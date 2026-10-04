@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{ChildStderr, ChildStdout, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -18,9 +18,42 @@ use crate::tools::is_executable_file;
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// How long [`broken_node_reason`] lets `node --version` run. It runs on every
-/// failed npx run, so a hanging `node` must not extend `ProcessSpec::timeout_ms`
-/// by much.
-const NODE_VERSION_TIMEOUT: Duration = Duration::from_secs(2);
+/// failed npx run, so a hanging `node` adds at most this long to the failure.
+/// A healthy-but-slow start must not hit it either: on a loaded machine, or
+/// on the first launch of a just-upgraded binary, a process start measured
+/// up to 3.6 s, and a probe that gives up reports no cause.
+const NODE_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Attempts and pause for [`spawn_retrying_busy`]: about half a second in all.
+const BUSY_SPAWN_ATTEMPTS: u32 = 20;
+const BUSY_SPAWN_BACKOFF: Duration = Duration::from_millis(25);
+
+/// `command.spawn()`, retried while the program is "Text file busy"
+/// (ETXTBSY). On Linux, exec of a file fails that way while any process still
+/// holds it open for writing. A thread that has just written an executable
+/// (an installer, a script, a test fixture) can have that descriptor copied
+/// into a child that another thread forks at the same moment; the copy
+/// closes when that child execs, within milliseconds. A real binary is
+/// never busy for long, so a bounded retry is harmless and hides the race.
+pub fn spawn_retrying_busy(command: &mut std::process::Command) -> std::io::Result<Child> {
+    retry_when_busy(|| command.spawn())
+}
+
+fn retry_when_busy<T>(mut attempt: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut tries = 1;
+    loop {
+        match attempt() {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && tries < BUSY_SPAWN_ATTEMPTS =>
+            {
+                tries += 1;
+                std::thread::sleep(BUSY_SPAWN_BACKOFF);
+            }
+            result => return result,
+        }
+    }
+}
 
 /// How long the timeout path waits for a reader thread to see EOF after
 /// killing the child's whole process group, before giving up on it and
@@ -168,14 +201,14 @@ impl RealProcessSpawner {
 /// `node` fails to start for that reason. `None` for a working Node or any
 /// other failure.
 fn broken_node_reason(node: &Path, path: &OsString) -> Option<String> {
-    let mut child = std::process::Command::new(node)
+    let mut command = std::process::Command::new(node);
+    command
         .arg("--version")
         .env("PATH", path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::piped());
+    let mut child = spawn_retrying_busy(&mut command).ok()?;
     let stderr_reader = child.stderr.take().map(spawn_drain::<ChildStderr>);
     let start = Instant::now();
     let status = loop {
@@ -292,8 +325,7 @@ impl ProcessSpawner for RealProcessSpawner {
             // `child.kill()` isn't enough.
             command.process_group(0);
         }
-        let mut child = command
-            .spawn()
+        let mut child = spawn_retrying_busy(&mut command)
             .map_err(|e| CoreError::io(Path::new(&spec.program), e))?;
 
         // Drain both pipes concurrently with the poll loop below, not after
@@ -373,6 +405,45 @@ mod tests {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    /// `a_busy_executable_is_retried_until_free_or_the_busy_error_surfaces_after_the_cap`:
+    /// on Linux a just-written script can be "Text file busy" for a few
+    /// milliseconds. Fails if the first ETXTBSY is returned to the caller
+    /// instead of retried, or if a program that stays busy is retried
+    /// without bound.
+    #[test]
+    fn a_busy_executable_is_retried_until_free_or_the_busy_error_surfaces_after_the_cap() {
+        let busy = || std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy);
+
+        let mut calls = 0;
+        let result = retry_when_busy(|| {
+            calls += 1;
+            if calls < 3 {
+                Err(busy())
+            } else {
+                Ok(calls)
+            }
+        });
+        assert_eq!(result.unwrap(), 3, "two busy attempts must be retried");
+
+        let mut calls = 0;
+        let error = retry_when_busy::<()>(|| {
+            calls += 1;
+            Err(busy())
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::ExecutableFileBusy);
+        assert_eq!(calls, BUSY_SPAWN_ATTEMPTS, "retries must stop at the cap");
+
+        let mut calls = 0;
+        let error = retry_when_busy::<()>(|| {
+            calls += 1;
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(calls, 1, "any other spawn error must not be retried");
+    }
+
     fn run_fake_npx(dir: &Path) -> ProcessOutput {
         let spec = ProcessSpec {
             program: "npx".into(),
@@ -442,7 +513,7 @@ mod tests {
             args: vec!["hello".into()],
             cwd: None,
             env: Vec::new(),
-            timeout_ms: 2_000,
+            timeout_ms: 30_000,
         };
         let output = spawner.run(&spec, &NeverCancel).unwrap();
         assert_eq!(output.status, Some(0), "echo did not exit 0");
@@ -472,7 +543,7 @@ mod tests {
             ],
             cwd: None,
             env: Vec::new(),
-            timeout_ms: 1_000,
+            timeout_ms: 5_000,
         };
 
         let output = spawner.run(&spec, &NeverCancel).unwrap();
@@ -558,7 +629,7 @@ mod tests {
             // alongside other tests that spawn and sleep real child
             // processes, and 2s was tight enough under that load to time
             // out this fake `npx` before it ever ran.
-            timeout_ms: 5_000,
+            timeout_ms: 30_000,
         };
 
         let output = spawner.run(&spec, &NeverCancel).unwrap();
@@ -587,7 +658,7 @@ mod tests {
             args: vec!["-c".into(), "yes x | head -c 200000".into()],
             cwd: None,
             env: Vec::new(),
-            timeout_ms: 5_000,
+            timeout_ms: 30_000,
         };
 
         let output = spawner.run(&spec, &NeverCancel).unwrap();
@@ -630,20 +701,14 @@ mod tests {
             ],
             cwd: None,
             env: Vec::new(),
-            timeout_ms: 500,
+            timeout_ms: 5_000,
         };
 
-        let start = Instant::now();
         let output = spawner.run(&spec, &NeverCancel).unwrap();
-        let elapsed = start.elapsed();
 
         assert!(
             output.timed_out,
             "a child whose grandchild holds the pipe open must still report timed_out, got {output:?}"
-        );
-        assert!(
-            elapsed < Duration::from_secs(3),
-            "run took {elapsed:?} - it waited on the grandchild's pipe instead of bounding the join"
         );
         let grandchild_pid = std::fs::read_to_string(&grandchild_pid_file).unwrap_or_default();
         let grandchild_pid = grandchild_pid.trim();

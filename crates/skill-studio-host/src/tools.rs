@@ -85,12 +85,11 @@ const SHELL_PROBE_TIMEOUT: Duration = Duration::from_millis(5000);
 /// this forever; see `PATH_MARKER_END`'s doc comment. Mirrors
 /// `skill_editor.rs`'s `run_with_timeout`.
 fn run_with_timeout(mut command: Command, end_marker: &str, timeout: Duration) -> Option<String> {
-    let mut child = command
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::null());
+    let mut child = crate::harness_detect::spawn_retrying_busy(&mut command).ok()?;
 
     let stdout = child.stdout.take()?;
     let (tx, rx) = mpsc::channel();
