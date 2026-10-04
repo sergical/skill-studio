@@ -62,23 +62,28 @@ fn discard_body(
     ) {
         return refuse("only a Universal, agent, or parked folder can be deleted");
     }
+    // An allowlist: any ledger kind not named here, today's or a future one,
+    // belongs to its installer.
     if deployment.root.kind != RootKind::Parked
-        && matches!(
+        && !matches!(
             deployment.owner_kind,
-            LifecycleOwnerKind::SkillsSh | LifecycleOwnerKind::Dotagents
+            LifecycleOwnerKind::Manual
+                | LifecycleOwnerKind::InRepo
+                | LifecycleOwnerKind::Copy
+                | LifecycleOwnerKind::Fork
         )
     {
         return refuse(MANAGED_COPY_MESSAGE);
     }
-    check_kept_copy(
-        &session,
-        rt.ports.fs.as_ref(),
-        &deployment,
-        &req.keep_deployment_id,
-    )?;
-
     let skill = crate::ops::resolve_skill(&session.fresh, &deployment.id)?.clone();
     let fs = rt.ports.fs.as_ref();
+    check_kept_copy(
+        &session,
+        fs,
+        &deployment,
+        &skill.name,
+        &req.keep_deployment_id,
+    )?;
     let links: Vec<PathBuf> = crate::ops::find_all_links(&skill, &deployment.path, fs)
         .into_iter()
         .map(|d| d.path.clone())
@@ -99,7 +104,6 @@ fn discard_body(
             .filter(|note| fs.symlink_metadata(note).is_ok())
             .cloned(),
     );
-    let registry_undo = crate::ops_remove::registry_row_undo(rt, fs, &deployment, &skill.name.0)?;
     let manifest = session
         .store
         .backup_paths(&session.guard, &id, &backup_targets)?;
@@ -107,15 +111,12 @@ fn discard_body(
         .entries
         .first()
         .and_then(|e| e.fingerprint.as_ref());
-    let mut inverse = crate::events::restore_backup_inverse_with_links(
+    let inverse = crate::events::restore_backup_inverse_with_links(
         &deployment.path,
         pre_fingerprint,
         None,
         &link_targets,
     );
-    if let Some(entry) = registry_undo {
-        inverse["registry_undo"] = serde_json::json!([entry]);
-    }
     let project_path = match &deployment.root.scope {
         RootScope::Global => None,
         RootScope::Project(project) => Some(project.0.clone()),
@@ -138,29 +139,21 @@ fn discard_body(
     };
     session.store.record(&session.guard, &id, &draft)?;
 
+    // The folder moves first: if the rename fails nothing has changed, so the
+    // links stay. A registry row is left alone on purpose: a parked copy
+    // returns to the slot that row describes.
     let write_result = (|| -> Result<(), CoreError> {
+        let trash = crate::park_move::move_to_trash(rt, &session, &deployment.path)?;
         for link in &links {
             let scoped = crate::ports::confine(&rt.scope, fs, link)?;
             fs.remove_file(&session.guard, &scoped)
                 .map_err(|e| CoreError::io(link, e))?;
         }
-        crate::park_move::discard_dir(rt, &session, &deployment.path)?;
+        crate::park_move::remove_trash(rt, &session, &trash);
         if let Some(note) = &origin_note {
             if let Ok(scoped) = crate::ports::confine(&rt.scope, fs, note) {
                 let _ = fs.remove_file(&session.guard, &scoped);
             }
-        }
-        match deployment.owner_kind {
-            LifecycleOwnerKind::Copy => crate::ops_remove::drop_copy_registry_entry(
-                rt,
-                &session.guard,
-                fs,
-                deployment.id.as_str(),
-            )?,
-            LifecycleOwnerKind::Fork => {
-                crate::ops_remove::drop_fork_registry_entry(rt, &session.guard, fs, &skill.name.0)?;
-            }
-            _ => {}
         }
         Ok(())
     })();
@@ -207,6 +200,7 @@ fn check_kept_copy(
     session: &MutationSession,
     fs: &dyn ScopeFs,
     deployment: &crate::dto::DeploymentDto,
+    skill_name: &crate::identity::SkillName,
     keep_id: &crate::identity::DeploymentId,
 ) -> Result<(), CoreError> {
     let refuse =
@@ -228,6 +222,11 @@ fn check_kept_copy(
         return refuse(
             "The copy you meant to keep is no longer a real folder, so nothing was deleted.",
         );
+    }
+    let same_skill = crate::ops::resolve_skill(&session.fresh, keep_id)
+        .is_ok_and(|kept| kept.name == *skill_name);
+    if !same_skill {
+        return refuse("The copy you meant to keep is a different skill, so nothing was deleted.");
     }
     let (live, parked) = if deployment.root.kind == RootKind::Parked {
         (keep, deployment)

@@ -694,6 +694,21 @@ describe("skill page header removal and park choices", () => {
     // Only a project live copy, nothing parked: no toggle.
     expect(skillParkVerb(menuView([project], false))).toBeNull();
   });
+
+  // Failure caught: the header offers Park or Unpark on a left-behind pair, a second way to
+  // act on it that skips the choice between the two copies.
+  it("hides the header toggle while a parked copy is left behind beside a live copy", () => {
+    const universalParked = {
+      ...deployment("parked-universal"),
+      scope: "parked" as const,
+      parked_origin: { kind: "universal", scope: "global", project_path: null },
+    };
+    for (const parked of [false, true]) {
+      const pair = { ...view([global, universalParked]), parked };
+      expect(skillParkVerb(pair)).toBeNull();
+      expect(skillCanPark(pair)).toBe(false);
+    }
+  });
 });
 
 describe("skillsWithLocalEdits", () => {

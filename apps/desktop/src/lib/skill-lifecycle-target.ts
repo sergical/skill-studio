@@ -1,6 +1,7 @@
 import {
   agentIdFromDeploymentLabel,
   basename,
+  findLeftBehindPairs,
   homeRelativePath,
   parentDirectory,
 } from "@skill-studio/lib";
@@ -699,10 +700,12 @@ type ParkView = SkillLifecycleView & Partial<Pick<InstalledSkill, "parked">>;
 /**
  * The folder the header Park or Unpark moves. Park takes the live Global
  * Universal copy; Unpark takes only the Global Universal parked copy. A skill
- * with other copies parked (an agent folder, a project) has no header toggle:
- * the Locations card is where to act.
+ * with other copies parked (an agent folder, a project) has no header toggle,
+ * and neither does one with a parked copy left behind beside a live copy: the
+ * Locations card is where to act.
  */
 function parkableDeployment(skill: ParkView): Deployment | undefined {
+  if (findLeftBehindPairs(skill).length > 0) return undefined;
   if (skill.parked) {
     return skill.deployments.find(
       (deployment) =>

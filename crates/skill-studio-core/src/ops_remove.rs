@@ -276,7 +276,7 @@ fn remove_via_cli(
 /// Removes one entry from the scope home's registry `copies` map, keyed by
 /// deployment id - the write-back half of `ops_install::install_and_link`'s
 /// own `Copy` branch, which inserts under the same key.
-pub(crate) fn drop_copy_registry_entry(
+fn drop_copy_registry_entry(
     rt: &Runtime,
     guard: &ExclusiveGuard,
     fs: &dyn ScopeFs,
@@ -289,7 +289,7 @@ pub(crate) fn drop_copy_registry_entry(
 /// skill name (`ownership::HomeRegistry::forks`'s own key) - the write-back
 /// half of whatever recorded the fork, mirroring [`drop_copy_registry_entry`]
 /// for the other lifecycle owner kind that keeps its own registry row.
-pub(crate) fn drop_fork_registry_entry(
+fn drop_fork_registry_entry(
     rt: &Runtime,
     guard: &ExclusiveGuard,
     fs: &dyn ScopeFs,
@@ -301,7 +301,7 @@ pub(crate) fn drop_fork_registry_entry(
 /// The `registry_undo` entry for the `copies` (or `forks`) row this removal
 /// drops, or `None` for owner kinds with no row of their own. `expected` is
 /// absent: undo refuses when something re-created the row since.
-pub(crate) fn registry_row_undo(
+fn registry_row_undo(
     rt: &Runtime,
     fs: &dyn ScopeFs,
     deployment: &crate::dto::DeploymentDto,

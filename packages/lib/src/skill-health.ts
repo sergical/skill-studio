@@ -426,7 +426,7 @@ function liveCopyKey(deployment: Deployment): string | null {
  * hand `mv`, put a folder back where the parked one came from. Each pair needs
  * one decision: keep the live copy or keep the parked one.
  */
-export function findLeftBehindPairs(skill: InstalledSkill): LeftBehindPair[] {
+export function findLeftBehindPairs(skill: Pick<InstalledSkill, "deployments">): LeftBehindPair[] {
   const live = new Map<string, Deployment>();
   for (const deployment of skill.deployments) {
     const key = liveCopyKey(deployment);

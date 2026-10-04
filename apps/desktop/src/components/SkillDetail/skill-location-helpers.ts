@@ -31,8 +31,10 @@ export function leftBehindFix(
   if (choice === "keep-live") {
     return { discard: pair.parked, keep: pair.live, checksRepository: false, blockedReason: null };
   }
-  const installerOwned =
-    pair.live.owner_kind === "skills-sh" || pair.live.owner_kind === "dotagents";
+  // An allowlist, as in core: any other owner (an installer's ledger, an
+  // ambiguous claim, a future kind) is the installer's to remove.
+  const deletable = ["manual", "in-repo", "copy", "fork"].includes(pair.live.owner_kind);
+  const installerOwned = !deletable;
   return {
     discard: pair.live,
     keep: pair.parked,

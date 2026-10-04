@@ -17,9 +17,10 @@ use std::sync::Arc;
 
 use skill_studio_core::dto::{
     DeploymentDto, DiscardRequest, ListEventsRequest, ParkRequest, RestoreRequest, ScanRequest,
+    UnparkRequest,
 };
 use skill_studio_core::harness::HarnessCatalog;
-use skill_studio_core::identity::RootKind;
+use skill_studio_core::identity::{LifecycleOwnerKind, RootKind};
 use skill_studio_core::ops;
 use skill_studio_core::ports::{Ports, ProcessSpawner, Runtime, ScopeFs};
 use skill_studio_core::scope::{ProjectSelection, RuntimeScope};
@@ -324,14 +325,20 @@ fn discard_refuses_when_the_kept_copy_is_gone() {
 /// ledger keeps a row for a folder that is gone.
 #[test]
 fn discard_refuses_a_live_copy_an_installer_owns() {
-    for owner in ["skills.sh", "dotagents"] {
+    for owner in ["skills.sh", "dotagents", "wildcard", "ambiguous"] {
         let home = unique_temp_dir("discard_managed");
         let live = home.join(".agents/skills/foo");
         write_skill(&live, "foo");
         let rt = runtime(&home, &[]);
         let parked = leave_a_parked_copy_behind(&rt, "foo", &live);
         let agents = home.join(".agents");
-        if owner == "skills.sh" {
+        if owner == "wildcard" {
+            std::fs::write(
+                agents.join("agents.lock"),
+                "[skills.foo]\nsource = \"owner/foo\"\n",
+            )
+            .unwrap();
+        } else if owner == "skills.sh" || owner == "ambiguous" {
             std::fs::write(
                 agents.join(".skill-lock.json"),
                 serde_json::json!({"version": 3, "skills": {"foo": {
@@ -344,7 +351,8 @@ fn discard_refuses_a_live_copy_an_installer_owns() {
                 .to_string(),
             )
             .unwrap();
-        } else {
+        }
+        if owner == "dotagents" || owner == "ambiguous" {
             std::fs::write(
                 agents.join("agents.lock"),
                 "[skills.foo]\nsource = \"owner/foo\"\n",
@@ -352,6 +360,17 @@ fn discard_refuses_a_live_copy_an_installer_owns() {
             .unwrap();
             std::fs::write(agents.join("agents.toml"), "[[skills]]\nname = \"foo\"\n").unwrap();
         }
+        let expected_kind = match owner {
+            "skills.sh" => LifecycleOwnerKind::SkillsSh,
+            "dotagents" => LifecycleOwnerKind::Dotagents,
+            "wildcard" => LifecycleOwnerKind::WildcardDotagents,
+            _ => LifecycleOwnerKind::Ambiguous,
+        };
+        assert_eq!(
+            copy_with(&rt, "foo", false).owner_kind,
+            expected_kind,
+            "{owner}: the fixture must classify as the kind under test"
+        );
 
         let err = ops::discard(&rt, &ctx(), &discard_request(&rt, "foo", false)).unwrap_err();
 
@@ -366,11 +385,11 @@ fn discard_refuses_a_live_copy_an_installer_owns() {
     }
 }
 
-/// Flow: discard a Fork live copy, then undo. Expectation: the registry row
-/// goes with the folder and comes back on undo. Failure: a stale fork row
-/// outlives the folder.
+/// Flow: Keep parked on a Fork live copy, then unpark. Expectation: the fork
+/// row stays and the unparked copy is still a Fork. Failure: the row is
+/// dropped, the copy turns into a skills.sh one, and Update overwrites edits.
 #[test]
-fn discarding_a_fork_drops_its_registry_row_and_undo_restores_it() {
+fn keep_parked_leaves_the_fork_row_so_unpark_is_still_a_fork() {
     let home = unique_temp_dir("discard_fork");
     let live = home.join(".agents/skills/foo");
     write_skill(&live, "foo");
@@ -382,20 +401,46 @@ fn discarding_a_fork_drops_its_registry_row_and_undo_restores_it() {
     )
     .unwrap();
 
-    let outcome = ops::discard(&rt, &ctx(), &discard_request(&rt, "foo", false)).unwrap();
-    assert!(forks_registry(&home)["forks"].get("foo").is_none());
+    ops::discard(&rt, &ctx(), &discard_request(&rt, "foo", false)).unwrap();
+    assert!(forks_registry(&home)["forks"].get("foo").is_some());
 
-    ops::restore_event(
+    ops::unpark(
         &rt,
         &ctx(),
-        &RestoreRequest {
-            event_id: outcome.event_id,
-            force: false,
+        &UnparkRequest {
+            deployment_id: deployments(&rt, "foo").into_iter().next().unwrap().id,
         },
     )
     .unwrap();
     assert!(live.join("SKILL.md").exists());
-    assert!(forks_registry(&home)["forks"].get("foo").is_some());
+    assert_eq!(
+        copy_with(&rt, "foo", false).owner_kind,
+        LifecycleOwnerKind::Fork
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: Keep parked where the copy to keep is a different skill. Expectation:
+/// refused, nothing deleted. Failure: the live copy goes and the kept folder
+/// is not its backup.
+#[test]
+fn discard_refuses_when_the_kept_copy_is_a_different_skill() {
+    let home = unique_temp_dir("discard_other_skill");
+    let live = home.join(".agents/skills/foo");
+    write_skill(&live, "foo");
+    write_skill(&home.join(".agents/skills/bar"), "bar");
+    let rt = runtime(&home, &[]);
+    let parked = leave_a_parked_copy_behind(&rt, "foo", &live);
+    let req = DiscardRequest {
+        deployment_id: copy_with(&rt, "foo", false).id,
+        keep_deployment_id: copy_with(&rt, "bar", false).id,
+    };
+
+    let err = ops::discard(&rt, &ctx(), &req).unwrap_err();
+
+    assert!(!err.message.is_empty());
+    assert!(live.join("SKILL.md").exists());
+    assert!(parked.join("SKILL.md").exists());
     std::fs::remove_dir_all(&home).ok();
 }
 
@@ -420,7 +465,7 @@ fn discard_works_for_a_project_scope_pair() {
     }
 }
 
-/// Flow: the folder rename fails after the per-skill links went. Expectation:
+/// Flow: the folder rename fails before any link is touched. Expectation: the links stay,
 /// the row is Failed, the folder is intact. Failure: a half delete is
 /// reported Done.
 #[test]
@@ -430,12 +475,23 @@ fn a_failed_delete_leaves_a_failed_row_and_the_folder() {
     write_skill(&live, "foo");
     let (rt, failing) = failing_runtime(&home);
     leave_a_parked_copy_behind(&rt, "foo", &live);
-    let req = discard_request(&rt, "foo", false);
+    let link = home.join(".claude/skills/foo");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&live, &link).unwrap();
+    let req = DiscardRequest {
+        deployment_id: deployments(&rt, "foo")
+            .into_iter()
+            .find(|d| d.path == live)
+            .unwrap()
+            .id,
+        keep_deployment_id: copy_with(&rt, "foo", true).id,
+    };
     failing.fail_next_rename();
 
     assert!(ops::discard(&rt, &ctx(), &req).is_err());
 
     assert!(live.join("SKILL.md").exists());
+    assert!(link.is_symlink(), "a failed rename must leave the links");
     let events = ops::list_events(&rt, &ctx(), &ListEventsRequest::default()).unwrap();
     let rows: Vec<(String, String)> = events
         .iter()
