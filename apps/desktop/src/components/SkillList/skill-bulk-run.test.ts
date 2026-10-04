@@ -21,6 +21,15 @@ function globalFolder(name: string, fields: Partial<Deployment> = {}): Deploymen
   );
 }
 
+/** The Global Universal folder after a park: the copy Unpark moves back. */
+function parkedFolder(name: string): Deployment {
+  return {
+    ...globalFolder(name),
+    scope: "parked",
+    parked_origin: { kind: "universal", scope: "global", project_path: null },
+  };
+}
+
 function fixtureSkill(name: string, fields: Partial<Deployment> = {}): InstalledSkill {
   return {
     name,
@@ -89,7 +98,7 @@ describe("runBatchAction", () => {
   });
 
   it("maps a failed park target to that skill and reports changed, skipped and failed in one toast", async () => {
-    const parked = { ...fixtureSkill("done"), parked: true };
+    const parked = { ...fixtureSkill("done"), parked: true, deployments: [parkedFolder("done")] };
     const skills = [fixtureSkill("ok"), fixtureSkill("refused"), parked];
     const plan = planBulkAction(skills, { kind: "park" });
     const api = fakeApi({

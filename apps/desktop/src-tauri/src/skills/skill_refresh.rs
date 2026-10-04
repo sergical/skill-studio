@@ -1681,7 +1681,12 @@ pub(crate) fn apply_skill_snapshot_overlays(
     // timer and must not pay a per-skill I/O cost just for a badge
     // timestamp.
     for skill in skills.iter_mut() {
-        if !skill.deployments.iter().any(|d| d.scope == "parked") {
+        // A skill with any live copy is not parked as a whole: its parked
+        // copies show as their own rows (and as "left behind" when a live
+        // copy sits at the same origin).
+        let fully_parked =
+            !skill.deployments.is_empty() && skill.deployments.iter().all(|d| d.scope == "parked");
+        if !fully_parked {
             continue;
         }
         skill.parked = true;
@@ -3168,14 +3173,13 @@ mod tests {
         assert!(snapshot.skills.iter().any(|s| s.name == "foo"));
     }
 
-    /// Regression for the "parked-but-reinstalled" case: `skill_park`'s
-    /// module docs note that `dotagents install`/`npx skills add` can
-    /// recreate the shared folder while a skill is parked - the snapshot
-    /// must still mark the skill `parked` (from the registry record) while
-    /// also surfacing the reinstalled deployment, so the frontend's health
-    /// check can flag the conflict rather than hiding it.
+    /// Regression for the "parked copy left behind" case: `dotagents
+    /// install`/`npx skills add` can recreate the shared folder while a
+    /// copy is parked. The skill has a live copy, so it is not `parked` as
+    /// a whole; the snapshot still surfaces both deployments so the frontend
+    /// can flag the conflict rather than hiding it.
     #[test]
-    fn build_snapshot_marks_parked_skills_and_surfaces_a_reinstalled_deployment() {
+    fn build_snapshot_does_not_mark_a_skill_with_a_live_copy_parked_and_keeps_both_copies() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(home.join(".agents/skills-parked/find-bugs")).unwrap();
@@ -3215,7 +3219,10 @@ mod tests {
             .iter()
             .find(|s| s.name == "find-bugs")
             .unwrap();
-        assert!(skill.parked);
+        assert!(
+            !skill.parked,
+            "a live copy at the origin means the skill is not parked as a whole"
+        );
         assert!(skill.deployments.iter().any(|d| d.scope == "parked"));
         assert!(skill.deployments.iter().any(|d| d.scope == "global"));
     }

@@ -424,6 +424,7 @@ pub fn run() {
             skills::skill_park::park_skill,
             skills::skill_park::unpark_skill,
             skills::skill_park::park_check,
+            skills::skill_park::discard_skill_copy,
             skills::skill_park::park_skills,
             skills::skill_park::unpark_skills,
             skills::skill_split::split_skill,

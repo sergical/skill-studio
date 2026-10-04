@@ -12,12 +12,11 @@ import { ChevronRight, Folder } from "lucide-react";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@skill-studio/ui";
 import { HarnessIcon } from "../ui/HarnessIcon";
 import { StatusIcon } from "../ui/StatusIcon";
-import { SwitchControl } from "../ui/SwitchControl";
 import { TooltipControl } from "../ui/TooltipControl";
 import { homeRelativePath } from "@skill-studio/lib";
 import { SkillLocationMenu } from "./SkillLocationMenu";
 import { SkillLocationRow } from "./SkillLocationRow";
-import { sharedFolderSwitchPolicy } from "./skill-location-helpers";
+import { SkillLocationRowButtons } from "./SkillLocationRowButtons";
 import {
   folderReaders,
   rowMenu,
@@ -46,16 +45,22 @@ export function SkillLocationScope({
       key={`${row.kind}-${row.harness}-${row.path}`}
       row={row}
       scopeLabel={group.label}
+      projectPath={group.projectPath ?? null}
       onAction={onAction}
     />
   );
+  const parkedRows = group.parked.map(renderRow);
 
   if (!shared) {
-    return <div className="flex flex-col">{siblings.map(renderRow)}</div>;
+    return (
+      <div className="flex flex-col">
+        {siblings.map(renderRow)}
+        {parkedRows}
+      </div>
+    );
   }
 
   const menu = rowMenu(shared, group.label, group.projectPath ?? null, splitReaders(group));
-  const switchPolicy = sharedFolderSwitchPolicy(group);
   const label = showEyebrow ? (group.isGlobal ? "Global folder" : "Project folder") : group.label;
 
   const labelPath = homeRelativePath(shared.path);
@@ -64,7 +69,12 @@ export function SkillLocationScope({
     : "";
   const renderReaderRow = (row: LocationRow) => (
     <div key={`${row.kind}-${row.harness}-${row.path}`} className={rowClass}>
-      <SkillLocationRow row={row} scopeLabel={group.label} onAction={onAction} />
+      <SkillLocationRow
+        row={row}
+        scopeLabel={group.label}
+        projectPath={group.projectPath ?? null}
+        onAction={onAction}
+      />
     </div>
   );
 
@@ -122,14 +132,11 @@ export function SkillLocationScope({
           </div>
         </CollapsibleTrigger>
         <span className="flex shrink-0 items-center gap-1">
-          <SwitchControl
-            checked={switchPolicy.checked}
-            disabled={switchPolicy.disabled}
-            onCheckedChange={(next) => {
-              const action = switchPolicy.actionForCheckedChange(next);
-              if (action) void onAction(action);
-            }}
-            ariaLabel={group.isGlobal ? "Enabled everywhere" : `Enabled in ${group.label}`}
+          <SkillLocationRowButtons
+            row={shared}
+            scopeLabel={group.label}
+            projectPath={group.projectPath ?? null}
+            onAction={onAction}
           />
           <SkillLocationMenu
             entries={menu.entries}
@@ -148,6 +155,7 @@ export function SkillLocationScope({
         )}
       </CollapsiblePanel>
       {siblings.map(renderRow)}
+      {parkedRows}
     </Collapsible>
   );
 }

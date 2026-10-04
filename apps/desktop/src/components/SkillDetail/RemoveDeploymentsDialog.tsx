@@ -16,6 +16,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@skill-studio/ui";
+import { useGitWarning } from "../../hooks/useGitWarning";
 import { removeSkill } from "../../lib/skill-api";
 import {
   skillDeploymentRemovalAvailability,
@@ -52,6 +53,16 @@ export function RemoveDeploymentsDialog({
         projectPath,
       });
 
+  // `park_check` takes one folder: the selected copy, else the first real folder the removal deletes.
+  const checked =
+    deployment ??
+    (removalAvailability.available ? removalAvailability.preview.managedDeployments[0] : undefined);
+  const { warning: gitWarning, isChecking } = useGitWarning(
+    checked ? { deployment_id: checked.id } : null,
+    "removing",
+    projectPath !== null,
+  );
+
   const handleRemove = () => {
     if (!removalAvailability.available) return;
     setIsRemoving(true);
@@ -81,6 +92,7 @@ export function RemoveDeploymentsDialog({
               ? skillRemovalDescription(removalAvailability.preview)
               : removalAvailability.reason}
           </AlertDialogDescription>
+          {gitWarning && <p className="m-0 text-small text-text-secondary">{gitWarning}</p>}
           {removalAvailability.available && (
             <ul className="max-h-40 overflow-auto font-mono text-xs break-all">
               {[
@@ -100,9 +112,9 @@ export function RemoveDeploymentsDialog({
           <AlertDialogAction
             variant="destructive"
             onClick={handleRemove}
-            disabled={isRemoving || !removalAvailability.available}
+            disabled={isRemoving || isChecking || !removalAvailability.available}
           >
-            {isRemoving ? "Removing…" : `Remove from ${scopeLabel}`}
+            {isRemoving ? "Removing…" : isChecking ? "Checking git…" : `Remove from ${scopeLabel}`}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

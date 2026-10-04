@@ -55,6 +55,27 @@ pub(crate) fn move_dir(
     }
 }
 
+/// First half of a delete: renames the folder `dir` to a hidden
+/// `.park-trash-*` sibling and returns it, so an agent never sees a
+/// half-deleted skill. A failed rename leaves the folder as it was. Finish
+/// with `remove_trash`; a delete that never runs leaves only the hidden
+/// sibling, which a later move or discard sweeps.
+pub(crate) fn move_to_trash(
+    rt: &Runtime,
+    session: &MutationSession,
+    dir: &Path,
+) -> Result<PathBuf, CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let parent = dir.parent().unwrap_or(dir);
+    sweep_trash(rt, session, parent);
+    let trash = parent.join(format!("{TRASH_PREFIX}{}", crate::fsops::unique_suffix()));
+    let scoped_dir = confine(&rt.scope, fs, dir)?;
+    let scoped_trash = confine(&rt.scope, fs, &trash)?;
+    fs.rename(&session.guard, &scoped_dir, &scoped_trash)
+        .map_err(|e| CoreError::io(dir, e))?;
+    Ok(trash)
+}
+
 fn copy_verify_remove(
     rt: &Runtime,
     session: &MutationSession,
@@ -134,7 +155,7 @@ const SWEEP_LIMIT: usize = 16;
 /// Deletes a trash folder best effort. Every `SKILL.md` (any case) goes first,
 /// so a delete that stops partway never leaves a folder an agent could load
 /// as a skill.
-fn remove_trash(rt: &Runtime, session: &MutationSession, trash: &Path) {
+pub(crate) fn remove_trash(rt: &Runtime, session: &MutationSession, trash: &Path) {
     let fs = rt.ports.fs.as_ref();
     // Listed earlier, so it may have changed to a link since.
     if !fs

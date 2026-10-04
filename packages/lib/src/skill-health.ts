@@ -42,6 +42,9 @@ export interface HealthIssue {
   harness?: string;
   harnessLabel?: string;
   root?: string;
+  /** For `"parked-but-reinstalled"` only: the two copies at one origin the fixes act on. */
+  live?: Deployment;
+  parked?: Deployment;
 }
 
 /**
@@ -80,8 +83,8 @@ export const HEALTH_ISSUE_SEVERITY = {
 /** Singular/plural copy for one issue kind, for chip and row labels. */
 export const HEALTH_ISSUE_KIND_LABEL = {
   "parked-but-reinstalled": {
-    singular: "parked skill was reinstalled",
-    plural: "parked skills were reinstalled",
+    singular: "parked copy left behind",
+    plural: "parked copies left behind",
   },
   duplicate: { singular: "skill differs between copies", plural: "skills differ between copies" },
   "broken-symlink": { singular: "broken link", plural: "broken links" },
@@ -397,21 +400,61 @@ export function coverageGaps(skills: InstalledSkill[]): CoverageGap[] {
   return gaps;
 }
 
+/** A live copy and a parked copy of one skill at the same origin. */
+export interface LeftBehindPair {
+  live: Deployment;
+  parked: Deployment;
+}
+
+/** `kind|scope|project` - where a copy lives, in the shape `ParkedOrigin` records. */
+function originKey(kind: string | null, scope: string, projectPath: string | null | undefined) {
+  return `${kind}|${scope}|${projectPath ?? ""}`;
+}
+
+/** A real, enabled folder (not a link, plugin or parked copy), keyed by where it lives. */
+function liveCopyKey(deployment: Deployment): string | null {
+  if (deployment.scope !== "global" && deployment.scope !== "project") return null;
+  if (deployment.plugin || deployment.is_symlink || deployment.symlink_is_broken) return null;
+  if (deployment.shared_via_whole_dir_link || deployment.disabled) return null;
+  const id = agentIdFromDeploymentLabel(deployment.agent);
+  const kind = id === "shared" ? "universal" : id;
+  return originKey(kind, deployment.scope, deployment.project_path);
+}
+
 /**
- * Parked skills whose shared-folder deployment came back - see
- * `skill_park.rs`'s "parked-but-reinstalled" note: an install or sync run
- * while the skill was parked can recreate `~/.agents/skills/<name>` even
- * though the parked copy is still sitting in `~/.agents/skills-parked`.
- * Unparking reconciles the two; this issue just flags that it's needed.
+ * Parked copies whose origin has a live copy again - an install or sync, or a
+ * hand `mv`, put a folder back where the parked one came from. Each pair needs
+ * one decision: keep the live copy or keep the parked one.
  */
+export function findLeftBehindPairs(skill: Pick<InstalledSkill, "deployments">): LeftBehindPair[] {
+  const live = new Map<string, Deployment>();
+  for (const deployment of skill.deployments) {
+    const key = liveCopyKey(deployment);
+    if (key && !live.has(key)) live.set(key, deployment);
+  }
+  return skill.deployments.flatMap((parked) => {
+    const origin = parked.scope === "parked" ? parked.parked_origin : null;
+    if (!origin) return [];
+    const match = live.get(originKey(origin.kind, origin.scope, origin.project_path));
+    return match ? [{ live: match, parked }] : [];
+  });
+}
+
+/** One "parked-but-reinstalled" issue per skill that has a left-behind pair; the fixes act on its first pair. */
 export function findParkedButReinstalled(skills: InstalledSkill[]): HealthIssue[] {
-  return skills
-    .filter((skill) => skill.parked && skill.deployments.some((d) => d.scope !== "parked"))
-    .map((skill) => ({
-      kind: "parked-but-reinstalled" as const,
-      skill,
-      detail: "Parked, but an install or sync recreated the Universal copy",
-    }));
+  return skills.flatMap((skill) => {
+    const [pair] = findLeftBehindPairs(skill);
+    return pair
+      ? [
+          {
+            kind: "parked-but-reinstalled" as const,
+            skill,
+            detail: "A live copy and a parked copy of the same folder both exist",
+            ...pair,
+          },
+        ]
+      : [];
+  });
 }
 
 /**

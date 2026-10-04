@@ -503,6 +503,17 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         }
         case "park_check":
           return { git_tracked: false };
+        case "discard_skill_copy": {
+          const { deployment_id, owner_id } = z
+            .object({ deployment_id: z.string().nullish(), owner_id: z.string().nullish() })
+            .parse(payload.target);
+          const name = skillNameForTarget({ deployment_id, owner_id });
+          await updateSkill(name, (item) => ({
+            ...item,
+            deployments: item.deployments.filter((d) => d.id !== deployment_id),
+          }));
+          return undefined;
+        }
         case "unpark_skill": {
           const { deployment_id, owner_id } = z
             .object({ deployment_id: z.string().nullish(), owner_id: z.string().nullish() })

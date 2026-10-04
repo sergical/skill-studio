@@ -189,6 +189,7 @@ const EXPECTED_WRAPPER_COMMANDS = {
   parkSkill: { kind: "command", command: "park_skill", registeredInLibRs: true },
   unparkSkill: { kind: "command", command: "unpark_skill", registeredInLibRs: true },
   parkCheck: { kind: "command", command: "park_check", registeredInLibRs: true },
+  discardSkillCopy: { kind: "command", command: "discard_skill_copy", registeredInLibRs: true },
   splitSkill: { kind: "command", command: "split_skill", registeredInLibRs: true },
   splitSkillTargets: {
     kind: "command",

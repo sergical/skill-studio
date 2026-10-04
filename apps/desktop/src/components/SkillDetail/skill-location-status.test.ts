@@ -6,19 +6,22 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { TooltipProvider } from "@skill-studio/ui";
-import { SkillLocationRow } from "./SkillLocationRow";
+import { findLeftBehindPairs } from "@skill-studio/lib";
 import type { Deployment, InstalledSkill } from "@skill-studio/lib";
+import { SkillLocationScope } from "./SkillLocationScope";
 import {
   buildInvocationFiles,
   buildScopeGroups,
   folderReaders,
   invocationFooterNote,
+  parkActionFor,
   promoteToGlobal,
   rowMenu,
   siblingRows,
   skillRollup,
   titleLink,
 } from "./skill-location-status";
+import type { ScopeGroup } from "./skill-location-status";
 import {
   perSkillLinkDeployment,
   realCopyDeployment,
@@ -81,6 +84,32 @@ function fixtureSkill(overrides: Partial<InstalledSkill> = {}): InstalledSkill {
     update_owner_ids:
       overrides.update_owner_ids ?? (overrides.has_update ? ["owner:v1/global/find-bugs"] : []),
   };
+}
+
+/** A parked copy of the Universal folder, overridable per test. */
+function parkedCopy(overrides: Partial<Deployment> = {}): Deployment {
+  return fixtureDeployment({
+    scope: "parked",
+    agent: "parked",
+    path: "/home/.agents/skills-parked/universal/find-bugs",
+    parked_origin: { kind: "universal", scope: "global", project_path: null },
+    ...overrides,
+  });
+}
+
+/** One scope block as the card renders it. */
+function renderGroup(group: ScopeGroup): string {
+  return renderToStaticMarkup(
+    createElement(
+      TooltipProvider,
+      null,
+      createElement(SkillLocationScope, {
+        group,
+        showEyebrow: false,
+        onAction: () => Promise.resolve(true),
+      }),
+    ),
+  );
 }
 
 describe("buildScopeGroups", () => {
@@ -221,60 +250,184 @@ describe("buildScopeGroups", () => {
     expect(found?.conditions[0].what).toBe(expectedWhat);
   });
 
-  it("marks the whole scope off and parked when the skill is parked", () => {
-    const parkedShared = fixtureDeployment({
-      scope: "parked",
-      path: "/home/.agents/skills-parked/find-bugs",
-    });
+  // Flow: one copy is live, another parked. Failure caught: the skill reads as parked as a whole,
+  // its live copy loses the Park button, or the parked copy hides inside the live rows.
+  it("keeps a live copy live and gives the parked copy its own Turn on row", () => {
     const claude = fixtureDeployment({
       agent: "Claude Code",
-      is_symlink: true,
-      symlink_target: "/home/.agents/skills/find-bugs",
-      disabled: true,
-      disabled_by: "claude-skill-overrides",
       path: "/home/.claude/skills/find-bugs",
     });
-    const skill = fixtureSkill({
-      deployments: [parkedShared, claude],
-      parked: true,
-      parked_at: "2026-01-01T00:00:00Z",
+    const parked = parkedCopy({
+      path: "/home/.agents/skills-parked/codex/find-bugs",
+      parked_origin: { kind: "codex", scope: "global", project_path: null },
     });
+    const skill = fixtureSkill({ deployments: [fixtureDeployment(), claude, parked] });
     const [global] = buildScopeGroups(skill);
-    expect(global.parkedScope).toBe(true);
-    expect(global.shared?.level).toBe("off");
-    expect(global.shared?.conditions[0].what).toContain("Off everywhere");
-    expect(global.rows.find((r) => r.harness === "claude-code")?.level).toBe("off");
-    const pi = global.rows.find((row) => row.harness === "pi")!;
-    const markup = renderToStaticMarkup(
-      createElement(
-        TooltipProvider,
+
+    expect(global.shared?.switchOn).toBe(true);
+    expect(global.rows.map((r) => r.kind)).not.toContain("parked");
+    expect(global.parked).toHaveLength(1);
+    expect(global.parked[0]).toMatchObject({
+      kind: "parked",
+      harnessLabel: "Codex",
+      level: "off",
+      leftBehind: null,
+    });
+    expect(rowMenu(global.parked[0], global.label).entries[0]).toMatchObject({
+      label: "Turn on",
+      action: { kind: "unpark", deployment: parked },
+    });
+    expect(skillRollup(skill, [global]).level).toBeNull();
+    expect(parkActionFor(global.shared!, global.label, null)).toMatchObject({ kind: "park" });
+    expect(
+      parkActionFor(
+        global.rows.find((r) => r.harness === "claude-code")!,
+        "Global",
         null,
-        createElement(SkillLocationRow, {
-          row: pi,
-          scopeLabel: global.label,
-          onAction: () => Promise.resolve(true),
-        }),
       ),
-    );
-    expect(markup).toContain('aria-checked="false"');
-    expect(markup).toContain('aria-label="Disabled for pi while this skill is off"');
+    ).toMatchObject({
+      kind: "park",
+      deployment: claude,
+    });
   });
 
-  it("flags parked-but-live with an error dot on the Universal folder", () => {
-    const parkedShared = fixtureDeployment({
-      scope: "parked",
-      path: "/home/.agents/skills-parked/find-bugs",
-    });
-    const liveCopy = fixtureDeployment({
+  // Flow: every copy is parked. Failure caught: no row offers Turn on, or the card still draws a live folder.
+  it("shows a fully parked skill as one Turn on row and no live rows", () => {
+    const parked = parkedCopy();
+    const skill = fixtureSkill({ deployments: [parked], parked: true });
+    const [global] = buildScopeGroups(skill);
+
+    expect(global.shared).toBeNull();
+    expect(global.rows).toEqual([]);
+    expect(global.parked.map((r) => r.harnessLabel)).toEqual(["Universal folder"]);
+    expect(skillRollup(skill, [global]).level).toBe("off");
+
+    const markup = renderGroup(global);
+    expect(markup).toContain("Turn on");
+    expect(markup).not.toContain('role="switch"');
+    expect(buildInvocationFiles([global])).toEqual([]);
+  });
+
+  // Failure caught: the parked copy shows in the Invocation section, where a segmented control
+  // would edit a SKILL.md that no agent reads.
+  it("leaves parked copies out of the Invocation section", () => {
+    const skill = fixtureSkill({ deployments: [fixtureDeployment(), parkedCopy()] });
+    const files = buildInvocationFiles(buildScopeGroups(skill));
+    expect(files.map((f) => f.path)).toEqual(["/home/.agents/skills/find-bugs"]);
+  });
+
+  // Flow: a project copy was parked. Failure caught: it lands in the Global block and its Turn on
+  // looks like it acts on a global copy.
+  it("puts a parked project copy in the block of the project it came from", () => {
+    const projectLive = fixtureDeployment({
       agent: "Codex",
       scope: "project",
       project_path: "/repo",
       path: "/repo/.codex/skills/find-bugs",
     });
-    const skill = fixtureSkill({ deployments: [parkedShared, liveCopy], parked: true });
+    const parked = parkedCopy({
+      path: "/home/.agents/skills-parked/project/find-bugs",
+      parked_origin: { kind: "universal", scope: "project", project_path: "/repo" },
+    });
+    const groups = buildScopeGroups(fixtureSkill({ deployments: [projectLive, parked] }));
+    expect(groups.find((g) => g.isGlobal)?.parked ?? []).toEqual([]);
+    expect(groups.find((g) => g.projectPath === "/repo")?.parked).toHaveLength(1);
+  });
+
+  // Flow: a hand `mv` or install put a live folder back beside the parked one. Failure caught:
+  // the parked row offers Turn on, which core refuses because a copy sits at the origin.
+  it("flags a parked copy with a live copy at its origin and offers the two fixes instead of Turn on", () => {
+    const live = fixtureDeployment();
+    const parked = parkedCopy();
+    const skill = fixtureSkill({ deployments: [live, parked] });
     const [global] = buildScopeGroups(skill);
-    expect(global.shared?.level).toBe("error");
-    expect(global.shared?.conditions[0].status).toBe("Parked but live");
+    const row = global.parked[0];
+
+    expect(row.level).toBe("error");
+    expect(row.conditions[0].status).toBe("Left behind");
+    expect(row.leftBehind).toEqual({ live, parked });
+    expect(rowMenu(row, global.label).entries.map((e) => e.label)).toEqual([
+      "Keep live",
+      "Keep parked",
+      "Reveal in Finder",
+    ]);
+    expect(skillRollup(skill, [global]).level).toBe("error");
+
+    const markup = renderGroup(global);
+    expect(markup).toContain("Keep live");
+    expect(markup).toContain("Keep parked");
+    expect(markup).not.toContain("Turn on");
+  });
+
+  // Failure caught: the live copy of a left-behind pair keeps a Park button, a second way to
+  // act on the pair that skips the parked copy.
+  it("offers no Park on the live copy of a left-behind pair", () => {
+    const skill = fixtureSkill({ deployments: [fixtureDeployment(), parkedCopy()] });
+    const [global] = buildScopeGroups(skill);
+
+    expect(global.shared?.leftBehindLive).toBe(true);
+    expect(parkActionFor(global.shared!, global.label, null)).toBeNull();
+  });
+
+  // Failure caught: a parked project copy pairs with a live copy in another project or in
+  // Global, so Keep live would delete the wrong folder.
+  it("pairs a parked project copy only with a live copy in the same project", () => {
+    const otherProject = fixtureDeployment({
+      scope: "project",
+      project_path: "/other",
+      path: "/other/.agents/skills/find-bugs",
+    });
+    const parked = parkedCopy({
+      path: "/home/.agents/skills-parked/project/find-bugs",
+      parked_origin: { kind: "universal", scope: "project", project_path: "/repo" },
+    });
+    const apart = fixtureSkill({ deployments: [fixtureDeployment(), otherProject, parked] });
+    expect(findLeftBehindPairs(apart)).toEqual([]);
+
+    const sameProject = fixtureDeployment({
+      scope: "project",
+      project_path: "/repo",
+      path: "/repo/.agents/skills/find-bugs",
+    });
+    const together = fixtureSkill({ deployments: [fixtureDeployment(), sameProject, parked] });
+    expect(findLeftBehindPairs(together)).toEqual([{ live: sameProject, parked }]);
+  });
+
+  // Failure caught: Park shows on a plugin copy or a link, which core refuses; or a project row
+  // loses its project path and skips the git confirm.
+  it("offers Park only on real copies and carries the project path for the confirm", () => {
+    const shared = fixtureDeployment({
+      scope: "project",
+      project_path: "/repo",
+      path: "/repo/.agents/skills/find-bugs",
+    });
+    const link = fixtureDeployment({
+      agent: "Claude Code",
+      scope: "project",
+      project_path: "/repo",
+      is_symlink: true,
+      symlink_target: "/repo/.agents/skills/find-bugs",
+      path: "/repo/.claude/skills/find-bugs",
+    });
+    const [project] = buildScopeGroups(fixtureSkill({ deployments: [shared, link] }));
+    expect(parkActionFor(project.shared!, project.label, "/repo")).toMatchObject({
+      kind: "park",
+      projectPath: "/repo",
+    });
+    expect(
+      parkActionFor(
+        project.rows.find((r) => r.kind === "link")!,
+        project.label,
+        "/repo",
+      ),
+    ).toBeNull();
+    expect(
+      parkActionFor(
+        project.rows.find((r) => r.kind === "reader")!,
+        project.label,
+        "/repo",
+      ),
+    ).toBeNull();
   });
 
   it("synthesizes reader rows for agents that read the Universal folder natively", () => {
@@ -513,34 +666,20 @@ describe("skillRollup", () => {
 });
 
 describe("titleLink", () => {
-  it("orders unpark above drift, install-again, enable-everywhere and update", () => {
-    const parkedShared = fixtureDeployment({ scope: "parked" });
-    const liveCopy = fixtureDeployment({ agent: "Codex", scope: "project", project_path: "/repo" });
-    const skill = fixtureSkill({
-      deployments: [parkedShared, liveCopy],
-      parked: true,
-      has_update: true,
-    });
-    expect(titleLink(skill, true)).toBe("Unpark");
-  });
-
   it("prefers Compare copies over Install again and Update when there's drift", () => {
     const skill = fixtureSkill({ has_update: true });
     expect(titleLink(skill, true)).toBe("Compare copies");
   });
 
-  it("prefers Install again over Enable everywhere and Update for a lock-only skill", () => {
-    const skill = fixtureSkill({ deployments: [], parked: true, has_update: true });
-    expect(titleLink(skill, false)).toBe("Install again");
+  // Failure caught: a title link comes back that unparks the whole skill, hiding which copy turns on.
+  it("never offers an unpark link, because each parked row has its own Turn on", () => {
+    const skill = fixtureSkill({ deployments: [parkedCopy()], parked: true, has_update: true });
+    expect(titleLink(skill, false)).toBeNull();
   });
 
-  it("prefers Enable everywhere over Update for a parked skill", () => {
-    const skill = fixtureSkill({
-      deployments: [fixtureDeployment({ scope: "parked" })],
-      parked: true,
-      has_update: true,
-    });
-    expect(titleLink(skill, false)).toBe("Enable everywhere");
+  it("prefers Install again for a lock-only skill", () => {
+    const skill = fixtureSkill({ deployments: [], has_update: true });
+    expect(titleLink(skill, false)).toBe("Install again");
   });
 
   it("leaves Update to the page header, so the card title never reads as updating locations", () => {

@@ -38,6 +38,7 @@ import {
   skillKey,
   updateAllFailureMessage,
 } from "./home-inbox-data";
+import { HomeLeftBehindActions } from "./HomeLeftBehindActions";
 import { rowClickOpensSkill } from "./home-row-click";
 import type { GroupId, HomeFilter, HomeGroups, HomeRowPlan } from "./home-inbox-data";
 
@@ -290,13 +291,17 @@ function BrokenGroup({
                 onOpen={() => onSelectSkill(issue.skill.name, issueDeploymentPath(issue))}
                 detail={<span>{issue.detail}</span>}
                 action={
-                  <Button
-                    variant="ghost"
-                    className={ROW_ACTION_CLASS}
-                    onClick={() => onSelectSkill(issue.skill.name, issueDeploymentPath(issue))}
-                  >
-                    {issueActionLabel(issue.kind)}
-                  </Button>
+                  issue.kind === "parked-but-reinstalled" && issue.live && issue.parked ? (
+                    <HomeLeftBehindActions issue={issue} live={issue.live} parked={issue.parked} />
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      className={ROW_ACTION_CLASS}
+                      onClick={() => onSelectSkill(issue.skill.name, issueDeploymentPath(issue))}
+                    >
+                      {issueActionLabel(issue.kind)}
+                    </Button>
+                  )
                 }
               />
             );

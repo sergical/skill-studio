@@ -414,7 +414,14 @@ function parkedSkill(
     description,
     parked: true,
     parked_at: "2026-08-25T09:00:00.000Z",
-    deployments: [],
+    deployments: [
+      deployment({
+        agent: "parked",
+        scope: "parked",
+        path: `${HARNESS_HOME}/.agents/skills-parked/universal/${name}`,
+        parked_origin: { kind: "universal", scope: "global", project_path: null },
+      }),
+    ],
     content_hash: "",
     content_hashes: [],
     ...sizing,

@@ -697,6 +697,26 @@ pub struct ParkOutcome {
     pub parked_path: PathBuf,
 }
 
+/// Request to delete one real copy: a parked copy or a live one. Undo is in
+/// Activity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DiscardRequest {
+    /// The copy to delete. Never a link or a plugin copy.
+    pub deployment_id: DeploymentId,
+    /// The copy that stays. Checked again under the lease: the delete is
+    /// refused when this copy is gone, so the fix never deletes the last one.
+    pub keep_deployment_id: DeploymentId,
+}
+
+/// Result of `discard`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DiscardOutcome {
+    /// The `remove` event Activity can undo.
+    pub event_id: EventId,
+    /// The deployment that was deleted.
+    pub deployment_id: DeploymentId,
+}
+
 /// Request to unpark one deployment: move its directory back to the
 /// universal root and recreate any per-harness link it had.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
