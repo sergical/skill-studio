@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, OnceLock};
 use std::time::Duration;
 
@@ -269,12 +269,11 @@ fn parse_terminal_editor(output: &str) -> Option<String> {
 /// block) on its own instead of being joined, since joining could still hang
 /// on that same held-open pipe.
 fn run_with_timeout(mut command: Command, end_marker: &str, timeout: Duration) -> Option<String> {
-    let mut child = command
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::null());
+    let mut child = skill_studio_host::spawn_retrying_busy(&mut command).ok()?;
 
     let stdout = child.stdout.take()?;
     let (tx, rx) = mpsc::channel();
@@ -551,9 +550,13 @@ pub fn open_paths_in_editor(home: &Path, paths: &[PathBuf]) -> Result<(), String
             vec![script_arg]
         }
     };
-    let output = Command::new("open")
-        .args(&args)
-        .output()
+    let mut open = Command::new("open");
+    open.args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = skill_studio_host::spawn_retrying_busy(&mut open)
+        .and_then(Child::wait_with_output)
         .map_err(|e| format!("Failed to open editor: {e}"))?;
     if !output.status.success() {
         if let Some(script) = &script_to_clean_up {

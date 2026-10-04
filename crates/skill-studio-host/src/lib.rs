@@ -61,7 +61,7 @@ pub use discovery::{
 };
 pub use fs::RealFs;
 pub use gh_currency::{GhCommitLookup, GhPluginManifestLookup, GhSourceTreeLookup};
-pub use harness_detect::RealProcessSpawner;
+pub use harness_detect::{spawn_retrying_busy, RealProcessSpawner};
 pub use history::{hash_entry, NoHistoryOpener, SqliteHistoryOpener};
 pub use ids::UlidIds;
 pub use lease::FileLease;
