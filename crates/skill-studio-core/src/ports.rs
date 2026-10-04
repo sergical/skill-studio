@@ -1006,7 +1006,8 @@ pub struct ProcessSpec {
     pub args: Vec<String>,
     /// Working directory.
     pub cwd: Option<PathBuf>,
-    /// Extra environment; the adapter decides what else is inherited.
+    /// Extra environment; the adapter decides what else is inherited. An
+    /// entry with an empty value removes that variable from the child.
     pub env: Vec<(String, String)>,
     /// Hard deadline in milliseconds.
     pub timeout_ms: u64,
