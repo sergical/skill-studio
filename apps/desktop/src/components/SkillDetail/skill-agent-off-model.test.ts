@@ -3,7 +3,6 @@
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
-import type { AgentOffCheck } from "@skill-studio/lib";
 import {
   perSkillLinkDeployment,
   realCopyDeployment,
@@ -15,7 +14,6 @@ import {
   turnOffActionFor,
   turnOffConfirmText,
   turnOffSuccessMessage,
-  turnOffView,
 } from "./skill-agent-off-model";
 
 const UNIVERSAL = "/home/.agents/skills/find-bugs";
@@ -51,44 +49,6 @@ describe("turn off for one agent: confirm text", () => {
 
   it("success_message_points_to_activity_for_the_undo_or_the_user_cannot_find_how_to_go_back", () => {
     expect(turnOffSuccessMessage("Codex")).toContain("Undo it from Activity");
-  });
-});
-
-describe("turn off for one agent: backend check", () => {
-  it("dotagents_refusal_shows_the_reason_and_offers_off_everywhere_or_the_user_hits_a_dead_end", () => {
-    const check: AgentOffCheck = {
-      refusal: {
-        reason: 'dotagents manages this skill. Use "Off everywhere" instead.',
-        off_everywhere: true,
-      },
-      git_tracked: null,
-      project: null,
-    };
-
-    expect(turnOffView(check)).toEqual({
-      kind: "refused",
-      reason: 'dotagents manages this skill. Use "Off everywhere" instead.',
-      offEverywhere: true,
-    });
-  });
-
-  it("plugin_refusal_shows_the_reason_only_or_off_everywhere_would_park_a_plugin_copy_core_refuses_to_park", () => {
-    const check: AgentOffCheck = {
-      refusal: {
-        reason: "a plugin copy cannot be turned off for one agent",
-        off_everywhere: false,
-      },
-      git_tracked: null,
-      project: null,
-    };
-
-    expect(turnOffView(check)).toMatchObject({ kind: "refused", offEverywhere: false });
-  });
-
-  it("no_refusal_shows_the_confirm_or_a_turn_off_the_backend_allows_would_be_blocked", () => {
-    expect(turnOffView({ refusal: null, git_tracked: false, project: null })).toEqual({
-      kind: "confirm",
-    });
   });
 });
 
@@ -152,5 +112,24 @@ describe("turn off for one agent: which rows offer it", () => {
     });
 
     expect(actionsByAgent(installed)["link:claude-code"]).toBeNull();
+  });
+
+  it("a_reader_hidden_by_its_own_settings_has_no_turn_off_while_other_readers_keep_theirs_or_a_split_would_switch_the_hidden_one_back_on", () => {
+    const installed = skill({
+      name: "find-bugs",
+      deployments: [
+        universalDeployment({ universalPath: UNIVERSAL }, { disabled_readers: ["codex"] }),
+        perSkillLinkDeployment({
+          agent: "Claude Code",
+          path: "/home/.claude/skills/find-bugs",
+          universalPath: UNIVERSAL,
+        }),
+      ],
+    });
+
+    const actions = actionsByAgent(installed);
+
+    expect(actions["reader:codex"]).toBeNull();
+    expect(actions["link:claude-code"]).toMatchObject({ kind: "turn-off-agent" });
   });
 });

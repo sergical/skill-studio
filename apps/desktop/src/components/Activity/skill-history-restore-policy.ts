@@ -15,6 +15,15 @@ export function shouldOfferForceRestore(event: SkillEvent, message: string): boo
   return event.force_restorable && isDriftRefusal(message);
 }
 
+/**
+ * The row's label. A split that names an agent is that agent's turn-off: the
+ * plain split row has no agent, "Turn off for one agent" writes the agent on it.
+ */
+export function eventLabel(event: SkillEvent, agentLabel: string | null): string {
+  if (event.kind === "split" && agentLabel) return `Turned off for ${agentLabel}`;
+  return kindLabel(event.kind);
+}
+
 /** "unlink harness" from "unlink_harness", for kinds with no friendlier label. */
 export function kindLabel(kind: string): string {
   switch (kind) {

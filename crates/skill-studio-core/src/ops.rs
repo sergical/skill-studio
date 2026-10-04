@@ -5050,12 +5050,53 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
     let deployment = session.resolve_exact(&req.deployment_id)?.clone();
     refuse_unparkable(&deployment)?;
     let skill = resolve_skill(&session.fresh, &deployment.id)?.clone();
+    let begin_step = crate::timing::step(clock, "begin_session", step_start);
+
+    let step_start = clock.monotonic();
+    let parked = park_found_copy(rt, ctx, &mut session, &deployment, &skill)?;
+    session.finish(rt, ctx);
+    let write_step = crate::timing::step(clock, "remove_link_and_rename", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "park",
+        op_start,
+        vec![begin_step, write_step],
+    ));
+    Ok(ParkOutcome {
+        event_id: parked.event_id,
+        deployment_id: deployment.id,
+        parked_path: parked.parked_dir,
+    })
+}
+
+/// What [`park_found_copy`] left behind.
+pub(crate) struct ParkedCopy {
+    pub event_id: EventId,
+    pub parked_dir: PathBuf,
+    /// The `.origin` note written next to the parked copy, when its origin
+    /// folder is one the catalog names.
+    pub origin_note: Option<PathBuf>,
+}
+
+/// The park steps that run once `deployment` is resolved and checked
+/// parkable: remove every link into it, migrate a legacy flat copy that
+/// would swallow the slot, write the `.origin` notes, move the folder into
+/// `.agents/skills-parked`, and journal it as a `park` row. Shared by `park`
+/// and `turn_off_for_agent`, so both leave a copy `unpark` handles the same
+/// way. The caller holds the session and finishes it.
+pub(crate) fn park_found_copy(
+    rt: &Runtime,
+    ctx: &OpContext,
+    session: &mut crate::ports::MutationSession,
+    deployment: &DeploymentDto,
+    skill: &InstalledSkillDto,
+) -> Result<ParkedCopy, CoreError> {
     let fs = rt.ports.fs.as_ref();
     // Before any row: a refusal here leaves no journal entry behind.
-    let dotagents = crate::ops_park_dotagents::plan_park(rt, &deployment, &skill.name)?;
-    let links: Vec<PathBuf> = find_all_links(&skill, &deployment.path, fs)
+    let dotagents = crate::ops_park_dotagents::plan_park(rt, deployment, &skill.name)?;
+    let links: Vec<PathBuf> = find_all_links(skill, &deployment.path, fs)
         .into_iter()
-        .chain(find_independent_links(&skill, &deployment, fs))
+        .chain(find_independent_links(skill, deployment, fs))
         .map(|d| d.path.clone())
         .collect();
     let scoped_links = links
@@ -5075,9 +5116,7 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
             )
         })
         .collect();
-    let begin_step = crate::timing::step(clock, "begin_session", step_start);
 
-    let step_start = clock.monotonic();
     let origin = deployment.root.clone();
     let parked_root = rt.scope.home.lexical.join(PARKED_ROOT_RELATIVE);
     let project_key = match &origin.scope {
@@ -5117,7 +5156,7 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
     {
         migrate_legacy_flat_copy(
             rt,
-            &mut session,
+            session,
             &parked_root,
             &top_level.as_os_str().to_string_lossy(),
         )?;
@@ -5181,7 +5220,7 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
                 .map_err(|e| CoreError::io(link, e))?;
         }
         let parent = parked_dir.parent().unwrap_or(&parked_dir).to_path_buf();
-        created_dirs.extend(ensure_dir_all_tracked(rt, &session, fs, &parent)?);
+        created_dirs.extend(ensure_dir_all_tracked(rt, session, fs, &parent)?);
         // `undo_on_failure` is false for a marker other parked copies share.
         let mut write_marker =
             |marker: PathBuf, text: &str, undo_on_failure: bool| -> Result<(), CoreError> {
@@ -5205,10 +5244,10 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
         }
         if let Some(relative) = &origin_root_relative {
             let marker_dir = slot_dir.join(crate::park_layout::COPY_ORIGIN_DIR);
-            created_dirs.extend(ensure_dir_all_tracked(rt, &session, fs, &marker_dir)?);
+            created_dirs.extend(ensure_dir_all_tracked(rt, session, fs, &marker_dir)?);
             write_marker(marker_dir.join(&skill.name.0), relative, true)?;
         }
-        crate::park_move::move_dir(rt, &session, &deployment.path, &parked_dir)?;
+        crate::park_move::move_dir(rt, session, &deployment.path, &parked_dir)?;
         // After the move: `dotagents remove` deletes the skill's folder, and
         // the parked copy must survive it.
         if let Some(plan) = &dotagents {
@@ -5221,7 +5260,7 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
                 &deployment.root.scope,
             ) {
                 let moved_back =
-                    crate::park_move::move_dir(rt, &session, &parked_dir, &deployment.path);
+                    crate::park_move::move_dir(rt, session, &parked_dir, &deployment.path);
                 let files_back =
                     crate::ops_park_dotagents::restore_originals(rt, &session.guard, plan);
                 let mut message = e.message.clone();
@@ -5246,7 +5285,7 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
     })();
     if let Err(e) = write_result {
         if !copy_stays_parked {
-            remove_park_scaffolding(rt, &session, &written_files, &created_dirs);
+            remove_park_scaffolding(rt, session, &written_files, &created_dirs);
         }
         // While the folder is still at its own path, the links that came
         // down are the only change left to undo.
@@ -5269,18 +5308,14 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
     session
         .store
         .finish(&session.guard, &id, crate::events::EventStatus::Done, None)?;
-    session.finish(rt, ctx);
-    let write_step = crate::timing::step(clock, "remove_link_and_rename", step_start);
-    ctx.record_timing(crate::timing::op_timing(
-        clock,
-        "park",
-        op_start,
-        vec![begin_step, write_step],
-    ));
-    Ok(ParkOutcome {
+    Ok(ParkedCopy {
         event_id: id,
-        deployment_id: deployment.id,
-        parked_path: parked_dir,
+        parked_dir,
+        origin_note: origin_root_relative.map(|_| {
+            slot_dir
+                .join(crate::park_layout::COPY_ORIGIN_DIR)
+                .join(&skill.name.0)
+        }),
     })
 }
 

@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use skill_studio_core::dto::{
-    AgentOffRequest, DeploymentDto, ListEventsRequest, RestoreRequest, ScanRequest,
+    AgentOffRequest, DeploymentDto, ListEventsRequest, RestoreCapability, RestoreRequest,
+    ScanRequest, UnparkRequest,
 };
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::{AgentId, DeploymentId, RootKind};
@@ -126,12 +127,23 @@ fn tree(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     out
 }
 
+/// Every agent but Codex that reads `global_home`'s shared folder: Claude
+/// Code and pi by link, the rest by reading the folder.
+const READERS_BESIDES_CODEX: [&str; 5] = [
+    ".claude/skills/gamma",
+    ".pi/agent/skills/gamma",
+    ".config/opencode/skills/gamma",
+    ".cursor/skills/gamma",
+    ".grok/skills/gamma",
+];
+
 /// Flow: `gamma` sits in the shared folder, linked from Claude Code and pi.
-/// Turn it off for Codex. Expect real copies for Claude Code and pi, no copy
-/// at Codex's folder, the Codex copy parked with its `.origin` note, no
-/// shared folder, and one journal row. Catches a flow that leaves the other
-/// agents without the skill, parks the wrong copy, or writes a second row
-/// the user would have to undo separately.
+/// Turn it off for Codex. Expect a real copy for every other reader
+/// (Claude Code, pi, `OpenCode`, Cursor, Grok Build), no copy at Codex's
+/// folder, the Codex copy parked with its `.origin` note, no shared folder,
+/// and the split row (marked as Codex's turn-off) plus the park row Unpark
+/// needs. Catches a flow that leaves an agent without the skill or parks
+/// the wrong copy.
 #[test]
 fn turning_off_codex_keeps_every_other_agent_live_and_parks_the_codex_copy_in_one_event() {
     let home = unique_temp_dir("agent_off_codex");
@@ -149,13 +161,21 @@ fn turning_off_codex_keeps_every_other_agent_live_and_parks_the_codex_copy_in_on
         ".codex/skills"
     );
     assert!(std::fs::symlink_metadata(home.join(".codex/skills/gamma")).is_err());
-    for live in [".claude/skills/gamma", ".pi/agent/skills/gamma"] {
+    for live in READERS_BESIDES_CODEX {
         let live = home.join(live);
         assert!(is_real_dir(&live), "{} must be a real copy", live.display());
         assert_eq!(std::fs::read(live.join("SKILL.md")).unwrap(), SKILL_MD);
     }
     assert!(std::fs::symlink_metadata(home.join(".agents/skills/gamma")).is_err());
-    assert_eq!(kinds(&rt), vec!["split".to_string()]);
+    let mut kinds = kinds(&rt);
+    kinds.sort();
+    assert_eq!(kinds, vec!["park".to_string(), "split".to_string()]);
+    let split_row = ops::list_events(&rt, &ctx(), &ListEventsRequest::default())
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == "split")
+        .unwrap();
+    assert_eq!(split_row.harness, Some(AgentId::parse("codex").unwrap()));
 
     std::fs::remove_dir_all(&home).ok();
 }
@@ -187,6 +207,9 @@ fn undo_after_turning_off_codex_restores_the_shared_folder_and_removes_every_new
     assert_eq!(tree(&home.join(".agents/skills/gamma")), before);
     for link in [".claude/skills/gamma", ".pi/agent/skills/gamma"] {
         assert!(is_link(&home.join(link)), "{link} must be a link again");
+    }
+    for copy in READERS_BESIDES_CODEX.iter().skip(2) {
+        assert!(std::fs::symlink_metadata(home.join(copy)).is_err());
     }
     assert!(std::fs::symlink_metadata(home.join(".codex/skills/gamma")).is_err());
     assert!(std::fs::symlink_metadata(home.join(".agents/skills-parked/codex/gamma")).is_err());
@@ -311,7 +334,7 @@ fn a_whole_folder_claude_link_is_refused_with_off_everywhere_and_nothing_is_writ
     let check = turn_off_check(&rt, &ctx(), &request(id, "codex")).unwrap();
 
     assert!(
-        error.message.contains("link to the Universal folder"),
+        error.message.contains("link to the shared folder"),
         "{}",
         error.message
     );
@@ -356,7 +379,7 @@ fn an_agent_that_does_not_read_the_shared_folder_is_refused() {
 /// Flow: a regular file blocks the `.origin` folder the parked copy's note
 /// goes in, so the park step fails after the split wrote every copy. Expect
 /// the error, the shared folder and links back as they were, no per-agent
-/// copy, and the one split row marked as undone. Catches a failure that
+/// copy, no restore row, and the split row failed with no Undo. Catches a failure that
 /// leaves the user with copies for every agent and a shared folder that is
 /// gone.
 #[test]
@@ -381,10 +404,201 @@ fn a_park_step_that_fails_rolls_the_split_back() {
     assert!(std::fs::symlink_metadata(parked_codex.join("gamma")).is_err());
     let events = ops::list_events(&rt, &ctx(), &ListEventsRequest::default()).unwrap();
     assert!(
-        events.iter().any(|e| e.kind == "restore"),
-        "the rollback must be a restore of the split row"
+        events.iter().all(|e| e.kind != "restore"),
+        "the rollback happens inside the op and writes no restore row to undo"
     );
+    let split_row = events.iter().find(|e| e.kind == "split").unwrap();
+    assert_eq!(split_row.status, "failed");
+    assert_eq!(split_row.restore, RestoreCapability::NoInverse);
 
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: turn `gamma` off for Codex, then unpark the Codex copy. Expect the
+/// copy back in Codex's folder, a real folder with the original bytes, read by
+/// Codex again, and the parked copy gone. Catches a parked copy that Unpark
+/// cannot place (the user could not turn the skill back on, which #390
+/// requires).
+#[test]
+fn unparking_the_turned_off_copy_gives_codex_its_skill_back() {
+    let home = unique_temp_dir("agent_off_unpark");
+    global_home(&home);
+    let rt = runtime(&home, &[]);
+    let id = shared_deployment(&rt).id;
+    let outcome = turn_off_for_agent(&rt, &ctx(), &request(id, "codex")).unwrap();
+    let inventory = ops::scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+    let parked = inventory
+        .skills
+        .iter()
+        .flat_map(|s| s.deployments.iter())
+        .find(|d| d.root.kind == RootKind::Parked && d.path == outcome.parked_path)
+        .unwrap();
+
+    ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked.id.clone(),
+        },
+    )
+    .unwrap();
+
+    let codex_copy = home.join(".codex/skills/gamma");
+    assert!(is_real_dir(&codex_copy));
+    assert_eq!(
+        std::fs::read(codex_copy.join("SKILL.md")).unwrap(),
+        SKILL_MD
+    );
+    assert!(std::fs::symlink_metadata(&outcome.parked_path).is_err());
+    let inventory = ops::scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+    assert!(inventory
+        .skills
+        .iter()
+        .flat_map(|s| s.deployments.iter())
+        .any(
+            |d| d.root.kind == RootKind::Harness(AgentId::parse("codex").unwrap())
+                && d.path == codex_copy
+        ));
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+fn refused(rt: &Runtime, home: &Path, agent: &str) -> skill_studio_core::dto::AgentOffRefusal {
+    let id = shared_deployment(rt).id;
+    let error = turn_off_for_agent(rt, &ctx(), &request(id.clone(), agent)).unwrap_err();
+    let refusal = turn_off_check(rt, &ctx(), &request(id, agent))
+        .unwrap()
+        .refusal
+        .unwrap_or_else(|| panic!("the check must refuse too: {}", error.message));
+    assert_eq!(refusal.reason, error.message);
+    assert_eq!(
+        std::fs::read(home.join(".agents/skills/gamma/SKILL.md")).unwrap(),
+        SKILL_MD
+    );
+    assert!(std::fs::symlink_metadata(home.join(".agents/skills-parked")).is_err());
+    assert!(kinds(rt).is_empty());
+    refusal
+}
+
+/// Flow: turn `gamma` off for Cursor. Cursor also reads the Claude Code and
+/// Codex folders, and the split writes a copy into both. Expect a refusal
+/// that names them and offers "Off everywhere", with nothing written. Catches
+/// a "turn off" that parks Cursor's copy while Cursor still loads the others.
+#[test]
+fn cursor_is_refused_because_it_also_reads_the_codex_and_claude_folders() {
+    let home = unique_temp_dir("agent_off_cursor");
+    global_home(&home);
+    let rt = runtime(&home, &[]);
+
+    let refusal = refused(&rt, &home, "cursor");
+
+    assert!(refusal.off_everywhere);
+    assert!(refusal.reason.contains("Codex"), "{}", refusal.reason);
+    assert!(refusal.reason.contains("Claude Code"), "{}", refusal.reason);
+    assert!(refusal.reason.contains("Off everywhere"));
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: turn `gamma` off for `OpenCode` while Claude Code links it. `OpenCode`
+/// reads `~/.claude/skills`, where the split writes Claude Code's copy.
+/// Expect a refusal naming Claude Code. Catches an `OpenCode` that stays on
+/// through Claude Code's copy.
+#[test]
+fn opencode_is_refused_when_claude_code_would_get_a_copy_it_reads() {
+    let home = unique_temp_dir("agent_off_opencode_claude");
+    global_home(&home);
+    let rt = runtime(&home, &[]);
+
+    let refusal = refused(&rt, &home, "open-code");
+
+    assert!(refusal.off_everywhere);
+    assert!(refusal.reason.contains("Claude Code"), "{}", refusal.reason);
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: turn `gamma` off for `OpenCode` when Claude Code has no link and no
+/// copy. Expect it to go through: `OpenCode`'s copy is parked, the others live.
+/// Catches a refusal that shuts out `OpenCode` when nothing else it reads holds
+/// the skill.
+#[test]
+fn opencode_is_allowed_when_it_reads_no_other_copy() {
+    let home = unique_temp_dir("agent_off_opencode_alone");
+    shared_skill(
+        &home.join(".agents/skills"),
+        &[home.join(".pi/agent/skills")],
+    );
+    let rt = runtime(&home, &[]);
+    let id = shared_deployment(&rt).id;
+
+    let outcome = turn_off_for_agent(&rt, &ctx(), &request(id, "open-code")).unwrap();
+
+    assert_eq!(
+        std::fs::read(outcome.parked_path.join("SKILL.md")).unwrap(),
+        SKILL_MD
+    );
+    assert!(std::fs::symlink_metadata(home.join(".config/opencode/skills/gamma")).is_err());
+    assert!(std::fs::symlink_metadata(home.join(".claude/skills/gamma")).is_err());
+    for live in [".codex/skills/gamma", ".pi/agent/skills/gamma"] {
+        assert!(is_real_dir(&home.join(live)), "{live} must be a real copy");
+    }
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: Codex's own settings already turn `gamma` off (by path), then turn it
+/// off for pi. The split would give Codex a copy at a new path, which the
+/// settings no longer cover. Expect a refusal naming Codex with "Off
+/// everywhere", nothing written. Catches a turn-off for one agent that
+/// switches the skill back on for another.
+#[test]
+fn a_reader_with_the_skill_off_in_its_own_settings_blocks_the_split() {
+    let home = unique_temp_dir("agent_off_config_off");
+    global_home(&home);
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    std::fs::write(
+        home.join(".codex/config.toml"),
+        format!(
+            "[[skills.config]]\npath = \"{}\"\nenabled = false\n",
+            home.join(".agents/skills/gamma/SKILL.md").display()
+        ),
+    )
+    .unwrap();
+    let rt = runtime(&home, &[]);
+
+    let refusal = refused(&rt, &home, "pi");
+
+    assert!(refusal.off_everywhere);
+    assert!(refusal.reason.contains("Codex"), "{}", refusal.reason);
+    assert!(
+        refusal.reason.contains("own settings"),
+        "{}",
+        refusal.reason
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: a parked copy of `gamma` from Codex already sits in the slot. Turn
+/// `gamma` off for Codex. Expect a refusal that says so and nothing written.
+/// Catches a turn-off that splits first and fails at the park step.
+#[test]
+fn a_parked_copy_already_in_the_slot_is_refused_before_any_write() {
+    let home = unique_temp_dir("agent_off_slot_taken");
+    global_home(&home);
+    let taken = home.join(".agents/skills-parked/codex/gamma");
+    std::fs::create_dir_all(&taken).unwrap();
+    std::fs::write(taken.join("SKILL.md"), SKILL_MD).unwrap();
+    let rt = runtime(&home, &[]);
+    let id = shared_deployment(&rt).id;
+
+    let error = turn_off_for_agent(&rt, &ctx(), &request(id, "codex")).unwrap_err();
+
+    assert!(
+        error.message.contains("already exists"),
+        "{}",
+        error.message
+    );
+    assert!(is_link(&home.join(".claude/skills/gamma")));
+    assert!(std::fs::symlink_metadata(home.join(".codex/skills/gamma")).is_err());
+    assert_eq!(std::fs::read(taken.join("SKILL.md")).unwrap(), SKILL_MD);
     std::fs::remove_dir_all(&home).ok();
 }
 

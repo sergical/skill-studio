@@ -3,25 +3,27 @@
 //! splits it (a real copy for every agent that reads the folder) and then
 //! parks the chosen agent's copy.
 //!
-//! The split's journal row is the one row Activity shows. The park step
-//! writes no row of its own: it extends the split row's inverse, so one undo
-//! (`restore_event`) puts the shared folder back and removes the per-agent
-//! copies, the parked copy, and its `.origin` note.
+//! Both steps run in the split's one session, under one lease. The split's
+//! journal row is the row Activity shows, marked `agent_off` from the start;
+//! the park step adds a `park` row of its own (the shared
+//! `ops::park_found_copy`), so `unpark` brings the copy back like any other
+//! parked copy. One undo (`restore_event`) of the split row puts the shared
+//! folder back and removes the per-agent copies and the parked copy.
 
 use std::path::{Path, PathBuf};
 
 use crate::dto::{
     AgentOffCheck, AgentOffOutcome, AgentOffRefusal, AgentOffRequest, DeploymentDto,
-    InstalledSkillDto, ParkCheckRequest, RestoreRequest, ScanRequest, SplitRequest,
+    InstalledSkillDto, ParkCheckRequest, ScanRequest, SplitRequest,
 };
 use crate::error::{CoreError, ErrorCode};
 use crate::harness::{RootRole, ScopeLevel};
 use crate::identity::{
-    AgentId, BackingRelationship, LifecycleOwnerKind, RootKind, RootRef, RootScope, SkillName,
+    AgentId, BackingRelationship, EventId, LifecycleOwnerKind, RootKind, RootScope, SkillName,
     PARKED_ROOT_RELATIVE,
 };
-use crate::ops::{self, Operation, Outcome};
-use crate::ops_split::{refuse_whole_folder_link, split_target_root};
+use crate::ops::{self, Operation, Outcome, ParkedCopy};
+use crate::ops_split::{is_whole_folder_link, split_body, split_target_root, AgentOffHook};
 use crate::ports::{MutationSession, OpContext, Runtime};
 
 /// The harnesses `split` can write a copy for, in the split dialog's order.
@@ -46,13 +48,16 @@ impl Outcome for AgentOffOutcome {
 /// deployment is the live Universal folder; it is not a plugin copy and not
 /// managed by dotagents (whose `install` would put the shared folder back);
 /// `agent` reads the shared folder in that scope; no reader's skills folder
-/// is a whole-folder link into it; and nothing is parked yet for `agent`'s
+/// is a whole-folder link into it; `agent` reads no other folder the split
+/// would put a copy in (Cursor, `OpenCode`, and Grok Build also read the
+/// Claude Code folder, Cursor the Codex folder); no other reader has the
+/// skill off in its own settings; and nothing is parked yet for `agent`'s
 /// copy of this skill.
 ///
-/// Sequence: `split` for every agent that reads the folder (its own lease
-/// and journal row), then the park step for `agent`'s new copy. If the park
-/// step fails, the split is undone through `restore_event`, so a failure
-/// leaves the shared folder as it was.
+/// Sequence, in one session: `split` for every agent that reads the folder,
+/// then park `agent`'s new copy. If the park step fails, the split is rolled
+/// back inside the session, so a failure leaves the shared folder as it was
+/// and writes no undoable row.
 pub fn turn_off_for_agent(
     rt: &Runtime,
     ctx: &OpContext,
@@ -110,18 +115,26 @@ fn turn_off_for_agent_body(
             return Err(CoreError::new(ErrorCode::Unsupported, refused.reason));
         }
     };
-    let split = ops::split(
+    let park =
+        |rt: &Runtime, ctx: &OpContext, session: &mut MutationSession, split_event: &EventId| {
+            park_agent_copy(rt, ctx, session, split_event, &plan, &req.agent)
+        };
+    let hook = AgentOffHook {
+        agent: &req.agent,
+        park: &park,
+    };
+    let (split, parked_path) = split_body(
         rt,
         ctx,
         &SplitRequest {
             deployment_id: req.deployment_id.clone(),
             harnesses: plan.harnesses.clone(),
         },
+        Some(&hook),
     )?;
-    let parked_path = match park_agent_copy(rt, ctx, &plan, &split.event_id, &req.agent) {
-        Ok(path) => path,
-        Err(error) => return Err(undo_split(rt, ctx, &split.event_id, error)),
-    };
+    let parked_path = parked_path.ok_or_else(|| {
+        CoreError::new(ErrorCode::Io, "the split finished without parking a copy")
+    })?;
     Ok(AgentOffOutcome {
         event_id: split.event_id,
         deployment_id: split.deployment_id,
@@ -133,31 +146,26 @@ fn turn_off_for_agent_body(
     })
 }
 
-/// Undoes the split after a failed park step and returns the error to
-/// report: the park error, plus a note when the undo failed too.
-fn undo_split(
-    rt: &Runtime,
-    ctx: &OpContext,
-    split_event: &crate::identity::EventId,
-    park_error: CoreError,
-) -> CoreError {
-    let undo = ops::restore_event(
-        rt,
-        ctx,
-        &RestoreRequest {
-            event_id: split_event.clone(),
-            force: false,
-        },
-    );
-    match undo {
-        Ok(_) => park_error,
-        Err(undo_error) => CoreError::new(
-            park_error.code,
-            format!(
-                "{}; undoing the split failed too ({}), so use Undo on the split in Activity",
-                park_error.message, undo_error.message
-            ),
-        ),
+fn harness_label(rt: &Runtime, id: &AgentId) -> String {
+    rt.ports
+        .catalog
+        .get(id)
+        .map_or_else(|| id.as_str().to_string(), |f| f.display_name.clone())
+}
+
+/// "Codex", "Codex and Claude Code", "A, B and C".
+fn join_labels(labels: &[String]) -> String {
+    match labels {
+        [] => String::new(),
+        [only] => only.clone(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
+}
+
+fn scope_level(scope: &RootScope) -> ScopeLevel {
+    match scope {
+        RootScope::Global => ScopeLevel::Global,
+        RootScope::Project(_) => ScopeLevel::Project,
     }
 }
 
@@ -166,10 +174,7 @@ fn undo_split(
 /// that reach it through a link. A harness with a real copy of its own is
 /// not a reader.
 fn readers(rt: &Runtime, skill: &InstalledSkillDto, deployment: &DeploymentDto) -> Vec<AgentId> {
-    let level = match deployment.root.scope {
-        RootScope::Global => ScopeLevel::Global,
-        RootScope::Project(_) => ScopeLevel::Project,
-    };
+    let level = scope_level(&deployment.root.scope);
     let own_deployments = |harness: &AgentId| {
         skill
             .deployments
@@ -196,6 +201,86 @@ fn readers(rt: &Runtime, skill: &InstalledSkillDto, deployment: &DeploymentDto) 
             let has_own_copy = own.iter().any(|d| !reaches_by_link(d));
             !has_own_copy && (reads_root || own.iter().any(reaches_by_link))
         })
+        .collect()
+}
+
+/// The harnesses whose skills folder `agent` also reads, and where the
+/// split would leave a copy of the skill: it writes one for every reader,
+/// and a real copy already there stays. `agent` would still load that copy
+/// after its own is parked.
+fn cross_readers(
+    rt: &Runtime,
+    skill: &InstalledSkillDto,
+    deployment: &DeploymentDto,
+    agent: &AgentId,
+    harnesses: &[AgentId],
+) -> Vec<AgentId> {
+    let scope = &deployment.root.scope;
+    let level = scope_level(scope);
+    let Some(facts) = rt.ports.catalog.get(agent) else {
+        return Vec::new();
+    };
+    let cross_roots: Vec<PathBuf> = facts
+        .roots
+        .iter()
+        .filter(|root| root.role == RootRole::CrossHarness && root.level == level)
+        .map(|root| match scope {
+            RootScope::Global => rt.scope.global_root_path(Path::new(&root.relative_path)),
+            RootScope::Project(project) => project.0.join(&root.relative_path),
+        })
+        .collect();
+    SPLIT_HARNESSES
+        .iter()
+        .filter_map(|raw| AgentId::parse(raw).ok())
+        .filter(|other| other != agent)
+        .filter(|other| {
+            let Some(root) = split_target_root(rt, scope, other) else {
+                return false;
+            };
+            cross_roots.contains(&root)
+                && (harnesses.contains(other)
+                    || skill.deployments.iter().any(|d| {
+                        d.root.scope == *scope
+                            && d.plugin.is_none()
+                            && !d.is_symlink
+                            && d.path.parent() == Some(root.as_path())
+                    }))
+        })
+        .collect()
+}
+
+/// The readers other than `agent` that have the skill off in their own
+/// settings: Codex by the path of its `SKILL.md`, `OpenCode` by name. The split
+/// gives Codex a copy at a new path, which its path-based rule no longer
+/// covers.
+fn config_off_readers(
+    rt: &Runtime,
+    deployment: &DeploymentDto,
+    skill: &SkillName,
+    agent: &AgentId,
+    harnesses: &[AgentId],
+) -> Vec<AgentId> {
+    let fs = rt.ports.fs.as_ref();
+    harnesses
+        .iter()
+        .filter(|harness| *harness != agent)
+        .filter(|harness| match harness.as_str() {
+            AgentId::CODEX => {
+                let skill_md = deployment.path.join("SKILL.md");
+                ops::codex_disabled_skill_md_paths(fs, &rt.scope.codex_home)
+                    .contains(&ops::codex_path_form(fs, &skill_md))
+            }
+            AgentId::OPEN_CODE => {
+                let config_dir = rt
+                    .scope
+                    .opencode_config_root
+                    .clone()
+                    .unwrap_or_else(|| rt.scope.home.lexical.join(".config").join("opencode"));
+                crate::opencode_config::read_skill_rules(fs, &config_dir).is_denied(&skill.0)
+            }
+            _ => false,
+        })
+        .cloned()
         .collect()
 }
 
@@ -226,10 +311,7 @@ fn plan(
             )
         })?;
     let fs = rt.ports.fs.as_ref();
-    let agent_label = rt.ports.catalog.get(&req.agent).map_or_else(
-        || req.agent.as_str().to_string(),
-        |f| f.display_name.clone(),
-    );
+    let agent_label = harness_label(rt, &req.agent);
 
     if deployment.plugin.is_some() || deployment.owner_kind == LifecycleOwnerKind::Plugin {
         return Ok(Err(refusal(
@@ -279,10 +361,43 @@ fn plan(
         let Some(root) = split_target_root(rt, &deployment.root.scope, harness) else {
             continue;
         };
-        if let Err(error) = refuse_whole_folder_link(fs, harness, &root, &canonical_universal_root)
-        {
-            return Ok(Err(refusal(error.message, true)));
+        if is_whole_folder_link(fs, &root, &canonical_universal_root) {
+            return Ok(Err(refusal(
+                format!(
+                    "{} is a link to the shared folder, so {} has no folder of its own to hold a copy. Use \"Off everywhere\" instead.",
+                    root.display(),
+                    harness_label(rt, harness)
+                ),
+                true,
+            )));
         }
+    }
+
+    let also_read = cross_readers(rt, skill, deployment, &req.agent, &harnesses);
+    if !also_read.is_empty() {
+        let folders: Vec<String> = also_read.iter().map(|id| harness_label(rt, id)).collect();
+        return Ok(Err(refusal(
+            format!(
+                "{agent_label} also reads the {} {}, so it would still load {}. Use \"Off everywhere\" instead.",
+                join_labels(&folders),
+                if folders.len() == 1 { "folder" } else { "folders" },
+                skill.name.0
+            ),
+            true,
+        )));
+    }
+
+    let config_off = config_off_readers(rt, deployment, &skill.name, &req.agent, &harnesses);
+    if !config_off.is_empty() {
+        let labels: Vec<String> = config_off.iter().map(|id| harness_label(rt, id)).collect();
+        return Ok(Err(refusal(
+            format!(
+                "{} already has {} off in its own settings, and a copy made for {agent_label} could turn it back on there. Use \"Off everywhere\" instead.",
+                join_labels(&labels),
+                skill.name.0
+            ),
+            true,
+        )));
     }
 
     let agent_root =
@@ -292,9 +407,15 @@ fn plan(
                 format!("`{}` has no skills folder to copy into", req.agent.as_str()),
             )
         })?;
-    let agent_copy = agent_root.join(&skill.name.0);
-    let parked = parked_place(rt, &deployment.root.scope, &req.agent, &skill.name)?;
-    if fs.symlink_metadata(&parked.dir).is_ok() || parked.slot_name_taken {
+    if fs
+        .symlink_metadata(&parked_dir(
+            rt,
+            &deployment.root.scope,
+            &req.agent,
+            &skill.name,
+        )?)
+        .is_ok()
+    {
         return Ok(Err(refusal(
             format!(
                 "a parked copy of this skill from {agent_label} already exists; turn it on or delete it first"
@@ -305,92 +426,63 @@ fn plan(
     Ok(Ok(Plan {
         skill: skill.name.clone(),
         harnesses,
-        agent_copy,
+        agent_copy: agent_root.join(&skill.name.0),
     }))
 }
 
 /// Where a plain park of `agent`'s copy would put it.
-struct ParkedPlace {
-    origin: RootRef,
-    parked_root: PathBuf,
-    project_key: Option<String>,
-    slot_dir: PathBuf,
-    dir: PathBuf,
-    /// An old flat parked copy whose folder name is this slot's name: moving
-    /// into the slot would put the new copy inside it.
-    slot_name_taken: bool,
-}
-
-fn parked_place(
+fn parked_dir(
     rt: &Runtime,
     scope: &RootScope,
     agent: &AgentId,
     skill: &SkillName,
-) -> Result<ParkedPlace, CoreError> {
-    let fs = rt.ports.fs.as_ref();
-    let origin = RootRef {
+) -> Result<PathBuf, CoreError> {
+    let origin = crate::identity::RootRef {
         scope: scope.clone(),
         kind: RootKind::Harness(agent.clone()),
     };
-    let parked_root = rt.scope.home.lexical.join(PARKED_ROOT_RELATIVE);
     let project_key = match scope {
         RootScope::Global => None,
         RootScope::Project(project) => Some(crate::park_layout::project_key(
-            &fs.canonicalize(&project.0)
+            &rt.ports
+                .fs
+                .canonicalize(&project.0)
                 .unwrap_or_else(|_| project.0.clone()),
         )),
     };
-    let slot_dir =
-        crate::park_layout::parked_slot_dir(&parked_root, &origin, project_key.as_deref())
-            .ok_or_else(|| {
-                CoreError::new(
-                    ErrorCode::Unsupported,
-                    format!("{}'s copy cannot be parked", agent.as_str()),
-                )
-            })?;
-    let slot_name_taken = slot_dir
-        .strip_prefix(&parked_root)
-        .ok()
-        .and_then(|relative| relative.components().next())
-        .is_some_and(|top_level| {
-            fs.symlink_metadata(&parked_root.join(top_level).join("SKILL.md"))
-                .is_ok()
-        });
-    let dir = slot_dir.join(&skill.0);
-    Ok(ParkedPlace {
-        origin,
-        parked_root,
-        project_key,
-        slot_dir,
-        dir,
-        slot_name_taken,
-    })
+    let parked_root = rt.scope.home.lexical.join(PARKED_ROOT_RELATIVE);
+    crate::park_layout::parked_slot_dir(&parked_root, &origin, project_key.as_deref())
+        .map(|slot| slot.join(&skill.0))
+        .ok_or_else(|| {
+            CoreError::new(
+                ErrorCode::Unsupported,
+                format!("{}'s copy cannot be parked", agent.as_str()),
+            )
+        })
 }
 
-/// Parks `agent`'s fresh copy exactly as `ops::park` would, but writes no
-/// journal row: the split row's inverse learns about the parked copy and its
-/// `.origin` note before the move, so the one undo removes them.
+/// Parks `agent`'s fresh copy with the same steps `ops::park` runs, then
+/// teaches the split row's inverse about the parked copy and its `.origin`
+/// note, so the one undo removes them too.
+///
+/// The session's inventory predates the split, so it is scanned again to
+/// see the new copy.
 fn park_agent_copy(
     rt: &Runtime,
     ctx: &OpContext,
-    plan: &Plan,
-    split_event: &crate::identity::EventId,
-    agent: &AgentId,
-) -> Result<PathBuf, CoreError> {
-    let mut session = MutationSession::begin_for(rt, ctx, std::slice::from_ref(&plan.skill))?;
-    let result = park_in_session(rt, &mut session, plan, split_event, agent);
-    session.finish(rt, ctx);
-    result
-}
-
-fn park_in_session(
-    rt: &Runtime,
     session: &mut MutationSession,
+    split_event: &EventId,
     plan: &Plan,
-    split_event: &crate::identity::EventId,
     agent: &AgentId,
 ) -> Result<PathBuf, CoreError> {
-    let fs = rt.ports.fs.as_ref();
+    session.fresh = ops::scan_inner(
+        rt,
+        ctx,
+        &ScanRequest {
+            skills: vec![plan.skill.clone()],
+            timings: false,
+        },
+    )?;
     let copy = find_copy(rt, session, &plan.agent_copy).ok_or_else(|| {
         CoreError::new(
             ErrorCode::Io,
@@ -402,62 +494,10 @@ fn park_in_session(
         .at(&plan.agent_copy)
     })?;
     ops::refuse_unparkable(&copy)?;
-    let place = parked_place(rt, &copy.root.scope, agent, &plan.skill)?;
-    if fs.symlink_metadata(&place.dir).is_ok() {
-        return Err(CoreError::new(
-            ErrorCode::InvalidRequest,
-            "a parked copy from this folder already exists for this skill",
-        )
-        .at(&place.dir));
-    }
-    let origin_root_relative = ops::origin_root_relative(rt, &place.origin, &copy.path);
-    let copy_fingerprint = crate::events::fingerprint_path(fs, &copy.path)?;
-
-    let mut created_dirs: Vec<PathBuf> = Vec::new();
-    let mut written_files: Vec<PathBuf> = Vec::new();
-    let result = (|| -> Result<(), CoreError> {
-        let parent = place.dir.parent().unwrap_or(&place.dir).to_path_buf();
-        created_dirs.extend(ops::ensure_dir_all_tracked(rt, session, fs, &parent)?);
-        if let (RootScope::Project(project), Some(key)) = (&place.origin.scope, &place.project_key)
-        {
-            let key_dir = place
-                .parked_root
-                .join(crate::park_layout::PARKED_PROJECTS_DIR)
-                .join(key);
-            let marker = key_dir.join(crate::park_layout::PROJECT_ORIGIN_MARKER);
-            write_marker(
-                rt,
-                session,
-                &marker,
-                &project.0.to_string_lossy(),
-                created_dirs.contains(&key_dir),
-                &mut written_files,
-            )?;
-        }
-        let mut note = None;
-        if let Some(relative) = &origin_root_relative {
-            let marker_dir = place.slot_dir.join(crate::park_layout::COPY_ORIGIN_DIR);
-            created_dirs.extend(ops::ensure_dir_all_tracked(rt, session, fs, &marker_dir)?);
-            let marker = marker_dir.join(&plan.skill.0);
-            write_marker(rt, session, &marker, relative, true, &mut written_files)?;
-            note = Some(marker);
-        }
-        record_parked_copy(
-            session,
-            fs,
-            split_event,
-            agent,
-            &place.dir,
-            copy_fingerprint.as_ref(),
-            note.as_deref(),
-        )?;
-        crate::park_move::move_dir(rt, session, &copy.path, &place.dir)
-    })();
-    if let Err(error) = result {
-        ops::remove_park_scaffolding(rt, session, &written_files, &created_dirs);
-        return Err(error);
-    }
-    Ok(place.dir)
+    let skill = ops::resolve_skill(&session.fresh, &copy.id)?.clone();
+    let parked = ops::park_found_copy(rt, ctx, session, &copy, &skill)?;
+    record_parked_copy(rt, session, split_event, agent, &parked)?;
+    Ok(parked.parked_dir)
 }
 
 fn find_copy(rt: &Runtime, session: &MutationSession, path: &Path) -> Option<DeploymentDto> {
@@ -477,38 +517,17 @@ fn find_copy(rt: &Runtime, session: &MutationSession, path: &Path) -> Option<Dep
         .cloned()
 }
 
-/// `undo_on_failure` is false for a marker other parked copies share.
-fn write_marker(
-    rt: &Runtime,
-    session: &MutationSession,
-    marker: &Path,
-    text: &str,
-    undo_on_failure: bool,
-    written_files: &mut Vec<PathBuf>,
-) -> Result<(), CoreError> {
-    let fs = rt.ports.fs.as_ref();
-    let scoped = crate::ports::confine(&rt.scope, fs, marker)?;
-    fs.write_atomic(&session.guard, &scoped, text.as_bytes())
-        .map_err(|e| CoreError::io(marker, e))?;
-    if undo_on_failure {
-        written_files.push(marker.to_path_buf());
-    }
-    Ok(())
-}
-
 /// Adds the parked copy and its `.origin` note to the split row's
 /// `remove_copies`, so `restore_event` takes them down with the per-agent
-/// copies. The parked copy has the bytes of the copy being moved, so its
-/// fingerprint is known before the move.
+/// copies, and records where it went in the row's `agent_off` marker.
 fn record_parked_copy(
+    rt: &Runtime,
     session: &mut MutationSession,
-    fs: &dyn crate::ports::ScopeFs,
-    split_event: &crate::identity::EventId,
+    split_event: &EventId,
     agent: &AgentId,
-    parked_dir: &Path,
-    copy_fingerprint: Option<&crate::identity::Fingerprint>,
-    note: Option<&Path>,
+    parked: &ParkedCopy,
 ) -> Result<(), CoreError> {
+    let fs = rt.ports.fs.as_ref();
     let record = session
         .store
         .get(split_event)?
@@ -525,12 +544,12 @@ fn record_parked_copy(
                 .map(|fingerprint| (path, fingerprint))
         })
         .collect();
-    if let Some(fingerprint) = copy_fingerprint {
-        copies.push((parked_dir.to_path_buf(), fingerprint.clone()));
+    if let Some(fingerprint) = crate::events::fingerprint_path(fs, &parked.parked_dir)? {
+        copies.push((parked.parked_dir.clone(), fingerprint));
     }
-    if let Some(note) = note {
+    if let Some(note) = &parked.origin_note {
         if let Some(fingerprint) = crate::events::fingerprint_path(fs, note)? {
-            copies.push((note.to_path_buf(), fingerprint));
+            copies.push((note.clone(), fingerprint));
         }
     }
     let patch = crate::events::with_remove_copies(serde_json::json!({}), &copies);
@@ -541,7 +560,7 @@ fn record_parked_copy(
         &session.guard,
         split_event,
         serde_json::json!({
-            "agent_off": { "agent": agent.as_str(), "parked_to": parked_dir },
+            "agent_off": { "agent": agent.as_str(), "parked_to": parked.parked_dir },
         }),
     )
 }

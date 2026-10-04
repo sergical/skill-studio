@@ -92,6 +92,10 @@ pub fn dto_from_row(
     let restorable = row.restorable
         && !is_agent_config_event(store, &row)
         && row.inverse.is_some()
+        && row
+            .payload
+            .get(skill_studio_core::events::ROLLED_BACK_PAYLOAD_KEY)
+            .is_none()
         && row.reverted_by.is_none()
         && matches!(row.status.as_str(), "done" | "failed" | "interrupted");
     let backup_path = row.backup_dir.as_ref().map(|dir| {
