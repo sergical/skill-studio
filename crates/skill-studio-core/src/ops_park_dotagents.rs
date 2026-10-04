@@ -199,13 +199,17 @@ fn lists_explicitly(doc: &toml_edit::DocumentMut, name: &str) -> bool {
 /// `owner/repo` of a hosted URL body such as `owner/repo.git/@ref`; GitLab
 /// owners may be nested groups. Mirrors the GITHUB_* and GITLAB_* patterns of
 /// dotagents-lib (`sources/repository-source.js`).
-fn hosted_owner_repo(rest: &str, nested_groups: bool) -> Option<String> {
+fn hosted_owner_repo(rest: &str, nested_groups: bool, trailing_slash: bool) -> Option<String> {
     let base = match rest.split_once('@') {
         Some((_, "")) => return None,
         Some((base, _ref)) => base,
         None => rest,
     };
-    let base = base.strip_suffix('/').unwrap_or(base);
+    let base = if trailing_slash {
+        base.strip_suffix('/').unwrap_or(base)
+    } else {
+        base
+    };
     let base = base.strip_suffix(".git").unwrap_or(base);
     let (owner, repo) = if nested_groups {
         base.rsplit_once('/')?
@@ -231,35 +235,24 @@ fn normalize_source(source: &str) -> String {
     if source.starts_with("path:") || source.starts_with("git:") {
         return source.to_string();
     }
-    let lower = source.to_ascii_lowercase();
-    let hosts: [(&[&str], bool); 2] = [
-        (
-            &[
-                "https://github.com/",
-                "http://github.com/",
-                "git@github.com:",
-            ],
-            false,
-        ),
-        (
-            &[
-                "https://gitlab.com/",
-                "http://gitlab.com/",
-                "git@gitlab.com:",
-            ],
-            true,
-        ),
+    // The GitHub and GitLab patterns are case-sensitive; only the generic
+    // `https://` check below ignores case. SSH sources take no trailing `/`.
+    let hosts: [(&str, bool, bool); 6] = [
+        ("https://github.com/", false, true),
+        ("http://github.com/", false, true),
+        ("git@github.com:", false, false),
+        ("https://gitlab.com/", true, true),
+        ("http://gitlab.com/", true, true),
+        ("git@gitlab.com:", true, false),
     ];
-    for (prefixes, nested_groups) in hosts {
-        for prefix in prefixes {
-            if lower.starts_with(prefix) {
-                if let Some(repo) = hosted_owner_repo(&source[prefix.len()..], nested_groups) {
-                    return repo;
-                }
+    for (prefix, nested_groups, trailing_slash) in hosts {
+        if let Some(rest) = source.strip_prefix(prefix) {
+            if let Some(repo) = hosted_owner_repo(rest, nested_groups, trailing_slash) {
+                return repo;
             }
         }
     }
-    if lower.starts_with("https://") {
+    if source.to_ascii_lowercase().starts_with("https://") {
         let rest = &source["https://".len()..];
         let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
         let (host, tail) = rest.split_at(host_end);
@@ -370,11 +363,6 @@ fn add_exclude(row: &mut toml_edit::Table, name: &str) {
         exclude.push(name);
         return;
     }
-    let newline = if layout.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    };
     let Some(last) = exclude.len().checked_sub(1) else {
         exclude.push(name);
         return;
@@ -395,26 +383,24 @@ fn add_exclude(row: &mut toml_edit::Table, name: &str) {
         .and_then(|item| item.decor().suffix().cloned());
     exclude.push(name);
     if let Some(at) = trailing.find('\n') {
-        let cut = if trailing[..at].ends_with('\r') {
-            at - 1
-        } else {
-            at
-        };
         if let Some(added) = exclude.get_mut(last + 1) {
             added
                 .decor_mut()
-                .set_prefix(format!("{}{newline}{indent}", &trailing[..cut]));
+                .set_prefix(format!("{}\n{indent}", &trailing[..at]));
         }
-        exclude.set_trailing(trailing[cut..].to_string());
+        exclude.set_trailing(trailing[at..].to_string());
         exclude.set_trailing_comma(true);
     } else {
-        // No trailing comma: the closing bracket's line break sits after
-        // the last item and moves to the new one.
+        // No trailing comma: a comment after the last item stays on that
+        // item's line, and the line break before `]` moves to the new item.
+        let last_suffix = last_suffix.and_then(|raw| raw.as_str().map(str::to_string));
+        let comment = last_suffix
+            .as_deref()
+            .and_then(|suffix| suffix.split('\n').next())
+            .unwrap_or_default();
         if let Some(added) = exclude.get_mut(last + 1) {
-            added.decor_mut().set_prefix(format!("{newline}{indent}"));
-            if let Some(suffix) = last_suffix {
-                added.decor_mut().set_suffix(suffix);
-            }
+            added.decor_mut().set_prefix(format!("{comment}\n{indent}"));
+            added.decor_mut().set_suffix("\n");
         }
         if let Some(item) = exclude.get_mut(last) {
             item.decor_mut().set_suffix("");
@@ -526,6 +512,32 @@ pub(crate) fn plan_park(
     };
     if entry.is_none() && wildcards.is_empty() {
         return Ok(None);
+    }
+    let mut wildcards = wildcards;
+    if let (None, Some(locked)) = (&entry, &locked) {
+        // `dotagents remove` excludes the first `*` entry of the source, which
+        // need not be one that supplies the skill; turn-on lifts that too.
+        let target = rows(&doc)
+            .find(|row| {
+                row_name(row) == Some("*")
+                    && row_str(row, "source").is_some_and(|s| sources_match(s, &locked.source))
+            })
+            .filter(|row| !excludes(row, &skill.0))
+            .and_then(|row| {
+                Some(WildcardRef {
+                    source: row_str(row, "source")?.to_string(),
+                    path: row_str(row, "path").map(str::to_string),
+                })
+            });
+        if let Some(target) = target {
+            let known = wildcards.iter().any(|w| {
+                sources_match(&w.source, &target.source)
+                    && comparable_path(w.path.as_deref()) == comparable_path(target.path.as_deref())
+            });
+            if !known {
+                wildcards.push(target);
+            }
+        }
     }
     refuse_nested_project(rt, &deployment.root.scope, skill)?;
     let tools = rt.ports.tools.as_ref();
@@ -641,7 +653,9 @@ fn verify_removed(
     if is_removed(&doc, plan, skill) {
         return Ok(());
     }
-    if !lists_explicitly(&doc, &skill.0) && exclude_where_supplied(rt, guard, plan, skill, doc)? {
+    if !lists_explicitly(&doc, &skill.0)
+        && exclude_where_supplied(rt, guard, plan, skill, doc, text.contains("\r\n"))?
+    {
         return Ok(());
     }
     Err(CoreError::new(
@@ -663,16 +677,16 @@ fn verify_removed(
 /// - dotagents excluded the first `*` entry of that source, which is not the
 ///   one that supplies the skill (a different `path`).
 ///
-/// Adds the name to the `exclude` of the `*` entries that still supply the
-/// skill (every one when the skill had its own entry, the first otherwise,
-/// as `remove` would), and drops the lock row if dotagents left it. Writes
-/// nothing and returns `false` when that would not unlist the skill.
+/// Adds the name to the `exclude` of every `*` entry that still supplies the
+/// skill, and drops the lock row if dotagents left it. Writes nothing and
+/// returns `false` when that would not unlist the skill.
 fn exclude_where_supplied(
     rt: &Runtime,
     guard: &ExclusiveGuard,
     plan: &DotagentsPark,
     skill: &SkillName,
     mut doc: toml_edit::DocumentMut,
+    crlf: bool,
 ) -> Result<bool, CoreError> {
     let Some(locked) = &plan.locked else {
         return Ok(false);
@@ -682,17 +696,12 @@ fn exclude_where_supplied(
         .filter(|(_, row)| wildcard_contains(row, &skill.0, locked))
         .map(|(index, _)| index)
         .collect();
-    let take = if plan.entry.is_some() {
-        supplying.len()
-    } else {
-        1
-    };
     if let Some(list) = doc
         .get_mut("skills")
         .and_then(toml_edit::Item::as_array_of_tables_mut)
     {
         for (index, row) in list.iter_mut().enumerate() {
-            if supplying.iter().take(take).any(|i| *i == index) {
+            if supplying.contains(&index) {
                 add_exclude(row, &skill.0);
             }
         }
@@ -700,7 +709,7 @@ fn exclude_where_supplied(
     if !is_removed(&doc, plan, skill) {
         return Ok(false);
     }
-    write_text(rt, guard, &plan.config, &doc.to_string())?;
+    write_text(rt, guard, &plan.config, &render(&doc, crlf))?;
     drop_lock_entry(rt, guard, plan, skill)?;
     Ok(true)
 }
@@ -721,7 +730,7 @@ fn drop_lock_entry(
         .and_then(|skills| skills.remove(&skill.0))
         .is_some();
     if removed {
-        write_text(rt, guard, &plan.lock, &doc.to_string())?;
+        write_text(rt, guard, &plan.lock, &render(&doc, text.contains("\r\n")))?;
     }
     Ok(())
 }
@@ -759,6 +768,17 @@ pub(crate) fn restore_files(
     first_error.map_or(Ok(()), Err)
 }
 
+/// `doc` as text. toml_edit drops every `\r` on parse, so a file that had
+/// CRLF line endings gets them back here.
+fn render(doc: &toml_edit::DocumentMut, crlf: bool) -> String {
+    let text = doc.to_string();
+    if crlf {
+        text.replace('\n', "\r\n")
+    } else {
+        text
+    }
+}
+
 fn write_text(
     rt: &Runtime,
     guard: &ExclusiveGuard,
@@ -769,6 +789,47 @@ fn write_text(
     let scoped = crate::ports::confine_write_through(&rt.scope, fs, path)?;
     fs.write_atomic(guard, &scoped, text.as_bytes())
         .map_err(|e| CoreError::io(path, e))
+}
+
+/// Takes `name` out of `exclude`, undoing [`add_exclude`]: the comment that
+/// `add_exclude` moved into the item's prefix goes back to where it was, and
+/// when the item was the last of a list with no trailing comma its line break
+/// goes back to the new last item. Reports whether the name was there.
+fn lift_exclude(exclude: &mut toml_edit::Array, name: &str) -> bool {
+    let mut lifted = false;
+    loop {
+        let found = exclude.iter().position(|item| item.as_str() == Some(name));
+        let Some(index) = found else {
+            break;
+        };
+        lifted = true;
+        let raw = |text: Option<&toml_edit::RawString>| {
+            text.and_then(toml_edit::RawString::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let (prefix, suffix) = exclude
+            .get(index)
+            .map(|item| (raw(item.decor().prefix()), raw(item.decor().suffix())))
+            .unwrap_or_default();
+        exclude.remove(index);
+        let Some((comment, _)) = prefix.split_once('\n') else {
+            continue;
+        };
+        if let Some(next) = exclude.get_mut(index) {
+            let next_prefix = raw(next.decor().prefix());
+            next.decor_mut()
+                .set_prefix(format!("{comment}{next_prefix}"));
+        } else if exclude.trailing_comma() {
+            let trailing = exclude.trailing().as_str().unwrap_or_default().to_string();
+            exclude.set_trailing(format!("{comment}{trailing}"));
+        } else if let Some(last) = exclude.len().checked_sub(1) {
+            if let Some(item) = exclude.get_mut(last) {
+                item.decor_mut().set_suffix(format!("{comment}{suffix}"));
+            }
+        }
+    }
+    lifted
 }
 
 /// `skill` listed again in `doc`: the recorded `[[skills]]` entry added back,
@@ -818,9 +879,7 @@ fn with_skill_back(
             else {
                 continue;
             };
-            let before = exclude.len();
-            exclude.retain(|item| item.as_str() != Some(skill.0.as_str()));
-            if exclude.len() != before {
+            if lift_exclude(exclude, &skill.0) {
                 changed = true;
                 if exclude.is_empty() {
                     row.remove("exclude");
@@ -867,7 +926,7 @@ fn with_lock_entry(
         return Ok(None);
     };
     skills.insert(&skill.0, toml_edit::Item::Table(table));
-    Ok(Some(doc.to_string()))
+    Ok(Some(render(&doc, text.contains("\r\n"))))
 }
 
 /// Lists `skill` again in `agents.toml` and `agents.lock`. It runs before the
@@ -920,7 +979,12 @@ fn turn_on_files(
             .at(&recorded.config));
         }
         if edited {
-            write_text(rt, guard, &recorded.config, &doc.to_string())?;
+            write_text(
+                rt,
+                guard,
+                &recorded.config,
+                &render(&doc, before.contains("\r\n")),
+            )?;
             changed.push(FileSnapshot {
                 path: recorded.config.clone(),
                 text: Some(before),
@@ -972,6 +1036,11 @@ mod tests {
             ("owner/repo", "ssh://git@github.com/owner/repo"),
             ("owner/repo", "https://www.github.com/owner/repo"),
             ("owner/repo", "owner/other"),
+            ("owner/repo", "https://GitHub.com/owner/repo"),
+            ("owner/repo", "HTTPS://github.com/owner/repo"),
+            ("owner/repo", "git@GitHub.com:owner/repo"),
+            ("owner/repo", "git@github.com:owner/repo/"),
+            ("group/sub/repo", "git@gitlab.com:group/sub/repo/"),
             ("git:https://x.dev/r.git", "https://x.dev/r"),
             ("path:../skills", "../skills"),
             ("owner/repo", "owner/repo/nested"),

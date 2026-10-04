@@ -1185,12 +1185,21 @@ fn park_repairs_a_crlf_agents_toml_that_dotagents_left_unchanged() {
 
     park_foo(&rt);
 
-    assert!(read(&stub.toml_path()).contains("exclude = [\"foo\"]"));
+    let parked = read(&stub.toml_path());
+    assert!(parked.contains("exclude = [\"foo\"]"));
+    assert_eq!(
+        parked.replace("\r\n", "").matches('\n').count(),
+        0,
+        "park wrote a bare LF into a CRLF file"
+    );
     dotagents_install(&stub);
     assert!(
         !home.join(".agents/skills/foo").exists(),
         "install revived the parked skill"
     );
+
+    unpark_foo(&rt);
+    assert_eq!(read(&stub.toml_path()), crlf, "turn-on must keep CRLF");
     std::fs::remove_dir_all(&home).ok();
 }
 
@@ -1223,24 +1232,45 @@ fn park_excludes_the_wildcard_entry_that_really_supplies_the_skill() {
     assert!(rows.iter().all(excludes_foo), "{doc}");
     dotagents_install(&stub);
     assert!(!home.join(".agents/skills/foo").exists());
+
+    unpark_foo(&rt);
+    assert_eq!(
+        read(&stub.toml_path()),
+        TWO_PATHS_TOML,
+        "turn-on must lift the exclude from both rows"
+    );
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// Flow: park a skill whose `*` entry has a multi-line `exclude` with a comment
-/// above the last item and one after it. Expectation: `foo` goes in as a new
-/// last item and both comments stay once, where they were. Failure: a comment
-/// is copied onto the new item or moves.
+/// Flow: park a skill whose `*` entry has a multi-line `exclude` with a
+/// comment above the last item and one after it, with and without a trailing
+/// comma, then turn it on. Expectation: `foo` goes in as a new last item and
+/// both comments stay once, where they were; turn-on gives back the original
+/// bytes. Failure: a comment is copied, moves, or is lost on turn-on.
 #[test]
-fn park_keeps_the_comments_around_the_last_exclude_item() {
-    let (home, stub) = dotagents_home("park_dotagents_comments", COMMENTED_EXCLUDE_TOML);
-    let rt = runtime(&home, stub.clone(), true);
-    stub.keep_lock_row.store(true, Ordering::SeqCst);
+fn park_and_turn_on_keep_the_comments_around_the_last_exclude_item() {
+    let no_comma = COMMENTED_EXCLUDE_TOML.replace("\"baz\", # tail\n", "\"baz\" # tail\n");
+    let forms = [
+        (
+            COMMENTED_EXCLUDE_TOML.to_string(),
+            "\"baz\", # tail\n  \"foo\",\n]\n",
+        ),
+        (no_comma, "\"baz\", # tail\n  \"foo\"\n]\n"),
+    ];
+    for (toml, parked_tail) in forms {
+        let (home, stub) = dotagents_home("park_dotagents_comments", &toml);
+        let rt = runtime(&home, stub.clone(), true);
+        stub.keep_lock_row.store(true, Ordering::SeqCst);
 
-    park_foo(&rt);
+        park_foo(&rt);
+        let parked = read(&stub.toml_path());
+        assert!(
+            parked.ends_with(&format!("  # note\n  {parked_tail}")),
+            "{parked}"
+        );
 
-    assert_eq!(
-        read(&stub.toml_path()),
-        "version = 1\n\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\nexclude = [\n  \"a\",\n  # note\n  \"baz\", # tail\n  \"foo\",\n]\n"
-    );
-    std::fs::remove_dir_all(&home).ok();
+        unpark_foo(&rt);
+        assert_eq!(read(&stub.toml_path()), toml);
+        std::fs::remove_dir_all(&home).ok();
+    }
 }
