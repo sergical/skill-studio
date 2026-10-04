@@ -5049,6 +5049,8 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
     refuse_unparkable(&deployment)?;
     let skill = resolve_skill(&session.fresh, &deployment.id)?.clone();
     let fs = rt.ports.fs.as_ref();
+    // Before any row: a refusal here leaves no journal entry behind.
+    let dotagents = crate::ops_park_dotagents::plan_park(rt, &deployment, &skill.name)?;
     let links: Vec<PathBuf> = find_all_links(&skill, &deployment.path, fs)
         .into_iter()
         .chain(find_independent_links(&skill, &deployment, fs))
@@ -5126,24 +5128,49 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
     };
 
     let id = rt.ports.ids.next_event_id();
+    let mut payload = serde_json::json!({
+        "deployment_id": deployment.id.as_str(),
+        "from": deployment.path,
+        "to": parked_dir,
+        "origin": origin,
+        "links": links,
+        "link_targets": link_targets,
+    });
+    // Undo of a directory move is out of this build's scope: `Park` carries
+    // no inverse, except for a dotagents skill, whose `agents.toml` and
+    // `agents.lock` are backed up so undo puts the entry back.
+    let (inverse, backup_dir) = match &dotagents {
+        Some(plan) => {
+            payload["dotagents"] = plan.payload();
+            let manifest = session.store.backup_paths(
+                &session.guard,
+                &id,
+                &[plan.config.clone(), plan.lock.clone()],
+            )?;
+            let pre = manifest
+                .entries
+                .first()
+                .and_then(|e| e.fingerprint.as_ref());
+            (
+                Some(crate::events::restore_backup_inverse(
+                    &plan.config,
+                    pre,
+                    None,
+                )),
+                Some(manifest.backup_dir),
+            )
+        }
+        None => (None, None),
+    };
     let draft = crate::events::EventDraft {
         kind: crate::events::EventKind::Park,
         skill: skill.name.clone(),
         harness: None,
         scope: Some(scope_label),
         project_path,
-        payload: serde_json::json!({
-            "deployment_id": deployment.id.as_str(),
-            "from": deployment.path,
-            "to": parked_dir,
-            "origin": origin,
-            "links": links,
-            "link_targets": link_targets,
-        }),
-        // Undo of a directory move is out of this build's scope: `Park`
-        // deliberately carries no inverse.
-        inverse: None,
-        backup_dir: None,
+        payload,
+        inverse,
+        backup_dir,
     };
     session.store.record(&session.guard, &id, &draft)?;
 
@@ -5183,7 +5210,23 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
             created_dirs.extend(ensure_dir_all_tracked(rt, &session, fs, &marker_dir)?);
             write_marker(marker_dir.join(&skill.name.0), relative, true)?;
         }
-        crate::park_move::move_dir(rt, &session, &deployment.path, &parked_dir)
+        crate::park_move::move_dir(rt, &session, &deployment.path, &parked_dir)?;
+        // After the move: `dotagents remove` deletes the skill's folder, and
+        // the parked copy must survive it.
+        if let Some(plan) = &dotagents {
+            if let Err(e) = crate::ops_park_dotagents::run_remove(
+                rt,
+                ctx,
+                plan,
+                &skill.name,
+                &deployment.root.scope,
+            ) {
+                let _ = crate::park_move::move_dir(rt, &session, &parked_dir, &deployment.path);
+                let _ = crate::ops_park_dotagents::restore_config(rt, &session.guard, plan);
+                return Err(e);
+            }
+        }
+        Ok(())
     })();
     if let Err(e) = write_result {
         remove_park_scaffolding(rt, &session, &written_files, &created_dirs);
@@ -5205,9 +5248,17 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
         return Err(e);
     }
 
-    session
-        .store
-        .finish(&session.guard, &id, crate::events::EventStatus::Done, None)?;
+    // Undo compares `agents.toml` against this before it restores it.
+    let post_fingerprint = match &dotagents {
+        Some(plan) => crate::events::fingerprint_path(fs, &plan.config)?,
+        None => None,
+    };
+    session.store.finish(
+        &session.guard,
+        &id,
+        crate::events::EventStatus::Done,
+        post_fingerprint,
+    )?;
     session.finish(rt, ctx);
     let write_step = crate::timing::step(clock, "remove_link_and_rename", step_start);
     ctx.record_timing(crate::timing::op_timing(
@@ -5320,6 +5371,33 @@ fn unpark_body(
     };
 
     let id = rt.ports.ids.next_event_id();
+    // A skill parked from dotagents goes back into `agents.toml` below; its
+    // backup lets undo of this turn-on take the entry out again.
+    let dotagents = park_row
+        .as_ref()
+        .and_then(|row| crate::ops_park_dotagents::recorded(&row.payload));
+    let (inverse, backup_dir) = match &dotagents {
+        Some(recorded) => {
+            let manifest = session.store.backup_paths(
+                &session.guard,
+                &id,
+                std::slice::from_ref(&recorded.config),
+            )?;
+            let pre = manifest
+                .entries
+                .first()
+                .and_then(|e| e.fingerprint.as_ref());
+            (
+                Some(crate::events::restore_backup_inverse(
+                    &recorded.config,
+                    pre,
+                    None,
+                )),
+                Some(manifest.backup_dir),
+            )
+        }
+        None => (None, None),
+    };
     let draft = crate::events::EventDraft {
         kind: crate::events::EventKind::Unpark,
         skill: skill.name.clone(),
@@ -5332,8 +5410,8 @@ fn unpark_body(
             "to": restored_dir,
             "links": links,
         }),
-        inverse: None,
-        backup_dir: None,
+        inverse,
+        backup_dir,
     };
     session.store.record(&session.guard, &id, &draft)?;
 
@@ -5393,9 +5471,36 @@ fn unpark_body(
         .at(restored_dir));
     }
 
-    session
-        .store
-        .finish(&session.guard, &id, crate::events::EventStatus::Done, None)?;
+    if let Some(recorded) = &dotagents {
+        if let Err(e) =
+            crate::ops_park_dotagents::turn_on(rt, &session.guard, recorded, &skill.name)
+        {
+            let _ = session.store.finish(
+                &session.guard,
+                &id,
+                crate::events::EventStatus::Failed,
+                None,
+            );
+            return Err(CoreError::new(
+                e.code,
+                format!(
+                    "the skill is back at its place, but dotagents' agents.toml could not list it again: {}",
+                    e.message
+                ),
+            )
+            .at(restored_dir));
+        }
+    }
+    let post_fingerprint = match &dotagents {
+        Some(recorded) => crate::events::fingerprint_path(fs, &recorded.config)?,
+        None => None,
+    };
+    session.store.finish(
+        &session.guard,
+        &id,
+        crate::events::EventStatus::Done,
+        post_fingerprint,
+    )?;
     session.finish(rt, ctx);
     let write_step = crate::timing::step(clock, "rename_and_relink", step_start);
     ctx.record_timing(crate::timing::op_timing(
