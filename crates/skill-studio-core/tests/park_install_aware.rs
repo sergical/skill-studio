@@ -1274,3 +1274,91 @@ fn park_and_turn_on_keep_the_comments_around_the_last_exclude_item() {
         std::fs::remove_dir_all(&home).ok();
     }
 }
+
+/// Flow: a no-comma `exclude` has a comment after the last item and a
+/// commented-out item on the next line. Park, then turn on. Expectation: the
+/// commented-out line stays through park and the file is byte for byte as it
+/// was after turn-on. Failure: park deletes the comment line.
+#[test]
+fn park_keeps_comment_lines_after_the_last_exclude_item() {
+    let toml = "version = 1\n\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\nexclude = [\n  \"baz\" # tail\n  # \"old\"\n]\n";
+    let (home, stub) = dotagents_home("park_dotagents_comment_lines", toml);
+    let rt = runtime(&home, stub.clone(), true);
+    stub.keep_lock_row.store(true, Ordering::SeqCst);
+
+    park_foo(&rt);
+    let parked = read(&stub.toml_path());
+    assert!(parked.contains("  # \"old\"\n]"), "{parked}");
+
+    unpark_foo(&rt);
+    assert_eq!(read(&stub.toml_path()), toml);
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: park, then the person puts more items on the line after `foo`,
+/// then turn on. Expectation: `foo` leaves the list, the other items stay
+/// excluded, and the file still parses. Failure: the tail comment swallows
+/// the next item or the closing bracket.
+#[test]
+fn turn_on_keeps_items_the_person_added_after_the_parked_name() {
+    let (home, stub) = dotagents_home("park_dotagents_edited_list", COMMENTED_EXCLUDE_TOML);
+    let rt = runtime(&home, stub.clone(), true);
+    stub.keep_lock_row.store(true, Ordering::SeqCst);
+    park_foo(&rt);
+    let edited = read(&stub.toml_path()).replace("  \"foo\",\n]", "  \"foo\", \"new\",\n]");
+    assert!(edited.contains("\"new\""));
+    std::fs::write(stub.toml_path(), edited).unwrap();
+
+    unpark_foo(&rt);
+
+    let doc = read(&stub.toml_path())
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    let list: Vec<&str> = doc["skills"][0]["exclude"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item.as_str())
+        .collect();
+    assert_eq!(list, ["a", "baz", "new"]);
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: two `*` entries share a source, dotagents excludes the first, and
+/// the person deletes the `path = "b"` entry that supplies `foo` while it is
+/// parked. Expectation: turn-on refuses and the copy stays parked. Failure:
+/// turn-on counts the first entry, which never supplied `foo`, and reports
+/// success for a skill dotagents will not install.
+#[test]
+fn turn_on_refuses_when_only_the_entry_dotagents_excluded_is_left() {
+    let (home, stub) =
+        dotagents_home_with_pool("park_dotagents_target_only", TWO_PATHS_TOML, &["foo"]);
+    let lock = read(&stub.lock_path()).replace(
+        "[skills.foo]\nsource = \"owner/pack\"\n",
+        "[skills.foo]\nsource = \"owner/pack\"\nresolved_path = \"b\"\n",
+    );
+    std::fs::write(stub.lock_path(), lock).unwrap();
+    let rt = runtime(&home, stub.clone(), true);
+    park_foo(&rt);
+    let mut doc = read(&stub.toml_path())
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    doc["skills"].as_array_of_tables_mut().unwrap().remove(1);
+    std::fs::write(stub.toml_path(), doc.to_string()).unwrap();
+    let toml_parked = read(&stub.toml_path());
+
+    let result = ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked_copy(&rt, "foo").id,
+        },
+    );
+
+    assert!(result.is_err());
+    assert_eq!(read(&stub.toml_path()), toml_parked);
+    assert!(home
+        .join(".agents/skills-parked/universal/foo/SKILL.md")
+        .exists());
+    std::fs::remove_dir_all(&home).ok();
+}

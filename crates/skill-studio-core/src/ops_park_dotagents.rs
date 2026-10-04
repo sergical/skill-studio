@@ -31,6 +31,10 @@ pub(crate) struct FileSnapshot {
 struct WildcardRef {
     source: String,
     path: Option<String>,
+    /// Whether the entry supplied the skill. The other recorded entry is the
+    /// one `dotagents remove` excludes; turn-on lifts it but does not count it
+    /// as a reason dotagents would manage the skill.
+    supplies: bool,
 }
 
 /// What `agents.lock` records about the skill: the fields dotagents matches
@@ -81,7 +85,13 @@ impl DotagentsPark {
         let wildcards: Vec<serde_json::Value> = self
             .wildcards
             .iter()
-            .map(|w| serde_json::json!({ "source": w.source, "path": w.path }))
+            .map(|w| {
+                serde_json::json!({
+                    "source": w.source,
+                    "path": w.path,
+                    "supplies": w.supplies,
+                })
+            })
             .collect();
         serde_json::json!({
             "config": self.config,
@@ -119,6 +129,11 @@ pub(crate) fn recorded(payload: &serde_json::Value) -> Option<RecordedDotagents>
                                 .get("path")
                                 .and_then(|path| path.as_str())
                                 .map(str::to_string),
+                            // Older payloads recorded only entries that supply.
+                            supplies: row
+                                .get("supplies")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(true),
                         })
                     })
                     .collect()
@@ -392,15 +407,19 @@ fn add_exclude(row: &mut toml_edit::Table, name: &str) {
         exclude.set_trailing_comma(true);
     } else {
         // No trailing comma: a comment after the last item stays on that
-        // item's line, and the line break before `]` moves to the new item.
-        let last_suffix = last_suffix.and_then(|raw| raw.as_str().map(str::to_string));
-        let comment = last_suffix
-            .as_deref()
-            .and_then(|suffix| suffix.split('\n').next())
+        // item's line, and the rest of its suffix (the line break before `]`
+        // and any comment lines) moves to the new item.
+        let last_suffix = last_suffix
+            .and_then(|raw| raw.as_str().map(str::to_string))
             .unwrap_or_default();
+        let (comment, rest) = last_suffix
+            .find('\n')
+            .map_or((last_suffix.as_str(), ""), |at| last_suffix.split_at(at));
         if let Some(added) = exclude.get_mut(last + 1) {
             added.decor_mut().set_prefix(format!("{comment}\n{indent}"));
-            added.decor_mut().set_suffix("\n");
+            added
+                .decor_mut()
+                .set_suffix(if rest.is_empty() { "\n" } else { rest });
         }
         if let Some(item) = exclude.get_mut(last) {
             item.decor_mut().set_suffix("");
@@ -505,6 +524,7 @@ pub(crate) fn plan_park(
                 Some(WildcardRef {
                     source: row_str(row, "source")?.to_string(),
                     path: row_str(row, "path").map(str::to_string),
+                    supplies: true,
                 })
             })
             .collect(),
@@ -527,6 +547,7 @@ pub(crate) fn plan_park(
                 Some(WildcardRef {
                     source: row_str(row, "source")?.to_string(),
                     path: row_str(row, "path").map(str::to_string),
+                    supplies: false,
                 })
             });
         if let Some(target) = target {
@@ -709,7 +730,12 @@ fn exclude_where_supplied(
     if !is_removed(&doc, plan, skill) {
         return Ok(false);
     }
-    write_text(rt, guard, &plan.config, &render(&doc, crlf))?;
+    write_text(
+        rt,
+        guard,
+        &plan.config,
+        &render_checked(&plan.config, &doc, crlf)?,
+    )?;
     drop_lock_entry(rt, guard, plan, skill)?;
     Ok(true)
 }
@@ -730,7 +756,8 @@ fn drop_lock_entry(
         .and_then(|skills| skills.remove(&skill.0))
         .is_some();
     if removed {
-        write_text(rt, guard, &plan.lock, &render(&doc, text.contains("\r\n")))?;
+        let rendered = render_checked(&plan.lock, &doc, text.contains("\r\n"))?;
+        write_text(rt, guard, &plan.lock, &rendered)?;
     }
     Ok(())
 }
@@ -768,15 +795,45 @@ pub(crate) fn restore_files(
     first_error.map_or(Ok(()), Err)
 }
 
-/// `doc` as text. `toml_edit` drops every `\r` on parse, so a file that had
-/// CRLF line endings gets them back here.
+/// `doc` as text. `toml_edit` drops the `\r` of every line break on parse
+/// except inside multi-line strings, so a file that had CRLF line endings gets
+/// them back on each `\n` that has none.
 fn render(doc: &toml_edit::DocumentMut, crlf: bool) -> String {
     let text = doc.to_string();
-    if crlf {
-        text.replace('\n', "\r\n")
-    } else {
-        text
+    if !crlf {
+        return text;
     }
+    let mut out = String::with_capacity(text.len() + text.len() / 16);
+    let mut previous = '\0';
+    for c in text.chars() {
+        if c == '\n' && previous != '\r' {
+            out.push('\r');
+        }
+        out.push(c);
+        previous = c;
+    }
+    out
+}
+
+/// [`render`], refusing text that no longer parses: an edit that breaks the
+/// file must fail the operation, not be written.
+fn render_checked(
+    path: &Path,
+    doc: &toml_edit::DocumentMut,
+    crlf: bool,
+) -> Result<String, CoreError> {
+    let text = render(doc, crlf);
+    parse(path, &text).map_err(|e| {
+        CoreError::new(
+            ErrorCode::Io,
+            format!(
+                "the edited file would not be valid TOML, so nothing was written: {}",
+                e.message
+            ),
+        )
+        .at(path)
+    })?;
+    Ok(text)
 }
 
 fn write_text(
@@ -789,6 +846,21 @@ fn write_text(
     let scoped = crate::ports::confine_write_through(&rt.scope, fs, path)?;
     fs.write_atomic(guard, &scoped, text.as_bytes())
         .map_err(|e| CoreError::io(path, e))
+}
+
+/// `comment` in front of `text`, with a line break between them unless `text`
+/// already starts with one (after optional spaces): a comment runs to the end
+/// of its line and must not swallow the next item or the closing bracket.
+fn comment_before(comment: &str, text: &str) -> String {
+    if comment.trim().is_empty()
+        || text
+            .trim_start_matches([' ', '\t'])
+            .starts_with(['\n', '\r'])
+    {
+        format!("{comment}{text}")
+    } else {
+        format!("{comment}\n{text}")
+    }
 }
 
 /// Takes `name` out of `exclude`, undoing [`add_exclude`]: the comment that
@@ -819,13 +891,14 @@ fn lift_exclude(exclude: &mut toml_edit::Array, name: &str) -> bool {
         if let Some(next) = exclude.get_mut(index) {
             let next_prefix = raw(next.decor().prefix());
             next.decor_mut()
-                .set_prefix(format!("{comment}{next_prefix}"));
+                .set_prefix(comment_before(comment, &next_prefix));
         } else if exclude.trailing_comma() {
             let trailing = exclude.trailing().as_str().unwrap_or_default().to_string();
-            exclude.set_trailing(format!("{comment}{trailing}"));
+            exclude.set_trailing(comment_before(comment, &trailing));
         } else if let Some(last) = exclude.len().checked_sub(1) {
             if let Some(item) = exclude.get_mut(last) {
-                item.decor_mut().set_suffix(format!("{comment}{suffix}"));
+                item.decor_mut()
+                    .set_suffix(comment_before(comment, &suffix));
             }
         }
     }
@@ -891,14 +964,16 @@ fn with_skill_back(
 }
 
 /// Whether `dotagents install` would install `skill` from `doc`: an entry of
-/// that name, or a recorded wildcard entry that does not exclude it.
+/// that name, or a recorded wildcard entry that supplies it and does not
+/// exclude it.
 fn listed_again(
     doc: &toml_edit::DocumentMut,
     skill: &SkillName,
     wildcards: &[WildcardRef],
 ) -> bool {
+    let suppliers: Vec<WildcardRef> = wildcards.iter().filter(|w| w.supplies).cloned().collect();
     lists_explicitly(doc, &skill.0)
-        || rows(doc).any(|row| is_recorded(row, wildcards) && !excludes(row, &skill.0))
+        || rows(doc).any(|row| is_recorded(row, &suppliers) && !excludes(row, &skill.0))
 }
 
 /// The `agents.lock` text with the skill's table back, or `None` when it is
@@ -926,7 +1001,7 @@ fn with_lock_entry(
         return Ok(None);
     };
     skills.insert(&skill.0, toml_edit::Item::Table(table));
-    Ok(Some(render(&doc, text.contains("\r\n"))))
+    render_checked(path, &doc, text.contains("\r\n")).map(Some)
 }
 
 /// Lists `skill` again in `agents.toml` and `agents.lock`. It runs before the
@@ -979,12 +1054,8 @@ fn turn_on_files(
             .at(&recorded.config));
         }
         if edited {
-            write_text(
-                rt,
-                guard,
-                &recorded.config,
-                &render(&doc, before.contains("\r\n")),
-            )?;
+            let rendered = render_checked(&recorded.config, &doc, before.contains("\r\n"))?;
+            write_text(rt, guard, &recorded.config, &rendered)?;
             changed.push(FileSnapshot {
                 path: recorded.config.clone(),
                 text: Some(before),
@@ -1050,6 +1121,19 @@ mod tests {
         }
     }
 
+    /// Flow: a CRLF file with a `"""` value is edited and written back.
+    /// Expectation: every line break is CRLF once, also inside the string, and
+    /// the text still parses. Failure: `\r\r\n` makes the file invalid TOML.
+    #[test]
+    fn render_gives_crlf_back_without_doubling_it() {
+        let text = "note = \"\"\"a\r\nb\"\"\"\r\n[[skills]]\r\nname = \"*\"\r\n";
+        let doc = table(text);
+        let rendered = render(&doc, true);
+        assert_eq!(rendered, text);
+        assert!(rendered.parse::<toml_edit::DocumentMut>().is_ok());
+        assert_eq!(render(&doc, false).contains('\r'), text.contains("a\r\nb"));
+    }
+
     fn table(text: &str) -> toml_edit::DocumentMut {
         text.parse().unwrap()
     }
@@ -1064,6 +1148,7 @@ mod tests {
             vec![WildcardRef {
                 source: "owner/repo".to_string(),
                 path: path.map(str::to_string),
+                supplies: true,
             }]
         };
         let doc = table(
