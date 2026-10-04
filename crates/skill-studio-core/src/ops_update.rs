@@ -908,7 +908,17 @@ fn update_split_copies_body(
         RootScope::Global => None,
         RootScope::Project(p) => Some(p.0.to_string_lossy().into_owned()),
     };
-    let rows: Vec<(String, PathBuf, String)> = document
+    // Only copies split from the lock row's own source take this update; a
+    // same-name copy installed from another repo must never be overwritten.
+    let lock_source = match &req.scope {
+        RootScope::Global => Some(
+            crate::lock_file::read_lock_file(fs, &crate::lock_file::lock_file_path(home))
+                .ok()
+                .and_then(|lock| lock.skills.get(&req.skill.0).map(|e| e.source.clone())),
+        ),
+        RootScope::Project(_) => None,
+    };
+    let rows: Vec<(String, PathBuf, String, Option<String>)> = document
         .get("copies")
         .and_then(serde_json::Value::as_object)
         .into_iter()
@@ -924,9 +934,13 @@ fn update_split_copies_body(
         .filter_map(|(id, row)| {
             let path = PathBuf::from(row.get("path")?.as_str()?);
             let hash = row.get("content_hash")?.as_str()?.to_string();
-            Some((id.clone(), path, hash))
+            let source = row
+                .get("split_source")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            Some((id.clone(), path, hash, source))
         })
-        .filter(|(_, path, _)| {
+        .filter(|(_, path, _, _)| {
             fs.symlink_metadata(path)
                 .is_ok_and(|facts| facts.kind == FileKind::Dir)
         })
@@ -934,7 +948,17 @@ fn update_split_copies_body(
 
     let own_roots = crate::ops::harness_own_skill_roots(rt, &req.scope);
     let mut outcome = SplitCopiesOutcome::default();
-    for (id, path, recorded_hash) in rows {
+    for (id, path, recorded_hash, split_source) in rows {
+        if let Some(lock_source) = &lock_source {
+            if split_source.is_none() || split_source != *lock_source {
+                outcome.refused.push((
+                    path,
+                    "this copy was not split from this skill's source, so the update left it as it is"
+                        .to_string(),
+                ));
+                continue;
+            }
+        }
         // The swap happens in `path`'s parent, so a row whose path is not a
         // `<harness skills root>/<skill>` folder must not be swapped at all.
         let in_own_root = path.file_name().is_some_and(|n| n == req.skill.0.as_str())
@@ -960,7 +984,9 @@ fn update_split_copies_body(
                 outcome.updated.push(path);
             }
             Ok(Err(reason)) => outcome.refused.push((path, reason)),
-            Err(e) => outcome.refused.push((path, e.message)),
+            Err(e) => outcome
+                .refused
+                .push((path, format!("could not write: {}", e.message))),
         }
     }
     // Hashes of the copies that did swap are always recorded, even when a

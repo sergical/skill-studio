@@ -2235,7 +2235,8 @@ fn update_split_copies_command(
 ) -> Result<serde_json::Value, String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     let (fetch, lookup) = super::skill_install::resolve_fetch_and_lookup(app)?;
-    let gh_bin = super::skill_update_check::resolve_gh_binary().ok_or("Run Check now first")?;
+    let gh_bin = super::skill_update_check::resolve_gh_binary()
+        .ok_or("Install the GitHub CLI (gh) to update split copies.")?;
     let outcome = super::skill_split_update::update_split_skill(
         rt,
         ctx,

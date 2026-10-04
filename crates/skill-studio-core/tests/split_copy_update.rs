@@ -55,6 +55,7 @@ fn split_home(name: &str) -> PathBuf {
     let dir = home.join(".agents/skills/gamma");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("SKILL.md"), skill_md("v1")).unwrap();
+    write_lock(&home);
     let rt = runtime_with(&home, Arc::new(RealFs::new()));
     let id = ops::scan(&rt, &ctx(), &ScanRequest::default())
         .unwrap()
@@ -195,6 +196,14 @@ fn update_failing_at_any_step_leaves_each_copy_wholly_old_or_new_and_a_retry_fin
                 "step {n}: {dir} is missing or mixed after {result:?}"
             );
         }
+        if let Ok(outcome) = &result {
+            for (_, reason) in &outcome.refused {
+                assert!(
+                    reason.starts_with("could not write: "),
+                    "step {n}: a write failure reads like an edit refusal: {reason}"
+                );
+            }
+        }
         let retry = runtime_with(&home, Arc::new(RealFs::new()));
         let retried = ops::update_split_copies(&retry, &ctx(), &v2()).unwrap();
         assert!(
@@ -212,28 +221,32 @@ fn update_failing_at_any_step_leaves_each_copy_wholly_old_or_new_and_a_retry_fin
     }
 }
 
-fn lock_hash(home: &Path) -> String {
-    let text = std::fs::read_to_string(home.join(".agents/.skill-lock.json")).unwrap();
-    let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
-    doc["skills"]["gamma"]["skillFolderHash"]
-        .as_str()
-        .unwrap()
-        .to_string()
+/// The lock file `npx skills` left, with fields the update must not touch.
+fn lock_doc() -> serde_json::Value {
+    serde_json::json!({
+        "version": 3,
+        "skills": {"gamma": {
+            "source": "acme/skills", "sourceType": "github",
+            "sourceUrl": "https://github.com/acme/skills",
+            "skillPath": "skills/gamma/SKILL.md", "skillFolderHash": "tree-v1",
+            "installedAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z",
+            "futureField": {"kept": true},
+        }},
+        "dismissed": {"tip": true},
+    })
 }
 
 fn write_lock(home: &Path) {
     std::fs::write(
         home.join(".agents/.skill-lock.json"),
-        serde_json::json!({
-            "version": 3,
-            "skills": {"gamma": {
-                "source": "acme/skills", "sourceType": "github",
-                "skillPath": "skills/gamma/SKILL.md", "skillFolderHash": "tree-v1",
-            }}
-        })
-        .to_string(),
+        lock_doc().to_string(),
     )
     .unwrap();
+}
+
+fn read_lock(home: &Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(home.join(".agents/.skill-lock.json")).unwrap();
+    serde_json::from_str(&text).unwrap()
 }
 
 /// Rewrites every `copies` row of the home registry through `edit`.
@@ -249,18 +262,20 @@ fn edit_rows(home: &Path, edit: impl Fn(&str, &mut serde_json::Value)) {
 }
 
 /// Flow: every live copy updates and the lock row has a tree SHA. Expect the
-/// row's `skillFolderHash` to become the fetched SHA. Catches an Update that
+/// row's `skillFolderHash` to become the fetched SHA and every other key of
+/// the lock file to stay as written. Catches an Update that
 /// leaves the old hash, so the 6-hour update check offers the same update
 /// again.
 #[test]
 fn a_full_split_update_writes_the_fetched_tree_hash_to_the_lock_row() {
     let home = split_home("split_update_lock_full");
-    write_lock(&home);
     let rt = runtime_with(&home, Arc::new(RealFs::new()));
 
     ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
 
-    assert_eq!(lock_hash(&home), "tree-v2");
+    let mut expected = lock_doc();
+    expected["skills"]["gamma"]["skillFolderHash"] = serde_json::json!("tree-v2");
+    assert_eq!(read_lock(&home), expected);
     std::fs::remove_dir_all(&home).ok();
 }
 
@@ -270,7 +285,6 @@ fn a_full_split_update_writes_the_fetched_tree_hash_to_the_lock_row() {
 #[test]
 fn a_partial_split_update_leaves_the_lock_hash_alone() {
     let home = split_home("split_update_lock_partial");
-    write_lock(&home);
     std::fs::write(
         copy_of(&home, ".pi/agent/skills").join("SKILL.md"),
         b"---\nname: gamma\ndescription: mine\n---\nEdited.\n",
@@ -280,7 +294,7 @@ fn a_partial_split_update_leaves_the_lock_hash_alone() {
 
     ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
 
-    assert_eq!(lock_hash(&home), "tree-v1");
+    assert_eq!(read_lock(&home), lock_doc());
     std::fs::remove_dir_all(&home).ok();
 }
 
@@ -327,5 +341,33 @@ fn a_disabled_split_row_is_skipped_without_a_refusal() {
     assert_eq!(outcome.updated.len(), 2, "{outcome:?}");
     assert!(outcome.refused.is_empty(), "{outcome:?}");
     assert_eq!(revision_of(&copy_of(&home, ".codex/skills")), Some("v1"));
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: a same-name copy was installed from another repo (its row names a
+/// different source, or none) and its bytes still match its recorded hash.
+/// Expect it refused with a reason and untouched, the split copies updated,
+/// and the lock row left as is. Catches an Update that overwrites a copy of
+/// a different skill that only shares the name.
+#[test]
+fn a_same_name_copy_from_another_source_is_refused_and_not_overwritten() {
+    let home = split_home("split_update_other_source");
+    edit_rows(&home, |slot, row| match slot {
+        "pi" => row["split_source"] = serde_json::json!("other/repo"),
+        "codex" => {
+            row.as_object_mut().unwrap().remove("split_source");
+        }
+        _ => {}
+    });
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+
+    let outcome = ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+
+    assert_eq!(outcome.updated.len(), 1, "{outcome:?}");
+    assert_eq!(outcome.refused.len(), 2, "{outcome:?}");
+    assert_eq!(revision_of(&copy_of(&home, ".pi/agent/skills")), Some("v1"));
+    assert_eq!(revision_of(&copy_of(&home, ".codex/skills")), Some("v1"));
+    assert_eq!(revision_of(&copy_of(&home, ".claude/skills")), Some("v2"));
+    assert_eq!(read_lock(&home), lock_doc());
     std::fs::remove_dir_all(&home).ok();
 }

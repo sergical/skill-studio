@@ -83,7 +83,11 @@ pub(crate) fn update_split_skill(
     let lock_folder_hash = {
         let repo = source.repo.as_deref().unwrap_or_default();
         let path = source.path.as_deref().unwrap_or_default();
-        tree.tree_shas_at_head_uncached(repo)?.get(path).cloned()
+        // Best effort: without it the copies still update and the lock row
+        // stays as it is, so the next update check offers Update again.
+        tree.tree_shas_at_head_uncached(repo)
+            .ok()
+            .and_then(|shas| shas.get(path).cloned())
     };
     let files: Vec<InstallFile> = gather_copy_files(&source, home, home, fetch, lookup, None)?;
     ops::update_split_copies(
@@ -171,6 +175,16 @@ mod tests {
         ) -> Result<std::collections::HashMap<String, String>, String> {
             assert_eq!(repo, "acme/skills");
             Ok([("skills/gamma".to_string(), "tree-v2".to_string())].into())
+        }
+    }
+
+    struct FailingTree;
+    impl TreeLookup for FailingTree {
+        fn tree_shas_at_head_uncached(
+            &self,
+            _: &str,
+        ) -> Result<std::collections::HashMap<String, String>, String> {
+            Err("rate limited".to_string())
         }
     }
 
@@ -373,6 +387,33 @@ mod tests {
 
         let lock = std::fs::read_to_string(home.join(".agents/.skill-lock.json")).unwrap();
         assert!(lock.contains("tree-v2"), "{lock}");
+    }
+
+    /// Flow: the tree lookup fails but the fetch works. Expect every copy at
+    /// v2 and the lock hash unchanged, so the next check offers Update again.
+    /// Catches a lookup hiccup that blocks the whole update.
+    #[test]
+    fn a_failed_tree_lookup_still_updates_the_copies_and_keeps_the_lock_hash() {
+        let (tmp, rt) = split_home();
+        let home = tmp.path();
+
+        let outcome = update_split_skill(
+            &rt,
+            &ctx(),
+            home,
+            "gamma",
+            &FixtureFetch(Default::default()),
+            &FixtureLookup,
+            &FailingTree,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.updated.len(), 3, "{outcome:?}");
+        let lock = std::fs::read_to_string(home.join(".agents/.skill-lock.json")).unwrap();
+        assert!(
+            lock.contains("\"abc\"") && !lock.contains("tree-v2"),
+            "{lock}"
+        );
     }
 
     /// Flow: every copy is parked, then Update. Expect an error that says no
