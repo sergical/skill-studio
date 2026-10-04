@@ -839,6 +839,9 @@ pub struct FailingFs {
     inner: Arc<dyn ScopeFs>,
     fail_next_write_atomic: AtomicBool,
     fail_next_rename: AtomicBool,
+    fail_next_rename_cross_device: AtomicBool,
+    corrupt_next_new_file_with_mode: AtomicBool,
+    fail_rename_after_cross_device: AtomicBool,
     fail_next_remove_file: AtomicBool,
     /// `-1` means unlimited. Otherwise the number of `write_atomic` calls
     /// still allowed to succeed before every later call fails; see
@@ -891,6 +894,9 @@ impl FailingFs {
             inner,
             fail_next_write_atomic: AtomicBool::new(false),
             fail_next_rename: AtomicBool::new(false),
+            fail_next_rename_cross_device: AtomicBool::new(false),
+            corrupt_next_new_file_with_mode: AtomicBool::new(false),
+            fail_rename_after_cross_device: AtomicBool::new(false),
             fail_next_remove_file: AtomicBool::new(false),
             write_atomic_budget: AtomicI64::new(-1),
             fail_next_create_dir: AtomicBool::new(false),
@@ -932,6 +938,28 @@ impl FailingFs {
     /// example park's link removal landing before the directory rename.
     pub fn fail_next_rename(&self) {
         self.fail_next_rename.store(true, Ordering::SeqCst);
+    }
+
+    /// The next `rename` call fails the way a move to another volume does
+    /// (`EXDEV`); later calls delegate normally again.
+    pub fn fail_next_rename_cross_device(&self) {
+        self.fail_next_rename_cross_device
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// After the next cross-device rename failure, the rename that follows it
+    /// fails too (a plain error). Lets a test fail the step after a copy.
+    pub fn fail_rename_after_cross_device(&self) {
+        self.fail_rename_after_cross_device
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// The next `fsops_write_new_file_with_mode` call writes its bytes with
+    /// the first byte flipped, the way a bad disk would; later calls write
+    /// normally again. Lets a test prove a cross-volume copy is verified.
+    pub fn corrupt_next_new_file_with_mode(&self) {
+        self.corrupt_next_new_file_with_mode
+            .store(true, Ordering::SeqCst);
     }
 
     /// The next `remove_file` call returns an error instead of reaching
@@ -1170,6 +1198,18 @@ impl ScopeFs for FailingFs {
         if self.fail_next_rename.swap(false, Ordering::SeqCst) {
             return Err(std::io::Error::other("FailingFs: injected rename failure"));
         }
+        if self
+            .fail_next_rename_cross_device
+            .swap(false, Ordering::SeqCst)
+        {
+            if self
+                .fail_rename_after_cross_device
+                .swap(false, Ordering::SeqCst)
+            {
+                self.fail_next_rename.store(true, Ordering::SeqCst);
+            }
+            return Err(std::io::Error::from_raw_os_error(18));
+        }
         self.inner.rename(guard, from, to)
     }
     fn remove_file(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
@@ -1260,6 +1300,18 @@ impl ScopeFs for FailingFs {
         bytes: &[u8],
         mode: u32,
     ) -> std::io::Result<()> {
+        if self
+            .corrupt_next_new_file_with_mode
+            .swap(false, Ordering::SeqCst)
+        {
+            let mut flipped = bytes.to_vec();
+            if let Some(first) = flipped.first_mut() {
+                *first ^= 0xff;
+            }
+            return self
+                .inner
+                .fsops_write_new_file_with_mode(path, &flipped, mode);
+        }
         self.inner.fsops_write_new_file_with_mode(path, bytes, mode)
     }
     fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
