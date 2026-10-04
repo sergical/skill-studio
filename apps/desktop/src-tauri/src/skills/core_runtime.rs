@@ -37,19 +37,19 @@ pub(crate) fn data_root() -> PathBuf {
 
 #[cfg(not(test))]
 pub(crate) fn data_root() -> PathBuf {
-    data_root_from_env()
+    data_root_for(
+        std::env::var("XDG_DATA_HOME").ok().as_deref(),
+        dirs::home_dir(),
+    )
 }
 
-#[cfg(not(test))]
-fn data_root_from_env() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("skill-studio");
-        }
+fn data_root_for(xdg_data_home: Option<&str>, home: Option<PathBuf>) -> PathBuf {
+    match xdg_data_home {
+        Some(xdg) if !xdg.is_empty() => PathBuf::from(xdg).join("skill-studio"),
+        _ => home
+            .unwrap_or_else(|| PathBuf::from("/"))
+            .join(".local/share/skill-studio"),
     }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/"))
-        .join(".local/share/skill-studio")
 }
 
 /// `<data_root>/history/events.sqlite3` - the one `SQLite` file every core
@@ -175,5 +175,29 @@ pub fn to_command_result<T: Outcome>(envelope: ResultEnvelope<T>) -> Result<T, S
             .errors
             .first()
             .map_or_else(|| "operation failed".to_string(), |e| e.message.clone())),
+    }
+}
+
+#[cfg(test)]
+mod data_root_tests {
+    use super::*;
+
+    /// `a_set_xdg_data_home_wins_over_home_or_the_data_folder_moves`: the CLI
+    /// and desktop must agree on one data folder. Fails if an empty or unset
+    /// `XDG_DATA_HOME` does not fall back to `~/.local/share`, or a set one
+    /// is ignored.
+    #[test]
+    fn a_set_xdg_data_home_wins_over_home_or_the_data_folder_moves() {
+        let home = Some(PathBuf::from("/home/u"));
+        assert_eq!(
+            data_root_for(Some("/xdg"), home.clone()),
+            PathBuf::from("/xdg/skill-studio")
+        );
+        for unset in [None, Some("")] {
+            assert_eq!(
+                data_root_for(unset, home.clone()),
+                PathBuf::from("/home/u/.local/share/skill-studio")
+            );
+        }
     }
 }

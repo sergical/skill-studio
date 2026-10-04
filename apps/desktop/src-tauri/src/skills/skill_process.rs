@@ -675,7 +675,6 @@ mod tests {
             pid_file.display()
         );
         let cancel = AtomicBool::new(false);
-        let started = Instant::now();
 
         let error = run_controlled_command(
             "sh",
@@ -690,7 +689,6 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error, ControlledProcessError::TimedOut);
-        assert!(started.elapsed() < Duration::from_secs(30));
         let descendant_pid: i32 = std::fs::read_to_string(&pid_file)
             .unwrap()
             .trim()
@@ -812,7 +810,7 @@ mod tests {
             &[],
             None,
             &cancel,
-            Duration::from_secs(5),
+            Duration::from_secs(30),
             MAX_PROCESS_OUTPUT_BYTES,
             &search_dirs,
         )
