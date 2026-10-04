@@ -35,6 +35,7 @@ import {
   lifecycleTargetForSkill,
 } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
+import type { TurnOffAction } from "./skill-agent-off-model";
 import { hasUpstreamOwner } from "./skill-location-status";
 import type { InvocationFile, LocationAction } from "./skill-location-status";
 import type { LeftBehindChoice } from "./LeftBehindDialog";
@@ -69,6 +70,9 @@ interface UseLocationActionsResult {
   /** Set while a "Split into harness folders…" action is pending confirmation. */
   splitRequest: SplitLocationRequest | null;
   closeSplitRequest: () => void;
+  /** Set while a "Turn off for <Agent>" action is pending its confirm. */
+  turnOffRequest: TurnOffAction | null;
+  closeTurnOffRequest: () => void;
 }
 
 type SplitLocationRequest = Omit<Extract<LocationAction, { kind: "split" }>, "kind">;
@@ -146,6 +150,7 @@ export function useLocationActions(
   } | null>(null);
   const [pluginUninstallRequest, setPluginUninstallRequest] = useState<Deployment | null>(null);
   const [splitRequest, setSplitRequest] = useState<SplitLocationRequest | null>(null);
+  const [turnOffRequest, setTurnOffRequest] = useState<TurnOffAction | null>(null);
 
   /** Resolves `true` when `fn` succeeded, `false` after showing its error toast. Never rejects. */
   const runWithErrorToast = (
@@ -256,6 +261,9 @@ export function useLocationActions(
           readers: action.readers,
         });
         return Promise.resolve(true);
+      case "turn-off-agent":
+        setTurnOffRequest(action);
+        return Promise.resolve(true);
       case "remove-scope":
         setRemoveRequest({ scopeLabel: action.scopeLabel, projectPath: action.projectPath });
         return Promise.resolve(true);
@@ -321,6 +329,8 @@ export function useLocationActions(
     closeLeftBehindRequest: () => setLeftBehindRequest(null),
     splitRequest,
     closeSplitRequest: () => setSplitRequest(null),
+    turnOffRequest,
+    closeTurnOffRequest: () => setTurnOffRequest(null),
   };
 }
 

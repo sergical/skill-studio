@@ -18,6 +18,7 @@ import { RemoveDeploymentsDialog } from "./RemoveDeploymentsDialog";
 import { SkillInvocationFooter } from "./SkillInvocationFooter";
 import { SkillLocationScope } from "./SkillLocationScope";
 import { SplitSkillDialog } from "./SplitSkillDialog";
+import { TurnOffForAgentDialog } from "./TurnOffForAgentDialog";
 import { UninstallPluginDialog } from "./UninstallPluginDialog";
 import { useLocationActions } from "./skill-location-actions";
 import {
@@ -163,6 +164,17 @@ export function SkillLocationsCard({ skill, onCompareCopies }: SkillLocationsCar
           projectPath={actions.splitRequest.projectPath}
           readers={actions.splitRequest.readers}
           onClose={actions.closeSplitRequest}
+        />
+      )}
+      {actions.turnOffRequest && (
+        <TurnOffForAgentDialog
+          skillName={skill.name}
+          request={actions.turnOffRequest}
+          onClose={actions.closeTurnOffRequest}
+          onOffEverywhere={({ shared, scopeLabel, projectPath }) => {
+            actions.closeTurnOffRequest();
+            void actions.run({ kind: "park", deployment: shared, scopeLabel, projectPath });
+          }}
         />
       )}
       {actions.parkRequest && (

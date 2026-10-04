@@ -2,9 +2,9 @@
 //! chosen harness's own skills folder.
 //!
 //! Harnesses the caller does not choose lose the skill: the Universal folder
-//! and every per-skill link into it go away. A Codex copy keeps the skill off
-//! when Codex's config turned the Universal folder off (its rows are keyed by
-//! path). The op writes no other harness config and never
+//! and every per-skill link into it go away. Codex's config turns a skill off
+//! by path, so a Codex copy of a skill it had off is on again: the op writes
+//! no harness config. It never
 //! touches `.skill-lock.json`, so `npx skills update` keeps pointing at a
 //! Universal copy that no longer exists. Each copy gets a `copies` registry
 //! row, which `ops::update_split_copies` reads to refresh them.
@@ -72,17 +72,39 @@ pub fn split_target_root(rt: &Runtime, scope: &RootScope, harness: &AgentId) -> 
 /// every link into the folder, write each copy, then move the Universal
 /// folder into the Universal root's quarantine (pruned by the same caps as
 /// `remove`'s). Undo (`restore_event`) writes the Universal folder back from
-/// the backup, removes the copies and any Codex row carried to a copy, and
-/// recreates the links.
+/// the backup, removes the copies, and recreates the links.
 pub fn split(rt: &Runtime, ctx: &OpContext, req: &SplitRequest) -> Result<SplitOutcome, CoreError> {
-    rt.run(Operation::Split, ctx, || split_body(rt, ctx, req))
+    rt.run(Operation::Split, ctx, || {
+        split_body(rt, ctx, req, None).map(|(outcome, _)| outcome)
+    })
 }
 
-fn split_body(
+/// The second half of `turn_off_for_agent`: runs inside the split's session,
+/// after the copies are written and before the split row finishes, so the
+/// split and the park are one lease and one journal row.
+pub(crate) struct AgentOffHook<'a> {
+    pub agent: &'a AgentId,
+    /// Parks the agent's new copy and returns where it went. An `Err` rolls
+    /// the whole split back.
+    pub park: &'a ParkHook<'a>,
+}
+
+type ParkHook<'a> = dyn Fn(
+        &Runtime,
+        &OpContext,
+        &mut MutationSession,
+        &crate::identity::EventId,
+    ) -> Result<PathBuf, CoreError>
+    + 'a;
+
+/// [`split`]'s body, for `turn_off_for_agent` too: the second value is where
+/// the hook parked the agent's copy.
+pub(crate) fn split_body(
     rt: &Runtime,
     ctx: &OpContext,
     req: &SplitRequest,
-) -> Result<SplitOutcome, CoreError> {
+    agent_off: Option<&AgentOffHook<'_>>,
+) -> Result<(SplitOutcome, Option<PathBuf>), CoreError> {
     ctx.checkpoint()?;
     let clock = rt.ports.clock.as_ref();
     let op_start = clock.monotonic();
@@ -241,19 +263,25 @@ fn split_body(
         &copy_fingerprints,
     );
 
+    let mut payload = serde_json::json!({
+        "deployment_id": deployment.id.as_str(),
+        "from": deployment.path,
+        "to": quarantine_target,
+        "copies": copies,
+        "links": links,
+    });
+    // Written with the row, before any copy exists, so a crash between the
+    // split and the park still shows the row as one agent's turn-off.
+    if let Some(hook) = agent_off {
+        payload["agent_off"] = serde_json::json!({ "agent": hook.agent.as_str() });
+    }
     let draft = EventDraft {
         kind: EventKind::Split,
         skill: skill.name.clone(),
-        harness: None,
+        harness: agent_off.map(|hook| hook.agent.clone()),
         scope: Some(scope_label),
         project_path,
-        payload: serde_json::json!({
-            "deployment_id": deployment.id.as_str(),
-            "from": deployment.path,
-            "to": quarantine_target,
-            "copies": copies,
-            "links": links,
-        }),
+        payload,
         inverse: Some(inverse),
         backup_dir: Some(manifest.backup_dir.clone()),
     };
@@ -291,6 +319,49 @@ fn split_body(
         .collect();
     let patch = crate::events::with_remove_copies(serde_json::json!({}), &written);
     let _ = session.store.patch_inverse(&session.guard, &id, patch);
+    let parked_path = match agent_off {
+        Some(hook) => match (hook.park)(rt, ctx, &mut session, &id) {
+            Ok(path) => Some(path),
+            Err(e) => {
+                let back =
+                    put_universal_back(rt, &session, fs, &quarantine_target, &deployment.path);
+                roll_back_split(rt, &session, fs, &copies, &link_targets);
+                // Only a row whose folder is back is closed to Undo; if the
+                // folder is stuck in quarantine, Undo on the row can still
+                // recover it.
+                let e = match back {
+                    Ok(()) => {
+                        let _ = session.store.patch_payload(
+                            &session.guard,
+                            &id,
+                            serde_json::json!({ crate::events::ROLLED_BACK_PAYLOAD_KEY: true }),
+                        );
+                        e
+                    }
+                    Err(back) => CoreError::new(
+                        e.code,
+                        format!(
+                            "{}; the skill is still in {}: {}",
+                            e.message,
+                            quarantine_target.display(),
+                            back.message
+                        ),
+                    ),
+                };
+                let _ = session
+                    .store
+                    .finish(&session.guard, &id, EventStatus::Failed, None);
+                return Err(e);
+            }
+        },
+        None => None,
+    };
+    // The parked copy has left its folder, so it gets no registry row.
+    let registered: Vec<SplitCopy> = copies
+        .iter()
+        .filter(|copy| agent_off.is_none_or(|hook| &copy.harness != hook.agent))
+        .cloned()
+        .collect();
     record_split_copies(
         rt,
         ctx,
@@ -298,7 +369,7 @@ fn split_body(
         fs,
         &deployment.root.scope,
         &skill.name,
-        &copies,
+        &registered,
     )?;
     session
         .store
@@ -312,15 +383,33 @@ fn split_body(
         op_start,
         vec![begin_step, write_step],
     ));
-    Ok(SplitOutcome {
-        event_id: id,
-        deployment_id: deployment.id,
-        skill: skill.name,
-        copies,
-        removed_links: links,
-        quarantine_path: quarantine_target,
-        update_note: SPLIT_UPDATE_NOTE.to_string(),
-    })
+    Ok((
+        SplitOutcome {
+            event_id: id,
+            deployment_id: deployment.id,
+            skill: skill.name,
+            copies,
+            removed_links: links,
+            quarantine_path: quarantine_target,
+            update_note: SPLIT_UPDATE_NOTE.to_string(),
+        },
+        parked_path,
+    ))
+}
+
+/// Moves the quarantined Universal folder back to its place, after a failed
+/// park step that ran once `write_split` had already emptied it.
+fn put_universal_back(
+    rt: &Runtime,
+    session: &MutationSession,
+    fs: &dyn ScopeFs,
+    quarantined: &Path,
+    universal: &Path,
+) -> Result<(), CoreError> {
+    let scoped_from = crate::ports::confine(&rt.scope, fs, quarantined)?;
+    let scoped_to = crate::ports::confine(&rt.scope, fs, universal)?;
+    fs.rename(&session.guard, &scoped_from, &scoped_to)
+        .map_err(|e| CoreError::io(universal, e))
 }
 
 /// Records each copy in the home registry's `copies` map, the same row
@@ -372,16 +461,13 @@ fn record_split_copies(
 
 /// Refuses a harness whose skills folder is itself a link into the
 /// Universal root: its copy would land inside the folder being split.
-fn refuse_whole_folder_link(
+pub(crate) fn refuse_whole_folder_link(
     fs: &dyn ScopeFs,
     harness: &AgentId,
     root: &Path,
     canonical_universal_root: &Path,
 ) -> Result<(), CoreError> {
-    let Ok(canonical_root) = fs.canonicalize(root) else {
-        return Ok(());
-    };
-    if canonical_root.starts_with(canonical_universal_root) {
+    if is_whole_folder_link(fs, root, canonical_universal_root) {
         return Err(CoreError::new(
             ErrorCode::Unsupported,
             format!(
@@ -395,6 +481,16 @@ fn refuse_whole_folder_link(
         .at(root));
     }
     Ok(())
+}
+
+/// Whether the skills folder `root` resolves into the Universal root.
+pub(crate) fn is_whole_folder_link(
+    fs: &dyn ScopeFs,
+    root: &Path,
+    canonical_universal_root: &Path,
+) -> bool {
+    fs.canonicalize(root)
+        .is_ok_and(|canonical_root| canonical_root.starts_with(canonical_universal_root))
 }
 
 struct SplitWrites<'a> {

@@ -581,6 +581,11 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           };
         }
 
+        case "turn_off_check":
+          return { refusal: null, git_tracked: false, project: null };
+        case "turn_off_for_agent":
+          throw new Error("harness: turn_off_for_agent is not simulated");
+
         case "restore_moved_deployment": {
           const { deployment_id, owner_id } = z
             .object({ deployment_id: z.string().nullish(), owner_id: z.string().nullish() })

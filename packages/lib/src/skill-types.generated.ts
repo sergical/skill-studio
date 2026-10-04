@@ -1415,6 +1415,76 @@ export interface SplitCopy {
   path: string;
 }
 /**
+ * Result of `turn_off_for_agent`.
+ */
+export interface AgentOffOutcome {
+  /**
+   * The one event Activity can undo: it puts the shared folder back and
+   * removes the per-agent copies and the parked copy.
+   */
+  event_id: string;
+  /**
+   * The Universal deployment that was split.
+   */
+  deployment_id: string;
+  /**
+   * The skill's name.
+   */
+  skill: string;
+  /**
+   * Kebab-case harness identifier, for example `claude-code` or `open-code`.
+   *
+   * Invariant: the string is the serde wire name used by the desktop app
+   * today. `open-code` is canonical; `opencode` is only a CLI binary name and
+   * is never stored in an `AgentId`.
+   */
+  agent: string;
+  /**
+   * One entry per agent that got its own copy, including `agent`.
+   */
+  copies: SplitCopy[];
+  /**
+   * Where `agent`'s copy now lives, under the parked root.
+   */
+  parked_path: string;
+  /**
+   * Plain-language note: `npx skills update` updates only a Universal
+   * copy, so these copies no longer get updates from it.
+   */
+  update_note: string;
+}
+/**
+ * Result of `turn_off_check`: what to show before the user confirms.
+ */
+export interface AgentOffCheck {
+  /**
+   * Set when `turn_off_for_agent` would refuse.
+   */
+  refusal: AgentOffRefusal | null;
+  /**
+   * The shared folder's `park_check` answer: git tracks it, so the move
+   * shows as deleted files. `None` when git could not be asked.
+   */
+  git_tracked: boolean | null;
+  /**
+   * The project the copy belongs to, when it is a project copy.
+   */
+  project: string | null;
+}
+/**
+ * Why `turn_off_for_agent` would write nothing.
+ */
+export interface AgentOffRefusal {
+  /**
+   * One plain line a person can act on.
+   */
+  reason: string;
+  /**
+   * True when parking the shared copy for every agent is the way out.
+   */
+  off_everywhere: boolean;
+}
+/**
  * Result of `remove`.
  */
 export interface RemoveOutcome {

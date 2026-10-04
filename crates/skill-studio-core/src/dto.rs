@@ -777,6 +777,58 @@ pub struct SplitOutcome {
     pub update_note: String,
 }
 
+/// Request to turn a skill in the shared folder off for one agent: give every
+/// agent that reads the folder its own copy, then park that agent's copy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentOffRequest {
+    /// The live Universal (shared folder) copy, at global or project scope.
+    pub deployment_id: DeploymentId,
+    /// The agent that loses the skill. Must read the shared folder.
+    pub agent: AgentId,
+}
+
+/// Result of `turn_off_for_agent`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentOffOutcome {
+    /// The one event Activity can undo: it puts the shared folder back and
+    /// removes the per-agent copies and the parked copy.
+    pub event_id: EventId,
+    /// The Universal deployment that was split.
+    pub deployment_id: DeploymentId,
+    /// The skill's name.
+    pub skill: SkillName,
+    /// The agent the skill is now off for.
+    pub agent: AgentId,
+    /// One entry per agent that got its own copy, including `agent`.
+    pub copies: Vec<SplitCopy>,
+    /// Where `agent`'s copy now lives, under the parked root.
+    pub parked_path: PathBuf,
+    /// Plain-language note: `npx skills update` updates only a Universal
+    /// copy, so these copies no longer get updates from it.
+    pub update_note: String,
+}
+
+/// Why `turn_off_for_agent` would write nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentOffRefusal {
+    /// One plain line a person can act on.
+    pub reason: String,
+    /// True when parking the shared copy for every agent is the way out.
+    pub off_everywhere: bool,
+}
+
+/// Result of `turn_off_check`: what to show before the user confirms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentOffCheck {
+    /// Set when `turn_off_for_agent` would refuse.
+    pub refusal: Option<AgentOffRefusal>,
+    /// The shared folder's `park_check` answer: git tracks it, so the move
+    /// shows as deleted files. `None` when git could not be asked.
+    pub git_tracked: Option<bool>,
+    /// The project the copy belongs to, when it is a project copy.
+    pub project: Option<PathBuf>,
+}
+
 /// Which of the three ways `ops::install` can put a skill's bytes on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

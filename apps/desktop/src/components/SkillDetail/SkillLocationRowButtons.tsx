@@ -12,7 +12,7 @@ import { parkActionFor } from "./skill-location-status";
 import type { LocationAction, LocationRow } from "./skill-location-status";
 
 /** One ghost text button that shows a spinner while its action runs. */
-function RowActionButton({
+export function RowActionButton({
   label,
   ariaLabel,
   action,

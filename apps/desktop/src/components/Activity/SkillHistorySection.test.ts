@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { SkillEvent } from "@skill-studio/lib";
 import {
   canRestoreSkillEvent,
+  eventLabel,
   kindLabel,
   shouldOfferForceRestore,
 } from "./skill-history-restore-policy";
@@ -41,6 +42,18 @@ describe("canRestoreSkillEvent", () => {
     expect(canRestoreSkillEvent({ ...event(false), kind: "restore", restorable: false })).toBe(
       false,
     );
+  });
+});
+
+describe("eventLabel", () => {
+  it("a_split_row_that_names_an_agent_reads_turned_off_for_that_agent_not_split", () => {
+    expect(eventLabel({ ...event(false), kind: "split", harness: "codex" }, "Codex")).toBe(
+      "Turned off for Codex",
+    );
+  });
+
+  it("a_plain_split_row_keeps_the_split_label_or_every_split_would_read_as_a_turn_off", () => {
+    expect(eventLabel({ ...event(false), kind: "split", harness: null }, null)).toBe("split");
   });
 });
 

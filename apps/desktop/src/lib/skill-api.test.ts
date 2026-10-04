@@ -196,6 +196,12 @@ const EXPECTED_WRAPPER_COMMANDS = {
     command: "split_skill_targets",
     registeredInLibRs: true,
   },
+  turnOffForAgent: {
+    kind: "command",
+    command: "turn_off_for_agent",
+    registeredInLibRs: true,
+  },
+  turnOffCheck: { kind: "command", command: "turn_off_check", registeredInLibRs: true },
   restoreMovedDeployment: {
     kind: "command",
     command: "restore_moved_deployment",

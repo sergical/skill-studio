@@ -9,7 +9,9 @@
 
 use std::path::PathBuf;
 
-use skill_studio_core::dto::{SplitCopy, SplitOutcome, SplitRequest};
+use skill_studio_core::dto::{
+    AgentOffCheck, AgentOffOutcome, AgentOffRequest, SplitCopy, SplitOutcome, SplitRequest,
+};
 use skill_studio_core::identity::{AgentId, CorrelationId, DeploymentId, ProjectRef, RootScope};
 use skill_studio_core::ops::{self, Operation, ResultEnvelope};
 use skill_studio_core::ports::OpContext;
@@ -87,6 +89,58 @@ pub async fn split_skill_targets(
                 })
             })
             .collect()
+    })
+    .await
+}
+
+fn agent_off_request(target: &LifecycleTarget, agent: &str) -> Result<AgentOffRequest, String> {
+    let raw = target
+        .deployment_id
+        .as_deref()
+        .ok_or("Turn off for one agent requires a copy id")?;
+    Ok(AgentOffRequest {
+        deployment_id: DeploymentId::parse(raw).map_err(|e| e.message)?,
+        agent: AgentId::parse_harness(agent).map_err(|e| e.message)?,
+    })
+}
+
+/// Give every agent under the shared folder its own copy, then park
+/// `agent`'s copy: one journal event, one undo.
+#[tauri::command]
+pub async fn turn_off_for_agent(
+    target: LifecycleTarget,
+    agent: String,
+    app: tauri::AppHandle,
+) -> Result<AgentOffOutcome, String> {
+    let state_app = app.clone();
+    crate::timing_log::time_command_blocking(&app, "turn_off_for_agent", move || {
+        let request = agent_off_request(&target, &agent)?;
+        let names = skill_names_for_deployments([&request.deployment_id]);
+        let rt = super::core_runtime::build_runtime_write()?;
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let result = skill_studio_core::ops_agent_off::turn_off_for_agent(&rt, &ctx, &request);
+        let envelope =
+            ResultEnvelope::from_result(Operation::TurnOffForAgent, &rt.scope, &ctx, result);
+        let outcome = super::core_runtime::to_command_result(envelope)?;
+        emit_snapshot_for_names(&state_app, "turn_off_for_agent", names);
+        Ok(outcome)
+    })
+    .await
+}
+
+/// What the confirm shows before `turn_off_for_agent`: the reason it would
+/// refuse, and the git warning. Writes nothing.
+#[tauri::command]
+pub async fn turn_off_check(
+    target: LifecycleTarget,
+    agent: String,
+    app: tauri::AppHandle,
+) -> Result<AgentOffCheck, String> {
+    crate::timing_log::time_command_blocking(&app, "turn_off_check", move || {
+        let request = agent_off_request(&target, &agent)?;
+        let rt = super::core_runtime::build_runtime_write()?;
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        skill_studio_core::ops_agent_off::turn_off_check(&rt, &ctx, &request).map_err(|e| e.message)
     })
     .await
 }

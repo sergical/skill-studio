@@ -68,6 +68,17 @@ export type LocationAction =
   | { kind: "keep-live"; pair: LeftBehindPair }
   | { kind: "keep-parked"; pair: LeftBehindPair }
   | { kind: "split"; target: LifecycleTarget; projectPath: string | null; readers: AgentId[] }
+  | {
+      kind: "turn-off-agent";
+      /** The shared folder's lifecycle target - what the backend splits. */
+      target: LifecycleTarget;
+      agent: AgentId;
+      agentLabel: string;
+      /** The shared copy "Off everywhere" parks. */
+      shared: Deployment;
+      scopeLabel: string;
+      projectPath: string | null;
+    }
   | { kind: "remove-scope"; scopeLabel: string; projectPath: string | null }
   | { kind: "remove-deployment"; scopeLabel: string; deployment: Deployment }
   | { kind: "install-again" }

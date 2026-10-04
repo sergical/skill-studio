@@ -12,7 +12,7 @@ import { SwitchControl } from "../ui/SwitchControl";
 import { TooltipControl } from "../ui/TooltipControl";
 import { homeRelativePath } from "@skill-studio/lib";
 import { SkillLocationMenu } from "./SkillLocationMenu";
-import { SkillLocationRowButtons } from "./SkillLocationRowButtons";
+import { RowActionButton, SkillLocationRowButtons } from "./SkillLocationRowButtons";
 import { parkActionFor, rowMenu, tipLines } from "./skill-location-status";
 import type { LocationAction, LocationRow } from "./skill-location-status";
 
@@ -85,12 +85,15 @@ export function SkillLocationRow({
   row,
   scopeLabel,
   projectPath = null,
+  turnOff = null,
   onAction,
 }: {
   row: LocationRow;
   scopeLabel: string;
   /** The project this row's scope block is for, `null` for Global. */
   projectPath?: string | null;
+  /** The "Turn off for <Agent>" action, set only on an agent row under a live shared folder. */
+  turnOff?: LocationAction | null;
   onAction: (action: LocationAction) => Promise<boolean>;
 }) {
   const menu = rowMenu(row, scopeLabel, projectPath);
@@ -134,6 +137,13 @@ export function SkillLocationRow({
             row={row}
             scopeLabel={scopeLabel}
             projectPath={projectPath}
+            onAction={onAction}
+          />
+        ) : turnOff ? (
+          <RowActionButton
+            label={`Turn off for ${row.harnessLabel}`}
+            ariaLabel={`Turn off ${row.harnessLabel} only: every agent gets its own copy, then the ${row.harnessLabel} copy is parked`}
+            action={turnOff}
             onAction={onAction}
           />
         ) : (

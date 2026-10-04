@@ -78,6 +78,8 @@ struct WireTypes {
     unpark_outcome: UnparkOutcome,
     split_outcome: skill_studio_core::dto::SplitOutcome,
     split_copy: skill_studio_core::dto::SplitCopy,
+    agent_off_outcome: skill_studio_core::dto::AgentOffOutcome,
+    agent_off_check: skill_studio_core::dto::AgentOffCheck,
     remove_outcome: RemoveOutcome,
     update_outcome: UpdateOutcome,
     update_all_outcome: UpdateAllOutcome,

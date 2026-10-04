@@ -172,6 +172,10 @@ impl EventStatus {
     }
 }
 
+/// Payload key an op sets on a row it rolled back itself, after which
+/// [`EventRecord::restore_capability`] reports no inverse.
+pub const ROLLED_BACK_PAYLOAD_KEY: &str = "rolled_back";
+
 /// One row of the `events` table.
 ///
 /// Invariant: field names match the `SQLite` columns. `payload` and `inverse`
@@ -261,6 +265,11 @@ impl EventRecord {
             // config. Restoring one would put a whole config file back from
             // a backup and drop every edit the user made since.
             (None, _, _, Some(EventKind::HarnessDisable | EventKind::HarnessEnable)) => {
+                RestoreCapability::NoInverse
+            }
+            // The op put everything back itself before it gave up, so the
+            // inverse it kept has nothing left to undo.
+            (None, _, _, _) if self.payload.get(ROLLED_BACK_PAYLOAD_KEY).is_some() => {
                 RestoreCapability::NoInverse
             }
             (None, false, _, _) | (None, true, None, _) => RestoreCapability::NoInverse,

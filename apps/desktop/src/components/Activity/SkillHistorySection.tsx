@@ -23,6 +23,7 @@ import { useAppStore } from "../../store/appStore";
 import { HARNESS_LABELS } from "../../lib/harness-labels";
 import {
   canRestoreSkillEvent,
+  eventLabel,
   kindLabel,
   shouldOfferForceRestore,
 } from "./skill-history-restore-policy";
@@ -204,8 +205,8 @@ function EventRow({ event, onRestored }: { event: SkillEvent; onRestored: () => 
       <span className="min-w-0 flex-1 truncate text-body text-text-primary" title={event.skill}>
         {event.skill || (event.harness ?? kindLabel(event.kind))}
       </span>
-      <span className="text-small text-text-tertiary">{kindLabel(event.kind)}</span>
-      {harnessLabel && (
+      <span className="text-small text-text-tertiary">{eventLabel(event, harnessLabel)}</span>
+      {harnessLabel && event.kind !== "split" && (
         <span className="shrink-0 text-small text-text-tertiary">{harnessLabel}</span>
       )}
       <span className="shrink-0 text-small text-text-tertiary tabular-nums">
