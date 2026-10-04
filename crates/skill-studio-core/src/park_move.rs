@@ -30,9 +30,12 @@ pub(crate) fn crosses_devices(err: &io::Error) -> bool {
 }
 
 /// Moves the folder `from` to `to`. A rename when both sit on one volume.
-/// Across volumes: copies the folder, checks the copy (file count and a hash
-/// of every file), then deletes the source. Any failure before the delete
-/// removes the partial copy and leaves the source as it was.
+/// Across volumes: copies the folder, flushes the copy to disk, checks it
+/// (entries, file modes and a hash of every file), then renames the source to
+/// a hidden `.park-trash-*` sibling and deletes that. Any failure before the
+/// rename removes the partial copy and leaves the source as it was. Once the
+/// rename is done the move has happened: a delete that fails after it leaves
+/// only the hidden sibling (the scan skips dot-folders) and still succeeds.
 pub(crate) fn move_dir(
     rt: &Runtime,
     session: &MutationSession,
@@ -56,6 +59,18 @@ fn copy_verify_remove(
     to: &Path,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
+    // A link would be followed by the walk below, and the delete would then
+    // reach the files it points at. A relative link would also break at `to`.
+    let facts = fs
+        .symlink_metadata(from)
+        .map_err(|e| CoreError::io(from, e))?;
+    if facts.kind != FileKind::Dir {
+        return Err(CoreError::new(
+            ErrorCode::Unsupported,
+            "this skill is a link, so it cannot move to another disk",
+        )
+        .at(from));
+    }
     let tree = walk(fs, from).map_err(|e| CoreError::io(from, e))?;
     if let Some(entry) = tree
         .iter()
@@ -69,23 +84,45 @@ fn copy_verify_remove(
     }
 
     let copied = copy_tree(rt, session, from, to, &tree)
-        .and_then(|()| verify_copy(fs, from, to, &tree).map_err(|e| CoreError::io(to, e)));
-    if let Err(e) = copied {
+        .and_then(|()| verify_copy(fs, from, to, &tree).map_err(|e| CoreError::io(to, e)))
+        .and_then(|()| flush_tree(fs, to, &tree).map_err(|e| CoreError::io(to, e)));
+    let trash = from
+        .parent()
+        .unwrap_or(from)
+        .join(format!(".park-trash-{}", crate::fsops::unique_suffix()));
+    let committed = copied.and_then(|()| {
+        let scoped_from = confine(&rt.scope, fs, from)?;
+        let scoped_trash = confine(&rt.scope, fs, &trash)?;
+        fs.rename(&session.guard, &scoped_from, &scoped_trash)
+            .map_err(|e| CoreError::io(from, e))
+    });
+    if let Err(e) = committed {
         // Best effort: whatever landed at `to` is this attempt's own partial
         // copy, because park refuses a destination that already exists.
         let _ = remove_tree(rt, session, to);
         return Err(e);
     }
 
-    remove_tree(rt, session, from).map_err(|e| {
-        CoreError::new(
-            ErrorCode::Io,
-            format!(
-                "the copy on the other disk is complete, but the original could not be removed: {e}"
-            ),
-        )
-        .at(from)
-    })
+    // The copy is complete and the source is out of the way. A failed delete
+    // costs disk space, not correctness, so it is not an error.
+    let _ = remove_tree(rt, session, &trash);
+    Ok(())
+}
+
+/// Flushes every file and directory of the copy at `to` to disk, so the
+/// source is not renamed away while the copy is still only in memory.
+fn flush_tree(fs: &dyn ScopeFs, to: &Path, tree: &[TreeEntry]) -> io::Result<()> {
+    for entry in tree.iter().filter(|e| e.kind == FileKind::File) {
+        fs.fsops_fsync_file(&to.join(&entry.relative))?;
+    }
+    for entry in tree.iter().rev().filter(|e| e.kind == FileKind::Dir) {
+        fs.fsops_fsync_dir(&to.join(&entry.relative))?;
+    }
+    fs.fsops_fsync_dir(to)?;
+    match to.parent() {
+        Some(parent) => fs.fsops_fsync_dir(parent),
+        None => Ok(()),
+    }
 }
 
 /// Every entry under `root`, directories before their contents.
@@ -150,12 +187,15 @@ fn copy_tree(
 fn verify_copy(fs: &dyn ScopeFs, from: &Path, to: &Path, tree: &[TreeEntry]) -> io::Result<()> {
     let copied = walk(fs, to)?;
     let same_shape = copied.len() == tree.len()
-        && copied
-            .iter()
-            .zip(tree)
-            .all(|(a, b)| a.relative == b.relative && a.kind == b.kind);
+        && copied.iter().zip(tree).all(|(a, b)| {
+            a.relative == b.relative
+                && a.kind == b.kind
+                && (a.kind != FileKind::File || a.mode == b.mode)
+        });
     if !same_shape {
-        return Err(io::Error::other("the copy does not list the same files"));
+        return Err(io::Error::other(
+            "the copy does not list the same files and modes",
+        ));
     }
     for entry in tree.iter().filter(|e| e.kind == FileKind::File) {
         let hash = |root: &Path| -> io::Result<Vec<u8>> {

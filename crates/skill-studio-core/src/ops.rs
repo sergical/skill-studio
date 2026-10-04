@@ -5332,7 +5332,15 @@ fn unpark_body(
     let scoped_parent = crate::ports::confine(&rt.scope, fs, &parent)?;
     fs.create_dir_all(&session.guard, &scoped_parent)
         .map_err(|e| CoreError::io(&parent, e))?;
-    crate::park_move::move_dir(rt, &session, &deployment.path, &restored_dir)?;
+    if let Err(e) = crate::park_move::move_dir(rt, &session, &deployment.path, &restored_dir) {
+        let _ = session.store.finish(
+            &session.guard,
+            &id,
+            crate::events::EventStatus::Failed,
+            None,
+        );
+        return Err(e);
+    }
     if let Some(parent) = deployment.path.parent() {
         let marker = parent
             .join(crate::park_layout::COPY_ORIGIN_DIR)
@@ -5538,14 +5546,21 @@ fn migrate_legacy_flat_copy(
     };
     session.store.record(&session.guard, &id, &draft)?;
 
-    // Through a sibling name: a skill named `universal` would otherwise move
-    // into itself.
+    // A skill named `universal` would move into itself, so it goes through a
+    // sibling name. Every other name moves in one step, which leaves no
+    // window for a crash to strand the skill under a hidden name.
     let holding = parked_root.join(format!(".legacy-{}", crate::fsops::unique_suffix()));
-    let result = crate::park_move::move_dir(rt, &*session, &legacy, &holding).and_then(|()| {
+    let result = if top_level == "universal" {
+        crate::park_move::move_dir(rt, &*session, &legacy, &holding).and_then(|()| {
+            let parent = destination.parent().unwrap_or(&destination).to_path_buf();
+            ensure_dir_all(rt, &*session, fs, &parent)?;
+            crate::park_move::move_dir(rt, &*session, &holding, &destination)
+        })
+    } else {
         let parent = destination.parent().unwrap_or(&destination).to_path_buf();
-        ensure_dir_all(rt, &*session, fs, &parent)?;
-        crate::park_move::move_dir(rt, &*session, &holding, &destination)
-    });
+        ensure_dir_all(rt, &*session, fs, &parent)
+            .and_then(|()| crate::park_move::move_dir(rt, &*session, &legacy, &destination))
+    };
     let status = if result.is_ok() {
         crate::events::EventStatus::Done
     } else {

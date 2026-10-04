@@ -840,6 +840,7 @@ pub struct FailingFs {
     fail_next_write_atomic: AtomicBool,
     fail_next_rename: AtomicBool,
     fail_next_rename_cross_device: AtomicBool,
+    corrupt_next_new_file_with_mode: AtomicBool,
     fail_next_remove_file: AtomicBool,
     /// `-1` means unlimited. Otherwise the number of `write_atomic` calls
     /// still allowed to succeed before every later call fails; see
@@ -893,6 +894,7 @@ impl FailingFs {
             fail_next_write_atomic: AtomicBool::new(false),
             fail_next_rename: AtomicBool::new(false),
             fail_next_rename_cross_device: AtomicBool::new(false),
+            corrupt_next_new_file_with_mode: AtomicBool::new(false),
             fail_next_remove_file: AtomicBool::new(false),
             write_atomic_budget: AtomicI64::new(-1),
             fail_next_create_dir: AtomicBool::new(false),
@@ -940,6 +942,14 @@ impl FailingFs {
     /// (`EXDEV`); later calls delegate normally again.
     pub fn fail_next_rename_cross_device(&self) {
         self.fail_next_rename_cross_device
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// The next `fsops_write_new_file_with_mode` call writes its bytes with
+    /// the first byte flipped, the way a bad disk would; later calls write
+    /// normally again. Lets a test prove a cross-volume copy is verified.
+    pub fn corrupt_next_new_file_with_mode(&self) {
+        self.corrupt_next_new_file_with_mode
             .store(true, Ordering::SeqCst);
     }
 
@@ -1275,6 +1285,18 @@ impl ScopeFs for FailingFs {
         bytes: &[u8],
         mode: u32,
     ) -> std::io::Result<()> {
+        if self
+            .corrupt_next_new_file_with_mode
+            .swap(false, Ordering::SeqCst)
+        {
+            let mut flipped = bytes.to_vec();
+            if let Some(first) = flipped.first_mut() {
+                *first ^= 0xff;
+            }
+            return self
+                .inner
+                .fsops_write_new_file_with_mode(path, &flipped, mode);
+        }
         self.inner.fsops_write_new_file_with_mode(path, bytes, mode)
     }
     fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
