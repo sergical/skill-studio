@@ -429,6 +429,8 @@ pub fn run() {
             skills::skill_park::unpark_skills,
             skills::skill_split::split_skill,
             skills::skill_split::split_skill_targets,
+            skills::skill_split::turn_off_for_agent,
+            skills::skill_split::turn_off_check,
             skills::skill_harness_disable::restore_moved_deployment,
             skills::skill_invocation::set_skill_invocation,
             skills::skill_invocation::set_skills_invocation,

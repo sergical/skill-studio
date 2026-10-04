@@ -25,6 +25,7 @@ import {
   toTooltipLines,
 } from "./skill-location-status";
 import type { LocationAction, LocationRow, ScopeGroup } from "./skill-location-status";
+import { turnOffActionFor } from "./skill-agent-off-model";
 import { splitReaders } from "./skill-split-model";
 
 export function SkillLocationScope({
@@ -46,6 +47,7 @@ export function SkillLocationScope({
       row={row}
       scopeLabel={group.label}
       projectPath={group.projectPath ?? null}
+      turnOff={turnOffActionFor(group, row)}
       onAction={onAction}
     />
   );
@@ -73,6 +75,7 @@ export function SkillLocationScope({
         row={row}
         scopeLabel={group.label}
         projectPath={group.projectPath ?? null}
+        turnOff={turnOffActionFor(group, row)}
         onAction={onAction}
       />
     </div>

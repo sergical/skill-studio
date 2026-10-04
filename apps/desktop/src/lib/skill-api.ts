@@ -44,6 +44,8 @@ import type {
   SkillSnapshot,
   SplitCopy,
   SplitOutcome,
+  AgentOffCheck,
+  AgentOffOutcome,
   TrackedProjects,
   UpdateAllOutcome,
   UpdateAllProgress,
@@ -658,6 +660,30 @@ export async function splitSkillTargets(
   harnesses: AgentId[],
 ): Promise<SplitCopy[]> {
   return callCommand("split_skill_targets", { skillName, projectPath, harnesses });
+}
+
+/**
+ * Turn the skill off for one agent that reads the shared folder: split the
+ * folder into a copy per agent, then park the chosen agent's copy. `target`
+ * names the shared (Universal) deployment. One Activity event holds the undo.
+ */
+export async function turnOffForAgent(
+  target: LifecycleTarget,
+  agent: AgentId,
+): Promise<AgentOffOutcome> {
+  return callCommand("turn_off_for_agent", { target, agent });
+}
+
+/**
+ * What the confirm shows before `turnOffForAgent`: the reason it would
+ * refuse (with whether "Off everywhere" is the way out), and the git warning.
+ * Writes nothing.
+ */
+export async function turnOffCheck(
+  target: LifecycleTarget,
+  agent: AgentId,
+): Promise<AgentOffCheck> {
+  return callCommand("turn_off_check", { target, agent });
 }
 
 /**

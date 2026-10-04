@@ -372,7 +372,7 @@ fn record_split_copies(
 
 /// Refuses a harness whose skills folder is itself a link into the
 /// Universal root: its copy would land inside the folder being split.
-fn refuse_whole_folder_link(
+pub(crate) fn refuse_whole_folder_link(
     fs: &dyn ScopeFs,
     harness: &AgentId,
     root: &Path,

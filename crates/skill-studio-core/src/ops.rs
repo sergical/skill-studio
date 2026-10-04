@@ -121,6 +121,8 @@ pub enum Operation {
     SweepQuarantine,
     /// Replace a Universal folder with one real copy per chosen harness.
     Split,
+    /// Split a shared skill into per-agent copies, then park one agent's.
+    TurnOffForAgent,
     /// Per-skill use counts over a rolling window. No `ops` function backs
     /// it: the host crate's `usage_report` reads agent session history,
     /// which the core never touches.
@@ -5563,7 +5565,11 @@ fn origin_roots(rt: &Runtime, origin: &RootRef) -> Vec<(String, PathBuf)> {
 
 /// The catalog spelling of the folder `copy_parent` is, among `origin`'s
 /// roots. `None` when it matches none of them.
-fn origin_root_relative(rt: &Runtime, origin: &RootRef, copy_parent: &Path) -> Option<String> {
+pub(crate) fn origin_root_relative(
+    rt: &Runtime,
+    origin: &RootRef,
+    copy_parent: &Path,
+) -> Option<String> {
     let fs = rt.ports.fs.as_ref();
     let parent = copy_parent.parent()?;
     let roots = origin_roots(rt, origin);
@@ -5710,7 +5716,7 @@ fn migrate_legacy_flat_copy(
 /// Undoes what a failed park created: the markers it wrote, then the
 /// directories it made, innermost first. Best effort; a directory that is not
 /// empty stays.
-fn remove_park_scaffolding(
+pub(crate) fn remove_park_scaffolding(
     rt: &Runtime,
     session: &crate::ports::MutationSession,
     files: &[PathBuf],
@@ -5730,7 +5736,7 @@ fn remove_park_scaffolding(
 }
 
 /// Refuses a copy `park` cannot move, with the reason a person can act on.
-fn refuse_unparkable(deployment: &DeploymentDto) -> Result<(), CoreError> {
+pub(crate) fn refuse_unparkable(deployment: &DeploymentDto) -> Result<(), CoreError> {
     let refuse =
         |message: &str| Err(CoreError::new(ErrorCode::Unsupported, message).at(&deployment.path));
     if deployment.plugin.is_some() || matches!(deployment.root.kind, RootKind::PluginCache(_)) {
@@ -7230,6 +7236,7 @@ mod tests {
                 Operation::Outdated,
                 Operation::SweepQuarantine,
                 Operation::Split,
+                Operation::TurnOffForAgent,
                 Operation::SkillUsage,
             ];
             for operation in all {
@@ -7255,6 +7262,7 @@ mod tests {
                     Operation::Outdated => "outdated",
                     Operation::SweepQuarantine => "sweep_quarantine",
                     Operation::Split => "split",
+                    Operation::TurnOffForAgent => "turn_off_for_agent",
                     Operation::SkillUsage => "skill_usage",
                 };
                 let value = serde_json::to_value(operation).unwrap();
