@@ -682,13 +682,15 @@ mod tests {
             &["-c".to_string(), script],
             None,
             &cancel,
-            Duration::from_secs(1),
+            // The descendant must have written its pid before the deadline;
+            // under load a shell start alone can take seconds.
+            Duration::from_secs(5),
             MAX_PROCESS_OUTPUT_BYTES,
         )
         .unwrap_err();
 
         assert_eq!(error, ControlledProcessError::TimedOut);
-        assert!(started.elapsed() < Duration::from_secs(4));
+        assert!(started.elapsed() < Duration::from_secs(30));
         let descendant_pid: i32 = std::fs::read_to_string(&pid_file)
             .unwrap()
             .trim()

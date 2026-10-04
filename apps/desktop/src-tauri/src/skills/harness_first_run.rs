@@ -269,9 +269,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         std::fs::create_dir_all(home.join(".agents")).unwrap();
-        // `write_fork_registry` takes its lease under `$HOME/.local/share`, and
-        // other tests swap the process-wide `HOME` while this one runs.
-        let _home_guard = super::super::test_support::HomeGuard::new(&home);
 
         let stale = super::super::skill_fork_registry::read_fork_registry_or_default(&home);
         assert!(

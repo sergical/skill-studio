@@ -22,7 +22,26 @@ use skill_studio_core::{OpStatus, RuntimeScope};
 /// `pub(crate)` so `write_lease.rs` can root every desktop write's lease
 /// under the same `leases` directory `build_runtime_write` uses for park
 /// and unpark, instead of a second, unrelated location.
+#[cfg(test)]
 pub(crate) fn data_root() -> PathBuf {
+    // Unit tests swap the process-wide `HOME` while other tests run in
+    // parallel, so a lease root derived from it moved or vanished mid-write
+    // (ENOENT, EINVAL) and wrote into the real data folder. One fixed
+    // folder for the whole test process keeps the "every writer shares
+    // one lease root" behaviour the lease tests rely on.
+    static TEST_DATA_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    TEST_DATA_ROOT
+        .get_or_init(|| tempfile::tempdir().unwrap().keep().join("skill-studio"))
+        .clone()
+}
+
+#[cfg(not(test))]
+pub(crate) fn data_root() -> PathBuf {
+    data_root_from_env()
+}
+
+#[cfg(not(test))]
+fn data_root_from_env() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
         if !xdg.is_empty() {
             return PathBuf::from(xdg).join("skill-studio");
