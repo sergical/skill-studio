@@ -912,7 +912,7 @@ fn update_split_copies_body(
             let text = |key: &str| row.get(key).and_then(serde_json::Value::as_str);
             text("name") == Some(req.skill.0.as_str())
                 && text("scope") == Some(scope_label)
-                && text("destination") == Some("per_harness")
+                && matches!(text("destination"), Some("per_harness" | "per-harness"))
                 && text("project_path") == project_path.as_deref()
                 && row.get("disabled").and_then(serde_json::Value::as_bool) != Some(true)
         })

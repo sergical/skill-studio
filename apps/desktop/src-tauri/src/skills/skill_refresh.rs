@@ -1588,6 +1588,32 @@ pub(crate) fn apply_skill_snapshot_overlays(
         .into_iter()
         .collect();
     let ledgers = super::skill_ownership::load_ownership_ledgers(home, &project_paths);
+    // A skill split into per-agent copies keeps its `.skill-lock.json` row,
+    // so the update check still tracks it. Its copies take that owner id so
+    // the badge and the Update action reach them.
+    if let Some(global) = ledgers
+        .iter()
+        .find(|ledger| ledger.scope == super::skill_dto::InstallScope::Global)
+    {
+        for skill in skills.iter_mut() {
+            let tracked =
+                global.lock.skills.get(&skill.name).is_some_and(|entry| {
+                    entry.source_type == "github" && entry.skill_path.is_some()
+                });
+            if !tracked {
+                continue;
+            }
+            for deployment in skill.deployments.iter_mut().filter(|deployment| {
+                deployment.owner_kind == super::skill_ownership::LifecycleOwnerKind::Copy
+                    && deployment.owner_id.is_none()
+                    && deployment.scope == "global"
+                    && deployment.destination
+                        == super::skill_deployment::SkillDestination::PerHarness
+            }) {
+                deployment.owner_id = Some(format!("owner:v1/global/{}", skill.name));
+            }
+        }
+    }
     for skill in skills.iter_mut() {
         let mut seen_owners: Vec<&str> = Vec::new();
         for deployment in &skill.deployments {
@@ -3380,6 +3406,97 @@ mod tests {
         assert_eq!(foo.update_owner_ids, vec![seeded_owner_id]);
         assert_eq!(foo.update_commit.as_deref(), Some("b".repeat(40).as_str()));
         assert_eq!(foo.update_owners.len(), 1);
+    }
+
+    /// Flow: a skill was split into per-agent copies and upstream has a newer
+    /// commit. Expect the skill to show an update and name the shared owner id
+    /// that Update acts on. Catches split copies dropping out of update
+    /// availability, which leaves the user no Update button.
+    #[test]
+    fn split_copies_of_a_tracked_skill_show_the_update() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_data = tmp.path().join("app-data");
+        let copy = home.join(".claude/skills/foo");
+        fs::create_dir_all(&copy).unwrap();
+        fs::write(
+            copy.join("SKILL.md"),
+            "---\nname: foo\ndescription: test\n---\nbody",
+        )
+        .unwrap();
+        fs::create_dir_all(home.join(".agents")).unwrap();
+        fs::write(
+            home.join(".agents/.skill-lock.json"),
+            serde_json::json!({
+                "version": 3,
+                "skills": { "foo": {
+                    "source": "someorg/foo", "sourceType": "github",
+                    "sourceUrl": "https://github.com/someorg/foo",
+                    "skillPath": "skills/foo/SKILL.md", "skillFolderHash": "abc",
+                    "installedAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"
+                }}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        // The registry row is keyed by the deployment id the scan computes.
+        let rt =
+            super::super::core_runtime::build_runtime_write_at(&home, &tmp.path().join("data"))
+                .unwrap();
+        let ctx = skill_studio_core::ports::OpContext::uncancellable(
+            skill_studio_core::identity::CorrelationId("t".to_string()),
+        );
+        let scanned = skill_studio_core::ops::scan(
+            &rt,
+            &ctx,
+            &skill_studio_core::dto::ScanRequest::default(),
+        )
+        .unwrap();
+        let scanned_copy = &scanned.skills[0].deployments[0];
+        let copy_id = scanned_copy.id.as_str().to_string();
+        let copy_hash = scanned_copy
+            .content_fingerprint
+            .as_ref()
+            .unwrap()
+            .bare_hex();
+        let registry = serde_json::json!({ "copies": { (copy_id.clone()): {
+            "deployment_id": copy_id, "name": "foo", "path": copy,
+            "scope": "global", "destination": "per_harness", "slot": "claude-code",
+            "project_path": null, "content_hash": copy_hash, "disabled": false
+        }}});
+        fs::write(home.join(".agents/skill-studio.json"), registry.to_string()).unwrap();
+
+        let owner_id = "owner:v1/global/foo";
+        let update_check_path = skill_update_check::update_check_path(&app_data);
+        fs::create_dir_all(update_check_path.parent().unwrap()).unwrap();
+        let now = Utc::now().to_rfc3339();
+        let store = serde_json::json!({
+            "version": 2, "checked_at": now, "gh_status": { "kind": "ok" },
+            "owners": { (owner_id): {
+                "repo": "someorg/foo", "path": "skills/foo",
+                "installed_commit": "a".repeat(40), "latest_commit": "b".repeat(40),
+                "latest_commit_at": now, "checked_at": now, "error": null,
+            }}
+        });
+        fs::write(&update_check_path, store.to_string()).unwrap();
+
+        let mut invocation_index = SkillInvocationIndex::default();
+        let cache_path = tmp.path().join("cache.json");
+        let (snapshot, _report) = build_snapshot(
+            &home,
+            &mut invocation_index,
+            BuildPaths {
+                cache_path: &cache_path,
+                runs_root: tmp.path(),
+                update_check_path: &update_check_path,
+            },
+            Utc::now(),
+        );
+
+        let foo = snapshot.skills.iter().find(|s| s.name == "foo").unwrap();
+        assert_eq!(foo.deployments[0].owner_id.as_deref(), Some(owner_id));
+        assert!(foo.has_update);
+        assert_eq!(foo.update_owner_ids, vec![owner_id]);
     }
 
     #[test]

@@ -2106,11 +2106,14 @@ fn classify_owner(cx: &OwnerClassifyContext) -> (LifecycleOwnerKind, Option<Owne
             (cx.scope, record.scope.as_str()),
             (RootScope::Global, "global") | (RootScope::Project(_), "project")
         );
-        let destination_matches = record.destination
-            == match cx.destination {
-                SkillDestination::Universal => "universal",
-                SkillDestination::PerHarness => "per-harness",
-            };
+        // `install` and `split` write `per_harness` (the enum's serde form);
+        // older registries and the desktop wrote `per-harness`.
+        let destination_matches = match cx.destination {
+            SkillDestination::Universal => record.destination == "universal",
+            SkillDestination::PerHarness => {
+                matches!(record.destination.as_str(), "per_harness" | "per-harness")
+            }
+        };
         let project_matches = match cx.scope {
             RootScope::Global => record.project_path.is_none(),
             RootScope::Project(project) => {

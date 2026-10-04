@@ -2169,7 +2169,7 @@ fn clear_outdated_state_and_emit(
 pub async fn update_skill(
     target: LifecycleTarget,
     app: tauri::AppHandle,
-) -> Result<skill_studio_core::dto::UpdateOutcome, String> {
+) -> Result<serde_json::Value, String> {
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(&timing_app, "update_skill", move || {
         let refresh_state = app.state::<SkillRefreshState>();
@@ -2179,12 +2179,22 @@ pub async fn update_skill(
             .path()
             .app_data_dir()
             .unwrap_or_else(|_| PathBuf::from("."));
-        let req = build_update_request(&app_data, &snapshot, &skill, &deployment)?;
-
         let rt = super::core_runtime::build_runtime_write()?;
         let ctx = skill_studio_core::ports::OpContext::uncancellable(
             skill_studio_core::identity::CorrelationId(ulid::Ulid::new().to_string()),
         );
+        if deployment.owner_kind == super::skill_ownership::LifecycleOwnerKind::Copy {
+            return update_split_copies_command(
+                &app,
+                &refresh_state,
+                &snapshot,
+                &rt,
+                &ctx,
+                &skill,
+                &deployment,
+            );
+        }
+        let req = build_update_request(&app_data, &snapshot, &skill, &deployment)?;
         let result = skill_studio_core::ops::update(&rt, &ctx, &req);
         let envelope = skill_studio_core::ops::ResultEnvelope::from_result(
             skill_studio_core::ops::Operation::Update,
@@ -2201,9 +2211,46 @@ pub async fn update_skill(
             deployment.owner_id.as_deref(),
             &skill_refresh::snapshot_owner_ids(&snapshot.skills),
         );
-        Ok(outcome)
+        serde_json::to_value(outcome).map_err(|e| e.to_string())
     })
     .await
+}
+
+/// `update_skill` for a skill that was split into per-agent copies: one
+/// fetch, every live copy written (see `skill_split_update`). The outdated
+/// badge clears only when no copy was left behind, so a refused copy keeps
+/// offering the update.
+fn update_split_copies_command(
+    app: &tauri::AppHandle,
+    refresh_state: &SkillRefreshState,
+    snapshot: &skill_refresh::SkillSnapshot,
+    rt: &skill_studio_core::ports::Runtime,
+    ctx: &skill_studio_core::ports::OpContext,
+    skill: &InstalledSkill,
+    deployment: &super::skill_dto::Deployment,
+) -> Result<serde_json::Value, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let (fetch, lookup) = super::skill_install::resolve_fetch_and_lookup(app)?;
+    let outcome = super::skill_split_update::update_split_skill(
+        rt,
+        ctx,
+        &home,
+        &skill.name,
+        fetch.as_ref(),
+        lookup.as_ref(),
+    )?;
+    let result = super::skill_split_update::split_update_result(&skill.name, &outcome);
+    if result.is_ok() {
+        clear_outdated_state_and_emit(
+            app,
+            refresh_state,
+            &skill.name,
+            deployment.owner_id.as_deref(),
+            &skill_refresh::snapshot_owner_ids(&snapshot.skills),
+        );
+    }
+    result?;
+    Ok(serde_json::json!({ "updated": outcome.updated }))
 }
 
 /// Test-only: the batch write itself, isolated from target resolution and
