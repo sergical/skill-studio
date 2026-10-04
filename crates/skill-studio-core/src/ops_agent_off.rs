@@ -330,7 +330,9 @@ fn plan(
     }
     if matches!(
         deployment.owner_kind,
-        LifecycleOwnerKind::Dotagents | LifecycleOwnerKind::WildcardDotagents
+        LifecycleOwnerKind::Dotagents
+            | LifecycleOwnerKind::WildcardDotagents
+            | LifecycleOwnerKind::Ambiguous
     ) {
         return Ok(Err(refusal(
             format!(
@@ -495,9 +497,37 @@ fn park_agent_copy(
     })?;
     ops::refuse_unparkable(&copy)?;
     let skill = ops::resolve_skill(&session.fresh, &copy.id)?.clone();
-    let parked = ops::park_found_copy(rt, ctx, session, &copy, &skill)?;
-    record_parked_copy(rt, session, split_event, agent, &parked)?;
+    let parked = match ops::park_found_copy(rt, ctx, session, &copy, &skill) {
+        Ok(parked) => parked,
+        Err(e) => {
+            // The move may have happened before the failure (the journal
+            // write after it); put the copy back so the split rollback sees it.
+            if let Ok(dir) = parked_dir(rt, &copy.root.scope, agent, &skill.name) {
+                bring_back(rt, session, &dir, &copy.path);
+            }
+            return Err(e);
+        }
+    };
+    if let Err(e) = record_parked_copy(rt, session, split_event, agent, &parked) {
+        if bring_back(rt, session, &parked.parked_dir, &copy.path) {
+            let _ = session.store.patch_payload(
+                &session.guard,
+                &parked.event_id,
+                serde_json::json!({ crate::events::ROLLED_BACK_PAYLOAD_KEY: true }),
+            );
+        }
+        return Err(e);
+    }
     Ok(parked.parked_dir)
+}
+
+/// Moves a parked copy back to `slot` when it is parked and the slot is
+/// empty. Returns true when the copy is back; false leaves things as they are.
+fn bring_back(rt: &Runtime, session: &MutationSession, parked: &Path, slot: &Path) -> bool {
+    let fs = rt.ports.fs.as_ref();
+    fs.symlink_metadata(slot).is_err()
+        && fs.symlink_metadata(parked).is_ok()
+        && crate::park_move::move_dir(rt, session, parked, slot).is_ok()
 }
 
 fn find_copy(rt: &Runtime, session: &MutationSession, path: &Path) -> Option<DeploymentDto> {

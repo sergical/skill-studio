@@ -16,7 +16,7 @@ use skill_studio_core::dto::{
     ScanRequest, UnparkRequest,
 };
 use skill_studio_core::harness::HarnessCatalog;
-use skill_studio_core::identity::{AgentId, DeploymentId, RootKind};
+use skill_studio_core::identity::{AgentId, DeploymentId, LifecycleOwnerKind, RootKind};
 use skill_studio_core::ops;
 use skill_studio_core::ops_agent_off::{turn_off_check, turn_off_for_agent};
 use skill_studio_core::ports::{Ports, Runtime};
@@ -287,6 +287,37 @@ fn a_dotagents_skill_is_refused_with_off_everywhere_and_nothing_is_written() {
     let refusal = check.refusal.unwrap();
     assert!(refusal.off_everywhere);
     assert_eq!(refusal.reason, error.message);
+    assert_nothing_written(&home);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: `gamma` has an `agents.toml` row and a `.skill-lock.json` entry, so
+/// its owner is ambiguous; turn it off for Codex. Expect the dotagents refusal
+/// naming "Off everywhere" and nothing written. Catches an ambiguous owner
+/// that slips past the dotagents check and gets a copy `dotagents install`
+/// or the skills CLI would undo.
+#[test]
+fn an_ambiguous_owner_is_refused_with_off_everywhere_and_nothing_is_written() {
+    let home = unique_temp_dir("agent_off_ambiguous");
+    global_home(&home);
+    write_dotagents_ledger(&home);
+    std::fs::write(
+        home.join(".agents/.skill-lock.json"),
+        r#"{"version":3,"skills":{"gamma":{"source":"owner/gamma","sourceType":"github","sourceUrl":"https://github.com/owner/gamma","skillPath":"skills/gamma/SKILL.md","skillFolderHash":"h","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}}}"#,
+    )
+    .unwrap();
+    let rt = runtime(&home, &[]);
+    let deployment = shared_deployment(&rt);
+    assert_eq!(deployment.owner_kind, LifecycleOwnerKind::Ambiguous);
+
+    let error = turn_off_for_agent(&rt, &ctx(), &request(deployment.id, "codex")).unwrap_err();
+
+    assert!(
+        error.message.contains("Off everywhere"),
+        "{}",
+        error.message
+    );
     assert_nothing_written(&home);
 
     std::fs::remove_dir_all(&home).ok();
