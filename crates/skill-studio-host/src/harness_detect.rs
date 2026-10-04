@@ -19,8 +19,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// How long [`broken_node_reason`] lets `node --version` run. It runs on every
 /// failed npx run, so a hanging `node` must not extend `ProcessSpec::timeout_ms`
-/// by much.
-const NODE_VERSION_TIMEOUT: Duration = Duration::from_secs(2);
+/// by much. A healthy-but-slow start must not hit it either: on a loaded
+/// machine, or on the first launch of a just-upgraded binary, a process
+/// start measured up to 3.6 s, and a probe that gives up reports no cause.
+const NODE_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long the timeout path waits for a reader thread to see EOF after
 /// killing the child's whole process group, before giving up on it and
@@ -442,7 +444,7 @@ mod tests {
             args: vec!["hello".into()],
             cwd: None,
             env: Vec::new(),
-            timeout_ms: 2_000,
+            timeout_ms: 30_000,
         };
         let output = spawner.run(&spec, &NeverCancel).unwrap();
         assert_eq!(output.status, Some(0), "echo did not exit 0");
@@ -558,7 +560,7 @@ mod tests {
             // alongside other tests that spawn and sleep real child
             // processes, and 2s was tight enough under that load to time
             // out this fake `npx` before it ever ran.
-            timeout_ms: 5_000,
+            timeout_ms: 30_000,
         };
 
         let output = spawner.run(&spec, &NeverCancel).unwrap();
@@ -587,7 +589,7 @@ mod tests {
             args: vec!["-c".into(), "yes x | head -c 200000".into()],
             cwd: None,
             env: Vec::new(),
-            timeout_ms: 5_000,
+            timeout_ms: 30_000,
         };
 
         let output = spawner.run(&spec, &NeverCancel).unwrap();
