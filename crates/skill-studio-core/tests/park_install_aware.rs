@@ -64,6 +64,9 @@ struct FakeDotagents {
     crash_in_remove: AtomicBool,
     /// `remove` leaves the skill's `agents.lock` row in place.
     keep_lock_row: AtomicBool,
+    /// `remove` never writes `agents.toml`, as real dotagents does with a
+    /// multi-line `exclude` or CRLF line endings.
+    leave_toml: AtomicBool,
 }
 
 impl FakeDotagents {
@@ -76,6 +79,7 @@ impl FakeDotagents {
             ignore_yes: AtomicBool::new(false),
             crash_in_remove: AtomicBool::new(false),
             keep_lock_row: AtomicBool::new(false),
+            leave_toml: AtomicBool::new(false),
         })
     }
 
@@ -124,7 +128,7 @@ impl FakeDotagents {
     /// when its `source` equals the skill's `agents.lock` source and it does
     /// not exclude the name; the exclude goes to the first such entry, and
     /// is not written when that entry's list spans several lines.
-    fn remove(dir: &Path, skills_dir: &Path, name: &str, keep_lock_row: bool) {
+    fn remove(dir: &Path, skills_dir: &Path, name: &str, keep_lock_row: bool, leave_toml: bool) {
         let toml_path = dir.join("agents.toml");
         let lock_path = dir.join("agents.lock");
         let text = std::fs::read_to_string(&toml_path).unwrap();
@@ -145,7 +149,7 @@ impl FakeDotagents {
         let explicit = rows
             .iter()
             .position(|row| row.get("name").and_then(toml_edit::Item::as_str) == Some(name));
-        let mut write_toml = true;
+        let mut write_toml = !leave_toml;
         if let Some(index) = explicit {
             rows.remove(index);
         } else {
@@ -274,6 +278,7 @@ impl ProcessSpawner for FakeDotagents {
                             &project.join(".agents/skills"),
                             name,
                             self.keep_lock_row.load(Ordering::SeqCst),
+                            self.leave_toml.load(Ordering::SeqCst),
                         );
                     } else {
                         let dir = PathBuf::from(env_value(spec, "DOTAGENTS_HOME").unwrap());
@@ -282,6 +287,7 @@ impl ProcessSpawner for FakeDotagents {
                             &dir.join("skills"),
                             name,
                             self.keep_lock_row.load(Ordering::SeqCst),
+                            self.leave_toml.load(Ordering::SeqCst),
                         );
                     }
                 }
@@ -648,8 +654,13 @@ fn a_dotagents_park_row_has_no_inverse() {
 /// Parks `foo` after `setup` made the stub misbehave, and checks the park
 /// rolled back: the copy is at its place, both dotagents files are
 /// byte-identical, the row is failed, and no folder or marker stays parked.
-fn assert_failed_park_rolls_back(label: &str, setup: impl Fn(&FakeDotagents), expected: &str) {
-    for toml in [WILDCARD_TOML, EXPLICIT_TOML] {
+fn assert_failed_park_rolls_back(
+    label: &str,
+    tomls: &[&str],
+    setup: impl Fn(&FakeDotagents),
+    expected: &str,
+) {
+    for toml in tomls.iter().copied() {
         let (home, stub) = dotagents_home(label, toml);
         let rt = runtime(&home, stub.clone(), true);
         let (toml_before, lock_before) = (read(&stub.toml_path()), read(&stub.lock_path()));
@@ -686,6 +697,7 @@ fn assert_failed_park_rolls_back(label: &str, setup: impl Fn(&FakeDotagents), ex
 fn a_failed_dotagents_remove_puts_the_copy_and_both_files_back() {
     assert_failed_park_rolls_back(
         "park_dotagents_remove_fails",
+        &[WILDCARD_TOML, EXPLICIT_TOML],
         |stub| stub.remove_exit.store(3, Ordering::SeqCst),
         "dotagents remove",
     );
@@ -695,10 +707,13 @@ fn a_failed_dotagents_remove_puts_the_copy_and_both_files_back() {
 /// must ask a question and has no terminal. Expectation: park notices that
 /// `agents.toml` still lists the skill, fails, and rolls back. Failure: park
 /// reports success and the next `dotagents install` brings the copy back.
+/// A wildcard skill is different: park adds the exclude itself (see the
+/// repair tests below), so only an explicit entry can fail this way.
 #[test]
 fn a_dotagents_remove_that_changes_nothing_fails_the_park() {
     assert_failed_park_rolls_back(
         "park_dotagents_no_change",
+        &[EXPLICIT_TOML],
         |stub| stub.ignore_yes.store(true, Ordering::SeqCst),
         "still lists foo",
     );
@@ -1112,5 +1127,120 @@ fn park_of_a_hand_placed_skill_runs_no_installer() {
     park_foo(&rt);
 
     assert!(stub.calls().is_empty());
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// An own entry for `foo` and a `name = "*"` entry of the same source.
+const OWN_AND_WILDCARD_TOML: &str = "version = 1\n\n[[skills]]\nname = \"foo\"\nsource = \"owner/pack\"\n\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\n";
+/// A comment above the last `exclude` item and one after it.
+const COMMENTED_EXCLUDE_TOML: &str = "version = 1\n\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\nexclude = [\n  \"a\",\n  # note\n  \"baz\", # tail\n]\n";
+/// Two `name = "*"` entries of one source with different `path`s.
+const TWO_PATHS_TOML: &str = "version = 1\n\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\npath = \"a\"\n\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\npath = \"b\"\n";
+
+/// Flow: `foo` has its own entry and the `*` entry of the same source also
+/// supplies it. Park, run `dotagents install`, turn on. Expectation: park
+/// removes the own entry and excludes `foo` in the `*` entry, install leaves
+/// the skill parked, turn-on brings back the entry and lifts the exclude.
+/// Failure: install revives the skill through the `*` entry.
+#[test]
+fn a_skill_with_an_own_entry_and_a_wildcard_entry_stays_parked() {
+    let (home, stub) = dotagents_home_with_pool(
+        "park_dotagents_own_and_wildcard",
+        OWN_AND_WILDCARD_TOML,
+        &["foo", "bar"],
+    );
+    let rt = runtime(&home, stub.clone(), true);
+    let live = home.join(".agents/skills/foo");
+
+    park_foo(&rt);
+    let toml = read(&stub.toml_path());
+    assert!(
+        !toml.contains("name = \"foo\"") && toml.contains("exclude = [\"foo\"]"),
+        "{toml}"
+    );
+    dotagents_install(&stub);
+    assert!(!live.exists(), "install revived the parked skill");
+
+    unpark_foo(&rt);
+    let toml = read(&stub.toml_path());
+    assert!(
+        toml.contains("name = \"foo\"") && !toml.contains("exclude"),
+        "{toml}"
+    );
+    std::fs::remove_dir_all(&live).unwrap();
+    dotagents_install(&stub);
+    assert!(live.join("SKILL.md").exists());
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: real dotagents leaves `agents.toml` unchanged for a CRLF file. The
+/// stub does the same. Expectation: park adds `foo` to `exclude` itself and
+/// install leaves the skill parked. Failure: park fails or the skill returns.
+#[test]
+fn park_repairs_a_crlf_agents_toml_that_dotagents_left_unchanged() {
+    let crlf = WILDCARD_TOML.replace('\n', "\r\n");
+    let (home, stub) = dotagents_home("park_dotagents_crlf", &crlf);
+    let rt = runtime(&home, stub.clone(), true);
+    stub.leave_toml.store(true, Ordering::SeqCst);
+
+    park_foo(&rt);
+
+    assert!(read(&stub.toml_path()).contains("exclude = [\"foo\"]"));
+    dotagents_install(&stub);
+    assert!(
+        !home.join(".agents/skills/foo").exists(),
+        "install revived the parked skill"
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: two `*` entries share a source; only the one with `path = "b"`
+/// supplies `foo`, but dotagents excludes `foo` in the first one. Expectation:
+/// park excludes `foo` in the entry that supplies it. Failure: the skill is
+/// still supplied and the next install brings it back.
+#[test]
+fn park_excludes_the_wildcard_entry_that_really_supplies_the_skill() {
+    let (home, stub) =
+        dotagents_home_with_pool("park_dotagents_two_paths", TWO_PATHS_TOML, &["foo"]);
+    let lock = read(&stub.lock_path()).replace(
+        "[skills.foo]\nsource = \"owner/pack\"\n",
+        "[skills.foo]\nsource = \"owner/pack\"\nresolved_path = \"b\"\n",
+    );
+    std::fs::write(stub.lock_path(), lock).unwrap();
+    let rt = runtime(&home, stub.clone(), true);
+
+    park_foo(&rt);
+
+    let doc = read(&stub.toml_path())
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    let rows = doc["skills"].as_array_of_tables().unwrap();
+    let excludes_foo = |row: &toml_edit::Table| {
+        row.get("exclude")
+            .and_then(toml_edit::Item::as_array)
+            .is_some_and(|list| list.iter().any(|item| item.as_str() == Some("foo")))
+    };
+    assert!(rows.iter().all(excludes_foo), "{doc}");
+    dotagents_install(&stub);
+    assert!(!home.join(".agents/skills/foo").exists());
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: park a skill whose `*` entry has a multi-line `exclude` with a comment
+/// above the last item and one after it. Expectation: `foo` goes in as a new
+/// last item and both comments stay once, where they were. Failure: a comment
+/// is copied onto the new item or moves.
+#[test]
+fn park_keeps_the_comments_around_the_last_exclude_item() {
+    let (home, stub) = dotagents_home("park_dotagents_comments", COMMENTED_EXCLUDE_TOML);
+    let rt = runtime(&home, stub.clone(), true);
+    stub.keep_lock_row.store(true, Ordering::SeqCst);
+
+    park_foo(&rt);
+
+    assert_eq!(
+        read(&stub.toml_path()),
+        "version = 1\n\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\nexclude = [\n  \"a\",\n  # note\n  \"baz\", # tail\n  \"foo\",\n]\n"
+    );
     std::fs::remove_dir_all(&home).ok();
 }

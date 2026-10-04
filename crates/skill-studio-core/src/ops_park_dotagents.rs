@@ -196,25 +196,90 @@ fn lists_explicitly(doc: &toml_edit::DocumentMut, name: &str) -> bool {
     rows(doc).any(|row| row_name(row) == Some(name))
 }
 
-/// dotagents' `normalizeSource`, for the shapes a source takes in practice:
-/// a GitHub URL or `github:` form of `owner/repo` equals the short form.
+/// `owner/repo` of a hosted URL body such as `owner/repo.git/@ref`; GitLab
+/// owners may be nested groups. Mirrors the GITHUB_* and GITLAB_* patterns of
+/// dotagents-lib (`sources/repository-source.js`).
+fn hosted_owner_repo(rest: &str, nested_groups: bool) -> Option<String> {
+    let base = match rest.split_once('@') {
+        Some((_, "")) => return None,
+        Some((base, _ref)) => base,
+        None => rest,
+    };
+    let base = base.strip_suffix('/').unwrap_or(base);
+    let base = base.strip_suffix(".git").unwrap_or(base);
+    let (owner, repo) = if nested_groups {
+        base.rsplit_once('/')?
+    } else {
+        base.split_once('/')?
+    };
+    let starts_alphanumeric = |part: &str| {
+        part.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric())
+    };
+    if !starts_alphanumeric(owner) || !starts_alphanumeric(repo) || repo.contains('/') {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
+}
+
+/// dotagents-lib's `normalizeSource` (over `parseSource`): GitHub and GitLab
+/// URLs and `owner/repo@ref` shorthand become `owner/repo`, other https URLs
+/// get a lowercase host and no trailing slash, and `git:`, `path:` and
+/// anything it cannot parse stay as written.
 fn normalize_source(source: &str) -> String {
-    let source = source.trim();
-    let source = source.strip_prefix("github:").unwrap_or(source);
-    let source = [
-        "https://github.com/",
-        "http://github.com/",
-        "https://www.github.com/",
-        "ssh://git@github.com/",
-        "git@github.com:",
-    ]
-    .iter()
-    .find_map(|prefix| source.strip_prefix(prefix))
-    .unwrap_or(source);
-    source
-        .trim_end_matches('/')
-        .trim_end_matches(".git")
-        .to_string()
+    if source.starts_with("path:") || source.starts_with("git:") {
+        return source.to_string();
+    }
+    let lower = source.to_ascii_lowercase();
+    let hosts: [(&[&str], bool); 2] = [
+        (
+            &[
+                "https://github.com/",
+                "http://github.com/",
+                "git@github.com:",
+            ],
+            false,
+        ),
+        (
+            &[
+                "https://gitlab.com/",
+                "http://gitlab.com/",
+                "git@gitlab.com:",
+            ],
+            true,
+        ),
+    ];
+    for (prefixes, nested_groups) in hosts {
+        for prefix in prefixes {
+            if lower.starts_with(prefix) {
+                if let Some(repo) = hosted_owner_repo(&source[prefix.len()..], nested_groups) {
+                    return repo;
+                }
+            }
+        }
+    }
+    if lower.starts_with("https://") {
+        let rest = &source["https://".len()..];
+        let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let (host, tail) = rest.split_at(host_end);
+        let path = tail.split(['?', '#']).next().unwrap_or_default();
+        return format!(
+            "https://{}{}",
+            host.to_lowercase(),
+            path.trim_end_matches('/')
+        );
+    }
+    let shorthand = source.strip_prefix('@').unwrap_or(source);
+    let base = match shorthand.split_once('@') {
+        Some((_, "")) => return source.to_string(),
+        Some((base, _ref)) => base,
+        None => shorthand,
+    };
+    match base.split('/').collect::<Vec<_>>().as_slice() {
+        [owner, repo] if !owner.is_empty() && !repo.is_empty() => format!("{owner}/{repo}"),
+        _ => source.to_string(),
+    }
 }
 
 fn sources_match(a: &str, b: &str) -> bool {
@@ -270,14 +335,94 @@ fn wildcard_contains(row: &toml_edit::Table, name: &str, locked: &Locked) -> boo
     path == "." || resolved == path || resolved.starts_with(&format!("{path}/"))
 }
 
+/// A wildcard entry's `path` as dotagents compares it; no path equals `.`.
+fn comparable_path(path: Option<&str>) -> String {
+    normalize_path(path.unwrap_or_default())
+}
+
 /// Whether `row` is one of the recorded wildcard entries.
 fn is_recorded(row: &toml_edit::Table, wildcards: &[WildcardRef]) -> bool {
     row_name(row) == Some("*")
         && row_str(row, "source").is_some_and(|source| {
             wildcards.iter().any(|w| {
-                sources_match(&w.source, source) && w.path.as_deref() == row_str(row, "path")
+                sources_match(&w.source, source)
+                    && comparable_path(w.path.as_deref()) == comparable_path(row_str(row, "path"))
             })
         })
+}
+
+/// Adds `name` to the `exclude` list of `row`, creating the list when the
+/// entry has none. A multi-line list keeps its layout: the new item takes the
+/// indent of the last one, and a comment after the last item's comma stays
+/// on that line.
+fn add_exclude(row: &mut toml_edit::Table, name: &str) {
+    if row.get("exclude").is_none() {
+        row["exclude"] = toml_edit::value(toml_edit::Array::new());
+    }
+    let Some(exclude) = row
+        .get_mut("exclude")
+        .and_then(toml_edit::Item::as_array_mut)
+    else {
+        return;
+    };
+    let layout = exclude.to_string();
+    if !layout.contains('\n') {
+        exclude.push(name);
+        return;
+    }
+    let newline = if layout.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let Some(last) = exclude.len().checked_sub(1) else {
+        exclude.push(name);
+        return;
+    };
+    let indent = exclude
+        .get(last)
+        .and_then(|item| item.decor().prefix())
+        .and_then(toml_edit::RawString::as_str)
+        .and_then(|prefix| {
+            prefix
+                .rsplit_once('\n')
+                .map(|(_, indent)| indent.to_string())
+        })
+        .unwrap_or_default();
+    let trailing = exclude.trailing().as_str().unwrap_or_default().to_string();
+    let last_suffix = exclude
+        .get(last)
+        .and_then(|item| item.decor().suffix().cloned());
+    exclude.push(name);
+    match trailing.find('\n') {
+        Some(at) => {
+            let cut = if trailing[..at].ends_with('\r') {
+                at - 1
+            } else {
+                at
+            };
+            if let Some(added) = exclude.get_mut(last + 1) {
+                added
+                    .decor_mut()
+                    .set_prefix(format!("{}{newline}{indent}", &trailing[..cut]));
+            }
+            exclude.set_trailing(trailing[cut..].to_string());
+            exclude.set_trailing_comma(true);
+        }
+        None => {
+            // No trailing comma: the closing bracket's line break sits after
+            // the last item and moves to the new one.
+            if let Some(added) = exclude.get_mut(last + 1) {
+                added.decor_mut().set_prefix(format!("{newline}{indent}"));
+                if let Some(suffix) = last_suffix {
+                    added.decor_mut().set_suffix(suffix);
+                }
+            }
+            if let Some(item) = exclude.get_mut(last) {
+                item.decor_mut().set_suffix("");
+            }
+        }
+    }
 }
 
 fn lock_table<'a>(doc: &'a toml_edit::DocumentMut, name: &str) -> Option<&'a toml_edit::Table> {
@@ -370,8 +515,8 @@ pub(crate) fn plan_park(
     let entry = rows(&doc)
         .find(|row| row_name(row) == Some(skill.0.as_str()))
         .map(ToString::to_string);
-    let wildcards: Vec<WildcardRef> = match (&entry, &locked) {
-        (None, Some(locked)) => rows(&doc)
+    let wildcards: Vec<WildcardRef> = match &locked {
+        Some(locked) => rows(&doc)
             .filter(|row| wildcard_contains(row, &skill.0, locked))
             .filter_map(|row| {
                 Some(WildcardRef {
@@ -380,7 +525,7 @@ pub(crate) fn plan_park(
                 })
             })
             .collect(),
-        _ => Vec::new(),
+        None => Vec::new(),
     };
     if entry.is_none() && wildcards.is_empty() {
         return Ok(None);
@@ -481,10 +626,11 @@ pub(crate) fn run_remove(
 
 /// Whether `dotagents install` would no longer install the skill from `doc`.
 fn is_removed(doc: &toml_edit::DocumentMut, plan: &DotagentsPark, skill: &SkillName) -> bool {
-    match (&plan.entry, &plan.locked) {
-        (None, Some(locked)) => !rows(doc).any(|row| wildcard_contains(row, &skill.0, locked)),
-        _ => !lists_explicitly(doc, &skill.0),
-    }
+    let supplied = plan
+        .locked
+        .as_ref()
+        .is_some_and(|locked| rows(doc).any(|row| wildcard_contains(row, &skill.0, locked)));
+    !lists_explicitly(doc, &skill.0) && !supplied
 }
 
 fn verify_removed(
@@ -498,8 +644,7 @@ fn verify_removed(
     if is_removed(&doc, plan, skill) {
         return Ok(());
     }
-    let unchanged = plan.originals[0].text.as_deref() == Some(text.as_str());
-    if plan.entry.is_none() && unchanged && exclude_in_multiline(rt, guard, plan, skill, doc)? {
+    if !lists_explicitly(&doc, &skill.0) && exclude_where_supplied(rt, guard, plan, skill, doc)? {
         return Ok(());
     }
     Err(CoreError::new(
@@ -512,11 +657,20 @@ fn verify_removed(
     .at(&plan.config))
 }
 
-/// dotagents leaves `agents.toml` alone when the entry's `exclude` list spans
-/// several lines (it still deletes the folder and the lock row). Adds the
-/// name to that list here and drops the lock row if dotagents left it.
-/// `false` when no such entry exists.
-fn exclude_in_multiline(
+/// `dotagents remove` does not always leave the skill unlisted:
+/// - the skill had its own entry and a `*` entry from the same source, and
+///   `remove` drops only the own entry, so `install` brings the skill back
+///   through the `*` entry;
+/// - its `exclude` list spans several lines, or the file has CRLF line ends,
+///   and dotagents' line-based edit changes nothing;
+/// - dotagents excluded the first `*` entry of that source, which is not the
+///   one that supplies the skill (a different `path`).
+///
+/// Adds the name to the `exclude` of the `*` entries that still supply the
+/// skill (every one when the skill had its own entry, the first otherwise,
+/// as `remove` would), and drops the lock row if dotagents left it. Writes
+/// nothing and returns `false` when that would not unlist the skill.
+fn exclude_where_supplied(
     rt: &Runtime,
     guard: &ExclusiveGuard,
     plan: &DotagentsPark,
@@ -526,36 +680,28 @@ fn exclude_in_multiline(
     let Some(locked) = &plan.locked else {
         return Ok(false);
     };
-    let Some(list) = doc
+    let supplying: Vec<usize> = rows(&doc)
+        .enumerate()
+        .filter(|(_, row)| wildcard_contains(row, &skill.0, locked))
+        .map(|(index, _)| index)
+        .collect();
+    let take = if plan.entry.is_some() {
+        supplying.len()
+    } else {
+        1
+    };
+    if let Some(list) = doc
         .get_mut("skills")
         .and_then(toml_edit::Item::as_array_of_tables_mut)
-    else {
-        return Ok(false);
-    };
-    let Some(row) = list
-        .iter_mut()
-        .find(|row| wildcard_contains(row, &skill.0, locked))
-    else {
-        return Ok(false);
-    };
-    let Some(exclude) = row
-        .get_mut("exclude")
-        .and_then(toml_edit::Item::as_array_mut)
-    else {
-        return Ok(false);
-    };
-    if !exclude.to_string().contains('\n') {
-        return Ok(false);
-    }
-    let prefix = exclude
-        .iter()
-        .last()
-        .and_then(|item| item.decor().prefix().cloned());
-    exclude.push(skill.0.as_str());
-    if let (Some(prefix), Some(added)) = (prefix, exclude.len().checked_sub(1)) {
-        if let Some(item) = exclude.get_mut(added) {
-            item.decor_mut().set_prefix(prefix);
+    {
+        for (index, row) in list.iter_mut().enumerate() {
+            if supplying.iter().take(take).any(|i| *i == index) {
+                add_exclude(row, &skill.0);
+            }
         }
+    }
+    if !is_removed(&doc, plan, skill) {
+        return Ok(false);
     }
     write_text(rt, guard, &plan.config, &doc.to_string())?;
     drop_lock_entry(rt, guard, plan, skill)?;
@@ -629,8 +775,8 @@ fn write_text(
 }
 
 /// `skill` listed again in `doc`: the recorded `[[skills]]` entry added back,
-/// or, without one, the name lifted from the `exclude` of the recorded
-/// wildcard entries. Reports whether anything changed.
+/// and the name lifted from the `exclude` of the recorded wildcard
+/// entries. Reports whether anything changed.
 fn with_skill_back(
     doc: &mut toml_edit::DocumentMut,
     skill: &SkillName,
@@ -660,7 +806,8 @@ fn with_skill_back(
                 changed = true;
             }
         }
-    } else if let Some(list) = doc
+    }
+    if let Some(list) = doc
         .get_mut("skills")
         .and_then(toml_edit::Item::as_array_of_tables_mut)
     {
@@ -797,4 +944,107 @@ fn turn_on_files(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Flow: a source in `agents.toml` and the same source in `agents.lock`
+    /// are written in different shapes. Expectation: they match exactly when
+    /// dotagents-lib's `normalizeSource` makes them equal. Failure: a `*`
+    /// entry is not found for its skill, or a different source is taken for it.
+    #[test]
+    fn sources_match_as_dotagents_normalizes_them() {
+        let same = [
+            ("owner/repo", "https://github.com/owner/repo"),
+            ("owner/repo", "https://github.com/owner/repo.git"),
+            ("owner/repo", "http://github.com/owner/repo/"),
+            ("owner/repo", "https://github.com/owner/repo@v1"),
+            ("owner/repo", "git@github.com:owner/repo.git"),
+            ("owner/repo", "owner/repo@abc123"),
+            ("owner/repo", "@owner/repo"),
+            ("group/sub/repo", "https://gitlab.com/group/sub/repo.git"),
+            ("https://x.dev/a", "https://X.dev/a/"),
+        ];
+        for (a, b) in same {
+            assert!(sources_match(a, b), "{a} should match {b}");
+        }
+        let different = [
+            ("owner/repo", "github:owner/repo"),
+            ("owner/repo", "ssh://git@github.com/owner/repo"),
+            ("owner/repo", "https://www.github.com/owner/repo"),
+            ("owner/repo", "owner/other"),
+            ("git:https://x.dev/r.git", "https://x.dev/r"),
+            ("path:../skills", "../skills"),
+            ("owner/repo", "owner/repo/nested"),
+        ];
+        for (a, b) in different {
+            assert!(!sources_match(a, b), "{a} should not match {b}");
+        }
+    }
+
+    fn table(text: &str) -> toml_edit::DocumentMut {
+        text.parse().unwrap()
+    }
+
+    /// Flow: a recorded `*` entry is found again after the person rewrote its
+    /// `path`. Expectation: paths compare as dotagents compares them
+    /// (backslashes, `./`, trailing slash, no path equal to `.`). Failure: a
+    /// turn-on skips the entry it must lift the exclude from.
+    #[test]
+    fn recorded_entries_match_through_path_normalization() {
+        let recorded = |path: Option<&str>| {
+            vec![WildcardRef {
+                source: "owner/repo".to_string(),
+                path: path.map(str::to_string),
+            }]
+        };
+        let doc = table(
+            "name = \"*\"\nsource = \"https://github.com/owner/repo\"\npath = \"./skills/\"\n",
+        );
+        assert!(is_recorded(doc.as_table(), &recorded(Some("skills"))));
+        assert!(is_recorded(doc.as_table(), &recorded(Some("skills\\"))));
+        assert!(!is_recorded(doc.as_table(), &recorded(Some("other"))));
+        assert!(!is_recorded(doc.as_table(), &recorded(None)));
+        let doc = table("name = \"*\"\nsource = \"owner/repo\"\n");
+        assert!(is_recorded(doc.as_table(), &recorded(Some("."))));
+        assert!(is_recorded(doc.as_table(), &recorded(None)));
+    }
+
+    fn exclude_after_add(text: &str) -> String {
+        let mut doc = table(text);
+        add_exclude(doc.as_table_mut(), "foo");
+        doc.to_string()
+    }
+
+    /// Flow: `foo` is added to an `exclude` list. Expectation: a missing list
+    /// is created, a one-line list grows on its line, and a multi-line list
+    /// keeps its layout: a comment above the last item is not copied, and a
+    /// comment after the last item's comma stays on that item's line.
+    /// Failure: the person's comments move or double.
+    #[test]
+    fn add_exclude_keeps_the_layout_of_the_list() {
+        assert_eq!(
+            exclude_after_add("name = \"*\"\n"),
+            "name = \"*\"\nexclude = [\"foo\"]\n"
+        );
+        assert_eq!(
+            exclude_after_add("exclude = [\"a\"]\n"),
+            "exclude = [\"a\", \"foo\"]\n"
+        );
+        assert_eq!(
+            exclude_after_add("exclude = [\n  \"a\",\n  # note\n  \"baz\", # tail\n]\n"),
+            "exclude = [\n  \"a\",\n  # note\n  \"baz\", # tail\n  \"foo\",\n]\n"
+        );
+        assert_eq!(
+            exclude_after_add("exclude = [\n  \"baz\"\n]\n"),
+            "exclude = [\n  \"baz\",\n  \"foo\"\n]\n"
+        );
+        assert_eq!(
+            exclude_after_add("exclude = [\r\n  \"baz\",\r\n]\r\n"),
+            // toml_edit reads CRLF files as LF, so the edit writes LF.
+            "exclude = [\n  \"baz\",\n  \"foo\",\n]\n"
+        );
+    }
 }
