@@ -2184,6 +2184,10 @@ pub async fn update_skill(
             skill_studio_core::identity::CorrelationId(ulid::Ulid::new().to_string()),
         );
         if deployment.owner_kind == super::skill_ownership::LifecycleOwnerKind::Copy {
+            super::skill_split_update::check_split_deployment(
+                &deployment.scope,
+                deployment.destination,
+            )?;
             return update_split_copies_command(
                 &app,
                 &refresh_state,
@@ -2231,6 +2235,7 @@ fn update_split_copies_command(
 ) -> Result<serde_json::Value, String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     let (fetch, lookup) = super::skill_install::resolve_fetch_and_lookup(app)?;
+    let gh_bin = super::skill_update_check::resolve_gh_binary().ok_or("Run Check now first")?;
     let outcome = super::skill_split_update::update_split_skill(
         rt,
         ctx,
@@ -2238,6 +2243,7 @@ fn update_split_copies_command(
         &skill.name,
         fetch.as_ref(),
         lookup.as_ref(),
+        &super::skill_update_check::GhTreeLookup { gh_bin },
     )?;
     let result = super::skill_split_update::split_update_result(&skill.name, &outcome);
     if result.is_ok() {

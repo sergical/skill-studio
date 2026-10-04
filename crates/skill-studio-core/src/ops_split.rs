@@ -337,8 +337,19 @@ fn record_split_copies(
 ) -> Result<(), CoreError> {
     let home = &rt.scope.home.lexical;
     let mut document = crate::ops_install::read_registry_document(fs, home)?;
+    // The lock row's source says which upstream these copies came from, so a
+    // later update only touches copies of that same source, never a
+    // same-name copy installed from somewhere else.
+    let split_source = match scope {
+        RootScope::Global => {
+            crate::lock_file::read_lock_file(fs, &crate::lock_file::lock_file_path(home))
+                .ok()
+                .and_then(|lock| lock.skills.get(&skill.0).map(|entry| entry.source.clone()))
+        }
+        RootScope::Project(_) => None,
+    };
     for copy in copies {
-        crate::ops_install::record_copy(
+        let (id, _) = crate::ops_install::record_copy(
             fs,
             ctx,
             &mut document,
@@ -347,6 +358,14 @@ fn record_split_copies(
             &copy.path,
             Some(&copy.harness),
         )?;
+        if let Some(source) = &split_source {
+            if let Some(row) = document
+                .get_mut("copies")
+                .and_then(|copies| copies.get_mut(&id))
+            {
+                row["split_source"] = serde_json::Value::String(source.clone());
+            }
+        }
     }
     crate::ops_install::write_registry_document(&session.guard, fs, home, document)
 }

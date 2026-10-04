@@ -165,6 +165,11 @@ pub struct CopyDeploymentRecord {
     /// True when the exact copy is stored under `.skill-studio-disabled`.
     #[serde(default)]
     pub disabled: bool,
+    /// The `.skill-lock.json` source the copy was split from. Set by the
+    /// core's split; only a copy that names the lock row's source takes
+    /// part in that skill's update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_source: Option<String>,
 }
 
 /// `~/.agents/skill-studio.json`'s shape.

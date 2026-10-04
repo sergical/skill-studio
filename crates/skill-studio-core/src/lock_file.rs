@@ -171,12 +171,57 @@ pub fn restore_lock_entry(
         return Ok(());
     }
     skills.insert(skill_name.to_string(), entry.clone());
+    write_lock_document(guard, fs, scope, path, &doc)
+}
+
+/// Sets `skill_name`'s `skillFolderHash` in the lock file at `path`, keeping
+/// every other key as `npx skills` wrote it, so the update check sees the
+/// skill as current after a write that did not go through the CLI. A no-op
+/// when the file or the row is missing.
+pub fn set_skill_folder_hash(
+    guard: &ExclusiveGuard,
+    fs: &dyn ScopeFs,
+    scope: &NormalizedScope,
+    path: &Path,
+    skill_name: &str,
+    hash: &str,
+) -> Result<(), CoreError> {
+    let bytes = match fs.read_capped(path, LOCK_FILE_MAX_BYTES) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(CoreError::io(path, e)),
+    };
+    let mut doc: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+        CoreError::new(ErrorCode::Io, format!("failed to parse lock file: {e}")).at(path)
+    })?;
+    let Some(row) = doc
+        .get_mut("skills")
+        .and_then(|skills| skills.get_mut(skill_name))
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+    row.insert(
+        "skillFolderHash".to_string(),
+        serde_json::Value::String(hash.to_string()),
+    );
+    write_lock_document(guard, fs, scope, path, &doc)
+}
+
+/// Serializes `doc` the way `npx skills` does and writes it atomically.
+fn write_lock_document(
+    guard: &ExclusiveGuard,
+    fs: &dyn ScopeFs,
+    scope: &NormalizedScope,
+    path: &Path,
+    doc: &serde_json::Value,
+) -> Result<(), CoreError> {
     // The `npx skills` CLI itself always writes this file pretty-printed
     // (`JSON.stringify(doc, null, 2) + "\n"` - checked against its packed
     // `dist/cli.mjs`), so restoring a row compactly would leave the file in
     // a shape that CLI never produces, even though both parse identically.
     // `to_vec_pretty`'s default indent is the same two spaces.
-    let mut bytes = serde_json::to_vec_pretty(&doc).map_err(|e| {
+    let mut bytes = serde_json::to_vec_pretty(doc).map_err(|e| {
         CoreError::new(ErrorCode::Io, format!("failed to serialize lock file: {e}")).at(path)
     })?;
     bytes.push(b'\n');

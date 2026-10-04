@@ -92,6 +92,7 @@ fn v2() -> SplitCopiesUpdate {
             contents: skill_md("v2"),
             mode: None,
         }],
+        lock_folder_hash: Some("tree-v2".to_string()),
     }
 }
 
@@ -175,8 +176,9 @@ fn update_refuses_a_split_copy_with_local_edits_and_updates_the_rest() {
 
 /// Flow: a rename fails at each step of the three-copy update. Expect every
 /// copy to hold wholly v1 or wholly v2 (never missing or mixed), and a
-/// second update to bring all three to v2. Catches a failure that leaves a
-/// copy half-written or blocks the retry.
+/// second update to bring all three to v2 with nothing refused. Catches a
+/// failure that leaves a copy half-written, or skips recording the hash of a
+/// copy that did swap so the retry refuses it as edited.
 #[test]
 fn update_failing_at_any_step_leaves_each_copy_wholly_old_or_new_and_a_retry_finishes() {
     for n in 1..=14 {
@@ -194,7 +196,11 @@ fn update_failing_at_any_step_leaves_each_copy_wholly_old_or_new_and_a_retry_fin
             );
         }
         let retry = runtime_with(&home, Arc::new(RealFs::new()));
-        ops::update_split_copies(&retry, &ctx(), &v2()).unwrap();
+        let retried = ops::update_split_copies(&retry, &ctx(), &v2()).unwrap();
+        assert!(
+            retried.refused.is_empty(),
+            "step {n}: a copy that did update lost its recorded hash: {retried:?}"
+        );
         for dir in HARNESS_DIRS {
             assert_eq!(
                 revision_of(&copy_of(&home, dir)),
@@ -204,4 +210,122 @@ fn update_failing_at_any_step_leaves_each_copy_wholly_old_or_new_and_a_retry_fin
         }
         std::fs::remove_dir_all(&home).ok();
     }
+}
+
+fn lock_hash(home: &Path) -> String {
+    let text = std::fs::read_to_string(home.join(".agents/.skill-lock.json")).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+    doc["skills"]["gamma"]["skillFolderHash"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn write_lock(home: &Path) {
+    std::fs::write(
+        home.join(".agents/.skill-lock.json"),
+        serde_json::json!({
+            "version": 3,
+            "skills": {"gamma": {
+                "source": "acme/skills", "sourceType": "github",
+                "skillPath": "skills/gamma/SKILL.md", "skillFolderHash": "tree-v1",
+            }}
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+/// Rewrites every `copies` row of the home registry through `edit`.
+fn edit_rows(home: &Path, edit: impl Fn(&str, &mut serde_json::Value)) {
+    let path = home.join(".agents/skill-studio.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for (_, row) in doc["copies"].as_object_mut().unwrap() {
+        let slot = row["slot"].as_str().unwrap().to_string();
+        edit(&slot, row);
+    }
+    std::fs::write(&path, doc.to_string()).unwrap();
+}
+
+/// Flow: every live copy updates and the lock row has a tree SHA. Expect the
+/// row's `skillFolderHash` to become the fetched SHA. Catches an Update that
+/// leaves the old hash, so the 6-hour update check offers the same update
+/// again.
+#[test]
+fn a_full_split_update_writes_the_fetched_tree_hash_to_the_lock_row() {
+    let home = split_home("split_update_lock_full");
+    write_lock(&home);
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+
+    ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+
+    assert_eq!(lock_hash(&home), "tree-v2");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: one copy was edited, so the update is partial. Expect the lock hash
+/// to stay at the old value. Catches a partial update that marks the skill
+/// current and hides the Update the edited copy still needs.
+#[test]
+fn a_partial_split_update_leaves_the_lock_hash_alone() {
+    let home = split_home("split_update_lock_partial");
+    write_lock(&home);
+    std::fs::write(
+        copy_of(&home, ".pi/agent/skills").join("SKILL.md"),
+        b"---\nname: gamma\ndescription: mine\n---\nEdited.\n",
+    )
+    .unwrap();
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+
+    ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+
+    assert_eq!(lock_hash(&home), "tree-v1");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: a registry row points outside the agent's own skill folders. Expect
+/// it refused with a reason and its folder untouched. Catches an Update that
+/// swaps into a parent folder taken from an unchecked registry path.
+#[test]
+fn a_row_outside_the_agents_own_skill_folder_is_refused_and_not_written() {
+    let home = split_home("split_update_stray_row");
+    let stray = home.join("stray/gamma");
+    std::fs::create_dir_all(stray.parent().unwrap()).unwrap();
+    std::fs::rename(copy_of(&home, ".pi/agent/skills"), &stray).unwrap();
+    edit_rows(&home, |slot, row| {
+        if slot == "pi" {
+            row["path"] = serde_json::json!(stray);
+        }
+    });
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+
+    let outcome = ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+
+    assert_eq!(outcome.updated.len(), 2, "{outcome:?}");
+    assert_eq!(outcome.refused.len(), 1, "{outcome:?}");
+    assert!(outcome.refused[0].1.contains("own skill folders"));
+    assert_eq!(revision_of(&stray), Some("v1"));
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: a copy's row is marked disabled. Expect it neither updated nor
+/// listed as refused. Catches an Update that writes into a copy the user
+/// turned off.
+#[test]
+fn a_disabled_split_row_is_skipped_without_a_refusal() {
+    let home = split_home("split_update_disabled_row");
+    edit_rows(&home, |slot, row| {
+        if slot == "codex" {
+            row["disabled"] = serde_json::json!(true);
+        }
+    });
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+
+    let outcome = ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+
+    assert_eq!(outcome.updated.len(), 2, "{outcome:?}");
+    assert!(outcome.refused.is_empty(), "{outcome:?}");
+    assert_eq!(revision_of(&copy_of(&home, ".codex/skills")), Some("v1"));
+    std::fs::remove_dir_all(&home).ok();
 }

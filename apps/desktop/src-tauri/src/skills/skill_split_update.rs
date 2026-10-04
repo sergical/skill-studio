@@ -13,10 +13,11 @@ use skill_studio_core::ops;
 use skill_studio_core::ports::{OpContext, Runtime};
 use skill_studio_core::{SplitCopiesOutcome, SplitCopiesUpdate};
 
+use super::skill_deployment::SkillDestination;
 use super::skill_dto::{ParsedSkillSource, ParsedSkillSourceKind};
 use super::skill_fork::UpstreamFetch;
 use super::skill_install::gather_copy_files;
-use super::skill_update_check::CommitLookup;
+use super::skill_update_check::{CommitLookup, TreeLookup};
 
 /// The source of `name` as `npx skills` recorded it. A split leaves that
 /// lock row alone, so it still names where the copies came from.
@@ -51,6 +52,20 @@ fn source_from_lock(home: &Path, name: &str) -> Result<ParsedSkillSource, String
     })
 }
 
+/// Only a global per-harness copy takes part in a split update; any other
+/// copy has no split to update, so the user gets a plain reason.
+pub(crate) fn check_split_deployment(
+    scope: &str,
+    destination: SkillDestination,
+) -> Result<(), String> {
+    if scope == "global" && destination == SkillDestination::PerHarness {
+        return Ok(());
+    }
+    Err("Update works for split copies in your home folder only. \
+         This copy is not one, so it was left as it is."
+        .to_string())
+}
+
 /// Fetches `name`'s new version once, then writes it to every live split
 /// copy. Nothing is written to an agent folder unless the fetch succeeded.
 pub(crate) fn update_split_skill(
@@ -60,8 +75,16 @@ pub(crate) fn update_split_skill(
     name: &str,
     fetch: &dyn UpstreamFetch,
     lookup: &dyn CommitLookup,
+    tree: &dyn TreeLookup,
 ) -> Result<SplitCopiesOutcome, String> {
     let source = source_from_lock(home, name)?;
+    // Read before the files, so a commit that lands in between leaves the
+    // update offered again rather than hidden.
+    let lock_folder_hash = {
+        let repo = source.repo.as_deref().unwrap_or_default();
+        let path = source.path.as_deref().unwrap_or_default();
+        tree.tree_shas_at_head_uncached(repo)?.get(path).cloned()
+    };
     let files: Vec<InstallFile> = gather_copy_files(&source, home, home, fetch, lookup, None)?;
     ops::update_split_copies(
         rt,
@@ -70,6 +93,7 @@ pub(crate) fn update_split_skill(
             skill: SkillName(name.to_string()),
             scope: RootScope::Global,
             files,
+            lock_folder_hash,
         },
     )
     .map_err(|e| e.message)
@@ -78,6 +102,11 @@ pub(crate) fn update_split_skill(
 /// `Ok` when every live copy updated, otherwise the plain sentence the
 /// toast shows: how many copies updated and why each other one was left.
 pub(crate) fn split_update_result(name: &str, outcome: &SplitCopiesOutcome) -> Result<(), String> {
+    if outcome.updated.is_empty() && outcome.refused.is_empty() {
+        return Err(format!(
+            "No copies of {name} are live to update. Each one is parked or turned off."
+        ));
+    }
     if outcome.refused.is_empty() {
         return Ok(());
     }
@@ -131,6 +160,17 @@ mod tests {
             _until: Option<&str>,
         ) -> Result<Option<(String, String)>, String> {
             Ok(Some(("c0ffee".into(), "2026-01-01T00:00:00Z".into())))
+        }
+    }
+
+    struct FixtureTree;
+    impl TreeLookup for FixtureTree {
+        fn tree_shas_at_head_uncached(
+            &self,
+            repo: &str,
+        ) -> Result<std::collections::HashMap<String, String>, String> {
+            assert_eq!(repo, "acme/skills");
+            Ok([("skills/gamma".to_string(), "tree-v2".to_string())].into())
         }
     }
 
@@ -216,8 +256,16 @@ mod tests {
         std::fs::rename(home.join(".codex/skills/gamma"), &parked).unwrap();
         let fetch = FixtureFetch(Default::default());
 
-        let outcome =
-            update_split_skill(&rt, &ctx(), home, "gamma", &fetch, &FixtureLookup).unwrap();
+        let outcome = update_split_skill(
+            &rt,
+            &ctx(),
+            home,
+            "gamma",
+            &fetch,
+            &FixtureLookup,
+            &FixtureTree,
+        )
+        .unwrap();
 
         assert_eq!(fetch.0.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(outcome.updated.len(), 2, "{outcome:?}");
@@ -251,6 +299,7 @@ mod tests {
             "gamma",
             &FixtureFetch(Default::default()),
             &FixtureLookup,
+            &FixtureTree,
         )
         .unwrap();
 
@@ -269,12 +318,106 @@ mod tests {
         let (tmp, rt) = split_home();
         let home = tmp.path();
 
-        let err = update_split_skill(&rt, &ctx(), home, "gamma", &FailingFetch, &FixtureLookup)
-            .unwrap_err();
+        let err = update_split_skill(
+            &rt,
+            &ctx(),
+            home,
+            "gamma",
+            &FailingFetch,
+            &FixtureLookup,
+            &FixtureTree,
+        )
+        .unwrap_err();
 
         assert!(err.contains("network down"), "{err}");
         for dir in [".claude/skills", ".codex/skills", ".pi/agent/skills"] {
             assert!(body(&home.join(dir).join("gamma")).contains("Body at v1"));
+        }
+    }
+
+    /// Flow: a real core split, then the desktop reads the home registry.
+    /// Expect it to parse, with three per-harness copies that name the lock
+    /// source. Catches a registry spelling the desktop rejects, which makes
+    /// every registry read fail after one split.
+    #[test]
+    fn the_registry_a_real_split_wrote_reads_back_with_its_copies() {
+        let (tmp, _rt) = split_home();
+
+        let registry = super::super::skill_fork_registry::read_fork_registry(tmp.path()).unwrap();
+
+        assert_eq!(registry.copies.len(), 3);
+        for record in registry.copies.values() {
+            assert_eq!(record.destination, SkillDestination::PerHarness);
+            assert_eq!(record.split_source.as_deref(), Some("acme/skills"));
+        }
+    }
+
+    /// Flow: a full update of a split skill. Expect the lock row to carry the
+    /// tree SHA the tree lookup gave. Catches an Update that leaves the old
+    /// hash, so the next update check offers the same update again.
+    #[test]
+    fn a_full_update_moves_the_lock_hash_to_the_fetched_tree() {
+        let (tmp, rt) = split_home();
+        let home = tmp.path();
+
+        update_split_skill(
+            &rt,
+            &ctx(),
+            home,
+            "gamma",
+            &FixtureFetch(Default::default()),
+            &FixtureLookup,
+            &FixtureTree,
+        )
+        .unwrap();
+
+        let lock = std::fs::read_to_string(home.join(".agents/.skill-lock.json")).unwrap();
+        assert!(lock.contains("tree-v2"), "{lock}");
+    }
+
+    /// Flow: every copy is parked, then Update. Expect an error that says no
+    /// copy is live. Catches a silent success that clears the badge and
+    /// toasts "updated" with nothing changed.
+    #[test]
+    fn updating_when_every_copy_is_parked_says_so_instead_of_succeeding() {
+        let (tmp, rt) = split_home();
+        let home = tmp.path();
+        for (i, dir) in [".claude/skills", ".codex/skills", ".pi/agent/skills"]
+            .iter()
+            .enumerate()
+        {
+            let parked = home.join(format!(".agents/skills-parked/universal/gamma-{i}"));
+            std::fs::create_dir_all(parked.parent().unwrap()).unwrap();
+            std::fs::rename(home.join(dir).join("gamma"), parked).unwrap();
+        }
+
+        let outcome = update_split_skill(
+            &rt,
+            &ctx(),
+            home,
+            "gamma",
+            &FixtureFetch(Default::default()),
+            &FixtureLookup,
+            &FixtureTree,
+        )
+        .unwrap();
+
+        let message = split_update_result("gamma", &outcome).unwrap_err();
+        assert!(message.contains("No copies of gamma are live"), "{message}");
+    }
+
+    /// Flow: Update on a copy that is not a global per-harness copy. Expect a
+    /// plain-words error, and none for a global per-harness copy. Catches a
+    /// project or Universal copy being updated as if it were a global split.
+    #[test]
+    fn only_a_global_per_harness_copy_is_routed_to_the_split_update() {
+        assert!(check_split_deployment("global", SkillDestination::PerHarness).is_ok());
+        for (scope, destination) in [
+            ("project", SkillDestination::PerHarness),
+            ("global", SkillDestination::Universal),
+        ] {
+            let message = check_split_deployment(scope, destination).unwrap_err();
+            assert!(message.contains("home folder only"), "{message}");
         }
     }
 }

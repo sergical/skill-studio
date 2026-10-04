@@ -855,6 +855,10 @@ pub struct SplitCopiesUpdate {
     pub scope: RootScope,
     /// The fetched files, written whole to each copy.
     pub files: Vec<crate::dto::InstallFile>,
+    /// The fetched folder's git tree SHA. Written to the skill's
+    /// `.skill-lock.json` row when every live copy updated, so the update
+    /// check stops offering this version.
+    pub lock_folder_hash: Option<String>,
 }
 
 /// Result of [`update_split_copies`].
@@ -876,8 +880,9 @@ pub struct SplitCopiesOutcome {
 /// local edits: it is refused with a reason and the others still update.
 ///
 /// Each copy is staged beside itself and swapped in, so one copy is never
-/// half-written. A failure on a later copy stops the loop with an error; the
-/// copies already swapped stay updated and their hashes are recorded.
+/// half-written. A copy that fails to write goes into `refused` with the
+/// error, and the loop goes on; hashes of the copies that did update are
+/// always recorded. Only a registry or lock write failure is an `Err`.
 pub fn update_split_copies(
     rt: &Runtime,
     ctx: &OpContext,
@@ -927,39 +932,82 @@ fn update_split_copies_body(
         })
         .collect();
 
+    let own_roots = crate::ops::harness_own_skill_roots(rt, &req.scope);
     let mut outcome = SplitCopiesOutcome::default();
-    let mut failure = None;
     for (id, path, recorded_hash) in rows {
-        let live_hash = crate::ops::skill_content_hash(fs, ctx, &path)?;
-        if live_hash != recorded_hash {
+        // The swap happens in `path`'s parent, so a row whose path is not a
+        // `<harness skills root>/<skill>` folder must not be swapped at all.
+        let in_own_root = path.file_name().is_some_and(|n| n == req.skill.0.as_str())
+            && path
+                .parent()
+                .is_some_and(|parent| own_roots.iter().any(|root| root == parent));
+        if !in_own_root {
             outcome.refused.push((
                 path,
-                "this copy has changes of its own, so the update left it as it is".to_string(),
+                "this copy is not in one of the agent's own skill folders, so the update left it as it is"
+                    .to_string(),
             ));
             continue;
         }
-        let Some(root) = path.parent() else { continue };
-        if let Err(e) = update_copy(rt, &session.guard, root, &req.skill, &req.files) {
-            failure = Some(e);
-            break;
+        match update_one_split_copy(rt, ctx, &session.guard, req, &path, &recorded_hash) {
+            Ok(Ok(new_hash)) => {
+                if let Some(row) = document
+                    .get_mut("copies")
+                    .and_then(|copies| copies.get_mut(&id))
+                {
+                    row["content_hash"] = serde_json::Value::String(new_hash);
+                }
+                outcome.updated.push(path);
+            }
+            Ok(Err(reason)) => outcome.refused.push((path, reason)),
+            Err(e) => outcome.refused.push((path, e.message)),
         }
-        let new_hash = crate::ops::skill_content_hash(fs, ctx, &path)?;
-        if let Some(row) = document
-            .get_mut("copies")
-            .and_then(|copies| copies.get_mut(&id))
-        {
-            row["content_hash"] = serde_json::Value::String(new_hash);
-        }
-        outcome.updated.push(path);
     }
+    // Hashes of the copies that did swap are always recorded, even when a
+    // later copy failed, or the next update would refuse them as edited.
+    let mut result = Ok(());
     if !outcome.updated.is_empty() {
-        ops_install::write_registry_document(&session.guard, fs, home, document)?;
+        result = ops_install::write_registry_document(&session.guard, fs, home, document);
+    }
+    // The lock row marks the skill current only when no copy was left behind,
+    // so a partial update keeps offering Update.
+    if result.is_ok() && outcome.refused.is_empty() && !outcome.updated.is_empty() {
+        if let (Some(hash), RootScope::Global) = (&req.lock_folder_hash, &req.scope) {
+            result = crate::lock_file::set_skill_folder_hash(
+                &session.guard,
+                fs,
+                &rt.scope,
+                &crate::lock_file::lock_file_path(home),
+                &req.skill.0,
+                hash,
+            );
+        }
     }
     session.finish(rt, ctx);
-    match failure {
-        Some(e) => Err(e),
-        None => Ok(outcome),
+    result.map(|()| outcome)
+}
+
+/// Swaps the new files into one copy. The inner `Err` is a refusal with a
+/// plain reason; the outer `Err` is a failed write.
+fn update_one_split_copy(
+    rt: &Runtime,
+    ctx: &OpContext,
+    guard: &ExclusiveGuard,
+    req: &SplitCopiesUpdate,
+    path: &Path,
+    recorded_hash: &str,
+) -> Result<Result<String, String>, CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    if crate::ops::skill_content_hash(fs, ctx, path)? != recorded_hash {
+        return Ok(Err(
+            "this copy has changes of its own, so the update left it as it is".to_string(),
+        ));
     }
+    let Some(root) = path.parent() else {
+        return Ok(Err("this copy has no parent folder".to_string()));
+    };
+    update_copy(rt, guard, root, &req.skill, &req.files)?;
+    Ok(Ok(crate::ops::skill_content_hash(fs, ctx, path)?))
 }
 
 /// Runs [`update`] once per entry in `requests`, each its own journal row
