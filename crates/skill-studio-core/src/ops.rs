@@ -2187,11 +2187,14 @@ fn classify_owner(cx: &OwnerClassifyContext) -> (LifecycleOwnerKind, Option<Owne
             (cx.scope, record.scope.as_str()),
             (RootScope::Global, "global") | (RootScope::Project(_), "project")
         );
-        let destination_matches = record.destination
-            == match cx.destination {
-                SkillDestination::Universal => "universal",
-                SkillDestination::PerHarness => "per-harness",
-            };
+        // `install` and `split` write `per_harness` (the enum's serde form);
+        // older registries and the desktop wrote `per-harness`.
+        let destination_matches = match cx.destination {
+            SkillDestination::Universal => record.destination == "universal",
+            SkillDestination::PerHarness => {
+                matches!(record.destination.as_str(), "per_harness" | "per-harness")
+            }
+        };
         let project_matches = match cx.scope {
             RootScope::Global => record.project_path.is_none(),
             RootScope::Project(project) => {
@@ -5006,7 +5009,7 @@ pub use crate::ops_doctor::doctor;
 pub use crate::ops_install::{install, install_preferences};
 pub use crate::ops_remove::{remove, sweep_quarantine};
 pub use crate::ops_split::split;
-pub use crate::ops_update::{update, update_all};
+pub use crate::ops_update::{update, update_all, update_split_copies};
 
 /// Moves one real copy's directory into the parked root, in the slot for
 /// where it came from ([`crate::park_layout`]).

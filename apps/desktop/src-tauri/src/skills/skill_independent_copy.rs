@@ -264,6 +264,7 @@ fn run_independent_copy(
         project_path: request.project_path.map(str::to_string),
         content_hash,
         disabled: false,
+        split_source: None,
     };
     payload["staged_fingerprint"] = json!(staged_fingerprint);
     payload["copy_record"] = serde_json::to_value(&record)

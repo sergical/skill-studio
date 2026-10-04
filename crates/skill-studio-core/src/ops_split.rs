@@ -6,7 +6,8 @@
 //! when Codex's config turned the Universal folder off (its rows are keyed by
 //! path). The op writes no other harness config and never
 //! touches `.skill-lock.json`, so `npx skills update` keeps pointing at a
-//! Universal copy that no longer exists.
+//! Universal copy that no longer exists. Each copy gets a `copies` registry
+//! row, which `ops::update_split_copies` reads to refresh them.
 
 use std::path::{Path, PathBuf};
 
@@ -290,6 +291,15 @@ fn split_body(
         .collect();
     let patch = crate::events::with_remove_copies(serde_json::json!({}), &written);
     let _ = session.store.patch_inverse(&session.guard, &id, patch);
+    record_split_copies(
+        rt,
+        ctx,
+        &session,
+        fs,
+        &deployment.root.scope,
+        &skill.name,
+        &copies,
+    )?;
     session
         .store
         .finish(&session.guard, &id, EventStatus::Done, None)?;
@@ -311,6 +321,53 @@ fn split_body(
         quarantine_path: quarantine_target,
         update_note: SPLIT_UPDATE_NOTE.to_string(),
     })
+}
+
+/// Records each copy in the home registry's `copies` map, the same row
+/// `install` writes for a per-harness copy, so `ops::update_split_copies`
+/// can find every copy of the skill later.
+fn record_split_copies(
+    rt: &Runtime,
+    ctx: &OpContext,
+    session: &MutationSession,
+    fs: &dyn ScopeFs,
+    scope: &RootScope,
+    skill: &crate::identity::SkillName,
+    copies: &[SplitCopy],
+) -> Result<(), CoreError> {
+    let home = &rt.scope.home.lexical;
+    let mut document = crate::ops_install::read_registry_document(fs, home)?;
+    // The lock row's source says which upstream these copies came from, so a
+    // later update only touches copies of that same source, never a
+    // same-name copy installed from somewhere else.
+    let split_source = match scope {
+        RootScope::Global => {
+            crate::lock_file::read_lock_file(fs, &crate::lock_file::lock_file_path(home))
+                .ok()
+                .and_then(|lock| lock.skills.get(&skill.0).map(|entry| entry.source.clone()))
+        }
+        RootScope::Project(_) => None,
+    };
+    for copy in copies {
+        let (id, _) = crate::ops_install::record_copy(
+            fs,
+            ctx,
+            &mut document,
+            scope,
+            skill,
+            &copy.path,
+            Some(&copy.harness),
+        )?;
+        if let Some(source) = &split_source {
+            if let Some(row) = document
+                .get_mut("copies")
+                .and_then(|copies| copies.get_mut(&id))
+            {
+                row["split_source"] = serde_json::Value::String(source.clone());
+            }
+        }
+    }
+    crate::ops_install::write_registry_document(&session.guard, fs, home, document)
 }
 
 /// Refuses a harness whose skills folder is itself a link into the
