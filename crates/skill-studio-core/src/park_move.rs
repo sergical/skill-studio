@@ -115,6 +115,19 @@ fn copy_verify_remove(
 /// Prefix of the hidden folder a cross-volume move renames its source to.
 const TRASH_PREFIX: &str = ".park-trash-";
 
+/// True for exactly the names `unique_suffix` makes after the prefix
+/// (`<digits>-<digits>`), so a user's own `.park-trash-notes` is never swept.
+fn is_trash_name(name: &str) -> bool {
+    name.strip_prefix(TRASH_PREFIX)
+        .and_then(|rest| rest.split_once('-'))
+        .is_some_and(|(pid, n)| {
+            !pid.is_empty()
+                && !n.is_empty()
+                && pid.bytes().all(|b| b.is_ascii_digit())
+                && n.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
 /// Most stale trash folders one sweep removes, so a sweep stays cheap.
 const SWEEP_LIMIT: usize = 16;
 
@@ -123,6 +136,13 @@ const SWEEP_LIMIT: usize = 16;
 /// as a skill.
 fn remove_trash(rt: &Runtime, session: &MutationSession, trash: &Path) {
     let fs = rt.ports.fs.as_ref();
+    // Listed earlier, so it may have changed to a link since.
+    if !fs
+        .symlink_metadata(trash)
+        .is_ok_and(|facts| facts.kind == FileKind::Dir)
+    {
+        return;
+    }
     if let Ok(tree) = walk(fs, trash) {
         for entry in tree.iter().filter(|e| {
             e.kind == FileKind::File
@@ -139,9 +159,9 @@ fn remove_trash(rt: &Runtime, session: &MutationSession, trash: &Path) {
     let _ = remove_tree(rt, session, trash);
 }
 
-/// Removes stale `.park-trash-*` folders left directly under `dir` by an
-/// earlier move whose delete failed. Only real folders with the exact prefix
-/// are touched; a link is never followed. Best effort.
+/// Removes stale `.park-trash-<digits>-<digits>` folders left directly under
+/// `dir` by an earlier move whose delete failed. Only real folders with that
+/// exact name shape are touched; a link is never followed. Best effort.
 fn sweep_trash(rt: &Runtime, session: &MutationSession, dir: &Path) {
     let fs = rt.ports.fs.as_ref();
     let Ok(entries) = fs.read_dir(dir) else {
@@ -149,7 +169,7 @@ fn sweep_trash(rt: &Runtime, session: &MutationSession, dir: &Path) {
     };
     for entry in entries
         .iter()
-        .filter(|e| e.kind == FileKind::Dir && e.name.starts_with(TRASH_PREFIX))
+        .filter(|e| e.kind == FileKind::Dir && is_trash_name(&e.name))
         .take(SWEEP_LIMIT)
     {
         remove_trash(rt, session, &dir.join(&entry.name));

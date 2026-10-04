@@ -1075,16 +1075,16 @@ fn park_sweeps_stale_trash_folders_in_the_roots_it_touches() {
     let root = home.join(".codex/skills");
     let live = root.join("foo");
     write_skill(&live, "foo");
-    write_skill(&root.join(".park-trash-old"), "old");
+    write_skill(&root.join(".park-trash-1-1"), "old");
     let outside = home.join("outside");
     write_skill(&outside, "outside");
-    std::os::unix::fs::symlink(&outside, root.join(".park-trash-link")).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join(".park-trash-2-2")).unwrap();
     std::fs::create_dir_all(root.join(".keep-me")).unwrap();
     let rt = runtime(&home, &[]);
 
     park_copy_at(&rt, "foo", &live);
 
-    assert!(!root.join(".park-trash-old").exists());
+    assert!(!root.join(".park-trash-1-1").exists());
     assert!(
         outside.join("SKILL.md").exists(),
         "a link must not be followed"
@@ -1236,5 +1236,78 @@ fn unpark_marks_the_row_failed_when_a_link_cannot_be_recreated() {
     .unwrap();
     let unpark_row = events.iter().find(|e| e.kind == "unpark").unwrap();
     assert_eq!(unpark_row.status, "failed");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: a user folder named `.park-trash-notes` sits in a root; a skill in
+/// that root is parked. Expectation: the folder and its file survive, because
+/// the sweep only takes the exact `.park-trash-<digits>-<digits>` names.
+/// Failure: the loose prefix match deletes a user's own folder.
+#[test]
+fn park_sweep_leaves_a_user_folder_with_a_similar_name() {
+    let home = unique_temp_dir("park_any_sweep_user_folder");
+    let root = home.join(".codex/skills");
+    let live = root.join("foo");
+    write_skill(&live, "foo");
+    let user = root.join(".park-trash-notes");
+    std::fs::create_dir_all(&user).unwrap();
+    std::fs::write(user.join("todo.txt"), "mine").unwrap();
+    let rt = runtime(&home, &[]);
+
+    park_copy_at(&rt, "foo", &live);
+
+    assert!(user.join("todo.txt").exists());
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: a stale trash folder holds a link to a folder elsewhere; a park in
+/// that root sweeps it. Expectation: the link is removed and the folder it
+/// points at is untouched. Failure: the sweep follows the link and deletes
+/// the target's files.
+#[test]
+fn park_sweep_unlinks_a_link_inside_trash_and_keeps_its_target() {
+    let home = unique_temp_dir("park_any_sweep_inner_link");
+    let root = home.join(".codex/skills");
+    let live = root.join("foo");
+    write_skill(&live, "foo");
+    let stale = root.join(".park-trash-3-3");
+    write_skill(&stale, "stale");
+    let outside = home.join("outside");
+    write_skill(&outside, "outside");
+    std::os::unix::fs::symlink(&outside, stale.join("ref")).unwrap();
+    let rt = runtime(&home, &[]);
+
+    park_copy_at(&rt, "foo", &live);
+
+    assert!(!stale.exists());
+    assert!(outside.join("SKILL.md").exists());
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: a stale trash folder cannot be fully deleted (an injected failure),
+/// then a skill in that root is parked. Expectation: park still succeeds; the
+/// sweep is best effort. Failure: a stuck stale folder blocks every park.
+#[test]
+fn park_succeeds_when_the_sweep_cannot_delete_a_stale_trash_folder() {
+    let home = unique_temp_dir("park_any_sweep_fails");
+    let root = home.join(".codex/skills");
+    let live = root.join("foo");
+    write_skill(&live, "foo");
+    let stale = root.join(".park-trash-4-4");
+    std::fs::create_dir_all(&stale).unwrap();
+    std::fs::write(stale.join("notes.md"), "old").unwrap();
+    let (rt, failing) = failing_runtime(&home, &[]);
+    let deployment_id = live_copy(&rt, "foo", &live).id;
+    failing.fail_next_remove_file();
+
+    let parked = ops::park(&rt, &ctx(), &ParkRequest { deployment_id })
+        .unwrap()
+        .parked_path;
+
+    assert!(parked.join("SKILL.md").exists());
+    assert!(
+        stale.join("notes.md").exists(),
+        "the failed delete leaves it"
+    );
     std::fs::remove_dir_all(&home).ok();
 }
