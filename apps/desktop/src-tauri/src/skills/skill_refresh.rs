@@ -1588,6 +1588,42 @@ pub(crate) fn apply_skill_snapshot_overlays(
         .into_iter()
         .collect();
     let ledgers = super::skill_ownership::load_ownership_ledgers(home, &project_paths);
+    // A skill split into per-agent copies keeps its `.skill-lock.json` row,
+    // so the update check still tracks it. Its copies take that owner id so
+    // the badge and the Update action reach them. Only a copy whose registry
+    // row names the lock row's source qualifies: a same-name copy installed
+    // from elsewhere keeps its own owner.
+    if let Some(global) = ledgers
+        .iter()
+        .find(|ledger| ledger.scope == super::skill_dto::InstallScope::Global)
+    {
+        let registry = super::skill_fork_registry::read_fork_registry_or_default(home);
+        for skill in skills.iter_mut() {
+            let Some(lock_source) = global
+                .lock
+                .skills
+                .get(&skill.name)
+                .filter(|entry| entry.source_type == "github" && entry.skill_path.is_some())
+                .map(|entry| entry.source.as_str())
+            else {
+                continue;
+            };
+            for deployment in skill.deployments.iter_mut().filter(|deployment| {
+                deployment.owner_kind == super::skill_ownership::LifecycleOwnerKind::Copy
+                    && deployment.owner_id.is_none()
+                    && deployment.scope == "global"
+                    && deployment.destination
+                        == super::skill_deployment::SkillDestination::PerHarness
+                    && registry
+                        .copies
+                        .get(&deployment.id)
+                        .and_then(|record| record.split_source.as_deref())
+                        == Some(lock_source)
+            }) {
+                deployment.owner_id = Some(format!("owner:v1/global/{}", skill.name));
+            }
+        }
+    }
     for skill in skills.iter_mut() {
         let mut seen_owners: Vec<&str> = Vec::new();
         for deployment in &skill.deployments {
@@ -3380,6 +3416,136 @@ mod tests {
         assert_eq!(foo.update_owner_ids, vec![seeded_owner_id]);
         assert_eq!(foo.update_commit.as_deref(), Some("b".repeat(40).as_str()));
         assert_eq!(foo.update_owners.len(), 1);
+    }
+
+    /// Splits a Universal `foo` (lock source `someorg/foo`) into Claude Code
+    /// and Codex copies with the real core split, seeds an update-check store
+    /// that reports a newer commit, and builds the snapshot. `edit_registry`
+    /// can change the registry rows the split wrote before the build.
+    fn snapshot_of_split_foo(edit_registry: impl FnOnce(&mut serde_json::Value)) -> SkillSnapshot {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_data = tmp.path().join("app-data");
+        fs::create_dir_all(home.join(".agents/skills/foo")).unwrap();
+        fs::write(
+            home.join(".agents/skills/foo/SKILL.md"),
+            "---\nname: foo\ndescription: test\n---\nbody",
+        )
+        .unwrap();
+        fs::write(
+            home.join(".agents/.skill-lock.json"),
+            serde_json::json!({
+                "version": 3,
+                "skills": { "foo": {
+                    "source": "someorg/foo", "sourceType": "github",
+                    "sourceUrl": "https://github.com/someorg/foo",
+                    "skillPath": "skills/foo/SKILL.md", "skillFolderHash": "abc",
+                    "installedAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"
+                }}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let rt =
+            super::super::core_runtime::build_runtime_write_at(&home, &tmp.path().join("data"))
+                .unwrap();
+        let ctx = skill_studio_core::ports::OpContext::uncancellable(
+            skill_studio_core::identity::CorrelationId("t".to_string()),
+        );
+        let universal = skill_studio_core::ops::scan(
+            &rt,
+            &ctx,
+            &skill_studio_core::dto::ScanRequest::default(),
+        )
+        .unwrap()
+        .skills
+        .iter()
+        .find(|s| s.name.0 == "foo")
+        .unwrap()
+        .deployments
+        .iter()
+        .find(|d| d.root.kind == skill_studio_core::identity::RootKind::Universal)
+        .unwrap()
+        .id
+        .clone();
+        skill_studio_core::ops::split(
+            &rt,
+            &ctx,
+            &skill_studio_core::dto::SplitRequest {
+                deployment_id: universal,
+                harnesses: ["claude-code", "codex"]
+                    .iter()
+                    .map(|h| skill_studio_core::identity::AgentId::parse(h).unwrap())
+                    .collect(),
+            },
+        )
+        .unwrap();
+        let registry_path = home.join(".agents/skill-studio.json");
+        let mut registry: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&registry_path).unwrap()).unwrap();
+        edit_registry(&mut registry);
+        fs::write(&registry_path, registry.to_string()).unwrap();
+
+        let update_check_path = skill_update_check::update_check_path(&app_data);
+        fs::create_dir_all(update_check_path.parent().unwrap()).unwrap();
+        let now = Utc::now().to_rfc3339();
+        let store = serde_json::json!({
+            "version": 2, "checked_at": now, "gh_status": { "kind": "ok" },
+            "owners": { ("owner:v1/global/foo"): {
+                "repo": "someorg/foo", "path": "skills/foo",
+                "installed_commit": "a".repeat(40), "latest_commit": "b".repeat(40),
+                "latest_commit_at": now, "checked_at": now, "error": null,
+            }}
+        });
+        fs::write(&update_check_path, store.to_string()).unwrap();
+
+        let mut invocation_index = SkillInvocationIndex::default();
+        let cache_path = tmp.path().join("cache.json");
+        build_snapshot(
+            &home,
+            &mut invocation_index,
+            BuildPaths {
+                cache_path: &cache_path,
+                runs_root: tmp.path(),
+                update_check_path: &update_check_path,
+            },
+            Utc::now(),
+        )
+        .0
+    }
+
+    /// Flow: a skill was really split into per-agent copies and upstream has
+    /// a newer commit. Expect the skill to show an update and both copies to
+    /// carry the owner id Update acts on. Catches split copies dropping out
+    /// of update availability, which leaves the user no Update button.
+    #[test]
+    fn split_copies_of_a_tracked_skill_show_the_update() {
+        let snapshot = snapshot_of_split_foo(|_| {});
+
+        let foo = snapshot.skills.iter().find(|s| s.name == "foo").unwrap();
+        assert_eq!(foo.deployments.len(), 2);
+        for deployment in &foo.deployments {
+            assert_eq!(deployment.owner_id.as_deref(), Some("owner:v1/global/foo"));
+        }
+        assert!(foo.has_update);
+        assert_eq!(foo.update_owner_ids, vec!["owner:v1/global/foo"]);
+    }
+
+    /// Flow: a same-name copy whose registry row does not name the lock row's
+    /// source (installed from somewhere else). Expect no owner id and no
+    /// update on it. Catches the update overlay claiming and later
+    /// overwriting a copy that came from a different source.
+    #[test]
+    fn a_same_name_copy_from_another_source_gets_no_split_owner() {
+        let snapshot = snapshot_of_split_foo(|registry| {
+            for (_, row) in registry["copies"].as_object_mut().unwrap() {
+                row["split_source"] = serde_json::json!("other/repo");
+            }
+        });
+
+        let foo = snapshot.skills.iter().find(|s| s.name == "foo").unwrap();
+        assert!(foo.deployments.iter().all(|d| d.owner_id.is_none()));
+        assert!(!foo.has_update);
     }
 
     #[test]

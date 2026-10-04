@@ -638,6 +638,7 @@ fn registered_copy_record_owns_the_copy() {
             project_path: None,
             content_hash,
             disabled: false,
+            split_source: None,
         },
     );
     write_fork_registry_under_home_lock(&home, &registry).unwrap();
@@ -963,6 +964,7 @@ fn copy_record(
         project_path: None,
         content_hash,
         disabled: false,
+        split_source: None,
     }
 }
 
