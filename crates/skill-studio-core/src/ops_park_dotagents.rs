@@ -768,7 +768,7 @@ pub(crate) fn restore_files(
     first_error.map_or(Ok(()), Err)
 }
 
-/// `doc` as text. toml_edit drops every `\r` on parse, so a file that had
+/// `doc` as text. `toml_edit` drops every `\r` on parse, so a file that had
 /// CRLF line endings gets them back here.
 fn render(doc: &toml_edit::DocumentMut, crlf: bool) -> String {
     let text = doc.to_string();
