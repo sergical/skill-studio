@@ -5049,6 +5049,8 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
     refuse_unparkable(&deployment)?;
     let skill = resolve_skill(&session.fresh, &deployment.id)?.clone();
     let fs = rt.ports.fs.as_ref();
+    // Before any row: a refusal here leaves no journal entry behind.
+    let dotagents = crate::ops_park_dotagents::plan_park(rt, &deployment, &skill.name)?;
     let links: Vec<PathBuf> = find_all_links(&skill, &deployment.path, fs)
         .into_iter()
         .chain(find_independent_links(&skill, &deployment, fs))
@@ -5126,30 +5128,51 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
     };
 
     let id = rt.ports.ids.next_event_id();
+    let mut payload = serde_json::json!({
+        "deployment_id": deployment.id.as_str(),
+        "from": deployment.path,
+        "to": parked_dir,
+        "origin": origin,
+        "links": links,
+        "link_targets": link_targets,
+    });
+    // Undo of a directory move is out of this build's scope: `Park` carries
+    // no inverse, and turn-on is the way back. A dotagents skill still gets
+    // `agents.toml` and `agents.lock` backed up, for recovery by hand.
+    let backup_dir = match &dotagents {
+        Some(plan) => {
+            payload["dotagents"] = plan.payload();
+            Some(
+                session
+                    .store
+                    .backup_paths(
+                        &session.guard,
+                        &id,
+                        &[plan.config.clone(), plan.lock.clone()],
+                    )?
+                    .backup_dir,
+            )
+        }
+        None => None,
+    };
     let draft = crate::events::EventDraft {
         kind: crate::events::EventKind::Park,
         skill: skill.name.clone(),
         harness: None,
         scope: Some(scope_label),
         project_path,
-        payload: serde_json::json!({
-            "deployment_id": deployment.id.as_str(),
-            "from": deployment.path,
-            "to": parked_dir,
-            "origin": origin,
-            "links": links,
-            "link_targets": link_targets,
-        }),
-        // Undo of a directory move is out of this build's scope: `Park`
-        // deliberately carries no inverse.
+        payload,
         inverse: None,
-        backup_dir: None,
+        backup_dir,
     };
     session.store.record(&session.guard, &id, &draft)?;
 
     // What this attempt created, so a failed move leaves no empty key folder.
     let mut created_dirs: Vec<PathBuf> = Vec::new();
     let mut written_files: Vec<PathBuf> = Vec::new();
+    // Set when a failed `dotagents remove` could not move the copy back: the
+    // marker that names its origin is then the only record of where it goes.
+    let mut copy_stays_parked = false;
     let write_result = (|| -> Result<(), CoreError> {
         for (link, scoped_link) in links.iter().zip(&scoped_links) {
             fs.remove_file(&session.guard, scoped_link)
@@ -5183,10 +5206,46 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
             created_dirs.extend(ensure_dir_all_tracked(rt, &session, fs, &marker_dir)?);
             write_marker(marker_dir.join(&skill.name.0), relative, true)?;
         }
-        crate::park_move::move_dir(rt, &session, &deployment.path, &parked_dir)
+        crate::park_move::move_dir(rt, &session, &deployment.path, &parked_dir)?;
+        // After the move: `dotagents remove` deletes the skill's folder, and
+        // the parked copy must survive it.
+        if let Some(plan) = &dotagents {
+            if let Err(e) = crate::ops_park_dotagents::run_remove(
+                rt,
+                ctx,
+                &session.guard,
+                plan,
+                &skill.name,
+                &deployment.root.scope,
+            ) {
+                let moved_back =
+                    crate::park_move::move_dir(rt, &session, &parked_dir, &deployment.path);
+                let files_back =
+                    crate::ops_park_dotagents::restore_originals(rt, &session.guard, plan);
+                let mut message = e.message.clone();
+                if let Err(move_error) = &moved_back {
+                    copy_stays_parked = true;
+                    message = format!(
+                        "{message} The copy could not be moved back and is still at {}: {}",
+                        parked_dir.display(),
+                        move_error.message
+                    );
+                }
+                if let Err(files_error) = &files_back {
+                    message = format!(
+                        "{message} agents.toml and agents.lock could not be written back: {}",
+                        files_error.message
+                    );
+                }
+                return Err(CoreError::new(e.code, message).at(&deployment.path));
+            }
+        }
+        Ok(())
     })();
     if let Err(e) = write_result {
-        remove_park_scaffolding(rt, &session, &written_files, &created_dirs);
+        if !copy_stays_parked {
+            remove_park_scaffolding(rt, &session, &written_files, &created_dirs);
+        }
         // While the folder is still at its own path, the links that came
         // down are the only change left to undo.
         if fs.symlink_metadata(&deployment.path).is_ok() {
@@ -5320,6 +5379,26 @@ fn unpark_body(
     };
 
     let id = rt.ports.ids.next_event_id();
+    // A skill parked from dotagents goes back into `agents.toml` and
+    // `agents.lock` below. Like the park, the row has no inverse; the backup
+    // is for recovery by hand.
+    let dotagents = park_row
+        .as_ref()
+        .and_then(|row| crate::ops_park_dotagents::recorded(&row.payload));
+    let backup_dir = match &dotagents {
+        Some(recorded) => {
+            let files: Vec<PathBuf> = std::iter::once(recorded.config.clone())
+                .chain(recorded.lock.clone())
+                .collect();
+            Some(
+                session
+                    .store
+                    .backup_paths(&session.guard, &id, &files)?
+                    .backup_dir,
+            )
+        }
+        None => None,
+    };
     let draft = crate::events::EventDraft {
         kind: crate::events::EventKind::Unpark,
         skill: skill.name.clone(),
@@ -5333,7 +5412,7 @@ fn unpark_body(
             "links": links,
         }),
         inverse: None,
-        backup_dir: None,
+        backup_dir,
     };
     session.store.record(&session.guard, &id, &draft)?;
 
@@ -5341,7 +5420,34 @@ fn unpark_body(
     let scoped_parent = crate::ports::confine(&rt.scope, fs, &parent)?;
     fs.create_dir_all(&session.guard, &scoped_parent)
         .map_err(|e| CoreError::io(&parent, e))?;
+    // Before the folder moves: a failure here leaves the copy parked, so the
+    // turn-on can be tried again.
+    let listed_again = match &dotagents {
+        Some(recorded) => {
+            match crate::ops_park_dotagents::turn_on(rt, &session.guard, recorded, &skill.name) {
+                Ok(files) => files,
+                Err(e) => {
+                    let _ = session.store.finish(
+                        &session.guard,
+                        &id,
+                        crate::events::EventStatus::Failed,
+                        None,
+                    );
+                    return Err(CoreError::new(
+                        e.code,
+                        format!(
+                            "the skill stays parked: dotagents' agents.toml or agents.lock could not list it again: {}",
+                            e.message
+                        ),
+                    )
+                    .at(&deployment.path));
+                }
+            }
+        }
+        None => Vec::new(),
+    };
     if let Err(e) = crate::park_move::move_dir(rt, &session, &deployment.path, &restored_dir) {
+        let _ = crate::ops_park_dotagents::restore_files(rt, &session.guard, &listed_again);
         let _ = session.store.finish(
             &session.guard,
             &id,

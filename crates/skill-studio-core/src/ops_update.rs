@@ -298,7 +298,7 @@ fn record_dotagents_side_effects(
 /// The `<command> failed: <detail>` error for a non-zero CLI exit: the last
 /// few stderr lines that say something, without the `npm notice`/`npm warn`
 /// chatter `npx` prints around every run.
-fn cli_failure(command: &str, output: &crate::ports::ProcessOutput) -> CoreError {
+pub(crate) fn cli_failure(command: &str, output: &crate::ports::ProcessOutput) -> CoreError {
     let lines: Vec<&str> = output
         .stderr
         .lines()
@@ -670,7 +670,49 @@ pub fn update(
     ctx: &OpContext,
     req: &UpdateRequest,
 ) -> Result<UpdateOutcome, CoreError> {
-    rt.run(Operation::Update, ctx, || update_body(rt, ctx, req))
+    rt.run(Operation::Update, ctx, || {
+        refuse_parked(rt, req)?;
+        update_body(rt, ctx, req)
+    })
+}
+
+/// Refuses to update a skill whose Universal copy is parked: the skills CLI
+/// would fetch it again and undo the park. Checked before anything runs, so
+/// the CLI is never spawned and no journal row is written.
+fn refuse_parked(rt: &Runtime, req: &UpdateRequest) -> Result<(), CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let parked_root = rt
+        .scope
+        .home
+        .lexical
+        .join(crate::identity::PARKED_ROOT_RELATIVE);
+    let (project_key, legacy_flat) = match &req.scope {
+        RootScope::Global => (None, parked_root.join(&req.skill.0).join("SKILL.md")),
+        RootScope::Project(project) => (
+            Some(crate::park_layout::project_key(
+                &fs.canonicalize(&project.0)
+                    .unwrap_or_else(|_| project.0.clone()),
+            )),
+            PathBuf::new(),
+        ),
+    };
+    let origin = crate::identity::RootRef {
+        scope: req.scope.clone(),
+        kind: crate::identity::RootKind::Universal,
+    };
+    let slot = crate::park_layout::parked_slot_dir(&parked_root, &origin, project_key.as_deref());
+    let is_parked = slot.is_some_and(|slot| fs.symlink_metadata(&slot.join(&req.skill.0)).is_ok())
+        || (!legacy_flat.as_os_str().is_empty() && fs.symlink_metadata(&legacy_flat).is_ok());
+    if is_parked {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "{} is parked, so Update leaves it alone; turn it on first",
+                req.skill.0
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn update_body(

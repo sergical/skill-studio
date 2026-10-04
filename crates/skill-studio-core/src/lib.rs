@@ -51,6 +51,7 @@ mod ops_discard;
 mod ops_doctor;
 mod ops_install;
 mod ops_install_cli;
+mod ops_park_dotagents;
 mod ops_remove;
 pub mod ops_split;
 mod ops_update;

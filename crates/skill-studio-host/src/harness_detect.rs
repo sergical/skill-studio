@@ -310,12 +310,21 @@ impl ProcessSpawner for RealProcessSpawner {
             command.current_dir(cwd);
         }
         for (key, value) in &spec.env {
-            command.env(key, value);
+            if value.is_empty() {
+                command.env_remove(key);
+            } else {
+                command.env(key, value);
+            }
         }
         if !self.search_dirs.is_empty() && !spec.env.iter().any(|(key, _)| key == "PATH") {
             command.env("PATH", self.child_path());
         }
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        // No stdin: the MCP server's JSON-RPC stream must not reach a child,
+        // and a CLI that asks a question then fails instead of waiting.
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
