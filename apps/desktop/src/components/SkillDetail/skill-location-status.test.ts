@@ -6,6 +6,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { TooltipProvider } from "@skill-studio/ui";
+import { findLeftBehindPairs } from "@skill-studio/lib";
 import type { Deployment, InstalledSkill } from "@skill-studio/lib";
 import { SkillLocationScope } from "./SkillLocationScope";
 import {
@@ -356,6 +357,40 @@ describe("buildScopeGroups", () => {
     expect(markup).toContain("Keep live");
     expect(markup).toContain("Keep parked");
     expect(markup).not.toContain("Turn on");
+  });
+
+  // Failure caught: the live copy of a left-behind pair keeps a Park button, a second way to
+  // act on the pair that skips the parked copy.
+  it("offers no Park on the live copy of a left-behind pair", () => {
+    const skill = fixtureSkill({ deployments: [fixtureDeployment(), parkedCopy()] });
+    const [global] = buildScopeGroups(skill);
+
+    expect(global.shared?.leftBehindLive).toBe(true);
+    expect(parkActionFor(global.shared!, global.label, null)).toBeNull();
+  });
+
+  // Failure caught: a parked project copy pairs with a live copy in another project or in
+  // Global, so Keep live would delete the wrong folder.
+  it("pairs a parked project copy only with a live copy in the same project", () => {
+    const otherProject = fixtureDeployment({
+      scope: "project",
+      project_path: "/other",
+      path: "/other/.agents/skills/find-bugs",
+    });
+    const parked = parkedCopy({
+      path: "/home/.agents/skills-parked/project/find-bugs",
+      parked_origin: { kind: "universal", scope: "project", project_path: "/repo" },
+    });
+    const apart = fixtureSkill({ deployments: [fixtureDeployment(), otherProject, parked] });
+    expect(findLeftBehindPairs(apart)).toEqual([]);
+
+    const sameProject = fixtureDeployment({
+      scope: "project",
+      project_path: "/repo",
+      path: "/repo/.agents/skills/find-bugs",
+    });
+    const together = fixtureSkill({ deployments: [fixtureDeployment(), sameProject, parked] });
+    expect(findLeftBehindPairs(together)).toEqual([{ live: sameProject, parked }]);
   });
 
   // Failure caught: Park shows on a plugin copy or a link, which core refuses; or a project row

@@ -5,9 +5,11 @@
 //!
 //! `remove` cannot do either: it takes only a Universal copy Skill Studio
 //! owns, and refuses a parked copy and an agent's own folder. Here the person
-//! has already confirmed which of two copies to drop, so ownership is not
-//! asked. Like `remove`, the journal row and an archival `backup_paths` copy
-//! come before the first write, and the row's `inverse` restores the tree, so
+//! has already confirmed which of two copies to drop, so ownership is mostly
+//! not asked. A copy an installer owns (`npx skills`, dotagents) is refused:
+//! the installer keeps its own record, and only it can drop that cleanly.
+//! Like `remove`, the journal row and an archival `backup_paths` copy come
+//! before the first write, and the row's `inverse` restores the tree, so
 //! Activity can undo the delete. The row reuses `EventKind::Remove`.
 
 use std::path::PathBuf;
@@ -15,16 +17,18 @@ use std::path::PathBuf;
 use crate::dto::{DiscardOutcome, DiscardRequest};
 use crate::error::{CoreError, ErrorCode};
 use crate::events::{EventDraft, EventKind, EventStatus};
-use crate::identity::{BackingRelationship, RootKind, RootScope};
+use crate::identity::{BackingRelationship, LifecycleOwnerKind, RootKind, RootScope};
 use crate::ops::Operation;
-use crate::ports::{MutationSession, OpContext, Runtime};
+use crate::ports::{FileKind, MutationSession, OpContext, Runtime, ScopeFs};
 
 /// Deletes one real copy: a parked copy, or a live copy in the Universal
 /// folder or an agent's own folder, at global or project scope.
 ///
 /// Preconditions: exclusive lease; the deployment must resolve exactly once
-/// and hold its own bytes. A plugin copy and a link are refused. Every
-/// per-skill link into the folder is removed with it, as `park` does.
+/// and hold its own bytes. A plugin copy, a link (in any root), and a live
+/// copy an installer owns are refused. The copy to keep must still be there,
+/// as a real folder at the matching origin. Every per-skill link into the
+/// folder is removed with it, as `park` does.
 pub fn discard(
     rt: &Runtime,
     ctx: &OpContext,
@@ -49,8 +53,7 @@ fn discard_body(
     if deployment.plugin.is_some() || matches!(deployment.root.kind, RootKind::PluginCache(_)) {
         return refuse("a plugin copy cannot be deleted; turn it off with /plugin in the agent");
     }
-    let is_agent_symlink = deployment.is_symlink && deployment.root.kind != RootKind::Universal;
-    if deployment.backing == BackingRelationship::LinkedTo || is_agent_symlink {
+    if deployment.is_symlink || deployment.backing == BackingRelationship::LinkedTo {
         return refuse("a link cannot be deleted here; delete the real folder it points to");
     }
     if !matches!(
@@ -59,6 +62,20 @@ fn discard_body(
     ) {
         return refuse("only a Universal, agent, or parked folder can be deleted");
     }
+    if deployment.root.kind != RootKind::Parked
+        && matches!(
+            deployment.owner_kind,
+            LifecycleOwnerKind::SkillsSh | LifecycleOwnerKind::Dotagents
+        )
+    {
+        return refuse(MANAGED_COPY_MESSAGE);
+    }
+    check_kept_copy(
+        &session,
+        rt.ports.fs.as_ref(),
+        &deployment,
+        &req.keep_deployment_id,
+    )?;
 
     let skill = crate::ops::resolve_skill(&session.fresh, &deployment.id)?.clone();
     let fs = rt.ports.fs.as_ref();
@@ -72,20 +89,33 @@ fn discard_body(
         .collect();
 
     let id = rt.ports.ids.next_event_id();
-    let manifest =
-        session
-            .store
-            .backup_paths(&session.guard, &id, std::slice::from_ref(&deployment.path))?;
+    // A parked agent copy keeps a note of where it came from beside it. It
+    // goes in the backup, so undo brings the note back with the folder.
+    let origin_note = origin_note_path(&deployment, &skill.name.0);
+    let mut backup_targets = vec![deployment.path.clone()];
+    backup_targets.extend(
+        origin_note
+            .iter()
+            .filter(|note| fs.symlink_metadata(note).is_ok())
+            .cloned(),
+    );
+    let registry_undo = crate::ops_remove::registry_row_undo(rt, fs, &deployment, &skill.name.0)?;
+    let manifest = session
+        .store
+        .backup_paths(&session.guard, &id, &backup_targets)?;
     let pre_fingerprint = manifest
         .entries
         .first()
         .and_then(|e| e.fingerprint.as_ref());
-    let inverse = crate::events::restore_backup_inverse_with_links(
+    let mut inverse = crate::events::restore_backup_inverse_with_links(
         &deployment.path,
         pre_fingerprint,
         None,
         &link_targets,
     );
+    if let Some(entry) = registry_undo {
+        inverse["registry_undo"] = serde_json::json!([entry]);
+    }
     let project_path = match &deployment.root.scope {
         RootScope::Global => None,
         RootScope::Project(project) => Some(project.0.clone()),
@@ -114,25 +144,23 @@ fn discard_body(
             fs.remove_file(&session.guard, &scoped)
                 .map_err(|e| CoreError::io(link, e))?;
         }
-        // Confine first: the tree walk below deletes without a scoped path.
-        crate::ports::confine(&rt.scope, fs, &deployment.path)?;
-        crate::ops_remove::remove_tree_best_effort(fs, &deployment.path);
-        if fs.symlink_metadata(&deployment.path).is_ok() {
-            return Err(
-                CoreError::new(ErrorCode::Io, "the folder could not be fully deleted")
-                    .at(&deployment.path),
-            );
-        }
-        // A parked agent copy keeps a note of where it came from beside it.
-        if deployment.root.kind == RootKind::Parked {
-            if let Some(slot_dir) = deployment.path.parent() {
-                let marker = slot_dir
-                    .join(crate::park_layout::COPY_ORIGIN_DIR)
-                    .join(&skill.name.0);
-                if let Ok(scoped) = crate::ports::confine(&rt.scope, fs, &marker) {
-                    let _ = fs.remove_file(&session.guard, &scoped);
-                }
+        crate::park_move::discard_dir(rt, &session, &deployment.path)?;
+        if let Some(note) = &origin_note {
+            if let Ok(scoped) = crate::ports::confine(&rt.scope, fs, note) {
+                let _ = fs.remove_file(&session.guard, &scoped);
             }
+        }
+        match deployment.owner_kind {
+            LifecycleOwnerKind::Copy => crate::ops_remove::drop_copy_registry_entry(
+                rt,
+                &session.guard,
+                fs,
+                deployment.id.as_str(),
+            )?,
+            LifecycleOwnerKind::Fork => {
+                crate::ops_remove::drop_fork_registry_entry(rt, &session.guard, fs, &skill.name.0)?;
+            }
+            _ => {}
         }
         Ok(())
     })();
@@ -150,4 +178,67 @@ fn discard_body(
         event_id: id,
         deployment_id: deployment.id,
     })
+}
+
+/// What a refused installer-owned copy tells the person to do. The desktop
+/// shows the same words for a disabled "Keep parked".
+const MANAGED_COPY_MESSAGE: &str =
+    "Remove this copy with its installer (npx skills remove / dotagents remove), then try again.";
+
+/// The note beside a parked agent copy that records its origin, if this copy
+/// is one.
+fn origin_note_path(deployment: &crate::dto::DeploymentDto, name: &str) -> Option<PathBuf> {
+    if deployment.root.kind != RootKind::Parked {
+        return None;
+    }
+    Some(
+        deployment
+            .path
+            .parent()?
+            .join(crate::park_layout::COPY_ORIGIN_DIR)
+            .join(name),
+    )
+}
+
+/// Refuses unless the copy to keep still exists, as a real folder with a
+/// `SKILL.md`, and pairs with `deployment` the way a left-behind pair does: one
+/// is parked, and the parked copy's origin is the live copy's root.
+fn check_kept_copy(
+    session: &MutationSession,
+    fs: &dyn ScopeFs,
+    deployment: &crate::dto::DeploymentDto,
+    keep_id: &crate::identity::DeploymentId,
+) -> Result<(), CoreError> {
+    let refuse =
+        |message: &str| Err(CoreError::new(ErrorCode::StaleProposal, message).at(&deployment.path));
+    let Ok(keep) = session.resolve_exact(keep_id) else {
+        return refuse("The copy you meant to keep is gone, so nothing was deleted.");
+    };
+    let is_real_folder = !keep.is_symlink
+        && keep.backing != BackingRelationship::LinkedTo
+        && fs
+            .symlink_metadata(&keep.path)
+            .is_ok_and(|facts| facts.kind == FileKind::Dir)
+        && fs.read_dir(&keep.path).is_ok_and(|entries| {
+            entries
+                .iter()
+                .any(|e| e.kind == FileKind::File && e.name.eq_ignore_ascii_case("SKILL.md"))
+        });
+    if !is_real_folder {
+        return refuse(
+            "The copy you meant to keep is no longer a real folder, so nothing was deleted.",
+        );
+    }
+    let (live, parked) = if deployment.root.kind == RootKind::Parked {
+        (keep, deployment)
+    } else {
+        (deployment, keep)
+    };
+    let paired = live.root.kind != RootKind::Parked
+        && parked.root.kind == RootKind::Parked
+        && parked.parked_origin.as_ref() == Some(&live.root);
+    if !paired {
+        return refuse("These two copies are no longer a parked copy and its live copy, so nothing was deleted.");
+    }
+    Ok(())
 }

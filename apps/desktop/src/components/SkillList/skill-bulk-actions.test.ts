@@ -29,6 +29,15 @@ function globalFolder(name: string, fields: Partial<Deployment> = {}): Deploymen
   );
 }
 
+/** The Global Universal folder after a park: the copy Unpark moves back. */
+function parkedFolder(name: string): Deployment {
+  return {
+    ...globalFolder(name),
+    scope: "parked",
+    parked_origin: { kind: "universal", scope: "global", project_path: null },
+  };
+}
+
 function fixtureSkill(name: string, overrides: Partial<InstalledSkill> = {}): InstalledSkill {
   return {
     name,
@@ -97,7 +106,7 @@ const names = (skills: InstalledSkill[]) => skills.map((skill) => skill.name);
 
 describe("planBulkAction", () => {
   const unparked = fixtureSkill("unparked");
-  const parked = fixtureSkill("parked", { parked: true });
+  const parked = fixtureSkill("parked", { parked: true, deployments: [parkedFolder("parked")] });
   const plugin = pluginSkill("from-plugin");
 
   it("splits a mixed selection into parkable and already-parked skills, and skips a plugin skill; fails if park ignores the parked flag or the missing folder", () => {
@@ -159,7 +168,7 @@ describe("planBulkAction", () => {
 describe("bulkActionToast", () => {
   const a = fixtureSkill("a");
   const b = fixtureSkill("b");
-  const c = fixtureSkill("c", { parked: true });
+  const c = fixtureSkill("c", { parked: true, deployments: [parkedFolder("c")] });
 
   it("names the count when every skill changed; fails if the title drops the count", () => {
     const plan = { applicable: [a, b], skipped: [] };

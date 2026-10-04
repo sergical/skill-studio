@@ -110,6 +110,19 @@ describe("leftBehindFix", () => {
     });
     expect(leftBehindFix("keep-parked", { live: projectLive, parked }).checksRepository).toBe(true);
   });
+
+  // Failure caught: Keep parked deletes a folder an installer owns, so its ledger keeps a row
+  // for a folder that is gone; or Keep live is blocked for no reason.
+  it("blocks Keep parked, with the installer reason, for a skills.sh or dotagents live copy", () => {
+    for (const owner_kind of ["skills-sh", "dotagents"] as const) {
+      const managed = { ...live, owner_kind };
+      expect(leftBehindFix("keep-parked", { live: managed, parked }).blockedReason).toBe(
+        "Remove this copy with its installer (npx skills remove / dotagents remove), then try again.",
+      );
+      expect(leftBehindFix("keep-live", { live: managed, parked }).blockedReason).toBeNull();
+    }
+    expect(leftBehindFix("keep-parked", { live, parked }).blockedReason).toBeNull();
+  });
 });
 
 describe("agent rows", () => {

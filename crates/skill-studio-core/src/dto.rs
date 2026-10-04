@@ -703,6 +703,9 @@ pub struct ParkOutcome {
 pub struct DiscardRequest {
     /// The copy to delete. Never a link or a plugin copy.
     pub deployment_id: DeploymentId,
+    /// The copy that stays. Checked again under the lease: the delete is
+    /// refused when this copy is gone, so the fix never deletes the last one.
+    pub keep_deployment_id: DeploymentId,
 }
 
 /// Result of `discard`.

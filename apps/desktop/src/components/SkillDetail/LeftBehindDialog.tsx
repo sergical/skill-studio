@@ -38,12 +38,22 @@ export function LeftBehindDialog({
   const [isWorking, setIsWorking] = useState(false);
   const addToast = useAppStore((state) => state.addToast);
   const keepLive = choice === "keep-live";
-  const { discard: doomed, keep: kept, checksRepository } = leftBehindFix(choice, pair);
-  const gitWarning = useGitWarning({ deployment_id: doomed.id }, "deleting", checksRepository);
+  const {
+    discard: doomed,
+    keep: kept,
+    checksRepository,
+    blockedReason,
+  } = leftBehindFix(choice, pair);
+  const { warning: gitWarning, isChecking } = useGitWarning(
+    { deployment_id: doomed.id },
+    "deleting",
+    checksRepository,
+  );
 
   const handleConfirm = () => {
+    if (blockedReason) return;
     setIsWorking(true);
-    discardSkillCopy({ deployment_id: doomed.id })
+    discardSkillCopy({ deployment_id: doomed.id }, { deployment_id: kept.id })
       .then(onClose)
       .catch((err) => {
         addToast({
@@ -70,14 +80,25 @@ export function LeftBehindDialog({
               : `This deletes the live copy at ${homeRelativePath(doomed.path)}. The parked copy at ${homeRelativePath(kept.path)} stays parked, so the skill stays off.`}{" "}
             You can undo it from Activity.
           </AlertDialogDescription>
+          {blockedReason && <p className="m-0 text-small text-text-secondary">{blockedReason}</p>}
           {gitWarning && <p className="m-0 text-small text-text-secondary">{gitWarning}</p>}
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel onClick={onClose} disabled={isWorking}>
             Cancel
           </AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={handleConfirm} disabled={isWorking}>
-            {isWorking ? "Deleting…" : keepLive ? "Keep live" : "Keep parked"}
+          <AlertDialogAction
+            variant="destructive"
+            onClick={handleConfirm}
+            disabled={isWorking || isChecking || blockedReason !== null}
+          >
+            {isWorking
+              ? "Deleting…"
+              : isChecking
+                ? "Checking git…"
+                : keepLive
+                  ? "Keep live"
+                  : "Keep parked"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -603,10 +603,14 @@ export async function unparkSkill(target: LifecycleTarget): Promise<void> {
 /**
  * Delete one copy for good (a quarantine backup keeps it undoable from
  * Activity): the parked copy for "Keep live", the live copy for "Keep parked".
- * Refused for a plugin copy or a link.
+ * `keep` is the copy that stays: the core checks it is still there before it
+ * deletes. Refused for a plugin copy, a link, or a live copy an installer owns.
  */
-export async function discardSkillCopy(target: LifecycleTarget): Promise<void> {
-  return callCommand("discard_skill_copy", { target });
+export async function discardSkillCopy(
+  target: LifecycleTarget,
+  keep: LifecycleTarget,
+): Promise<void> {
+  return callCommand("discard_skill_copy", { target, keep });
 }
 
 /**

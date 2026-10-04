@@ -35,7 +35,11 @@ export function ParkCopyDialog({
 }) {
   const [isParking, setIsParking] = useState(false);
   const addToast = useAppStore((state) => state.addToast);
-  const gitWarning = useGitWarning({ deployment_id: deployment.id }, "parking", true);
+  const { warning: gitWarning, isChecking } = useGitWarning(
+    { deployment_id: deployment.id },
+    "parking",
+    true,
+  );
 
   const handlePark = () => {
     setIsParking(true);
@@ -69,8 +73,8 @@ export function ParkCopyDialog({
           <AlertDialogCancel onClick={onClose} disabled={isParking}>
             Cancel
           </AlertDialogCancel>
-          <AlertDialogAction onClick={handlePark} disabled={isParking}>
-            {isParking ? "Parking…" : "Park"}
+          <AlertDialogAction onClick={handlePark} disabled={isParking || isChecking}>
+            {isParking ? "Parking…" : isChecking ? "Checking git…" : "Park"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -55,6 +55,28 @@ pub(crate) fn move_dir(
     }
 }
 
+/// Deletes the folder `dir`: renames it to a hidden `.park-trash-*` sibling,
+/// then deletes that best effort, so an agent never sees a half-deleted
+/// skill. A failed rename leaves the folder as it was. Once the rename is
+/// done the delete has happened: a failure after it leaves only the hidden
+/// sibling, which a later move or discard sweeps.
+pub(crate) fn discard_dir(
+    rt: &Runtime,
+    session: &MutationSession,
+    dir: &Path,
+) -> Result<(), CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let parent = dir.parent().unwrap_or(dir);
+    sweep_trash(rt, session, parent);
+    let trash = parent.join(format!("{TRASH_PREFIX}{}", crate::fsops::unique_suffix()));
+    let scoped_dir = confine(&rt.scope, fs, dir)?;
+    let scoped_trash = confine(&rt.scope, fs, &trash)?;
+    fs.rename(&session.guard, &scoped_dir, &scoped_trash)
+        .map_err(|e| CoreError::io(dir, e))?;
+    remove_trash(rt, session, &trash);
+    Ok(())
+}
+
 fn copy_verify_remove(
     rt: &Runtime,
     session: &MutationSession,

@@ -53,13 +53,11 @@ export function RemoveDeploymentsDialog({
         projectPath,
       });
 
-  // `park_check` takes one folder; the project's Universal folder is the one a repository tracks.
+  // `park_check` takes one folder: the selected copy, else the first real folder the removal deletes.
   const checked =
     deployment ??
-    skill.deployments.find(
-      (d) => d.scope === "project" && d.project_path === projectPath && d.agent === "shared",
-    );
-  const gitWarning = useGitWarning(
+    (removalAvailability.available ? removalAvailability.preview.managedDeployments[0] : undefined);
+  const { warning: gitWarning, isChecking } = useGitWarning(
     checked ? { deployment_id: checked.id } : null,
     "removing",
     projectPath !== null,
@@ -114,9 +112,9 @@ export function RemoveDeploymentsDialog({
           <AlertDialogAction
             variant="destructive"
             onClick={handleRemove}
-            disabled={isRemoving || !removalAvailability.available}
+            disabled={isRemoving || isChecking || !removalAvailability.available}
           >
-            {isRemoving ? "Removing…" : `Remove from ${scopeLabel}`}
+            {isRemoving ? "Removing…" : isChecking ? "Checking git…" : `Remove from ${scopeLabel}`}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

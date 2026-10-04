@@ -134,15 +134,24 @@ pub async fn park_check(
 #[tauri::command]
 pub async fn discard_skill_copy(
     target: LifecycleTarget,
+    keep: LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<DiscardOutcome, String> {
     let state_app = app.clone();
     crate::timing_log::time_command_blocking(&app, "discard_skill_copy", move || {
         let deployment_id = deployment_id_from_target(&target, "Delete copy")?;
+        let keep_deployment_id = deployment_id_from_target(&keep, "Keep copy")?;
         let names = skill_names_for_deployments([&deployment_id]);
         let rt = super::core_runtime::build_runtime_write()?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
-        let result = ops::discard(&rt, &ctx, &DiscardRequest { deployment_id });
+        let result = ops::discard(
+            &rt,
+            &ctx,
+            &DiscardRequest {
+                deployment_id,
+                keep_deployment_id,
+            },
+        );
         let envelope = ResultEnvelope::from_result(Operation::Remove, &rt.scope, &ctx, result);
         let outcome = super::core_runtime::to_command_result(envelope)?;
         emit_snapshot_for_names(&state_app, "discard_skill_copy", names);

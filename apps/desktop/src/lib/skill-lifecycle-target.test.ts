@@ -4,6 +4,7 @@ import {
   forkableDeployment,
   lifecycleTargetForDeployment,
   lifecycleTargetForHarnessRoot,
+  lifecycleTargetForPark,
   lifecycleTargetForSkill,
   skillCanPark,
   skillDeploymentRemovalAvailability,
@@ -632,10 +633,14 @@ describe("skill page header removal and park choices", () => {
   });
 
   it("offers Park only where the core's park can move a folder, so the button never errors", () => {
-    const parked = { ...deployment("parked"), scope: "parked" as const };
+    const parked = {
+      ...deployment("parked"),
+      scope: "parked" as const,
+      parked_origin: { kind: "universal", scope: "global", project_path: null },
+    };
 
     expect(skillCanPark(view([global]))).toBe(true);
-    expect(skillCanPark(view([parked]))).toBe(true);
+    expect(skillCanPark({ ...view([parked]), parked: true })).toBe(true);
     expect(skillCanPark(view([project]))).toBe(false);
     expect(skillCanPark(view([inRepo]))).toBe(false);
   });
@@ -645,7 +650,11 @@ describe("skill page header removal and park choices", () => {
       ...view(deployments),
       parked,
     });
-    const parked = { ...deployment("parked"), scope: "parked" as const };
+    const parked = {
+      ...deployment("parked"),
+      scope: "parked" as const,
+      parked_origin: { kind: "universal", scope: "global", project_path: null },
+    };
 
     expect(
       skillParkVerb(menuView([project])),
@@ -653,6 +662,37 @@ describe("skill page header removal and park choices", () => {
     ).toBeNull();
     expect(skillParkVerb(menuView([global]))).toBe("Park");
     expect(skillParkVerb(menuView([parked], true))).toBe("Unpark");
+  });
+
+  it("a partly parked skill gets the header toggle only when it can move the Global Universal copy", () => {
+    const menuView = (deployments: Deployment[], parked: boolean) => ({
+      ...view(deployments),
+      parked,
+    });
+    const parkedFrom = (id: string, kind: string, scope: "global" | "project") => ({
+      ...deployment(id),
+      scope: "parked" as const,
+      parked_origin: { kind, scope, project_path: scope === "project" ? "/code/remix" : null },
+    });
+    const universalParked = parkedFrom("parked-universal", "universal", "global");
+    const codexParked = parkedFrom("parked-codex", "codex", "global");
+    const projectParked = parkedFrom("parked-project", "universal", "project");
+
+    // Live Global Universal copy plus an agent copy parked: Park still moves the live copy.
+    expect(skillParkVerb(menuView([global, codexParked], false))).toBe("Park");
+    expect(lifecycleTargetForPark(menuView([global, codexParked], false))).toEqual({
+      deployment_id: "global",
+    });
+    // Only an agent or project copy is parked: Unpark has nothing it may move.
+    expect(skillParkVerb(menuView([codexParked], true))).toBeNull();
+    expect(skillParkVerb(menuView([projectParked], true))).toBeNull();
+    expect(() => lifecycleTargetForPark(menuView([codexParked], true))).toThrow();
+    // A Global Universal parked copy beside a parked agent copy: Unpark takes the Universal one.
+    expect(lifecycleTargetForPark(menuView([codexParked, universalParked], true))).toEqual({
+      deployment_id: "parked-universal",
+    });
+    // Only a project live copy, nothing parked: no toggle.
+    expect(skillParkVerb(menuView([project], false))).toBeNull();
   });
 });
 

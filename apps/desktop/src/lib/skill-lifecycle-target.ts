@@ -694,21 +694,34 @@ export function skillRemovalDescription(preview: SkillRemovalPreview): string {
   return [removes, otherLinks, stays, "This cannot be undone."].filter(Boolean).join(" ");
 }
 
-function parkableDeployment(skill: SkillLifecycleView): Deployment | undefined {
-  // A live folder comes first: a skill that also has a parked copy is still on.
-  return (
-    skill.deployments.find(
+type ParkView = SkillLifecycleView & Partial<Pick<InstalledSkill, "parked">>;
+
+/**
+ * The folder the header Park or Unpark moves. Park takes the live Global
+ * Universal copy; Unpark takes only the Global Universal parked copy. A skill
+ * with other copies parked (an agent folder, a project) has no header toggle:
+ * the Locations card is where to act.
+ */
+function parkableDeployment(skill: ParkView): Deployment | undefined {
+  if (skill.parked) {
+    return skill.deployments.find(
       (deployment) =>
-        deployment.scope === "global" &&
-        deployment.destination === "universal" &&
-        deployment.backing.kind === "canonical" &&
-        !deployment.plugin,
-    ) ?? skill.deployments.find((deployment) => deployment.scope === "parked")
+        deployment.scope === "parked" &&
+        deployment.parked_origin?.kind === "universal" &&
+        deployment.parked_origin.scope === "global",
+    );
+  }
+  return skill.deployments.find(
+    (deployment) =>
+      deployment.scope === "global" &&
+      deployment.destination === "universal" &&
+      deployment.backing.kind === "canonical" &&
+      !deployment.plugin,
   );
 }
 
 /** Whether park/unpark has a folder to move - `ops::park` in the core refuses every other skill. */
-export function skillCanPark(skill: SkillLifecycleView): boolean {
+export function skillCanPark(skill: ParkView): boolean {
   return parkableDeployment(skill) !== undefined;
 }
 
@@ -721,7 +734,7 @@ export function skillParkVerb(
 }
 
 /** The Global Universal folder park/unpark may move. Project and Per harness stay independent. */
-export function lifecycleTargetForPark(skill: SkillLifecycleView): LifecycleTarget {
+export function lifecycleTargetForPark(skill: ParkView): LifecycleTarget {
   const canonical = parkableDeployment(skill);
   if (!canonical) {
     throw new Error(

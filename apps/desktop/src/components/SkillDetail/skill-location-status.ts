@@ -119,6 +119,8 @@ interface BaseLocationRow {
   hasSwitch: boolean;
   switchOn: boolean;
   invocation: InvocationPolicy | null;
+  /** Set when a parked copy came back at this live copy's origin: the left-behind fix, not Park, acts on the pair. */
+  leftBehindLive?: true;
 }
 
 /** The shared-folder row - its `harness` is the literal `"shared"`, never a real `AgentId`. */
@@ -542,6 +544,8 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
   const summary = locationSummary(skill);
   const driftSet = new Set(driftingCopies(summary));
   const leftBehind = findLeftBehindPairs(skill);
+  const liveInPair = (d: Deployment) =>
+    leftBehind.some((p) => p.live === d) ? { leftBehindLive: true as const } : {};
   const keys = [...byKey.keys()].sort((a, b) =>
     a === "" ? -1 : b === "" ? 1 : a.localeCompare(b),
   );
@@ -575,6 +579,7 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
             hasSwitch: false,
             switchOn: !sharedDeployment.disabled,
             invocation: sharedDeployment.invocation ?? skill.invocation,
+            ...liveInPair(sharedDeployment),
           };
         })()
       : null;
@@ -606,6 +611,7 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
         hasSwitch: false,
         switchOn: !d.disabled,
         invocation: d.invocation ?? skill.invocation,
+        ...liveInPair(d),
       };
     });
 
@@ -919,6 +925,7 @@ export function parkActionFor(
   const d = row.deployment;
   if (!d || (row.kind !== "shared" && row.kind !== "copy")) return null;
   if (d.plugin || d.is_symlink || d.symlink_is_broken || d.shared_via_whole_dir_link) return null;
+  if (row.leftBehindLive) return null;
   return { kind: "park", deployment: d, scopeLabel, projectPath };
 }
 

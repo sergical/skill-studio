@@ -15,16 +15,30 @@ interface LeftBehindFix {
   keep: Deployment;
   /** True when the deleted copy sits in a repository, so the confirm checks it. */
   checksRepository: boolean;
+  /** Why the fix cannot run, shown disabled in place of an error; `null` when it can. */
+  blockedReason: string | null;
 }
+
+/** What core says for a live copy an installer owns; kept in step with `ops_discard.rs`. */
+const MANAGED_COPY_REASON =
+  "Remove this copy with its installer (npx skills remove / dotagents remove), then try again.";
 
 /** "Keep live" deletes the parked copy; "Keep parked" deletes the live one. */
 export function leftBehindFix(
   choice: "keep-live" | "keep-parked",
   pair: LeftBehindPair,
 ): LeftBehindFix {
-  return choice === "keep-live"
-    ? { discard: pair.parked, keep: pair.live, checksRepository: false }
-    : { discard: pair.live, keep: pair.parked, checksRepository: pair.live.scope === "project" };
+  if (choice === "keep-live") {
+    return { discard: pair.parked, keep: pair.live, checksRepository: false, blockedReason: null };
+  }
+  const installerOwned =
+    pair.live.owner_kind === "skills-sh" || pair.live.owner_kind === "dotagents";
+  return {
+    discard: pair.live,
+    keep: pair.parked,
+    checksRepository: pair.live.scope === "project",
+    blockedReason: installerOwned ? MANAGED_COPY_REASON : null,
+  };
 }
 
 /**
