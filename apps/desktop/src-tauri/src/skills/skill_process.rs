@@ -312,7 +312,7 @@ fn run_controlled_command_with_search_dirs(
         command.process_group(0);
     }
 
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = skill_studio_host::spawn_retrying_busy(&mut command).map_err(|error| {
         ControlledProcessError::Failed(format!("Failed to execute {program}: {error}"))
     })?;
     let pid = child.id();
@@ -463,7 +463,7 @@ fn run_controlled_command_io(
         command.process_group(0);
     }
 
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = skill_studio_host::spawn_retrying_busy(&mut command).map_err(|error| {
         ControlledProcessError::Failed(format!("Failed to execute {}: {error}", program.display()))
     })?;
     let pid = child.id();
