@@ -7,6 +7,7 @@ import {
   coverageGaps,
   deploymentWithSpecViolations,
   findDuplicateSkills,
+  findLeftBehindPairs,
   findLinkedRootIssues,
   findParkedButReinstalled,
   findSpecViolations,
@@ -271,31 +272,71 @@ describe("HEALTH_ISSUE_KIND_ORDER", () => {
   });
 });
 
+const parkedCopy = (overrides: Partial<Deployment> = {}) =>
+  fixtureDeployment({
+    scope: "parked",
+    agent: "parked",
+    path: "/home/.agents/skills-parked/universal/agent-browser",
+    parked_origin: { kind: "universal", scope: "global", project_path: null },
+    ...overrides,
+  });
+
 describe("findParkedButReinstalled", () => {
-  it("flags a parked skill whose Universal deployment came back", () => {
-    const skill = fixtureSkill({
-      parked: true,
-      deployments: [fixtureDeployment({ scope: "global" })],
-    });
-    const issues = findParkedButReinstalled([skill]);
+  // Flow: a hand `mv` or install put a folder back where a parked copy came from.
+  // Failure caught: the left-behind copy goes unflagged, so two copies drift silently.
+  it("flags a live copy and a parked copy at the same origin, and names both", () => {
+    const live = fixtureDeployment({ scope: "global" });
+    const parked = parkedCopy();
+    const issues = findParkedButReinstalled([fixtureSkill({ deployments: [live, parked] })]);
     expect(issues).toHaveLength(1);
     expect(issues[0].kind).toBe("parked-but-reinstalled");
+    expect(issues[0].live).toBe(live);
+    expect(issues[0].parked).toBe(parked);
   });
 
-  it("does not flag a parked skill with only its parked-copy deployment", () => {
+  // Failure caught: a skill parked in one agent folder is flagged because the Universal folder is live.
+  it("does not flag a live copy at a different origin than the parked one", () => {
     const skill = fixtureSkill({
-      parked: true,
-      deployments: [fixtureDeployment({ scope: "parked" })],
+      deployments: [
+        fixtureDeployment({ scope: "global" }),
+        parkedCopy({ parked_origin: { kind: "codex", scope: "global", project_path: null } }),
+      ],
     });
     expect(findParkedButReinstalled([skill])).toEqual([]);
   });
 
-  it("does not flag a skill that isn't parked", () => {
+  // Failure caught: a project copy pairs with the global parked copy of the same name.
+  it("does not pair a project copy with a global parked copy", () => {
     const skill = fixtureSkill({
-      parked: false,
-      deployments: [fixtureDeployment({ scope: "global" })],
+      deployments: [
+        fixtureDeployment({ scope: "project", project_path: "/work/app" }),
+        parkedCopy(),
+      ],
     });
     expect(findParkedButReinstalled([skill])).toEqual([]);
+  });
+
+  it("does not flag a fully parked skill", () => {
+    const skill = fixtureSkill({ parked: true, deployments: [parkedCopy()] });
+    expect(findParkedButReinstalled([skill])).toEqual([]);
+  });
+
+  it("does not flag a skill with only live copies", () => {
+    const skill = fixtureSkill({ deployments: [fixtureDeployment({ scope: "global" })] });
+    expect(findParkedButReinstalled([skill])).toEqual([]);
+  });
+});
+
+describe("findLeftBehindPairs", () => {
+  // Failure caught: a link at the origin counts as a copy, and "Keep parked" has nothing it may delete.
+  it("ignores a symlink at the parked origin", () => {
+    const skill = fixtureSkill({
+      deployments: [
+        fixtureDeployment({ agent: "Codex", is_symlink: true }),
+        parkedCopy({ parked_origin: { kind: "codex", scope: "global", project_path: null } }),
+      ],
+    });
+    expect(findLeftBehindPairs(skill)).toEqual([]);
   });
 });
 

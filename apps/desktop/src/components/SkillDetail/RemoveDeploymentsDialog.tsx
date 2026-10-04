@@ -16,6 +16,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@skill-studio/ui";
+import { useGitWarning } from "../../hooks/useGitWarning";
 import { removeSkill } from "../../lib/skill-api";
 import {
   skillDeploymentRemovalAvailability,
@@ -52,6 +53,18 @@ export function RemoveDeploymentsDialog({
         projectPath,
       });
 
+  // `park_check` takes one folder; the project's Universal folder is the one a repository tracks.
+  const checked =
+    deployment ??
+    skill.deployments.find(
+      (d) => d.scope === "project" && d.project_path === projectPath && d.agent === "shared",
+    );
+  const gitWarning = useGitWarning(
+    checked ? { deployment_id: checked.id } : null,
+    "removing",
+    projectPath !== null,
+  );
+
   const handleRemove = () => {
     if (!removalAvailability.available) return;
     setIsRemoving(true);
@@ -81,6 +94,7 @@ export function RemoveDeploymentsDialog({
               ? skillRemovalDescription(removalAvailability.preview)
               : removalAvailability.reason}
           </AlertDialogDescription>
+          {gitWarning && <p className="m-0 text-small text-text-secondary">{gitWarning}</p>}
           {removalAvailability.available && (
             <ul className="max-h-40 overflow-auto font-mono text-xs break-all">
               {[

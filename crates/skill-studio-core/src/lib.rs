@@ -47,6 +47,7 @@ pub mod journal;
 pub mod lock_file;
 pub mod opencode_config;
 pub mod ops;
+mod ops_discard;
 mod ops_doctor;
 mod ops_install;
 mod ops_install_cli;

@@ -15,6 +15,7 @@ import type {
   ForkRecord,
   InstalledSkill,
   InvocationPolicy,
+  LeftBehindPair,
   LifecycleTarget,
 } from "@skill-studio/lib";
 import {
@@ -31,12 +32,12 @@ import {
 } from "../../lib/skill-api";
 import {
   lifecycleTargetForDeployment,
-  lifecycleTargetForPark,
   lifecycleTargetForSkill,
 } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
 import { hasUpstreamOwner } from "./skill-location-status";
 import type { InvocationFile, LocationAction } from "./skill-location-status";
+import type { LeftBehindChoice } from "./LeftBehindDialog";
 
 interface UseLocationActionsResult {
   /** Resolves `true` when the action succeeded or only opened a dialog, `false` after its error toast. */
@@ -59,6 +60,12 @@ interface UseLocationActionsResult {
   /** Set while an "Uninstall the <name> plugin…" action is pending confirmation. */
   pluginUninstallRequest: Deployment | null;
   closePluginUninstallRequest: () => void;
+  /** Set while a project copy's Park is pending its confirm. */
+  parkRequest: { deployment: Deployment; scopeLabel: string } | null;
+  closeParkRequest: () => void;
+  /** Set while "Keep live" or "Keep parked" is pending its confirm. */
+  leftBehindRequest: { choice: LeftBehindChoice; pair: LeftBehindPair } | null;
+  closeLeftBehindRequest: () => void;
   /** Set while a "Split into harness folders…" action is pending confirmation. */
   splitRequest: SplitLocationRequest | null;
   closeSplitRequest: () => void;
@@ -128,6 +135,14 @@ export function useLocationActions(
     scopeLabel: string;
     projectPath: string | null;
     deployment?: Deployment;
+  } | null>(null);
+  const [parkRequest, setParkRequest] = useState<{
+    deployment: Deployment;
+    scopeLabel: string;
+  } | null>(null);
+  const [leftBehindRequest, setLeftBehindRequest] = useState<{
+    choice: LeftBehindChoice;
+    pair: LeftBehindPair;
   } | null>(null);
   const [pluginUninstallRequest, setPluginUninstallRequest] = useState<Deployment | null>(null);
   const [splitRequest, setSplitRequest] = useState<SplitLocationRequest | null>(null);
@@ -218,13 +233,22 @@ export function useLocationActions(
         });
       }
       case "park":
+        // A project copy leaves a repository, so it confirms first; a global one parks at once.
+        if (action.projectPath !== null) {
+          setParkRequest({ deployment: action.deployment, scopeLabel: action.scopeLabel });
+          return Promise.resolve(true);
+        }
         return runWithErrorToast("Couldn't park skill", () =>
-          parkSkill(lifecycleTargetForPark(skill)),
+          parkSkill({ deployment_id: action.deployment.id }),
         );
       case "unpark":
-        return runWithErrorToast("Couldn't unpark skill", () =>
-          unparkSkill(lifecycleTargetForPark(skill)),
+        return runWithErrorToast("Couldn't turn on skill", () =>
+          unparkSkill({ deployment_id: action.deployment.id }),
         );
+      case "keep-live":
+      case "keep-parked":
+        setLeftBehindRequest({ choice: action.kind, pair: action.pair });
+        return Promise.resolve(true);
       case "split":
         setSplitRequest({
           target: action.target,
@@ -291,6 +315,10 @@ export function useLocationActions(
     closeRemoveRequest: () => setRemoveRequest(null),
     pluginUninstallRequest,
     closePluginUninstallRequest: () => setPluginUninstallRequest(null),
+    parkRequest,
+    closeParkRequest: () => setParkRequest(null),
+    leftBehindRequest,
+    closeLeftBehindRequest: () => setLeftBehindRequest(null),
     splitRequest,
     closeSplitRequest: () => setSplitRequest(null),
   };

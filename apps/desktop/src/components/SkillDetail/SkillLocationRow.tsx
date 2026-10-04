@@ -1,8 +1,8 @@
 // ============================================================================
 // SkillLocationRow - one harness/reader row inside a scope's drawer: an
 // identity icon carrying the row's one status dot, its name and path, a
-// facts-only chip, a switch where the row has one of its own, and the ⋯
-// menu. Status never lives in the name or the chip - see status-spec.md §1.
+// facts-only chip, a Park / Turn on button (or a disabled switch for an
+// always-on reader), and the ⋯ menu. Status never lives in the name or the chip - see status-spec.md §1.
 // ============================================================================
 
 import { Link2, Puzzle } from "lucide-react";
@@ -12,7 +12,8 @@ import { SwitchControl } from "../ui/SwitchControl";
 import { TooltipControl } from "../ui/TooltipControl";
 import { homeRelativePath } from "@skill-studio/lib";
 import { SkillLocationMenu } from "./SkillLocationMenu";
-import { rowMenu, tipLines } from "./skill-location-status";
+import { SkillLocationRowButtons } from "./SkillLocationRowButtons";
+import { parkActionFor, rowMenu, tipLines } from "./skill-location-status";
 import type { LocationAction, LocationRow } from "./skill-location-status";
 
 /** The label tooltip: just the row's path, or the path plus its symlink target for a link row. */
@@ -83,13 +84,17 @@ function LocationRowSwitch({ row }: { row: LocationRow }) {
 export function SkillLocationRow({
   row,
   scopeLabel,
+  projectPath = null,
   onAction,
 }: {
   row: LocationRow;
   scopeLabel: string;
+  /** The project this row's scope block is for, `null` for Global. */
+  projectPath?: string | null;
   onAction: (action: LocationAction) => Promise<boolean>;
 }) {
-  const menu = rowMenu(row, scopeLabel);
+  const menu = rowMenu(row, scopeLabel, projectPath);
+  const hasButton = row.kind === "parked" || parkActionFor(row, scopeLabel, projectPath) !== null;
   const tip = tipLines(row.conditions);
   const labelTip = labelTipFor(row);
 
@@ -98,7 +103,7 @@ export function SkillLocationRow({
       <span aria-hidden="true" />
       <span className="grid min-w-0 grid-cols-[16px_12.5rem_minmax(0,1fr)] items-center gap-2">
         <StatusIcon
-          icon={<HarnessIcon harness={row.harness} size={16} />}
+          icon={<HarnessIcon harness={row.harness} size={16} muted={row.kind === "parked"} />}
           level={row.level ?? undefined}
           tip={tip}
         />
@@ -124,7 +129,16 @@ export function SkillLocationRow({
         <span className="truncate text-caption text-text-tertiary">{row.caption}</span>
       </span>
       <span className="flex shrink-0 items-center gap-1">
-        <LocationRowSwitch row={row} />
+        {hasButton ? (
+          <SkillLocationRowButtons
+            row={row}
+            scopeLabel={scopeLabel}
+            projectPath={projectPath}
+            onAction={onAction}
+          />
+        ) : (
+          <LocationRowSwitch row={row} />
+        )}
         <SkillLocationMenu
           entries={menu.entries}
           danger={menu.danger}

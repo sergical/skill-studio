@@ -587,8 +587,6 @@ export async function parkSkill(target: LifecycleTarget): Promise<void> {
  * Whether git tracks the copy `target` names, so a confirm can warn that
  * parking or removing it shows as deleted files in the repository. Read-only;
  * never a reason to refuse.
- *
- * @public No caller until the park confirm in #388 reads it.
  */
 export async function parkCheck(target: LifecycleTarget): Promise<ParkCheck> {
   return callCommand("park_check", { target });
@@ -600,6 +598,15 @@ export async function parkCheck(target: LifecycleTarget): Promise<ParkCheck> {
  */
 export async function unparkSkill(target: LifecycleTarget): Promise<void> {
   return callCommand("unpark_skill", { target });
+}
+
+/**
+ * Delete one copy for good (a quarantine backup keeps it undoable from
+ * Activity): the parked copy for "Keep live", the live copy for "Keep parked".
+ * Refused for a plugin copy or a link.
+ */
+export async function discardSkillCopy(target: LifecycleTarget): Promise<void> {
+  return callCommand("discard_skill_copy", { target });
 }
 
 /**

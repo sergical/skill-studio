@@ -695,15 +695,15 @@ export function skillRemovalDescription(preview: SkillRemovalPreview): string {
 }
 
 function parkableDeployment(skill: SkillLifecycleView): Deployment | undefined {
+  // A live folder comes first: a skill that also has a parked copy is still on.
   return (
-    skill.deployments.find((deployment) => deployment.scope === "parked") ??
     skill.deployments.find(
       (deployment) =>
         deployment.scope === "global" &&
         deployment.destination === "universal" &&
         deployment.backing.kind === "canonical" &&
         !deployment.plugin,
-    )
+    ) ?? skill.deployments.find((deployment) => deployment.scope === "parked")
   );
 }
 

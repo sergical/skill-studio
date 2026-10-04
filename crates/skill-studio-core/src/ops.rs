@@ -212,6 +212,11 @@ impl Outcome for ParkOutcome {
         Some(self.event_id.clone())
     }
 }
+impl Outcome for crate::dto::DiscardOutcome {
+    fn event_id(&self) -> Option<EventId> {
+        Some(self.event_id.clone())
+    }
+}
 impl Outcome for crate::dto::SplitOutcome {
     fn event_id(&self) -> Option<EventId> {
         Some(self.event_id.clone())
@@ -5005,6 +5010,7 @@ fn find_independent_links<'a>(
         .collect()
 }
 
+pub use crate::ops_discard::discard;
 pub use crate::ops_doctor::doctor;
 pub use crate::ops_install::{install, install_preferences};
 pub use crate::ops_remove::{remove, sweep_quarantine};

@@ -34,7 +34,7 @@ const ISSUE_ROW_LABEL = {
   "spec-violation": "Spec violation",
   "spec-warning": "Spec warning",
   "broken-symlink": "Broken link",
-  "parked-but-reinstalled": "Parked and installed",
+  "parked-but-reinstalled": "Parked copy left behind",
   duplicate: "Copies differ",
   "linked-root": "Linked root",
   "lock-only": "Lock entry only",

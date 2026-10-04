@@ -48,6 +48,11 @@ const EXCLUSIONS: &[Exclusion] = &[
         reason: "a read-only question the desktop asks before its park/remove confirm; the CLI \
                   and MCP park without a prompt, so they have nothing to warn before",
     },
+    Exclusion {
+        name: "discard",
+        reason: "the confirmed fix for a parked copy left behind, offered only in the desktop's \
+                  Locations card and Needs attention list; the CLI and MCP have no such issue",
+    },
 ];
 
 /// An `ops` function whose surface spells it differently: the op's name,

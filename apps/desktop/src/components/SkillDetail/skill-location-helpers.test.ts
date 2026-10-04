@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { Deployment, InstalledSkill } from "@skill-studio/lib";
-import { sharedFolderSwitchPolicy } from "./skill-location-helpers";
+import { gitWarningText, leftBehindFix } from "./skill-location-helpers";
 import { buildScopeGroups, rowMenu } from "./skill-location-status";
 import { universalDeployment, withScannerIdentity } from "../../dev/harness/scanned-deployment";
 
@@ -53,35 +53,62 @@ function skillWithDeployments(deployments: Deployment[]): InstalledSkill {
   };
 }
 
-describe("sharedFolderSwitchPolicy", () => {
-  it("keeps same-name Global and Project Universal folders isolated", () => {
-    const skill = skillWithDeployments([
-      sharedDeployment(),
-      sharedDeployment({
-        scope: "project",
-        project_path: "/repo",
-        path: "/repo/.agents/skills/find-bugs",
-        disabled: true,
-      }),
-    ]);
-    const groups = buildScopeGroups(skill);
-    const global = groups.find((group) => group.isGlobal)!;
-    const project = groups.find((group) => !group.isGlobal)!;
-    const globalPolicy = sharedFolderSwitchPolicy(global);
-    const projectPolicy = sharedFolderSwitchPolicy(project);
+describe("gitWarningText", () => {
+  // Flow: park or remove a project copy that git tracks. Failure caught: the confirm
+  // stays silent and the user finds deleted files in the repository afterwards.
+  it("warns that the move shows as deleted files when git tracks the folder", () => {
+    expect(gitWarningText(true, "parking")).toBe(
+      "Git tracks this folder, so parking it shows as deleted files in your repository.",
+    );
+  });
 
-    expect(globalPolicy).toMatchObject({ checked: true, disabled: false });
-    expect(globalPolicy.actionForCheckedChange(false)).toEqual({ kind: "park" });
-    expect(globalPolicy.actionForCheckedChange(true)).toEqual({ kind: "unpark" });
+  // Failure caught: an unknown answer reads as "safe", or the confirm hides that the check failed.
+  it("says plainly that the check could not run when the answer is null", () => {
+    expect(gitWarningText(null, "removing")).toBe(
+      "Couldn't check whether git tracks this folder. If it does, removing it shows as deleted files in your repository.",
+    );
+  });
 
-    expect(projectPolicy).toMatchObject({ checked: false, disabled: true });
-    expect(projectPolicy.actionForCheckedChange(false)).toBeNull();
-    expect(projectPolicy.actionForCheckedChange(true)).toBeNull();
-    expect(
-      rowMenu(project.shared!, project.label, project.projectPath ?? null).entries.map(
-        (entry) => entry.action.kind,
-      ),
-    ).not.toContain("park");
+  // Failure caught: a warning shows for an untracked folder and trains users to ignore it.
+  it("shows no warning when git does not track the folder", () => {
+    expect(gitWarningText(false, "parking")).toBeNull();
+  });
+});
+
+describe("leftBehindFix", () => {
+  const live = sharedDeployment({ path: "/home/.agents/skills/find-bugs" });
+  const parked = withScannerIdentity({
+    ...sharedDeployment(),
+    scope: "parked",
+    agent: "parked",
+    path: "/home/.agents/skills-parked/universal/find-bugs",
+    parked_origin: { kind: "universal", scope: "global", project_path: null },
+  });
+
+  // Failure caught: "Keep live" deletes the live copy, the only one agents read.
+  it("deletes the parked copy for Keep live and keeps the live one", () => {
+    const fix = leftBehindFix("keep-live", { live, parked });
+    expect(fix.discard).toBe(parked);
+    expect(fix.keep).toBe(live);
+    expect(fix.checksRepository).toBe(false);
+  });
+
+  // Failure caught: "Keep parked" deletes the parked copy, the backup of the skill.
+  it("deletes the live copy for Keep parked and keeps the parked one", () => {
+    const fix = leftBehindFix("keep-parked", { live, parked });
+    expect(fix.discard).toBe(live);
+    expect(fix.keep).toBe(parked);
+    expect(fix.checksRepository).toBe(false);
+  });
+
+  // Failure caught: deleting a live project copy gives no repository warning.
+  it("checks the repository when Keep parked deletes a live project copy", () => {
+    const projectLive = sharedDeployment({
+      scope: "project",
+      project_path: "/repo",
+      path: "/repo/.agents/skills/find-bugs",
+    });
+    expect(leftBehindFix("keep-parked", { live: projectLive, parked }).checksRepository).toBe(true);
   });
 });
 

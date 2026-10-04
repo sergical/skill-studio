@@ -10,7 +10,9 @@
 import { Loader2 } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import { MaterializeRootDialog } from "../ui/MaterializeRootDialog";
+import { LeftBehindDialog } from "./LeftBehindDialog";
 import { MakeIndependentCopyDialog } from "./MakeIndependentCopyDialog";
+import { ParkCopyDialog } from "./ParkCopyDialog";
 import { TooltipControl } from "../ui/TooltipControl";
 import { RemoveDeploymentsDialog } from "./RemoveDeploymentsDialog";
 import { SkillInvocationFooter } from "./SkillInvocationFooter";
@@ -34,14 +36,12 @@ interface SkillLocationsCardProps {
 }
 
 interface LocationActionForTitle {
-  kind: "unpark" | "compare" | "install-again";
+  kind: "compare" | "install-again";
 }
 
 const TITLE_LINK_ACTIONS = {
-  Unpark: { kind: "unpark" },
   "Compare copies": { kind: "compare" },
   "Install again": { kind: "install-again" },
-  "Enable everywhere": { kind: "unpark" },
 } satisfies Record<NonNullable<ReturnType<typeof titleLink>>, LocationActionForTitle>;
 
 /** A small spinner after a title link's text while its action runs. The link stays enabled, so it keeps keyboard focus. */
@@ -163,6 +163,22 @@ export function SkillLocationsCard({ skill, onCompareCopies }: SkillLocationsCar
           projectPath={actions.splitRequest.projectPath}
           readers={actions.splitRequest.readers}
           onClose={actions.closeSplitRequest}
+        />
+      )}
+      {actions.parkRequest && (
+        <ParkCopyDialog
+          skillName={skill.name}
+          deployment={actions.parkRequest.deployment}
+          scopeLabel={actions.parkRequest.scopeLabel}
+          onClose={actions.closeParkRequest}
+        />
+      )}
+      {actions.leftBehindRequest && (
+        <LeftBehindDialog
+          skillName={skill.name}
+          choice={actions.leftBehindRequest.choice}
+          pair={actions.leftBehindRequest.pair}
+          onClose={actions.closeLeftBehindRequest}
         />
       )}
       {actions.pluginUninstallRequest && (

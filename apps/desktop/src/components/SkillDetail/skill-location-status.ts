@@ -10,8 +10,10 @@
 import {
   agentIdFromDeploymentLabel,
   describeSpecViolations,
+  deploymentLabelFromAgentId,
   deploymentLinkKind,
   driftingCopies,
+  findLeftBehindPairs,
   homeRelativePath,
   isBlockingSpecViolation,
   specViolationSeverity,
@@ -23,6 +25,7 @@ import type {
   Deployment,
   InstalledSkill,
   InvocationPolicy,
+  LeftBehindPair,
   LifecycleTarget,
 } from "@skill-studio/lib";
 import type { TooltipLine } from "../ui/TooltipControl";
@@ -60,8 +63,10 @@ export type LocationAction =
   | { kind: "restore-moved"; deployment: Deployment }
   | { kind: "set-plugin-enabled"; deployment: Deployment; enabled: boolean }
   | { kind: "uninstall-plugin"; deployment: Deployment }
-  | { kind: "park" }
-  | { kind: "unpark" }
+  | { kind: "park"; deployment: Deployment; scopeLabel: string; projectPath: string | null }
+  | { kind: "unpark"; deployment: Deployment }
+  | { kind: "keep-live"; pair: LeftBehindPair }
+  | { kind: "keep-parked"; pair: LeftBehindPair }
   | { kind: "split"; target: LifecycleTarget; projectPath: string | null; readers: AgentId[] }
   | { kind: "remove-scope"; scopeLabel: string; projectPath: string | null }
   | { kind: "remove-deployment"; scopeLabel: string; deployment: Deployment }
@@ -90,7 +95,7 @@ interface Condition {
   fix?: string;
   /** Tooltip's mono path/target line, when there is one. */
   path?: string;
-  /** Takes over the rollup tooltip's first two lines verbatim instead of the counted summary - parked-but-live only. */
+  /** Takes over the rollup tooltip's first two lines verbatim instead of the counted summary. */
   headline?: boolean;
   menu: MenuEntry[];
   /** Row caption for a skill an agent's own setting hides. */
@@ -110,7 +115,7 @@ interface BaseLocationRow {
   deployment: Deployment | null;
   /** Exact deployment used by lifecycle actions, including synthesized reader rows. */
   lifecycleTarget: LifecycleTarget;
-  /** True only for the shared-folder row: its switch parks or unparks the folder. */
+  /** No row writes an agent setting any more; kept false so callers and tests can assert it. */
   hasSwitch: boolean;
   switchOn: boolean;
   invocation: InvocationPolicy | null;
@@ -128,19 +133,33 @@ export interface AgentLocationRow extends BaseLocationRow {
   harness: AgentId;
 }
 
-/** One row on the flat card: the Universal folder, a per-skill link, a copy, a plugin, or a synthesized always-reads-the-folder reader. */
-export type LocationRow = SharedLocationRow | AgentLocationRow;
+/** A parked copy: its own row with "Turn on", labelled by the folder it was parked from. */
+export interface ParkedLocationRow extends BaseLocationRow {
+  kind: "parked";
+  harness: AgentId | "shared";
+  /** The live copy that came back at the same origin, or `null` when nothing sits there. */
+  liveCopy: Deployment | null;
+  /** The pair "Keep live" and "Keep parked" act on - set with `liveCopy`. */
+  leftBehind: LeftBehindPair | null;
+}
 
-/** One scope block on the card: Global (folds in plugin and parked deployments), or one project. */
+/** One row on the flat card: the Universal folder, a per-skill link, a copy, a plugin, a synthesized always-reads-the-folder reader, or a parked copy. */
+export type LocationRow = LiveLocationRow | ParkedLocationRow;
+
+/** Every row of a live copy, link, plugin or reader - what `ScopeGroup.rows` holds. */
+export type LiveLocationRow = SharedLocationRow | AgentLocationRow;
+
+/** One scope block on the card: Global (folds in plugin deployments), or one project. Parked copies sit in the block of the scope they were parked from. */
 export interface ScopeGroup {
   label: string;
   isGlobal: boolean;
   projectPath?: string;
   shared: LocationRow | null;
-  rows: LocationRow[];
+  rows: LiveLocationRow[];
+  /** Parked copies of this scope, below the live rows. */
+  parked: ParkedLocationRow[];
   folderLevel: StatusLevel | null;
   folderTip: string;
-  parkedScope: boolean;
 }
 
 /** One Invocation footer row for a deployment with its own SKILL.md. */
@@ -229,11 +248,6 @@ function readerLabel(agent: AgentId): string {
 function harnessId(agent: string): AgentId | null {
   const id = agentIdFromDeploymentLabel(agent);
   return id === "shared" || id === null ? null : id;
-}
-
-/** True when a skill parked globally still has a live copy or Universal folder outside the parked one. */
-function liveElsewhere(skill: InstalledSkill): boolean {
-  return skill.parked && skill.deployments.some((d) => d.scope !== "parked" && !d.disabled);
 }
 
 /** "Missing description", "Missing name", etc, folded into the fixed sentence shapes from status-spec.md §5. */
@@ -352,23 +366,37 @@ function claudeNotLinkedCondition(): Condition {
   };
 }
 
-/** Off because the folder that carries this row is parked - the folder's own switch is the fix, not this row's. */
-function offBecauseParked(label: string, liveWhere: boolean): Condition {
+/** A parked copy with no live copy at its origin: quiet, and the fix is "Turn on". */
+function parkedCondition(deployment: Deployment): Condition {
   return {
     level: "off",
-    status: "Off",
-    phrase: "off",
-    plural: "off",
-    what: `Off for ${label} — the folder is parked.`,
-    fix: "Use the folder switch to unpark.",
-    menu: liveWhere ? [] : [{ label: "Enable everywhere", action: { kind: "unpark" } }],
+    status: "Parked",
+    phrase: "parked",
+    plural: "parked",
+    what: "Parked — turned off for every agent that read this copy.",
+    fix: "Turn it on to move it back.",
+    menu: [{ label: "Turn on", action: { kind: "unpark", deployment } }],
+  };
+}
+
+/** A parked copy whose origin has a live copy again: the two need one decision. */
+function leftBehindCondition(pair: LeftBehindPair): Condition {
+  return {
+    level: "error",
+    status: "Left behind",
+    phrase: "parked copy left behind",
+    plural: "parked copies left behind",
+    what: "A live copy came back where this copy was parked.",
+    fix: "Keep the live copy or the parked one.",
+    menu: [
+      { label: "Keep live", action: { kind: "keep-live", pair } },
+      { label: "Keep parked", action: { kind: "keep-parked", pair } },
+    ],
   };
 }
 
 interface GroupContext {
-  parkedScope: boolean;
   anyShared: boolean;
-  live: boolean;
   otherScopeLabel: string | undefined;
   driftSet: Set<Deployment>;
 }
@@ -438,47 +466,15 @@ function deploymentConditions(deployment: Deployment, ctx: GroupContext): Condit
 
   if (ctx.driftSet.has(deployment)) out.push(driftCondition(deployment, ctx));
 
-  if (ctx.parkedScope) {
-    out.push(offBecauseParked(label, ctx.live));
-  } else if (deployment.disabled) {
+  if (deployment.disabled) {
     out.push(offCondition(deployment));
   }
 
   return out.sort((a, b) => RANK[b.level] - RANK[a.level]);
 }
 
-function sharedConditions(shared: Deployment, ctx: GroupContext): Condition[] {
+function sharedConditions(shared: Deployment): Condition[] {
   const out: Condition[] = [];
-  if (ctx.parkedScope) {
-    if (ctx.live) {
-      out.push({
-        level: "error",
-        status: "Parked but live",
-        phrase: "parked but live",
-        plural: "parked but live",
-        headline: true,
-        what: "Parked, but a sync created a live folder.",
-        fix: "Unpark to reconcile.",
-        menu: [{ label: "Unpark", action: { kind: "unpark" } }],
-      });
-    }
-    out.push({
-      level: "off",
-      status: "Off everywhere",
-      phrase: "off",
-      plural: "off",
-      headline: true,
-      what: "Off everywhere — the folder is parked in ~/.agents/skills-parked.",
-      fix: "Use the switch to unpark.",
-      menu: [
-        ...(ctx.live ? [] : [{ label: "Enable everywhere", action: { kind: "unpark" as const } }]),
-        {
-          label: "Reveal in Finder",
-          action: { kind: "reveal", path: shared.path, label: "the Universal folder" },
-        },
-      ],
-    });
-  }
   const violations = shared.spec_violations ?? [];
   const spec = specCondition(violations, shared.path);
   if (spec) out.push(spec);
@@ -515,6 +511,10 @@ export function toTooltipLines(tip: string): TooltipLine[] {
 
 /** Groups `deployments` into scope blocks (Global folds in plugin/parked deployments, then one block per project). */
 function scopeKeyOf(d: Deployment): string {
+  if (d.scope === "parked") {
+    const origin = d.parked_origin;
+    return origin?.scope === "project" && origin.project_path ? origin.project_path : "";
+  }
   return d.scope === "project" && d.project_path ? d.project_path : "";
 }
 
@@ -541,29 +541,27 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
 
   const summary = locationSummary(skill);
   const driftSet = new Set(driftingCopies(summary));
-  const live = liveElsewhere(skill);
+  const leftBehind = findLeftBehindPairs(skill);
   const keys = [...byKey.keys()].sort((a, b) =>
     a === "" ? -1 : b === "" ? 1 : a.localeCompare(b),
   );
 
   return keys.map((key) => {
-    const deployments = byKey.get(key) ?? [];
+    const all = byKey.get(key) ?? [];
+    const deployments = all.filter((d) => d.scope !== "parked");
     const isGlobal = key === "";
-    const parkedScope = isGlobal && skill.parked;
     const sharedDeployment =
       deployments.find((d) => deploymentLinkKind(d) === "shared-root") ?? null;
     const otherKey = keys.find((k) => k !== key);
     const ctx: GroupContext = {
-      parkedScope,
       anyShared: summary.truth != null,
-      live,
       otherScopeLabel: otherKey !== undefined ? scopeLabelOf(otherKey) : undefined,
       driftSet,
     };
 
     const shared: LocationRow | null = sharedDeployment
       ? (() => {
-          const conditions = sharedConditions(sharedDeployment, ctx);
+          const conditions = sharedConditions(sharedDeployment);
           return {
             kind: "shared",
             harness: "shared",
@@ -574,15 +572,15 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
             level: topLevel(conditions),
             deployment: sharedDeployment,
             lifecycleTarget: { deployment_id: sharedDeployment.id },
-            hasSwitch: true,
-            switchOn: !sharedDeployment.disabled && !parkedScope,
+            hasSwitch: false,
+            switchOn: !sharedDeployment.disabled,
             invocation: sharedDeployment.invocation ?? skill.invocation,
           };
         })()
       : null;
 
     const restDeployments = deployments.filter((d) => d !== sharedDeployment);
-    const rows: LocationRow[] = restDeployments.map((d) => {
+    const rows: LiveLocationRow[] = restDeployments.map((d) => {
       const conditions = deploymentConditions(d, ctx);
       // A harness whose whole skills dir links to the shared root reads the
       // folder like any per-skill link.
@@ -606,7 +604,7 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
         deployment: d,
         lifecycleTarget: { deployment_id: d.id },
         hasSwitch: false,
-        switchOn: !d.disabled && !parkedScope,
+        switchOn: !d.disabled,
         invocation: d.invocation ?? skill.invocation,
       };
     });
@@ -622,11 +620,9 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
           isGlobal &&
           disabledForReader &&
           (agent === "codex" || agent === "open-code");
-        const conditions: Condition[] = parkedScope
-          ? [offBecauseParked(readerLabel(agent), live)]
-          : hiddenBySetting
-            ? [readerOffCondition(agent, sharedDeployment)]
-            : [];
+        const conditions: Condition[] = hiddenBySetting
+          ? [readerOffCondition(agent, sharedDeployment)]
+          : [];
         rows.push({
           kind: "reader",
           harness: agent,
@@ -638,16 +634,11 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
           deployment: null,
           lifecycleTarget: shared.lifecycleTarget,
           hasSwitch: false,
-          switchOn: !disabledForReader && !parkedScope,
+          switchOn: !disabledForReader,
           invocation: null,
         });
       }
-      if (
-        isGlobal &&
-        !parkedScope &&
-        !covered.has("claude-code") &&
-        disabledReaders.has("claude-code")
-      ) {
+      if (isGlobal && !covered.has("claude-code") && disabledReaders.has("claude-code")) {
         const conditions = [claudeNotLinkedCondition()];
         rows.push({
           kind: "reader",
@@ -673,8 +664,35 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
       ...(shared?.conditions.map((c) => ({ condition: c, label: "" })) ?? []),
       ...readers.flatMap((r) => r.conditions.map((c) => ({ condition: c, label: r.harnessLabel }))),
     ];
-    const allOff = (shared != null && !shared.switchOn) || parkedScope;
+    const allOff = shared != null && !shared.switchOn;
     const { level: folderLevel, tip: folderTip } = rollup(entries, allOff);
+
+    const parked = all.flatMap((d): ParkedLocationRow[] => {
+      if (d.scope !== "parked") return [];
+      const pair = leftBehind.find((p) => p.parked === d) ?? null;
+      const conditions = [pair ? leftBehindCondition(pair) : parkedCondition(d)];
+      const originKind = d.parked_origin?.kind ?? "universal";
+      const universal = originKind === "universal";
+      return [
+        {
+          kind: "parked",
+          // SAFETY: a parked origin names the Universal folder or a first-class agent id.
+          harness: universal ? "shared" : (originKind as AgentId),
+          harnessLabel: universal ? "Universal folder" : deploymentLabelFromAgentId(originKind),
+          path: d.path,
+          caption: "Parked",
+          conditions,
+          level: topLevel(conditions),
+          deployment: d,
+          lifecycleTarget: { deployment_id: d.id },
+          hasSwitch: false,
+          switchOn: false,
+          invocation: null,
+          liveCopy: pair?.live ?? null,
+          leftBehind: pair,
+        },
+      ];
+    });
 
     return {
       label: scopeLabelOf(key),
@@ -682,9 +700,9 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
       projectPath: key === "" ? undefined : key,
       shared,
       rows,
+      parked,
       folderLevel,
       folderTip,
-      parkedScope,
     };
   });
 }
@@ -763,13 +781,12 @@ export function skillRollup(skill: InstalledSkill, groups: ScopeGroup[]): Rollup
   const entries: LabeledCondition[] = groups.flatMap((g) => {
     const shared: LabeledCondition[] =
       g.shared?.conditions.map((c) => ({ condition: c, label: g.label })) ?? [];
-    const rows: LabeledCondition[] = g.rows.flatMap((r) =>
+    const rows: LabeledCondition[] = [...g.rows, ...g.parked].flatMap((r) =>
       r.conditions.map((c) => ({ condition: c, label: `${g.label} · ${r.harnessLabel}` })),
     );
     return [...shared, ...rows];
   });
-  const allOff =
-    groups.length > 0 && groups.every((g) => g.folderLevel === "off" || g.folderLevel === null);
+  const allOff = skill.deployments.every((d) => d.scope === "parked");
   return rollup(entries, allOff);
 }
 
@@ -785,15 +802,13 @@ export function scopeGroupsHaveDrift(groups: ScopeGroup[]): boolean {
   return groups.some((g) => g.rows.some((r) => r.conditions.some((c) => c.status === "Differs")));
 }
 
-/** The card title's one right-aligned action link, precedence per status-spec.md §2: unpark > compare > install-again > enable-everywhere. Update stays in the page header: here it read as updating the locations. */
+/** The card title's one right-aligned action link, precedence per status-spec.md §2: compare > install-again. Update stays in the page header: here it read as updating the locations. Turning a parked copy on is its own row's "Turn on". */
 export function titleLink(
   skill: InstalledSkill,
   hasDrift: boolean,
-): "Unpark" | "Compare copies" | "Install again" | "Enable everywhere" | null {
-  if (liveElsewhere(skill)) return "Unpark";
+): "Compare copies" | "Install again" | null {
   if (hasDrift) return "Compare copies";
   if (skill.deployments.length === 0) return "Install again";
-  if (skill.parked) return "Enable everywhere";
   return null;
 }
 
@@ -891,6 +906,22 @@ export function invocationFooterNote(files: InvocationFile[], skillName: string)
   }
 }
 
+/**
+ * The Park button a live copy row shows where the old switch was, or `null`
+ * for a row core refuses to park: a plugin copy, a link, or a synthesized
+ * reader. On the shared row it parks the folder for every agent that reads it.
+ */
+export function parkActionFor(
+  row: LocationRow,
+  scopeLabel: string,
+  projectPath: string | null,
+): LocationAction | null {
+  const d = row.deployment;
+  if (!d || (row.kind !== "shared" && row.kind !== "copy")) return null;
+  if (d.plugin || d.is_symlink || d.symlink_is_broken || d.shared_via_whole_dir_link) return null;
+  return { kind: "park", deployment: d, scopeLabel, projectPath };
+}
+
 /** `rowMenu`'s result: the plain entries, the danger entries (rendered after a separator), and an optional hint line. */
 interface RowMenuResult {
   entries: MenuEntry[];
@@ -927,9 +958,6 @@ export function rowMenu(
       },
       false,
     );
-    if (!hasOff && projectPath === null) {
-      push({ label: "Park (Disable everywhere)", action: { kind: "park" } }, false);
-    }
     if (!hasOff && row.deployment?.backing.kind === "canonical") {
       push(
         {
@@ -949,6 +977,14 @@ export function rowMenu(
         label: `Remove from ${scopeLabel}…`,
         action: { kind: "remove-scope", scopeLabel, projectPath },
         danger: true,
+      },
+      false,
+    );
+  } else if (row.kind === "parked") {
+    push(
+      {
+        label: "Reveal in Finder",
+        action: { kind: "reveal", path: row.path, label: "the parked copy" },
       },
       false,
     );
