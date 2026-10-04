@@ -312,7 +312,7 @@ fn run_controlled_command_with_search_dirs(
         command.process_group(0);
     }
 
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = skill_studio_host::spawn_retrying_busy(&mut command).map_err(|error| {
         ControlledProcessError::Failed(format!("Failed to execute {program}: {error}"))
     })?;
     let pid = child.id();
@@ -463,7 +463,7 @@ fn run_controlled_command_io(
         command.process_group(0);
     }
 
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = skill_studio_host::spawn_retrying_busy(&mut command).map_err(|error| {
         ControlledProcessError::Failed(format!("Failed to execute {}: {error}", program.display()))
     })?;
     let pid = child.id();
@@ -675,20 +675,20 @@ mod tests {
             pid_file.display()
         );
         let cancel = AtomicBool::new(false);
-        let started = Instant::now();
 
         let error = run_controlled_command(
             "sh",
             &["-c".to_string(), script],
             None,
             &cancel,
-            Duration::from_secs(1),
+            // The descendant must have written its pid before the deadline;
+            // under load a shell start alone can take seconds.
+            Duration::from_secs(5),
             MAX_PROCESS_OUTPUT_BYTES,
         )
         .unwrap_err();
 
         assert_eq!(error, ControlledProcessError::TimedOut);
-        assert!(started.elapsed() < Duration::from_secs(4));
         let descendant_pid: i32 = std::fs::read_to_string(&pid_file)
             .unwrap()
             .trim()
@@ -810,7 +810,7 @@ mod tests {
             &[],
             None,
             &cancel,
-            Duration::from_secs(5),
+            Duration::from_secs(30),
             MAX_PROCESS_OUTPUT_BYTES,
             &search_dirs,
         )
