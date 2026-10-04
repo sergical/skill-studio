@@ -672,9 +672,6 @@ pub fn update(
 ) -> Result<UpdateOutcome, CoreError> {
     rt.run(Operation::Update, ctx, || {
         refuse_parked(rt, req)?;
-        if req.method == InstallMethod::Dotagents {
-            crate::ops_park_dotagents::refuse_listed_parked(rt, &req.scope)?;
-        }
         update_body(rt, ctx, req)
     })
 }

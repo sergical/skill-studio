@@ -25,10 +25,27 @@ pub(crate) struct FileSnapshot {
     text: Option<String>,
 }
 
+/// A `name = "*"` entry that supplied the skill, found again by what it
+/// says rather than by position: entries move when the person edits the file.
+#[derive(Clone)]
+struct WildcardRef {
+    source: String,
+    path: Option<String>,
+}
+
+/// What `agents.lock` records about the skill: the fields dotagents matches
+/// wildcard entries on.
+struct Locked {
+    source: String,
+    resolved_path: Option<String>,
+}
+
 /// What Park must undo in dotagents' files for one skill.
 pub(crate) struct DotagentsPark {
-    /// The dotagents program found on `PATH`.
+    /// The program that runs dotagents: `dotagents` itself, or `npx`.
     program: PathBuf,
+    /// Arguments before the dotagents ones; `-y @sentry/dotagents` for `npx`.
+    prefix_args: Vec<String>,
     /// `agents.toml`, or the file its link resolves to.
     pub(crate) config: PathBuf,
     /// `agents.lock`, or the file its link resolves to.
@@ -41,11 +58,12 @@ pub(crate) struct DotagentsPark {
     /// The skill's `[skills.<name>]` table in `agents.lock`. `remove` deletes
     /// it, and with no row dotagents treats the skill as new.
     lock_entry: Option<String>,
-    /// Positions (among the `[[skills]]` rows) of the `name = "*"` entries
-    /// that supply the skill and did not exclude it yet. `remove` adds the
-    /// exclude to one of them; turn-on lifts it from these rows only, so an
-    /// exclude the person wrote stays.
-    wildcard_rows: Vec<usize>,
+    /// The skill's lock fields, read before `remove` deletes the row.
+    locked: Option<Locked>,
+    /// The `name = "*"` entries that supply the skill and did not exclude it
+    /// yet. `remove` adds the exclude to one of them; turn-on lifts it from
+    /// these entries only, so an exclude the person wrote stays.
+    wildcards: Vec<WildcardRef>,
 }
 
 /// The `dotagents` fields a park row records for turn-on.
@@ -54,18 +72,23 @@ pub(crate) struct RecordedDotagents {
     pub(crate) lock: Option<PathBuf>,
     entry: Option<String>,
     lock_entry: Option<String>,
-    wildcard_rows: Vec<usize>,
+    wildcards: Vec<WildcardRef>,
 }
 
 impl DotagentsPark {
     /// The `payload.dotagents` value the park row records.
     pub(crate) fn payload(&self) -> serde_json::Value {
+        let wildcards: Vec<serde_json::Value> = self
+            .wildcards
+            .iter()
+            .map(|w| serde_json::json!({ "source": w.source, "path": w.path }))
+            .collect();
         serde_json::json!({
             "config": self.config,
             "lock": self.lock,
             "entry": self.entry,
             "lock_entry": self.lock_entry,
-            "wildcard_rows": self.wildcard_rows,
+            "wildcards": wildcards,
         })
     }
 }
@@ -84,12 +107,20 @@ pub(crate) fn recorded(payload: &serde_json::Value) -> Option<RecordedDotagents>
         lock: text("lock").map(PathBuf::from),
         entry: text("entry"),
         lock_entry: text("lock_entry"),
-        wildcard_rows: value
-            .get("wildcard_rows")
+        wildcards: value
+            .get("wildcards")
             .and_then(|rows| rows.as_array())
             .map(|rows| {
                 rows.iter()
-                    .filter_map(|row| row.as_u64().and_then(|row| usize::try_from(row).ok()))
+                    .filter_map(|row| {
+                        Some(WildcardRef {
+                            source: row.get("source")?.as_str()?.to_string(),
+                            path: row
+                                .get("path")
+                                .and_then(|path| path.as_str())
+                                .map(str::to_string),
+                        })
+                    })
                     .collect()
             })
             .unwrap_or_default(),
@@ -147,8 +178,12 @@ fn rows(doc: &toml_edit::DocumentMut) -> impl Iterator<Item = &toml_edit::Table>
         .flat_map(toml_edit::ArrayOfTables::iter)
 }
 
+fn row_str<'a>(row: &'a toml_edit::Table, key: &str) -> Option<&'a str> {
+    row.get(key).and_then(toml_edit::Item::as_str)
+}
+
 fn row_name(row: &toml_edit::Table) -> Option<&str> {
-    row.get("name").and_then(toml_edit::Item::as_str)
+    row_str(row, "name")
 }
 
 fn excludes(row: &toml_edit::Table, name: &str) -> bool {
@@ -161,19 +196,107 @@ fn lists_explicitly(doc: &toml_edit::DocumentMut, name: &str) -> bool {
     rows(doc).any(|row| row_name(row) == Some(name))
 }
 
-/// Whether `dotagents install` would install `name` from `doc`: an entry of
-/// that name, or a `name = "*"` entry that does not exclude it.
-fn lists(doc: &toml_edit::DocumentMut, name: &str) -> bool {
-    lists_explicitly(doc, name)
-        || rows(doc).any(|row| row_name(row) == Some("*") && !excludes(row, name))
+/// dotagents' `normalizeSource`, for the shapes a source takes in practice:
+/// a GitHub URL or `github:` form of `owner/repo` equals the short form.
+fn normalize_source(source: &str) -> String {
+    let source = source.trim();
+    let source = source.strip_prefix("github:").unwrap_or(source);
+    let source = [
+        "https://github.com/",
+        "http://github.com/",
+        "https://www.github.com/",
+        "ssh://git@github.com/",
+        "git@github.com:",
+    ]
+    .iter()
+    .find_map(|prefix| source.strip_prefix(prefix))
+    .unwrap_or(source);
+    source
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .to_string()
 }
 
-fn lock_table_text(doc: &toml_edit::DocumentMut, name: &str) -> Option<String> {
+fn sources_match(a: &str, b: &str) -> bool {
+    normalize_source(a) == normalize_source(b)
+}
+
+/// `posix.normalize` plus the backslash and trailing-slash handling dotagents
+/// applies to a wildcard entry's `path`.
+fn normalize_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let absolute = path.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." if parts.last().is_some_and(|last| *last != "..") => {
+                parts.pop();
+            }
+            ".." if absolute => {}
+            _ => parts.push(part),
+        }
+    }
+    let joined = parts.join("/");
+    match (absolute, joined.is_empty()) {
+        (true, _) => format!("/{joined}"),
+        (false, true) => ".".to_string(),
+        (false, false) => joined,
+    }
+}
+
+/// dotagents' `wildcardContainsLockedSkill`: whether the `name = "*"` entry
+/// `row` supplies the locked skill `name`. Lock rows without a
+/// `resolved_path` count as supplied until `install` refreshes them.
+fn wildcard_contains(row: &toml_edit::Table, name: &str, locked: &Locked) -> bool {
+    if row_name(row) != Some("*") || excludes(row, name) {
+        return false;
+    }
+    let Some(source) = row_str(row, "source") else {
+        return false;
+    };
+    if !sources_match(source, &locked.source) {
+        return false;
+    }
+    let wildcard_path = row_str(row, "path").filter(|path| !path.is_empty());
+    let resolved = locked
+        .resolved_path
+        .as_deref()
+        .filter(|path| !path.is_empty());
+    let (Some(wildcard_path), Some(resolved)) = (wildcard_path, resolved) else {
+        return true;
+    };
+    let path = normalize_path(wildcard_path);
+    path == "." || resolved == path || resolved.starts_with(&format!("{path}/"))
+}
+
+/// Whether `row` is one of the recorded wildcard entries.
+fn is_recorded(row: &toml_edit::Table, wildcards: &[WildcardRef]) -> bool {
+    row_name(row) == Some("*")
+        && row_str(row, "source").is_some_and(|source| {
+            wildcards.iter().any(|w| {
+                sources_match(&w.source, source) && w.path.as_deref() == row_str(row, "path")
+            })
+        })
+}
+
+fn lock_table<'a>(doc: &'a toml_edit::DocumentMut, name: &str) -> Option<&'a toml_edit::Table> {
     doc.get("skills")
         .and_then(toml_edit::Item::as_table)
         .and_then(|skills| skills.get(name))
         .and_then(toml_edit::Item::as_table)
-        .map(ToString::to_string)
+}
+
+fn lock_table_text(doc: &toml_edit::DocumentMut, name: &str) -> Option<String> {
+    lock_table(doc, name).map(ToString::to_string)
+}
+
+fn locked_from(doc: &toml_edit::DocumentMut, name: &str) -> Option<Locked> {
+    let table = lock_table(doc, name)?;
+    Some(Locked {
+        source: row_str(table, "source")?.to_string(),
+        resolved_path: row_str(table, "resolved_path").map(str::to_string),
+    })
 }
 
 /// Refuses a project whose git root is an ancestor: dotagents reads
@@ -187,17 +310,20 @@ fn refuse_nested_project(
         return Ok(());
     };
     let fs = rt.ports.fs.as_ref();
-    let git_root = project
-        .0
+    // A linked project folder sits in the repository its target does.
+    let start = fs
+        .canonicalize(&project.0)
+        .unwrap_or_else(|_| project.0.clone());
+    let git_root = start
         .ancestors()
         .find(|dir| fs.symlink_metadata(&dir.join(".git")).is_ok());
     match git_root {
-        Some(root) if root != project.0 => Err(CoreError::new(
+        Some(root) if root != start => Err(CoreError::new(
             ErrorCode::Unsupported,
             format!(
                 "dotagents reads agents.toml from the git root of a project, which is {}, not {}, so it cannot remove {} from here. Park it from a project opened at {}.",
                 root.display(),
-                project.0.display(),
+                start.display(),
                 skill.0,
                 root.display()
             ),
@@ -210,9 +336,10 @@ fn refuse_nested_project(
 /// Decides whether parking `deployment` needs `dotagents remove`.
 ///
 /// `None` when dotagents does not list the skill (so `install` would not
-/// bring it back). Refuses when it does list the skill but `dotagents` is not
-/// on `PATH`: parking would leave a copy the next `dotagents install` brings
-/// back. Also refuses a project that is not its own git root.
+/// bring it back). Refuses when it does list the skill but neither
+/// `dotagents` nor `npx` is on `PATH`: parking would leave a copy the next
+/// `dotagents install` brings back. Also refuses a project that is not its
+/// own git root.
 pub(crate) fn plan_park(
     rt: &Runtime,
     deployment: &DeploymentDto,
@@ -230,45 +357,62 @@ pub(crate) fn plan_park(
     let Some((original_config, doc)) = read_manifest(fs, &config)? else {
         return Ok(None);
     };
+    let lock = crate::ports::resolve_config_link(fs, &dir.join("agents.lock"))?;
+    let original_lock = read_text(fs, &lock)?;
+    let lock_doc = match &original_lock {
+        Some(text) => Some(parse(&lock, text)?),
+        None => None,
+    };
+    let lock_entry = lock_doc
+        .as_ref()
+        .and_then(|doc| lock_table_text(doc, &skill.0));
+    let locked = lock_doc.as_ref().and_then(|doc| locked_from(doc, &skill.0));
     let entry = rows(&doc)
         .find(|row| row_name(row) == Some(skill.0.as_str()))
         .map(ToString::to_string);
-    let wildcard_rows: Vec<usize> = if entry.is_some() {
-        Vec::new()
-    } else {
-        rows(&doc)
-            .enumerate()
-            .filter(|(_, row)| row_name(row) == Some("*") && !excludes(row, &skill.0))
-            .map(|(index, _)| index)
-            .collect()
+    let wildcards: Vec<WildcardRef> = match (&entry, &locked) {
+        (None, Some(locked)) => rows(&doc)
+            .filter(|row| wildcard_contains(row, &skill.0, locked))
+            .filter_map(|row| {
+                Some(WildcardRef {
+                    source: row_str(row, "source")?.to_string(),
+                    path: row_str(row, "path").map(str::to_string),
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
     };
-    if entry.is_none() && wildcard_rows.is_empty() {
+    if entry.is_none() && wildcards.is_empty() {
         return Ok(None);
     }
     refuse_nested_project(rt, &deployment.root.scope, skill)?;
-    let program = rt
-        .ports
-        .tools
-        .as_ref()
+    let tools = rt.ports.tools.as_ref();
+    let (program, prefix_args) = tools
         .and_then(|tools| tools.find_binary("dotagents"))
+        .map(|program| (program, Vec::new()))
+        .or_else(|| {
+            tools
+                .and_then(|tools| tools.find_binary("npx"))
+                .map(|program| {
+                    (
+                        program,
+                        vec!["-y".to_string(), "@sentry/dotagents".to_string()],
+                    )
+                })
+        })
         .ok_or_else(|| {
             CoreError::new(
                 ErrorCode::Unsupported,
                 format!(
-                    "dotagents manages {} but is not installed here, so the next `dotagents install` would bring the copy back. Install dotagents, then park it again.",
+                    "dotagents manages {} but is not installed here (neither `dotagents` nor `npx` is on PATH), so the next `dotagents install` would bring the copy back. Install dotagents, then park it again.",
                     skill.0
                 ),
             )
             .at(&deployment.path)
         })?;
-    let lock = crate::ports::resolve_config_link(fs, &dir.join("agents.lock"))?;
-    let original_lock = read_text(fs, &lock)?;
-    let lock_entry = match &original_lock {
-        Some(text) => lock_table_text(&parse(&lock, text)?, &skill.0),
-        None => None,
-    };
     Ok(Some(DotagentsPark {
         program,
+        prefix_args,
         originals: vec![
             FileSnapshot {
                 path: config.clone(),
@@ -283,7 +427,8 @@ pub(crate) fn plan_park(
         config,
         entry,
         lock_entry,
-        wildcard_rows,
+        locked,
+        wildcards,
     }))
 }
 
@@ -293,6 +438,7 @@ pub(crate) fn plan_park(
 pub(crate) fn run_remove(
     rt: &Runtime,
     ctx: &OpContext,
+    guard: &ExclusiveGuard,
     plan: &DotagentsPark,
     skill: &SkillName,
     scope: &RootScope,
@@ -304,9 +450,10 @@ pub(crate) fn run_remove(
         )
     })?;
     let home = rt.scope.home.lexical.clone();
-    let mut args = Vec::new();
-    // dotagents reads `DOTAGENTS_HOME` before it looks at the project, so a
-    // project run must not inherit one (an empty value removes the variable).
+    let mut args = plan.prefix_args.clone();
+    // With `--project` dotagents never reads `DOTAGENTS_HOME`, but one in the
+    // environment must not leak in (an empty value removes the variable). A
+    // global run needs it, or dotagents may pick another user-scope folder.
     let (cwd, dotagents_home) = match scope {
         RootScope::Global => (home.clone(), home.join(".agents").display().to_string()),
         RootScope::Project(project) => {
@@ -329,22 +476,30 @@ pub(crate) fn run_remove(
     if output.status != Some(0) {
         return Err(crate::ops_update::cli_failure("dotagents remove", &output));
     }
-    verify_removed(rt, plan, skill)
+    verify_removed(rt, guard, plan, skill)
 }
 
-fn verify_removed(rt: &Runtime, plan: &DotagentsPark, skill: &SkillName) -> Result<(), CoreError> {
-    let doc = match read_manifest(rt.ports.fs.as_ref(), &plan.config)? {
-        Some((_, doc)) => doc,
-        None => parse(&plan.config, "")?,
-    };
-    let done = if plan.entry.is_some() {
-        !lists_explicitly(&doc, &skill.0)
-    } else {
-        rows(&doc)
-            .enumerate()
-            .any(|(index, row)| plan.wildcard_rows.contains(&index) && excludes(row, &skill.0))
-    };
-    if done {
+/// Whether `dotagents install` would no longer install the skill from `doc`.
+fn is_removed(doc: &toml_edit::DocumentMut, plan: &DotagentsPark, skill: &SkillName) -> bool {
+    match (&plan.entry, &plan.locked) {
+        (None, Some(locked)) => !rows(doc).any(|row| wildcard_contains(row, &skill.0, locked)),
+        _ => !lists_explicitly(doc, &skill.0),
+    }
+}
+
+fn verify_removed(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    plan: &DotagentsPark,
+    skill: &SkillName,
+) -> Result<(), CoreError> {
+    let text = read_text(rt.ports.fs.as_ref(), &plan.config)?.unwrap_or_default();
+    let doc = parse(&plan.config, &text)?;
+    if is_removed(&doc, plan, skill) {
+        return Ok(());
+    }
+    let unchanged = plan.originals[0].text.as_deref() == Some(text.as_str());
+    if plan.entry.is_none() && unchanged && exclude_in_multiline(rt, guard, plan, skill, doc)? {
         return Ok(());
     }
     Err(CoreError::new(
@@ -355,6 +510,77 @@ fn verify_removed(rt: &Runtime, plan: &DotagentsPark, skill: &SkillName) -> Resu
         ),
     )
     .at(&plan.config))
+}
+
+/// dotagents leaves `agents.toml` alone when the entry's `exclude` list spans
+/// several lines (it still deletes the folder and the lock row). Adds the
+/// name to that list here and drops the lock row if dotagents left it.
+/// `false` when no such entry exists.
+fn exclude_in_multiline(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    plan: &DotagentsPark,
+    skill: &SkillName,
+    mut doc: toml_edit::DocumentMut,
+) -> Result<bool, CoreError> {
+    let Some(locked) = &plan.locked else {
+        return Ok(false);
+    };
+    let Some(list) = doc
+        .get_mut("skills")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+    else {
+        return Ok(false);
+    };
+    let Some(row) = list
+        .iter_mut()
+        .find(|row| wildcard_contains(row, &skill.0, locked))
+    else {
+        return Ok(false);
+    };
+    let Some(exclude) = row
+        .get_mut("exclude")
+        .and_then(toml_edit::Item::as_array_mut)
+    else {
+        return Ok(false);
+    };
+    if !exclude.to_string().contains('\n') {
+        return Ok(false);
+    }
+    let prefix = exclude
+        .iter()
+        .last()
+        .and_then(|item| item.decor().prefix().cloned());
+    exclude.push(skill.0.as_str());
+    if let (Some(prefix), Some(added)) = (prefix, exclude.len().checked_sub(1)) {
+        if let Some(item) = exclude.get_mut(added) {
+            item.decor_mut().set_prefix(prefix);
+        }
+    }
+    write_text(rt, guard, &plan.config, &doc.to_string())?;
+    drop_lock_entry(rt, guard, plan, skill)?;
+    Ok(true)
+}
+
+fn drop_lock_entry(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    plan: &DotagentsPark,
+    skill: &SkillName,
+) -> Result<(), CoreError> {
+    let Some(text) = read_text(rt.ports.fs.as_ref(), &plan.lock)? else {
+        return Ok(());
+    };
+    let mut doc = parse(&plan.lock, &text)?;
+    let removed = doc
+        .get_mut("skills")
+        .and_then(toml_edit::Item::as_table_mut)
+        .and_then(|skills| skills.remove(&skill.0))
+        .is_some();
+    if removed {
+        write_text(rt, guard, &plan.lock, &doc.to_string())?;
+    }
+    Ok(())
 }
 
 /// Writes `agents.toml` and `agents.lock` back as `plan_park` read them.
@@ -402,19 +628,18 @@ fn write_text(
         .map_err(|e| CoreError::io(path, e))
 }
 
-/// The `agents.toml` text with `skill` listed again, or `None` when it
-/// already is. `entry` is the recorded `[[skills]]` entry; without one the
-/// skill came from wildcard entries and leaves the `exclude` of
-/// `wildcard_rows`.
+/// `skill` listed again in `doc`: the recorded `[[skills]]` entry added back,
+/// or, without one, the name lifted from the `exclude` of the recorded
+/// wildcard entries. Reports whether anything changed.
 fn with_skill_back(
-    mut doc: toml_edit::DocumentMut,
+    doc: &mut toml_edit::DocumentMut,
     skill: &SkillName,
     entry: Option<&str>,
-    wildcard_rows: &[usize],
-) -> Result<Option<String>, CoreError> {
+    wildcards: &[WildcardRef],
+) -> Result<bool, CoreError> {
     let mut changed = false;
     if let Some(entry) = entry {
-        if !lists_explicitly(&doc, &skill.0) {
+        if !lists_explicitly(doc, &skill.0) {
             let table = parse(Path::new("agents.toml"), entry)
                 .map_err(|e| {
                     CoreError::new(
@@ -439,8 +664,8 @@ fn with_skill_back(
         .get_mut("skills")
         .and_then(toml_edit::Item::as_array_of_tables_mut)
     {
-        for (index, row) in list.iter_mut().enumerate() {
-            if !wildcard_rows.contains(&index) || row_name(row) != Some("*") {
+        for row in list.iter_mut() {
+            if !is_recorded(row, wildcards) {
                 continue;
             }
             let Some(exclude) = row
@@ -459,18 +684,29 @@ fn with_skill_back(
             }
         }
     }
-    Ok(changed.then(|| doc.to_string()))
+    Ok(changed)
+}
+
+/// Whether `dotagents install` would install `skill` from `doc`: an entry of
+/// that name, or a recorded wildcard entry that does not exclude it.
+fn listed_again(
+    doc: &toml_edit::DocumentMut,
+    skill: &SkillName,
+    wildcards: &[WildcardRef],
+) -> bool {
+    lists_explicitly(doc, &skill.0)
+        || rows(doc).any(|row| is_recorded(row, wildcards) && !excludes(row, &skill.0))
 }
 
 /// The `agents.lock` text with the skill's table back, or `None` when it is
 /// there already.
 fn with_lock_entry(
     path: &Path,
-    text: Option<&str>,
+    text: &str,
     skill: &SkillName,
     lock_entry: &str,
 ) -> Result<Option<String>, CoreError> {
-    let mut doc = parse(path, text.unwrap_or_default())?;
+    let mut doc = parse(path, text)?;
     if lock_table_text(&doc, &skill.0).is_some() {
         return Ok(None);
     }
@@ -519,83 +755,46 @@ fn turn_on_files(
     changed: &mut Vec<FileSnapshot>,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
-    if let Some((before, doc)) = read_manifest(fs, &recorded.config)? {
+    if let Some((before, mut doc)) = read_manifest(fs, &recorded.config)? {
         let edited = with_skill_back(
-            doc,
+            &mut doc,
             skill,
             recorded.entry.as_deref(),
-            &recorded.wildcard_rows,
+            &recorded.wildcards,
         )?;
-        if let Some(text) = edited {
-            write_text(rt, guard, &recorded.config, &text)?;
+        let has_record = recorded.entry.is_some() || !recorded.wildcards.is_empty();
+        // Nothing is written yet: a turn-on that would not make dotagents
+        // manage the skill again must leave the copy parked and the files alone.
+        if has_record && !listed_again(&doc, skill, &recorded.wildcards) {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                format!(
+                    "agents.toml no longer has an entry that supplies {}, so dotagents would not manage it after turn-on. Add its entry back to agents.toml, then turn it on.",
+                    skill.0
+                ),
+            )
+            .at(&recorded.config));
+        }
+        if edited {
+            write_text(rt, guard, &recorded.config, &doc.to_string())?;
             changed.push(FileSnapshot {
                 path: recorded.config.clone(),
                 text: Some(before),
             });
         }
     }
+    // A missing `agents.lock` stays missing: a file without `version = 1`
+    // breaks every dotagents command, and dotagents writes its own.
     if let (Some(lock), Some(lock_entry)) = (&recorded.lock, &recorded.lock_entry) {
-        let before = read_text(fs, lock)?;
-        if let Some(text) = with_lock_entry(lock, before.as_deref(), skill, lock_entry)? {
-            write_text(rt, guard, lock, &text)?;
-            changed.push(FileSnapshot {
-                path: lock.clone(),
-                text: before,
-            });
+        if let Some(before) = read_text(fs, lock)? {
+            if let Some(text) = with_lock_entry(lock, &before, skill, lock_entry)? {
+                write_text(rt, guard, lock, &text)?;
+                changed.push(FileSnapshot {
+                    path: lock.clone(),
+                    text: Some(before),
+                });
+            }
         }
     }
     Ok(())
-}
-
-/// Refuses `dotagents install` while a parked skill is still listed in the
-/// scope's `agents.toml`: install would copy it back. Skills parked before
-/// Park ran `dotagents remove` are in that state.
-pub(crate) fn refuse_listed_parked(rt: &Runtime, scope: &RootScope) -> Result<(), CoreError> {
-    let fs = rt.ports.fs.as_ref();
-    let parked_root = rt
-        .scope
-        .home
-        .lexical
-        .join(crate::identity::PARKED_ROOT_RELATIVE);
-    let project_key = match scope {
-        RootScope::Global => None,
-        RootScope::Project(project) => Some(crate::park_layout::project_key(
-            &fs.canonicalize(&project.0)
-                .unwrap_or_else(|_| project.0.clone()),
-        )),
-    };
-    let origin = crate::identity::RootRef {
-        scope: scope.clone(),
-        kind: crate::identity::RootKind::Universal,
-    };
-    let Some(slot) =
-        crate::park_layout::parked_slot_dir(&parked_root, &origin, project_key.as_deref())
-    else {
-        return Ok(());
-    };
-    let Ok(parked) = fs.read_dir(&slot) else {
-        return Ok(());
-    };
-    let config =
-        crate::ports::resolve_config_link(fs, &manifest_dir(rt, scope).join("agents.toml"))?;
-    let Some((_, doc)) = read_manifest(fs, &config)? else {
-        return Ok(());
-    };
-    let mut names: Vec<String> = parked
-        .iter()
-        .filter(|entry| crate::ports::is_skill_shaped_entry(entry))
-        .map(|entry| entry.name.clone())
-        .filter(|name| lists(&doc, name))
-        .collect();
-    names.sort();
-    match names.first() {
-        Some(name) => Err(CoreError::new(
-            ErrorCode::InvalidRequest,
-            format!(
-                "{name} is parked but still listed in agents.toml, so dotagents install would bring it back. Turn it on or remove it from agents.toml first."
-            ),
-        )
-        .at(&config)),
-        None => Ok(()),
-    }
 }

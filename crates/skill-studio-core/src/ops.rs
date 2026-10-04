@@ -5213,6 +5213,7 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
             if let Err(e) = crate::ops_park_dotagents::run_remove(
                 rt,
                 ctx,
+                &session.guard,
                 plan,
                 &skill.name,
                 &deployment.root.scope,
