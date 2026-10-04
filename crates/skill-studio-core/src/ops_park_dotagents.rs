@@ -394,33 +394,30 @@ fn add_exclude(row: &mut toml_edit::Table, name: &str) {
         .get(last)
         .and_then(|item| item.decor().suffix().cloned());
     exclude.push(name);
-    match trailing.find('\n') {
-        Some(at) => {
-            let cut = if trailing[..at].ends_with('\r') {
-                at - 1
-            } else {
-                at
-            };
-            if let Some(added) = exclude.get_mut(last + 1) {
-                added
-                    .decor_mut()
-                    .set_prefix(format!("{}{newline}{indent}", &trailing[..cut]));
-            }
-            exclude.set_trailing(trailing[cut..].to_string());
-            exclude.set_trailing_comma(true);
+    if let Some(at) = trailing.find('\n') {
+        let cut = if trailing[..at].ends_with('\r') {
+            at - 1
+        } else {
+            at
+        };
+        if let Some(added) = exclude.get_mut(last + 1) {
+            added
+                .decor_mut()
+                .set_prefix(format!("{}{newline}{indent}", &trailing[..cut]));
         }
-        None => {
-            // No trailing comma: the closing bracket's line break sits after
-            // the last item and moves to the new one.
-            if let Some(added) = exclude.get_mut(last + 1) {
-                added.decor_mut().set_prefix(format!("{newline}{indent}"));
-                if let Some(suffix) = last_suffix {
-                    added.decor_mut().set_suffix(suffix);
-                }
+        exclude.set_trailing(trailing[cut..].to_string());
+        exclude.set_trailing_comma(true);
+    } else {
+        // No trailing comma: the closing bracket's line break sits after
+        // the last item and moves to the new one.
+        if let Some(added) = exclude.get_mut(last + 1) {
+            added.decor_mut().set_prefix(format!("{newline}{indent}"));
+            if let Some(suffix) = last_suffix {
+                added.decor_mut().set_suffix(suffix);
             }
-            if let Some(item) = exclude.get_mut(last) {
-                item.decor_mut().set_suffix("");
-            }
+        }
+        if let Some(item) = exclude.get_mut(last) {
+            item.decor_mut().set_suffix("");
         }
     }
 }
