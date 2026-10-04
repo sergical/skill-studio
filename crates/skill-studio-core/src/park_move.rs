@@ -43,6 +43,9 @@ pub(crate) fn move_dir(
     to: &Path,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
+    for dir in [from.parent(), to.parent()].into_iter().flatten() {
+        sweep_trash(rt, session, dir);
+    }
     let scoped_from = confine(&rt.scope, fs, from)?;
     let scoped_to = confine(&rt.scope, fs, to)?;
     match fs.rename(&session.guard, &scoped_from, &scoped_to) {
@@ -89,7 +92,7 @@ fn copy_verify_remove(
     let trash = from
         .parent()
         .unwrap_or(from)
-        .join(format!(".park-trash-{}", crate::fsops::unique_suffix()));
+        .join(format!("{TRASH_PREFIX}{}", crate::fsops::unique_suffix()));
     let committed = copied.and_then(|()| {
         let scoped_from = confine(&rt.scope, fs, from)?;
         let scoped_trash = confine(&rt.scope, fs, &trash)?;
@@ -105,8 +108,52 @@ fn copy_verify_remove(
 
     // The copy is complete and the source is out of the way. A failed delete
     // costs disk space, not correctness, so it is not an error.
-    let _ = remove_tree(rt, session, &trash);
+    remove_trash(rt, session, &trash);
     Ok(())
+}
+
+/// Prefix of the hidden folder a cross-volume move renames its source to.
+const TRASH_PREFIX: &str = ".park-trash-";
+
+/// Most stale trash folders one sweep removes, so a sweep stays cheap.
+const SWEEP_LIMIT: usize = 16;
+
+/// Deletes a trash folder best effort. Every `SKILL.md` (any case) goes first,
+/// so a delete that stops partway never leaves a folder an agent could load
+/// as a skill.
+fn remove_trash(rt: &Runtime, session: &MutationSession, trash: &Path) {
+    let fs = rt.ports.fs.as_ref();
+    if let Ok(tree) = walk(fs, trash) {
+        for entry in tree.iter().filter(|e| {
+            e.kind == FileKind::File
+                && e.relative
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("SKILL.md"))
+        }) {
+            let path = trash.join(&entry.relative);
+            if confine(&rt.scope, fs, &path).is_ok() {
+                let _ = fs.fsops_remove_file(&path);
+            }
+        }
+    }
+    let _ = remove_tree(rt, session, trash);
+}
+
+/// Removes stale `.park-trash-*` folders left directly under `dir` by an
+/// earlier move whose delete failed. Only real folders with the exact prefix
+/// are touched; a link is never followed. Best effort.
+fn sweep_trash(rt: &Runtime, session: &MutationSession, dir: &Path) {
+    let fs = rt.ports.fs.as_ref();
+    let Ok(entries) = fs.read_dir(dir) else {
+        return;
+    };
+    for entry in entries
+        .iter()
+        .filter(|e| e.kind == FileKind::Dir && e.name.starts_with(TRASH_PREFIX))
+        .take(SWEEP_LIMIT)
+    {
+        remove_trash(rt, session, &dir.join(&entry.name));
+    }
 }
 
 /// Flushes every file and directory of the copy at `to` to disk, so the

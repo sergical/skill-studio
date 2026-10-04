@@ -841,6 +841,7 @@ pub struct FailingFs {
     fail_next_rename: AtomicBool,
     fail_next_rename_cross_device: AtomicBool,
     corrupt_next_new_file_with_mode: AtomicBool,
+    fail_rename_after_cross_device: AtomicBool,
     fail_next_remove_file: AtomicBool,
     /// `-1` means unlimited. Otherwise the number of `write_atomic` calls
     /// still allowed to succeed before every later call fails; see
@@ -895,6 +896,7 @@ impl FailingFs {
             fail_next_rename: AtomicBool::new(false),
             fail_next_rename_cross_device: AtomicBool::new(false),
             corrupt_next_new_file_with_mode: AtomicBool::new(false),
+            fail_rename_after_cross_device: AtomicBool::new(false),
             fail_next_remove_file: AtomicBool::new(false),
             write_atomic_budget: AtomicI64::new(-1),
             fail_next_create_dir: AtomicBool::new(false),
@@ -942,6 +944,13 @@ impl FailingFs {
     /// (`EXDEV`); later calls delegate normally again.
     pub fn fail_next_rename_cross_device(&self) {
         self.fail_next_rename_cross_device
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// After the next cross-device rename failure, the rename that follows it
+    /// fails too (a plain error). Lets a test fail the step after a copy.
+    pub fn fail_rename_after_cross_device(&self) {
+        self.fail_rename_after_cross_device
             .store(true, Ordering::SeqCst);
     }
 
@@ -1193,6 +1202,12 @@ impl ScopeFs for FailingFs {
             .fail_next_rename_cross_device
             .swap(false, Ordering::SeqCst)
         {
+            if self
+                .fail_rename_after_cross_device
+                .swap(false, Ordering::SeqCst)
+            {
+                self.fail_next_rename.store(true, Ordering::SeqCst);
+            }
             return Err(std::io::Error::from_raw_os_error(18));
         }
         self.inner.rename(guard, from, to)

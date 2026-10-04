@@ -21,10 +21,10 @@ use std::process::Command;
 use std::sync::Arc;
 
 use skill_studio_core::dto::{
-    DeploymentDto, ParkCheckRequest, ParkRequest, ScanRequest, UnparkRequest,
+    DeploymentDto, ListEventsRequest, ParkCheckRequest, ParkRequest, ScanRequest, UnparkRequest,
 };
 use skill_studio_core::harness::HarnessCatalog;
-use skill_studio_core::identity::{AgentId, RootKind, RootScope};
+use skill_studio_core::identity::{AgentId, RootKind, RootScope, SkillName};
 use skill_studio_core::ops;
 use skill_studio_core::ports::{Ports, ProcessSpawner, Runtime, ScopeFs};
 use skill_studio_core::scope::{ProjectSelection, RuntimeScope};
@@ -981,9 +981,22 @@ fn failing_runtime(home: &Path, projects: &[PathBuf]) -> (Runtime, Arc<FailingFs
     (rt, failing)
 }
 
+/// Hidden `.park-trash-*` folders directly under `dir`.
+fn leftover_trash(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(".park-trash-"))
+        })
+        .collect()
+}
+
 /// Flow: park across volumes, and the delete of the old folder fails after
 /// the copy was verified. Expectation: park still succeeds, the parked copy
-/// is whole, its `.origin` marker stays, and no live copy is listed.
+/// is whole, its `.origin` marker stays, no live copy is listed, and the
+/// leftover `.park-trash-*` folder holds no `SKILL.md` an agent could load.
 /// Failure: park reports an error and undoes the marker and links while the
 /// copy already sits in the parked folder, leaving a half-deleted source.
 #[test]
@@ -991,6 +1004,7 @@ fn park_across_volumes_succeeds_when_deleting_the_old_folder_fails() {
     let home = unique_temp_dir("park_any_exdev_delete_fails");
     let live = home.join(".codex/skills/foo");
     write_skill(&live, "foo");
+    std::fs::write(live.join("notes.md"), "notes").unwrap();
     let (rt, failing) = failing_runtime(&home, &[]);
     let deployment_id = live_copy(&rt, "foo", &live).id;
     failing.fail_next_rename_cross_device();
@@ -1012,17 +1026,22 @@ fn park_across_volumes_succeeds_when_deleting_the_old_folder_fails() {
     assert!(deployments(&rt, "foo")
         .iter()
         .all(|d| d.root.kind == RootKind::Parked));
+    let trash = leftover_trash(&home.join(".codex/skills"));
+    assert_eq!(trash.len(), 1, "the failed delete leaves one hidden folder");
+    assert!(!trash[0].join("SKILL.md").exists());
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// Flow: the same, for unpark. Expectation: unpark succeeds and the skill is
-/// back at its origin. Failure: unpark errors after the copy landed, so the
+/// Flow: the same, for unpark. Expectation: unpark succeeds, the skill is
+/// back at its origin, and the leftover trash folder in the parked slot holds
+/// no `SKILL.md`. Failure: unpark errors after the copy landed, so the
 /// journal row says failed while the skill is live again.
 #[test]
 fn unpark_across_volumes_succeeds_when_deleting_the_parked_folder_fails() {
     let home = unique_temp_dir("park_any_exdev_unpark_delete_fails");
     let live = home.join(".codex/skills/foo");
     write_skill(&live, "foo");
+    std::fs::write(live.join("notes.md"), "notes").unwrap();
     let (rt, failing) = failing_runtime(&home, &[]);
     park_copy_at(&rt, "foo", &live);
     failing.fail_next_rename_cross_device();
@@ -1039,6 +1058,61 @@ fn unpark_across_volumes_succeeds_when_deleting_the_parked_folder_fails() {
 
     assert_eq!(restored.restored_path, live);
     assert!(live.join("SKILL.md").exists());
+    let trash = leftover_trash(&home.join(PARKED_ROOT_RELATIVE).join("codex"));
+    assert_eq!(trash.len(), 1, "the failed delete leaves one hidden folder");
+    assert!(!trash[0].join("SKILL.md").exists());
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: a stale `.park-trash-*` folder (with a `SKILL.md`) sits in a root, as
+/// an earlier failed delete left it; then a skill in that root is parked.
+/// Expectation: the stale folder is removed, a link with the same prefix is
+/// not followed (its target stays), and a folder without the prefix stays.
+/// Failure: stale copies of skills pile up in agent roots.
+#[test]
+fn park_sweeps_stale_trash_folders_in_the_roots_it_touches() {
+    let home = unique_temp_dir("park_any_sweep");
+    let root = home.join(".codex/skills");
+    let live = root.join("foo");
+    write_skill(&live, "foo");
+    write_skill(&root.join(".park-trash-old"), "old");
+    let outside = home.join("outside");
+    write_skill(&outside, "outside");
+    std::os::unix::fs::symlink(&outside, root.join(".park-trash-link")).unwrap();
+    std::fs::create_dir_all(root.join(".keep-me")).unwrap();
+    let rt = runtime(&home, &[]);
+
+    park_copy_at(&rt, "foo", &live);
+
+    assert!(!root.join(".park-trash-old").exists());
+    assert!(
+        outside.join("SKILL.md").exists(),
+        "a link must not be followed"
+    );
+    assert!(root.join(".keep-me").exists());
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: a cross-volume park where the copy verifies but the rename of the
+/// source to the trash name fails. Expectation: park fails, the copy at the
+/// parked path is removed, the source is whole. Failure: a verified copy and
+/// the source both stay, so one skill exists twice.
+#[test]
+fn cross_volume_park_removes_the_copy_when_moving_the_source_aside_fails() {
+    let home = unique_temp_dir("park_any_exdev_trash_rename");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let (rt, failing) = failing_runtime(&home, &[]);
+    let deployment_id = live_copy(&rt, "foo", &live).id;
+    failing.fail_next_rename_cross_device();
+    failing.fail_rename_after_cross_device();
+
+    let result = ops::park(&rt, &ctx(), &ParkRequest { deployment_id });
+
+    assert!(result.is_err());
+    assert!(live.join("SKILL.md").exists());
+    assert!(leftover_trash(&home.join(".codex/skills")).is_empty());
+    assert!(!home.join(PARKED_ROOT_RELATIVE).exists());
     std::fs::remove_dir_all(&home).ok();
 }
 
@@ -1115,5 +1189,52 @@ fn cross_volume_park_rejects_a_copy_whose_content_differs() {
         .unwrap()
         .contains("Body."));
     assert!(!home.join(PARKED_ROOT_RELATIVE).exists());
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: unpark moves the skill back, then recreating its link fails.
+/// Expectation: unpark errors, the message says the skill is back, the
+/// skill is at its origin, and the journal row is Failed, not Pending.
+/// Failure: the row stays Pending forever while the files already moved.
+#[test]
+fn unpark_marks_the_row_failed_when_a_link_cannot_be_recreated() {
+    let home = unique_temp_dir("park_any_relink_fails");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let link = home.join(".claude/skills/foo");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink("../../.codex/skills/foo", &link).unwrap();
+    let (rt, failing) = failing_runtime(&home, &[]);
+    park_copy_at(&rt, "foo", &live);
+    failing.fail_next_symlink();
+
+    let result = ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: only_parked_copy(&rt, "foo").id,
+        },
+    );
+
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("is back at its place"),
+        "{}",
+        err.message
+    );
+    assert!(live.join("SKILL.md").exists());
+    let events = ops::list_events(
+        &rt,
+        &ctx(),
+        &ListEventsRequest {
+            skill: Some(SkillName("foo".to_string())),
+            limit: 0,
+            after: None,
+            check_drift: false,
+        },
+    )
+    .unwrap();
+    let unpark_row = events.iter().find(|e| e.kind == "unpark").unwrap();
+    assert_eq!(unpark_row.status, "failed");
     std::fs::remove_dir_all(&home).ok();
 }

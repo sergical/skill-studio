@@ -5349,20 +5349,39 @@ fn unpark_body(
             let _ = fs.remove_file(&session.guard, &scoped);
         }
     }
-    for link_path in &links {
-        let relative_target = recorded_targets
-            .get(link_path.to_string_lossy().as_ref())
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from)
-            .filter(|target| target.is_relative());
-        if let Some(target) = relative_target {
-            recreate_link(rt, &session.guard, link_path, &target)?;
-            continue;
+    let relinked = (|| {
+        for link_path in &links {
+            let relative_target = recorded_targets
+                .get(link_path.to_string_lossy().as_ref())
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+                .filter(|target| target.is_relative());
+            if let Some(target) = relative_target {
+                recreate_link(rt, &session.guard, link_path, &target)?;
+                continue;
+            }
+            let scoped_target = crate::ports::confine(&rt.scope, fs, &restored_dir)?;
+            let scoped_link = crate::ports::confine(&rt.scope, fs, link_path)?;
+            fs.symlink(&session.guard, &scoped_target, &scoped_link)
+                .map_err(|e| CoreError::io(link_path, e))?;
         }
-        let scoped_target = crate::ports::confine(&rt.scope, fs, &restored_dir)?;
-        let scoped_link = crate::ports::confine(&rt.scope, fs, link_path)?;
-        fs.symlink(&session.guard, &scoped_target, &scoped_link)
-            .map_err(|e| CoreError::io(link_path, e))?;
+        Ok::<(), CoreError>(())
+    })();
+    if let Err(e) = relinked {
+        let _ = session.store.finish(
+            &session.guard,
+            &id,
+            crate::events::EventStatus::Failed,
+            None,
+        );
+        return Err(CoreError::new(
+            e.code,
+            format!(
+                "the skill is back at its place, but a link to it could not be recreated: {}",
+                e.message
+            ),
+        )
+        .at(restored_dir));
     }
 
     session
