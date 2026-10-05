@@ -280,13 +280,28 @@ fn is_openable_external_url(url: &tauri::Url) -> bool {
 /// webview never opens a window of its own: web links go to the system
 /// default browser and everything else is dropped.
 fn route_new_window<R: tauri::Runtime>(url: &tauri::Url) -> tauri::webview::NewWindowResponse<R> {
-    if is_openable_external_url(url) {
-        // `spawn`, not `output`: this runs inside the webview callback.
-        if let Err(error) = std::process::Command::new("open").arg(url.as_str()).spawn() {
-            eprintln!("[external_link] could not open {url}: {error}");
-        }
+    let (to_open, response) = plan_new_window(url);
+    if let Some(target) = to_open {
+        // A worker thread keeps the webview callback from blocking, and
+        // `status()` waits on the child so no zombie `open` is left behind.
+        std::thread::spawn(move || {
+            match std::process::Command::new("open").arg(&target).status() {
+                Ok(status) if status.success() => {}
+                Ok(status) => eprintln!("[external_link] open {target} exited with {status}"),
+                Err(error) => eprintln!("[external_link] could not open {target}: {error}"),
+            }
+        });
     }
-    tauri::webview::NewWindowResponse::Deny
+    response
+}
+
+/// The decision without the side effect: the URL to hand to `open` (if any)
+/// and the response for the webview, which is always `Deny`.
+fn plan_new_window<R: tauri::Runtime>(
+    url: &tauri::Url,
+) -> (Option<String>, tauri::webview::NewWindowResponse<R>) {
+    let to_open = is_openable_external_url(url).then(|| url.to_string());
+    (to_open, tauri::webview::NewWindowResponse::Deny)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -521,7 +536,8 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::is_openable_external_url;
+    use super::{is_openable_external_url, plan_new_window};
+    use tauri::webview::NewWindowResponse;
 
     fn parse(url: &str) -> tauri::Url {
         url.parse().expect("test URL parses")
@@ -554,6 +570,26 @@ mod tests {
                 !is_openable_external_url(&parse(url)),
                 "{url} must be refused"
             );
+        }
+    }
+
+    // Flow: any new-window request (http, file:, javascript:) reaches the handler.
+    // Expectation: the webview is always told Deny; only the http URL is queued for `open`.
+    // Failure: Allow lets the webview open a window, or a local scheme reaches `open`.
+    #[test]
+    fn new_window_is_always_denied_and_only_web_urls_are_opened() {
+        let cases = [
+            ("https://skills.sh/a/b", Some("https://skills.sh/a/b")),
+            ("file:///etc/passwd", None),
+            ("javascript:alert(1)", None),
+        ];
+        for (url, expected) in cases {
+            let (to_open, response) = plan_new_window::<tauri::Wry>(&parse(url));
+            assert!(
+                matches!(response, NewWindowResponse::Deny),
+                "{url} must be denied"
+            );
+            assert_eq!(to_open.as_deref(), expected, "{url}");
         }
     }
 }
