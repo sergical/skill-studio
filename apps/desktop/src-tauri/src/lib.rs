@@ -269,6 +269,25 @@ fn apply_fixture_home_override() {
     }
 }
 
+/// Only web links may leave the app. `file:`, `javascript:` and custom
+/// schemes (`vscode:`, `x-apple.*:`) would let page content launch local
+/// handlers, so they are refused.
+fn is_openable_external_url(url: &tauri::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+}
+
+/// Every `target="_blank"` link and `window.open` call lands here. The
+/// webview never opens a window of its own: web links go to the system
+/// default browser and everything else is dropped.
+fn route_new_window<R: tauri::Runtime>(url: &tauri::Url) -> tauri::webview::NewWindowResponse<R> {
+    if is_openable_external_url(url) {
+        if let Err(error) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
+            eprintln!("[external_link] could not open {url}: {error}");
+        }
+    }
+    tauri::webview::NewWindowResponse::Deny
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 // `run()` is the process entry point (called only from `main()`); a failure
 // building or running the Tauri event loop is fatal and unrecoverable, so
@@ -281,6 +300,19 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            // The main window is declared in tauri.conf.json with
+            // `create: false` so it can be built here with the new-window
+            // handler attached.
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .first()
+                .ok_or("tauri.conf.json declares no main window")?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?
+                .on_new_window(|url, _features| route_new_window(&url))
+                .build()?;
+
             // Reads `~/.agents/skill-studio.json`, not `app_data_dir` -
             // independent of the data-folder migration below - so this runs
             // first: a panic anywhere else in setup, including that
@@ -484,4 +516,43 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_openable_external_url;
+
+    fn parse(url: &str) -> tauri::Url {
+        url.parse().expect("test URL parses")
+    }
+
+    // Flow: a user clicks a target="_blank" link in a skill's markdown.
+    // Expectation: web links open in the system browser.
+    // Failure: a link silently does nothing, as before this fix.
+    #[test]
+    fn external_link_filter_allows_http_and_https() {
+        assert!(is_openable_external_url(&parse("https://skills.sh/a/b")));
+        assert!(is_openable_external_url(&parse("http://example.com/")));
+    }
+
+    // Flow: skill markdown, which is untrusted, contains a link with a
+    // local or custom scheme.
+    // Expectation: the click opens nothing.
+    // Failure: page content launches a local file or app handler.
+    #[test]
+    fn external_link_filter_refuses_file_javascript_and_custom_schemes() {
+        for url in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "vscode://file/etc/passwd",
+            "x-apple.systempreferences:com.apple.preference",
+            "data:text/html,hi",
+            "ftp://example.com/",
+        ] {
+            assert!(
+                !is_openable_external_url(&parse(url)),
+                "{url} must be refused"
+            );
+        }
+    }
 }
