@@ -273,15 +273,15 @@ fn lock_shape(text: &str, skill: &str) -> Option<serde_json::Value> {
     Some(shape)
 }
 
-/// The ignore file's lines, sorted, without the ones that name `skill`.
+/// The ignore file's lines in file order, without the ones that name
+/// `skill`. Git uses the last matching rule, so a reorder is a change.
 fn ignore_shape(text: &str, skill: &str) -> serde_json::Value {
     let own = [format!("/skills/{skill}"), format!("/skills/{skill}/")];
-    let mut lines: Vec<&str> = text
+    let lines: Vec<&str> = text
         .lines()
         .map(str::trim_end)
         .filter(|line| !line.is_empty() && !own.iter().any(|own| own == line))
         .collect();
-    lines.sort_unstable();
     lines.into()
 }
 
@@ -801,6 +801,19 @@ pub(crate) fn plan_park(
             RootScope::Project(_) => dir.join(".agents").join(".gitignore"),
         },
     )?;
+    // Turn on writes this file back through `confine_write_through`; a link
+    // that leaves the home and projects would park the skill for good.
+    crate::ports::confine(&rt.scope, fs, &gitignore).map_err(|e| {
+        CoreError::new(
+            e.code,
+            format!(
+                "dotagents' ignore file {} resolves outside the home and the configured projects, so the skill could not be turned on again: {}",
+                gitignore.display(),
+                e.message
+            ),
+        )
+        .at(&deployment.path)
+    })?;
     let mut originals = vec![
         FileSnapshot {
             path: config.clone(),
@@ -1437,6 +1450,20 @@ pub(crate) fn backed_up_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Flow: another tool swaps two unrelated negation rules while dotagents
+    /// removes a skill's line. Expectation: the shapes differ, so no
+    /// after-hashes are recorded. Failure: a sorted comparison hides the swap
+    /// and turn-on restores the old file over it.
+    #[test]
+    fn a_reordered_ignore_file_is_not_only_the_skills_own_line_gone() {
+        let before = "/skills/bar\n!/skills/bar\n/skills/foo\n";
+        let swapped = "!/skills/bar\n/skills/bar\n";
+        let kept = "/skills/bar\n!/skills/bar\n";
+        let shape = |text: &str| Some(ignore_shape(text, "foo"));
+        assert!(!removed_only(Some(before), Some(swapped), shape));
+        assert!(removed_only(Some(before), Some(kept), shape));
+    }
 
     /// Flow: a source in `agents.toml` and the same source in `agents.lock`
     /// are written in different shapes. Expectation: they match exactly when

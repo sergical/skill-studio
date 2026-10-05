@@ -1699,6 +1699,41 @@ fn a_symlinked_ignore_file_comes_back_byte_for_byte_and_stays_a_link() {
     }
 }
 
+/// Flow: `.agents/.gitignore` is a link to a file outside the home and the
+/// configured projects. Expectation: park refuses before anything moves or
+/// dotagents runs. Failure: park succeeds and turn-on later fails at the
+/// ignore file, leaving the skill parked.
+#[cfg(unix)]
+#[test]
+fn an_ignore_file_link_leaving_the_scope_makes_park_refuse_and_nothing_moves() {
+    let (home, stub) = dotagents_home("park_dotagents_ignore_outside", EXPLICIT_TOML);
+    let outside = unique_temp_dir("park_dotagents_ignore_outside_target");
+    std::fs::create_dir_all(&outside).unwrap();
+    let target = outside.join("ignore");
+    std::fs::write(&target, "/skills/foo\n").unwrap();
+    std::os::unix::fs::symlink(&target, home.join(".agents/.gitignore")).unwrap();
+    let rt = runtime(&home, stub.clone(), true);
+    let calls_before = stub.calls().len();
+
+    let err = ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: live_copy(&rt, "foo").id,
+        },
+    )
+    .unwrap_err();
+
+    assert!(err.message.contains("outside"), "{}", err.message);
+    assert!(home.join(".agents/skills/foo/SKILL.md").exists());
+    assert!(!home.join(".agents/skills-parked").exists());
+    assert_eq!(stub.calls().len(), calls_before);
+    assert_eq!(read(&target), "/skills/foo\n");
+    assert!(statuses(&rt).is_empty());
+    std::fs::remove_dir_all(&home).ok();
+    std::fs::remove_dir_all(&outside).ok();
+}
+
 /// Flow: park and turn on a skill in a project whose `.agents/.gitignore`
 /// lists it. Expectation: the project's file is byte for byte what it was.
 /// Failure: the project scope reads the file at the wrong path and leaves
