@@ -21,19 +21,19 @@ function skill(name: string, deployments: Deployment[]): InstalledSkill {
 describe("otherScopeNote", () => {
   it("warns a project install when a global copy exists", () => {
     const skills = [skill("tidy", [dep("global")])];
-    expect(otherScopeNote(skills, "tidy", "project", "/work/app")).toBe(
+    expect(otherScopeNote(skills, "tidy", "project")).toBe(
       "Already installed globally. Installing here adds a second copy for this project.",
     );
   });
 
   it("stays quiet for a project install when only another project has it", () => {
     const skills = [skill("tidy", [dep("project", "/work/other")])];
-    expect(otherScopeNote(skills, "tidy", "project", "/work/app")).toBeNull();
+    expect(otherScopeNote(skills, "tidy", "project")).toBeNull();
   });
 
   it("warns a global install when a project has it, naming the project", () => {
     const skills = [skill("tidy", [dep("project", "/work/app")])];
-    expect(otherScopeNote(skills, "tidy", "global", null)).toBe(
+    expect(otherScopeNote(skills, "tidy", "global")).toBe(
       "Already in app. A global copy will apply to every project.",
     );
   });
@@ -42,20 +42,32 @@ describe("otherScopeNote", () => {
     const skills = [
       skill("tidy", [dep("global"), dep("project", "/a/one"), dep("project", "/b/two")]),
     ];
-    expect(otherScopeNote(skills, "tidy", "global", null)).toBe(
+    expect(otherScopeNote(skills, "tidy", "global")).toBe(
       "Already in one and two. A global copy will apply to every project.",
     );
   });
 
   it("stays quiet for a global-only skill installed globally and for an unknown name", () => {
     const skills = [skill("tidy", [dep("global")])];
-    expect(otherScopeNote(skills, "tidy", "global", null)).toBeNull();
-    expect(otherScopeNote(skills, "other", "project", "/work/app")).toBeNull();
+    expect(otherScopeNote(skills, "tidy", "global")).toBeNull();
+    expect(otherScopeNote(skills, "other", "project")).toBeNull();
+  });
+
+  it("names the skill when several are installed at once", () => {
+    const skills = [skill("tidy", [dep("global")])];
+    expect(otherScopeNote(skills, "tidy", "project", true)).toBe(
+      "tidy is already installed globally. Installing here adds a second copy for this project.",
+    );
+  });
+
+  it("does not treat a plugin copy as a global install", () => {
+    const skills = [skill("tidy", [dep("plugin")])];
+    expect(otherScopeNote(skills, "tidy", "project")).toBeNull();
   });
 
   it("ignores a parked copy", () => {
     const skills = [skill("tidy", [dep("parked")])];
-    expect(otherScopeNote(skills, "tidy", "project", "/work/app")).toBeNull();
+    expect(otherScopeNote(skills, "tidy", "project")).toBeNull();
   });
 });
 
@@ -76,6 +88,20 @@ describe("scopeMarker", () => {
     expect(scopeMarker(scopePresence([dep("global")]), { isGlobal: true })).toBeNull();
     const projectOnly = scopePresence([dep("project", "/a/one")]);
     expect(scopeMarker(projectOnly, { isGlobal: false, projectPath: "/a/one" })).toBeNull();
+  });
+
+  it("marks nothing on the global group when every global copy is parked", () => {
+    const parkedGlobal = scopePresence([
+      dep("parked"),
+      dep("project", "/a/one"),
+      dep("project", "/b/two"),
+    ]);
+    expect(scopeMarker(parkedGlobal, { isGlobal: true })).toBeNull();
+  });
+
+  it("counts a plugin copy as global on the Locations card", () => {
+    const plugin = scopePresence([dep("plugin"), dep("project", "/a/one")]);
+    expect(scopeMarker(plugin, { isGlobal: false, projectPath: "/a/one" })).toBe("Also global");
   });
 
   it("does not count a parked copy", () => {

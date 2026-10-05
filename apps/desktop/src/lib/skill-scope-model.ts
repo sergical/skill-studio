@@ -7,36 +7,42 @@
 import type { Deployment, InstalledSkill, InstallScope } from "@skill-studio/lib";
 
 export interface ScopePresence {
+  /** A live copy the user installed globally. */
   global: boolean;
+  /** A live copy shipped by a plugin. The Locations card lists it under Global, but nobody installed it. */
+  plugin: boolean;
   /** Project folders holding a live copy, sorted. */
   projectPaths: string[];
 }
 
-/** Live copies only: a parked copy is switched off, so it does not count. A plugin copy counts as global, as on the Locations card. */
+/** Live copies only: a parked copy is switched off, so it does not count. */
 export function scopePresence(deployments: readonly Deployment[]): ScopePresence {
   let global = false;
+  let plugin = false;
   const projects = new Set<string>();
   for (const d of deployments) {
     if (d.scope === "parked") continue;
-    if (d.scope === "project" && d.project_path) projects.add(d.project_path);
+    if (d.scope === "plugin") plugin = true;
+    else if (d.scope === "project" && d.project_path) projects.add(d.project_path);
     else global = true;
   }
-  return { global, projectPaths: [...projects].sort() };
+  return { global, plugin, projectPaths: [...projects].sort() };
 }
 
-/** Marker text for one scope group, or null when the skill is in that scope only. */
+/** Marker text for one scope group, or null when the skill is live in that scope only. */
 export function scopeMarker(
   presence: ScopePresence,
   group: { isGlobal: boolean; projectPath?: string },
 ): string | null {
+  const liveGlobally = presence.global || presence.plugin;
   if (group.isGlobal) {
     const count = presence.projectPaths.length;
-    if (count === 0) return null;
+    if (!liveGlobally || count === 0) return null;
     return `Also in ${count} ${count === 1 ? "project" : "projects"}`;
   }
   const isLiveHere =
     group.projectPath !== undefined && presence.projectPaths.includes(group.projectPath);
-  return isLiveHere && presence.global ? "Also global" : null;
+  return isLiveHere && liveGlobally ? "Also global" : null;
 }
 
 function projectName(path: string): string {
@@ -50,24 +56,25 @@ function joinNames(names: string[]): string {
 
 /**
  * The note for installing `skillName` into `scope`, when a live copy already
- * sits in the other scope. Null when nothing needs saying. A different
- * project's copy does not matter to a project install.
+ * sits in the other scope. Null when nothing needs saying. A project install
+ * ignores other projects and plugin copies, which Claude Code namespaces.
+ * `named` puts the skill name in the note, for an install of several skills.
  */
 export function otherScopeNote(
   skills: readonly InstalledSkill[],
   skillName: string,
   scope: InstallScope,
-  projectPath: string | null,
+  named = false,
 ): string | null {
   const skill = skills.find((s) => s.name === skillName);
   if (!skill) return null;
   const presence = scopePresence(skill.deployments);
+  const already = named ? `${skillName} is already` : "Already";
 
   if (scope === "project") {
     if (!presence.global) return null;
-    return "Already installed globally. Installing here adds a second copy for this project.";
+    return `${already} installed globally. Installing here adds a second copy for this project.`;
   }
-  const others = presence.projectPaths.filter((p) => p !== projectPath);
-  if (others.length === 0) return null;
-  return `Already in ${joinNames(others.map(projectName))}. A global copy will apply to every project.`;
+  if (presence.projectPaths.length === 0) return null;
+  return `${already} in ${joinNames(presence.projectPaths.map(projectName))}. A global copy will apply to every project.`;
 }

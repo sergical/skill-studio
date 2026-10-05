@@ -1402,7 +1402,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
       : [submitParsed.skillName];
   const scopeNote =
     installNames
-      .map((name) => otherScopeNote(skills, name, scope, projectPath))
+      .map((name) => otherScopeNote(skills, name, scope, installNames.length > 1))
       .find((text) => text !== null) ?? null;
   const submitLabel =
     githubEntries && githubEntries.length > 1
