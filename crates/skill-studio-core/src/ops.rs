@@ -5302,6 +5302,15 @@ pub(crate) fn park_found_copy(
                 }
             }
         }
+        if copy_stays_parked {
+            // Turn on must still offer this row: it holds the links and file
+            // backups the copy needs to come back whole.
+            let _ = session.store.patch_payload(
+                &session.guard,
+                &id,
+                serde_json::json!({ PARK_ROLLBACK_INCOMPLETE: true }),
+            );
+        }
         let _ = session.store.finish(
             &session.guard,
             &id,
@@ -5380,7 +5389,8 @@ fn unpark_body(
         .into_iter()
         .find(|row| {
             row.kind == crate::events::EventKind::Park.as_str()
-                && row.status != crate::events::EventStatus::Failed
+                && (row.status != crate::events::EventStatus::Failed
+                    || row.payload.get(PARK_ROLLBACK_INCOMPLETE) == Some(&serde_json::json!(true)))
                 && row.reverted_by.is_none()
                 && row
                     .payload
@@ -5929,6 +5939,10 @@ fn git_tracks_folder(rt: &Runtime, ctx: &OpContext, folder: &Path) -> Option<boo
             .is_ok_and(|output| output.status == Some(0) && !output.stdout.trim().is_empty()),
     )
 }
+
+/// Payload key on a failed `park` row whose rollback could not move the copy
+/// back: the copy is still parked, so Turn on must still use the row.
+const PARK_ROLLBACK_INCOMPLETE: &str = "rollback_incomplete";
 
 /// The link paths a `park` row removed. Rows written before `links` existed
 /// carry only the Claude Code link, as `claude_link`.

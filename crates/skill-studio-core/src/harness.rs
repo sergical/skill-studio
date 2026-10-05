@@ -1212,7 +1212,8 @@ fn probe_version(
 /// the same "inferred from path" heuristic `harness-detection.md` describes
 /// for Codex, `OpenCode`, and pi.
 fn infer_install_method(path: &Path) -> DetectedString {
-    let text = path.to_string_lossy();
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let text = resolved.to_string_lossy();
     let method = if text.contains("Cellar") || text.contains("homebrew") {
         "homebrew"
     } else if text.contains("node_modules") || text.contains(".npm") {
@@ -1569,6 +1570,21 @@ mod tests {
     use crate::error::CoreError;
     use crate::ports::{CancelToken, ProcessOutput};
     use crate::testing::{FakeToolLookup, FixtureBuilder};
+
+    #[test]
+    fn a_symlink_into_node_modules_is_detected_as_an_npm_install_or_names_the_method_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("lib/node_modules/codex/bin/codex.js");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"#!/usr/bin/env node\n").unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let link = bin.join("codex");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let method = infer_install_method(&link);
+        assert_eq!(method.value.as_deref(), Some("npm"), "got {method:?}");
+    }
 
     /// A spawner whose every probe outlives its deadline.
     struct TimedOutSpawner;

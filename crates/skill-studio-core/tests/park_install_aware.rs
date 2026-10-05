@@ -67,6 +67,9 @@ struct FakeDotagents {
     /// `remove` never writes `agents.toml`, as real dotagents does with a
     /// multi-line `exclude` or CRLF line endings.
     leave_toml: AtomicBool,
+    /// A failed `remove` leaves a folder at the skill's own path, so the
+    /// rollback cannot move the parked copy back.
+    block_move_back: AtomicBool,
 }
 
 impl FakeDotagents {
@@ -80,6 +83,7 @@ impl FakeDotagents {
             crash_in_remove: AtomicBool::new(false),
             keep_lock_row: AtomicBool::new(false),
             leave_toml: AtomicBool::new(false),
+            block_move_back: AtomicBool::new(false),
         })
     }
 
@@ -301,6 +305,9 @@ impl ProcessSpawner for FakeDotagents {
                 }
             }
             None => self.install(),
+        }
+        if status != 0 && self.block_move_back.load(Ordering::SeqCst) {
+            write_skill(&self.skill_dir("foo"), "foo");
         }
         Ok(ProcessOutput {
             status: Some(status),
@@ -1521,5 +1528,150 @@ fn turn_on_after_agents_toml_was_edited_keeps_the_new_row_and_lists_the_skill_ag
     let restored = read(&home.join(".agents/.gitignore"));
     assert!(restored.contains("/skills/foo"), "{restored}");
     assert!(gitignore.contains("/skills/foo"));
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: `dotagents remove` exits non-zero and the rollback cannot move the
+/// copy back, because a folder now sits at the skill's own path. Then that
+/// folder goes away and the person turns the skill on. Expectation: the
+/// failed row is still offered, so turn-on moves the copy back and the skill
+/// is listed in `agents.toml` and `agents.lock` as before. Failure: the row
+/// is dropped as failed, and turn-on restores the folder without the
+/// recorded entries.
+#[test]
+fn a_failed_remove_whose_rollback_also_failed_can_still_be_turned_on() {
+    let (home, stub) = dotagents_home("park_dotagents_rollback_fails", EXPLICIT_TOML);
+    let rt = runtime(&home, stub.clone(), true);
+    let (toml, lock) = (read(&stub.toml_path()), read(&stub.lock_path()));
+    stub.remove_exit.store(3, Ordering::SeqCst);
+    stub.block_move_back.store(true, Ordering::SeqCst);
+
+    let err = ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: live_copy(&rt, "foo").id,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        err.message.contains("could not be moved back"),
+        "{}",
+        err.message
+    );
+    assert_eq!(statuses(&rt), ["failed"]);
+    assert!(home
+        .join(".agents/skills-parked/universal/foo/SKILL.md")
+        .exists());
+
+    std::fs::remove_dir_all(home.join(".agents/skills/foo")).unwrap();
+    // The files as a half-done park could leave them: no entry for foo.
+    std::fs::write(stub.toml_path(), "version = 1\n").unwrap();
+    std::fs::write(stub.lock_path(), "version = 1\n").unwrap();
+    unpark_foo(&rt);
+
+    assert!(home.join(".agents/skills/foo/SKILL.md").exists());
+    let (turned_on_toml, turned_on_lock) = (read(&stub.toml_path()), read(&stub.lock_path()));
+    assert!(
+        turned_on_toml.contains("name = \"foo\""),
+        "{turned_on_toml}"
+    );
+    assert!(turned_on_lock.contains("[skills.foo]"), "{turned_on_lock}");
+    assert!(toml.contains("name = \"foo\"") && lock.contains("[skills.foo]"));
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: `dotagents remove` exits non-zero and the rollback works. The copy
+/// is then moved into the parked folder by hand and turned on. Expectation:
+/// the failed row is not offered, so turn-on does not rewrite `agents.toml`
+/// from it. Failure: a failed park's recorded files overwrite what the
+/// person has now.
+#[test]
+fn a_failed_row_with_a_completed_rollback_is_not_offered_to_turn_on() {
+    let (home, stub) = dotagents_home("park_dotagents_failed_not_offered", EXPLICIT_TOML);
+    let rt = runtime(&home, stub.clone(), true);
+    stub.remove_exit.store(3, Ordering::SeqCst);
+    let parked = ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: live_copy(&rt, "foo").id,
+        },
+    );
+    assert!(parked.is_err());
+    assert_eq!(statuses(&rt), ["failed"]);
+
+    let edited = format!("{}\n# edited by hand\n", read(&stub.toml_path()));
+    std::fs::write(stub.toml_path(), &edited).unwrap();
+    let slot = home.join(".agents/skills-parked/universal");
+    std::fs::create_dir_all(&slot).unwrap();
+    std::fs::rename(home.join(".agents/skills/foo"), slot.join("foo")).unwrap();
+    unpark_foo(&rt);
+
+    assert!(home.join(".agents/skills/foo/SKILL.md").exists());
+    assert_eq!(read(&stub.toml_path()), edited);
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: `.agents/.gitignore` is a link (absolute or relative) to a file
+/// elsewhere; park an explicit skill, then turn it on. Expectation: the
+/// target file holds its original bytes and the name is still a link.
+/// Failure: the backup reads the link, turn-on replaces the link with a
+/// plain file, or the target keeps the park's edit.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_ignore_file_comes_back_byte_for_byte_and_stays_a_link() {
+    for absolute in [true, false] {
+        let (home, stub) = dotagents_home("park_dotagents_ignore_link", EXPLICIT_TOML);
+        let original = write_gitignore(&home);
+        let store = home.join("dotfiles");
+        std::fs::create_dir_all(&store).unwrap();
+        let target = store.join("agents-ignore");
+        let link = home.join(".agents/.gitignore");
+        std::fs::rename(&link, &target).unwrap();
+        let link_text = if absolute {
+            target.clone()
+        } else {
+            PathBuf::from("../dotfiles/agents-ignore")
+        };
+        std::os::unix::fs::symlink(&link_text, &link).unwrap();
+        let rt = runtime(&home, stub.clone(), true);
+
+        park_foo(&rt);
+        assert!(!read(&target).contains("/skills/foo"), "park left the line");
+        unpark_foo(&rt);
+
+        assert_eq!(read(&target), original, "absolute link: {absolute}");
+        assert_eq!(std::fs::read_link(&link).unwrap(), link_text);
+        std::fs::remove_dir_all(&home).ok();
+    }
+}
+
+/// Flow: park and turn on a skill in a project whose `.agents/.gitignore`
+/// lists it. Expectation: the project's file is byte for byte what it was.
+/// Failure: the project scope reads the file at the wrong path and leaves
+/// the removed line out.
+#[test]
+fn project_turn_on_gives_the_ignore_file_back_byte_for_byte() {
+    let home = unique_temp_dir("park_dotagents_project_ignore");
+    let project = home.join("proj");
+    project_with_foo(&project);
+    let original = "# dotagents\n/skills/foo\n";
+    std::fs::write(project.join(".agents/.gitignore"), original).unwrap();
+    let stub = FakeDotagents::new(&home, &[]);
+    let rt = runtime_with_projects(&home, stub.clone(), true, vec![project.clone()]);
+
+    ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: live_project_copy(&rt, "foo").id,
+        },
+    )
+    .unwrap();
+    assert!(!read(&project.join(".agents/.gitignore")).contains("/skills/foo"));
+    unpark_foo(&rt);
+
+    assert_eq!(read(&project.join(".agents/.gitignore")), original);
     std::fs::remove_dir_all(&home).ok();
 }

@@ -842,6 +842,45 @@ async fn park_then_unpark_on_one_process_puts_the_skill_and_its_link_back() {
     );
 }
 
+/// Flow: park `gamma` over MCP after git tracks its folder.
+/// Expectation: an `ok` envelope whose `data.warnings` holds one line that
+/// says git tracks the folder.
+/// A failure here means the MCP park hides from an agent that the move shows
+/// as deleted files in the repository, as the CLI warns on stderr.
+#[tokio::test]
+async fn the_park_tool_returns_a_warning_when_git_tracks_the_folder_or_names_the_envelope() {
+    let (_home_dir, home) = live_home();
+    for args in [&["init", "-q"][..], &["add", ".agents/skills/gamma"][..]] {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&home)
+            .env("HOME", &home)
+            .status()
+            .expect("run the repository tool");
+        assert!(status.success(), "{args:?}");
+    }
+    let (client, _) = connect(&[("SKILL_STUDIO_HOME", home.to_str().unwrap())]).await;
+
+    let universal_id = deployment_id_via_mcp(&client, "gamma", "universal").await;
+    let park = call_tool(
+        &client,
+        "park",
+        serde_json::json!({ "deployment_id": universal_id }),
+    )
+    .await;
+    client.cancel().await.ok();
+
+    assert_eq!(park["status"], "ok", "{park:?}");
+    let warnings = park["data"]["warnings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("park of a tracked folder returned no warnings: {park:?}"));
+    assert_eq!(warnings.len(), 1, "{park:?}");
+    assert!(
+        warnings[0].as_str().unwrap().contains("git tracks"),
+        "{park:?}"
+    );
+}
+
 /// Flow: park `gamma`, then call `restore_event` with park's `event_id`.
 /// Expectation: an error envelope with code `unsupported`, and `gamma`
 /// still parked.

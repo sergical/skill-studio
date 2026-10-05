@@ -1693,11 +1693,12 @@ fn run_park(scope: &ScopeArgs, target: &TargetArgs, json: bool, time: bool) -> E
     };
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
     let result = resolve_target(&rt, target, TargetKind::Park).and_then(|deployment_id| {
+        // Asked before the park: the copy has moved by the time it returns.
         let warning = ops::park_git_warning(&rt, &ctx, &deployment_id);
+        let mut outcome = ops::park(&rt, &ctx, &ParkRequest { deployment_id })?;
         if let Some(warning) = &warning {
             eprintln!("warning: {warning}");
         }
-        let mut outcome = ops::park(&rt, &ctx, &ParkRequest { deployment_id })?;
         outcome.warnings.extend(warning);
         Ok(outcome)
     });

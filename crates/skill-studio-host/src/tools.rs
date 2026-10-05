@@ -56,7 +56,9 @@ pub(crate) fn is_executable_file(path: &Path) -> bool {
 impl ToolLookup for PathToolLookup {
     fn find_binary(&self, name: &str) -> Option<PathBuf> {
         self.search_dirs.iter().find_map(|dir| {
-            let candidate = dir.join(name);
+            // Absolute but not canonical: a shim keeps its own name (argv[0]),
+            // and a relative PATH entry must not follow the spawn cwd.
+            let candidate = std::path::absolute(dir.join(name)).ok()?;
             is_executable_file(&candidate).then_some(candidate)
         })
     }
@@ -406,6 +408,41 @@ mod tests {
         let lookup = PathToolLookup::with_search_dirs(vec![tmp.path().to_path_buf()]);
         let found = lookup.find_binary("my-tool").unwrap();
         assert_eq!(found, bin);
+    }
+
+    #[test]
+    fn a_shim_found_through_a_symlink_keeps_its_own_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("vp");
+        write_executable(&real);
+        let bin = tmp.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        std::os::unix::fs::symlink(&real, bin.join("npx")).unwrap();
+
+        let lookup = PathToolLookup::with_search_dirs(vec![bin.clone()]);
+        let found = lookup.find_binary("npx").unwrap();
+        assert_eq!(
+            found,
+            bin.join("npx"),
+            "the link path must come back, not its target `vp`: tools read argv[0]"
+        );
+    }
+
+    #[test]
+    fn a_relative_search_dir_gives_an_absolute_path_that_survives_a_cwd_change() {
+        let cwd = std::env::current_dir().unwrap();
+        let tmp = tempfile::tempdir_in(&cwd).unwrap();
+        let tool = tmp.path().join("rel-tool");
+        write_executable(&tool);
+        let relative_dir = tmp.path().strip_prefix(&cwd).unwrap().to_path_buf();
+
+        let lookup = PathToolLookup::with_search_dirs(vec![relative_dir]);
+        let found = lookup.find_binary("rel-tool").unwrap();
+        assert!(
+            found.is_absolute(),
+            "a relative PATH entry must become absolute at lookup time, got {found:?}"
+        );
+        assert_eq!(found, tool);
     }
 
     #[test]

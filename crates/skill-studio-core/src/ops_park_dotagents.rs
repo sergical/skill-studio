@@ -667,10 +667,13 @@ pub(crate) fn plan_park(
             )
             .at(&deployment.path)
         })?;
-    let gitignore = match &deployment.root.scope {
-        RootScope::Global => dir.join(".gitignore"),
-        RootScope::Project(_) => dir.join(".agents").join(".gitignore"),
-    };
+    let gitignore = crate::ports::resolve_config_link(
+        fs,
+        &match &deployment.root.scope {
+            RootScope::Global => dir.join(".gitignore"),
+            RootScope::Project(_) => dir.join(".agents").join(".gitignore"),
+        },
+    )?;
     let mut originals = vec![
         FileSnapshot {
             path: config.clone(),
