@@ -13,7 +13,14 @@ import { FaqSection } from "../home/FaqSection";
 import { homeSectionStyles } from "../home/HomeSection.stylex";
 import { MascotStage } from "../home/MascotStage";
 import { UsageSection } from "../home/UsageSection";
-import { DOCS_URL, DOWNLOAD_INTEL_URL, DOWNLOAD_URL, TRUST_LINE } from "../site-links";
+import {
+  CLI_DOCS_URL,
+  DOCS_URL,
+  DOWNLOAD_INTEL_URL,
+  DOWNLOAD_URL,
+  MCP_DOCS_URL,
+  TRUST_LINE,
+} from "../site-links";
 
 interface CommandCenterProps {
   theme: SiteTheme;
@@ -33,25 +40,61 @@ const marqueeMove = stylex.keyframes({
   to: { transform: "translateX(-50%)" },
 });
 
+// Phones and tablets cannot run the macOS installer, so they get the CLI and MCP console instead.
+const TOUCH_DEVICE = "@media (hover: none) and (pointer: coarse)";
+
 function DownloadButton({ theme, inFinale = false }: { theme: SiteTheme; inFinale?: boolean }) {
   return (
-    <a href={DOWNLOAD_URL} {...stylex.props(inFinale && finaleCtaMarker, styles.primaryButton)}>
-      <span>Download for macOS</span>
-      <span aria-hidden="true" {...stylex.props(styles.primaryButtonArrow)}>
-        <Arrow inverse={theme === "dark"} />
-      </span>
-    </a>
+    <>
+      <a
+        href={DOWNLOAD_URL}
+        {...stylex.props(inFinale && finaleCtaMarker, styles.primaryButton, styles.pointerOnly)}
+      >
+        <span>Download for macOS</span>
+        <span aria-hidden="true" {...stylex.props(styles.primaryButtonArrow)}>
+          <Arrow inverse={theme === "dark"} />
+        </span>
+      </a>
+      <a
+        href="#use-it"
+        {...stylex.props(inFinale && finaleCtaMarker, styles.primaryButton, styles.touchOnly)}
+      >
+        <span>Get Skill Studio</span>
+        <span aria-hidden="true" {...stylex.props(styles.primaryButtonArrow, styles.arrowDown)}>
+          <Arrow inverse={theme === "dark"} />
+        </span>
+      </a>
+    </>
   );
 }
 
 function TrustLine() {
   return (
-    <p {...stylex.props(styles.fineprint)}>
-      {TRUST_LINE} ·{" "}
-      <a href={DOWNLOAD_INTEL_URL} {...stylex.props(homeSectionStyles.textLink, styles.intelLink)}>
-        Intel build
-      </a>
-    </p>
+    <>
+      <p {...stylex.props(styles.fineprint, styles.pointerOnlyBlock)}>
+        Also as a{" "}
+        <a href={CLI_DOCS_URL} {...stylex.props(homeSectionStyles.textLink, styles.inlineLink)}>
+          CLI
+        </a>{" "}
+        ·{" "}
+        <a href={MCP_DOCS_URL} {...stylex.props(homeSectionStyles.textLink, styles.inlineLink)}>
+          MCP server
+        </a>
+        <br />
+        {TRUST_LINE} ·{" "}
+        <a
+          href={DOWNLOAD_INTEL_URL}
+          {...stylex.props(homeSectionStyles.textLink, styles.inlineLink)}
+        >
+          Intel build
+        </a>
+      </p>
+      <p {...stylex.props(styles.fineprint, styles.touchOnlyBlock)}>
+        Mac app, CLI and MCP server. Free and open source.
+        <br />
+        Download the Mac app on your computer.
+      </p>
+    </>
   );
 }
 
@@ -210,7 +253,12 @@ const styles = stylex.create({
     margin: "14px 0 0",
     textWrap: "balance",
   },
-  intelLink: { fontSize: "inherit", minHeight: "auto" },
+  inlineLink: { fontSize: "inherit", minHeight: "auto" },
+  pointerOnly: { display: { default: "inline-flex", [TOUCH_DEVICE]: "none" } },
+  touchOnly: { display: { default: "none", [TOUCH_DEVICE]: "inline-flex" } },
+  pointerOnlyBlock: { display: { default: "block", [TOUCH_DEVICE]: "none" } },
+  touchOnlyBlock: { display: { default: "none", [TOUCH_DEVICE]: "block" } },
+  arrowDown: { transform: "rotate(90deg)" },
   primaryButton: {
     textDecoration: "none",
     alignItems: "center",
