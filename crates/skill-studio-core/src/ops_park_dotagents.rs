@@ -35,6 +35,10 @@ struct WildcardRef {
     /// one `dotagents remove` excludes; turn-on lifts it but does not count it
     /// as a reason dotagents would manage the skill.
     supplies: bool,
+    /// Whether the entry had an `exclude` key before the park. Turn-on keeps
+    /// that key, and the line and comment it carried, when the list ends up
+    /// empty.
+    had_exclude: bool,
 }
 
 /// What `agents.lock` records about the skill: the fields dotagents matches
@@ -54,7 +58,9 @@ pub(crate) struct DotagentsPark {
     pub(crate) config: PathBuf,
     /// `agents.lock`, or the file its link resolves to.
     pub(crate) lock: PathBuf,
-    /// Both files as read, written back when `dotagents remove` fails.
+    /// `.agents/.gitignore`: `remove` deletes the `/skills/<name>` line from it.
+    gitignore: PathBuf,
+    /// The files as read, written back when `dotagents remove` fails.
     originals: Vec<FileSnapshot>,
     /// The skill's own `[[skills]]` entry, kept so turn-on can put it back.
     /// `None` when a wildcard entry supplies the skill.
@@ -74,12 +80,59 @@ pub(crate) struct DotagentsPark {
 pub(crate) struct RecordedDotagents {
     pub(crate) config: PathBuf,
     pub(crate) lock: Option<PathBuf>,
+    pub(crate) gitignore: Option<PathBuf>,
+    /// The files as the park left them. `None` for a row from before this
+    /// was recorded; turn-on then edits the files.
+    after: Option<PostPark>,
     entry: Option<String>,
     lock_entry: Option<String>,
     wildcards: Vec<WildcardRef>,
 }
 
+/// A content hash of each file after `dotagents remove` ran, or `ABSENT`.
+/// A file that still has its hash at turn-on was touched by nothing else, so
+/// the backed-up original goes back byte for byte.
+struct PostPark {
+    config: String,
+    lock: String,
+    gitignore: String,
+}
+
+const ABSENT: &str = "absent";
+
+fn content_hash(text: Option<&str>) -> String {
+    text.map_or_else(
+        || ABSENT.to_string(),
+        |text| {
+            crate::identity::Fingerprint::of_bytes(text.as_bytes())
+                .bare_hex()
+                .to_string()
+        },
+    )
+}
+
 impl DotagentsPark {
+    /// The files the park row backs up: `.gitignore` only when it exists.
+    pub(crate) fn backup_paths(&self) -> Vec<PathBuf> {
+        self.originals
+            .iter()
+            .map(|file| file.path.clone())
+            .collect()
+    }
+
+    /// The `payload.dotagents_after` value: what the three files hold once
+    /// `dotagents remove` has run. `None` when a file cannot be read, so
+    /// turn-on edits instead of restoring.
+    pub(crate) fn payload_after(&self, rt: &Runtime) -> Option<serde_json::Value> {
+        let fs = rt.ports.fs.as_ref();
+        let hash = |path: &Path| read_text(fs, path).ok().map(|t| content_hash(t.as_deref()));
+        Some(serde_json::json!({
+            "config": hash(&self.config)?,
+            "lock": hash(&self.lock)?,
+            "gitignore": hash(&self.gitignore)?,
+        }))
+    }
+
     /// The `payload.dotagents` value the park row records.
     pub(crate) fn payload(&self) -> serde_json::Value {
         let wildcards: Vec<serde_json::Value> = self
@@ -90,12 +143,14 @@ impl DotagentsPark {
                     "source": w.source,
                     "path": w.path,
                     "supplies": w.supplies,
+                    "had_exclude": w.had_exclude,
                 })
             })
             .collect();
         serde_json::json!({
             "config": self.config,
             "lock": self.lock,
+            "gitignore": self.gitignore,
             "entry": self.entry,
             "lock_entry": self.lock_entry,
             "wildcards": wildcards,
@@ -115,6 +170,15 @@ pub(crate) fn recorded(payload: &serde_json::Value) -> Option<RecordedDotagents>
     Some(RecordedDotagents {
         config: PathBuf::from(value.get("config")?.as_str()?),
         lock: text("lock").map(PathBuf::from),
+        gitignore: text("gitignore").map(PathBuf::from),
+        after: payload.get("dotagents_after").and_then(|after| {
+            let hash = |key: &str| Some(after.get(key)?.as_str()?.to_string());
+            Some(PostPark {
+                config: hash("config")?,
+                lock: hash("lock")?,
+                gitignore: hash("gitignore")?,
+            })
+        }),
         entry: text("entry"),
         lock_entry: text("lock_entry"),
         wildcards: value
@@ -134,6 +198,10 @@ pub(crate) fn recorded(payload: &serde_json::Value) -> Option<RecordedDotagents>
                                 .get("supplies")
                                 .and_then(serde_json::Value::as_bool)
                                 .unwrap_or(true),
+                            had_exclude: row
+                                .get("had_exclude")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false),
                         })
                     })
                     .collect()
@@ -359,6 +427,18 @@ fn is_recorded(row: &toml_edit::Table, wildcards: &[WildcardRef]) -> bool {
         })
 }
 
+/// Whether the recorded entry that matches `row` had an `exclude` key before
+/// the park.
+fn had_exclude(row: &toml_edit::Table, wildcards: &[WildcardRef]) -> bool {
+    row_str(row, "source").is_some_and(|source| {
+        wildcards.iter().any(|w| {
+            w.had_exclude
+                && sources_match(&w.source, source)
+                && comparable_path(w.path.as_deref()) == comparable_path(row_str(row, "path"))
+        })
+    })
+}
+
 /// Adds `name` to the `exclude` list of `row`, creating the list when the
 /// entry has none. A multi-line list keeps its layout: the new item takes the
 /// indent of the last one, and a comment after the last item's comma stays
@@ -525,6 +605,7 @@ pub(crate) fn plan_park(
                     source: row_str(row, "source")?.to_string(),
                     path: row_str(row, "path").map(str::to_string),
                     supplies: true,
+                    had_exclude: row.get("exclude").is_some(),
                 })
             })
             .collect(),
@@ -548,6 +629,7 @@ pub(crate) fn plan_park(
                     source: row_str(row, "source")?.to_string(),
                     path: row_str(row, "path").map(str::to_string),
                     supplies: false,
+                    had_exclude: row.get("exclude").is_some(),
                 })
             });
         if let Some(target) = target {
@@ -585,21 +667,33 @@ pub(crate) fn plan_park(
             )
             .at(&deployment.path)
         })?;
+    let gitignore = match &deployment.root.scope {
+        RootScope::Global => dir.join(".gitignore"),
+        RootScope::Project(_) => dir.join(".agents").join(".gitignore"),
+    };
+    let mut originals = vec![
+        FileSnapshot {
+            path: config.clone(),
+            text: Some(original_config),
+        },
+        FileSnapshot {
+            path: lock.clone(),
+            text: original_lock,
+        },
+    ];
+    if let Some(text) = read_text(fs, &gitignore)? {
+        originals.push(FileSnapshot {
+            path: gitignore.clone(),
+            text: Some(text),
+        });
+    }
     Ok(Some(DotagentsPark {
         program,
         prefix_args,
-        originals: vec![
-            FileSnapshot {
-                path: config.clone(),
-                text: Some(original_config),
-            },
-            FileSnapshot {
-                path: lock.clone(),
-                text: original_lock,
-            },
-        ],
-        lock,
         config,
+        lock,
+        gitignore,
+        originals,
         entry,
         lock_entry,
         locked,
@@ -954,7 +1048,7 @@ fn with_skill_back(
             };
             if lift_exclude(exclude, &skill.0) {
                 changed = true;
-                if exclude.is_empty() {
+                if exclude.is_empty() && !had_exclude(row, wildcards) {
                     row.remove("exclude");
                 }
             }
@@ -1004,19 +1098,21 @@ fn with_lock_entry(
     render_checked(path, &doc, text.contains("\r\n")).map(Some)
 }
 
-/// Lists `skill` again in `agents.toml` and `agents.lock`. It runs before the
-/// folder moves back, so a failure here leaves the copy parked and the
-/// turn-on can be tried again. Returns what it changed, for [`restore_files`]
+/// Lists `skill` again in `agents.toml`, `agents.lock` and `.gitignore`. It
+/// runs before the folder moves back, so a failure here leaves the copy
+/// parked and the turn-on can be tried again. `originals` are the files as
+/// the park backed them up. Returns what it changed, for [`restore_files`]
 /// if the move then fails; on an error it has already written back its own
 /// edits.
 pub(crate) fn turn_on(
     rt: &Runtime,
     guard: &ExclusiveGuard,
     recorded: &RecordedDotagents,
+    originals: &[FileSnapshot],
     skill: &SkillName,
 ) -> Result<Vec<FileSnapshot>, CoreError> {
     let mut changed = Vec::new();
-    match turn_on_files(rt, guard, recorded, skill, &mut changed) {
+    match turn_on_files(rt, guard, recorded, originals, skill, &mut changed) {
         Ok(()) => Ok(changed),
         Err(e) => {
             let _ = restore_files(rt, guard, &changed);
@@ -1025,57 +1121,187 @@ pub(crate) fn turn_on(
     }
 }
 
+/// The backed-up text of `path` when the file still holds exactly what the
+/// park left (`post_park` is its recorded hash): nothing else touched it, so
+/// the original goes back wholesale.
+fn untouched_original<'a>(
+    current: Option<&str>,
+    post_park: Option<&str>,
+    path: &Path,
+    originals: &'a [FileSnapshot],
+) -> Option<&'a str> {
+    if content_hash(current) != post_park? {
+        return None;
+    }
+    originals
+        .iter()
+        .find(|file| file.path == path)
+        .and_then(|file| file.text.as_deref())
+}
+
+/// Writes `text` over `path` unless it is there already, noting what the
+/// file held so a later failure can put it back.
+fn write_back(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    path: &Path,
+    current: Option<String>,
+    text: &str,
+    changed: &mut Vec<FileSnapshot>,
+) -> Result<(), CoreError> {
+    if current.as_deref() == Some(text) {
+        return Ok(());
+    }
+    write_text(rt, guard, path, text)?;
+    changed.push(FileSnapshot {
+        path: path.to_path_buf(),
+        text: current,
+    });
+    Ok(())
+}
+
 fn turn_on_files(
     rt: &Runtime,
     guard: &ExclusiveGuard,
     recorded: &RecordedDotagents,
+    originals: &[FileSnapshot],
     skill: &SkillName,
     changed: &mut Vec<FileSnapshot>,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
-    if let Some((before, mut doc)) = read_manifest(fs, &recorded.config)? {
-        let edited = with_skill_back(
-            &mut doc,
-            skill,
-            recorded.entry.as_deref(),
-            &recorded.wildcards,
-        )?;
-        let has_record = recorded.entry.is_some() || !recorded.wildcards.is_empty();
-        // Nothing is written yet: a turn-on that would not make dotagents
-        // manage the skill again must leave the copy parked and the files alone.
-        if has_record && !listed_again(&doc, skill, &recorded.wildcards) {
-            return Err(CoreError::new(
-                ErrorCode::InvalidRequest,
-                format!(
-                    "agents.toml no longer has an entry that supplies {}, so dotagents would not manage it after turn-on. Add its entry back to agents.toml, then turn it on.",
-                    skill.0
-                ),
-            )
-            .at(&recorded.config));
-        }
-        if edited {
-            let rendered = render_checked(&recorded.config, &doc, before.contains("\r\n"))?;
-            write_text(rt, guard, &recorded.config, &rendered)?;
-            changed.push(FileSnapshot {
-                path: recorded.config.clone(),
-                text: Some(before),
-            });
+    let after = recorded.after.as_ref();
+    if let Some(current) = read_text(fs, &recorded.config)? {
+        let wholesale = untouched_original(
+            Some(&current),
+            after.map(|a| a.config.as_str()),
+            &recorded.config,
+            originals,
+        );
+        if let Some(original) = wholesale {
+            write_back(
+                rt,
+                guard,
+                &recorded.config,
+                Some(current),
+                original,
+                changed,
+            )?;
+        } else {
+            let mut doc = parse(&recorded.config, &current)?;
+            let edited = with_skill_back(
+                &mut doc,
+                skill,
+                recorded.entry.as_deref(),
+                &recorded.wildcards,
+            )?;
+            let has_record = recorded.entry.is_some() || !recorded.wildcards.is_empty();
+            // Nothing is written yet: a turn-on that would not make dotagents
+            // manage the skill again must leave the copy parked and the files alone.
+            if has_record && !listed_again(&doc, skill, &recorded.wildcards) {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    format!(
+                        "agents.toml no longer has an entry that supplies {}, so dotagents would not manage it after turn-on. Add its entry back to agents.toml, then turn it on.",
+                        skill.0
+                    ),
+                )
+                .at(&recorded.config));
+            }
+            if edited {
+                let rendered = render_checked(&recorded.config, &doc, current.contains("\r\n"))?;
+                write_text(rt, guard, &recorded.config, &rendered)?;
+                changed.push(FileSnapshot {
+                    path: recorded.config.clone(),
+                    text: Some(current),
+                });
+            }
         }
     }
     // A missing `agents.lock` stays missing: a file without `version = 1`
     // breaks every dotagents command, and dotagents writes its own.
-    if let (Some(lock), Some(lock_entry)) = (&recorded.lock, &recorded.lock_entry) {
-        if let Some(before) = read_text(fs, lock)? {
-            if let Some(text) = with_lock_entry(lock, &before, skill, lock_entry)? {
-                write_text(rt, guard, lock, &text)?;
+    if let Some(lock) = &recorded.lock {
+        if let Some(current) = read_text(fs, lock)? {
+            let wholesale = untouched_original(
+                Some(&current),
+                after.map(|a| a.lock.as_str()),
+                lock,
+                originals,
+            );
+            if let Some(original) = wholesale {
+                write_back(rt, guard, lock, Some(current), original, changed)?;
+            } else if let Some(lock_entry) = &recorded.lock_entry {
+                if let Some(text) = with_lock_entry(lock, &current, skill, lock_entry)? {
+                    write_text(rt, guard, lock, &text)?;
+                    changed.push(FileSnapshot {
+                        path: lock.clone(),
+                        text: Some(current),
+                    });
+                }
+            }
+        }
+    }
+    // The park backs `.gitignore` up only when it exists, so a row without
+    // that backup leaves the file alone.
+    if let Some(gitignore) = &recorded.gitignore {
+        let current = read_text(fs, gitignore)?;
+        let original = originals
+            .iter()
+            .find(|file| &file.path == gitignore)
+            .and_then(|file| file.text.as_deref());
+        let wholesale = untouched_original(
+            current.as_deref(),
+            after.map(|a| a.gitignore.as_str()),
+            gitignore,
+            originals,
+        );
+        if let Some(original) = wholesale {
+            write_back(rt, guard, gitignore, current, original, changed)?;
+        } else if let (Some(current), Some(original)) = (current, original) {
+            let line = format!("/skills/{}", skill.0);
+            let has_line = |text: &str| text.lines().any(|l| l.trim_end() == line);
+            if has_line(original) && !has_line(&current) {
+                let separator = if current.is_empty() || current.ends_with('\n') {
+                    ""
+                } else {
+                    "\n"
+                };
+                let text = format!("{current}{separator}{line}\n");
+                write_text(rt, guard, gitignore, &text)?;
                 changed.push(FileSnapshot {
-                    path: lock.clone(),
-                    text: Some(before),
+                    path: gitignore.clone(),
+                    text: Some(current),
                 });
             }
         }
     }
     Ok(())
+}
+
+/// The files a park backed up, read back from its backup folder, for
+/// [`turn_on`]. Empty when the row has no backup or it cannot be read; the
+/// turn-on then edits the files.
+pub(crate) fn backed_up_files(
+    store: &dyn crate::ports::HistoryStore,
+    backup_dir: Option<&str>,
+) -> Vec<FileSnapshot> {
+    let Some(backup_dir) = backup_dir else {
+        return Vec::new();
+    };
+    let Ok(manifest) = store.read_manifest(backup_dir) else {
+        return Vec::new();
+    };
+    manifest
+        .entries
+        .into_iter()
+        .filter(|entry| !entry.relative.is_empty() && !entry.is_dir)
+        .filter_map(|entry| {
+            let bytes = store.read_backup_bytes(backup_dir, &entry.relative).ok()?;
+            Some(FileSnapshot {
+                path: entry.original,
+                text: Some(String::from_utf8(bytes).ok()?),
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1149,6 +1375,7 @@ mod tests {
                 source: "owner/repo".to_string(),
                 path: path.map(str::to_string),
                 supplies: true,
+                had_exclude: false,
             }]
         };
         let doc = table(

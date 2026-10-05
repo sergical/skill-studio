@@ -57,8 +57,7 @@ impl ToolLookup for PathToolLookup {
     fn find_binary(&self, name: &str) -> Option<PathBuf> {
         self.search_dirs.iter().find_map(|dir| {
             let candidate = dir.join(name);
-            is_executable_file(&candidate)
-                .then(|| std::fs::canonicalize(&candidate).unwrap_or(candidate))
+            is_executable_file(&candidate).then_some(candidate)
         })
     }
 }
@@ -406,7 +405,7 @@ mod tests {
 
         let lookup = PathToolLookup::with_search_dirs(vec![tmp.path().to_path_buf()]);
         let found = lookup.find_binary("my-tool").unwrap();
-        assert_eq!(found, fs::canonicalize(&bin).unwrap());
+        assert_eq!(found, bin);
     }
 
     #[test]
@@ -441,7 +440,7 @@ mod tests {
             second.path().to_path_buf(),
         ]);
         let found = lookup.find_binary("tool").unwrap();
-        assert_eq!(found, fs::canonicalize(first.path().join("tool")).unwrap());
+        assert_eq!(found, first.path().join("tool"));
     }
 
     /// `a_shell_banner_printed_before_the_marker_never_becomes_the_path_or_names_the_banner_it_kept`:

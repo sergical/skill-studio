@@ -5066,6 +5066,7 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
         event_id: parked.event_id,
         deployment_id: deployment.id,
         parked_path: parked.parked_dir,
+        warnings: Vec::new(),
     })
 }
 
@@ -5186,11 +5187,7 @@ pub(crate) fn park_found_copy(
             Some(
                 session
                     .store
-                    .backup_paths(
-                        &session.guard,
-                        &id,
-                        &[plan.config.clone(), plan.lock.clone()],
-                    )?
+                    .backup_paths(&session.guard, &id, &plan.backup_paths())?
                     .backup_dir,
             )
         }
@@ -5279,6 +5276,15 @@ pub(crate) fn park_found_copy(
                     );
                 }
                 return Err(CoreError::new(e.code, message).at(&deployment.path));
+            }
+            // What the files hold now: turn-on restores the backed-up originals
+            // wholesale when nothing else changed them since.
+            if let Some(after) = plan.payload_after(rt) {
+                let _ = session.store.patch_payload(
+                    &session.guard,
+                    &id,
+                    serde_json::json!({ "dotagents_after": after }),
+                );
             }
         }
         Ok(())
@@ -5374,6 +5380,7 @@ fn unpark_body(
         .into_iter()
         .find(|row| {
             row.kind == crate::events::EventKind::Park.as_str()
+                && row.status != crate::events::EventStatus::Failed
                 && row.reverted_by.is_none()
                 && row
                     .payload
@@ -5426,6 +5433,7 @@ fn unpark_body(
         Some(recorded) => {
             let files: Vec<PathBuf> = std::iter::once(recorded.config.clone())
                 .chain(recorded.lock.clone())
+                .chain(recorded.gitignore.clone())
                 .collect();
             Some(
                 session
@@ -5461,7 +5469,17 @@ fn unpark_body(
     // turn-on can be tried again.
     let listed_again = match &dotagents {
         Some(recorded) => {
-            match crate::ops_park_dotagents::turn_on(rt, &session.guard, recorded, &skill.name) {
+            let originals = crate::ops_park_dotagents::backed_up_files(
+                session.store.as_ref(),
+                park_row.as_ref().and_then(|row| row.backup_dir.as_deref()),
+            );
+            match crate::ops_park_dotagents::turn_on(
+                rt,
+                &session.guard,
+                recorded,
+                &originals,
+                &skill.name,
+            ) {
                 Ok(files) => files,
                 Err(e) => {
                     let _ = session.store.finish(
@@ -5838,6 +5856,29 @@ pub fn park_check(
     Ok(ParkCheck {
         git_tracked,
         project,
+    })
+}
+
+/// The warning an adapter shows before it parks `deployment_id`: git tracks
+/// the copy, so the move shows as deleted files in the repository. `None`
+/// when git does not track it or the check cannot run; the park reports its
+/// own refusals, and a warning never blocks it.
+pub fn park_git_warning(
+    rt: &Runtime,
+    ctx: &OpContext,
+    deployment_id: &DeploymentId,
+) -> Option<String> {
+    let check = park_check(
+        rt,
+        ctx,
+        &ParkCheckRequest {
+            deployment_id: deployment_id.clone(),
+        },
+    )
+    .ok()?;
+    check.git_tracked.unwrap_or(false).then(|| {
+        "git tracks this skill folder, so the move shows as deleted files in the repository"
+            .to_string()
     })
 }
 

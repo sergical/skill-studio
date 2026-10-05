@@ -578,7 +578,10 @@ impl SkillStudioServer {
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
         run_op(Operation::Park, true, &context, |rt, ctx| {
-            ops::park(rt, ctx, &req)
+            let warning = ops::park_git_warning(rt, ctx, &req.deployment_id);
+            let mut outcome = ops::park(rt, ctx, &req)?;
+            outcome.warnings.extend(warning);
+            Ok(outcome)
         })
         .await
     }

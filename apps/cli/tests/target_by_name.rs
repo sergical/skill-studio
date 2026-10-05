@@ -308,6 +308,55 @@ fn remove_by_name_with_only_a_hand_placed_copy_says_none_can_be_removed() {
     assert!(home.join(".agents/skills/solo/SKILL.md").exists());
 }
 
+/// Flow: `park --json` of a project copy that the project's repository
+/// tracks, then of a home copy that no repository tracks.
+/// Expectation: the tracked park exits 0, prints the warning on stderr, and
+/// lists it in `data.warnings`; the other park prints no warning and has no
+/// `warnings` key. Both copies move.
+/// A failure means the CLI hides that the move shows as deleted files in the
+/// repository, or warns about a copy the repository does not track.
+#[test]
+fn park_warns_on_stderr_and_in_json_when_the_project_tracks_the_copy() {
+    let (_dir, home, project) = home_and_project();
+    write_skill(&project, "tracked");
+    let repo = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&project)
+            .env("HOME", &home)
+            .status()
+            .expect("run the repository tool");
+        assert!(status.success(), "{args:?}");
+    };
+    repo(&["init", "-q"]);
+    repo(&["add", ".agents/skills/tracked"]);
+    let project_arg = project.to_str().unwrap();
+
+    let park = run(
+        &home,
+        &["park", "tracked", "--project", project_arg, "--json"],
+    );
+    assert_eq!(park.status.code(), Some(0), "{}", text(&park.stderr));
+    assert!(
+        text(&park.stderr).contains("git tracks"),
+        "{}",
+        text(&park.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&park.stdout).unwrap();
+    assert_eq!(
+        json["data"]["warnings"].as_array().unwrap().len(),
+        1,
+        "{json}"
+    );
+    assert!(!project.join(".agents/skills/tracked").exists());
+
+    let other = run(&home, &["park", "solo", "--json"]);
+    assert_eq!(other.status.code(), Some(0), "{}", text(&other.stderr));
+    assert!(!text(&other.stderr).contains("git tracks"));
+    let json: serde_json::Value = serde_json::from_slice(&other.stdout).unwrap();
+    assert!(json["data"].get("warnings").is_none(), "{json}");
+}
+
 /// Flow: `unpark solo` when `solo` is on (not parked).
 /// Expectation: exit 2, a message that says `solo` has no copy that can be
 /// unparked, and the folder stays where it is.

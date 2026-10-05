@@ -695,6 +695,10 @@ pub struct ParkOutcome {
     pub deployment_id: DeploymentId,
     /// Where the directory now lives, under the parked root.
     pub parked_path: PathBuf,
+    /// Notes for the caller; never a reason the park failed. An adapter that
+    /// ran `park_check` first puts its git warning here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Request to delete one real copy: a parked copy or a live one. Undo is in
