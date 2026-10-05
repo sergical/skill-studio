@@ -1403,12 +1403,7 @@ fn turn_on_files(
             let line = format!("/skills/{}", skill.0);
             let has_line = |text: &str| text.lines().any(|l| l.trim_end() == line);
             if has_line(original) && !has_line(&current) {
-                let separator = if current.is_empty() || current.ends_with('\n') {
-                    ""
-                } else {
-                    "\n"
-                };
-                let text = format!("{current}{separator}{line}\n");
+                let text = with_line_restored(original, &current, &line);
                 write_text(rt, guard, gitignore, &text)?;
                 changed.push(FileSnapshot {
                     path: gitignore.clone(),
@@ -1418,6 +1413,38 @@ fn turn_on_files(
         }
     }
     Ok(())
+}
+
+/// `current` with `line` back at its place in `original`: right before the
+/// nearest later line of `original` that `current` still has, else right
+/// after the nearest earlier one, else at the end. Git takes the last rule
+/// that matches, so a line appended after a negation would change what is
+/// ignored.
+fn with_line_restored(original: &str, current: &str, line: &str) -> String {
+    let before: Vec<&str> = original.lines().map(str::trim_end).collect();
+    let mut kept: Vec<&str> = current.lines().collect();
+    let at = before
+        .iter()
+        .position(|l| *l == line)
+        .unwrap_or(before.len());
+    let survives = |l: &str| !l.is_empty() && kept.iter().any(|k| k.trim_end() == l);
+    let position_in = |l: &str| kept.iter().position(|k| k.trim_end() == l);
+    let index = before
+        .iter()
+        .skip(at + 1)
+        .find(|l| survives(l))
+        .and_then(|l| position_in(l))
+        .or_else(|| {
+            before[..at.min(before.len())]
+                .iter()
+                .rev()
+                .find(|l| survives(l))
+                .and_then(|l| position_in(l))
+                .map(|i| i + 1)
+        })
+        .unwrap_or(kept.len());
+    kept.insert(index, line);
+    format!("{}\n", kept.join("\n"))
 }
 
 /// The files a park backed up, read back from its backup folder, for
@@ -1450,6 +1477,28 @@ pub(crate) fn backed_up_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Flow: the backup has `/skills/foo` then `!/skills/foo/`, and the file
+    /// has since gained a comment. Expectation: the restored line lands before
+    /// the negation. Failure: it is appended after it, so git ignores a folder
+    /// that used to be visible.
+    #[test]
+    fn a_restored_ignore_line_goes_back_before_the_line_that_followed_it() {
+        let original = "# top\n/skills/foo\n!/skills/foo/\n";
+        let current = "# top\n!/skills/foo/\n# mine\n";
+        assert_eq!(
+            with_line_restored(original, current, "/skills/foo"),
+            "# top\n/skills/foo\n!/skills/foo/\n# mine\n"
+        );
+        assert_eq!(
+            with_line_restored("# top\n/skills/foo\n", "# top\n# mine\n", "/skills/foo"),
+            "# top\n/skills/foo\n# mine\n"
+        );
+        assert_eq!(
+            with_line_restored("/skills/foo\n", "# mine", "/skills/foo"),
+            "# mine\n/skills/foo\n"
+        );
+    }
 
     /// Flow: another tool swaps two unrelated negation rules while dotagents
     /// removes a skill's line. Expectation: the shapes differ, so no

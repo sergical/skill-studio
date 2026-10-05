@@ -1734,6 +1734,28 @@ fn an_ignore_file_link_leaving_the_scope_makes_park_refuse_and_nothing_moves() {
     std::fs::remove_dir_all(&outside).ok();
 }
 
+/// Flow: `.agents/.gitignore` has `/skills/foo` then `!/skills/foo/`. Park
+/// removes the first line, the person adds a comment, then turn on. Expectation:
+/// the line returns before the negation and the comment stays. Failure: it is
+/// appended after the negation and git ignores a folder that was visible.
+#[test]
+fn turn_on_puts_the_ignore_line_back_before_the_negation_that_followed_it() {
+    let (home, stub) = dotagents_home("park_dotagents_ignore_order", EXPLICIT_TOML);
+    let ignore = home.join(".agents/.gitignore");
+    std::fs::write(&ignore, "# dotagents\n/skills/foo\n!/skills/foo/\n").unwrap();
+    let rt = runtime(&home, stub.clone(), true);
+
+    park_foo(&rt);
+    std::fs::write(&ignore, read(&ignore) + "# mine\n").unwrap();
+    unpark_foo(&rt);
+
+    assert_eq!(
+        read(&ignore),
+        "# dotagents\n/skills/foo\n!/skills/foo/\n# mine\n"
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
 /// Flow: park and turn on a skill in a project whose `.agents/.gitignore`
 /// lists it. Expectation: the project's file is byte for byte what it was.
 /// Failure: the project scope reads the file at the wrong path and leaves
