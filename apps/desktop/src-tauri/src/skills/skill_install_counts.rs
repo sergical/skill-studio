@@ -251,7 +251,6 @@ pub struct InstallScheduler {
     spacing: Duration,
     permits: Arc<Semaphore>,
     state: Mutex<SchedulerState>,
-    visibility_inflight: Inflight<bool>,
     count_inflight: Inflight<Option<u32>>,
 }
 
@@ -267,7 +266,6 @@ impl InstallScheduler {
             spacing,
             permits: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             state: Mutex::new(SchedulerState::default()),
-            visibility_inflight: Inflight::new(),
             count_inflight: Inflight::new(),
         }
     }
@@ -322,73 +320,53 @@ impl InstallScheduler {
         });
     }
 
-    /// Whether GitHub confirms `source` is public right now. Anything else -
-    /// private, unknown, failed, rate limited, still cooling down - is `false`.
-    /// Only the call that actually asks GitHub takes a slot; on a `Public`
-    /// answer it leaves that slot in `held`, so the caller keeps it through the
-    /// skills.sh request. A caller that waits on another's answer holds none.
-    async fn is_public<A: InstallsApi>(
-        &self,
-        api: &A,
-        source: &str,
-        held: &mut Option<OwnedSemaphorePermit>,
-    ) -> bool {
-        let id = format!("repo:{source}");
-        if self.is_negative(&id) || self.github_blocked() {
-            return false;
-        }
-        self.visibility_inflight
-            .run(&id, async {
-                let Some(permit) = self.acquire().await else {
-                    return false;
-                };
-                // A request that queued for a slot may have waited out a 429.
-                if self.github_blocked() {
-                    return false;
-                }
-                let verdict = tokio::time::timeout(FETCH_TIMEOUT, api.is_public_repo(source)).await;
-                if matches!(verdict, Ok(Ok(Visibility::Public))) {
-                    *held = Some(permit);
-                    return true;
-                }
-                self.release_after_spacing(permit);
-                if let Ok(Ok(Visibility::RateLimited(wait))) = verdict {
-                    self.with_state(|state| {
-                        state.github_blocked_until = Some(Instant::now() + wait);
-                    });
-                } else {
-                    self.remember_negative(&id);
-                }
-                false
-            })
-            .await
+    /// Whether a request for `id` (a skill of `repo_id`) may still go out:
+    /// nothing remembered or cooling down says no.
+    fn may_request(&self, id: &str, repo_id: &str) -> bool {
+        !(self.is_negative(id)
+            || self.is_negative(repo_id)
+            || self.github_blocked()
+            || self.skills_blocked())
     }
 
     /// One skill's count, or `None` when it cannot be asked for or answered.
+    /// Each request takes one slot and holds it through its own GitHub
+    /// visibility check and the skills.sh call: a verdict is never shared,
+    /// because a repo can turn private between two requests. Only callers
+    /// asking for the very same skill share one run and its count.
     async fn installs<A: InstallsApi>(&self, api: &A, key: &InstallCountKey) -> Option<u32> {
         let id = format!("skill:{}", cache_key(key));
         let repo_id = format!("repo:{}", key.source);
-        if self.is_negative(&id) || self.skills_blocked() {
+        if !self.may_request(&id, &repo_id) {
             return None;
         }
         self.count_inflight
             .run(&id, async {
-                let mut held = None;
-                if !self.is_public(api, &key.source, &mut held).await {
+                let permit = self.acquire().await?;
+                // Queuing for a slot can outlast a cooldown or another
+                // task's NotPublic answer.
+                if !self.may_request(&id, &repo_id) {
                     return None;
                 }
-                let permit = match held {
-                    Some(permit) => permit,
-                    None => self.acquire().await?,
-                };
-                // The verdict is only as old as the moment it was given: another
-                // task may have learned the repo is private, or hit a cooldown,
-                // while this one waited.
-                if self.is_negative(&repo_id)
-                    || self.is_negative(&id)
-                    || self.github_blocked()
-                    || self.skills_blocked()
-                {
+                let verdict =
+                    tokio::time::timeout(FETCH_TIMEOUT, api.is_public_repo(&key.source)).await;
+                match verdict {
+                    Ok(Ok(Visibility::Public)) => {}
+                    Ok(Ok(Visibility::RateLimited(wait))) => {
+                        self.release_after_spacing(permit);
+                        self.with_state(|state| {
+                            state.github_blocked_until = Some(Instant::now() + wait);
+                        });
+                        return None;
+                    }
+                    _ => {
+                        self.release_after_spacing(permit);
+                        self.remember_negative(&repo_id);
+                        return None;
+                    }
+                }
+                // Another task may have recorded a newer answer meanwhile.
+                if !self.may_request(&id, &repo_id) {
                     return None;
                 }
                 let result =
@@ -794,22 +772,49 @@ mod tests {
         assert_eq!(result[0].installs, None);
     }
 
-    /// Flow: more skills of one repo than there are request slots, all
-    /// looked up at once.
-    /// Expectation: every skill gets its count.
-    /// A failure here means tasks waiting on one repo's visibility answer hold
-    /// the slots the answering task needs, and the lookup deadlocks.
-    #[tokio::test(start_paused = true)]
-    async fn waiters_on_one_repo_do_not_starve_the_task_asking_github() {
+    /// Public for the first GitHub check, private for every later one.
+    struct TurnsPrivateApi {
+        visibility_calls: AtomicUsize,
+        calls: AtomicUsize,
+    }
+
+    impl InstallsApi for TurnsPrivateApi {
+        async fn is_public_repo(&self, _source: &str) -> Result<Visibility, String> {
+            let earlier = self.visibility_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(if earlier == 0 {
+                Visibility::Public
+            } else {
+                Visibility::NotPublic
+            })
+        }
+
+        async fn installs(&self, _source: &str, _name: &str) -> Result<u32, InstallsFailure> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(5)
+        }
+    }
+
+    /// Flow: two different skills of one repo; the first is told `Public` and
+    /// sends, then the repo turns private while the second is still waiting.
+    /// Expectation: the second makes no skills.sh call.
+    /// A failure here means a Public verdict is shared between requests, and
+    /// a repo that just turned private still has a skill name sent.
+    #[tokio::test]
+    async fn a_repo_that_turns_private_after_one_skill_sent_stops_the_next() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("install-counts.json");
-        let keys: Vec<_> = (0..MAX_CONCURRENT_REQUESTS * 2)
-            .map(|i| key("obra/write-tests", &format!("skill-{i}")))
-            .collect();
+        let api = Arc::new(TurnsPrivateApi {
+            visibility_calls: AtomicUsize::new(0),
+            calls: AtomicUsize::new(0),
+        });
+        let keys = vec![key("a/b", "first"), key("a/b", "second")];
 
-        let result = lookup_keys(&FakeApi::answering(Some(9)), &path, keys, 1_000).await;
+        let result = lookup_keys(&api, &path, keys, 1_000).await;
 
-        assert!(result.iter().all(|c| c.installs == Some(9)));
+        let counts: Vec<_> = result.iter().map(|c| c.installs).collect();
+        assert_eq!(counts.iter().filter(|c| c.is_some()).count(), 1);
+        assert_eq!(api.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 2);
     }
 
     /// Flow: one fetch never resolves; its cache entry is stale, and other
@@ -965,10 +970,11 @@ mod tests {
     }
 
     /// Flow: three skills from one repo in one batch.
-    /// Expectation: GitHub is asked once for the repo, skills.sh three times.
-    /// A failure here means the 60 requests an hour GitHub allows run out fast.
+    /// Expectation: each skills.sh request has its own GitHub check.
+    /// A failure here means a verdict is shared, and a repo that turned
+    /// private mid-batch still gets its names sent.
     #[tokio::test]
-    async fn skills_of_one_repo_share_one_visibility_check_per_lookup() {
+    async fn each_skills_sh_request_has_its_own_visibility_check() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("install-counts.json");
         let api = FakeApi::answering(Some(5));
@@ -977,15 +983,14 @@ mod tests {
         lookup_keys(&api, &path, keys, 1_000).await;
 
         assert_eq!(api.calls.load(Ordering::SeqCst), 3);
-        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 3);
     }
 
     /// Flow: two single-key lookups of the same repo run at the same time
     /// (two skill pages opened together), on the one shared scheduler.
-    /// Expectation: GitHub is asked once for the repo.
-    /// A failure here means every page open spends GitHub's 60 requests an hour.
+    /// Expectation: both get their count, each after its own GitHub check.
     #[tokio::test]
-    async fn concurrent_lookups_of_one_repo_make_one_github_call() {
+    async fn concurrent_lookups_of_one_repo_each_check_github() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("install-counts.json");
         let api = FakeApi::answering(Some(5));
@@ -998,7 +1003,7 @@ mod tests {
 
         assert_eq!(one[0].installs, Some(5));
         assert_eq!(two[0].installs, Some(5));
-        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 2);
     }
 
     /// Flow: the same skill is looked up at the same time by two callers.
