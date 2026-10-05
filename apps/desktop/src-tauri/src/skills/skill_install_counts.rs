@@ -27,17 +27,29 @@ pub const REQUEST_SPACING: Duration = Duration::from_millis(250);
 /// fetch like any other and takes the stale-cache fallback.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// Only a plain `owner/repo` goes to skills.sh: two non-empty segments, no
-/// scheme, no leading slash. A git URL or local path would leak a private
-/// source, so those are never looked up.
-fn is_owner_repo(source: &str) -> bool {
-    let mut parts = source.split('/');
-    let valid = |s: Option<&str>| {
-        s.is_some_and(|s| {
-            !s.is_empty() && !s.contains(':') && s != ".." && !s.chars().any(char::is_whitespace)
-        })
-    };
-    valid(parts.next()) && valid(parts.next()) && parts.next().is_none()
+/// One safe URL path segment: ASCII letters, digits, `.`, `_`, `-`, and not
+/// `.` or `..`. No `%` or `/`, so nothing can encode a traversal or add path
+/// levels.
+fn is_safe_segment(s: &str) -> bool {
+    !s.is_empty()
+        && s != "."
+        && s != ".."
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Splits a plain `owner/repo` source into its two safe segments. A git URL
+/// or local path would leak a private source, so those give `None` and are
+/// never looked up.
+fn owner_repo(source: &str) -> Option<(&str, &str)> {
+    let (owner, repo) = source.split_once('/')?;
+    (is_safe_segment(owner) && is_safe_segment(repo)).then_some((owner, repo))
+}
+
+/// A key is looked up only when its source and its skill name are all safe
+/// segments.
+fn is_lookup_key(key: &InstallCountKey) -> bool {
+    owner_repo(&key.source).is_some() && is_safe_segment(&key.name)
 }
 
 /// Fetches one skill's install count, after checking its repo is public.
@@ -84,7 +96,8 @@ impl InstallsApi for SkillsShInstallsApi {
     }
 
     async fn installs(&self, source: &str, name: &str) -> Result<u32, String> {
-        let details = api::get_skill_details(&self.access, &format!("{source}/{name}")).await?;
+        let (owner, repo) = owner_repo(source).ok_or("not an owner/repo source")?;
+        let details = api::get_skill_details_by_segments(&self.access, owner, repo, name).await?;
         Ok(details.installs)
     }
 }
@@ -163,7 +176,7 @@ pub async fn lookup_install_counts<A: InstallsApi>(
         if counts.contains_key(&id) {
             continue;
         }
-        if !is_owner_repo(&key.source) {
+        if !is_lookup_key(key) {
             counts.insert(id, None);
             continue;
         }
@@ -598,6 +611,37 @@ mod tests {
 
         assert_eq!(result[0].installs, None);
         assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(api.calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// Flow: a public source with a skill name that encodes a path traversal
+    /// into another repo, or carries `%`, `/` or dots only.
+    /// Expectation: no GitHub call and no skills.sh call for any repo, no count.
+    /// A failure here means a crafted lock entry sends a private repo's
+    /// coordinates to skills.sh without a visibility check.
+    #[tokio::test]
+    async fn an_unsafe_skill_name_makes_no_calls_at_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        let api = FakeApi::answering(Some(5));
+        let keys = [
+            "%2e%2e/%2e%2e/private-owner/private-repo/secret-skill",
+            "../x",
+            "..",
+            ".",
+            "a%2Fb",
+            "a/b",
+            "",
+        ]
+        .into_iter()
+        .map(|name| key("obra/write-tests", name))
+        .collect();
+
+        let result =
+            lookup_install_counts(Arc::clone(&api), &path, keys, 1_000, Duration::ZERO).await;
+
+        assert!(result.iter().all(|c| c.installs.is_none()));
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 0);
         assert_eq!(api.calls.load(Ordering::SeqCst), 0);
     }
 

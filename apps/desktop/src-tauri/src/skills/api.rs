@@ -346,10 +346,59 @@ pub async fn get_skill_details(
     }
 
     let url = format!("{}/skills/{}", access.base(), skill_id);
+    let url = reqwest::Url::parse(&url).map_err(|e| format!("Invalid skill id: {e}"))?;
+    fetch_skill_details(access, url).await
+}
 
+/// Builds `<base>/skills/{owner}/{repo}/{skill}` one pushed segment at a
+/// time, so a segment can never add or remove path levels, and refuses any
+/// URL whose parsed path is not exactly the base plus those four segments.
+/// Callers validate the segments' characters first; this is the second wall.
+fn skill_details_url(
+    access: &SkillsShAccess,
+    owner: &str,
+    repo: &str,
+    skill: &str,
+) -> Result<reqwest::Url, String> {
+    let invalid = || format!("Invalid skill id: {owner}/{repo}/{skill}");
+    let mut url = reqwest::Url::parse(access.base()).map_err(|_| invalid())?;
+    let mut expected: Vec<String> = url
+        .path_segments()
+        .ok_or_else(invalid)?
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    url.path_segments_mut()
+        .map_err(|()| invalid())?
+        .pop_if_empty()
+        .extend(["skills", owner, repo, skill]);
+    expected.extend(["skills", owner, repo, skill].map(str::to_string));
+    let actual: Vec<&str> = url.path_segments().ok_or_else(invalid)?.collect();
+    if actual != expected {
+        return Err(invalid());
+    }
+    Ok(url)
+}
+
+/// `get_skill_details` for an id already split into owner, repo and slug,
+/// with the URL built per segment (see `skill_details_url`).
+pub async fn get_skill_details_by_segments(
+    access: &SkillsShAccess,
+    owner: &str,
+    repo: &str,
+    skill: &str,
+) -> Result<SkillDetails, String> {
+    let url = skill_details_url(access, owner, repo, skill)?;
+    fetch_skill_details(access, url).await
+}
+
+async fn fetch_skill_details(
+    access: &SkillsShAccess,
+    url: reqwest::Url,
+) -> Result<SkillDetails, String> {
     let (client, headers) = client_for(access)?;
     let response = client
-        .get(&url)
+        .get(url)
         .headers(headers)
         .header("User-Agent", "AgentStudio/0.1.0")
         .send()
@@ -383,6 +432,32 @@ mod tests {
         SkillFileEntry {
             path: path.to_string(),
             contents: contents.to_string(),
+        }
+    }
+
+    /// Flow: build the details URL for a normal skill and for names that try
+    /// to add path levels.
+    /// Expectation: the path is exactly base + skills + owner + repo + skill;
+    /// a segment carrying a slash or dot-dot is encoded or refused, never a
+    /// different path.
+    /// A failure here means a crafted skill name can reach another repo's page.
+    #[test]
+    fn skill_details_url_has_exactly_the_four_segments() {
+        let access = SkillsShAccess::Server {
+            base_url: "http://127.0.0.1:8787/api/v1".to_string(),
+        };
+
+        let url = skill_details_url(&access, "obra", "write-tests", "tdd").unwrap();
+        let segments: Vec<&str> = url.path_segments().unwrap().collect();
+        assert_eq!(
+            segments,
+            ["api", "v1", "skills", "obra", "write-tests", "tdd"]
+        );
+
+        for hostile in ["..", "a/b", "%2e%2e/%2e%2e/x/y/z"] {
+            if let Ok(url) = skill_details_url(&access, "obra", "write-tests", hostile) {
+                assert_eq!(url.path_segments().unwrap().count(), 6, "{url}");
+            }
         }
     }
 
