@@ -31,7 +31,8 @@ function devPrerender(): Plugin {
       // The build writes the docs markdown copies and llms.txt to dist; serve them from source here.
       server.middlewares.use(async (req, res, next) => {
         const path = req.url?.split("?")[0].replace(/^\//, "");
-        if (path !== "llms.txt" && !path?.endsWith(".md")) return next();
+        if (path !== "llms.txt" && !(path?.startsWith("docs/") && path.endsWith(".md")))
+          return next();
         try {
           const prerender = await loadPrerender(server);
           if (path === "llms.txt") {

@@ -60,7 +60,10 @@ function DownloadButton({ theme, inFinale = false }: { theme: SiteTheme; inFinal
         {...stylex.props(inFinale && finaleCtaMarker, styles.primaryButton, styles.touchOnly)}
       >
         <span>Get Skill Studio</span>
-        <span aria-hidden="true" {...stylex.props(styles.primaryButtonArrow, styles.arrowDown)}>
+        <span
+          aria-hidden="true"
+          {...stylex.props(styles.primaryButtonArrow, inFinale ? styles.arrowUp : styles.arrowDown)}
+        >
           <Arrow inverse={theme === "dark"} />
         </span>
       </a>
@@ -259,6 +262,7 @@ const styles = stylex.create({
   pointerOnlyBlock: { display: { default: "block", [TOUCH_DEVICE]: "none" } },
   touchOnlyBlock: { display: { default: "none", [TOUCH_DEVICE]: "block" } },
   arrowDown: { transform: "rotate(90deg)" },
+  arrowUp: { transform: "rotate(-90deg)" },
   primaryButton: {
     textDecoration: "none",
     alignItems: "center",
