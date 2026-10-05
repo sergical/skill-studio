@@ -1313,6 +1313,9 @@ fn turn_on_files(
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
     let after = recorded.after.as_ref();
+    // Worked out before any file is written, so a merge that cannot be done
+    // fails with agents.toml and agents.lock untouched.
+    let ignore_merge = planned_ignore_merge(fs, recorded, originals, skill)?;
     if let Some(current) = read_text(fs, &recorded.config)? {
         let wholesale = untouched_original(
             Some(&current),
@@ -1387,10 +1390,6 @@ fn turn_on_files(
     // that backup leaves the file alone.
     if let Some(gitignore) = &recorded.gitignore {
         let current = read_text(fs, gitignore)?;
-        let original = originals
-            .iter()
-            .find(|file| &file.path == gitignore)
-            .and_then(|file| file.text.as_deref());
         let wholesale = untouched_original(
             current.as_deref(),
             after.map(|a| a.gitignore.as_str()),
@@ -1399,71 +1398,182 @@ fn turn_on_files(
         );
         if let Some(original) = wholesale {
             write_back(rt, guard, gitignore, current, original, changed)?;
-        } else if let (Some(current), Some(original)) = (current, original) {
-            let line = format!("/skills/{}", skill.0);
-            let has_line = |text: &str| text.lines().any(|l| l.trim_end() == line);
-            if has_line(original) && !has_line(&current) {
-                let text = with_line_restored(original, &current, &line);
-                write_text(rt, guard, gitignore, &text)?;
-                changed.push(FileSnapshot {
-                    path: gitignore.clone(),
-                    text: Some(current),
-                });
-            }
+        } else if let Some((text, before)) = ignore_merge {
+            write_text(rt, guard, gitignore, &text)?;
+            changed.push(FileSnapshot {
+                path: gitignore.clone(),
+                text: Some(before),
+            });
         }
     }
     Ok(())
 }
 
-/// `current` with `line` back at its place in `original`. The backup's other
-/// lines are aligned with `current` by longest common subsequence, so a line
-/// that repeats is matched by order, not by text. The line goes right after
-/// the current line aligned to its nearest earlier backup line, else right
-/// before the one aligned to its nearest later line, else at the end. Git
-/// takes the last rule that matches, so a line appended after a negation
-/// would change what is ignored.
-fn with_line_restored(original: &str, current: &str, line: &str) -> String {
-    let mut before: Vec<&str> = original.lines().map(str::trim_end).collect();
-    let at = before
+/// The merged ignore file and the text it replaces, when turn-on has to merge
+/// the skill's lines back into a file that changed since the park. `None`
+/// when the file goes back wholesale or already has every line.
+fn planned_ignore_merge(
+    fs: &dyn ScopeFs,
+    recorded: &RecordedDotagents,
+    originals: &[FileSnapshot],
+    skill: &SkillName,
+) -> Result<Option<(String, String)>, CoreError> {
+    let Some(gitignore) = &recorded.gitignore else {
+        return Ok(None);
+    };
+    let current = read_text(fs, gitignore)?;
+    let wholesale = untouched_original(
+        current.as_deref(),
+        recorded.after.as_ref().map(|a| a.gitignore.as_str()),
+        gitignore,
+        originals,
+    );
+    let original = originals
         .iter()
-        .position(|l| *l == line)
-        .unwrap_or(before.len());
-    if at < before.len() {
-        before.remove(at);
+        .find(|file| &file.path == gitignore)
+        .and_then(|file| file.text.as_deref());
+    let (None, Some(current), Some(original)) = (wholesale, current, original) else {
+        return Ok(None);
+    };
+    let own = [
+        format!("/skills/{}", skill.0),
+        format!("/skills/{}/", skill.0),
+    ];
+    let merged = with_lines_restored(original, &current, &own).map_err(|lines| {
+        CoreError::new(
+            ErrorCode::DriftConflict,
+            format!(
+                "the ignore file changed too much to merge safely; put these lines back by hand: {}",
+                lines.join(", ")
+            ),
+        )
+        .at(gitignore)
+    })?;
+    Ok(merged.map(|text| (text, current)))
+}
+
+/// The most cells the line alignment may use, about 16 MiB of table.
+const IGNORE_ALIGN_CELL_CAP: usize = 4_000_000;
+
+/// `current` with each of `own` that `original` had, and `current` lacks,
+/// back at its place in `original`; `None` when nothing is missing. The
+/// backup's other lines are aligned with `current` by longest common
+/// subsequence, so a line that repeats is matched by order, not by text. A
+/// restored line goes right after the current line aligned to its nearest
+/// earlier backup line, else right before the one aligned to its nearest
+/// later line, else at the end. Git takes the last rule that matches, so a
+/// line put after a negation would change what is ignored. `Err` carries the
+/// missing lines when the alignment would be too big to compute.
+fn with_lines_restored(
+    original: &str,
+    current: &str,
+    own: &[String],
+) -> Result<Option<String>, Vec<String>> {
+    let kept: Vec<&str> = current.lines().collect();
+    let mut present: Vec<usize> = own
+        .iter()
+        .map(|line| kept.iter().filter(|k| k.trim_end() == line).count())
+        .collect();
+    let mut stay: Vec<&str> = Vec::new();
+    // Each missing line with the count of surviving backup lines before it.
+    let mut missing: Vec<(usize, &str)> = Vec::new();
+    for line in original.lines().map(str::trim_end) {
+        match own.iter().position(|o| o == line) {
+            Some(i) if present[i] > 0 => present[i] -= 1,
+            Some(_) => missing.push((stay.len(), line)),
+            None => stay.push(line),
+        }
     }
-    let mut kept: Vec<&str> = current.lines().collect();
-    let (n, m) = (before.len(), kept.len());
-    // lcs[i][j]: length of the common subsequence of before[i..] and kept[j..].
-    let mut lcs = vec![vec![0usize; m + 1]; n + 1];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            lcs[i][j] = if before[i] == kept[j].trim_end() {
-                lcs[i + 1][j + 1] + 1
+    if missing.is_empty() {
+        return Ok(None);
+    }
+    let Some(align) = align_lines(&stay, &kept) else {
+        return Err(missing
+            .iter()
+            .map(|(_, line)| (*line).to_string())
+            .collect());
+    };
+    let mut inserts: Vec<(usize, usize, &str)> = missing
+        .iter()
+        .enumerate()
+        .map(|(order, (k, line))| {
+            let at = align[..*k]
+                .iter()
+                .rev()
+                .find_map(|j| *j)
+                .map(|j| j + 1)
+                .or_else(|| align[*k..].iter().find_map(|j| *j))
+                .unwrap_or(kept.len());
+            (at, order, *line)
+        })
+        .collect();
+    inserts.sort_unstable();
+    let mut out: Vec<&str> = Vec::with_capacity(kept.len() + inserts.len());
+    let mut pending = inserts.into_iter().peekable();
+    for (i, line) in kept.iter().enumerate() {
+        while let Some((_, _, restored)) = pending.next_if(|(at, _, _)| *at == i) {
+            out.push(restored);
+        }
+        out.push(line);
+    }
+    out.extend(pending.map(|(_, _, restored)| restored));
+    Ok(Some(format!("{}\n", out.join("\n"))))
+}
+
+/// For each line of `a`, the index of the line of `b` it is aligned with
+/// (trailing whitespace ignored), by longest common subsequence. The common
+/// start and end are matched first, so the table covers only what differs;
+/// `None` when even that is over [`IGNORE_ALIGN_CELL_CAP`].
+fn align_lines(backup: &[&str], current: &[&str]) -> Option<Vec<Option<usize>>> {
+    let same = |old: &str, new: &str| old == new.trim_end();
+    let mut align = vec![None; backup.len()];
+    let limit = backup.len().min(current.len());
+    let start = (0..limit)
+        .take_while(|&k| same(backup[k], current[k]))
+        .count();
+    let end = (0..limit - start)
+        .take_while(|&k| same(backup[backup.len() - 1 - k], current[current.len() - 1 - k]))
+        .count();
+    for (k, slot) in align.iter_mut().enumerate().take(start) {
+        *slot = Some(k);
+    }
+    for k in 0..end {
+        align[backup.len() - 1 - k] = Some(current.len() - 1 - k);
+    }
+    let old = &backup[start..backup.len() - end];
+    let new = &current[start..current.len() - end];
+    let (rows, cols) = (old.len(), new.len());
+    if rows == 0 || cols == 0 {
+        return Some(align);
+    }
+    if (rows + 1).checked_mul(cols + 1)? > IGNORE_ALIGN_CELL_CAP {
+        return None;
+    }
+    // lcs[r * (cols + 1) + c]: common subsequence length of old[r..], new[c..].
+    let at = |r: usize, c: usize| r * (cols + 1) + c;
+    let mut lcs = vec![0u32; (rows + 1) * (cols + 1)];
+    for r in (0..rows).rev() {
+        for c in (0..cols).rev() {
+            lcs[at(r, c)] = if same(old[r], new[c]) {
+                lcs[at(r + 1, c + 1)] + 1
             } else {
-                lcs[i + 1][j].max(lcs[i][j + 1])
+                lcs[at(r + 1, c)].max(lcs[at(r, c + 1)])
             };
         }
     }
-    let (mut earlier, mut later) = (None, None);
-    let (mut i, mut j) = (0, 0);
-    while i < n && j < m {
-        if before[i] == kept[j].trim_end() {
-            if i < at {
-                earlier = Some(j);
-            } else if later.is_none() {
-                later = Some(j);
-            }
-            i += 1;
-            j += 1;
-        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
-            i += 1;
+    let (mut r, mut c) = (0, 0);
+    while r < rows && c < cols {
+        if same(old[r], new[c]) {
+            align[start + r] = Some(start + c);
+            r += 1;
+            c += 1;
+        } else if lcs[at(r + 1, c)] >= lcs[at(r, c + 1)] {
+            r += 1;
         } else {
-            j += 1;
+            c += 1;
         }
     }
-    let index = earlier.map(|j| j + 1).or(later).unwrap_or(m);
-    kept.insert(index, line);
-    format!("{}\n", kept.join("\n"))
+    Some(align)
 }
 
 /// The files a park backed up, read back from its backup folder, for
@@ -1497,6 +1607,73 @@ pub(crate) fn backed_up_files(
 mod tests {
     use super::*;
 
+    fn restore_line(original: &str, current: &str, line: &str) -> String {
+        with_lines_restored(original, current, &[line.to_string()])
+            .unwrap()
+            .unwrap_or_else(|| current.to_string())
+    }
+
+    fn big_ignore_file(lines: usize) -> String {
+        let others: Vec<String> = (0..lines).map(|i| format!("/skills/other-{i}")).collect();
+        format!("/skills/foo\n{}\n", others.join("\n"))
+    }
+
+    /// Flow: a 50k-line ignore file with a small edit in the middle. Expectation:
+    /// the common start and end are trimmed, so the line still merges back.
+    /// Failure: the alignment allocates a table over the whole file.
+    #[test]
+    fn a_large_ignore_file_with_a_small_edit_still_merges() {
+        let original = big_ignore_file(50_000);
+        let edited: Vec<&str> = original
+            .lines()
+            .skip(1)
+            .map(|l| {
+                if l == "/skills/other-25000" {
+                    "# edited"
+                } else {
+                    l
+                }
+            })
+            .collect();
+        let current = edited.join("\n") + "\n";
+        let merged = restore_line(&original, &current, "/skills/foo");
+        assert!(merged.starts_with("/skills/foo\n/skills/other-0\n"));
+        assert!(merged.contains("# edited\n"));
+    }
+
+    /// Flow: a 50k-line ignore file where most lines differ from the backup.
+    /// Expectation: the merge is refused and names the missing line. Failure:
+    /// a table of billions of cells is allocated.
+    #[test]
+    fn a_large_ignore_file_changed_too_much_is_refused() {
+        let original = big_ignore_file(50_000);
+        let changed: Vec<String> = (0..50_000).map(|i| format!("# changed {i}")).collect();
+        let current = changed.join("\n") + "\n";
+        let err =
+            with_lines_restored(&original, &current, &["/skills/foo".to_string()]).unwrap_err();
+        assert_eq!(err, ["/skills/foo"]);
+    }
+
+    /// Flow: the backup has the skill's rule twice, around a negation. Expectation:
+    /// both come back at their own places. Failure: only the first returns and the
+    /// folder shows up in git.
+    #[test]
+    fn every_removed_copy_of_the_rule_comes_back() {
+        let original = "/skills/foo\n!/skills/foo/\n/skills/foo\n";
+        let current = "!/skills/foo/\n# mine\n";
+        assert_eq!(
+            with_lines_restored(original, current, &["/skills/foo".to_string()])
+                .unwrap()
+                .unwrap(),
+            "/skills/foo\n!/skills/foo/\n/skills/foo\n# mine\n"
+        );
+        let half = "/skills/foo\n!/skills/foo/\n# mine\n";
+        assert_eq!(
+            restore_line(original, half, "/skills/foo"),
+            "/skills/foo\n!/skills/foo/\n/skills/foo\n# mine\n"
+        );
+    }
+
     /// Flow: the backup has `/skills/foo` then `!/skills/foo/`, and the file
     /// has since gained a comment. Expectation: the restored line lands before
     /// the negation. Failure: it is appended after it, so git ignores a folder
@@ -1506,15 +1683,15 @@ mod tests {
         let original = "# top\n/skills/foo\n!/skills/foo/\n";
         let current = "# top\n!/skills/foo/\n# mine\n";
         assert_eq!(
-            with_line_restored(original, current, "/skills/foo"),
+            restore_line(original, current, "/skills/foo"),
             "# top\n/skills/foo\n!/skills/foo/\n# mine\n"
         );
         assert_eq!(
-            with_line_restored("# top\n/skills/foo\n", "# top\n# mine\n", "/skills/foo"),
+            restore_line("# top\n/skills/foo\n", "# top\n# mine\n", "/skills/foo"),
             "# top\n/skills/foo\n# mine\n"
         );
         assert_eq!(
-            with_line_restored(
+            restore_line(
                 "# group\n!/skills/foo/\n/skills/foo\n# group\n",
                 "# group\n!/skills/foo/\n# group\n# mine\n",
                 "/skills/foo"
@@ -1522,7 +1699,7 @@ mod tests {
             "# group\n!/skills/foo/\n/skills/foo\n# group\n# mine\n"
         );
         assert_eq!(
-            with_line_restored("/skills/foo\n", "# mine", "/skills/foo"),
+            restore_line("/skills/foo\n", "# mine", "/skills/foo"),
             "# mine\n/skills/foo\n"
         );
     }

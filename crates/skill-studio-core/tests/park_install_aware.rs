@@ -1779,6 +1779,66 @@ fn turn_on_restores_the_ignore_line_beside_the_right_repeat_of_a_line() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// Flow: the ignore file has the skill's rule on both sides of a negation.
+/// Park removes both, the person adds a comment, then turn on. Expectation:
+/// both rules return around the negation and the comment stays. Failure: only
+/// the first returns and the folder shows up in git.
+#[test]
+fn turn_on_restores_every_removed_copy_of_the_ignore_rule() {
+    let (home, stub) = dotagents_home("park_dotagents_ignore_twice", EXPLICIT_TOML);
+    let ignore = home.join(".agents/.gitignore");
+    std::fs::write(&ignore, "/skills/foo\n!/skills/foo/\n/skills/foo\n").unwrap();
+    let rt = runtime(&home, stub.clone(), true);
+
+    park_foo(&rt);
+    std::fs::write(&ignore, read(&ignore) + "# mine\n").unwrap();
+    unpark_foo(&rt);
+
+    assert_eq!(
+        read(&ignore),
+        "/skills/foo\n!/skills/foo/\n/skills/foo\n# mine\n"
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: a 50k-line ignore file is rewritten almost entirely after the park,
+/// then turn on. Expectation: turn-on refuses with a clear error and nothing
+/// changes: the skill stays parked and `agents.toml` and `agents.lock` are as
+/// the park left them. Failure: the alignment runs out of memory after the
+/// config files were already written.
+#[test]
+fn turn_on_refuses_an_ignore_file_too_changed_to_merge_and_changes_nothing() {
+    let (home, stub) = dotagents_home("park_dotagents_ignore_huge", EXPLICIT_TOML);
+    let ignore = home.join(".agents/.gitignore");
+    let others: Vec<String> = (0..50_000).map(|i| format!("/skills/other-{i}")).collect();
+    std::fs::write(&ignore, format!("/skills/foo\n{}\n", others.join("\n"))).unwrap();
+    let rt = runtime(&home, stub.clone(), true);
+
+    park_foo(&rt);
+    let changed: Vec<String> = (0..50_000).map(|i| format!("# changed {i}")).collect();
+    let rewritten = changed.join("\n") + "\n";
+    std::fs::write(&ignore, &rewritten).unwrap();
+    let (toml, lock) = (read(&stub.toml_path()), read(&stub.lock_path()));
+    let err = ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked_copy(&rt, "foo").id,
+        },
+    )
+    .unwrap_err();
+
+    assert!(err.message.contains("too much to merge"), "{}", err.message);
+    assert_eq!(read(&stub.toml_path()), toml);
+    assert_eq!(read(&stub.lock_path()), lock);
+    assert_eq!(read(&ignore), rewritten);
+    assert!(home
+        .join(".agents/skills-parked/universal/foo/SKILL.md")
+        .exists());
+    assert!(!home.join(".agents/skills/foo").exists());
+    std::fs::remove_dir_all(&home).ok();
+}
+
 /// Flow: park and turn on a skill in a project whose `.agents/.gitignore`
 /// lists it. Expectation: the project's file is byte for byte what it was.
 /// Failure: the project scope reads the file at the wrong path and leaves
