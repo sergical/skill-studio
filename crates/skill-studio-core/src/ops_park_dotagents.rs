@@ -121,16 +121,49 @@ impl DotagentsPark {
     }
 
     /// The `payload.dotagents_after` value: what the three files hold once
-    /// `dotagents remove` has run. `None` when a file cannot be read, so
-    /// turn-on edits instead of restoring.
-    pub(crate) fn payload_after(&self, rt: &Runtime) -> Option<serde_json::Value> {
+    /// `dotagents remove` has run. `None` when a file cannot be read, or when
+    /// anything beyond this skill's own entries changed while the command
+    /// ran: turn-on then edits the files, because restoring a backup would
+    /// drop that other change.
+    pub(crate) fn payload_after(
+        &self,
+        rt: &Runtime,
+        skill: &SkillName,
+    ) -> Option<serde_json::Value> {
         let fs = rt.ports.fs.as_ref();
-        let hash = |path: &Path| read_text(fs, path).ok().map(|t| content_hash(t.as_deref()));
-        Some(serde_json::json!({
-            "config": hash(&self.config)?,
-            "lock": hash(&self.lock)?,
-            "gitignore": hash(&self.gitignore)?,
-        }))
+        let after_text = |path: &Path| read_text(fs, path).ok();
+        let before_text = |path: &Path| {
+            self.originals
+                .iter()
+                .find(|file| file.path == path)
+                .and_then(|file| file.text.clone())
+        };
+        let (config, lock, ignore) = (
+            after_text(&self.config)?,
+            after_text(&self.lock)?,
+            after_text(&self.gitignore)?,
+        );
+        let name = skill.0.as_str();
+        let only_own_entries_gone = removed_only(
+            before_text(&self.config).as_deref(),
+            config.as_deref(),
+            |text| config_shape(text, name),
+        ) && removed_only(
+            before_text(&self.lock).as_deref(),
+            lock.as_deref(),
+            |text| lock_shape(text, name),
+        ) && removed_only(
+            before_text(&self.gitignore).as_deref(),
+            ignore.as_deref(),
+            |text| Some(ignore_shape(text, name)),
+        );
+        only_own_entries_gone.then(|| {
+            serde_json::json!({
+                "config": content_hash(config.as_deref()),
+                "lock": content_hash(lock.as_deref()),
+                "gitignore": content_hash(ignore.as_deref()),
+            })
+        })
     }
 
     /// The `payload.dotagents` value the park row records.
@@ -156,6 +189,100 @@ impl DotagentsPark {
             "wildcards": wildcards,
         })
     }
+}
+
+/// True when `after` is `before` apart from the skill's own entries, as
+/// `shape` sees them. An absent file only matches an absent file.
+fn removed_only(
+    before: Option<&str>,
+    after: Option<&str>,
+    shape: impl Fn(&str) -> Option<serde_json::Value>,
+) -> bool {
+    match (before, after) {
+        (None, None) => true,
+        (Some(before), Some(after)) => {
+            let before = shape(before);
+            before.is_some() && before == shape(after)
+        }
+        _ => false,
+    }
+}
+
+/// A TOML item as JSON, so two files compare by content and not by layout.
+fn item_json(item: &toml_edit::Item) -> serde_json::Value {
+    fn value_json(value: &toml_edit::Value) -> serde_json::Value {
+        match value {
+            toml_edit::Value::Array(items) => items.iter().map(value_json).collect(),
+            toml_edit::Value::InlineTable(table) => table
+                .iter()
+                .map(|(key, value)| (key.to_string(), value_json(value)))
+                .collect::<serde_json::Map<_, _>>()
+                .into(),
+            toml_edit::Value::String(text) => text.value().clone().into(),
+            other => other.to_string().trim().to_string().into(),
+        }
+    }
+    match item {
+        toml_edit::Item::Value(value) => value_json(value),
+        toml_edit::Item::Table(table) => table
+            .iter()
+            .map(|(key, item)| (key.to_string(), item_json(item)))
+            .collect::<serde_json::Map<_, _>>()
+            .into(),
+        toml_edit::Item::ArrayOfTables(tables) => tables
+            .iter()
+            .map(|table| item_json(&toml_edit::Item::Table(table.clone())))
+            .collect(),
+        toml_edit::Item::None => serde_json::Value::Null,
+    }
+}
+
+/// `agents.toml` without `skill`'s own row, and without `skill` in any
+/// `exclude` list (an empty list reads as no list).
+fn config_shape(text: &str, skill: &str) -> Option<serde_json::Value> {
+    let doc = parse(Path::new("agents.toml"), text).ok()?;
+    let mut shape = item_json(doc.as_item());
+    if let Some(skills) = shape.get_mut("skills").and_then(|v| v.as_array_mut()) {
+        skills.retain(|row| row.get("name").and_then(|n| n.as_str()) != Some(skill));
+        for row in skills {
+            let Some(row) = row.as_object_mut() else {
+                continue;
+            };
+            if let Some(exclude) = row.get_mut("exclude").and_then(|v| v.as_array_mut()) {
+                exclude.retain(|item| item.as_str() != Some(skill));
+            }
+            if row
+                .get("exclude")
+                .and_then(|v| v.as_array())
+                .is_some_and(Vec::is_empty)
+            {
+                row.remove("exclude");
+            }
+        }
+    }
+    Some(shape)
+}
+
+/// `agents.lock` without `skill`'s row.
+fn lock_shape(text: &str, skill: &str) -> Option<serde_json::Value> {
+    let doc = parse(Path::new("agents.lock"), text).ok()?;
+    let mut shape = item_json(doc.as_item());
+    if let Some(skills) = shape.get_mut("skills").and_then(|v| v.as_object_mut()) {
+        skills.remove(skill);
+    }
+    Some(shape)
+}
+
+/// The ignore file's lines, sorted, without the ones that name `skill`.
+fn ignore_shape(text: &str, skill: &str) -> serde_json::Value {
+    let own = [format!("/skills/{skill}"), format!("/skills/{skill}/")];
+    let mut lines: Vec<&str> = text
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty() && !own.iter().any(|own| own == line))
+        .collect();
+    lines.sort_unstable();
+    lines.into()
 }
 
 /// Reads back what [`DotagentsPark::payload`] recorded.

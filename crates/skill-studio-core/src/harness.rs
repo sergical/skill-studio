@@ -1203,7 +1203,7 @@ fn probe_version(
         Some(value) => DetectedString::known(value, Evidence::verified("--version stdout")),
         None => DetectedString::unknown("--version printed nothing usable"),
     };
-    (version, infer_install_method(path))
+    (version, infer_install_method(ports.fs, path))
 }
 
 /// Infers an install method from the resolved executable's path. No vendor
@@ -1211,8 +1211,10 @@ fn probe_version(
 /// field is a documented but unread signal, a follow-up - so every row uses
 /// the same "inferred from path" heuristic `harness-detection.md` describes
 /// for Codex, `OpenCode`, and pi.
-fn infer_install_method(path: &Path) -> DetectedString {
-    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+fn infer_install_method(fs: &dyn ScopeFs, path: &Path) -> DetectedString {
+    // A shim link (`codex` -> `lib/node_modules/...`) names its install only
+    // through its target.
+    let resolved = fs.canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let text = resolved.to_string_lossy();
     let method = if text.contains("Cellar") || text.contains("homebrew") {
         "homebrew"
@@ -1573,16 +1575,15 @@ mod tests {
 
     #[test]
     fn a_symlink_into_node_modules_is_detected_as_an_npm_install_or_names_the_method_found() {
-        let tmp = tempfile::tempdir().unwrap();
-        let target = tmp.path().join("lib/node_modules/codex/bin/codex.js");
-        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-        std::fs::write(&target, b"#!/usr/bin/env node\n").unwrap();
-        let bin = tmp.path().join("bin");
-        std::fs::create_dir(&bin).unwrap();
-        let link = bin.join("codex");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let fs = FixtureBuilder::default()
+            .file("/usr/local/lib/node_modules/codex/bin/codex.js", b"")
+            .alias(
+                "/usr/local/bin/codex",
+                "/usr/local/lib/node_modules/codex/bin/codex.js",
+            )
+            .build_fs();
 
-        let method = infer_install_method(&link);
+        let method = infer_install_method(&fs, Path::new("/usr/local/bin/codex"));
         assert_eq!(method.value.as_deref(), Some("npm"), "got {method:?}");
     }
 

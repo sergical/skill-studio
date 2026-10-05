@@ -5279,7 +5279,7 @@ pub(crate) fn park_found_copy(
             }
             // What the files hold now: turn-on restores the backed-up originals
             // wholesale when nothing else changed them since.
-            if let Some(after) = plan.payload_after(rt) {
+            if let Some(after) = plan.payload_after(rt, &skill.name) {
                 let _ = session.store.patch_payload(
                     &session.guard,
                     &id,
@@ -5302,15 +5302,13 @@ pub(crate) fn park_found_copy(
                 }
             }
         }
-        if copy_stays_parked {
-            // Turn on must still offer this row: it holds the links and file
-            // backups the copy needs to come back whole.
-            let _ = session.store.patch_payload(
-                &session.guard,
-                &id,
-                serde_json::json!({ PARK_ROLLBACK_INCOMPLETE: true }),
-            );
-        }
+        // Recorded either way: a failed row with a finished rollback must not
+        // be offered to Turn on, one with a stranded copy must.
+        let _ = session.store.patch_payload(
+            &session.guard,
+            &id,
+            serde_json::json!({ PARK_ROLLBACK_INCOMPLETE: copy_stays_parked }),
+        );
         let _ = session.store.finish(
             &session.guard,
             &id,
@@ -5379,7 +5377,8 @@ fn unpark_body(
     }
     let skill = resolve_skill(&session.fresh, &deployment.id)?.clone();
 
-    let park_row = session
+    let fs = rt.ports.fs.as_ref();
+    let mut park_rows = session
         .store
         .list(&crate::events::EventFilter {
             skill: Some(skill.name.clone()),
@@ -5387,10 +5386,8 @@ fn unpark_body(
             after: None,
         })?
         .into_iter()
-        .find(|row| {
+        .filter(|row| {
             row.kind == crate::events::EventKind::Park.as_str()
-                && (row.status != crate::events::EventStatus::Failed
-                    || row.payload.get(PARK_ROLLBACK_INCOMPLETE) == Some(&serde_json::json!(true)))
                 && row.reverted_by.is_none()
                 && row
                     .payload
@@ -5398,7 +5395,19 @@ fn unpark_body(
                     .and_then(|v| v.as_str())
                     .map(Path::new)
                     == Some(deployment.path.as_path())
-        });
+        })
+        .collect::<Vec<_>>();
+    // A park that finished wins; a failed one is offered only when its copy
+    // is still parked, so a rolled-back attempt never rewrites live files.
+    let park_row = park_rows
+        .iter()
+        .position(|row| row.status != crate::events::EventStatus::Failed)
+        .or_else(|| {
+            park_rows
+                .iter()
+                .position(|row| failed_park_leaves_copy_parked(fs, &row.payload, &deployment.path))
+        })
+        .map(|index| park_rows.swap_remove(index));
     let links = park_row
         .as_ref()
         .map(|row| park_row_links(&row.payload))
@@ -5410,7 +5419,6 @@ fn unpark_body(
     let begin_step = crate::timing::step(clock, "begin_session", step_start);
 
     let step_start = clock.monotonic();
-    let fs = rt.ports.fs.as_ref();
     let restored_dir = match recorded_origin_dir(park_row.as_ref(), &skill.name) {
         Some(dir) => dir,
         None => unrecorded_origin_dir(rt, &deployment, &skill.name)?,
@@ -5944,6 +5952,23 @@ fn git_tracks_folder(rt: &Runtime, ctx: &OpContext, folder: &Path) -> Option<boo
 /// back: the copy is still parked, so Turn on must still use the row.
 const PARK_ROLLBACK_INCOMPLETE: &str = "rollback_incomplete";
 
+/// Whether a failed `park` row still has its copy parked at `parked_dir`.
+/// New rows say so in [`PARK_ROLLBACK_INCOMPLETE`]; rows from before that
+/// marker existed are judged by whether the copy is still there.
+fn failed_park_leaves_copy_parked(
+    fs: &dyn ScopeFs,
+    payload: &serde_json::Value,
+    parked_dir: &Path,
+) -> bool {
+    match payload
+        .get(PARK_ROLLBACK_INCOMPLETE)
+        .and_then(serde_json::Value::as_bool)
+    {
+        Some(stranded) => stranded,
+        None => fs.symlink_metadata(parked_dir).is_ok(),
+    }
+}
+
 /// The link paths a `park` row removed. Rows written before `links` existed
 /// carry only the Claude Code link, as `claude_link`.
 fn park_row_links(payload: &serde_json::Value) -> Vec<PathBuf> {
@@ -6006,6 +6031,25 @@ mod tests {
     use super::*;
     use crate::scope::RuntimeScope;
     use crate::testing::FixtureBuilder;
+
+    /// A failed park row from before `rollback_incomplete` existed is offered
+    /// to Turn on while its copy is still parked and not once it is gone;
+    /// a row that says its rollback finished is never offered, and one that
+    /// says it did not always is. Fails if an old stranded copy loses its
+    /// recorded links, or a rolled-back attempt rewrites live files.
+    #[test]
+    fn a_failed_park_row_is_offered_by_its_marker_or_by_its_copy_still_parked() {
+        let fs = FixtureBuilder::new().dir("/parked/foo").build_fs();
+        let parked = Path::new("/parked/foo");
+        let gone = Path::new("/parked/gone");
+        let legacy = serde_json::json!({});
+        assert!(failed_park_leaves_copy_parked(&fs, &legacy, parked));
+        assert!(!failed_park_leaves_copy_parked(&fs, &legacy, gone));
+        let finished = serde_json::json!({ PARK_ROLLBACK_INCOMPLETE: false });
+        assert!(!failed_park_leaves_copy_parked(&fs, &finished, parked));
+        let stranded = serde_json::json!({ PARK_ROLLBACK_INCOMPLETE: true });
+        assert!(failed_park_leaves_copy_parked(&fs, &stranded, gone));
+    }
 
     fn scope() -> NormalizedScope {
         let fs = FixtureBuilder::new().dir("/h").build_fs();

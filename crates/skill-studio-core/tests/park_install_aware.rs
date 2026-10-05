@@ -70,6 +70,9 @@ struct FakeDotagents {
     /// A failed `remove` leaves a folder at the skill's own path, so the
     /// rollback cannot move the parked copy back.
     block_move_back: AtomicBool,
+    /// `remove` also writes an unrelated skill into `agents.toml`, as another
+    /// tool editing the file at the same time would.
+    add_unrelated_entry: AtomicBool,
 }
 
 impl FakeDotagents {
@@ -84,6 +87,7 @@ impl FakeDotagents {
             keep_lock_row: AtomicBool::new(false),
             leave_toml: AtomicBool::new(false),
             block_move_back: AtomicBool::new(false),
+            add_unrelated_entry: AtomicBool::new(false),
         })
     }
 
@@ -305,6 +309,11 @@ impl ProcessSpawner for FakeDotagents {
                 }
             }
             None => self.install(),
+        }
+        if status == 0 && self.add_unrelated_entry.load(Ordering::SeqCst) {
+            let toml = std::fs::read_to_string(self.toml_path()).unwrap();
+            let toml = toml + "\n[[skills]]\nname = \"extra\"\nsource = \"owner/extra\"\n";
+            std::fs::write(self.toml_path(), toml).unwrap();
         }
         if status != 0 && self.block_move_back.load(Ordering::SeqCst) {
             write_skill(&self.skill_dir("foo"), "foo");
@@ -1673,5 +1682,25 @@ fn project_turn_on_gives_the_ignore_file_back_byte_for_byte() {
     unpark_foo(&rt);
 
     assert_eq!(read(&project.join(".agents/.gitignore")), original);
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: while `dotagents remove` runs, another tool adds an unrelated skill
+/// to `agents.toml`; then the skill is turned on. Expectation: the unrelated
+/// entry is still listed and so is the parked skill. Failure: Turn on
+/// restores the backup it took before the park and drops the other tool's
+/// entry.
+#[test]
+fn turn_on_keeps_an_entry_another_tool_added_while_dotagents_ran() {
+    let (home, stub) = dotagents_home("park_dotagents_concurrent_edit", EXPLICIT_TOML);
+    let rt = runtime(&home, stub.clone(), true);
+    stub.add_unrelated_entry.store(true, Ordering::SeqCst);
+
+    park_foo(&rt);
+    unpark_foo(&rt);
+
+    let toml = read(&stub.toml_path());
+    assert!(toml.contains("name = \"extra\""), "{toml}");
+    assert!(toml.contains("name = \"foo\""), "{toml}");
     std::fs::remove_dir_all(&home).ok();
 }
