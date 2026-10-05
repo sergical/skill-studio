@@ -1395,11 +1395,15 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
     openSkill,
     addToast,
   });
+  const singleName =
+    "error" in submitParsed
+      ? undefined
+      : (submitParsed.skillName ?? submitParsed.localPath?.split("/").filter(Boolean).pop());
   const installNames = githubEntries
     ? githubEntries.map((entry) => entry.name)
-    : "error" in submitParsed || !submitParsed.skillName
-      ? []
-      : [submitParsed.skillName];
+    : singleName
+      ? [singleName]
+      : [];
   const scopeNote =
     installNames
       .map((name) => otherScopeNote(skills, name, scope, installNames.length > 1))
