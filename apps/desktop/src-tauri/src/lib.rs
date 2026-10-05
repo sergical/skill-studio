@@ -281,7 +281,8 @@ fn is_openable_external_url(url: &tauri::Url) -> bool {
 /// default browser and everything else is dropped.
 fn route_new_window<R: tauri::Runtime>(url: &tauri::Url) -> tauri::webview::NewWindowResponse<R> {
     if is_openable_external_url(url) {
-        if let Err(error) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
+        // `spawn`, not `output`: this runs inside the webview callback.
+        if let Err(error) = std::process::Command::new("open").arg(url.as_str()).spawn() {
             eprintln!("[external_link] could not open {url}: {error}");
         }
     }
