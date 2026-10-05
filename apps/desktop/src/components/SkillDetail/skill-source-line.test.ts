@@ -8,6 +8,7 @@ function skill(overrides: Partial<InstalledSkill>): InstalledSkill {
     name: "write-tests",
     source: "obra/write-tests",
     source_kind: "skills-sh",
+    source_type: "github",
     source_url: "https://github.com/obra/write-tests",
     deployments: [],
     ...overrides,
@@ -56,5 +57,34 @@ describe("skillSourceLine", () => {
   it("shows only the existing source label for non-skills.sh sources", () => {
     const line = skillSourceLine(skill({ source_kind: "in-repo", source: "local" }), 99);
     expect(line).toEqual({ prefix: "", label: "Local repository", href: null, installs: null });
+  });
+
+  // Flow: a skill installed from a git URL source.
+  // Expectation: the URL is not shown as a maker; the existing label shows, no link, no count.
+  // A failure means a private git URL is printed as "by https://...".
+  it("does not show a git URL source as the maker", () => {
+    const line = skillSourceLine(
+      skill({ source_type: "git", source: "https://git.example.com/team/repo.git" }),
+      42,
+    );
+    expect(line.prefix).toBe("");
+    expect(line.href).toBeNull();
+    expect(line.installs).toBeNull();
+  });
+
+  // Flow: a skill installed from a local path source.
+  // Expectation: same as a git URL: no maker, no count.
+  it("does not show a local source as the maker", () => {
+    const line = skillSourceLine(skill({ source_type: "local", source: "/Users/me/skills" }), 42);
+    expect(line.prefix).toBe("");
+    expect(line.installs).toBeNull();
+  });
+
+  // Flow: a lock file whose source_url ends in .git.
+  // Expectation: the link drops the suffix, so it opens the repo page.
+  it("strips a trailing .git from the link", () => {
+    expect(
+      skillSourceLine(skill({ source_url: "https://github.com/obra/write-tests.git" }), 1).href,
+    ).toBe("https://github.com/obra/write-tests");
   });
 });

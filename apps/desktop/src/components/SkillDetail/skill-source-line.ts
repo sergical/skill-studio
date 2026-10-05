@@ -23,6 +23,16 @@ function installsLabel(count: number): string {
   return `${formatInstalls(count)} ${count === 1 ? "install" : "installs"}`;
 }
 
+/** A GitHub-installed skill whose source is a plain `owner/repo`; a git URL or local path is
+ * private and is neither shown as a maker nor sent to skills.sh. */
+export function hasSkillsShSource(skill: InstalledSkill): boolean {
+  return (
+    skill.source_kind === "skills-sh" &&
+    skill.source_type === "github" &&
+    /^[^/:\s]+\/[^/:\s]+$/.test(skill.source)
+  );
+}
+
 /**
  * skills.sh skills show who made them and how many installs skills.sh counts;
  * every other source (plugin, fork, in-repo, manual) shows its existing source
@@ -32,13 +42,13 @@ export function skillSourceLine(
   skill: InstalledSkill,
   installs: number | null | undefined,
 ): SkillSourceLine {
-  if (skill.source_kind !== "skills-sh" || !skill.source.includes("/")) {
+  if (!hasSkillsShSource(skill)) {
     return { prefix: "", label: sourceLedgerLabel(skill), href: null, installs: null };
   }
   return {
     prefix: "by ",
     label: skill.source,
-    href: skill.source_url ?? `https://github.com/${skill.source}`,
+    href: (skill.source_url ?? `https://github.com/${skill.source}`).replace(/\.git$/, ""),
     installs: installs == null ? null : installsLabel(installs),
   };
 }

@@ -23,6 +23,23 @@ const CACHE_TTL_SECS: u64 = 24 * 60 * 60;
 const WORKERS: usize = 3;
 pub const REQUEST_SPACING: Duration = Duration::from_millis(250);
 
+/// A hung connection must not hold a lookup open; a timeout is a failed
+/// fetch like any other and takes the stale-cache fallback.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Only a plain `owner/repo` goes to skills.sh: two non-empty segments, no
+/// scheme, no leading slash. A git URL or local path would leak a private
+/// source, so those are never looked up.
+fn is_owner_repo(source: &str) -> bool {
+    let mut parts = source.split('/');
+    let valid = |s: Option<&str>| {
+        s.is_some_and(|s| {
+            !s.is_empty() && !s.contains(':') && s != ".." && !s.chars().any(char::is_whitespace)
+        })
+    };
+    valid(parts.next()) && valid(parts.next()) && parts.next().is_none()
+}
+
 /// Fetches one skill's install count. `impl Future + Send` so the Tauri
 /// command's future stays `Send`.
 pub trait InstallsApi: Send + Sync + 'static {
@@ -93,7 +110,8 @@ fn save_fresh_entries(path: &Path, fresh: Cache) {
 }
 
 fn is_fresh(entry: &CacheEntry, now: u64) -> bool {
-    now.saturating_sub(entry.fetched_at) < CACHE_TTL_SECS
+    // An entry stamped in the future (clock moved back) cannot be trusted.
+    entry.fetched_at <= now && now - entry.fetched_at < CACHE_TTL_SECS
 }
 
 /// Looks up each key's install count: a cache entry younger than 24 h is
@@ -113,6 +131,10 @@ pub async fn lookup_install_counts<A: InstallsApi>(
     for key in &keys {
         let id = cache_key(key);
         if counts.contains_key(&id) {
+            continue;
+        }
+        if !is_owner_repo(&key.source) {
+            counts.insert(id, None);
             continue;
         }
         match cache.get(&id) {
@@ -139,9 +161,15 @@ pub async fn lookup_install_counts<A: InstallsApi>(
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .pop_front();
                 let Some(key) = next else { break };
-                let result = api.installs(&key.source, &key.name).await;
+                // Pause between fetches, not after the last one.
+                if !fetched.is_empty() {
+                    tokio::time::sleep(spacing).await;
+                }
+                let result =
+                    tokio::time::timeout(FETCH_TIMEOUT, api.installs(&key.source, &key.name))
+                        .await
+                        .unwrap_or_else(|_| Err("timed out".to_string()));
                 fetched.push((key, result));
-                tokio::time::sleep(spacing).await;
             }
             fetched
         });
@@ -305,5 +333,132 @@ mod tests {
         let names: Vec<_> = result.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["one", "two", "one"]);
         assert_eq!(api.calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// Flow: a cached count is stamped in the future (the clock moved back).
+    /// Expectation: it is fetched again, not trusted for up to 24 h.
+    /// A failure here means a clock change pins a count indefinitely.
+    #[tokio::test]
+    async fn a_count_stamped_in_the_future_is_fetched_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        lookup(&FakeApi::answering(Some(10)), &path, 50_000).await;
+        let api = FakeApi::answering(Some(25));
+
+        let result = lookup(&api, &path, 1_000).await;
+
+        assert_eq!(result[0].installs, Some(25));
+        assert_eq!(api.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Flow: the cache file holds garbage.
+    /// Expectation: it reads as empty, the lookup still answers, and the next
+    /// write replaces it with a valid cache.
+    /// A failure here means one bad write disables counts for good.
+    #[tokio::test]
+    async fn a_corrupt_cache_file_reads_as_empty_and_is_repaired() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        std::fs::write(&path, "{not json").unwrap();
+        let api = FakeApi::answering(Some(9));
+
+        let first = lookup(&api, &path, 1_000).await;
+        let second = lookup(&api, &path, 1_001).await;
+
+        assert_eq!(first[0].installs, Some(9));
+        assert_eq!(second[0].installs, Some(9));
+        assert_eq!(api.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Flow: sources that are a git URL, a local path, or not `owner/repo`.
+    /// Expectation: nothing is fetched and no count comes back.
+    /// A failure here means a private source string is sent to skills.sh.
+    #[tokio::test]
+    async fn a_source_that_is_not_owner_repo_is_never_fetched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        let api = FakeApi::answering(Some(5));
+        let keys = [
+            "https://git.example.com/team/repo.git",
+            "/Users/me/skills",
+            "local",
+            "a/b/c",
+        ]
+        .into_iter()
+        .map(|source| key(source, "s"))
+        .collect();
+
+        let result =
+            lookup_install_counts(Arc::clone(&api), &path, keys, 1_000, Duration::ZERO).await;
+
+        assert!(result.iter().all(|c| c.installs.is_none()));
+        assert_eq!(api.calls.load(Ordering::SeqCst), 0);
+    }
+
+    struct HangingApi;
+
+    impl InstallsApi for HangingApi {
+        async fn installs(&self, _source: &str, name: &str) -> Result<u32, String> {
+            if name == "slow" {
+                std::future::pending::<()>().await;
+            }
+            Ok(5)
+        }
+    }
+
+    /// Flow: one fetch never resolves; its cache entry is stale, and other
+    /// keys are in the same batch. Time is paused, so the 8 s deadline passes
+    /// at once.
+    /// Expectation: the batch returns; the hung key shows its stale count and
+    /// the other keys their fetched counts.
+    /// A failure here means one hung connection stalls the whole lookup or
+    /// blanks a count the user already saw.
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_fetch_times_out_to_the_stale_count_and_the_rest_still_return() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        lookup_install_counts(
+            Arc::new(FakeApi {
+                installs: Some(77),
+                calls: AtomicUsize::new(0),
+            }),
+            &path,
+            vec![key("a/b", "slow")],
+            1_000,
+            Duration::ZERO,
+        )
+        .await;
+        let keys = vec![key("a/b", "slow"), key("a/b", "fast"), key("a/b", "other")];
+
+        let result = lookup_install_counts(
+            Arc::new(HangingApi),
+            &path,
+            keys,
+            1_000 + CACHE_TTL_SECS + 1,
+            Duration::ZERO,
+        )
+        .await;
+
+        let counts: Vec<_> = result.iter().map(|c| c.installs).collect();
+        assert_eq!(counts, [Some(77), Some(5), Some(5)]);
+    }
+
+    /// Flow: a hung fetch with nothing cached.
+    /// Expectation: `None` for that key, no error.
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_fetch_with_no_cache_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+
+        let result = lookup_install_counts(
+            Arc::new(HangingApi),
+            &path,
+            vec![key("a/b", "slow")],
+            1_000,
+            Duration::ZERO,
+        )
+        .await;
+
+        assert_eq!(result[0].installs, None);
     }
 }
