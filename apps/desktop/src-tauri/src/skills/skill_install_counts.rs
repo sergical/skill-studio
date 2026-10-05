@@ -6,22 +6,30 @@
 // skill's popularity (the detail header today) reads it from here.
 // ============================================================================
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::future::Future;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::{OnceCell, OwnedSemaphorePermit, Semaphore};
+use tokio::time::Instant;
 
 use super::api::{self, SkillsShAccess};
 use super::skill_dto::{InstallCount, InstallCountKey};
 
 const CACHE_TTL_SECS: u64 = 24 * 60 * 60;
 
-/// A real machine has hundreds of skills; three workers, each pausing between
-/// requests, keep the proxy's load flat.
-const WORKERS: usize = 3;
+/// A real machine has hundreds of skills; at most three requests at once
+/// across every lookup, each slot held for `REQUEST_SPACING` after its
+/// request, keep the proxy's and GitHub's load flat.
+const MAX_CONCURRENT_REQUESTS: usize = 3;
 pub const REQUEST_SPACING: Duration = Duration::from_millis(250);
+
+/// How long a failed or not-public answer blocks new requests for the same
+/// repo or skill. It only ever blocks a call, so it cannot leak anything.
+const NEGATIVE_TTL: Duration = Duration::from_secs(60 * 60);
 
 /// A hung connection must not hold a lookup open; a timeout is a failed
 /// fetch like any other and takes the stale-cache fallback.
@@ -52,22 +60,40 @@ fn is_lookup_key(key: &InstallCountKey) -> bool {
     owner_repo(&key.source).is_some() && is_safe_segment(&key.name)
 }
 
+/// What GitHub said about a repo, asked with no credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Visibility {
+    Public,
+    /// Private, missing, or any answer that is not a confirmed public repo.
+    NotPublic,
+    /// A 403/429: stop asking for this long.
+    RateLimited(Duration),
+}
+
+/// Why a skills.sh count request produced no count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallsFailure {
+    /// A 429: stop asking for this long.
+    RateLimited(Duration),
+    Other(String),
+}
+
 /// Fetches one skill's install count, after checking its repo is public.
 /// `impl Future + Send` so the Tauri command's future stays `Send`.
 pub trait InstallsApi: Send + Sync + 'static {
-    /// Whether `source` (`owner/repo`) is a public GitHub repo, asked with no
-    /// credentials. Anything but a confirmed yes is an `Err` or `false`: a
-    /// private repo's name and skill must never reach skills.sh.
+    /// Whether `source` (`owner/repo`) is a public GitHub repo. Anything but
+    /// a confirmed `Public` stops the lookup: a private repo's name and skill
+    /// must never reach skills.sh.
     fn is_public_repo(
         &self,
         source: &str,
-    ) -> impl std::future::Future<Output = Result<bool, String>> + Send;
+    ) -> impl Future<Output = Result<Visibility, String>> + Send;
 
     fn installs(
         &self,
         source: &str,
         name: &str,
-    ) -> impl std::future::Future<Output = Result<u32, String>> + Send;
+    ) -> impl Future<Output = Result<u32, InstallsFailure>> + Send;
 }
 
 /// The real `InstallsApi`: skills.sh's details endpoint
@@ -79,8 +105,9 @@ pub struct SkillsShInstallsApi {
 impl InstallsApi for SkillsShInstallsApi {
     /// `GET https://api.github.com/repos/{owner}/{repo}` with no token (not
     /// even `gh`'s): only a 200 with `"private": false` counts as public, so a
-    /// 404, rate limit, or parse failure all fail closed.
-    async fn is_public_repo(&self, source: &str) -> Result<bool, String> {
+    /// 404, rate limit, or parse failure all fail closed. A 403 or 429 also
+    /// reports how long to stop asking.
+    async fn is_public_repo(&self, source: &str) -> Result<Visibility, String> {
         let response = reqwest::Client::new()
             .get(format!("https://api.github.com/repos/{source}"))
             .header(reqwest::header::USER_AGENT, "AgentStudio/0.1.0")
@@ -88,17 +115,37 @@ impl InstallsApi for SkillsShInstallsApi {
             .send()
             .await
             .map_err(|e| e.to_string())?;
-        if response.status() != reqwest::StatusCode::OK {
-            return Ok(false);
+        let status = response.status();
+        if status == reqwest::StatusCode::FORBIDDEN
+            || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        {
+            return Ok(Visibility::RateLimited(api::rate_limit_wait(
+                response.headers(),
+            )));
+        }
+        if status != reqwest::StatusCode::OK {
+            return Ok(Visibility::NotPublic);
         }
         let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-        Ok(body.get("private") == Some(&serde_json::Value::Bool(false)))
+        Ok(
+            if body.get("private") == Some(&serde_json::Value::Bool(false)) {
+                Visibility::Public
+            } else {
+                Visibility::NotPublic
+            },
+        )
     }
 
-    async fn installs(&self, source: &str, name: &str) -> Result<u32, String> {
-        let (owner, repo) = owner_repo(source).ok_or("not an owner/repo source")?;
-        let details = api::get_skill_details_by_segments(&self.access, owner, repo, name).await?;
-        Ok(details.installs)
+    async fn installs(&self, source: &str, name: &str) -> Result<u32, InstallsFailure> {
+        let (owner, repo) = owner_repo(source)
+            .ok_or_else(|| InstallsFailure::Other("not an owner/repo source".to_string()))?;
+        match api::get_skill_details_by_segments(&self.access, owner, repo, name).await {
+            Ok(details) => Ok(details.installs),
+            Err(failure) => Err(match failure.rate_limit_wait {
+                Some(wait) => InstallsFailure::RateLimited(wait),
+                None => InstallsFailure::Other(failure.message),
+            }),
+        }
     }
 }
 
@@ -153,24 +200,217 @@ fn is_fresh(entry: &CacheEntry, now: u64) -> bool {
     entry.fetched_at <= now && now - entry.fetched_at < CACHE_TTL_SECS
 }
 
+/// Concurrent callers of the same key share one run of the work and its
+/// result; the entry is dropped when the work finishes, so a later call runs
+/// the work again.
+struct Inflight<T> {
+    cells: Mutex<HashMap<String, Arc<OnceCell<T>>>>,
+}
+
+impl<T: Clone> Inflight<T> {
+    fn new() -> Self {
+        Self {
+            cells: Mutex::new(HashMap::new()),
+        }
+    }
+
+    async fn run(&self, key: &str, work: impl Future<Output = T>) -> T {
+        let cell = Arc::clone(
+            self.cells
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entry(key.to_string())
+                .or_default(),
+        );
+        let value = cell.get_or_init(|| work).await.clone();
+        let mut cells = self
+            .cells
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cells.get(key).is_some_and(|c| Arc::ptr_eq(c, &cell)) {
+            cells.remove(key);
+        }
+        value
+    }
+}
+
+#[derive(Default)]
+struct SchedulerState {
+    github_blocked_until: Option<Instant>,
+    skills_blocked_until: Option<Instant>,
+    /// "not public", failed or no-count answers, by key, with their expiry.
+    /// A public verdict is never stored: a repo can turn private.
+    negative: HashMap<String, Instant>,
+}
+
+/// The one process-wide gate in front of GitHub and skills.sh, all in memory:
+/// every lookup shares its concurrency limit, in-flight requests, rate-limit
+/// cooldowns and negative answers, so reopening skill pages over and over
+/// cannot drain GitHub's anonymous 60 requests an hour.
+pub struct InstallScheduler {
+    spacing: Duration,
+    permits: Arc<Semaphore>,
+    state: Mutex<SchedulerState>,
+    visibility_inflight: Inflight<bool>,
+    count_inflight: Inflight<Option<u32>>,
+}
+
+/// The scheduler the Tauri command uses.
+pub fn shared_scheduler() -> Arc<InstallScheduler> {
+    static SCHEDULER: OnceLock<Arc<InstallScheduler>> = OnceLock::new();
+    Arc::clone(SCHEDULER.get_or_init(|| Arc::new(InstallScheduler::new(REQUEST_SPACING))))
+}
+
+impl InstallScheduler {
+    pub fn new(spacing: Duration) -> Self {
+        Self {
+            spacing,
+            permits: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
+            state: Mutex::new(SchedulerState::default()),
+            visibility_inflight: Inflight::new(),
+            count_inflight: Inflight::new(),
+        }
+    }
+
+    fn with_state<R>(&self, f: impl FnOnce(&mut SchedulerState) -> R) -> R {
+        f(&mut self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+
+    fn is_negative(&self, id: &str) -> bool {
+        self.with_state(|state| match state.negative.get(id) {
+            Some(expires) if Instant::now() < *expires => true,
+            Some(_) => {
+                state.negative.remove(id);
+                false
+            }
+            None => false,
+        })
+    }
+
+    fn remember_negative(&self, id: &str) {
+        self.with_state(|state| {
+            state
+                .negative
+                .insert(id.to_string(), Instant::now() + NEGATIVE_TTL);
+        });
+    }
+
+    fn github_blocked(&self) -> bool {
+        self.with_state(|state| state.github_blocked_until)
+            .is_some_and(|until| Instant::now() < until)
+    }
+
+    fn skills_blocked(&self) -> bool {
+        self.with_state(|state| state.skills_blocked_until)
+            .is_some_and(|until| Instant::now() < until)
+    }
+
+    async fn acquire(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.permits).acquire_owned().await.ok()
+    }
+
+    /// Frees the slot `spacing` after the request, without making the caller
+    /// wait for it.
+    fn release_after_spacing(&self, permit: OwnedSemaphorePermit) {
+        let spacing = self.spacing;
+        tokio::spawn(async move {
+            tokio::time::sleep(spacing).await;
+            drop(permit);
+        });
+    }
+
+    /// Whether GitHub confirms `source` is public right now. Anything else -
+    /// private, unknown, failed, rate limited, still cooling down - is `false`.
+    async fn is_public<A: InstallsApi>(&self, api: &A, source: &str) -> bool {
+        let id = format!("repo:{source}");
+        if self.is_negative(&id) || self.github_blocked() {
+            return false;
+        }
+        self.visibility_inflight
+            .run(&id, async {
+                let Some(permit) = self.acquire().await else {
+                    return false;
+                };
+                // A request that queued for a slot may have waited out a 429.
+                if self.github_blocked() {
+                    return false;
+                }
+                let verdict = tokio::time::timeout(FETCH_TIMEOUT, api.is_public_repo(source)).await;
+                self.release_after_spacing(permit);
+                match verdict {
+                    Ok(Ok(Visibility::Public)) => true,
+                    Ok(Ok(Visibility::RateLimited(wait))) => {
+                        self.with_state(|state| {
+                            state.github_blocked_until = Some(Instant::now() + wait);
+                        });
+                        false
+                    }
+                    _ => {
+                        self.remember_negative(&id);
+                        false
+                    }
+                }
+            })
+            .await
+    }
+
+    /// One skill's count, or `None` when it cannot be asked for or answered.
+    async fn installs<A: InstallsApi>(&self, api: &A, key: &InstallCountKey) -> Option<u32> {
+        let id = format!("skill:{}", cache_key(key));
+        if self.is_negative(&id) || self.skills_blocked() {
+            return None;
+        }
+        self.count_inflight
+            .run(&id, async {
+                if !self.is_public(api, &key.source).await {
+                    return None;
+                }
+                let permit = self.acquire().await?;
+                if self.skills_blocked() {
+                    return None;
+                }
+                let result =
+                    tokio::time::timeout(FETCH_TIMEOUT, api.installs(&key.source, &key.name)).await;
+                self.release_after_spacing(permit);
+                match result {
+                    Ok(Ok(installs)) => Some(installs),
+                    Ok(Err(InstallsFailure::RateLimited(wait))) => {
+                        self.with_state(|state| {
+                            state.skills_blocked_until = Some(Instant::now() + wait);
+                        });
+                        None
+                    }
+                    _ => {
+                        self.remember_negative(&id);
+                        None
+                    }
+                }
+            })
+            .await
+    }
+}
+
 /// Looks up each key's install count: a cache entry younger than 24 h is
-/// used as-is; the rest are fetched by `WORKERS` workers, `spacing` apart.
+/// used as-is; the rest go through `scheduler`, which shares its pacing,
+/// in-flight requests, cooldowns and negative answers with every other call.
 /// Before any skills.sh request, GitHub must confirm the repo is public right
-/// now (asked once per repo per lookup, never cached, since a repo can turn
-/// private); otherwise nothing is sent. A failed fetch (offline, unknown
-/// skill, private repo) falls back to a stale cached count,
-/// else `None` - never an error. Results keep the order of `keys`.
+/// now (never cached, since a repo can turn private); otherwise nothing is
+/// sent. A failed fetch (offline, unknown skill, private repo, rate limit)
+/// falls back to a stale cached count, else `None` - never an error. Results
+/// keep the order of `keys`.
 pub async fn lookup_install_counts<A: InstallsApi>(
     api: Arc<A>,
+    scheduler: Arc<InstallScheduler>,
     cache_path: &Path,
     keys: Vec<InstallCountKey>,
     now: u64,
-    spacing: Duration,
 ) -> Vec<InstallCount> {
     let cache = load_cache(cache_path);
-    let verdicts: Arc<tokio::sync::Mutex<HashMap<String, bool>>> = Arc::default();
     let mut counts: HashMap<String, Option<u32>> = HashMap::new();
-    let mut queue: VecDeque<InstallCountKey> = VecDeque::new();
+    let mut queue: Vec<InstallCountKey> = Vec::new();
     for key in &keys {
         let id = cache_key(key);
         if counts.contains_key(&id) {
@@ -186,63 +426,27 @@ pub async fn lookup_install_counts<A: InstallsApi>(
             }
             _ => {
                 counts.insert(id, None);
-                queue.push_back(key.clone());
+                queue.push(key.clone());
             }
         }
     }
 
-    let queue = Arc::new(Mutex::new(queue));
-    let mut workers = tokio::task::JoinSet::new();
-    for _ in 0..WORKERS {
+    let mut lookups = tokio::task::JoinSet::new();
+    for key in queue {
         let api = Arc::clone(&api);
-        let queue = Arc::clone(&queue);
-        let verdicts = Arc::clone(&verdicts);
-        workers.spawn(async move {
-            let mut fetched: Vec<(InstallCountKey, Result<u32, String>)> = Vec::new();
-            loop {
-                let next = queue
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .pop_front();
-                let Some(key) = next else { break };
-                // Pause between fetches, not after the last one.
-                if !fetched.is_empty() {
-                    tokio::time::sleep(spacing).await;
-                }
-                // Held across the check so workers on one repo wait for the
-                // first answer instead of each asking GitHub.
-                let public = {
-                    let mut verdicts = verdicts.lock().await;
-                    if let Some(public) = verdicts.get(&key.source) {
-                        *public
-                    } else {
-                        let public =
-                            tokio::time::timeout(FETCH_TIMEOUT, api.is_public_repo(&key.source))
-                                .await
-                                .is_ok_and(|checked| checked == Ok(true));
-                        verdicts.insert(key.source.clone(), public);
-                        public
-                    }
-                };
-                let result = if public {
-                    tokio::time::timeout(FETCH_TIMEOUT, api.installs(&key.source, &key.name))
-                        .await
-                        .unwrap_or_else(|_| Err("timed out".to_string()))
-                } else {
-                    Err("repo is not confirmed public".to_string())
-                };
-                fetched.push((key, result));
-            }
-            fetched
+        let scheduler = Arc::clone(&scheduler);
+        lookups.spawn(async move {
+            let installs = scheduler.installs(&*api, &key).await;
+            (key, installs)
         });
     }
 
     let mut fresh = Cache::new();
-    while let Some(joined) = workers.join_next().await {
-        for (key, result) in joined.unwrap_or_default() {
+    while let Some(joined) = lookups.join_next().await {
+        if let Ok((key, result)) = joined {
             let id = cache_key(&key);
             match result {
-                Ok(installs) => {
+                Some(installs) => {
                     fresh.insert(
                         id.clone(),
                         CacheEntry {
@@ -252,7 +456,7 @@ pub async fn lookup_install_counts<A: InstallsApi>(
                     );
                     counts.insert(id, Some(installs));
                 }
-                Err(_) => {
+                None => {
                     counts.insert(id.clone(), cache.get(&id).map(|e| e.installs));
                 }
             }
@@ -281,16 +485,19 @@ mod tests {
         installs: Option<u32>,
         calls: AtomicUsize,
         /// What GitHub says about every repo.
-        visibility: Result<bool, String>,
+        visibility: Result<Visibility, String>,
         visibility_calls: AtomicUsize,
     }
 
     impl FakeApi {
         fn answering(installs: Option<u32>) -> Arc<Self> {
-            Self::with_visibility(installs, Ok(true))
+            Self::with_visibility(installs, Ok(Visibility::Public))
         }
 
-        fn with_visibility(installs: Option<u32>, visibility: Result<bool, String>) -> Arc<Self> {
+        fn with_visibility(
+            installs: Option<u32>,
+            visibility: Result<Visibility, String>,
+        ) -> Arc<Self> {
             Arc::new(Self {
                 installs,
                 calls: AtomicUsize::new(0),
@@ -301,14 +508,18 @@ mod tests {
     }
 
     impl InstallsApi for FakeApi {
-        async fn is_public_repo(&self, _source: &str) -> Result<bool, String> {
+        async fn is_public_repo(&self, _source: &str) -> Result<Visibility, String> {
             self.visibility_calls.fetch_add(1, Ordering::SeqCst);
+            // A real answer takes a network round trip; yielding lets a
+            // concurrent lookup of the same repo arrive while this one is open.
+            tokio::task::yield_now().await;
             self.visibility.clone()
         }
 
-        async fn installs(&self, _source: &str, _name: &str) -> Result<u32, String> {
+        async fn installs(&self, _source: &str, _name: &str) -> Result<u32, InstallsFailure> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            self.installs.ok_or_else(|| "offline".to_string())
+            self.installs
+                .ok_or_else(|| InstallsFailure::Other("offline".to_string()))
         }
     }
 
@@ -319,15 +530,40 @@ mod tests {
         }
     }
 
+    fn scheduler() -> Arc<InstallScheduler> {
+        Arc::new(InstallScheduler::new(Duration::ZERO))
+    }
+
+    /// One lookup on its own fresh scheduler, so no memory carries between
+    /// calls; tests of that shared memory pass their own scheduler.
     async fn lookup(api: &Arc<FakeApi>, path: &Path, now: u64) -> Vec<InstallCount> {
+        lookup_with(api, &scheduler(), path, "write-tests", now).await
+    }
+
+    async fn lookup_with(
+        api: &Arc<FakeApi>,
+        scheduler: &Arc<InstallScheduler>,
+        path: &Path,
+        name: &str,
+        now: u64,
+    ) -> Vec<InstallCount> {
         lookup_install_counts(
             Arc::clone(api),
+            Arc::clone(scheduler),
             path,
-            vec![key("obra/write-tests", "write-tests")],
+            vec![key("obra/write-tests", name)],
             now,
-            Duration::ZERO,
         )
         .await
+    }
+
+    async fn lookup_keys<A: InstallsApi>(
+        api: &Arc<A>,
+        path: &Path,
+        keys: Vec<InstallCountKey>,
+        now: u64,
+    ) -> Vec<InstallCount> {
+        lookup_install_counts(Arc::clone(api), scheduler(), path, keys, now).await
     }
 
     /// Flow: the same skill is looked up twice within 24 h.
@@ -403,8 +639,7 @@ mod tests {
         let api = FakeApi::answering(Some(5));
         let keys = vec![key("a/b", "one"), key("a/b", "two"), key("a/b", "one")];
 
-        let result =
-            lookup_install_counts(Arc::clone(&api), &path, keys, 1_000, Duration::ZERO).await;
+        let result = lookup_keys(&api, &path, keys, 1_000).await;
 
         let names: Vec<_> = result.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["one", "two", "one"]);
@@ -464,8 +699,7 @@ mod tests {
         .map(|source| key(source, "s"))
         .collect();
 
-        let result =
-            lookup_install_counts(Arc::clone(&api), &path, keys, 1_000, Duration::ZERO).await;
+        let result = lookup_keys(&api, &path, keys, 1_000).await;
 
         assert!(result.iter().all(|c| c.installs.is_none()));
         assert_eq!(api.calls.load(Ordering::SeqCst), 0);
@@ -474,11 +708,11 @@ mod tests {
     struct HangingApi;
 
     impl InstallsApi for HangingApi {
-        async fn is_public_repo(&self, _source: &str) -> Result<bool, String> {
-            Ok(true)
+        async fn is_public_repo(&self, _source: &str) -> Result<Visibility, String> {
+            Ok(Visibility::Public)
         }
 
-        async fn installs(&self, _source: &str, name: &str) -> Result<u32, String> {
+        async fn installs(&self, _source: &str, name: &str) -> Result<u32, InstallsFailure> {
             if name == "slow" {
                 std::future::pending::<()>().await;
             }
@@ -497,22 +731,20 @@ mod tests {
     async fn a_hung_fetch_times_out_to_the_stale_count_and_the_rest_still_return() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("install-counts.json");
-        lookup_install_counts(
-            FakeApi::answering(Some(77)),
+        lookup_keys(
+            &FakeApi::answering(Some(77)),
             &path,
             vec![key("a/b", "slow")],
             1_000,
-            Duration::ZERO,
         )
         .await;
         let keys = vec![key("a/b", "slow"), key("a/b", "fast"), key("a/b", "other")];
 
-        let result = lookup_install_counts(
-            Arc::new(HangingApi),
+        let result = lookup_keys(
+            &Arc::new(HangingApi),
             &path,
             keys,
             1_000 + CACHE_TTL_SECS + 1,
-            Duration::ZERO,
         )
         .await;
 
@@ -527,12 +759,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("install-counts.json");
 
-        let result = lookup_install_counts(
-            Arc::new(HangingApi),
+        let result = lookup_keys(
+            &Arc::new(HangingApi),
             &path,
             vec![key("a/b", "slow")],
             1_000,
-            Duration::ZERO,
         )
         .await;
 
@@ -546,7 +777,7 @@ mod tests {
     async fn a_private_repo_makes_no_skills_sh_call() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("install-counts.json");
-        let api = FakeApi::with_visibility(Some(5), Ok(false));
+        let api = FakeApi::with_visibility(Some(5), Ok(Visibility::NotPublic));
 
         let result = lookup(&api, &path, 1_000).await;
 
@@ -565,7 +796,11 @@ mod tests {
         let path = dir.path().join("install-counts.json");
         lookup(&FakeApi::answering(Some(77)), &path, 1_000).await;
 
-        for visibility in [Ok(false), Err("rate limited".to_string())] {
+        for visibility in [
+            Ok(Visibility::NotPublic),
+            Ok(Visibility::RateLimited(Duration::from_secs(60))),
+            Err("unreachable".to_string()),
+        ] {
             let api = FakeApi::with_visibility(Some(5), visibility);
             let result = lookup(&api, &path, 1_000 + 3 * CACHE_TTL_SECS).await;
             assert_eq!(result[0].installs, Some(77));
@@ -598,16 +833,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("install-counts.json");
         lookup(&FakeApi::answering(Some(5)), &path, 1_000).await;
-        let api = FakeApi::with_visibility(Some(6), Ok(false));
+        let api = FakeApi::with_visibility(Some(6), Ok(Visibility::NotPublic));
 
-        let result = lookup_install_counts(
-            Arc::clone(&api),
-            &path,
-            vec![key("obra/write-tests", "new-skill")],
-            2_000,
-            Duration::ZERO,
-        )
-        .await;
+        let result = lookup_with(&api, &scheduler(), &path, "new-skill", 2_000).await;
 
         assert_eq!(result[0].installs, None);
         assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
@@ -637,8 +865,7 @@ mod tests {
         .map(|name| key("obra/write-tests", name))
         .collect();
 
-        let result =
-            lookup_install_counts(Arc::clone(&api), &path, keys, 1_000, Duration::ZERO).await;
+        let result = lookup_keys(&api, &path, keys, 1_000).await;
 
         assert!(result.iter().all(|c| c.installs.is_none()));
         assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 0);
@@ -655,16 +882,159 @@ mod tests {
         let api = FakeApi::answering(Some(5));
         let keys = vec![key("a/b", "one"), key("a/b", "two"), key("a/b", "three")];
 
-        lookup_install_counts(
-            Arc::clone(&api),
-            &path,
-            keys,
-            1_000,
-            Duration::from_millis(5),
-        )
-        .await;
+        lookup_keys(&api, &path, keys, 1_000).await;
 
         assert_eq!(api.calls.load(Ordering::SeqCst), 3);
         assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Flow: two single-key lookups of the same repo run at the same time
+    /// (two skill pages opened together), on the one shared scheduler.
+    /// Expectation: GitHub is asked once for the repo.
+    /// A failure here means every page open spends GitHub's 60 requests an hour.
+    #[tokio::test]
+    async fn concurrent_lookups_of_one_repo_make_one_github_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        let api = FakeApi::answering(Some(5));
+        let shared = scheduler();
+
+        let (one, two) = tokio::join!(
+            lookup_with(&api, &shared, &path, "one", 1_000),
+            lookup_with(&api, &shared, &path, "two", 1_000),
+        );
+
+        assert_eq!(one[0].installs, Some(5));
+        assert_eq!(two[0].installs, Some(5));
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Flow: the same skill is looked up at the same time by two callers.
+    /// Expectation: skills.sh gets one request and both callers get the count.
+    #[tokio::test]
+    async fn concurrent_lookups_of_one_skill_share_one_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        let api = FakeApi::answering(Some(5));
+        let shared = scheduler();
+
+        let (one, two) = tokio::join!(
+            lookup_with(&api, &shared, &path, "same", 1_000),
+            lookup_with(&api, &shared, &path, "same", 1_000),
+        );
+
+        assert_eq!(one[0].installs, Some(5));
+        assert_eq!(two[0].installs, Some(5));
+        assert_eq!(api.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Flow: a lookup fails (skills.sh offline), then the same skill is asked
+    /// for again, first within the hour and then after it.
+    /// Expectation: no new GitHub or skills.sh call within the hour; one new
+    /// attempt after it.
+    /// A failure here means an offline machine retries every skill on every
+    /// page open.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_lookup_is_not_retried_within_the_hour() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        let api = FakeApi::answering(None);
+        let shared = scheduler();
+
+        lookup_with(&api, &shared, &path, "s", 1_000).await;
+        assert_eq!(api.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
+
+        tokio::time::advance(Duration::from_secs(60 * 60 - 1)).await;
+        lookup_with(&api, &shared, &path, "s", 1_000).await;
+        assert_eq!(api.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
+
+        tokio::time::advance(Duration::from_secs(2)).await;
+        lookup_with(&api, &shared, &path, "s", 1_000).await;
+        assert_eq!(api.calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// Flow: a repo that is not public is looked up again within the hour.
+    /// Expectation: GitHub is not asked again.
+    #[tokio::test(start_paused = true)]
+    async fn a_not_public_verdict_is_remembered_for_the_hour() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        let api = FakeApi::with_visibility(Some(5), Ok(Visibility::NotPublic));
+        let shared = scheduler();
+
+        lookup_with(&api, &shared, &path, "one", 1_000).await;
+        lookup_with(&api, &shared, &path, "two", 1_000).await;
+
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(api.calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// Flow: GitHub answers 429 with Retry-After 60 s; later lookups come
+    /// before and after that deadline.
+    /// Expectation: no GitHub call and no skills.sh call until the deadline;
+    /// then GitHub is asked again.
+    /// A failure here means a rate-limited client keeps hammering GitHub.
+    #[tokio::test(start_paused = true)]
+    async fn a_github_rate_limit_blocks_calls_until_its_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        let api = FakeApi::with_visibility(
+            Some(5),
+            Ok(Visibility::RateLimited(Duration::from_secs(60))),
+        );
+        let shared = scheduler();
+
+        let first = lookup_with(&api, &shared, &path, "one", 1_000).await;
+        assert_eq!(first[0].installs, None);
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
+
+        tokio::time::advance(Duration::from_secs(59)).await;
+        lookup_with(&api, &shared, &path, "two", 1_000).await;
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(api.calls.load(Ordering::SeqCst), 0);
+
+        tokio::time::advance(Duration::from_secs(2)).await;
+        lookup_with(&api, &shared, &path, "three", 1_000).await;
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// Flow: skills.sh answers 429 with Retry-After 60 s.
+    /// Expectation: no skills.sh request for any skill until the deadline.
+    #[tokio::test(start_paused = true)]
+    async fn a_skills_sh_rate_limit_blocks_requests_until_its_deadline() {
+        struct LimitedApi(AtomicUsize);
+        impl InstallsApi for LimitedApi {
+            async fn is_public_repo(&self, _source: &str) -> Result<Visibility, String> {
+                Ok(Visibility::Public)
+            }
+            async fn installs(&self, _source: &str, _name: &str) -> Result<u32, InstallsFailure> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Err(InstallsFailure::RateLimited(Duration::from_secs(60)))
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        let api = Arc::new(LimitedApi(AtomicUsize::new(0)));
+        let shared = scheduler();
+        let ask = |name: &'static str| {
+            lookup_install_counts(
+                Arc::clone(&api),
+                Arc::clone(&shared),
+                &path,
+                vec![key("a/b", name)],
+                1_000,
+            )
+        };
+
+        ask("one").await;
+        tokio::time::advance(Duration::from_secs(59)).await;
+        ask("two").await;
+        assert_eq!(api.0.load(Ordering::SeqCst), 1);
+
+        tokio::time::advance(Duration::from_secs(2)).await;
+        ask("three").await;
+        assert_eq!(api.0.load(Ordering::SeqCst), 2);
     }
 }

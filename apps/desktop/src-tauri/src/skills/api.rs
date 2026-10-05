@@ -9,6 +9,7 @@
 // ============================================================================
 
 use std::path::Path;
+use std::time::Duration;
 
 use serde::Deserialize;
 
@@ -387,15 +388,62 @@ pub async fn get_skill_details_by_segments(
     owner: &str,
     repo: &str,
     skill: &str,
-) -> Result<SkillDetails, String> {
+) -> Result<SkillDetails, DetailsFailure> {
     let url = skill_details_url(access, owner, repo, skill)?;
-    fetch_skill_details(access, url).await
+    send_skill_details(access, url).await
 }
 
 async fn fetch_skill_details(
     access: &SkillsShAccess,
     url: reqwest::Url,
 ) -> Result<SkillDetails, String> {
+    send_skill_details(access, url)
+        .await
+        .map_err(|failure| failure.message)
+}
+
+/// Why a details request failed; `rate_limit_wait` is set for a 429 so the
+/// install-count scheduler can stop sending until it passes.
+pub struct DetailsFailure {
+    pub message: String,
+    pub rate_limit_wait: Option<Duration>,
+}
+
+impl From<String> for DetailsFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            rate_limit_wait: None,
+        }
+    }
+}
+
+/// How long to stop sending after a 403/429: `Retry-After` seconds, else
+/// `X-RateLimit-Reset` (epoch seconds) when `X-RateLimit-Remaining` is 0,
+/// else 15 minutes.
+pub fn rate_limit_wait(headers: &reqwest::header::HeaderMap) -> Duration {
+    let number =
+        |name: &str| -> Option<u64> { headers.get(name)?.to_str().ok()?.trim().parse().ok() };
+    if let Some(seconds) = number("retry-after") {
+        return Duration::from_secs(seconds);
+    }
+    if number("x-ratelimit-remaining") == Some(0) {
+        if let Some(reset) = number("x-ratelimit-reset") {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            return Duration::from_secs(reset.saturating_sub(now));
+        }
+    }
+    DEFAULT_RATE_LIMIT_WAIT
+}
+
+const DEFAULT_RATE_LIMIT_WAIT: Duration = Duration::from_secs(15 * 60);
+
+async fn send_skill_details(
+    access: &SkillsShAccess,
+    url: reqwest::Url,
+) -> Result<SkillDetails, DetailsFailure> {
     let (client, headers) = client_for(access)?;
     let response = client
         .get(url)
@@ -406,7 +454,12 @@ async fn fetch_skill_details(
         .map_err(|e| connection_error(access, &e))?;
 
     if !response.status().is_success() {
-        return Err(status_error(response.status()));
+        let rate_limit_wait = (response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS)
+            .then(|| rate_limit_wait(response.headers()));
+        return Err(DetailsFailure {
+            message: status_error(response.status()),
+            rate_limit_wait,
+        });
     }
 
     let data: SkillDetailsResponse = response
@@ -459,6 +512,43 @@ mod tests {
                 assert_eq!(url.path_segments().unwrap().count(), 6, "{url}");
             }
         }
+    }
+
+    /// Flow: a 403/429 carries Retry-After, only a rate-limit reset, or nothing.
+    /// Expectation: Retry-After wins; a reset counts only with remaining 0;
+    /// otherwise 15 minutes.
+    /// A failure here means a rate limit is retried too early or blocks for ever.
+    #[test]
+    fn rate_limit_wait_reads_retry_after_then_reset_then_defaults() {
+        let headers = |pairs: &[(&'static str, String)]| {
+            let mut map = reqwest::header::HeaderMap::new();
+            for (name, value) in pairs {
+                map.insert(*name, value.parse().unwrap());
+            }
+            map
+        };
+        assert_eq!(
+            rate_limit_wait(&headers(&[("retry-after", "30".into())])),
+            Duration::from_secs(30)
+        );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let reset = (now + 600).to_string();
+        let wait = rate_limit_wait(&headers(&[
+            ("x-ratelimit-remaining", "0".into()),
+            ("x-ratelimit-reset", reset.clone()),
+        ]));
+        assert!((598..=600).contains(&wait.as_secs()), "{wait:?}");
+        assert_eq!(
+            rate_limit_wait(&headers(&[
+                ("x-ratelimit-remaining", "5".into()),
+                ("x-ratelimit-reset", reset),
+            ])),
+            DEFAULT_RATE_LIMIT_WAIT
+        );
+        assert_eq!(rate_limit_wait(&headers(&[])), DEFAULT_RATE_LIMIT_WAIT);
     }
 
     #[test]

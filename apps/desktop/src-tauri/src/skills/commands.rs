@@ -133,10 +133,10 @@ pub async fn get_install_counts(
         .map_or(0, |d| d.as_secs());
     Ok(counts::lookup_install_counts(
         std::sync::Arc::new(counts::SkillsShInstallsApi { access }),
+        counts::shared_scheduler(),
         &cache_path,
         keys,
         now,
-        counts::REQUEST_SPACING,
     )
     .await)
 }
