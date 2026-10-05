@@ -40,9 +40,17 @@ fn is_owner_repo(source: &str) -> bool {
     valid(parts.next()) && valid(parts.next()) && parts.next().is_none()
 }
 
-/// Fetches one skill's install count. `impl Future + Send` so the Tauri
-/// command's future stays `Send`.
+/// Fetches one skill's install count, after checking its repo is public.
+/// `impl Future + Send` so the Tauri command's future stays `Send`.
 pub trait InstallsApi: Send + Sync + 'static {
+    /// Whether `source` (`owner/repo`) is a public GitHub repo, asked with no
+    /// credentials. Anything but a confirmed yes is an `Err` or `false`: a
+    /// private repo's name and skill must never reach skills.sh.
+    fn is_public_repo(
+        &self,
+        source: &str,
+    ) -> impl std::future::Future<Output = Result<bool, String>> + Send;
+
     fn installs(
         &self,
         source: &str,
@@ -57,6 +65,24 @@ pub struct SkillsShInstallsApi {
 }
 
 impl InstallsApi for SkillsShInstallsApi {
+    /// `GET https://api.github.com/repos/{owner}/{repo}` with no token (not
+    /// even `gh`'s): only a 200 with `"private": false` counts as public, so a
+    /// 404, rate limit, or parse failure all fail closed.
+    async fn is_public_repo(&self, source: &str) -> Result<bool, String> {
+        let response = reqwest::Client::new()
+            .get(format!("https://api.github.com/repos/{source}"))
+            .header(reqwest::header::USER_AGENT, "AgentStudio/0.1.0")
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Ok(false);
+        }
+        let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+        Ok(body.get("private") == Some(&serde_json::Value::Bool(false)))
+    }
+
     async fn installs(&self, source: &str, name: &str) -> Result<u32, String> {
         let details = api::get_skill_details(&self.access, &format!("{source}/{name}")).await?;
         Ok(details.installs)
@@ -71,6 +97,17 @@ struct CacheEntry {
 
 type Cache = HashMap<String, CacheEntry>;
 
+/// The on-disk cache: counts per source + name, and when each repo was last
+/// confirmed public. Only a "public" verdict is stored; a negative or unknown
+/// one is never a reason to send, so it is simply asked again.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct CacheFile {
+    #[serde(default)]
+    counts: Cache,
+    #[serde(default)]
+    public_repos: HashMap<String, u64>,
+}
+
 /// Serializes the read-merge-write of the cache file across concurrent
 /// lookups; held only for the file I/O, never across a request.
 static CACHE_FILE_LOCK: Mutex<()> = Mutex::new(());
@@ -81,22 +118,23 @@ fn cache_key(key: &InstallCountKey) -> String {
 
 /// A missing or unreadable cache is an empty one: the counts are a courtesy,
 /// so a damaged file just costs a refetch.
-fn load_cache(path: &Path) -> Cache {
+fn load_cache(path: &Path) -> CacheFile {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
 }
 
-fn save_fresh_entries(path: &Path, fresh: Cache) {
-    if fresh.is_empty() {
+fn save_fresh_entries(path: &Path, fresh: Cache, fresh_public: HashMap<String, u64>) {
+    if fresh.is_empty() && fresh_public.is_empty() {
         return;
     }
     let _guard = CACHE_FILE_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut cache = load_cache(path);
-    cache.extend(fresh);
+    cache.counts.extend(fresh);
+    cache.public_repos.extend(fresh_public);
     let Ok(text) = serde_json::to_string(&cache) else {
         return;
     };
@@ -109,14 +147,20 @@ fn save_fresh_entries(path: &Path, fresh: Cache) {
     }
 }
 
-fn is_fresh(entry: &CacheEntry, now: u64) -> bool {
+fn is_fresh_at(fetched_at: u64, now: u64) -> bool {
     // An entry stamped in the future (clock moved back) cannot be trusted.
-    entry.fetched_at <= now && now - entry.fetched_at < CACHE_TTL_SECS
+    fetched_at <= now && now - fetched_at < CACHE_TTL_SECS
+}
+
+fn is_fresh(entry: &CacheEntry, now: u64) -> bool {
+    is_fresh_at(entry.fetched_at, now)
 }
 
 /// Looks up each key's install count: a cache entry younger than 24 h is
 /// used as-is; the rest are fetched by `WORKERS` workers, `spacing` apart.
-/// A failed fetch (offline, unknown skill) falls back to a stale cached count,
+/// Before a repo's first skills.sh request, GitHub must confirm it is public
+/// (cached 24 h); otherwise nothing is sent. A failed fetch (offline, unknown
+/// skill, private repo) falls back to a stale cached count,
 /// else `None` - never an error. Results keep the order of `keys`.
 pub async fn lookup_install_counts<A: InstallsApi>(
     api: Arc<A>,
@@ -125,7 +169,17 @@ pub async fn lookup_install_counts<A: InstallsApi>(
     now: u64,
     spacing: Duration,
 ) -> Vec<InstallCount> {
-    let cache = load_cache(cache_path);
+    let CacheFile {
+        counts: cache,
+        public_repos,
+    } = load_cache(cache_path);
+    let verdicts: HashMap<String, bool> = public_repos
+        .iter()
+        .filter(|(_, at)| is_fresh_at(**at, now))
+        .map(|(repo, _)| (repo.clone(), true))
+        .collect();
+    let cached_public: Vec<String> = verdicts.keys().cloned().collect();
+    let verdicts = Arc::new(Mutex::new(verdicts));
     let mut counts: HashMap<String, Option<u32>> = HashMap::new();
     let mut queue: VecDeque<InstallCountKey> = VecDeque::new();
     for key in &keys {
@@ -153,6 +207,7 @@ pub async fn lookup_install_counts<A: InstallsApi>(
     for _ in 0..WORKERS {
         let api = Arc::clone(&api);
         let queue = Arc::clone(&queue);
+        let verdicts = Arc::clone(&verdicts);
         workers.spawn(async move {
             let mut fetched: Vec<(InstallCountKey, Result<u32, String>)> = Vec::new();
             loop {
@@ -165,10 +220,31 @@ pub async fn lookup_install_counts<A: InstallsApi>(
                 if !fetched.is_empty() {
                     tokio::time::sleep(spacing).await;
                 }
-                let result =
+                let known = verdicts
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(&key.source)
+                    .copied();
+                let public = if let Some(public) = known {
+                    public
+                } else {
+                    let public =
+                        tokio::time::timeout(FETCH_TIMEOUT, api.is_public_repo(&key.source))
+                            .await
+                            .is_ok_and(|checked| checked == Ok(true));
+                    verdicts
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(key.source.clone(), public);
+                    public
+                };
+                let result = if public {
                     tokio::time::timeout(FETCH_TIMEOUT, api.installs(&key.source, &key.name))
                         .await
-                        .unwrap_or_else(|_| Err("timed out".to_string()));
+                        .unwrap_or_else(|_| Err("timed out".to_string()))
+                } else {
+                    Err("repo is not confirmed public".to_string())
+                };
                 fetched.push((key, result));
             }
             fetched
@@ -196,7 +272,14 @@ pub async fn lookup_install_counts<A: InstallsApi>(
             }
         }
     }
-    save_fresh_entries(cache_path, fresh);
+    let fresh_public = verdicts
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter(|(repo, public)| **public && !cached_public.contains(repo))
+        .map(|(repo, _)| (repo.clone(), now))
+        .collect();
+    save_fresh_entries(cache_path, fresh, fresh_public);
 
     keys.into_iter()
         .map(|key| {
@@ -218,18 +301,32 @@ mod tests {
     struct FakeApi {
         installs: Option<u32>,
         calls: AtomicUsize,
+        /// What GitHub says about every repo.
+        visibility: Result<bool, String>,
+        visibility_calls: AtomicUsize,
     }
 
     impl FakeApi {
         fn answering(installs: Option<u32>) -> Arc<Self> {
+            Self::with_visibility(installs, Ok(true))
+        }
+
+        fn with_visibility(installs: Option<u32>, visibility: Result<bool, String>) -> Arc<Self> {
             Arc::new(Self {
                 installs,
                 calls: AtomicUsize::new(0),
+                visibility,
+                visibility_calls: AtomicUsize::new(0),
             })
         }
     }
 
     impl InstallsApi for FakeApi {
+        async fn is_public_repo(&self, _source: &str) -> Result<bool, String> {
+            self.visibility_calls.fetch_add(1, Ordering::SeqCst);
+            self.visibility.clone()
+        }
+
         async fn installs(&self, _source: &str, _name: &str) -> Result<u32, String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.installs.ok_or_else(|| "offline".to_string())
@@ -289,7 +386,8 @@ mod tests {
     }
 
     /// Flow: skills.sh is unreachable and nothing is cached.
-    /// Expectation: `installs` is `None`, with no panic and no cache file.
+    /// Expectation: `installs` is `None`, with no panic and no cached count
+    /// (the repo's public verdict may be kept).
     /// A failure here means offline use surfaces an error or caches a bogus 0.
     #[tokio::test]
     async fn offline_with_no_cache_returns_none() {
@@ -299,7 +397,7 @@ mod tests {
         let result = lookup(&FakeApi::answering(None), &path, 1_000).await;
 
         assert_eq!(result[0].installs, None);
-        assert!(!path.exists());
+        assert!(load_cache(&path).counts.is_empty());
     }
 
     /// Flow: skills.sh is unreachable and the cached count is stale.
@@ -398,6 +496,10 @@ mod tests {
     struct HangingApi;
 
     impl InstallsApi for HangingApi {
+        async fn is_public_repo(&self, _source: &str) -> Result<bool, String> {
+            Ok(true)
+        }
+
         async fn installs(&self, _source: &str, name: &str) -> Result<u32, String> {
             if name == "slow" {
                 std::future::pending::<()>().await;
@@ -418,10 +520,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("install-counts.json");
         lookup_install_counts(
-            Arc::new(FakeApi {
-                installs: Some(77),
-                calls: AtomicUsize::new(0),
-            }),
+            FakeApi::answering(Some(77)),
             &path,
             vec![key("a/b", "slow")],
             1_000,
@@ -460,5 +559,80 @@ mod tests {
         .await;
 
         assert_eq!(result[0].installs, None);
+    }
+
+    /// Flow: GitHub says the repo is private.
+    /// Expectation: no skills.sh request, and no count.
+    /// A failure here means a private repo's name and skill reach skills.sh.
+    #[tokio::test]
+    async fn a_private_repo_makes_no_skills_sh_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        let api = FakeApi::with_visibility(Some(5), Ok(false));
+
+        let result = lookup(&api, &path, 1_000).await;
+
+        assert_eq!(result[0].installs, None);
+        assert_eq!(api.calls.load(Ordering::SeqCst), 0);
+        assert!(!path.exists());
+    }
+
+    /// Flow: GitHub answers 404, is rate limited, or is unreachable, and an
+    /// older count is cached.
+    /// Expectation: fail closed: no skills.sh request; the stale count shows.
+    /// A failure here means an unknown visibility is treated as public.
+    #[tokio::test]
+    async fn an_unknown_visibility_makes_no_skills_sh_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        lookup(&FakeApi::answering(Some(77)), &path, 1_000).await;
+
+        for visibility in [Ok(false), Err("rate limited".to_string())] {
+            let api = FakeApi::with_visibility(Some(5), visibility);
+            let result = lookup(&api, &path, 1_000 + 3 * CACHE_TTL_SECS).await;
+            assert_eq!(result[0].installs, Some(77));
+            assert_eq!(api.calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    /// Flow: a public repo, nothing cached.
+    /// Expectation: one GitHub call and one skills.sh call.
+    #[tokio::test]
+    async fn a_public_repo_makes_one_call_to_each() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        let api = FakeApi::answering(Some(5));
+
+        let result = lookup(&api, &path, 1_000).await;
+
+        assert_eq!(result[0].installs, Some(5));
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(api.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Flow: a repo confirmed public less than 24 h ago has a stale count.
+    /// Expectation: the count is refetched without asking GitHub again; after
+    /// 24 h GitHub is asked again.
+    /// A failure here means every refresh spends GitHub's 60 requests an hour.
+    #[tokio::test]
+    async fn a_cached_public_verdict_skips_the_github_call_until_it_expires() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        lookup(&FakeApi::answering(Some(5)), &path, 1_000).await;
+        let mut file = load_cache(&path);
+        file.counts.clear();
+        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+
+        let within = FakeApi::answering(Some(6));
+        lookup(&within, &path, 2_000).await;
+        assert_eq!(within.visibility_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(within.calls.load(Ordering::SeqCst), 1);
+
+        let mut file = load_cache(&path);
+        file.counts.clear();
+        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+        let expired = FakeApi::answering(Some(7));
+        lookup(&expired, &path, 1_000 + CACHE_TTL_SECS + 1).await;
+        assert_eq!(expired.visibility_calls.load(Ordering::SeqCst), 1);
     }
 }
