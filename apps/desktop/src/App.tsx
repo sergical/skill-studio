@@ -268,7 +268,7 @@ function App() {
           </main>
         </div>
 
-        <AddSkillSheet />
+        <AddSkillSheet skills={snapshot?.skills ?? []} />
         <CommandPalette snapshot={snapshot} requestRescan={requestRescan} />
         <Toaster
           position="bottom-right"

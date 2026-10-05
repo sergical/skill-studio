@@ -76,12 +76,14 @@ import type {
   ParsedSkillSource,
 } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
+import { otherScopeNote } from "../../lib/skill-scope-model";
 import type {
   AddMethod,
   AddMethodDefaults,
   AgentId,
   GithubSkillEntry,
   GithubSkillListing,
+  InstalledSkill,
   InstallScope,
 } from "@skill-studio/lib";
 
@@ -604,11 +606,14 @@ function ScopePicker({
   scope,
   projectPath,
   userAddedProjects,
+  note,
   onScopeChange,
   onProjectPathChange,
   onBrowseProject,
 }: {
   scope: InstallScope;
+  /** Cross-scope notice: informs, never blocks the install. */
+  note: string | null;
   projectPath: string | null;
   userAddedProjects: string[];
   onScopeChange: (scope: InstallScope) => void;
@@ -642,6 +647,7 @@ function ScopePicker({
           </Button>
         </div>
       )}
+      {note && <p className="m-0 text-caption text-text-tertiary">{note}</p>}
     </div>
   );
 }
@@ -987,6 +993,7 @@ function ManualTabFields({
   universalLockedReason,
   destinationError,
   claudeReadsShared,
+  scopeNote,
 }: {
   method: SheetMethod;
   scope: InstallScope;
@@ -1001,6 +1008,7 @@ function ManualTabFields({
   universalLockedReason: string | null;
   destinationError: string | null;
   claudeReadsShared: boolean;
+  scopeNote: string | null;
 }) {
   return (
     <>
@@ -1016,6 +1024,7 @@ function ManualTabFields({
           scope={scope}
           projectPath={projectPath}
           userAddedProjects={userAddedProjects}
+          note={scopeNote}
           onScopeChange={(next) => dispatch({ type: "set_scope", scope: next })}
           onProjectPathChange={(path) => dispatch({ type: "set_project_path", path })}
           onBrowseProject={onBrowseProject}
@@ -1260,7 +1269,7 @@ function useAddSkillGithubSelection(
   };
 }
 
-export function AddSkillSheet() {
+export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] }) {
   const { open: isOpen, prefill } = useAppStore((state) => state.addSkillSheet);
   const closeAddSkillSheet = useAppStore((state) => state.closeAddSkillSheet);
   const openSkill = useAppStore((state) => state.openSkill);
@@ -1386,6 +1395,15 @@ export function AddSkillSheet() {
     openSkill,
     addToast,
   });
+  const installNames = githubEntries
+    ? githubEntries.map((entry) => entry.name)
+    : "error" in submitParsed || !submitParsed.skillName
+      ? []
+      : [submitParsed.skillName];
+  const scopeNote =
+    installNames
+      .map((name) => otherScopeNote(skills, name, scope, projectPath))
+      .find((text) => text !== null) ?? null;
   const submitLabel =
     githubEntries && githubEntries.length > 1
       ? `Install ${githubEntries.length} skills`
@@ -1495,6 +1513,7 @@ export function AddSkillSheet() {
                   ? null
                   : submitError
               }
+              scopeNote={scopeNote}
               dispatch={dispatch}
               onBrowseProject={handleBrowseProject}
               offeredHarnesses={offeredHarnesses}

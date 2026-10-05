@@ -28,6 +28,7 @@ import {
   scopeGroupsHaveDrift,
   titleLink,
 } from "./skill-location-status";
+import { scopeMarker, scopePresence } from "../../lib/skill-scope-model";
 import type { InstalledSkill } from "@skill-studio/lib";
 
 interface SkillLocationsCardProps {
@@ -70,6 +71,7 @@ export function SkillLocationsCard({ skill, onCompareCopies }: SkillLocationsCar
   const link = titleLink(skill, hasDrift);
   const promote = link ? null : promoteToGlobal(groups);
   const showEyebrows = groups.some((g) => !g.isGlobal);
+  const presence = scopePresence(skill.deployments);
 
   return (
     <div className="flex flex-col gap-1 rounded-lg border border-border-subtle p-4">
@@ -115,16 +117,26 @@ export function SkillLocationsCard({ skill, onCompareCopies }: SkillLocationsCar
         </p>
       ) : (
         <div className="-mx-2 flex flex-col">
-          {groups.map((group) => (
-            <div key={group.label} className="flex flex-col not-first:mt-3">
-              {showEyebrows && (
-                <span className="px-2 pb-1.5 text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
-                  {group.label}
-                </span>
-              )}
-              <SkillLocationScope group={group} showEyebrow={showEyebrows} onAction={actions.run} />
-            </div>
-          ))}
+          {groups.map((group) => {
+            const marker = scopeMarker(presence, group);
+            return (
+              <div key={group.label} className="flex flex-col not-first:mt-3">
+                {showEyebrows && (
+                  <span className="flex items-baseline justify-between gap-3 px-2 pb-1.5 text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
+                    {group.label}
+                    {marker && (
+                      <span className="font-normal tracking-normal normal-case">{marker}</span>
+                    )}
+                  </span>
+                )}
+                <SkillLocationScope
+                  group={group}
+                  showEyebrow={showEyebrows}
+                  onAction={actions.run}
+                />
+              </div>
+            );
+          })}
         </div>
       )}
 
