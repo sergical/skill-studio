@@ -324,7 +324,15 @@ impl InstallScheduler {
 
     /// Whether GitHub confirms `source` is public right now. Anything else -
     /// private, unknown, failed, rate limited, still cooling down - is `false`.
-    async fn is_public<A: InstallsApi>(&self, api: &A, source: &str) -> bool {
+    /// Only the call that actually asks GitHub takes a slot; on a `Public`
+    /// answer it leaves that slot in `held`, so the caller keeps it through the
+    /// skills.sh request. A caller that waits on another's answer holds none.
+    async fn is_public<A: InstallsApi>(
+        &self,
+        api: &A,
+        source: &str,
+        held: &mut Option<OwnedSemaphorePermit>,
+    ) -> bool {
         let id = format!("repo:{source}");
         if self.is_negative(&id) || self.github_blocked() {
             return false;
@@ -339,20 +347,19 @@ impl InstallScheduler {
                     return false;
                 }
                 let verdict = tokio::time::timeout(FETCH_TIMEOUT, api.is_public_repo(source)).await;
-                self.release_after_spacing(permit);
-                match verdict {
-                    Ok(Ok(Visibility::Public)) => true,
-                    Ok(Ok(Visibility::RateLimited(wait))) => {
-                        self.with_state(|state| {
-                            state.github_blocked_until = Some(Instant::now() + wait);
-                        });
-                        false
-                    }
-                    _ => {
-                        self.remember_negative(&id);
-                        false
-                    }
+                if matches!(verdict, Ok(Ok(Visibility::Public))) {
+                    *held = Some(permit);
+                    return true;
                 }
+                self.release_after_spacing(permit);
+                if let Ok(Ok(Visibility::RateLimited(wait))) = verdict {
+                    self.with_state(|state| {
+                        state.github_blocked_until = Some(Instant::now() + wait);
+                    });
+                } else {
+                    self.remember_negative(&id);
+                }
+                false
             })
             .await
     }
@@ -360,16 +367,28 @@ impl InstallScheduler {
     /// One skill's count, or `None` when it cannot be asked for or answered.
     async fn installs<A: InstallsApi>(&self, api: &A, key: &InstallCountKey) -> Option<u32> {
         let id = format!("skill:{}", cache_key(key));
+        let repo_id = format!("repo:{}", key.source);
         if self.is_negative(&id) || self.skills_blocked() {
             return None;
         }
         self.count_inflight
             .run(&id, async {
-                if !self.is_public(api, &key.source).await {
+                let mut held = None;
+                if !self.is_public(api, &key.source, &mut held).await {
                     return None;
                 }
-                let permit = self.acquire().await?;
-                if self.skills_blocked() {
+                let permit = match held {
+                    Some(permit) => permit,
+                    None => self.acquire().await?,
+                };
+                // The verdict is only as old as the moment it was given: another
+                // task may have learned the repo is private, or hit a cooldown,
+                // while this one waited.
+                if self.is_negative(&repo_id)
+                    || self.is_negative(&id)
+                    || self.github_blocked()
+                    || self.skills_blocked()
+                {
                     return None;
                 }
                 let result =
@@ -718,6 +737,79 @@ mod tests {
             }
             Ok(5)
         }
+    }
+
+    /// Answers `Public` only once its gate opens, like a slow GitHub reply.
+    struct GatedApi {
+        gate: tokio::sync::Notify,
+        calls: AtomicUsize,
+    }
+
+    impl InstallsApi for GatedApi {
+        async fn is_public_repo(&self, _source: &str) -> Result<Visibility, String> {
+            self.gate.notified().await;
+            Ok(Visibility::Public)
+        }
+
+        async fn installs(&self, _source: &str, _name: &str) -> Result<u32, InstallsFailure> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(5)
+        }
+    }
+
+    /// Flow: task A is told `Public` but has not yet sent its skills.sh
+    /// request; meanwhile another task records the repo as not public.
+    /// Expectation: A sends nothing to skills.sh.
+    /// A failure here means a repo that just turned private still has its
+    /// name and skill sent to skills.sh by a task that was already queued.
+    #[tokio::test]
+    async fn a_newer_not_public_verdict_stops_a_task_holding_a_public_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        let api = Arc::new(GatedApi {
+            gate: tokio::sync::Notify::new(),
+            calls: AtomicUsize::new(0),
+        });
+        let scheduler = scheduler();
+        let task_a = tokio::spawn({
+            let (api, scheduler) = (Arc::clone(&api), Arc::clone(&scheduler));
+            async move {
+                lookup_install_counts(
+                    api,
+                    scheduler,
+                    &path,
+                    vec![key("obra/write-tests", "a")],
+                    1_000,
+                )
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+        scheduler.remember_negative("repo:obra/write-tests");
+        api.gate.notify_one();
+
+        let result = task_a.await.unwrap();
+
+        assert_eq!(api.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(result[0].installs, None);
+    }
+
+    /// Flow: more skills of one repo than there are request slots, all
+    /// looked up at once.
+    /// Expectation: every skill gets its count.
+    /// A failure here means tasks waiting on one repo's visibility answer hold
+    /// the slots the answering task needs, and the lookup deadlocks.
+    #[tokio::test(start_paused = true)]
+    async fn waiters_on_one_repo_do_not_starve_the_task_asking_github() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        let keys: Vec<_> = (0..MAX_CONCURRENT_REQUESTS * 2)
+            .map(|i| key("obra/write-tests", &format!("skill-{i}")))
+            .collect();
+
+        let result = lookup_keys(&FakeApi::answering(Some(9)), &path, keys, 1_000).await;
+
+        assert!(result.iter().all(|c| c.installs == Some(9)));
     }
 
     /// Flow: one fetch never resolves; its cache entry is stale, and other
