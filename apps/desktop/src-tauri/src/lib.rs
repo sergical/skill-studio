@@ -269,6 +269,41 @@ fn apply_fixture_home_override() {
     }
 }
 
+/// Only web links may leave the app. `file:`, `javascript:` and custom
+/// schemes (`vscode:`, `x-apple.*:`) would let page content launch local
+/// handlers, so they are refused.
+fn is_openable_external_url(url: &tauri::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+}
+
+/// Every `target="_blank"` link and `window.open` call lands here. The
+/// webview never opens a window of its own: web links go to the system
+/// default browser and everything else is dropped.
+fn route_new_window<R: tauri::Runtime>(url: &tauri::Url) -> tauri::webview::NewWindowResponse<R> {
+    let (to_open, response) = plan_new_window(url);
+    if let Some(target) = to_open {
+        // A worker thread keeps the webview callback from blocking, and
+        // `status()` waits on the child so no zombie `open` is left behind.
+        std::thread::spawn(move || {
+            match std::process::Command::new("open").arg(&target).status() {
+                Ok(status) if status.success() => {}
+                Ok(status) => eprintln!("[external_link] open {target} exited with {status}"),
+                Err(error) => eprintln!("[external_link] could not open {target}: {error}"),
+            }
+        });
+    }
+    response
+}
+
+/// The decision without the side effect: the URL to hand to `open` (if any)
+/// and the response for the webview, which is always `Deny`.
+fn plan_new_window<R: tauri::Runtime>(
+    url: &tauri::Url,
+) -> (Option<String>, tauri::webview::NewWindowResponse<R>) {
+    let to_open = is_openable_external_url(url).then(|| url.to_string());
+    (to_open, tauri::webview::NewWindowResponse::Deny)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 // `run()` is the process entry point (called only from `main()`); a failure
 // building or running the Tauri event loop is fatal and unrecoverable, so
@@ -281,6 +316,19 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            // The main window is declared in tauri.conf.json with
+            // `create: false` so it can be built here with the new-window
+            // handler attached.
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .first()
+                .ok_or("tauri.conf.json declares no main window")?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?
+                .on_new_window(|url, _features| route_new_window(&url))
+                .build()?;
+
             // Reads `~/.agents/skill-studio.json`, not `app_data_dir` -
             // independent of the data-folder migration below - so this runs
             // first: a panic anywhere else in setup, including that
@@ -484,4 +532,64 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_openable_external_url, plan_new_window};
+    use tauri::webview::NewWindowResponse;
+
+    fn parse(url: &str) -> tauri::Url {
+        url.parse().expect("test URL parses")
+    }
+
+    // Flow: a user clicks a target="_blank" link in a skill's markdown.
+    // Expectation: web links open in the system browser.
+    // Failure: a link silently does nothing, as before this fix.
+    #[test]
+    fn external_link_filter_allows_http_and_https() {
+        assert!(is_openable_external_url(&parse("https://skills.sh/a/b")));
+        assert!(is_openable_external_url(&parse("http://example.com/")));
+    }
+
+    // Flow: skill markdown, which is untrusted, contains a link with a
+    // local or custom scheme.
+    // Expectation: the click opens nothing.
+    // Failure: page content launches a local file or app handler.
+    #[test]
+    fn external_link_filter_refuses_file_javascript_and_custom_schemes() {
+        for url in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "vscode://file/etc/passwd",
+            "x-apple.systempreferences:com.apple.preference",
+            "data:text/html,hi",
+            "ftp://example.com/",
+        ] {
+            assert!(
+                !is_openable_external_url(&parse(url)),
+                "{url} must be refused"
+            );
+        }
+    }
+
+    // Flow: any new-window request (http, file:, javascript:) reaches the handler.
+    // Expectation: the webview is always told Deny; only the http URL is queued for `open`.
+    // Failure: Allow lets the webview open a window, or a local scheme reaches `open`.
+    #[test]
+    fn new_window_is_always_denied_and_only_web_urls_are_opened() {
+        let cases = [
+            ("https://skills.sh/a/b", Some("https://skills.sh/a/b")),
+            ("file:///etc/passwd", None),
+            ("javascript:alert(1)", None),
+        ];
+        for (url, expected) in cases {
+            let (to_open, response) = plan_new_window::<tauri::Wry>(&parse(url));
+            assert!(
+                matches!(response, NewWindowResponse::Deny),
+                "{url} must be denied"
+            );
+            assert_eq!(to_open.as_deref(), expected, "{url}");
+        }
+    }
 }

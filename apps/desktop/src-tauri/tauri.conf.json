@@ -13,6 +13,7 @@
   "app": {
     "windows": [
       {
+        "create": false,
         "title": "Skill Studio",
         "width": 1200,
         "height": 800,
