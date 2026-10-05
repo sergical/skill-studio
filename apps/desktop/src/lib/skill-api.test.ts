@@ -49,6 +49,7 @@ const EXPECTED_WRAPPER_COMMANDS = {
   searchSkills: { kind: "command", command: "search_skills", registeredInLibRs: true },
   getPopularSkills: { kind: "command", command: "get_popular_skills", registeredInLibRs: true },
   getSkillDetails: { kind: "command", command: "get_skill_details", registeredInLibRs: true },
+  getInstallCounts: { kind: "command", command: "get_install_counts", registeredInLibRs: true },
   getInstalledSkills: {
     kind: "command",
     command: "get_installed_skills",

@@ -741,6 +741,23 @@ export interface SkillDetails {
   skill_md: string | null;
 }
 /**
+ * One installed skills.sh skill to look up: the lock file's `source`
+ * (`owner/repo`) and the skill's name (its slug under that source).
+ */
+export interface InstallCountKey {
+  source: string;
+  name: string;
+}
+/**
+ * The skills.sh install count for one `InstallCountKey`; `installs` is
+ * `None` when the lookup failed or the skill is unknown to skills.sh.
+ */
+export interface InstallCount {
+  source: string;
+  name: string;
+  installs: number | null;
+}
+/**
  * How discovery requests reach skills.sh - see `api::resolve_skills_sh_access`.
  * `"direct"` means a developer-override key is configured (`server_url` is
  * `None`); `"server"` means requests go through the local Skill Studio

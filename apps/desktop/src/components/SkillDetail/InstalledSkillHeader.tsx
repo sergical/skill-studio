@@ -5,7 +5,7 @@
 // ledger's facts moved into the properties rail.
 // ============================================================================
 
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ExternalLink } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import {
   describeFrontmatterErrorLine,
@@ -24,7 +24,9 @@ import type {
   FrontmatterRepairPreview,
   InstalledSkill,
 } from "@skill-studio/lib";
+import { useSkillInstalls } from "../../hooks/useSkillInstalls";
 import { TooltipControl } from "../ui/TooltipControl";
+import { skillSourceLine } from "./skill-source-line";
 import {
   canOfferLocalQuote,
   fixLineFor,
@@ -74,6 +76,7 @@ export function InstalledSkillHeader({
 }: InstalledSkillHeaderProps) {
   // Notes from the skill's own copies only, as on list rows - a plugin copy's notes are not the
   // user's to fix. A plugin-only skill has no own copy, so it counts every copy.
+  const sourceLine = skillSourceLine(skill, useSkillInstalls(skill));
   const own = ownDeployments(skill);
   const noteSources = own.length > 0 ? own : skill.deployments;
   const nonBlockingNotes = [
@@ -146,6 +149,23 @@ export function InstalledSkillHeader({
     <header className="flex flex-col gap-4">
       <div>
         <h2 className="text-heading-lg font-semibold text-text-primary">{skill.name}</h2>
+        <p className="mt-1 select-text text-small text-text-tertiary">
+          {sourceLine.prefix}
+          {sourceLine.href ? (
+            <a
+              href={sourceLine.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-text-tertiary no-underline transition-colors hover:text-accent hover:underline"
+            >
+              {sourceLine.label}
+              <ExternalLink size={12} />
+            </a>
+          ) : (
+            sourceLine.label
+          )}
+          {sourceLine.installs && ` · ${sourceLine.installs}`}
+        </p>
         {skill.description && (
           <p className="mt-3 select-text text-pretty text-body leading-[1.5] text-text-secondary">
             {skill.description}

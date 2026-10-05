@@ -481,6 +481,8 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
             installs: 0,
             skill_md: null,
           };
+        case "get_install_counts":
+          return [];
         case "list_skill_packs":
           return [];
         case "list_skill_runs":

@@ -84,6 +84,23 @@ pub struct SkillDetails {
     pub skill_md: Option<String>,
 }
 
+/// One installed skills.sh skill to look up: the lock file's `source`
+/// (`owner/repo`) and the skill's name (its slug under that source).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InstallCountKey {
+    pub source: String,
+    pub name: String,
+}
+
+/// The skills.sh install count for one `InstallCountKey`; `installs` is
+/// `None` when the lookup failed or the skill is unknown to skills.sh.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InstallCount {
+    pub source: String,
+    pub name: String,
+    pub installs: Option<u32>,
+}
+
 /// How discovery requests reach skills.sh - see `api::resolve_skills_sh_access`.
 /// `"direct"` means a developer-override key is configured (`server_url` is
 /// `None`); `"server"` means requests go through the local Skill Studio

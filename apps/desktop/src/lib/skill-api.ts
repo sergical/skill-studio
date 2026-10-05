@@ -40,6 +40,8 @@ import type {
   PullResult,
   RemoveOutcome,
   SkillDetails,
+  InstallCount,
+  InstallCountKey,
   SkillEvent,
   SkillSnapshot,
   SplitCopy,
@@ -164,6 +166,15 @@ export async function getPopularSkills(
  */
 export async function getSkillDetails(skillId: string): Promise<SkillDetails> {
   return callCommand("get_skill_details", { skillId });
+}
+
+/**
+ * skills.sh install counts for installed skills-sh skills. The backend caches
+ * them for 24 h and fetches the misses at a throttled pace, so a long `keys`
+ * list is safe; `installs` is null when the count is unknown or offline.
+ */
+export async function getInstallCounts(keys: InstallCountKey[]): Promise<InstallCount[]> {
+  return callCommand("get_install_counts", { keys });
 }
 
 // ============================================================================
