@@ -67,15 +67,15 @@ const scripts = {
   ],
   mcp: [
     { text: "› Park the skills I haven’t used this month.", tone: "user", typed: true, pause: 420 },
-    { text: "⏺ skill-studio · skill_usage (days: 30)", tone: "tool", pause: 300 },
+    { text: "● skill-studio · skill_usage (days: 30)", tone: "tool", pause: 300 },
     { text: "  ⎿ 12 of 31 skills not used in 30 days", tone: "muted", pause: 360 },
-    { text: "⏺ skill-studio · park × 12", tone: "tool", pause: 300 },
+    { text: "● skill-studio · park × 12", tone: "tool", pause: 300 },
     {
       text: "  ⎿ Parked release-notes, deploy-preview, pdf-tools and 9 more",
       tone: "muted",
       pause: 420,
     },
-    { text: "⏺ Done. 12 skills are parked, so your agents load 19.", tone: "plain" },
+    { text: "● Done. 12 skills are parked, so your agents load 19.", tone: "plain" },
     { text: "  Say “undo” and I’ll unpark them.", tone: "plain" },
     { text: "  motion also has a broken header. Want me to fix it?", tone: "plain" },
   ],
@@ -134,6 +134,10 @@ function useScript(lines: ReadonlyArray<Line>, runId: number) {
   return state;
 }
 
+// Leading spaces plus a terminal marker or a [level] tag. On a narrow screen the rest wraps
+// under its own first word instead of back to the left edge.
+const LINE_PREFIX = /^\s*(?:[●⎿›$] |\[\w+\] )?/;
+
 function ScriptView({ lines, runId }: { lines: ReadonlyArray<Line>; runId: number }) {
   const { shown, chars } = useScript(lines, runId);
   return (
@@ -142,10 +146,14 @@ function ScriptView({ lines, runId }: { lines: ReadonlyArray<Line>; runId: numbe
         const current = i === shown - 1;
         const text = current && line.typed ? line.text.slice(0, chars) : line.text;
         const typing = current && line.typed && chars < line.text.length;
+        const indent = LINE_PREFIX.exec(line.text)?.[0].length ?? 0;
         return (
           <div key={i} {...stylex.props(styles.line, styles[line.tone ?? "plain"])}>
-            {text}
-            {typing && <span {...stylex.props(styles.caret)} />}
+            <span {...stylex.props(styles.linePrefix)}>{text.slice(0, indent)}</span>
+            <span>
+              {text.slice(indent)}
+              {typing && <span {...stylex.props(styles.caret)} />}
+            </span>
           </div>
         );
       })}
@@ -507,9 +515,22 @@ const styles = stylex.create({
     margin: 0,
     overflowX: "auto",
     padding: "16px 20px",
-    "@media (max-width: 600px)": { fontSize: 11.5, height: 320, padding: "12px 14px" },
+    "@media (max-width: 600px)": {
+      fontSize: 11.5,
+      height: 320,
+      lineHeight: 1.55,
+      padding: "12px 14px",
+    },
   },
-  line: { whiteSpace: { default: "pre", "@media (max-width: 600px)": "pre-wrap" } },
+  line: {
+    display: "grid",
+    gridTemplateColumns: "auto minmax(0, 1fr)",
+    whiteSpace: { default: "pre", "@media (max-width: 600px)": "pre-wrap" },
+    "@media (max-width: 600px)": { paddingBottom: 3 },
+  },
+  // pre-wrap lets a run of spaces hang at the end of a line with no width, so an
+  // indent-only prefix would collapse.
+  linePrefix: { whiteSpace: "pre" },
   plain: { color: "oklch(0.93 0.01 290)" },
   muted: { color: "oklch(0.68 0.02 290)" },
   warn: { color: "oklch(0.82 0.13 75)" },
@@ -637,7 +658,11 @@ const styles = stylex.create({
     minWidth: 0,
     paddingLeft: 14,
   },
-  commandText: { overflowX: "auto", whiteSpace: "nowrap" },
+  commandText: {
+    overflowX: "auto",
+    whiteSpace: { default: "nowrap", "@media (max-width: 600px)": "normal" },
+    "@media (max-width: 600px)": { paddingBlock: 10 },
+  },
   copyButton: {
     alignItems: "center",
     backgroundColor: "transparent",
