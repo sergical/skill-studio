@@ -5378,7 +5378,7 @@ fn unpark_body(
     let skill = resolve_skill(&session.fresh, &deployment.id)?.clone();
 
     let fs = rt.ports.fs.as_ref();
-    let mut park_rows = session
+    let park_row = session
         .store
         .list(&crate::events::EventFilter {
             skill: Some(skill.name.clone()),
@@ -5396,18 +5396,12 @@ fn unpark_body(
                     .map(Path::new)
                     == Some(deployment.path.as_path())
         })
-        .collect::<Vec<_>>();
-    // A park that finished wins; a failed one is offered only when its copy
-    // is still parked, so a rolled-back attempt never rewrites live files.
-    let park_row = park_rows
-        .iter()
-        .position(|row| row.status != crate::events::EventStatus::Failed)
-        .or_else(|| {
-            park_rows
-                .iter()
-                .position(|row| failed_park_leaves_copy_parked(fs, &row.payload, &deployment.path))
-        })
-        .map(|index| park_rows.swap_remove(index));
+        // Newest first, one rule: a finished park, or a failed one whose copy
+        // is still parked. A rolled-back attempt never rewrites live files.
+        .find(|row| {
+            row.status != crate::events::EventStatus::Failed
+                || failed_park_leaves_copy_parked(fs, &row.payload, &deployment.path)
+        });
     let links = park_row
         .as_ref()
         .map(|row| park_row_links(&row.payload))
@@ -5572,6 +5566,11 @@ fn unpark_body(
         .at(restored_dir));
     }
 
+    // The copy is back, so this park record is spent; a later turn-on must
+    // not pick it up.
+    if let Some(row) = &park_row {
+        let _ = session.store.claim_revert(&session.guard, &row.id, &id);
+    }
     session
         .store
         .finish(&session.guard, &id, crate::events::EventStatus::Done, None)?;

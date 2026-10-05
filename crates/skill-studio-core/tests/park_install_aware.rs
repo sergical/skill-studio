@@ -1590,6 +1590,49 @@ fn a_failed_remove_whose_rollback_also_failed_can_still_be_turned_on() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// Flow: park and turn on a wildcard skill, the person changes the wildcard
+/// source, then a second park fails and its rollback fails too. Expectation:
+/// turn-on uses the second park's record, so the skill comes back under the
+/// new source. Failure: turn-on picks the first, finished park row, lists the
+/// old source, and the skill stays parked.
+#[test]
+fn turn_on_after_a_failed_second_park_uses_the_newest_park_record() {
+    let (home, stub) = dotagents_home("park_dotagents_newest_row", WILDCARD_TOML);
+    let rt = runtime(&home, stub.clone(), true);
+
+    park_foo(&rt);
+    unpark_foo(&rt);
+    let new_source = WILDCARD_TOML.replace("owner/pack", "owner/other");
+    std::fs::write(stub.toml_path(), &new_source).unwrap();
+    let lock = read(&stub.lock_path()).replace("owner/pack", "owner/other");
+    std::fs::write(stub.lock_path(), lock).unwrap();
+
+    stub.remove_exit.store(3, Ordering::SeqCst);
+    stub.block_move_back.store(true, Ordering::SeqCst);
+    let second = ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: live_copy(&rt, "foo").id,
+        },
+    );
+    assert!(second.is_err());
+    assert!(home
+        .join(".agents/skills-parked/universal/foo/SKILL.md")
+        .exists());
+
+    std::fs::remove_dir_all(home.join(".agents/skills/foo")).unwrap();
+    unpark_foo(&rt);
+
+    assert!(home.join(".agents/skills/foo/SKILL.md").exists());
+    let toml = read(&stub.toml_path());
+    assert!(
+        toml.contains("owner/other") && !toml.contains("owner/pack"),
+        "{toml}"
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
 /// Flow: `dotagents remove` exits non-zero and the rollback works. The copy
 /// is then moved into the parked folder by hand and turned on. Expectation:
 /// the failed row is not offered, so turn-on does not rewrite `agents.toml`
