@@ -32,6 +32,7 @@ pub mod skill_fs;
 pub mod skill_harness_disable;
 pub mod skill_independent_copy;
 pub mod skill_install;
+pub mod skill_install_counts;
 pub mod skill_invocation;
 pub mod skill_lifecycle;
 pub mod skill_local_edits;

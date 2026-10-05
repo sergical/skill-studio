@@ -61,6 +61,8 @@ export type {
   AgentOffOutcome,
   AgentOffRefusal,
   SkillDetails,
+  InstallCount,
+  InstallCountKey,
   SkillEventDto,
   SkillEventDto as SkillEvent,
   SkillInvocation,

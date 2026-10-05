@@ -10,7 +10,8 @@ use std::process::Command;
 
 use super::api;
 use super::skill_dto::{
-    InstallScope, InstalledSkill, LifecycleTarget, PaginatedSkillsResponse, SkillDetails,
+    InstallCount, InstallCountKey, InstallScope, InstalledSkill, LifecycleTarget,
+    PaginatedSkillsResponse, SkillDetails,
 };
 use super::skill_editor;
 use super::skill_lifecycle::{self, rebuild_fresh_lifecycle_snapshot, resolve_lifecycle_target};
@@ -109,6 +110,35 @@ pub async fn get_skill_details(
         api::get_skill_details(&access, &skill_id).await
     })
     .await
+}
+
+/// skills.sh install counts for installed skills-sh skills. Cached on disk
+/// for 24 h and fetched in the background at a throttled pace; offline or
+/// unknown skills come back with `installs: null`, never an error.
+#[tauri::command]
+pub async fn get_install_counts(
+    keys: Vec<InstallCountKey>,
+    app: tauri::AppHandle,
+) -> Result<Vec<InstallCount>, String> {
+    use super::skill_install_counts as counts;
+    let cache_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not find the app data folder: {e}"))?
+        .join("install-counts.json");
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let access = api::resolve_skills_sh_access(&home)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    Ok(counts::lookup_install_counts(
+        std::sync::Arc::new(counts::SkillsShInstallsApi { access }),
+        &cache_path,
+        keys,
+        now,
+        counts::REQUEST_SPACING,
+    )
+    .await)
 }
 
 /// Get all installed skills. Returns the background-refreshed snapshot's

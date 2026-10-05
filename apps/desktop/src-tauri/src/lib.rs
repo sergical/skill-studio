@@ -439,6 +439,7 @@ pub fn run() {
             skills::commands::search_skills,
             skills::commands::get_popular_skills,
             skills::commands::get_skill_details,
+            skills::commands::get_install_counts,
             skills::commands::get_installed_skills,
             skills::commands::remove_skill,
             skills::commands::update_skill,

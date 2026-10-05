@@ -6,6 +6,7 @@ import { Download, Check, ArrowUp, Link2, FileCheck2, AlertTriangle } from "luci
 import { Button } from "@skill-studio/ui";
 import type { SkillWithStatus } from "@skill-studio/lib";
 import { SOURCE_KIND_LABELS, specViolationSeverity } from "@skill-studio/lib";
+import { formatInstalls } from "../../lib/skill-installs-format";
 
 /**
  * The Browse tab pages through skills.sh and shows an install indicator per
@@ -101,14 +102,6 @@ interface SkillCardProps {
   isSelected: boolean;
   onClick: () => void;
   hideInstalledIndicator: boolean | undefined;
-}
-
-/** 1,000+ installs show as e.g. "1.2k". */
-function formatInstalls(count: number): string {
-  if (count >= 1000) {
-    return `${(count / 1000).toFixed(1)}k`;
-  }
-  return count.toString();
 }
 
 /** The installed indicator badge - an update arrow when an owning source has
