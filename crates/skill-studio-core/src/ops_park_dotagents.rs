@@ -35,6 +35,10 @@ struct WildcardRef {
     /// one `dotagents remove` excludes; turn-on lifts it but does not count it
     /// as a reason dotagents would manage the skill.
     supplies: bool,
+    /// Whether the entry had an `exclude` key before the park. Turn-on keeps
+    /// that key, and the line and comment it carried, when the list ends up
+    /// empty.
+    had_exclude: bool,
 }
 
 /// What `agents.lock` records about the skill: the fields dotagents matches
@@ -54,7 +58,9 @@ pub(crate) struct DotagentsPark {
     pub(crate) config: PathBuf,
     /// `agents.lock`, or the file its link resolves to.
     pub(crate) lock: PathBuf,
-    /// Both files as read, written back when `dotagents remove` fails.
+    /// `.agents/.gitignore`: `remove` deletes the `/skills/<name>` line from it.
+    gitignore: PathBuf,
+    /// The files as read, written back when `dotagents remove` fails.
     originals: Vec<FileSnapshot>,
     /// The skill's own `[[skills]]` entry, kept so turn-on can put it back.
     /// `None` when a wildcard entry supplies the skill.
@@ -74,12 +80,92 @@ pub(crate) struct DotagentsPark {
 pub(crate) struct RecordedDotagents {
     pub(crate) config: PathBuf,
     pub(crate) lock: Option<PathBuf>,
+    pub(crate) gitignore: Option<PathBuf>,
+    /// The files as the park left them. `None` for a row from before this
+    /// was recorded; turn-on then edits the files.
+    after: Option<PostPark>,
     entry: Option<String>,
     lock_entry: Option<String>,
     wildcards: Vec<WildcardRef>,
 }
 
+/// A content hash of each file after `dotagents remove` ran, or `ABSENT`.
+/// A file that still has its hash at turn-on was touched by nothing else, so
+/// the backed-up original goes back byte for byte.
+struct PostPark {
+    config: String,
+    lock: String,
+    gitignore: String,
+}
+
+const ABSENT: &str = "absent";
+
+fn content_hash(text: Option<&str>) -> String {
+    text.map_or_else(
+        || ABSENT.to_string(),
+        |text| {
+            crate::identity::Fingerprint::of_bytes(text.as_bytes())
+                .bare_hex()
+                .to_string()
+        },
+    )
+}
+
 impl DotagentsPark {
+    /// The files the park row backs up: `.gitignore` only when it exists.
+    pub(crate) fn backup_paths(&self) -> Vec<PathBuf> {
+        self.originals
+            .iter()
+            .map(|file| file.path.clone())
+            .collect()
+    }
+
+    /// The `payload.dotagents_after` value: what the three files hold once
+    /// `dotagents remove` has run. `None` when a file cannot be read, or when
+    /// anything beyond this skill's own entries changed while the command
+    /// ran: turn-on then edits the files, because restoring a backup would
+    /// drop that other change.
+    pub(crate) fn payload_after(
+        &self,
+        rt: &Runtime,
+        skill: &SkillName,
+    ) -> Option<serde_json::Value> {
+        let fs = rt.ports.fs.as_ref();
+        let after_text = |path: &Path| read_text(fs, path).ok();
+        let before_text = |path: &Path| {
+            self.originals
+                .iter()
+                .find(|file| file.path == path)
+                .and_then(|file| file.text.clone())
+        };
+        let (config, lock, ignore) = (
+            after_text(&self.config)?,
+            after_text(&self.lock)?,
+            after_text(&self.gitignore)?,
+        );
+        let name = skill.0.as_str();
+        let only_own_entries_gone = removed_only(
+            before_text(&self.config).as_deref(),
+            config.as_deref(),
+            |text| config_shape(text, name),
+        ) && removed_only(
+            before_text(&self.lock).as_deref(),
+            lock.as_deref(),
+            |text| lock_shape(text, name),
+        ) && removed_only(
+            before_text(&self.gitignore).as_deref(),
+            ignore.as_deref(),
+            |text| Some(ignore_shape(text, name)),
+        );
+        only_own_entries_gone.then(|| {
+            serde_json::json!({
+                "config": content_hash(config.as_deref()),
+                "lock": content_hash(lock.as_deref()),
+                "gitignore": content_hash(ignore.as_deref()),
+            })
+        })
+    }
+
     /// The `payload.dotagents` value the park row records.
     pub(crate) fn payload(&self) -> serde_json::Value {
         let wildcards: Vec<serde_json::Value> = self
@@ -90,17 +176,113 @@ impl DotagentsPark {
                     "source": w.source,
                     "path": w.path,
                     "supplies": w.supplies,
+                    "had_exclude": w.had_exclude,
                 })
             })
             .collect();
         serde_json::json!({
             "config": self.config,
             "lock": self.lock,
+            "gitignore": self.gitignore,
             "entry": self.entry,
             "lock_entry": self.lock_entry,
             "wildcards": wildcards,
         })
     }
+}
+
+/// True when `after` is `before` apart from the skill's own entries, as
+/// `shape` sees them. An absent file only matches an absent file.
+fn removed_only(
+    before: Option<&str>,
+    after: Option<&str>,
+    shape: impl Fn(&str) -> Option<serde_json::Value>,
+) -> bool {
+    match (before, after) {
+        (None, None) => true,
+        (Some(before), Some(after)) => {
+            let before = shape(before);
+            before.is_some() && before == shape(after)
+        }
+        _ => false,
+    }
+}
+
+/// A TOML item as JSON, so two files compare by content and not by layout.
+fn item_json(item: &toml_edit::Item) -> serde_json::Value {
+    fn value_json(value: &toml_edit::Value) -> serde_json::Value {
+        match value {
+            toml_edit::Value::Array(items) => items.iter().map(value_json).collect(),
+            toml_edit::Value::InlineTable(table) => table
+                .iter()
+                .map(|(key, value)| (key.to_string(), value_json(value)))
+                .collect::<serde_json::Map<_, _>>()
+                .into(),
+            toml_edit::Value::String(text) => text.value().clone().into(),
+            other => other.to_string().trim().to_string().into(),
+        }
+    }
+    match item {
+        toml_edit::Item::Value(value) => value_json(value),
+        toml_edit::Item::Table(table) => table
+            .iter()
+            .map(|(key, item)| (key.to_string(), item_json(item)))
+            .collect::<serde_json::Map<_, _>>()
+            .into(),
+        toml_edit::Item::ArrayOfTables(tables) => tables
+            .iter()
+            .map(|table| item_json(&toml_edit::Item::Table(table.clone())))
+            .collect(),
+        toml_edit::Item::None => serde_json::Value::Null,
+    }
+}
+
+/// `agents.toml` without `skill`'s own row, and without `skill` in any
+/// `exclude` list (an empty list reads as no list).
+fn config_shape(text: &str, skill: &str) -> Option<serde_json::Value> {
+    let doc = parse(Path::new("agents.toml"), text).ok()?;
+    let mut shape = item_json(doc.as_item());
+    if let Some(skills) = shape.get_mut("skills").and_then(|v| v.as_array_mut()) {
+        skills.retain(|row| row.get("name").and_then(|n| n.as_str()) != Some(skill));
+        for row in skills {
+            let Some(row) = row.as_object_mut() else {
+                continue;
+            };
+            if let Some(exclude) = row.get_mut("exclude").and_then(|v| v.as_array_mut()) {
+                exclude.retain(|item| item.as_str() != Some(skill));
+            }
+            if row
+                .get("exclude")
+                .and_then(|v| v.as_array())
+                .is_some_and(Vec::is_empty)
+            {
+                row.remove("exclude");
+            }
+        }
+    }
+    Some(shape)
+}
+
+/// `agents.lock` without `skill`'s row.
+fn lock_shape(text: &str, skill: &str) -> Option<serde_json::Value> {
+    let doc = parse(Path::new("agents.lock"), text).ok()?;
+    let mut shape = item_json(doc.as_item());
+    if let Some(skills) = shape.get_mut("skills").and_then(|v| v.as_object_mut()) {
+        skills.remove(skill);
+    }
+    Some(shape)
+}
+
+/// The ignore file's lines in file order, without the ones that name
+/// `skill`. Git uses the last matching rule, so a reorder is a change.
+fn ignore_shape(text: &str, skill: &str) -> serde_json::Value {
+    let own = [format!("/skills/{skill}"), format!("/skills/{skill}/")];
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty() && !own.iter().any(|own| own == line))
+        .collect();
+    lines.into()
 }
 
 /// Reads back what [`DotagentsPark::payload`] recorded.
@@ -115,6 +297,15 @@ pub(crate) fn recorded(payload: &serde_json::Value) -> Option<RecordedDotagents>
     Some(RecordedDotagents {
         config: PathBuf::from(value.get("config")?.as_str()?),
         lock: text("lock").map(PathBuf::from),
+        gitignore: text("gitignore").map(PathBuf::from),
+        after: payload.get("dotagents_after").and_then(|after| {
+            let hash = |key: &str| Some(after.get(key)?.as_str()?.to_string());
+            Some(PostPark {
+                config: hash("config")?,
+                lock: hash("lock")?,
+                gitignore: hash("gitignore")?,
+            })
+        }),
         entry: text("entry"),
         lock_entry: text("lock_entry"),
         wildcards: value
@@ -134,6 +325,10 @@ pub(crate) fn recorded(payload: &serde_json::Value) -> Option<RecordedDotagents>
                                 .get("supplies")
                                 .and_then(serde_json::Value::as_bool)
                                 .unwrap_or(true),
+                            had_exclude: row
+                                .get("had_exclude")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false),
                         })
                     })
                     .collect()
@@ -359,6 +554,18 @@ fn is_recorded(row: &toml_edit::Table, wildcards: &[WildcardRef]) -> bool {
         })
 }
 
+/// Whether the recorded entry that matches `row` had an `exclude` key before
+/// the park.
+fn had_exclude(row: &toml_edit::Table, wildcards: &[WildcardRef]) -> bool {
+    row_str(row, "source").is_some_and(|source| {
+        wildcards.iter().any(|w| {
+            w.had_exclude
+                && sources_match(&w.source, source)
+                && comparable_path(w.path.as_deref()) == comparable_path(row_str(row, "path"))
+        })
+    })
+}
+
 /// Adds `name` to the `exclude` list of `row`, creating the list when the
 /// entry has none. A multi-line list keeps its layout: the new item takes the
 /// indent of the last one, and a comment after the last item's comma stays
@@ -525,6 +732,7 @@ pub(crate) fn plan_park(
                     source: row_str(row, "source")?.to_string(),
                     path: row_str(row, "path").map(str::to_string),
                     supplies: true,
+                    had_exclude: row.get("exclude").is_some(),
                 })
             })
             .collect(),
@@ -548,6 +756,7 @@ pub(crate) fn plan_park(
                     source: row_str(row, "source")?.to_string(),
                     path: row_str(row, "path").map(str::to_string),
                     supplies: false,
+                    had_exclude: row.get("exclude").is_some(),
                 })
             });
         if let Some(target) = target {
@@ -585,21 +794,49 @@ pub(crate) fn plan_park(
             )
             .at(&deployment.path)
         })?;
+    let gitignore = crate::ports::resolve_config_link(
+        fs,
+        &match &deployment.root.scope {
+            RootScope::Global => dir.join(".gitignore"),
+            RootScope::Project(_) => dir.join(".agents").join(".gitignore"),
+        },
+    )?;
+    // Turn on writes this file back through `confine_write_through`; a link
+    // that leaves the home and projects would park the skill for good.
+    crate::ports::confine(&rt.scope, fs, &gitignore).map_err(|e| {
+        CoreError::new(
+            e.code,
+            format!(
+                "dotagents' ignore file {} resolves outside the home and the configured projects, so the skill could not be turned on again: {}",
+                gitignore.display(),
+                e.message
+            ),
+        )
+        .at(&deployment.path)
+    })?;
+    let mut originals = vec![
+        FileSnapshot {
+            path: config.clone(),
+            text: Some(original_config),
+        },
+        FileSnapshot {
+            path: lock.clone(),
+            text: original_lock,
+        },
+    ];
+    if let Some(text) = read_text(fs, &gitignore)? {
+        originals.push(FileSnapshot {
+            path: gitignore.clone(),
+            text: Some(text),
+        });
+    }
     Ok(Some(DotagentsPark {
         program,
         prefix_args,
-        originals: vec![
-            FileSnapshot {
-                path: config.clone(),
-                text: Some(original_config),
-            },
-            FileSnapshot {
-                path: lock.clone(),
-                text: original_lock,
-            },
-        ],
-        lock,
         config,
+        lock,
+        gitignore,
+        originals,
         entry,
         lock_entry,
         locked,
@@ -954,7 +1191,7 @@ fn with_skill_back(
             };
             if lift_exclude(exclude, &skill.0) {
                 changed = true;
-                if exclude.is_empty() {
+                if exclude.is_empty() && !had_exclude(row, wildcards) {
                     row.remove("exclude");
                 }
             }
@@ -1004,19 +1241,21 @@ fn with_lock_entry(
     render_checked(path, &doc, text.contains("\r\n")).map(Some)
 }
 
-/// Lists `skill` again in `agents.toml` and `agents.lock`. It runs before the
-/// folder moves back, so a failure here leaves the copy parked and the
-/// turn-on can be tried again. Returns what it changed, for [`restore_files`]
+/// Lists `skill` again in `agents.toml`, `agents.lock` and `.gitignore`. It
+/// runs before the folder moves back, so a failure here leaves the copy
+/// parked and the turn-on can be tried again. `originals` are the files as
+/// the park backed them up. Returns what it changed, for [`restore_files`]
 /// if the move then fails; on an error it has already written back its own
 /// edits.
 pub(crate) fn turn_on(
     rt: &Runtime,
     guard: &ExclusiveGuard,
     recorded: &RecordedDotagents,
+    originals: &[FileSnapshot],
     skill: &SkillName,
 ) -> Result<Vec<FileSnapshot>, CoreError> {
     let mut changed = Vec::new();
-    match turn_on_files(rt, guard, recorded, skill, &mut changed) {
+    match turn_on_files(rt, guard, recorded, originals, skill, &mut changed) {
         Ok(()) => Ok(changed),
         Err(e) => {
             let _ = restore_files(rt, guard, &changed);
@@ -1025,62 +1264,459 @@ pub(crate) fn turn_on(
     }
 }
 
+/// The backed-up text of `path` when the file still holds exactly what the
+/// park left (`post_park` is its recorded hash): nothing else touched it, so
+/// the original goes back wholesale.
+fn untouched_original<'a>(
+    current: Option<&str>,
+    post_park: Option<&str>,
+    path: &Path,
+    originals: &'a [FileSnapshot],
+) -> Option<&'a str> {
+    if content_hash(current) != post_park? {
+        return None;
+    }
+    originals
+        .iter()
+        .find(|file| file.path == path)
+        .and_then(|file| file.text.as_deref())
+}
+
+/// Writes `text` over `path` unless it is there already, noting what the
+/// file held so a later failure can put it back.
+fn write_back(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    path: &Path,
+    current: Option<String>,
+    text: &str,
+    changed: &mut Vec<FileSnapshot>,
+) -> Result<(), CoreError> {
+    if current.as_deref() == Some(text) {
+        return Ok(());
+    }
+    write_text(rt, guard, path, text)?;
+    changed.push(FileSnapshot {
+        path: path.to_path_buf(),
+        text: current,
+    });
+    Ok(())
+}
+
 fn turn_on_files(
     rt: &Runtime,
     guard: &ExclusiveGuard,
     recorded: &RecordedDotagents,
+    originals: &[FileSnapshot],
     skill: &SkillName,
     changed: &mut Vec<FileSnapshot>,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
-    if let Some((before, mut doc)) = read_manifest(fs, &recorded.config)? {
-        let edited = with_skill_back(
-            &mut doc,
-            skill,
-            recorded.entry.as_deref(),
-            &recorded.wildcards,
-        )?;
-        let has_record = recorded.entry.is_some() || !recorded.wildcards.is_empty();
-        // Nothing is written yet: a turn-on that would not make dotagents
-        // manage the skill again must leave the copy parked and the files alone.
-        if has_record && !listed_again(&doc, skill, &recorded.wildcards) {
-            return Err(CoreError::new(
-                ErrorCode::InvalidRequest,
-                format!(
-                    "agents.toml no longer has an entry that supplies {}, so dotagents would not manage it after turn-on. Add its entry back to agents.toml, then turn it on.",
-                    skill.0
-                ),
-            )
-            .at(&recorded.config));
-        }
-        if edited {
-            let rendered = render_checked(&recorded.config, &doc, before.contains("\r\n"))?;
-            write_text(rt, guard, &recorded.config, &rendered)?;
-            changed.push(FileSnapshot {
-                path: recorded.config.clone(),
-                text: Some(before),
-            });
+    let after = recorded.after.as_ref();
+    // Worked out before any file is written, so a merge that cannot be done
+    // fails with agents.toml and agents.lock untouched.
+    let ignore_merge = planned_ignore_merge(fs, recorded, originals, skill)?;
+    if let Some(current) = read_text(fs, &recorded.config)? {
+        let wholesale = untouched_original(
+            Some(&current),
+            after.map(|a| a.config.as_str()),
+            &recorded.config,
+            originals,
+        );
+        if let Some(original) = wholesale {
+            write_back(
+                rt,
+                guard,
+                &recorded.config,
+                Some(current),
+                original,
+                changed,
+            )?;
+        } else {
+            let mut doc = parse(&recorded.config, &current)?;
+            let edited = with_skill_back(
+                &mut doc,
+                skill,
+                recorded.entry.as_deref(),
+                &recorded.wildcards,
+            )?;
+            let has_record = recorded.entry.is_some() || !recorded.wildcards.is_empty();
+            // Nothing is written yet: a turn-on that would not make dotagents
+            // manage the skill again must leave the copy parked and the files alone.
+            if has_record && !listed_again(&doc, skill, &recorded.wildcards) {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    format!(
+                        "agents.toml no longer has an entry that supplies {}, so dotagents would not manage it after turn-on. Add its entry back to agents.toml, then turn it on.",
+                        skill.0
+                    ),
+                )
+                .at(&recorded.config));
+            }
+            if edited {
+                let rendered = render_checked(&recorded.config, &doc, current.contains("\r\n"))?;
+                write_text(rt, guard, &recorded.config, &rendered)?;
+                changed.push(FileSnapshot {
+                    path: recorded.config.clone(),
+                    text: Some(current),
+                });
+            }
         }
     }
     // A missing `agents.lock` stays missing: a file without `version = 1`
     // breaks every dotagents command, and dotagents writes its own.
-    if let (Some(lock), Some(lock_entry)) = (&recorded.lock, &recorded.lock_entry) {
-        if let Some(before) = read_text(fs, lock)? {
-            if let Some(text) = with_lock_entry(lock, &before, skill, lock_entry)? {
-                write_text(rt, guard, lock, &text)?;
-                changed.push(FileSnapshot {
-                    path: lock.clone(),
-                    text: Some(before),
-                });
+    if let Some(lock) = &recorded.lock {
+        if let Some(current) = read_text(fs, lock)? {
+            let wholesale = untouched_original(
+                Some(&current),
+                after.map(|a| a.lock.as_str()),
+                lock,
+                originals,
+            );
+            if let Some(original) = wholesale {
+                write_back(rt, guard, lock, Some(current), original, changed)?;
+            } else if let Some(lock_entry) = &recorded.lock_entry {
+                if let Some(text) = with_lock_entry(lock, &current, skill, lock_entry)? {
+                    write_text(rt, guard, lock, &text)?;
+                    changed.push(FileSnapshot {
+                        path: lock.clone(),
+                        text: Some(current),
+                    });
+                }
             }
+        }
+    }
+    // The park backs `.gitignore` up only when it exists, so a row without
+    // that backup leaves the file alone.
+    if let Some(gitignore) = &recorded.gitignore {
+        let current = read_text(fs, gitignore)?;
+        let wholesale = untouched_original(
+            current.as_deref(),
+            after.map(|a| a.gitignore.as_str()),
+            gitignore,
+            originals,
+        );
+        if let Some(original) = wholesale {
+            write_back(rt, guard, gitignore, current, original, changed)?;
+        } else if let Some((text, before)) = ignore_merge {
+            write_text(rt, guard, gitignore, &text)?;
+            changed.push(FileSnapshot {
+                path: gitignore.clone(),
+                text: Some(before),
+            });
         }
     }
     Ok(())
 }
 
+/// The merged ignore file and the text it replaces, when turn-on has to merge
+/// the skill's lines back into a file that changed since the park. `None`
+/// when the file goes back wholesale or already has every line.
+fn planned_ignore_merge(
+    fs: &dyn ScopeFs,
+    recorded: &RecordedDotagents,
+    originals: &[FileSnapshot],
+    skill: &SkillName,
+) -> Result<Option<(String, String)>, CoreError> {
+    let Some(gitignore) = &recorded.gitignore else {
+        return Ok(None);
+    };
+    let current = read_text(fs, gitignore)?;
+    let wholesale = untouched_original(
+        current.as_deref(),
+        recorded.after.as_ref().map(|a| a.gitignore.as_str()),
+        gitignore,
+        originals,
+    );
+    let original = originals
+        .iter()
+        .find(|file| &file.path == gitignore)
+        .and_then(|file| file.text.as_deref());
+    let (None, Some(current), Some(original)) = (wholesale, current, original) else {
+        return Ok(None);
+    };
+    let own = [
+        format!("/skills/{}", skill.0),
+        format!("/skills/{}/", skill.0),
+    ];
+    let merged = with_lines_restored(original, &current, &own).map_err(|lines| {
+        CoreError::new(
+            ErrorCode::DriftConflict,
+            format!(
+                "the ignore file changed too much to merge safely; put these lines back by hand: {}",
+                lines.join(", ")
+            ),
+        )
+        .at(gitignore)
+    })?;
+    Ok(merged.map(|text| (text, current)))
+}
+
+/// The most cells the line alignment may use, about 16 MiB of table.
+const IGNORE_ALIGN_CELL_CAP: usize = 4_000_000;
+
+/// `current` with each of `own` that `original` had, and `current` lacks,
+/// back at its place in `original`; `None` when nothing is missing. The
+/// backup's other lines are aligned with `current` by longest common
+/// subsequence, so a line that repeats is matched by order, not by text. A
+/// restored line goes right after the current line aligned to its nearest
+/// earlier backup line, else right before the one aligned to its nearest
+/// later line, else at the end. Git takes the last rule that matches, so a
+/// line put after a negation would change what is ignored. `Err` carries the
+/// missing lines when the alignment would be too big to compute.
+fn with_lines_restored(
+    original: &str,
+    current: &str,
+    own: &[String],
+) -> Result<Option<String>, Vec<String>> {
+    let kept: Vec<&str> = current.lines().collect();
+    let mut present: Vec<usize> = own
+        .iter()
+        .map(|line| kept.iter().filter(|k| k.trim_end() == line).count())
+        .collect();
+    let mut stay: Vec<&str> = Vec::new();
+    // Each missing line with the count of surviving backup lines before it.
+    let mut missing: Vec<(usize, &str)> = Vec::new();
+    for line in original.lines().map(str::trim_end) {
+        match own.iter().position(|o| o == line) {
+            Some(i) if present[i] > 0 => present[i] -= 1,
+            Some(_) => missing.push((stay.len(), line)),
+            None => stay.push(line),
+        }
+    }
+    if missing.is_empty() {
+        return Ok(None);
+    }
+    let Some(align) = align_lines(&stay, &kept) else {
+        return Err(missing
+            .iter()
+            .map(|(_, line)| (*line).to_string())
+            .collect());
+    };
+    let mut inserts: Vec<(usize, usize, &str)> = missing
+        .iter()
+        .enumerate()
+        .map(|(order, (k, line))| {
+            let at = align[..*k]
+                .iter()
+                .rev()
+                .find_map(|j| *j)
+                .map(|j| j + 1)
+                .or_else(|| align[*k..].iter().find_map(|j| *j))
+                .unwrap_or(kept.len());
+            (at, order, *line)
+        })
+        .collect();
+    inserts.sort_unstable();
+    let mut out: Vec<&str> = Vec::with_capacity(kept.len() + inserts.len());
+    let mut pending = inserts.into_iter().peekable();
+    for (i, line) in kept.iter().enumerate() {
+        while let Some((_, _, restored)) = pending.next_if(|(at, _, _)| *at == i) {
+            out.push(restored);
+        }
+        out.push(line);
+    }
+    out.extend(pending.map(|(_, _, restored)| restored));
+    Ok(Some(format!("{}\n", out.join("\n"))))
+}
+
+/// For each line of `a`, the index of the line of `b` it is aligned with
+/// (trailing whitespace ignored), by longest common subsequence. The common
+/// start and end are matched first, so the table covers only what differs;
+/// `None` when even that is over [`IGNORE_ALIGN_CELL_CAP`].
+fn align_lines(backup: &[&str], current: &[&str]) -> Option<Vec<Option<usize>>> {
+    let same = |old: &str, new: &str| old == new.trim_end();
+    let mut align = vec![None; backup.len()];
+    let limit = backup.len().min(current.len());
+    let start = (0..limit)
+        .take_while(|&k| same(backup[k], current[k]))
+        .count();
+    let end = (0..limit - start)
+        .take_while(|&k| same(backup[backup.len() - 1 - k], current[current.len() - 1 - k]))
+        .count();
+    for (k, slot) in align.iter_mut().enumerate().take(start) {
+        *slot = Some(k);
+    }
+    for k in 0..end {
+        align[backup.len() - 1 - k] = Some(current.len() - 1 - k);
+    }
+    let old = &backup[start..backup.len() - end];
+    let new = &current[start..current.len() - end];
+    let (rows, cols) = (old.len(), new.len());
+    if rows == 0 || cols == 0 {
+        return Some(align);
+    }
+    if (rows + 1).checked_mul(cols + 1)? > IGNORE_ALIGN_CELL_CAP {
+        return None;
+    }
+    // lcs[r * (cols + 1) + c]: common subsequence length of old[r..], new[c..].
+    let at = |r: usize, c: usize| r * (cols + 1) + c;
+    let mut lcs = vec![0u32; (rows + 1) * (cols + 1)];
+    for r in (0..rows).rev() {
+        for c in (0..cols).rev() {
+            lcs[at(r, c)] = if same(old[r], new[c]) {
+                lcs[at(r + 1, c + 1)] + 1
+            } else {
+                lcs[at(r + 1, c)].max(lcs[at(r, c + 1)])
+            };
+        }
+    }
+    let (mut r, mut c) = (0, 0);
+    while r < rows && c < cols {
+        if same(old[r], new[c]) {
+            align[start + r] = Some(start + c);
+            r += 1;
+            c += 1;
+        } else if lcs[at(r + 1, c)] >= lcs[at(r, c + 1)] {
+            r += 1;
+        } else {
+            c += 1;
+        }
+    }
+    Some(align)
+}
+
+/// The files a park backed up, read back from its backup folder, for
+/// [`turn_on`]. Empty when the row has no backup or it cannot be read; the
+/// turn-on then edits the files.
+pub(crate) fn backed_up_files(
+    store: &dyn crate::ports::HistoryStore,
+    backup_dir: Option<&str>,
+) -> Vec<FileSnapshot> {
+    let Some(backup_dir) = backup_dir else {
+        return Vec::new();
+    };
+    let Ok(manifest) = store.read_manifest(backup_dir) else {
+        return Vec::new();
+    };
+    manifest
+        .entries
+        .into_iter()
+        .filter(|entry| !entry.relative.is_empty() && !entry.is_dir)
+        .filter_map(|entry| {
+            let bytes = store.read_backup_bytes(backup_dir, &entry.relative).ok()?;
+            Some(FileSnapshot {
+                path: entry.original,
+                text: Some(String::from_utf8(bytes).ok()?),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn restore_line(original: &str, current: &str, line: &str) -> String {
+        with_lines_restored(original, current, &[line.to_string()])
+            .unwrap()
+            .unwrap_or_else(|| current.to_string())
+    }
+
+    fn big_ignore_file(lines: usize) -> String {
+        let others: Vec<String> = (0..lines).map(|i| format!("/skills/other-{i}")).collect();
+        format!("/skills/foo\n{}\n", others.join("\n"))
+    }
+
+    /// Flow: a 50k-line ignore file with a small edit in the middle. Expectation:
+    /// the common start and end are trimmed, so the line still merges back.
+    /// Failure: the alignment allocates a table over the whole file.
+    #[test]
+    fn a_large_ignore_file_with_a_small_edit_still_merges() {
+        let original = big_ignore_file(50_000);
+        let edited: Vec<&str> = original
+            .lines()
+            .skip(1)
+            .map(|l| {
+                if l == "/skills/other-25000" {
+                    "# edited"
+                } else {
+                    l
+                }
+            })
+            .collect();
+        let current = edited.join("\n") + "\n";
+        let merged = restore_line(&original, &current, "/skills/foo");
+        assert!(merged.starts_with("/skills/foo\n/skills/other-0\n"));
+        assert!(merged.contains("# edited\n"));
+    }
+
+    /// Flow: a 50k-line ignore file where most lines differ from the backup.
+    /// Expectation: the merge is refused and names the missing line. Failure:
+    /// a table of billions of cells is allocated.
+    #[test]
+    fn a_large_ignore_file_changed_too_much_is_refused() {
+        let original = big_ignore_file(50_000);
+        let changed: Vec<String> = (0..50_000).map(|i| format!("# changed {i}")).collect();
+        let current = changed.join("\n") + "\n";
+        let err =
+            with_lines_restored(&original, &current, &["/skills/foo".to_string()]).unwrap_err();
+        assert_eq!(err, ["/skills/foo"]);
+    }
+
+    /// Flow: the backup has the skill's rule twice, around a negation. Expectation:
+    /// both come back at their own places. Failure: only the first returns and the
+    /// folder shows up in git.
+    #[test]
+    fn every_removed_copy_of_the_rule_comes_back() {
+        let original = "/skills/foo\n!/skills/foo/\n/skills/foo\n";
+        let current = "!/skills/foo/\n# mine\n";
+        assert_eq!(
+            with_lines_restored(original, current, &["/skills/foo".to_string()])
+                .unwrap()
+                .unwrap(),
+            "/skills/foo\n!/skills/foo/\n/skills/foo\n# mine\n"
+        );
+        let half = "/skills/foo\n!/skills/foo/\n# mine\n";
+        assert_eq!(
+            restore_line(original, half, "/skills/foo"),
+            "/skills/foo\n!/skills/foo/\n/skills/foo\n# mine\n"
+        );
+    }
+
+    /// Flow: the backup has `/skills/foo` then `!/skills/foo/`, and the file
+    /// has since gained a comment. Expectation: the restored line lands before
+    /// the negation. Failure: it is appended after it, so git ignores a folder
+    /// that used to be visible.
+    #[test]
+    fn a_restored_ignore_line_goes_back_before_the_line_that_followed_it() {
+        let original = "# top\n/skills/foo\n!/skills/foo/\n";
+        let current = "# top\n!/skills/foo/\n# mine\n";
+        assert_eq!(
+            restore_line(original, current, "/skills/foo"),
+            "# top\n/skills/foo\n!/skills/foo/\n# mine\n"
+        );
+        assert_eq!(
+            restore_line("# top\n/skills/foo\n", "# top\n# mine\n", "/skills/foo"),
+            "# top\n/skills/foo\n# mine\n"
+        );
+        assert_eq!(
+            restore_line(
+                "# group\n!/skills/foo/\n/skills/foo\n# group\n",
+                "# group\n!/skills/foo/\n# group\n# mine\n",
+                "/skills/foo"
+            ),
+            "# group\n!/skills/foo/\n/skills/foo\n# group\n# mine\n"
+        );
+        assert_eq!(
+            restore_line("/skills/foo\n", "# mine", "/skills/foo"),
+            "# mine\n/skills/foo\n"
+        );
+    }
+
+    /// Flow: another tool swaps two unrelated negation rules while dotagents
+    /// removes a skill's line. Expectation: the shapes differ, so no
+    /// after-hashes are recorded. Failure: a sorted comparison hides the swap
+    /// and turn-on restores the old file over it.
+    #[test]
+    fn a_reordered_ignore_file_is_not_only_the_skills_own_line_gone() {
+        let before = "/skills/bar\n!/skills/bar\n/skills/foo\n";
+        let swapped = "!/skills/bar\n/skills/bar\n";
+        let kept = "/skills/bar\n!/skills/bar\n";
+        let shape = |text: &str| Some(ignore_shape(text, "foo"));
+        assert!(!removed_only(Some(before), Some(swapped), shape));
+        assert!(removed_only(Some(before), Some(kept), shape));
+    }
 
     /// Flow: a source in `agents.toml` and the same source in `agents.lock`
     /// are written in different shapes. Expectation: they match exactly when
@@ -1149,6 +1785,7 @@ mod tests {
                 source: "owner/repo".to_string(),
                 path: path.map(str::to_string),
                 supplies: true,
+                had_exclude: false,
             }]
         };
         let doc = table(

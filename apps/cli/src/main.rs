@@ -1692,8 +1692,16 @@ fn run_park(scope: &ScopeArgs, target: &TargetArgs, json: bool, time: bool) -> E
         Err(code) => return code,
     };
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
-    let result = resolve_target(&rt, target, TargetKind::Park)
-        .and_then(|deployment_id| ops::park(&rt, &ctx, &ParkRequest { deployment_id }));
+    let result = resolve_target(&rt, target, TargetKind::Park).and_then(|deployment_id| {
+        // Asked before the park: the copy has moved by the time it returns.
+        let warning = ops::park_git_warning(&rt, &ctx, &deployment_id);
+        let mut outcome = ops::park(&rt, &ctx, &ParkRequest { deployment_id })?;
+        if let Some(warning) = &warning {
+            eprintln!("warning: {warning}");
+        }
+        outcome.warnings.extend(warning);
+        Ok(outcome)
+    });
     let envelope = ResultEnvelope::from_result(Operation::Park, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_park_outcome_table)
 }

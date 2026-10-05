@@ -49,6 +49,11 @@ const EXCLUSIONS: &[Exclusion] = &[
                   and MCP park without a prompt, so they have nothing to warn before",
     },
     Exclusion {
+        name: "park_git_warning",
+        reason: "the git warning the CLI and MCP park commands attach to their own outcome, \
+                  not a request/outcome op",
+    },
+    Exclusion {
         name: "discard",
         reason: "the confirmed fix for a parked copy left behind, offered only in the desktop's \
                   Locations card and Needs attention list; the CLI and MCP have no such issue",
