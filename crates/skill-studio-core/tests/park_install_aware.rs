@@ -1756,6 +1756,29 @@ fn turn_on_puts_the_ignore_line_back_before_the_negation_that_followed_it() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// Flow: the ignore file repeats a line (`# group`) around the skill's rule.
+/// Park removes the rule, the person adds a comment, then turn on.
+/// Expectation: the rule returns after the negation and before the second
+/// `# group`. Failure: the repeated line is matched by text, the rule lands
+/// before the negation, and git shows a folder that was ignored.
+#[test]
+fn turn_on_restores_the_ignore_line_beside_the_right_repeat_of_a_line() {
+    let (home, stub) = dotagents_home("park_dotagents_ignore_repeat", EXPLICIT_TOML);
+    let ignore = home.join(".agents/.gitignore");
+    std::fs::write(&ignore, "# group\n!/skills/foo/\n/skills/foo\n# group\n").unwrap();
+    let rt = runtime(&home, stub.clone(), true);
+
+    park_foo(&rt);
+    std::fs::write(&ignore, read(&ignore) + "# mine\n").unwrap();
+    unpark_foo(&rt);
+
+    assert_eq!(
+        read(&ignore),
+        "# group\n!/skills/foo/\n/skills/foo\n# group\n# mine\n"
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
 /// Flow: park and turn on a skill in a project whose `.agents/.gitignore`
 /// lists it. Expectation: the project's file is byte for byte what it was.
 /// Failure: the project scope reads the file at the wrong path and leaves

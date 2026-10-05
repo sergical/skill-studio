@@ -1415,34 +1415,53 @@ fn turn_on_files(
     Ok(())
 }
 
-/// `current` with `line` back at its place in `original`: right before the
-/// nearest later line of `original` that `current` still has, else right
-/// after the nearest earlier one, else at the end. Git takes the last rule
-/// that matches, so a line appended after a negation would change what is
-/// ignored.
+/// `current` with `line` back at its place in `original`. The backup's other
+/// lines are aligned with `current` by longest common subsequence, so a line
+/// that repeats is matched by order, not by text. The line goes right after
+/// the current line aligned to its nearest earlier backup line, else right
+/// before the one aligned to its nearest later line, else at the end. Git
+/// takes the last rule that matches, so a line appended after a negation
+/// would change what is ignored.
 fn with_line_restored(original: &str, current: &str, line: &str) -> String {
-    let before: Vec<&str> = original.lines().map(str::trim_end).collect();
-    let mut kept: Vec<&str> = current.lines().collect();
+    let mut before: Vec<&str> = original.lines().map(str::trim_end).collect();
     let at = before
         .iter()
         .position(|l| *l == line)
         .unwrap_or(before.len());
-    let survives = |l: &str| !l.is_empty() && kept.iter().any(|k| k.trim_end() == l);
-    let position_in = |l: &str| kept.iter().position(|k| k.trim_end() == l);
-    let index = before
-        .iter()
-        .skip(at + 1)
-        .find(|l| survives(l))
-        .and_then(|l| position_in(l))
-        .or_else(|| {
-            before[..at.min(before.len())]
-                .iter()
-                .rev()
-                .find(|l| survives(l))
-                .and_then(|l| position_in(l))
-                .map(|i| i + 1)
-        })
-        .unwrap_or(kept.len());
+    if at < before.len() {
+        before.remove(at);
+    }
+    let mut kept: Vec<&str> = current.lines().collect();
+    let (n, m) = (before.len(), kept.len());
+    // lcs[i][j]: length of the common subsequence of before[i..] and kept[j..].
+    let mut lcs = vec![vec![0usize; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            lcs[i][j] = if before[i] == kept[j].trim_end() {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
+        }
+    }
+    let (mut earlier, mut later) = (None, None);
+    let (mut i, mut j) = (0, 0);
+    while i < n && j < m {
+        if before[i] == kept[j].trim_end() {
+            if i < at {
+                earlier = Some(j);
+            } else if later.is_none() {
+                later = Some(j);
+            }
+            i += 1;
+            j += 1;
+        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    let index = earlier.map(|j| j + 1).or(later).unwrap_or(m);
     kept.insert(index, line);
     format!("{}\n", kept.join("\n"))
 }
@@ -1493,6 +1512,14 @@ mod tests {
         assert_eq!(
             with_line_restored("# top\n/skills/foo\n", "# top\n# mine\n", "/skills/foo"),
             "# top\n/skills/foo\n# mine\n"
+        );
+        assert_eq!(
+            with_line_restored(
+                "# group\n!/skills/foo/\n/skills/foo\n# group\n",
+                "# group\n!/skills/foo/\n# group\n# mine\n",
+                "/skills/foo"
+            ),
+            "# group\n!/skills/foo/\n/skills/foo\n# group\n# mine\n"
         );
         assert_eq!(
             with_line_restored("/skills/foo\n", "# mine", "/skills/foo"),
