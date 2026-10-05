@@ -1344,11 +1344,6 @@ export interface ParkOutcome {
    * Where the directory now lives, under the parked root.
    */
   parked_path: string;
-  /**
-   * Notes for the caller; never a reason the park failed. An adapter that
-   * ran `park_check` first puts its git warning here.
-   */
-  warnings?: string[];
 }
 /**
  * Result of `park_check`.
