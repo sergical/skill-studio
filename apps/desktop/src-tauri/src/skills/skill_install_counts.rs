@@ -97,17 +97,6 @@ struct CacheEntry {
 
 type Cache = HashMap<String, CacheEntry>;
 
-/// The on-disk cache: counts per source + name, and when each repo was last
-/// confirmed public. Only a "public" verdict is stored; a negative or unknown
-/// one is never a reason to send, so it is simply asked again.
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct CacheFile {
-    #[serde(default)]
-    counts: Cache,
-    #[serde(default)]
-    public_repos: HashMap<String, u64>,
-}
-
 /// Serializes the read-merge-write of the cache file across concurrent
 /// lookups; held only for the file I/O, never across a request.
 static CACHE_FILE_LOCK: Mutex<()> = Mutex::new(());
@@ -118,23 +107,22 @@ fn cache_key(key: &InstallCountKey) -> String {
 
 /// A missing or unreadable cache is an empty one: the counts are a courtesy,
 /// so a damaged file just costs a refetch.
-fn load_cache(path: &Path) -> CacheFile {
+fn load_cache(path: &Path) -> Cache {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
 }
 
-fn save_fresh_entries(path: &Path, fresh: Cache, fresh_public: HashMap<String, u64>) {
-    if fresh.is_empty() && fresh_public.is_empty() {
+fn save_fresh_entries(path: &Path, fresh: Cache) {
+    if fresh.is_empty() {
         return;
     }
     let _guard = CACHE_FILE_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut cache = load_cache(path);
-    cache.counts.extend(fresh);
-    cache.public_repos.extend(fresh_public);
+    cache.extend(fresh);
     let Ok(text) = serde_json::to_string(&cache) else {
         return;
     };
@@ -147,19 +135,16 @@ fn save_fresh_entries(path: &Path, fresh: Cache, fresh_public: HashMap<String, u
     }
 }
 
-fn is_fresh_at(fetched_at: u64, now: u64) -> bool {
-    // An entry stamped in the future (clock moved back) cannot be trusted.
-    fetched_at <= now && now - fetched_at < CACHE_TTL_SECS
-}
-
 fn is_fresh(entry: &CacheEntry, now: u64) -> bool {
-    is_fresh_at(entry.fetched_at, now)
+    // An entry stamped in the future (clock moved back) cannot be trusted.
+    entry.fetched_at <= now && now - entry.fetched_at < CACHE_TTL_SECS
 }
 
 /// Looks up each key's install count: a cache entry younger than 24 h is
 /// used as-is; the rest are fetched by `WORKERS` workers, `spacing` apart.
-/// Before a repo's first skills.sh request, GitHub must confirm it is public
-/// (cached 24 h); otherwise nothing is sent. A failed fetch (offline, unknown
+/// Before any skills.sh request, GitHub must confirm the repo is public right
+/// now (asked once per repo per lookup, never cached, since a repo can turn
+/// private); otherwise nothing is sent. A failed fetch (offline, unknown
 /// skill, private repo) falls back to a stale cached count,
 /// else `None` - never an error. Results keep the order of `keys`.
 pub async fn lookup_install_counts<A: InstallsApi>(
@@ -169,17 +154,8 @@ pub async fn lookup_install_counts<A: InstallsApi>(
     now: u64,
     spacing: Duration,
 ) -> Vec<InstallCount> {
-    let CacheFile {
-        counts: cache,
-        public_repos,
-    } = load_cache(cache_path);
-    let verdicts: HashMap<String, bool> = public_repos
-        .iter()
-        .filter(|(_, at)| is_fresh_at(**at, now))
-        .map(|(repo, _)| (repo.clone(), true))
-        .collect();
-    let cached_public: Vec<String> = verdicts.keys().cloned().collect();
-    let verdicts = Arc::new(Mutex::new(verdicts));
+    let cache = load_cache(cache_path);
+    let verdicts: Arc<tokio::sync::Mutex<HashMap<String, bool>>> = Arc::default();
     let mut counts: HashMap<String, Option<u32>> = HashMap::new();
     let mut queue: VecDeque<InstallCountKey> = VecDeque::new();
     for key in &keys {
@@ -220,23 +196,20 @@ pub async fn lookup_install_counts<A: InstallsApi>(
                 if !fetched.is_empty() {
                     tokio::time::sleep(spacing).await;
                 }
-                let known = verdicts
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .get(&key.source)
-                    .copied();
-                let public = if let Some(public) = known {
-                    public
-                } else {
-                    let public =
-                        tokio::time::timeout(FETCH_TIMEOUT, api.is_public_repo(&key.source))
-                            .await
-                            .is_ok_and(|checked| checked == Ok(true));
-                    verdicts
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .insert(key.source.clone(), public);
-                    public
+                // Held across the check so workers on one repo wait for the
+                // first answer instead of each asking GitHub.
+                let public = {
+                    let mut verdicts = verdicts.lock().await;
+                    if let Some(public) = verdicts.get(&key.source) {
+                        *public
+                    } else {
+                        let public =
+                            tokio::time::timeout(FETCH_TIMEOUT, api.is_public_repo(&key.source))
+                                .await
+                                .is_ok_and(|checked| checked == Ok(true));
+                        verdicts.insert(key.source.clone(), public);
+                        public
+                    }
                 };
                 let result = if public {
                     tokio::time::timeout(FETCH_TIMEOUT, api.installs(&key.source, &key.name))
@@ -272,14 +245,7 @@ pub async fn lookup_install_counts<A: InstallsApi>(
             }
         }
     }
-    let fresh_public = verdicts
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .iter()
-        .filter(|(repo, public)| **public && !cached_public.contains(repo))
-        .map(|(repo, _)| (repo.clone(), now))
-        .collect();
-    save_fresh_entries(cache_path, fresh, fresh_public);
+    save_fresh_entries(cache_path, fresh);
 
     keys.into_iter()
         .map(|key| {
@@ -386,8 +352,7 @@ mod tests {
     }
 
     /// Flow: skills.sh is unreachable and nothing is cached.
-    /// Expectation: `installs` is `None`, with no panic and no cached count
-    /// (the repo's public verdict may be kept).
+    /// Expectation: `installs` is `None`, with no panic and no cache file.
     /// A failure here means offline use surfaces an error or caches a bogus 0.
     #[tokio::test]
     async fn offline_with_no_cache_returns_none() {
@@ -397,7 +362,7 @@ mod tests {
         let result = lookup(&FakeApi::answering(None), &path, 1_000).await;
 
         assert_eq!(result[0].installs, None);
-        assert!(load_cache(&path).counts.is_empty());
+        assert!(!path.exists());
     }
 
     /// Flow: skills.sh is unreachable and the cached count is stale.
@@ -610,29 +575,52 @@ mod tests {
         assert_eq!(api.calls.load(Ordering::SeqCst), 1);
     }
 
-    /// Flow: a repo confirmed public less than 24 h ago has a stale count.
-    /// Expectation: the count is refetched without asking GitHub again; after
-    /// 24 h GitHub is asked again.
-    /// A failure here means every refresh spends GitHub's 60 requests an hour.
+    /// Flow: a repo was public at an earlier lookup and is private now; a new
+    /// skill key from it has no cached count.
+    /// Expectation: GitHub is asked again and skills.sh gets no request.
+    /// A failure here means a remembered "public" verdict leaks a repo that
+    /// has since gone private.
     #[tokio::test]
-    async fn a_cached_public_verdict_skips_the_github_call_until_it_expires() {
+    async fn a_repo_that_turned_private_makes_no_skills_sh_call_for_a_new_skill() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("install-counts.json");
         lookup(&FakeApi::answering(Some(5)), &path, 1_000).await;
-        let mut file = load_cache(&path);
-        file.counts.clear();
-        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+        let api = FakeApi::with_visibility(Some(6), Ok(false));
 
-        let within = FakeApi::answering(Some(6));
-        lookup(&within, &path, 2_000).await;
-        assert_eq!(within.visibility_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(within.calls.load(Ordering::SeqCst), 1);
+        let result = lookup_install_counts(
+            Arc::clone(&api),
+            &path,
+            vec![key("obra/write-tests", "new-skill")],
+            2_000,
+            Duration::ZERO,
+        )
+        .await;
 
-        let mut file = load_cache(&path);
-        file.counts.clear();
-        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
-        let expired = FakeApi::answering(Some(7));
-        lookup(&expired, &path, 1_000 + CACHE_TTL_SECS + 1).await;
-        assert_eq!(expired.visibility_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(result[0].installs, None);
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(api.calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// Flow: three skills from one repo in one batch.
+    /// Expectation: GitHub is asked once for the repo, skills.sh three times.
+    /// A failure here means the 60 requests an hour GitHub allows run out fast.
+    #[tokio::test]
+    async fn skills_of_one_repo_share_one_visibility_check_per_lookup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("install-counts.json");
+        let api = FakeApi::answering(Some(5));
+        let keys = vec![key("a/b", "one"), key("a/b", "two"), key("a/b", "three")];
+
+        lookup_install_counts(
+            Arc::clone(&api),
+            &path,
+            keys,
+            1_000,
+            Duration::from_millis(5),
+        )
+        .await;
+
+        assert_eq!(api.calls.load(Ordering::SeqCst), 3);
+        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
     }
 }
