@@ -109,9 +109,11 @@ pub fn plugin_update_verdict(
         ManifestVersion::NoVersion => non_empty(release.version.as_deref()),
     };
     if let Some(latest) = latest {
+        // Claude Code records "unknown" for a release with no version, so a
+        // versioned release after it is an update the CLI applies.
         let Some(installed) = non_empty(install.version.as_deref()).filter(|v| *v != "unknown")
         else {
-            return PluginUpdateVerdict::NoClaim;
+            return PluginUpdateVerdict::Available;
         };
         return if latest == installed {
             PluginUpdateVerdict::Current
@@ -267,6 +269,9 @@ pub struct CachedPluginVersion {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CachedCatalog {
     pub url: String,
+    /// The ref `commit` was resolved from; empty in caches written before it was stored.
+    #[serde(default)]
+    pub git_ref: String,
     pub commit: String,
     pub body: String,
 }
@@ -595,12 +600,22 @@ fn refresh_catalogs(
         if !installed_here {
             continue;
         }
+        let git_ref = marketplace.git_ref.as_deref().unwrap_or("HEAD");
+        let url = format!(
+            "https://github.com/{}/{}",
+            marketplace.owner, marketplace.repo
+        );
+        // A renamed marketplace can point at another repo or ref; its old
+        // catalog would then describe someone else's releases.
         let keep_previous = |next: &mut PluginVersionCache| {
-            if let Some(catalog) = previous.catalogs.get(&name) {
+            if let Some(catalog) = previous
+                .catalogs
+                .get(&name)
+                .filter(|catalog| catalog.url == url && catalog.git_ref == git_ref)
+            {
                 next.catalogs.insert(name.clone(), catalog.clone());
             }
         };
-        let git_ref = marketplace.git_ref.as_deref().unwrap_or("HEAD");
         let commit = match remote_api.commit_sha(&marketplace.owner, &marketplace.repo, git_ref) {
             CommitLookup::Sha(commit) => commit,
             CommitLookup::Gone => continue,
@@ -609,15 +624,9 @@ fn refresh_catalogs(
                 continue;
             }
         };
-        let url = format!(
-            "https://github.com/{}/{}",
-            marketplace.owner, marketplace.repo
-        );
-        if let Some(cached) = previous
-            .catalogs
-            .get(&name)
-            .filter(|cached| cached.commit == commit && cached.url == url)
-        {
+        if let Some(cached) = previous.catalogs.get(&name).filter(|cached| {
+            cached.commit == commit && cached.url == url && cached.git_ref == git_ref
+        }) {
             next.catalogs.insert(name, cached.clone());
             continue;
         }
@@ -631,8 +640,15 @@ fn refresh_catalogs(
                     .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
                     .filter(|body| serde_json::from_str::<Value>(body).is_ok());
                 if let Some(body) = body {
-                    next.catalogs
-                        .insert(name, CachedCatalog { url, commit, body });
+                    next.catalogs.insert(
+                        name,
+                        CachedCatalog {
+                            url,
+                            git_ref: git_ref.to_string(),
+                            commit,
+                            body,
+                        },
+                    );
                 } else {
                     // GitHub's contents API returns no content for a file over 1 MB.
                     eprintln!(
@@ -1139,16 +1155,30 @@ mod tests {
         );
     }
 
+    /// Flow: a plugin installed before it had a version (Claude Code records
+    /// "unknown", or nothing) now ships a manifest or catalog version.
+    /// Expectation: an update is offered.
+    /// A failure means the first versioned release of a plugin never badges.
     #[test]
-    fn an_unknown_installed_version_makes_no_claim() {
-        assert_eq!(
-            plugin_update_verdict(
-                &install(Some("unknown"), Some("aaaa")),
-                &manifest("1.0.6"),
-                &release(None, Some("bbbb"))
-            ),
-            PluginUpdateVerdict::NoClaim
-        );
+    fn a_first_versioned_release_after_an_unknown_version_is_an_update() {
+        for installed in [Some("unknown"), None] {
+            assert_eq!(
+                plugin_update_verdict(
+                    &install(installed, Some("aaaa")),
+                    &manifest("1.0.6"),
+                    &release(None, Some("bbbb"))
+                ),
+                PluginUpdateVerdict::Available
+            );
+            assert_eq!(
+                plugin_update_verdict(
+                    &install(installed, Some("aaaa")),
+                    &ManifestVersion::NoVersion,
+                    &release(Some("2.0.0"), Some("bbbb"))
+                ),
+                PluginUpdateVerdict::Available
+            );
+        }
     }
 
     #[test]
@@ -1380,7 +1410,7 @@ mod tests {
     const MARKETPLACE: &str = r#"{"plugins":[
         {"name":"sentry","version":null,"source":{"source":"url","url":"https://github.com/getsentry/sentry-for-claude","sha":"73e53541"}},
         {"name":"codex","version":"1.0.6","source":"./plugins/codex"},
-        {"name":"plugin-dev","version":"2.0.0","source":"./plugin-dev"}]}"#;
+        {"name":"plugin-dev","source":"./plugin-dev"}]}"#;
 
     fn sentry_key() -> String {
         "https://github.com/getsentry/sentry-for-claude#@73e53541".to_string()
@@ -1931,6 +1961,40 @@ mod tests {
             .contains_key("codex@claude-plugins-official"));
     }
 
+    /// Flow: a good check caches the marketplace catalog, then the marketplace
+    /// name is pointed at another repo, or another ref, and the next check
+    /// cannot reach GitHub.
+    /// Expectation: the old catalog is dropped and the local checkout decides.
+    /// A failure means the old source's releases badge (or hide) updates the
+    /// CLI would never apply.
+    #[test]
+    fn a_failed_lookup_drops_the_catalog_of_a_replaced_marketplace_source() {
+        for replaced in [
+            r#"{"claude-plugins-official":{"source":{"source":"github","repo":"o/other"}}}"#,
+            r#"{"claude-plugins-official":{"source":{"source":"github","repo":"o/market","ref":"beta"}}}"#,
+        ] {
+            let home = stale_checkout_home();
+            let app_data = tempfile::tempdir().unwrap();
+            refresh_plugin_versions_with(home.path(), app_data.path(), &upstream_remote());
+            fs::write(
+                home.path().join(".claude/plugins/known_marketplaces.json"),
+                replaced,
+            )
+            .unwrap();
+            let offline = FakeRemote {
+                commits_fail: true,
+                ..Default::default()
+            };
+            refresh_plugin_versions_with(home.path(), app_data.path(), &offline);
+            let versions = read_plugin_versions(&plugin_versions_path(app_data.path()));
+            assert!(versions.catalogs.is_empty(), "{replaced}");
+            assert!(
+                read_plugin_updates(home.path(), &versions).is_empty(),
+                "{replaced}"
+            );
+        }
+    }
+
     /// Flow: an unpinned source resolved to a commit and its version was
     /// cached; the next check cannot reach GitHub.
     /// Expectation: the resolution and version stay, so the badge stays; a
@@ -1991,6 +2055,7 @@ mod tests {
                 "claude-plugins-official".to_string(),
                 CachedCatalog {
                     url: "https://github.com/o/market".to_string(),
+                    git_ref: "HEAD".to_string(),
                     commit: commit.to_string(),
                     body: catalog_body.to_string(),
                 },
