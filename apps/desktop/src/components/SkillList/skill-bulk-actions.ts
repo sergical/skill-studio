@@ -17,6 +17,7 @@ import type {
 } from "@skill-studio/lib";
 import {
   conflictedSkillsNote,
+  ForkPullError,
   forkThenPull,
   excludeForkedOwner,
   forkTargetForSkill,
@@ -233,10 +234,12 @@ export async function runBulkUpdate(
     forked.map((skill) => [skill, excludeForkedOwner(skill, bulkUpdateTargets(skill))]),
   );
   const forkFailed = new Set<InstalledSkill>();
-  // Plugins of a skill whose copy failed are not run, nor are plugins it shares with another
-  // skill, so they are not counted. A failed fork pull does not hold its plugins back.
+  const forkPullFailed = new Set<InstalledSkill>();
+  // Plugins of a skill whose copy or fork failed are not run, nor are plugins it shares with
+  // another skill, so they are not counted. A pull that failed after a good fork does not
+  // hold its plugins back: the edits are already safe in the fork.
   const copyFailed = (skill: InstalledSkill) =>
-    !forkFailed.has(skill) && result.failed.some((failure) => failure.skill === skill);
+    !forkPullFailed.has(skill) && result.failed.some((failure) => failure.skill === skill);
   const pluginSkillsNow = () =>
     [...rest, ...forked].filter(
       (skill) => skillPluginUpdateTargets(skill).length > 0 && !copyFailed(skill),
@@ -266,6 +269,7 @@ export async function runBulkUpdate(
       result.succeeded.push(skill);
     } catch (error) {
       forkFailed.add(skill);
+      if (error instanceof ForkPullError) forkPullFailed.add(skill);
       result.failed.push({
         skill,
         error: error instanceof Error ? error.message : "Unknown error",
