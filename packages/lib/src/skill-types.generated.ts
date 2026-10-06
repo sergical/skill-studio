@@ -693,6 +693,12 @@ export interface UpstreamAhead {
    * GitHub page listing those commits.
    */
   compare_url: string;
+  /**
+   * Lifecycle owner ids of every installed skill from this repo, sorted.
+   * The frontend matches a skill's deployments against these, because a
+   * dotagents-only install has no lock-file `source` to compare.
+   */
+  owner_ids: string[];
 }
 /**
  * Agent target with paths resolved

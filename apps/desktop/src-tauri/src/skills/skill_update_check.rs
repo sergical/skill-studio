@@ -119,6 +119,11 @@ pub struct UpstreamAhead {
     pub behind_by: u32,
     /// GitHub page listing those commits.
     pub compare_url: String,
+    /// Lifecycle owner ids of every installed skill from this repo, sorted.
+    /// The frontend matches a skill's deployments against these, because a
+    /// dotagents-only install has no lock-file `source` to compare.
+    #[serde(default)]
+    pub owner_ids: Vec<String>,
 }
 
 /// The `SkillSnapshot.update_check` shape sent to the frontend: a flattened,
@@ -535,7 +540,7 @@ pub struct ForkParent {
 
 /// The two GitHub questions the fork note asks, behind a trait so the logic
 /// runs without network in tests.
-pub trait ForkLookup {
+pub trait ForkLookup: Sync {
     fn repo_info(&self, repo: &str) -> Result<RepoForkInfo, String>;
 
     /// Commits `base_repo`'s `base_branch` has that `head_owner:head_branch`
@@ -669,39 +674,100 @@ fn upstream_ahead_for_repo(
         ),
         upstream_repo: parent.full_name,
         behind_by,
+        owner_ids: Vec::new(),
     }))
 }
 
+/// True when a `gh` error says the repo does not exist (deleted, renamed away,
+/// or private to this login).
+fn is_repo_not_found(message: &str) -> bool {
+    message.contains("HTTP 404") || message.contains("Not Found")
+}
+
+/// True when a `gh` error says every further call will fail the same way.
+fn is_auth_failure(message: &str) -> bool {
+    is_not_logged_in(message)
+        || message.contains("HTTP 401")
+        || message.to_ascii_lowercase().contains("authentication")
+}
+
 /// For each distinct source repo among `candidates`, find forks whose original
-/// has commits the fork lacks. A repo whose lookup fails keeps its record from
-/// `previous` (if any), so one 404 or rate limit neither hides nor invents a
-/// note; repos no longer among `candidates` are dropped. Keyed by repo.
+/// has commits the fork lacks, on the same small worker pool as the commit
+/// lookups. A repo that no longer exists loses its record. Any other failure
+/// keeps the record from `previous` (if any), so a rate limit neither hides nor
+/// invents a note. After an auth failure the remaining repos are not asked and
+/// also keep their previous records. Repos no longer among `candidates` are
+/// dropped. Keyed by `normalize_repo_key`.
 fn find_upstream_ahead(
     candidates: &[Candidate],
     lookup: &dyn ForkLookup,
     previous: &BTreeMap<String, UpstreamAhead>,
 ) -> BTreeMap<String, UpstreamAhead> {
-    let mut seen = std::collections::BTreeSet::new();
-    let mut found = BTreeMap::new();
+    // key -> (repo as first seen, owner ids of every skill from it)
+    let mut groups: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
     for candidate in candidates {
         let key = skill_studio_core::skill_update_check::normalize_repo_key(&candidate.repo);
-        if !seen.insert(key) {
-            continue;
-        }
-        match upstream_ahead_for_repo(&candidate.repo, lookup) {
-            Ok(Some(record)) => {
-                found.insert(record.repo.clone(), record);
-            }
-            Ok(None) => {}
-            Err(e) => {
-                eprintln!(
-                    "skill update check: fork lookup for {} failed: {e}",
-                    candidate.repo
-                );
-                if let Some(old) = previous.get(&candidate.repo) {
-                    found.insert(old.repo.clone(), old.clone());
+        let group = groups
+            .entry(key)
+            .or_insert_with(|| (candidate.repo.clone(), Vec::new()));
+        group.1.push(candidate.owner_id.clone());
+    }
+    for (_, owner_ids) in groups.values_mut() {
+        owner_ids.sort();
+        owner_ids.dedup();
+    }
+
+    let queue: Mutex<VecDeque<(&String, &String)>> =
+        Mutex::new(groups.iter().map(|(key, (repo, _))| (key, repo)).collect());
+    let results: Mutex<BTreeMap<&String, Result<Option<UpstreamAhead>, String>>> =
+        Mutex::new(BTreeMap::new());
+    let auth_failed = AtomicBool::new(false);
+
+    std::thread::scope(|scope| {
+        for _ in 0..LOOKUP_POOL_SIZE {
+            scope.spawn(|| loop {
+                if auth_failed.load(Ordering::Relaxed) {
+                    break;
                 }
-            }
+                let next = queue
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .pop_front();
+                let Some((key, repo)) = next else { break };
+                let result = upstream_ahead_for_repo(repo, lookup);
+                if let Err(e) = &result {
+                    eprintln!("skill update check: fork lookup for {repo} failed: {e}");
+                    if is_auth_failure(e) {
+                        auth_failed.store(true, Ordering::Relaxed);
+                    }
+                }
+                results
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(key, result);
+            });
+        }
+    });
+
+    let results = results
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut found = BTreeMap::new();
+    for (key, (_, owner_ids)) in &groups {
+        let record = match results.get(key) {
+            Some(Ok(record)) => record.clone(),
+            Some(Err(e)) if is_repo_not_found(e) => None,
+            // Failed, or never asked because an auth failure stopped the run.
+            _ => previous
+                .values()
+                .find(|old| {
+                    skill_studio_core::skill_update_check::normalize_repo_key(&old.repo) == *key
+                })
+                .cloned(),
+        };
+        if let Some(mut record) = record {
+            record.owner_ids.clone_from(owner_ids);
+            found.insert(key.clone(), record);
         }
     }
     found
@@ -2294,6 +2360,12 @@ resolved_commit = "{commit}"
             }
         }
 
+        fn failing(mut self, repo: &str, message: &str) -> Self {
+            self.repos
+                .insert(repo.to_string(), Err(message.to_string()));
+            self
+        }
+
         fn fork(mut self, repo: &str, parent: &str, behind_by: u32) -> Self {
             self.repos.insert(
                 repo.to_string(),
@@ -2365,7 +2437,39 @@ resolved_commit = "{commit}"
                 compare_url:
                     "https://github.com/sergical/mattpocock-skills/compare/main...mattpocock:skills:main"
                         .to_string(),
+                owner_ids: vec!["owner:v1/global/tdd".to_string()],
             }]
+        );
+    }
+
+    #[test]
+    fn a_dotagents_candidate_with_no_skills_sh_lock_entry_puts_its_owner_id_in_the_record() {
+        let home = tempfile::tempdir().unwrap();
+        seed_one_dotagents_skill(home.path(), "me/fork");
+        let lookup = FakeForkLookup::new().fork("me/fork", "them/orig", 3);
+        let candidates = build_candidates(home.path(), &[]);
+        let found = find_upstream_ahead(&candidates, &lookup, &BTreeMap::new());
+        assert_eq!(
+            found["me/fork"].owner_ids,
+            vec![candidates[0].owner_id.clone()]
+        );
+    }
+
+    #[test]
+    fn owner_ids_cover_every_skill_from_the_repo_sorted_and_without_duplicates() {
+        let lookup = FakeForkLookup::new().fork("me/fork", "them/orig", 1);
+        let found = find_upstream_ahead(
+            &[
+                repo_candidate("b", "me/fork"),
+                repo_candidate("a", "Me/Fork"),
+                repo_candidate("b", "me/fork"),
+            ],
+            &lookup,
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            found["me/fork"].owner_ids,
+            vec!["owner:v1/global/a", "owner:v1/global/b"]
         );
     }
 
@@ -2466,6 +2570,7 @@ resolved_commit = "{commit}"
             upstream_repo: "them/orig".to_string(),
             behind_by,
             compare_url: format!("https://github.com/{repo}/compare/old"),
+            owner_ids: Vec::new(),
         }
     }
 
@@ -2478,10 +2583,65 @@ resolved_commit = "{commit}"
 
     #[test]
     fn a_failing_lookup_keeps_the_previous_record_for_that_repo() {
-        let lookup = FakeForkLookup::new();
+        let lookup = FakeForkLookup::new().failing("me/gone", "HTTP 502: Bad Gateway");
         let previous = previous_map(&[previous_record("me/gone", 4)]);
         let found = find_upstream_ahead(&[repo_candidate("a", "me/gone")], &lookup, &previous);
-        assert_eq!(found, previous);
+        let mut expected = previous_record("me/gone", 4);
+        expected.owner_ids = vec!["owner:v1/global/a".to_string()];
+        assert_eq!(found.into_values().collect::<Vec<_>>(), vec![expected]);
+    }
+
+    #[test]
+    fn a_deleted_or_private_repo_loses_its_previous_record() {
+        let lookup = FakeForkLookup::new().failing("me/gone", "gh: Not Found (HTTP 404)");
+        let previous = previous_map(&[previous_record("me/gone", 4)]);
+        let found = find_upstream_ahead(&[repo_candidate("a", "me/gone")], &lookup, &previous);
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn the_previous_record_is_found_by_normalised_repo_key() {
+        let lookup = FakeForkLookup::new().failing("Me/Gone", "HTTP 502: Bad Gateway");
+        let previous = previous_map(&[previous_record("me/gone", 4)]);
+        let found = find_upstream_ahead(&[repo_candidate("a", "Me/Gone")], &lookup, &previous);
+        assert_eq!(found["me/gone"].behind_by, 4);
+    }
+
+    /// Fails the first repo with an auth error at once; every other repo is
+    /// slow and fails with a transient error, so the pool is still busy when
+    /// the auth failure lands.
+    struct AuthThenSlowForkLookup {
+        calls: StdMutex<Vec<String>>,
+    }
+
+    impl ForkLookup for AuthThenSlowForkLookup {
+        fn repo_info(&self, repo: &str) -> Result<RepoForkInfo, String> {
+            self.calls.lock().unwrap().push(repo.to_string());
+            if repo == "me/a" {
+                return Err("To get started with GitHub CLI, run: gh auth login".to_string());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            Err("HTTP 502: Bad Gateway".to_string())
+        }
+
+        fn commits_behind(&self, _: &str, _: &str, _: &str, _: &str) -> Result<u32, String> {
+            unreachable!("repo_info never succeeds")
+        }
+    }
+
+    #[test]
+    fn an_auth_failure_stops_the_remaining_lookups_and_keeps_previous_records() {
+        let lookup = AuthThenSlowForkLookup {
+            calls: StdMutex::new(Vec::new()),
+        };
+        let candidates: Vec<Candidate> = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]
+            .iter()
+            .map(|name| repo_candidate(name, &format!("me/{name}")))
+            .collect();
+        let previous = previous_map(&[previous_record("me/j", 4), previous_record("me/a", 2)]);
+        let found = find_upstream_ahead(&candidates, &lookup, &previous);
+        assert_eq!(found.keys().collect::<Vec<_>>(), vec!["me/a", "me/j"]);
+        assert!(lookup.calls.lock().unwrap().len() <= LOOKUP_POOL_SIZE);
     }
 
     #[test]
