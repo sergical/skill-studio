@@ -523,6 +523,36 @@ struct GithubMarketplace {
     git_ref: Option<String>,
 }
 
+impl GithubMarketplace {
+    fn url(&self) -> String {
+        format!("https://github.com/{}/{}", self.owner, self.repo)
+    }
+
+    fn git_ref(&self) -> &str {
+        self.git_ref.as_deref().unwrap_or("HEAD")
+    }
+
+    /// False once the marketplace name points at another repo or ref, whose
+    /// releases the old catalog does not describe.
+    fn matches(&self, catalog: &CachedCatalog) -> bool {
+        catalog.url == self.url() && catalog.git_ref == self.git_ref()
+    }
+}
+
+/// The cached catalogs whose marketplace still points at the repo and ref they
+/// were fetched from.
+fn current_catalogs(
+    plugins_dir: &Path,
+    catalogs: &BTreeMap<String, CachedCatalog>,
+) -> BTreeMap<String, CachedCatalog> {
+    let known = github_marketplaces(plugins_dir);
+    catalogs
+        .iter()
+        .filter(|(name, catalog)| known.get(*name).is_some_and(|m| m.matches(catalog)))
+        .map(|(name, catalog)| (name.clone(), catalog.clone()))
+        .collect()
+}
+
 fn is_safe_marketplace_name(name: &str) -> bool {
     !name.contains(['/', '\\']) && name != ".."
 }
@@ -600,18 +630,13 @@ fn refresh_catalogs(
         if !installed_here {
             continue;
         }
-        let git_ref = marketplace.git_ref.as_deref().unwrap_or("HEAD");
-        let url = format!(
-            "https://github.com/{}/{}",
-            marketplace.owner, marketplace.repo
-        );
-        // A renamed marketplace can point at another repo or ref; its old
-        // catalog would then describe someone else's releases.
+        let git_ref = marketplace.git_ref();
+        let url = marketplace.url();
         let keep_previous = |next: &mut PluginVersionCache| {
             if let Some(catalog) = previous
                 .catalogs
                 .get(&name)
-                .filter(|catalog| catalog.url == url && catalog.git_ref == git_ref)
+                .filter(|catalog| marketplace.matches(catalog))
             {
                 next.catalogs.insert(name.clone(), catalog.clone());
             }
@@ -624,9 +649,11 @@ fn refresh_catalogs(
                 continue;
             }
         };
-        if let Some(cached) = previous.catalogs.get(&name).filter(|cached| {
-            cached.commit == commit && cached.url == url && cached.git_ref == git_ref
-        }) {
+        if let Some(cached) = previous
+            .catalogs
+            .get(&name)
+            .filter(|cached| cached.commit == commit && marketplace.matches(cached))
+        {
             next.catalogs.insert(name, cached.clone());
             continue;
         }
@@ -927,6 +954,10 @@ pub fn read_plugin_updates(
     let plugins_dir = home.join(".claude").join("plugins");
     let Ok(installed) = std::fs::read_to_string(plugins_dir.join("installed_plugins.json")) else {
         return BTreeMap::new();
+    };
+    let versions = &PluginVersionCache {
+        catalogs: current_catalogs(&plugins_dir, &versions.catalogs),
+        ..versions.clone()
     };
     let mut marketplaces: BTreeMap<String, Option<String>> = BTreeMap::new();
     let mut updates = BTreeMap::new();
@@ -1995,6 +2026,27 @@ mod tests {
         }
     }
 
+    /// Flow: a good check caches the marketplace catalog, then the marketplace
+    /// name is pointed at another repo, and the app reads update state before
+    /// any new check runs (no `gh`, or between six-hourly checks).
+    /// Expectation: the old catalog is ignored and the local checkout decides.
+    /// A failure means a badge for a release the new source never shipped.
+    #[test]
+    fn reading_ignores_the_catalog_of_a_replaced_marketplace_source() {
+        let home = stale_checkout_home();
+        let app_data = tempfile::tempdir().unwrap();
+        refresh_plugin_versions_with(home.path(), app_data.path(), &upstream_remote());
+        let versions = read_plugin_versions(&plugin_versions_path(app_data.path()));
+        assert!(read_plugin_updates(home.path(), &versions)
+            .contains_key("codex@claude-plugins-official"));
+        fs::write(
+            home.path().join(".claude/plugins/known_marketplaces.json"),
+            r#"{"claude-plugins-official":{"source":{"source":"github","repo":"o/other"}}}"#,
+        )
+        .unwrap();
+        assert!(read_plugin_updates(home.path(), &versions).is_empty());
+    }
+
     /// Flow: an unpinned source resolved to a commit and its version was
     /// cached; the next check cannot reach GitHub.
     /// Expectation: the resolution and version stay, so the badge stays; a
@@ -2071,6 +2123,11 @@ mod tests {
                 ),
                 Some(catalog_body),
             );
+            fs::write(
+                home.path().join(".claude/plugins/known_marketplaces.json"),
+                r#"{"claude-plugins-official":{"source":{"source":"github","repo":"o/market"}}}"#,
+            )
+            .unwrap();
             read_plugin_updates(home.path(), &versions_at(commit))
                 .contains_key("codex@claude-plugins-official")
         };
