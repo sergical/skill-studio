@@ -944,10 +944,10 @@ struct Sources {
     candidates: Vec<Candidate>,
     /// The fork lookups and the pruning of their notes.
     fork_candidates: Vec<ForkCandidate>,
-    /// Owners a readable file names for certain: every fork candidate except a
-    /// skills.sh lock entry in a root whose dotagents ledger failed (the
-    /// ledger may own that name and shadow the entry), plus every name in a
-    /// readable dotagents ledger, even one with no GitHub repo.
+    /// Owners a readable file names for certain: every fork candidate, plus
+    /// every name in a readable dotagents ledger, even one with no GitHub
+    /// repo. Rows an unreadable ledger or fork registry might shadow are in
+    /// neither.
     resolved_owners: std::collections::BTreeSet<String>,
     /// Owner id prefixes (`owner_id_for` with an empty name) of the roots whose
     /// lock, ledger, or fork registry file exists but could not be read. Both
@@ -1030,13 +1030,15 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
     // exactly the shape `CandidateKind::Dotagents` already models - and a
     // fork wins over a same-named ledger entry, same as dotagents wins over
     // skills.sh: it's the more specific, more recently established source.
+    let mut registry_failed = false;
     let fork_registry = super::skill_fork_registry::read_fork_registry(home).unwrap_or_else(|e| {
         eprintln!("skill fork registry: {e}");
         failed_roots.push("owner:v1/global/".to_string());
+        registry_failed = true;
         Default::default()
     });
     let mut path_less: Vec<ForkCandidate> = Vec::new();
-    let mut unverified_lock_ids: std::collections::BTreeSet<String> = Default::default();
+    let mut unverified_ids: std::collections::BTreeSet<String> = Default::default();
     let mut ledger_names: std::collections::BTreeSet<String> = Default::default();
     let mut candidates: Vec<Candidate> = fork_registry
         .forks
@@ -1060,8 +1062,15 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
             failed_roots.push(owner_id_for(&ledger, ""));
         }
         let owner_id = |name: &str| owner_id_for(&ledger, name);
-        ledger_names.extend(ledger.dotagents.iter().map(|skill| owner_id(&skill.name)));
         let global_fork = ledger.scope == InstallScope::Global;
+        // An unreadable fork registry may shadow any global row, so none of
+        // them can resolve an owner or be looked up until it reads again.
+        let registry_shadow_unknown = global_fork && registry_failed;
+        if registry_shadow_unknown {
+            unverified_ids.extend(ledger.dotagents.iter().map(|skill| owner_id(&skill.name)));
+        } else {
+            ledger_names.extend(ledger.dotagents.iter().map(|skill| owner_id(&skill.name)));
+        }
         let mut dotagents_names: std::collections::BTreeSet<String> = ledger
             .dotagents
             .iter()
@@ -1094,8 +1103,8 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
             let Some(repo) = dotagents_ledger::github_repo_from_source(&entry.source) else {
                 continue;
             };
-            if ledger.ledger_failed {
-                unverified_lock_ids.insert(owner_id(name));
+            if ledger.ledger_failed || registry_shadow_unknown {
+                unverified_ids.insert(owner_id(name));
             }
             let Some(skill_path) = &entry.skill_path else {
                 // A skill at the repo root has no path: no owner update
@@ -1131,9 +1140,9 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
             repo: c.repo.clone(),
         })
         .chain(path_less)
-        // A lock entry the unreadable ledger might shadow is not looked up:
-        // a stale entry naming another fork would add a second note.
-        .filter(|c| !unverified_lock_ids.contains(&c.owner_id))
+        // A row an unreadable ledger or fork registry might shadow is not
+        // looked up: a stale row naming another fork would add a second note.
+        .filter(|c| !unverified_ids.contains(&c.owner_id))
         .collect();
     fork_candidates.sort_by(|a, b| a.owner_id.cmp(&b.owner_id));
     let resolved_owners = fork_candidates
@@ -3353,6 +3362,48 @@ resolved_commit = "{commit}"
             &app_data,
             &FakeLookup::with_answers(vec![]),
             &FakeTreeLookup::with_tree("stale/other", HashMap::new()),
+            &FakeForkLookup::new().fork("stale/other", "them/orig", 5),
+        );
+
+        assert_eq!(
+            run.upstream_ahead.keys().collect::<Vec<_>>(),
+            vec!["me/fork"]
+        );
+    }
+
+    /// Flow: an unreadable fork registry, a global dotagents row for `tdd`
+    /// naming another fork, and a previous note for `tdd` from the fork the
+    /// registry recorded.
+    /// Expectation: the previous note survives and the ledger's fork is never
+    /// looked up.
+    /// A failure here means the registry's fork note is replaced by an
+    /// unrelated upstream while the registry cannot be read.
+    #[test]
+    fn an_unreadable_fork_registry_keeps_the_note_its_rows_might_shadow() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        write_agents_lock(&home, "tdd", "stale/other", "skills/tdd", &"a".repeat(40));
+        fs::write(
+            super::super::skill_fork_registry::fork_registry_path(&home),
+            "{ not json",
+        )
+        .unwrap();
+        let app_data = tmp.path().join("data");
+        let store = UpdateCheckStore {
+            upstream_ahead: previous_map(&[previous_record("me/fork", "tdd", 4)]),
+            ..UpdateCheckStore::default()
+        };
+        write_store(&app_data, &store).unwrap();
+
+        let run = run_update_check_with_forks(
+            &home,
+            &[],
+            &app_data,
+            &FakeLookup::with_answers(vec![Ok(Some((
+                "b".repeat(40),
+                "2026-01-02T00:00:00Z".to_string(),
+            )))]),
+            &UnusedTreeLookup,
             &FakeForkLookup::new().fork("stale/other", "them/orig", 5),
         );
 
