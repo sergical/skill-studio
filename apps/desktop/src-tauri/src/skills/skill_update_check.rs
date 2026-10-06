@@ -22,7 +22,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -33,7 +33,7 @@ use tauri::{AppHandle, Manager};
 
 use super::skill_agent_runner::{is_executable_file, pick_executable_line};
 use super::skill_dto::InstallScope;
-use super::skill_ownership::{load_ownership_ledgers_checked, owner_id_for};
+use super::skill_ownership::{load_ownership_ledgers, owner_id_for};
 use super::skill_refresh;
 use skill_studio_core::dotagents_ledger;
 
@@ -543,14 +543,17 @@ pub struct ForkParent {
 pub trait ForkLookup: Sync {
     fn repo_info(&self, repo: &str) -> Result<RepoForkInfo, String>;
 
-    /// Commits `base_repo`'s `base_branch` has that `head_owner:head_branch`
+    /// Commit SHA at the tip of `repo`'s `branch`. Asked of the exact fork repo
+    /// so two forks with the same owner and branch name stay distinct.
+    fn branch_tip(&self, repo: &str, branch: &str) -> Result<String, String>;
+
+    /// Commits `base_repo`'s `base_branch` has that the commit `head_sha`
     /// does not (`behind_by` in GitHub's compare response).
     fn commits_behind(
         &self,
         base_repo: &str,
         base_branch: &str,
-        head_owner: &str,
-        head_branch: &str,
+        head_sha: &str,
     ) -> Result<u32, String>;
 }
 
@@ -617,17 +620,20 @@ impl ForkLookup for GhForkLookup {
         Ok(parse_repo_fork_info(&String::from_utf8_lossy(&stdout)))
     }
 
+    fn branch_tip(&self, repo: &str, branch: &str) -> Result<String, String> {
+        let api_path = format!("repos/{repo}/commits/{branch}");
+        let stdout = self.run(&["api", &api_path, "--jq", ".sha"])?;
+        Ok(String::from_utf8_lossy(&stdout).trim().to_string())
+    }
+
     fn commits_behind(
         &self,
         base_repo: &str,
         base_branch: &str,
-        head_owner: &str,
-        head_branch: &str,
+        head_sha: &str,
     ) -> Result<u32, String> {
         // `per_page=1` keeps the commit list small; `behind_by` is a total.
-        let api_path = format!(
-            "repos/{base_repo}/compare/{base_branch}...{head_owner}:{head_branch}?per_page=1"
-        );
+        let api_path = format!("repos/{base_repo}/compare/{base_branch}...{head_sha}?per_page=1");
         let stdout = self.run(&["api", &api_path, "--jq", ".behind_by"])?;
         String::from_utf8_lossy(&stdout)
             .trim()
@@ -646,6 +652,11 @@ fn is_url_safe_name(name: &str, allow_slash: bool) -> bool {
         })
 }
 
+/// True for a full hex commit id (SHA-1 or SHA-256), safe for a compare URL.
+fn is_commit_sha(sha: &str) -> bool {
+    matches!(sha.len(), 40 | 64) && sha.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// Splits `owner/repo` when both halves are URL-safe.
 fn split_safe_repo(repo: &str) -> Option<(&str, &str)> {
     let (owner, name) = repo.split_once('/')?;
@@ -658,9 +669,9 @@ fn upstream_ahead_for_repo(
     repo: &str,
     lookup: &dyn ForkLookup,
 ) -> Result<Option<UpstreamAhead>, String> {
-    let Some((owner, _)) = split_safe_repo(repo) else {
+    if split_safe_repo(repo).is_none() {
         return Ok(None);
-    };
+    }
     let info = lookup.repo_info(repo)?;
     let Some(parent) = info.parent else {
         return Ok(None);
@@ -673,12 +684,11 @@ fn upstream_ahead_for_repo(
     {
         return Ok(None);
     }
-    let behind_by = lookup.commits_behind(
-        &parent.full_name,
-        &parent.default_branch,
-        owner,
-        &info.default_branch,
-    )?;
+    let tip = lookup.branch_tip(repo, &info.default_branch)?;
+    if !is_commit_sha(&tip) {
+        return Err(format!("{repo}: unexpected commit SHA {tip:?}"));
+    }
+    let behind_by = lookup.commits_behind(&parent.full_name, &parent.default_branch, &tip)?;
     if behind_by == 0 {
         return Ok(None);
     }
@@ -711,7 +721,7 @@ fn is_auth_failure(message: &str) -> bool {
 /// has commits the fork lacks, on the same small worker pool as the commit
 /// lookups. A repo that no longer exists loses its record. Any other failure
 /// keeps the record from `previous` (if any), so a rate limit neither hides nor
-/// invents a note. After an auth failure or a timeout the remaining repos are
+/// invents a note. After an auth failure or a second timeout the remaining repos are
 /// not asked and also keep their previous records. Repos no longer among
 /// `candidates` are dropped. Keyed by `normalize_repo_key`.
 fn find_upstream_ahead(
@@ -748,6 +758,9 @@ fn find_upstream_ahead_with_pool(
     let results: Mutex<BTreeMap<&String, Result<Option<UpstreamAhead>, String>>> =
         Mutex::new(BTreeMap::new());
     let stopped = AtomicBool::new(false);
+    // One repo that always times out must not starve the repos after it, so
+    // only the second timeout of a run counts as a stalled `gh`.
+    let timeouts = AtomicUsize::new(0);
 
     std::thread::scope(|scope| {
         for _ in 0..pool_size {
@@ -764,7 +777,10 @@ fn find_upstream_ahead_with_pool(
                 if let Err(e) = &result {
                     eprintln!("skill update check: fork lookup for {repo} failed: {e}");
                     // Every further call would fail or stall the same way.
-                    if is_auth_failure(e) || e == FORK_LOOKUP_TIMED_OUT_MESSAGE {
+                    if is_auth_failure(e)
+                        || (e == FORK_LOOKUP_TIMED_OUT_MESSAGE
+                            && timeouts.fetch_add(1, Ordering::Relaxed) >= 1)
+                    {
                         stopped.store(true, Ordering::Relaxed);
                     }
                 }
@@ -861,13 +877,10 @@ pub fn summarize_current(
         return summary;
     }
     let sources = build_sources(home, project_paths);
-    summary.upstream_ahead = if sources.read_failed {
-        store.upstream_ahead.values().cloned().collect()
-    } else {
-        prune_upstream_ahead(&store.upstream_ahead, &sources.fork_candidates)
-            .into_values()
-            .collect()
-    };
+    summary.upstream_ahead = sources
+        .pruned_notes(&store.upstream_ahead)
+        .into_values()
+        .collect();
     summary
 }
 
@@ -927,9 +940,68 @@ struct Sources {
     candidates: Vec<Candidate>,
     /// The fork lookups and the pruning of their notes.
     fork_candidates: Vec<ForkCandidate>,
-    /// A lock, ledger, or fork registry file exists but could not be read, so
-    /// both lists may be missing skills and must not be used to prune.
-    read_failed: bool,
+    /// Owner id prefixes (`owner_id_for` with an empty name) of the roots whose
+    /// lock, ledger, or fork registry file exists but could not be read. Both
+    /// lists may miss that root's skills, so its notes must not be pruned.
+    failed_roots: Vec<String>,
+}
+
+impl Sources {
+    fn in_failed_root(&self, owner_id: &str) -> bool {
+        self.failed_roots
+            .iter()
+            .any(|prefix| owner_id.starts_with(prefix))
+    }
+
+    /// Adds back the owners of `previous` notes that live in a root that
+    /// failed to read, which `fresh` cannot know about.
+    fn keep_failed_root_notes(
+        &self,
+        mut fresh: BTreeMap<String, UpstreamAhead>,
+        previous: &BTreeMap<String, UpstreamAhead>,
+    ) -> BTreeMap<String, UpstreamAhead> {
+        for old in previous.values() {
+            let kept: Vec<String> = old
+                .owner_ids
+                .iter()
+                .filter(|id| self.in_failed_root(id))
+                .cloned()
+                .collect();
+            if kept.is_empty() {
+                continue;
+            }
+            let key = skill_studio_core::skill_update_check::normalize_repo_key(&old.repo);
+            match fresh.get_mut(&key) {
+                Some(record) => {
+                    record.owner_ids.extend(kept);
+                    record.owner_ids.sort();
+                    record.owner_ids.dedup();
+                }
+                None => {
+                    fresh.insert(
+                        key,
+                        UpstreamAhead {
+                            owner_ids: kept,
+                            ..old.clone()
+                        },
+                    );
+                }
+            }
+        }
+        fresh
+    }
+
+    /// `previous` pruned against the sources read now, except for roots that
+    /// failed to read.
+    fn pruned_notes(
+        &self,
+        previous: &BTreeMap<String, UpstreamAhead>,
+    ) -> BTreeMap<String, UpstreamAhead> {
+        self.keep_failed_root_notes(
+            prune_upstream_ahead(previous, &self.fork_candidates),
+            previous,
+        )
+    }
 }
 
 /// Build the candidate list from the dotagents ledger and the skills.sh lock
@@ -937,14 +1009,14 @@ struct Sources {
 /// present in both (matches `skill_studio_core::identity::SourceKind`'s precedence). Manual
 /// and plugin skills have no ledger entry, so they're never candidates.
 fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
-    let mut read_failed = false;
+    let mut failed_roots: Vec<String> = Vec::new();
     // A fork's `base_commit` is the pinned "installed" side of the compare -
     // exactly the shape `CandidateKind::Dotagents` already models - and a
     // fork wins over a same-named ledger entry, same as dotagents wins over
     // skills.sh: it's the more specific, more recently established source.
     let fork_registry = super::skill_fork_registry::read_fork_registry(home).unwrap_or_else(|e| {
         eprintln!("skill fork registry: {e}");
-        read_failed = true;
+        failed_roots.push("owner:v1/global/".to_string());
         Default::default()
     });
     let mut path_less: Vec<ForkCandidate> = Vec::new();
@@ -965,9 +1037,10 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
     let fork_names: std::collections::BTreeSet<String> =
         fork_registry.forks.keys().cloned().collect();
 
-    let (ledgers, ledgers_failed) = load_ownership_ledgers_checked(home, project_paths);
-    read_failed |= ledgers_failed;
-    for ledger in ledgers {
+    for ledger in load_ownership_ledgers(home, project_paths) {
+        if ledger.read_failed {
+            failed_roots.push(owner_id_for(&ledger, ""));
+        }
         let owner_id = |name: &str| owner_id_for(&ledger, name);
         let global_fork = ledger.scope == InstallScope::Global;
         let mut dotagents_names: std::collections::BTreeSet<String> = ledger
@@ -1041,7 +1114,7 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
     Sources {
         candidates,
         fork_candidates,
-        read_failed,
+        failed_roots,
     }
 }
 
@@ -1191,7 +1264,7 @@ fn run_update_check_impl(
     let now = Utc::now().to_rfc3339();
 
     let sources = build_sources(home, project_paths);
-    let all_candidates = sources.candidates;
+    let all_candidates = &sources.candidates;
     let mut candidates = all_candidates.clone();
     if let Some(only) = only_owner_ids {
         candidates.retain(|candidate| only.contains(&candidate.owner_id));
@@ -1271,8 +1344,7 @@ fn run_update_check_impl(
 
     let upstream_ahead = match upstream_ahead {
         Some(fresh) if gh_status == GhStatus::Ok => fresh,
-        _ if sources.read_failed => previous.upstream_ahead.clone(),
-        _ => prune_upstream_ahead(&previous.upstream_ahead, &sources.fork_candidates),
+        _ => sources.pruned_notes(&previous.upstream_ahead),
     };
     let store = UpdateCheckStore {
         version: update_store_version(),
@@ -1332,16 +1404,17 @@ fn run_update_check_with_forks(
     fork_lookup: &dyn ForkLookup,
 ) -> UpdateCheckStore {
     let previous = read_update_check_store(app_data);
-    // With an unreadable lock the candidates are incomplete, so no lookup
-    // result could be trusted; the run keeps the previous notes.
+    // A root with an unreadable lock has incomplete candidates, so its owners
+    // keep their previous notes while the other roots are looked up normally.
     let sources = build_sources(home, project_paths);
-    let upstream_ahead = (!sources.read_failed).then(|| {
+    let upstream_ahead = Some(sources.keep_failed_root_notes(
         find_upstream_ahead(
             &sources.fork_candidates,
             fork_lookup,
             &previous.upstream_ahead,
-        )
-    });
+        ),
+        &previous.upstream_ahead,
+    ));
     run_update_check_with_projects(
         home,
         project_paths,
@@ -1361,11 +1434,7 @@ fn write_gh_missing_store(
 ) -> UpdateCheckStore {
     let previous = read_update_check_store(app_data);
     let sources = build_sources(home, project_paths);
-    let upstream_ahead = if sources.read_failed {
-        previous.upstream_ahead
-    } else {
-        prune_upstream_ahead(&previous.upstream_ahead, &sources.fork_candidates)
-    };
+    let upstream_ahead = sources.pruned_notes(&previous.upstream_ahead);
     let store = UpdateCheckStore {
         version: update_store_version(),
         checked_at: Some(Utc::now().to_rfc3339()),
@@ -2517,6 +2586,10 @@ resolved_commit = "{commit}"
     struct FakeForkLookup {
         repos: HashMap<String, Result<RepoForkInfo, String>>,
         behind: HashMap<String, u32>,
+        /// Branch tip SHA per fork repo; unlisted repos share one default tip.
+        tips: HashMap<String, String>,
+        /// Behind count per head SHA, taking precedence over `behind`.
+        behind_by_tip: HashMap<String, u32>,
         info_calls: StdMutex<Vec<String>>,
         compare_calls: StdMutex<Vec<String>>,
     }
@@ -2526,6 +2599,8 @@ resolved_commit = "{commit}"
             Self {
                 repos: HashMap::new(),
                 behind: HashMap::new(),
+                tips: HashMap::new(),
+                behind_by_tip: HashMap::new(),
                 info_calls: StdMutex::new(Vec::new()),
                 compare_calls: StdMutex::new(Vec::new()),
             }
@@ -2551,6 +2626,16 @@ resolved_commit = "{commit}"
             self.behind.insert(parent.to_string(), behind_by);
             self
         }
+
+        /// Like `fork`, with its own branch tip and the behind count GitHub
+        /// reports for that tip.
+        fn fork_at_tip(mut self, repo: &str, parent: &str, tip: char, behind_by: u32) -> Self {
+            let tip = tip.to_string().repeat(40);
+            self = self.fork(repo, parent, 0);
+            self.tips.insert(repo.to_string(), tip.clone());
+            self.behind_by_tip.insert(tip, behind_by);
+            self
+        }
     }
 
     impl ForkLookup for FakeForkLookup {
@@ -2562,18 +2647,30 @@ resolved_commit = "{commit}"
                 .unwrap_or_else(|| Err(format!("{repo}: HTTP 404")))
         }
 
+        fn branch_tip(&self, repo: &str, _branch: &str) -> Result<String, String> {
+            Ok(self
+                .tips
+                .get(repo)
+                .cloned()
+                .unwrap_or_else(|| "a".repeat(40)))
+        }
+
         fn commits_behind(
             &self,
             base_repo: &str,
             _base_branch: &str,
-            _head_owner: &str,
-            _head_branch: &str,
+            head_sha: &str,
         ) -> Result<u32, String> {
             self.compare_calls
                 .lock()
                 .unwrap()
                 .push(base_repo.to_string());
-            Ok(self.behind.get(base_repo).copied().unwrap_or(0))
+            Ok(self
+                .behind_by_tip
+                .get(head_sha)
+                .or_else(|| self.behind.get(base_repo))
+                .copied()
+                .unwrap_or(0))
         }
     }
 
@@ -2796,7 +2893,11 @@ resolved_commit = "{commit}"
             Err("HTTP 502: Bad Gateway".to_string())
         }
 
-        fn commits_behind(&self, _: &str, _: &str, _: &str, _: &str) -> Result<u32, String> {
+        fn branch_tip(&self, _: &str, _: &str) -> Result<String, String> {
+            unreachable!("repo_info never succeeds")
+        }
+
+        fn commits_behind(&self, _: &str, _: &str, _: &str) -> Result<u32, String> {
             unreachable!("repo_info never succeeds")
         }
     }
@@ -2827,8 +2928,10 @@ resolved_commit = "{commit}"
     }
 
     #[test]
-    fn a_timeout_stops_the_remaining_lookups_and_keeps_previous_records() {
-        let lookup = FakeForkLookup::new().failing("me/a", FORK_LOOKUP_TIMED_OUT_MESSAGE);
+    fn a_second_timeout_stops_the_remaining_lookups_and_keeps_previous_records() {
+        let lookup = FakeForkLookup::new()
+            .failing("me/a", FORK_LOOKUP_TIMED_OUT_MESSAGE)
+            .failing("me/b", FORK_LOOKUP_TIMED_OUT_MESSAGE);
         let candidates: Vec<ForkCandidate> = ["a", "b", "c"]
             .iter()
             .map(|name| repo_candidate(name, &format!("me/{name}")))
@@ -2839,7 +2942,47 @@ resolved_commit = "{commit}"
         ]);
         let found = find_upstream_ahead_with_pool(&candidates, &lookup, &previous, 1);
         assert_eq!(found.keys().collect::<Vec<_>>(), vec!["me/a", "me/c"]);
-        assert_eq!(*lookup.info_calls.lock().unwrap(), vec!["me/a".to_string()]);
+        assert_eq!(
+            *lookup.info_calls.lock().unwrap(),
+            vec!["me/a".to_string(), "me/b".to_string()]
+        );
+    }
+
+    #[test]
+    fn one_repo_that_times_out_does_not_starve_the_repos_after_it() {
+        let lookup = FakeForkLookup::new()
+            .failing("me/a", FORK_LOOKUP_TIMED_OUT_MESSAGE)
+            .fork("me/b", "them/orig", 3);
+        let candidates = [repo_candidate("a", "me/a"), repo_candidate("b", "me/b")];
+        let found = find_upstream_ahead_with_pool(&candidates, &lookup, &BTreeMap::new(), 1);
+        assert_eq!(found.keys().collect::<Vec<_>>(), vec!["me/b"]);
+    }
+
+    #[test]
+    fn two_forks_in_one_org_are_compared_by_their_own_branch_tip() {
+        let lookup = FakeForkLookup::new()
+            .fork_at_tip("acme/fork-one", "them/orig", 'b', 2)
+            .fork_at_tip("acme/fork-two", "them/orig", 'c', 9);
+        let found = find_upstream_ahead(
+            &[
+                repo_candidate("one", "acme/fork-one"),
+                repo_candidate("two", "acme/fork-two"),
+            ],
+            &lookup,
+            &BTreeMap::new(),
+        );
+        assert_eq!(found["acme/fork-one"].behind_by, 2);
+        assert_eq!(found["acme/fork-two"].behind_by, 9);
+    }
+
+    #[test]
+    fn a_branch_tip_that_is_not_a_commit_sha_is_a_failed_lookup() {
+        let mut lookup = FakeForkLookup::new().fork("me/fork", "them/orig", 5);
+        lookup
+            .tips
+            .insert("me/fork".to_string(), "main".to_string());
+        assert!(upstream_ahead_for_repo("me/fork", &lookup).is_err());
+        assert!(lookup.compare_calls.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -3037,6 +3180,58 @@ resolved_commit = "{commit}"
     }
 
     #[test]
+    fn a_broken_project_lock_keeps_only_that_projects_notes_while_global_notes_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let project = tmp.path().join("proj");
+        seed_one_dotagents_skill(&home, "me/fork");
+        fs::create_dir_all(project.join(".agents")).unwrap();
+        fs::write(project.join(".agents/.skill-lock.json"), "{ not json").unwrap();
+        let project_owner = format!(
+            "owner:v1/project/{}/p",
+            super::super::skill_deployment::encode_id_path(&project.to_string_lossy())
+        );
+        let mut project_note = previous_record("me/proj-fork", "unused", 6);
+        project_note.owner_ids = vec![project_owner.clone()];
+        let store = UpdateCheckStore {
+            upstream_ahead: previous_map(&[
+                previous_record("me/fork", "tdd", 1),
+                previous_record("me/gone", "old", 4),
+                project_note,
+            ]),
+            ..UpdateCheckStore::default()
+        };
+
+        let summary = summarize_current(&store, &home, std::slice::from_ref(&project));
+        let mut repos: Vec<_> = summary.upstream_ahead.iter().map(|n| &n.repo).collect();
+        repos.sort();
+        assert_eq!(repos, vec!["me/fork", "me/proj-fork"]);
+
+        let app_data = tmp.path().join("data");
+        write_store(&app_data, &store).unwrap();
+        let lookups = FakeForkLookup::new().fork("me/fork", "them/orig", 3);
+        let run = run_update_check_with_forks(
+            &home,
+            std::slice::from_ref(&project),
+            &app_data,
+            &FakeLookup::with_answers(vec![]),
+            &UnusedTreeLookup,
+            &lookups,
+        );
+        assert_eq!(run.upstream_ahead["me/fork"].behind_by, 3);
+        assert_eq!(
+            run.upstream_ahead["me/proj-fork"].owner_ids,
+            vec![project_owner]
+        );
+        assert!(!run.upstream_ahead.contains_key("me/gone"));
+        assert_eq!(
+            *lookups.info_calls.lock().unwrap(),
+            vec!["me/fork".to_string()],
+            "the healthy global root must still be looked up"
+        );
+    }
+
+    #[test]
     fn an_absent_lock_still_prunes_the_notes() {
         let tmp = tempfile::tempdir().unwrap();
         let store = UpdateCheckStore {
@@ -3118,15 +3313,17 @@ resolved_commit = "{commit}"
             self.inner.repo_info(repo)
         }
 
+        fn branch_tip(&self, repo: &str, branch: &str) -> Result<String, String> {
+            self.inner.branch_tip(repo, branch)
+        }
+
         fn commits_behind(
             &self,
             base_repo: &str,
             base_branch: &str,
-            head_owner: &str,
-            head_branch: &str,
+            head_sha: &str,
         ) -> Result<u32, String> {
-            self.inner
-                .commits_behind(base_repo, base_branch, head_owner, head_branch)
+            self.inner.commits_behind(base_repo, base_branch, head_sha)
         }
     }
 
