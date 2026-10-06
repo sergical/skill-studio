@@ -890,18 +890,12 @@ pub fn read_plugin_updates(
             continue;
         };
         let manifest = manifest_version_for(&plugins_dir, marketplace, &release, versions);
-        // The sha fallback compares against the commit the ref resolved to. A
-        // relative plugin in a fetched catalog has no version of its own, so
-        // Claude Code versions it by the marketplace commit: compare that.
-        let release = match (&release.source, versions.catalogs.get(marketplace)) {
-            (PluginSource::Remote(remote), _) => MarketplaceRelease {
+        // The sha fallback compares against the commit the ref resolved to.
+        let release = match &release.source {
+            PluginSource::Remote(remote) => MarketplaceRelease {
                 source: PluginSource::Remote(
                     pinned_remote(remote, versions).unwrap_or_else(|| remote.clone()),
                 ),
-                ..release
-            },
-            (PluginSource::Relative(relative), Some(catalog)) => MarketplaceRelease {
-                source: PluginSource::Remote(catalog_plugin_remote(catalog, relative)),
                 ..release
             },
             _ => release,
@@ -1912,13 +1906,14 @@ mod tests {
     }
 
     /// Flow: a relative plugin in a fetched catalog has no version in its
-    /// manifest or catalog entry; Claude Code then versions it by the
-    /// marketplace commit.
-    /// Expectation: an install recorded at another commit is an update, one
-    /// at the catalog commit (full or abbreviated) is current.
-    /// A failure means such a plugin never badges, or badges at its own commit.
+    /// manifest or catalog entry, and its install records an older marketplace
+    /// commit (Claude Code stores `version: "unknown"` and leaves these alone
+    /// when the marketplace moves).
+    /// Expectation: no update, whatever the catalog commit.
+    /// A failure means every marketplace commit badges every versionless
+    /// plugin, and Update answers "already up to date" forever.
     #[test]
-    fn a_versionless_relative_plugin_in_a_fetched_catalog_compares_the_marketplace_commit() {
+    fn a_versionless_relative_plugin_does_not_badge_when_the_marketplace_moves() {
         let catalog_body = r#"{"plugins":[{"name":"codex","source":"./plugins/codex"}]}"#;
         let versions_at = |commit: &str| {
             let mut versions = cache_with(
@@ -1940,15 +1935,14 @@ mod tests {
             write_fixture(
                 home.path(),
                 &format!(
-                    r#"{{"plugins":{{"codex@claude-plugins-official":[{{"scope":"user","gitCommitSha":"{installed_sha}"}}]}}}}"#
+                    r#"{{"plugins":{{"codex@claude-plugins-official":[{{"scope":"user","version":"unknown","gitCommitSha":"{installed_sha}"}}]}}}}"#
                 ),
                 Some(catalog_body),
             );
             read_plugin_updates(home.path(), &versions_at(commit))
                 .contains_key("codex@claude-plugins-official")
         };
-        assert!(updates_for("1111111aaaa", "c0ffee1bbbbbbbb"));
+        assert!(!updates_for("1111111aaaa", "c0ffee1bbbbbbbb"));
         assert!(!updates_for("c0ffee1bbbbb", "c0ffee1bbbbbbbb"));
-        assert!(!updates_for("c0ffee1bbbbbbbb", "c0ffee1"));
     }
 }
