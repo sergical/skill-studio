@@ -83,6 +83,7 @@ fn is_valid_plugin_id(plugin_id: &str) -> bool {
     };
     let is_id_part = |part: &str| {
         !part.is_empty()
+            && !part.starts_with('-')
             && part
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
@@ -551,6 +552,16 @@ mod tests {
         let runner = FakeRunner::default();
         let err = update_plugin_with(&runner, "codex@", "user", None).unwrap_err();
         assert!(err.contains("plugin"));
+        assert!(runner.calls.lock().unwrap().is_empty());
+    }
+
+    /// Flow: a plugin id whose marketplace half looks like a flag.
+    /// Expect: rejected before `claude plugin marketplace update` sees it.
+    /// Fails if: `-h` reaches the CLI as an option instead of a name.
+    #[test]
+    fn update_with_a_flag_like_marketplace_runs_nothing() {
+        let runner = FakeRunner::default();
+        assert!(update_plugin_with(&runner, "codex@-h", "user", None).is_err());
         assert!(runner.calls.lock().unwrap().is_empty());
     }
 
