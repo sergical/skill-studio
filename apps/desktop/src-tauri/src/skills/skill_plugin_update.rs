@@ -42,6 +42,8 @@ pub struct RemoteSource {
     /// Folder of the plugin inside the repo (`git-subdir`).
     pub path: Option<String>,
     pub sha: Option<String>,
+    /// Branch or tag the marketplace follows when it pins no `sha`.
+    pub git_ref: Option<String>,
 }
 
 /// Where a marketplace entry's plugin files live.
@@ -145,6 +147,7 @@ fn parse_source(source: &Value) -> PluginSource {
             url,
             path: field("path"),
             sha: field("sha"),
+            git_ref: field("ref"),
         }),
         None => PluginSource::Unsupported,
     }
@@ -159,12 +162,24 @@ pub fn marketplace_release(marketplace_json: &str, plugin: &str) -> Option<Marke
         .as_array()?
         .iter()
         .find(|entry| entry.get("name").and_then(Value::as_str) == Some(plugin))?;
+    let plugin_root = root
+        .get("metadata")
+        .and_then(|metadata| metadata.get("pluginRoot"))
+        .and_then(Value::as_str)
+        .filter(|root| !root.is_empty());
+    let mut source = entry.get("source").map(parse_source).unwrap_or_default();
+    // Claude Code prepends `metadata.pluginRoot` to a bare-name relative source.
+    if let (PluginSource::Relative(relative), Some(plugin_root)) = (&mut source, plugin_root) {
+        if !relative.starts_with("./") {
+            *relative = format!("{}/{relative}", plugin_root.trim_end_matches('/'));
+        }
+    }
     Some(MarketplaceRelease {
         version: entry
             .get("version")
             .and_then(Value::as_str)
             .map(str::to_string),
-        source: entry.get("source").map(parse_source).unwrap_or_default(),
+        source,
     })
 }
 
@@ -242,13 +257,16 @@ pub struct CachedPluginVersion {
     pub version: Option<String>,
 }
 
-/// `<app data>/skill-studio/plugin-versions.json`, keyed
-/// `"{url}#{path}@{sha}"`. A sha never changes content, so an entry never
-/// goes stale.
+/// `<app data>/skill-studio/plugin-versions.json`. `entries` is keyed
+/// `"{url}#{path}@{sha}"`: a sha never changes content, so an entry never
+/// goes stale. `resolved` maps a source with no pinned sha, keyed
+/// `"{url}#{path}@{ref|HEAD}"`, to the commit that ref pointed at during the
+/// last check.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[serde(default)]
 pub struct PluginVersionCache {
     pub entries: BTreeMap<String, CachedPluginVersion>,
+    pub resolved: BTreeMap<String, String>,
 }
 
 pub fn plugin_versions_path(app_data: &Path) -> PathBuf {
@@ -289,6 +307,49 @@ pub fn remote_cache_key(remote: &RemoteSource) -> Option<String> {
         remote.url,
         remote.path.as_deref().unwrap_or("")
     ))
+}
+
+/// Cache key of a source that pins no sha, by the ref it follows.
+pub fn unpinned_key(remote: &RemoteSource) -> String {
+    format!(
+        "{}#{}@{}",
+        remote.url,
+        remote.path.as_deref().unwrap_or(""),
+        non_empty(remote.git_ref.as_deref()).unwrap_or("HEAD")
+    )
+}
+
+/// `remote` with the sha the last check resolved for it, when it pins none.
+fn pinned_remote(remote: &RemoteSource, versions: &PluginVersionCache) -> Option<RemoteSource> {
+    if non_empty(remote.sha.as_deref()).is_some() {
+        return Some(remote.clone());
+    }
+    let sha = versions.resolved.get(&unpinned_key(remote))?;
+    Some(RemoteSource {
+        sha: Some(sha.clone()),
+        ..remote.clone()
+    })
+}
+
+/// A branch or tag name safe to put in a `gh api` path.
+fn is_safe_ref(git_ref: &str) -> bool {
+    !git_ref.is_empty()
+        && !git_ref.contains("..")
+        && !git_ref.starts_with(['/', '-'])
+        && !git_ref.ends_with('/')
+        && git_ref
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/'))
+}
+
+/// True when a source with no sha can be resolved and fetched through `gh`.
+fn is_resolvable(remote: &RemoteSource) -> bool {
+    let probe = RemoteSource {
+        sha: Some("0".to_string()),
+        ..remote.clone()
+    };
+    gh_manifest_api_path(&probe).is_some()
+        && non_empty(remote.git_ref.as_deref()).is_none_or(is_safe_ref)
 }
 
 fn is_name_part(part: &str) -> bool {
@@ -369,21 +430,45 @@ pub enum ManifestFetch {
     Failed,
 }
 
-fn fetch_with_gh(gh_bin: &Path, api_path: &str) -> ManifestFetch {
-    match gh_cli::run_gh(gh_bin, &["api", api_path, "--jq", ".content"], None) {
-        Ok(stdout) => ManifestFetch::Content(String::from_utf8_lossy(&stdout).trim().to_string()),
-        Err(gh_cli::GhError::Failed(message)) if message.contains("404") => ManifestFetch::Missing,
-        Err(_) => ManifestFetch::Failed,
+/// The GitHub lookups a refresh makes.
+pub trait PluginRemote {
+    /// The manifest at `api_path` (see [`gh_manifest_api_path`]).
+    fn manifest(&self, api_path: &str) -> ManifestFetch;
+    /// The commit sha `git_ref` points at in `owner/repo`; `None` when the
+    /// repo or commit cannot be read.
+    fn commit_sha(&self, owner: &str, repo: &str, git_ref: &str) -> Option<String>;
+}
+
+struct GhRemote<'a>(&'a Path);
+
+impl PluginRemote for GhRemote<'_> {
+    fn manifest(&self, api_path: &str) -> ManifestFetch {
+        match gh_cli::run_gh(self.0, &["api", api_path, "--jq", ".content"], None) {
+            Ok(stdout) => {
+                ManifestFetch::Content(String::from_utf8_lossy(&stdout).trim().to_string())
+            }
+            Err(gh_cli::GhError::Failed(message)) if message.contains("HTTP 404") => {
+                ManifestFetch::Missing
+            }
+            Err(_) => ManifestFetch::Failed,
+        }
+    }
+
+    fn commit_sha(&self, owner: &str, repo: &str, git_ref: &str) -> Option<String> {
+        let api_path = format!("repos/{owner}/{repo}/commits/{git_ref}");
+        let stdout = gh_cli::run_gh(self.0, &["api", &api_path, "--jq", ".sha"], None).ok()?;
+        let sha = String::from_utf8_lossy(&stdout).trim().to_string();
+        (sha.len() >= 7 && sha.bytes().all(|b| b.is_ascii_hexdigit())).then_some(sha)
     }
 }
 
-/// The remote sources of every installed plugin, keyed for the cache.
-fn wanted_remote_sources(home: &Path) -> BTreeMap<String, RemoteSource> {
+/// The remote sources of every installed plugin that can be looked up.
+fn wanted_remote_sources(home: &Path) -> Vec<RemoteSource> {
     let plugins_dir = home.join(".claude").join("plugins");
     let Ok(installed) = std::fs::read_to_string(plugins_dir.join("installed_plugins.json")) else {
-        return BTreeMap::new();
+        return Vec::new();
     };
-    let mut wanted = BTreeMap::new();
+    let mut wanted: Vec<RemoteSource> = Vec::new();
     for id in parse_installs(&installed).keys() {
         let Some((plugin, marketplace)) = id.split_once('@') else {
             continue;
@@ -396,38 +481,58 @@ fn wanted_remote_sources(home: &Path) -> BTreeMap<String, RemoteSource> {
             ..
         }) = marketplace_release(&body, plugin)
         {
-            if gh_manifest_api_path(&remote).is_some() {
-                if let Some(key) = remote_cache_key(&remote) {
-                    wanted.insert(key, remote);
-                }
+            let lookup_ok = if non_empty(remote.sha.as_deref()).is_some() {
+                gh_manifest_api_path(&remote).is_some()
+            } else {
+                is_resolvable(&remote)
+            };
+            if lookup_ok && !wanted.contains(&remote) {
+                wanted.push(remote);
             }
         }
     }
     wanted
 }
 
-/// Looks up the manifest version of each installed plugin with a pinned
-/// github source that `plugin-versions.json` has no entry for yet, and
-/// writes the result. A failed lookup records nothing, so the next check
-/// retries it.
-pub fn refresh_plugin_versions_with(
-    home: &Path,
-    app_data: &Path,
-    fetch: &dyn Fn(&str) -> ManifestFetch,
-) {
+/// Looks up the manifest version of each installed plugin with a github
+/// source that `plugin-versions.json` has no entry for yet, and writes the
+/// result. A source with no pinned sha first has its ref resolved to a commit
+/// on every check. A failed lookup records nothing, so the next check retries
+/// it; a missing manifest counts as "no version" only when the commit itself
+/// is readable, since GitHub also answers 404 for a private repo.
+pub fn refresh_plugin_versions_with(home: &Path, app_data: &Path, remote_api: &dyn PluginRemote) {
     let wanted = wanted_remote_sources(home);
     let path = plugin_versions_path(app_data);
     let previous = read_plugin_versions(&path);
     let mut next = PluginVersionCache::default();
-    for (key, remote) in &wanted {
-        if let Some(cached) = previous.entries.get(key) {
-            next.entries.insert(key.clone(), cached.clone());
-            continue;
-        }
-        let Some(api_path) = gh_manifest_api_path(remote) else {
+    for source in &wanted {
+        let Some((owner, repo)) = github_repo(&source.url) else {
             continue;
         };
-        let version = match fetch(&api_path) {
+        let remote = if non_empty(source.sha.as_deref()).is_some() {
+            source.clone()
+        } else {
+            let git_ref = non_empty(source.git_ref.as_deref()).unwrap_or("HEAD");
+            let Some(sha) = remote_api.commit_sha(&owner, &repo, git_ref) else {
+                continue;
+            };
+            next.resolved.insert(unpinned_key(source), sha.clone());
+            RemoteSource {
+                sha: Some(sha),
+                ..source.clone()
+            }
+        };
+        let (Some(key), Some(api_path)) =
+            (remote_cache_key(&remote), gh_manifest_api_path(&remote))
+        else {
+            continue;
+        };
+        if let Some(cached) = previous.entries.get(&key) {
+            next.entries.insert(key, cached.clone());
+            continue;
+        }
+        let sha = non_empty(remote.sha.as_deref()).unwrap_or_default();
+        let version = match remote_api.manifest(&api_path) {
             ManifestFetch::Content(content) => decode_base64(&content)
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
                 .and_then(|body| match manifest_version_from_json(&body) {
@@ -435,12 +540,14 @@ pub fn refresh_plugin_versions_with(
                     ManifestVersion::NoVersion => Some(None),
                     ManifestVersion::Unknown => None,
                 }),
-            ManifestFetch::Missing => Some(None),
+            ManifestFetch::Missing => remote_api
+                .commit_sha(&owner, &repo, sha)
+                .is_some()
+                .then_some(None),
             ManifestFetch::Failed => None,
         };
         if let Some(version) = version {
-            next.entries
-                .insert(key.clone(), CachedPluginVersion { version });
+            next.entries.insert(key, CachedPluginVersion { version });
         }
     }
     if next != previous {
@@ -452,7 +559,7 @@ pub fn refresh_plugin_versions_with(
 
 /// [`refresh_plugin_versions_with`] over the `gh` CLI.
 pub fn refresh_plugin_versions(home: &Path, app_data: &Path, gh_bin: &Path) {
-    refresh_plugin_versions_with(home, app_data, &|api_path| fetch_with_gh(gh_bin, api_path));
+    refresh_plugin_versions_with(home, app_data, &GhRemote(gh_bin));
 }
 
 fn read_marketplace(plugins_dir: &Path, marketplace: &str) -> Option<String> {
@@ -481,7 +588,8 @@ fn manifest_version_for(
             &plugins_dir.join("marketplaces").join(marketplace),
             relative,
         ),
-        PluginSource::Remote(remote) => remote_cache_key(remote)
+        PluginSource::Remote(remote) => pinned_remote(remote, versions)
+            .and_then(|remote| remote_cache_key(&remote))
             .and_then(|key| versions.entries.get(&key))
             .map_or(ManifestVersion::Unknown, |cached| match &cached.version {
                 Some(version) => ManifestVersion::Version(version.clone()),
@@ -531,6 +639,16 @@ pub fn read_plugin_updates(
             continue;
         };
         let manifest = manifest_version_for(&plugins_dir, marketplace, &release, versions);
+        // The sha fallback compares against the commit the ref resolved to.
+        let release = match &release.source {
+            PluginSource::Remote(remote) => MarketplaceRelease {
+                source: PluginSource::Remote(
+                    pinned_remote(remote, versions).unwrap_or_else(|| remote.clone()),
+                ),
+                ..release
+            },
+            _ => release,
+        };
         let outdated: Vec<PluginInstallUpdate> = installs
             .iter()
             .filter(|install| install_is_updatable(install))
@@ -600,6 +718,7 @@ mod tests {
             url: "https://github.com/getsentry/sentry-for-claude".to_string(),
             path: None,
             sha: sha.map(str::to_string),
+            git_ref: None,
         }
     }
 
@@ -759,7 +878,8 @@ mod tests {
             PluginSource::Remote(RemoteSource {
                 url: "https://github.com/o/r.git".to_string(),
                 path: None,
-                sha: Some("73e5".to_string())
+                sha: Some("73e5".to_string()),
+                git_ref: None
             })
         );
         assert_eq!(
@@ -767,7 +887,8 @@ mod tests {
             PluginSource::Remote(RemoteSource {
                 url: "https://github.com/o/mono".to_string(),
                 path: Some("plugins/figma".to_string()),
-                sha: Some("abcd".to_string())
+                sha: Some("abcd".to_string()),
+                git_ref: Some("main".to_string())
             })
         );
         assert_eq!(
@@ -775,7 +896,8 @@ mod tests {
             PluginSource::Remote(RemoteSource {
                 url: "https://github.com/o/gh".to_string(),
                 path: None,
-                sha: None
+                sha: None,
+                git_ref: None
             })
         );
         assert_eq!(
@@ -794,6 +916,7 @@ mod tests {
             url: "https://github.com/getsentry/sentry-for-claude.git".to_string(),
             path: None,
             sha: Some("73e53541".to_string()),
+            git_ref: None,
         };
         assert_eq!(
             remote_cache_key(&source).as_deref(),
@@ -811,6 +934,7 @@ mod tests {
             url: "https://github.com/figma/mcp".to_string(),
             path: Some("./plugins/figma/".to_string()),
             sha: Some("abcd1234".to_string()),
+            git_ref: None,
         };
         assert_eq!(
             remote_cache_key(&source).as_deref(),
@@ -952,6 +1076,7 @@ mod tests {
                     version: version.map(str::to_string),
                 },
             )]),
+            ..Default::default()
         }
     }
 
@@ -1143,6 +1268,55 @@ mod tests {
         out
     }
 
+    type ScriptedManifest = (&'static str, fn() -> ManifestFetch);
+
+    /// Scripted GitHub: manifests by api path prefix, commits by `owner/repo`.
+    #[derive(Default)]
+    struct FakeRemote {
+        manifest_calls: RefCell<Vec<String>>,
+        commit_calls: RefCell<Vec<String>>,
+        manifests: Vec<ScriptedManifest>,
+        readable_commits: Vec<&'static str>,
+        refs: Vec<(&'static str, &'static str)>,
+    }
+
+    impl PluginRemote for FakeRemote {
+        fn manifest(&self, api_path: &str) -> ManifestFetch {
+            self.manifest_calls.borrow_mut().push(api_path.to_string());
+            self.manifests
+                .iter()
+                .find(|(prefix, _)| api_path.starts_with(prefix))
+                .map_or(ManifestFetch::Failed, |(_, make)| make())
+        }
+
+        fn commit_sha(&self, owner: &str, repo: &str, git_ref: &str) -> Option<String> {
+            let repo_path = format!("{owner}/{repo}");
+            self.commit_calls
+                .borrow_mut()
+                .push(format!("{repo_path}@{git_ref}"));
+            if let Some((_, sha)) = self
+                .refs
+                .iter()
+                .find(|(r, _)| *r == format!("{repo_path}@{git_ref}"))
+            {
+                return Some((*sha).to_string());
+            }
+            self.readable_commits
+                .contains(&repo_path.as_str())
+                .then(|| git_ref.to_string())
+        }
+    }
+
+    fn sentry_content() -> ManifestFetch {
+        ManifestFetch::Content(b64_manifest(r#"{"version":"1.4.0"}"#))
+    }
+    fn nameonly_content() -> ManifestFetch {
+        ManifestFetch::Content(b64_manifest(r#"{"name":"figma"}"#))
+    }
+    fn missing() -> ManifestFetch {
+        ManifestFetch::Missing
+    }
+
     #[test]
     fn refresh_caches_versions_records_missing_manifests_and_skips_failures() {
         let home = tempfile::tempdir().unwrap();
@@ -1164,20 +1338,16 @@ mod tests {
                 {"name":"codex","version":"1.0.6","source":"./plugins/codex"}]}"#,
             ),
         );
-        let calls = RefCell::new(Vec::new());
-        let fetch = |api_path: &str| {
-            calls.borrow_mut().push(api_path.to_string());
-            if api_path.contains("/o/sentry/") || api_path.starts_with("repos/o/sentry/") {
-                ManifestFetch::Content(b64_manifest(r#"{"version":"1.4.0"}"#))
-            } else if api_path.starts_with("repos/o/mono/contents/plugins/figma/") {
-                ManifestFetch::Content(b64_manifest(r#"{"name":"figma"}"#))
-            } else if api_path.starts_with("repos/o/gone/") {
-                ManifestFetch::Missing
-            } else {
-                ManifestFetch::Failed
-            }
+        let remote = FakeRemote {
+            manifests: vec![
+                ("repos/o/sentry/", sentry_content),
+                ("repos/o/mono/contents/plugins/figma/", nameonly_content),
+                ("repos/o/gone/", missing),
+            ],
+            readable_commits: vec!["o/gone"],
+            ..Default::default()
         };
-        refresh_plugin_versions_with(home.path(), app_data.path(), &fetch);
+        refresh_plugin_versions_with(home.path(), app_data.path(), &remote);
 
         let cache = read_plugin_versions(&plugin_versions_path(app_data.path()));
         let version = |key: &str| cache.entries.get(key).map(|entry| entry.version.clone());
@@ -1191,14 +1361,152 @@ mod tests {
         );
         assert_eq!(version("https://github.com/o/gone#@cc33"), Some(None));
         assert_eq!(version("https://github.com/o/flaky#@dd44"), None);
-        assert_eq!(calls.borrow().len(), 4);
+        assert_eq!(remote.manifest_calls.borrow().len(), 4);
 
         // Cached entries are not fetched again; the failed one is retried.
-        calls.borrow_mut().clear();
-        refresh_plugin_versions_with(home.path(), app_data.path(), &fetch);
+        remote.manifest_calls.borrow_mut().clear();
+        refresh_plugin_versions_with(home.path(), app_data.path(), &remote);
         assert_eq!(
-            calls.borrow().as_slice(),
+            remote.manifest_calls.borrow().as_slice(),
             ["repos/o/flaky/contents/.claude-plugin/plugin.json?ref=dd44"]
         );
+    }
+
+    /// Flow: the manifest request 404s because the gh account cannot read a
+    /// private repo (the commit check fails too).
+    /// Expectation: nothing is cached, so the next check retries.
+    /// A failure means a private repo is cached as "no version" forever.
+    #[test]
+    fn a_404_for_an_unreadable_repo_is_not_cached_as_no_version() {
+        let home = tempfile::tempdir().unwrap();
+        let app_data = tempfile::tempdir().unwrap();
+        write_fixture(
+            home.path(),
+            r#"{"plugins":{"priv@claude-plugins-official":[{"scope":"user"}]}}"#,
+            Some(
+                r#"{"plugins":[{"name":"priv","source":{"source":"url","url":"https://github.com/o/priv","sha":"ee55"}}]}"#,
+            ),
+        );
+        let remote = FakeRemote {
+            manifests: vec![("repos/o/priv/", missing)],
+            ..Default::default()
+        };
+        refresh_plugin_versions_with(home.path(), app_data.path(), &remote);
+        let cache = read_plugin_versions(&plugin_versions_path(app_data.path()));
+        assert!(cache.entries.is_empty());
+        assert_eq!(remote.commit_calls.borrow().as_slice(), ["o/priv@ee55"]);
+    }
+
+    const UNPINNED: &str = r#"{"metadata":{},"plugins":[
+        {"name":"gh","source":{"source":"github","repo":"o/gh","ref":"stable"}},
+        {"name":"bare","source":{"source":"github","repo":"o/bare"}},
+        {"name":"evil","source":{"source":"github","repo":"o/evil","ref":"a/../b"}}]}"#;
+
+    /// Flow: marketplace sources with no sha (`github` repo, with or without
+    /// a `ref`) are installed.
+    /// Expectation: the ref (or HEAD) is resolved, the manifest fetched at the
+    /// resolved sha, and the resolution saved so the overlay reports an update.
+    /// A failure means unpinned sources are always `NoClaim`.
+    #[test]
+    fn unpinned_sources_are_resolved_fetched_and_reported() {
+        let home = tempfile::tempdir().unwrap();
+        let app_data = tempfile::tempdir().unwrap();
+        write_fixture(
+            home.path(),
+            r#"{"plugins":{
+                "gh@claude-plugins-official":[{"scope":"user","version":"1.3.0"}],
+                "bare@claude-plugins-official":[{"scope":"user","version":"1.4.0"}],
+                "evil@claude-plugins-official":[{"scope":"user","version":"1.0.0"}]}}"#,
+            Some(UNPINNED),
+        );
+        let remote = FakeRemote {
+            manifests: vec![("repos/o/", sentry_content)],
+            refs: vec![("o/gh@stable", "abc1234"), ("o/bare@HEAD", "def5678")],
+            ..Default::default()
+        };
+        refresh_plugin_versions_with(home.path(), app_data.path(), &remote);
+        assert_eq!(
+            remote.manifest_calls.borrow().as_slice(),
+            [
+                "repos/o/bare/contents/.claude-plugin/plugin.json?ref=def5678",
+                "repos/o/gh/contents/.claude-plugin/plugin.json?ref=abc1234",
+            ]
+        );
+        assert!(!remote
+            .commit_calls
+            .borrow()
+            .iter()
+            .any(|call| call.contains("..")));
+
+        let versions = read_plugin_versions(&plugin_versions_path(app_data.path()));
+        assert_eq!(
+            versions.resolved.get("https://github.com/o/gh#@stable"),
+            Some(&"abc1234".to_string())
+        );
+        let updates = read_plugin_updates(home.path(), &versions);
+        assert!(updates.contains_key("gh@claude-plugins-official"));
+        assert!(!updates.contains_key("bare@claude-plugins-official"));
+        assert!(!updates.contains_key("evil@claude-plugins-official"));
+
+        // A ref that no longer resolves drops the claim.
+        let unresolved = FakeRemote {
+            manifests: vec![("repos/o/", sentry_content)],
+            ..Default::default()
+        };
+        refresh_plugin_versions_with(home.path(), app_data.path(), &unresolved);
+        let versions = read_plugin_versions(&plugin_versions_path(app_data.path()));
+        assert!(versions.resolved.is_empty());
+        assert!(read_plugin_updates(home.path(), &versions).is_empty());
+    }
+
+    /// Flow: an unpinned source's manifest has no version.
+    /// Expectation: the sha fallback compares the install with the resolved sha.
+    #[test]
+    fn an_unpinned_source_without_a_version_falls_back_to_the_resolved_sha() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(
+            home.path(),
+            r#"{"plugins":{"gh@claude-plugins-official":[{"scope":"user","gitCommitSha":"1111111"}]}}"#,
+            Some(UNPINNED),
+        );
+        let mut versions = cache_with("https://github.com/o/gh#@abc1234".to_string(), None);
+        assert!(read_plugin_updates(home.path(), &versions).is_empty());
+        versions.resolved.insert(
+            "https://github.com/o/gh#@stable".to_string(),
+            "abc1234".to_string(),
+        );
+        assert!(
+            read_plugin_updates(home.path(), &versions).contains_key("gh@claude-plugins-official")
+        );
+    }
+
+    /// Flow: the marketplace sets `metadata.pluginRoot` and lists a bare name.
+    /// Expectation: the manifest is read under the root; an escaping root is
+    /// still rejected. A failure means those plugins never report updates.
+    #[test]
+    fn plugin_root_is_prepended_to_bare_relative_sources() {
+        let body = r#"{"metadata":{"pluginRoot":"./plugins"},"plugins":[
+            {"name":"fmt","source":"formatter"},
+            {"name":"dot","source":"./other"},
+            {"name":"up","source":"../escape"}]}"#;
+        let source = |name| marketplace_release(body, name).unwrap().source;
+        assert_eq!(
+            source("fmt"),
+            PluginSource::Relative("./plugins/formatter".to_string())
+        );
+        assert_eq!(source("dot"), PluginSource::Relative("./other".to_string()));
+
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(
+            home.path(),
+            r#"{"plugins":{
+                "fmt@claude-plugins-official":[{"scope":"user","version":"1.0.0"}],
+                "up@claude-plugins-official":[{"scope":"user","version":"1.0.0"}]}}"#,
+            Some(body),
+        );
+        write_manifest(home.path(), "plugins/formatter", r#"{"version":"1.1.0"}"#);
+        let updates = read_plugin_updates(home.path(), &PluginVersionCache::default());
+        assert!(updates.contains_key("fmt@claude-plugins-official"));
+        assert!(!updates.contains_key("up@claude-plugins-official"));
     }
 }

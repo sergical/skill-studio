@@ -51,6 +51,16 @@ interface SkillOwnerUpdateSummary {
   alreadyCurrent?: number;
 }
 
+/** A failed plugin install update, with the install it ran for. */
+export interface PluginUpdateFailure extends SkillOwnerUpdateFailure {
+  target: PluginUpdateTarget;
+}
+
+interface PluginUpdateSummary extends SkillOwnerUpdateSummary {
+  failures: PluginUpdateFailure[];
+  alreadyCurrent: number;
+}
+
 /** One install of a Claude Code plugin that has an update, as `update_owners` reports it. */
 export interface PluginUpdateTarget {
   plugin_id: string;
@@ -67,7 +77,7 @@ export type SkillUpdateAvailability =
 const PLUGIN_OWNER_PREFIX = "plugin:";
 
 /** Plugin updates have no ledger owner: `updateSkill` cannot run them, `updatePlugin` does. */
-function isPluginOwnerId(ownerId: string | null | undefined): boolean {
+export function isPluginOwnerId(ownerId: string | null | undefined): boolean {
   return ownerId?.startsWith(PLUGIN_OWNER_PREFIX) === true;
 }
 
@@ -93,7 +103,7 @@ export function skillPluginUpdateTargets(
 export const pluginOwnerIdFor = (target: PluginUpdateTarget) =>
   `${PLUGIN_OWNER_PREFIX}${target.plugin_id}`;
 
-const pluginTargetKey = (target: PluginUpdateTarget) =>
+export const pluginTargetKey = (target: PluginUpdateTarget) =>
   `${target.plugin_id}|${target.scope}|${target.project_path ?? ""}`;
 
 /** `targets` without repeats: one run per plugin id, scope, and project path. */
@@ -553,16 +563,30 @@ export async function forkEditedAndUpdate(
     fork: (target: LifecycleTarget) => Promise<ForkRecord>;
     pullFork: (target: LifecycleTarget) => Promise<PullResult>;
     updateOwner: (target: LifecycleTarget) => Promise<{ success: boolean; error?: string | null }>;
+    /** Runs the skill's plugin installs after the copies, when none of those failed. */
+    updatePluginInstall?: PluginInstallUpdater;
   },
   options: { updateOthers: boolean } = { updateOthers: true },
-): Promise<{ pull: PullResult; others: SkillOwnerUpdateSummary }> {
+): Promise<{
+  pull: PullResult;
+  others: SkillOwnerUpdateSummary;
+  plugins: PluginUpdateSummary | null;
+}> {
   const pull = await forkThenPull(forkTargetForSkill(skill), deps.fork, deps.pullFork);
   // react-doctor-disable-next-line react-doctor/server-sequential-independent-await -- a failed fork must leave the other copies untouched, and both steps write ~/.agents/.skill-lock.json
   const others = await updateOwnerTargets(
     options.updateOthers ? excludeForkedOwner(skill, skillUpdateOwnerTargets(skill)) : [],
     deps.updateOwner,
   );
-  return { pull, others };
+  const pluginTargets =
+    options.updateOthers && deps.updatePluginInstall && others.failures.length === 0
+      ? skillPluginUpdateTargets(skill)
+      : [];
+  const plugins =
+    deps.updatePluginInstall && pluginTargets.length > 0
+      ? await updatePluginTargets(pluginTargets, deps.updatePluginInstall)
+      : null;
+  return { pull, others, plugins };
 }
 
 /**
@@ -627,8 +651,8 @@ export async function updateSkillOwners(
 export async function updatePluginTargets(
   targets: PluginUpdateTarget[],
   updatePluginInstall: PluginInstallUpdater,
-): Promise<Required<SkillOwnerUpdateSummary>> {
-  const failures: SkillOwnerUpdateFailure[] = [];
+): Promise<PluginUpdateSummary> {
+  const failures: PluginUpdateFailure[] = [];
   let succeeded = 0;
   let alreadyCurrent = 0;
   for (const target of targets) {
@@ -641,6 +665,7 @@ export async function updatePluginTargets(
     } catch (error) {
       failures.push({
         ownerId: pluginOwnerIdFor(target),
+        target,
         message: error instanceof Error ? error.message : "Update failed without an error message.",
       });
     }

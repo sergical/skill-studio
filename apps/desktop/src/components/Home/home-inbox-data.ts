@@ -31,7 +31,7 @@ import {
   forkTargetForSkill,
   forkThenPull,
   lifecycleTargetForPark,
-  pluginOwnerIdFor,
+  pluginTargetKey,
   skillPluginUpdateTargets,
   skillUpdateOwnerTargets,
   uniquePluginTargets,
@@ -231,14 +231,19 @@ export async function updateAllOutdatedSkills(
   const ownerTargets = skills.flatMap((skill) =>
     failedSkillNames.has(skill.name) ? [] : ownerTargetsOf(skill),
   );
-  // Their copies leave the total too, so progress still reaches it.
-  const pluginTargets = uniquePluginTargets(
-    skills.flatMap((skill) => (failedSkillNames.has(skill.name) ? [] : pluginTargetsOf(skill))),
-  );
-  const plannedTotal = total;
-  total = forks.length + ownerTargets.length + pluginTargets.length;
-  tally.attempted = total;
-  if (total !== plannedTotal) onProgress?.(forks.length, total);
+  // A skill whose copies failed keeps its plugins untouched, and they leave the total too, so
+  // progress still reaches it.
+  const pluginTargetsOfOk = () =>
+    uniquePluginTargets(
+      skills.flatMap((skill) => (failedSkillNames.has(skill.name) ? [] : pluginTargetsOf(skill))),
+    );
+  const retotal = (done: number) => {
+    const plannedTotal = total;
+    total = forks.length + ownerTargets.length + pluginTargetsOfOk().length;
+    tally.attempted = total;
+    if (total !== plannedTotal) onProgress?.(done, total);
+  };
+  retotal(forks.length);
   if (ownerTargets.length > 0) {
     try {
       const outcome = await updateAllOwners(ownerTargets, (done) =>
@@ -266,6 +271,8 @@ export async function updateAllOutdatedSkills(
     }
   }
 
+  retotal(forks.length + ownerTargets.length);
+  const pluginTargets = pluginTargetsOfOk();
   if (updatePluginInstall && pluginTargets.length > 0) {
     const plugins = await updatePluginTargets(pluginTargets, (target) =>
       updatePluginInstall(target).then((outcome) => {
@@ -276,9 +283,11 @@ export async function updateAllOutdatedSkills(
     );
     tally.succeeded += plugins.succeeded;
     if (plugins.failures.length > 0) {
-      const failedIds = new Set(plugins.failures.map((failure) => failure.ownerId));
+      const failedKeys = new Set(
+        plugins.failures.map((failure) => pluginTargetKey(failure.target)),
+      );
       for (const skill of skills) {
-        if (pluginTargetsOf(skill).some((target) => failedIds.has(pluginOwnerIdFor(target)))) {
+        if (pluginTargetsOf(skill).some((target) => failedKeys.has(pluginTargetKey(target)))) {
           failedSkillNames.add(skill.name);
         }
       }

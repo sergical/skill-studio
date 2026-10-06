@@ -802,4 +802,62 @@ describe("updateAllOutdatedSkills with plugin updates", () => {
     expect(tally).toMatchObject({ skillsSucceeded: 0, failures: 1 });
     expect(tally.firstError).toContain("marketplace unreachable");
   });
+
+  /** Failure: a skill whose copy update failed still has its plugin updated. */
+  it("update_all_leaves_the_plugin_of_a_skill_whose_copy_update_failed_alone", async () => {
+    const both = {
+      ...ownerSkill("both", "owner:v1/global/both"),
+      update_owner_ids: ["owner:v1/global/both", "plugin:codex@official"],
+      update_owners: [
+        ...ownerSkill("both", "owner:v1/global/both").update_owners,
+        ...pluginOwner("both").update_owners,
+      ],
+    };
+    const plugins: string[] = [];
+    const seen: [number, number][] = [];
+    const tally = await updateAllOutdatedSkills(
+      [both],
+      async () => {
+        throw new Error("no forks");
+      },
+      async () => failAll(["both"]),
+      (done, total) => seen.push([done, total]),
+      undefined,
+      async (target) => {
+        plugins.push(target.plugin_id);
+        return "updated";
+      },
+    );
+    expect(plugins).toEqual([]);
+    expect(tally).toMatchObject({ skillsSucceeded: 0, attempted: 1 });
+    expect(seen[seen.length - 1]).toEqual([1, 1]);
+  });
+
+  /** Failure: a failed project-scope install marks a skill tied only to the user-scope install as failed. */
+  it("update_all_fails_only_the_skills_of_the_failed_plugin_scope", async () => {
+    const scoped = (name: string, scope: string, projectPath: string | null) => ({
+      ...pluginOwner(name),
+      update_owners: [
+        {
+          ...pluginOwner(name).update_owners[0],
+          plugin_scope: scope,
+          plugin_project_path: projectPath,
+        },
+      ],
+    });
+    const tally = await updateAllOutdatedSkills(
+      [scoped("usr", "user", null), scoped("proj", "project", "/p")],
+      async () => {
+        throw new Error("no forks");
+      },
+      async (targets) => succeedAll(targets.map((target) => target.owner_id ?? "")),
+      undefined,
+      undefined,
+      async (target) => {
+        if (target.scope === "project") throw new Error("project install broken");
+        return "updated";
+      },
+    );
+    expect(tally).toMatchObject({ skillsAttempted: 2, skillsSucceeded: 1, failures: 1 });
+  });
 });

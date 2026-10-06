@@ -32,6 +32,8 @@ interface PendingUpdate {
   overwrite: () => Promise<void>;
   /** Set when the update covers one owner only; the fork then replaces that owner alone. */
   scopeTarget?: LifecycleTarget;
+  /** The request's options, so a fork-and-update reports the same way an overwrite does. */
+  options: UpdateRequestOptions;
 }
 
 /** How a single-owner update ended, for callers that report it their own way. */
@@ -107,7 +109,7 @@ export function useGuardedSkillUpdate() {
     );
     const overwrite = overwriteFor(skill, options);
     if (edited.length > 0) {
-      setPending({ skill, overwrite, scopeTarget });
+      setPending({ skill, overwrite, scopeTarget, options });
       return;
     }
     await overwrite();
@@ -139,14 +141,27 @@ export function useGuardedSkillUpdate() {
   const overwrite = () => resolve("Update failed", (update) => update.overwrite());
 
   const forkAndUpdate = () =>
-    resolve("Fork and update failed", async ({ skill, scopeTarget }) => {
-      const { pull, others } = await forkEditedAndUpdate(
+    resolve("Fork and update failed", async ({ skill, scopeTarget, options }) => {
+      const { pull, others, plugins } = await forkEditedAndUpdate(
         skill,
-        { fork: forkSkill, pullFork: pullForkUpstream, updateOwner: updateSkill },
+        {
+          fork: forkSkill,
+          pullFork: pullForkUpstream,
+          updateOwner: updateSkill,
+          updatePluginInstall: options.skipPlugins ? undefined : updatePluginInstall,
+        },
         { updateOthers: scopeTarget === undefined },
       );
       addToast(pullUpstreamToast(pull));
       if (others.attempted > 0) addToast(skillUpdateToast(skill.name, others));
+      for (const failure of plugins?.failures ?? []) {
+        addToast({ type: "error", title: "Couldn't update plugin", message: failure.message });
+      }
+      const failures = [...others.failures, ...(plugins?.failures ?? [])];
+      await options.onFinished?.({
+        success: failures.length === 0,
+        error: failures.map((failure) => failure.message).join("; "),
+      });
     });
 
   const dialog = (

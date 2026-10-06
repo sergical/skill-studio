@@ -79,9 +79,23 @@ fn friendly_error(message: String) -> String {
     }
 }
 
+/// The `message` of a `{"outcome":"error","message":...}` line, when `text`
+/// holds one.
+fn json_error_message(text: &str) -> Option<String> {
+    text.lines().rev().find_map(|line| {
+        let value = serde_json::from_str::<serde_json::Value>(line.trim()).ok()?;
+        if value.get("outcome")?.as_str()? != "error" {
+            return None;
+        }
+        value.get("message")?.as_str().map(str::to_string)
+    })
+}
+
 /// Rewrites the CLI's refusal to run a marketplace-declared command without
 /// confirmation (`-y`, or a TTY) into the next step for the person.
 fn update_error(plugin_id: &str, message: String) -> String {
+    // A failed run can still print the `--json` error object on stdout.
+    let message = json_error_message(&message).unwrap_or(message);
     let lower = message.to_lowercase();
     // The wording of `claude plugin update --help` for `-y` and
     // `--accept-command`; bare "confirm" or "tty" also match unrelated errors.
@@ -368,7 +382,7 @@ mod tests {
     #[test]
     fn update_returns_the_outcome_the_cli_reports() {
         let runner = FakeRunner {
-            stdout: r#"{"outcome":"success","updateOutcome":"up_to_date","oldVersion":"1.4.0","newVersion":"1.4.0"}"#
+            stdout: r#"{"outcome":"ok","updateOutcome":"up_to_date","oldVersion":"1.4.0","newVersion":"1.4.0"}"#
                 .to_string(),
             ..Default::default()
         };
@@ -376,7 +390,7 @@ mod tests {
         assert_eq!(outcome, "up_to_date");
 
         let runner = FakeRunner {
-            stdout: r#"{"outcome":"success","updateOutcome":"updated"}"#.to_string(),
+            stdout: r#"{"outcome":"ok","updateOutcome":"updated"}"#.to_string(),
             ..Default::default()
         };
         assert_eq!(
@@ -461,5 +475,18 @@ mod tests {
         };
         let err = update_plugin_with(&runner, "codex@anthropics", "user", None).unwrap_err();
         assert_eq!(err, "Plugin not found in marketplace");
+    }
+
+    /// Flow: `claude plugin update --json` exits non-zero and prints the error
+    /// object on stdout. Expectation: the person sees its message, not JSON.
+    /// A failure means the failed-exit path shows raw JSON again.
+    #[test]
+    fn a_failed_exit_with_json_on_stdout_shows_its_message() {
+        let runner = FakeRunner {
+            fail: Some(r#"{"outcome":"error","message":"Plugin not found"}"#.to_string()),
+            ..Default::default()
+        };
+        let err = update_plugin_with(&runner, "codex@anthropics", "user", None).unwrap_err();
+        assert_eq!(err, "Plugin not found");
     }
 }

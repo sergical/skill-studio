@@ -846,6 +846,39 @@ describe("forkEditedAndUpdate", () => {
     );
     expect(updated).toEqual([]);
   });
+
+  it("fork_and_update_runs_the_plugin_installs_after_the_copies_or_a_forked_skill_keeps_its_plugin_outdated", async () => {
+    const withPlugin = {
+      ...skill,
+      update_owners: [
+        ...skill.update_owners,
+        {
+          owner_id: "plugin:codex@official",
+          latest_commit: null,
+          latest_commit_at: null,
+          plugin_scope: "user",
+          plugin_project_path: null,
+        },
+      ],
+    };
+    const plugins: string[] = [];
+    const deps = (updateOwnerOk: boolean) => ({
+      fork: async () => record,
+      pullFork: async () => pull,
+      updateOwner: async () => ({ success: updateOwnerOk, error: "boom" }),
+      updatePluginInstall: async (target: { plugin_id: string }) => {
+        plugins.push(target.plugin_id);
+        return "updated";
+      },
+    });
+    const ok = await forkEditedAndUpdate(withPlugin, deps(true));
+    expect(plugins).toEqual(["codex@official"]);
+    expect(ok.plugins?.succeeded).toBe(1);
+
+    plugins.length = 0;
+    await forkEditedAndUpdate(withPlugin, deps(false));
+    expect(plugins).toEqual([]);
+  });
 });
 
 describe("removing a skills.sh skill that has other real folders", () => {

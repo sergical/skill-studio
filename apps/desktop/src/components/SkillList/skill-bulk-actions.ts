@@ -24,7 +24,8 @@ import {
   skillParkVerb,
   skillRemovalAvailability,
   skillUpdateAvailability,
-  pluginOwnerIdFor,
+  isPluginOwnerId,
+  pluginTargetKey,
   skillPluginUpdateTargets,
   skillUpdateOwnerTargets,
   uniquePluginTargets,
@@ -82,12 +83,12 @@ function skipReason(skill: InstalledSkill, action: BulkAction): string | null {
       return files.length === 0 ? "no SKILL.md to edit" : "no editable file";
     }
     case "update": {
-      if (skillPluginUpdateTargets(skill).length > 0) return null;
-      if (skillMutableLifecycleScopes(skill).length === 0) return "no managed copy";
-      if (bulkUpdateTargets(skill).length > 0) return null;
-      return skillUpdateOwnerTargets(skill).length === 0
-        ? "no update available"
-        : "needs a specific location";
+      const hasPlugins = skillPluginUpdateTargets(skill).length > 0;
+      if (!hasPlugins && skillMutableLifecycleScopes(skill).length === 0) return "no managed copy";
+      // An outdated copy that cannot be resolved is skipped, and its plugins wait with it.
+      if (managedUpdateBlocked(skill)) return "needs a specific location";
+      if (hasPlugins || skillUpdateOwnerTargets(skill).length > 0) return null;
+      return "no update available";
     }
     case "remove": {
       const scopes = skillMutableLifecycleScopes(skill);
@@ -109,10 +110,24 @@ export function planBulkAction(skills: InstalledSkill[], action: BulkAction): Bu
   return plan;
 }
 
-/** The update targets of a skill `planBulkAction` accepted for "update": one per location with an update. */
+/** True when `skill` has an outdated managed copy that `bulkUpdateTargets` cannot resolve to one target. */
+function managedUpdateBlocked(skill: InstalledSkill): boolean {
+  return skillUpdateOwnerTargets(skill).length > 0 && bulkUpdateTargets(skill).length === 0;
+}
+
+/**
+ * The managed-copy update targets of a skill `planBulkAction` accepted for "update": one per
+ * location with an update. Plugin installs are left out so they do not make a location look
+ * ambiguous; the ambiguity check covers managed owners only.
+ */
 export function bulkUpdateTargets(skill: InstalledSkill): LifecycleTarget[] {
+  const managedOnly = {
+    ...skill,
+    update_owner_ids: skill.update_owner_ids.filter((ownerId) => !isPluginOwnerId(ownerId)),
+    update_owners: skill.update_owners?.filter((update) => !isPluginOwnerId(update.owner_id)),
+  };
   return skillMutableLifecycleScopes(skill).flatMap((selection) => {
-    const availability = skillUpdateAvailability(skill, selection);
+    const availability = skillUpdateAvailability(managedOnly, selection);
     return availability.available && "target" in availability ? [availability.target] : [];
   });
 }
@@ -197,19 +212,35 @@ export async function runBulkUpdate(
   onProgress: (done: number, total: number) => void,
 ): Promise<BulkRunResult> {
   const forked = skills.filter((skill) => forkNames.has(skill.name));
-  const rest = skills.filter((skill) => !forkNames.has(skill.name));
+  const allRest = skills.filter((skill) => !forkNames.has(skill.name));
   const result: BulkRunResult = { succeeded: [], failed: [] };
   const conflicted: string[] = [];
+  // A skill whose outdated managed copy is ambiguous is not updated at all, plugins included.
+  const rest = allRest.filter((skill) => !managedUpdateBlocked(skill));
+  for (const skill of allRest.filter((skill) => managedUpdateBlocked(skill))) {
+    result.failed.push({
+      skill,
+      error: `${skill.name} is installed from more than one source here. Update each copy in Locations.`,
+    });
+  }
   // A forked skill's other owners still get the normal update.
   const forkedOthers = new Map(
     forked.map((skill) => [skill, excludeForkedOwner(skill, bulkUpdateTargets(skill))]),
   );
-  const pluginTargetCount = uniquePluginTargets(rest.flatMap(skillPluginUpdateTargets)).length;
+  // Plugins of a skill whose copy failed are not run, so they are not counted.
+  const pluginSkillsNow = () =>
+    [...rest, ...forked].filter(
+      (skill) =>
+        skillPluginUpdateTargets(skill).length > 0 &&
+        !result.failed.some((failure) => failure.skill === skill),
+    );
+  const pluginTargetsNow = () =>
+    uniquePluginTargets(pluginSkillsNow().flatMap(skillPluginUpdateTargets));
   let total =
     forked.length +
     rest.flatMap(bulkUpdateTargets).length +
     [...forkedOthers.values()].reduce((sum, targets) => sum + targets.length, 0) +
-    pluginTargetCount;
+    pluginTargetsNow().length;
   const forkFailed = new Set<InstalledSkill>();
   for (const [index, skill] of forked.entries()) {
     try {
@@ -239,9 +270,12 @@ export async function runBulkUpdate(
     ...forkedToBatch.flatMap((skill) => forkedOthers.get(skill) ?? []),
   ];
   // A failed fork's other copies leave the total, so progress still reaches it.
-  const plannedTotal = total;
-  total = forked.length + batchTargets.length + pluginTargetCount;
-  if (total !== plannedTotal) onProgress(forked.length, total);
+  const retotal = (done: number) => {
+    const plannedTotal = total;
+    total = forked.length + batchTargets.length + pluginTargetsNow().length;
+    if (total !== plannedTotal) onProgress(done, total);
+  };
+  retotal(forked.length);
   if (batched.length > 0) {
     const outcome = await deps.updateAll(batchTargets, (done) =>
       onProgress(forked.length + done, total),
@@ -263,11 +297,8 @@ export async function runBulkUpdate(
       }
     }
   }
-  const pluginSkills = rest.filter(
-    (skill) =>
-      skillPluginUpdateTargets(skill).length > 0 &&
-      !result.failed.some((failure) => failure.skill === skill),
-  );
+  retotal(forked.length + batchTargets.length);
+  const pluginSkills = pluginSkillsNow();
   if (pluginSkills.length > 0) {
     let pluginsDone = 0;
     const outcome = await updatePluginTargets(
@@ -279,13 +310,13 @@ export async function runBulkUpdate(
           return updateOutcome;
         }),
     );
-    const failureById = new Map(
-      outcome.failures.map((failure) => [failure.ownerId, failure.message]),
+    const failureByKey = new Map(
+      outcome.failures.map((failure) => [pluginTargetKey(failure.target), failure.message]),
     );
     const succeeded = new Set(result.succeeded);
     for (const skill of pluginSkills) {
       const error = skillPluginUpdateTargets(skill)
-        .map((target) => failureById.get(pluginOwnerIdFor(target)))
+        .map((target) => failureByKey.get(pluginTargetKey(target)))
         .find((message) => message !== undefined);
       if (error === undefined) {
         succeeded.add(skill);
