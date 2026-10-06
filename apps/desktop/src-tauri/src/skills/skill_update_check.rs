@@ -621,8 +621,10 @@ impl ForkLookup for GhForkLookup {
     }
 
     fn branch_tip(&self, repo: &str, branch: &str) -> Result<String, String> {
-        let api_path = format!("repos/{repo}/commits/{branch}");
-        let stdout = self.run(&["api", &api_path, "--jq", ".sha"])?;
+        // The ref endpoint returns only the SHA (the commits endpoint ships every file patch)
+        // and never resolves a same-named tag.
+        let api_path = format!("repos/{repo}/git/ref/heads/{branch}");
+        let stdout = self.run(&["api", &api_path, "--jq", ".object.sha"])?;
         Ok(String::from_utf8_lossy(&stdout).trim().to_string())
     }
 
@@ -953,8 +955,15 @@ impl Sources {
             .any(|prefix| owner_id.starts_with(prefix))
     }
 
+    fn is_resolved(&self, owner_id: &str) -> bool {
+        self.fork_candidates.iter().any(|c| c.owner_id == owner_id)
+    }
+
     /// Adds back the owners of `previous` notes that live in a root that
-    /// failed to read, which `fresh` cannot know about.
+    /// failed to read and whose source no readable file names, which `fresh`
+    /// cannot know about. An owner with a current repo is handled by the
+    /// normal prune and lookup, so a changed source or a lookup that found
+    /// nothing behind still removes its note.
     fn keep_failed_root_notes(
         &self,
         mut fresh: BTreeMap<String, UpstreamAhead>,
@@ -964,7 +973,7 @@ impl Sources {
             let kept: Vec<String> = old
                 .owner_ids
                 .iter()
-                .filter(|id| self.in_failed_root(id))
+                .filter(|id| self.in_failed_root(id) && !self.is_resolved(id))
                 .cloned()
                 .collect();
             if kept.is_empty() {
@@ -3177,6 +3186,81 @@ resolved_commit = "{commit}"
         );
         assert_eq!(run.upstream_ahead.len(), 1);
         assert!(lookups.info_calls.lock().unwrap().is_empty());
+    }
+
+    /// A readable dotagents ledger for `tdd` beside a malformed skills.sh lock
+    /// in the same root, plus a note for `other`, which only the lock could
+    /// have named.
+    fn seed_ledger_with_malformed_lock(home: &Path, tdd_repo: &str) -> UpdateCheckStore {
+        seed_one_dotagents_skill(home, tdd_repo);
+        fs::write(home.join(".agents/.skill-lock.json"), "{ not json").unwrap();
+        UpdateCheckStore {
+            upstream_ahead: previous_map(&[
+                previous_record("me/fork", "tdd", 4),
+                previous_record("me/lock-only", "other", 2),
+            ]),
+            ..UpdateCheckStore::default()
+        }
+    }
+
+    #[test]
+    fn a_malformed_lock_does_not_keep_a_note_whose_readable_source_changed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let store = seed_ledger_with_malformed_lock(&home, "them/orig");
+
+        let repos: Vec<_> = summarize_current(&store, &home, &[])
+            .upstream_ahead
+            .into_iter()
+            .map(|n| n.repo)
+            .collect();
+        assert_eq!(repos, vec!["me/lock-only"]);
+
+        let app_data = tmp.path().join("data");
+        write_store(&app_data, &store).unwrap();
+        let written = write_gh_missing_store(&home, &[], &app_data);
+        assert_eq!(
+            written.upstream_ahead.keys().collect::<Vec<_>>(),
+            vec!["me/lock-only"]
+        );
+    }
+
+    #[test]
+    fn a_malformed_lock_does_not_keep_a_note_whose_lookup_now_finds_nothing_behind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let store = seed_ledger_with_malformed_lock(&home, "me/fork");
+        let app_data = tmp.path().join("data");
+        write_store(&app_data, &store).unwrap();
+
+        let run = run_update_check_with_forks(
+            &home,
+            &[],
+            &app_data,
+            &FakeLookup::with_answers(vec![Ok(Some((
+                "b".repeat(40),
+                "2026-01-02T00:00:00Z".to_string(),
+            )))]),
+            &UnusedTreeLookup,
+            &FakeForkLookup::new().fork("me/fork", "them/orig", 0),
+        );
+
+        assert_eq!(
+            run.upstream_ahead.keys().collect::<Vec<_>>(),
+            vec!["me/lock-only"]
+        );
+    }
+
+    #[test]
+    fn a_malformed_lock_keeps_the_note_of_an_owner_only_that_lock_could_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let store = seed_ledger_with_malformed_lock(&home, "me/fork");
+
+        let summary = summarize_current(&store, &home, &[]);
+        let mut repos: Vec<_> = summary.upstream_ahead.iter().map(|n| &n.repo).collect();
+        repos.sort();
+        assert_eq!(repos, vec!["me/fork", "me/lock-only"]);
     }
 
     #[test]
