@@ -344,6 +344,10 @@ describe("runBulkUpdate", () => {
         calls.push(`pull ${target.deployment_id}`);
         return pullResult(conflicts);
       },
+      updatePluginInstall: async (target: { plugin_id: string }) => {
+        calls.push(`plugin ${target.plugin_id}`);
+        return "updated";
+      },
       updateAll: async (targets: { owner_id?: string | null }[]) => {
         calls.push(`update ${targets.map((t) => t.owner_id).join(",")}`);
         const outcome = {
@@ -497,5 +501,64 @@ describe("bulkActionToast conflicts", () => {
       title: "Updated 1 skill",
       message: "Conflicts to resolve in the editor: a",
     });
+  });
+});
+
+describe("runBulkUpdate with plugin updates", () => {
+  const pluginSkill = (name: string): InstalledSkill => ({
+    ...outdatedSkillsSh(name),
+    deployments: [],
+    update_owner_ids: ["plugin:codex@official"],
+    update_owners: [
+      {
+        owner_id: "plugin:codex@official",
+        latest_commit: null,
+        latest_commit_at: null,
+        plugin_scope: "user",
+        plugin_project_path: null,
+      },
+    ],
+  });
+  const noop = async () => {
+    throw new Error("unused");
+  };
+
+  it("bulk_update_runs_a_plugin_shared_by_two_skills_once_and_succeeds_both", async () => {
+    const plugins: string[] = [];
+    const result = await runBulkUpdate(
+      [pluginSkill("one"), pluginSkill("two")],
+      new Set(),
+      {
+        fork: noop,
+        pullFork: noop,
+        updateAll: noop,
+        updatePluginInstall: async (target) => {
+          plugins.push(target.plugin_id);
+          return "updated";
+        },
+      },
+      () => {},
+    );
+    expect(plugins).toEqual(["codex@official"]);
+    expect(result.succeeded).toHaveLength(2);
+    expect(result.failed).toEqual([]);
+  });
+
+  it("bulk_update_fails_a_skill_whose_plugin_update_fails", async () => {
+    const result = await runBulkUpdate(
+      [pluginSkill("one")],
+      new Set(),
+      {
+        fork: noop,
+        pullFork: noop,
+        updateAll: noop,
+        updatePluginInstall: async () => {
+          throw new Error("marketplace unreachable");
+        },
+      },
+      () => {},
+    );
+    expect(result.succeeded).toEqual([]);
+    expect(result.failed[0]?.error).toContain("marketplace unreachable");
   });
 });

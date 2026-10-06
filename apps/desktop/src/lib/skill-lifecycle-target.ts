@@ -47,6 +47,8 @@ interface SkillOwnerUpdateSummary {
   attempted: number;
   succeeded: number;
   failures: SkillOwnerUpdateFailure[];
+  /** Plugin installs the CLI reported as already up to date; they count in `succeeded`. */
+  alreadyCurrent?: number;
 }
 
 /** One install of a Claude Code plugin that has an update, as `update_owners` reports it. */
@@ -73,18 +75,34 @@ function isPluginOwnerId(ownerId: string | null | undefined): boolean {
 export function skillPluginUpdateTargets(
   skill: Pick<InstalledSkill, "update_owners">,
 ): PluginUpdateTarget[] {
-  return (skill.update_owners ?? []).flatMap((update) =>
-    isPluginOwnerId(update.owner_id)
-      ? [
-          {
-            plugin_id: update.owner_id.slice(PLUGIN_OWNER_PREFIX.length),
-            scope: update.plugin_scope ?? "user",
-            project_path: update.plugin_project_path ?? null,
-          },
-        ]
-      : [],
+  return uniquePluginTargets(
+    (skill.update_owners ?? []).flatMap((update) =>
+      isPluginOwnerId(update.owner_id)
+        ? [
+            {
+              plugin_id: update.owner_id.slice(PLUGIN_OWNER_PREFIX.length),
+              scope: update.plugin_scope ?? "user",
+              project_path: update.plugin_project_path ?? null,
+            },
+          ]
+        : [],
+    ),
   );
 }
+
+export const pluginOwnerIdFor = (target: PluginUpdateTarget) =>
+  `${PLUGIN_OWNER_PREFIX}${target.plugin_id}`;
+
+const pluginTargetKey = (target: PluginUpdateTarget) =>
+  `${target.plugin_id}|${target.scope}|${target.project_path ?? ""}`;
+
+/** `targets` without repeats: one run per plugin id, scope, and project path. */
+export function uniquePluginTargets(targets: PluginUpdateTarget[]): PluginUpdateTarget[] {
+  return [...new Map(targets.map((target) => [pluginTargetKey(target), target])).values()];
+}
+
+/** Runs one plugin install update and resolves to the CLI's `updateOutcome`. */
+export type PluginInstallUpdater = (target: PluginUpdateTarget) => Promise<string>;
 
 /** A user-scope plugin serves every project; a project or local install serves only its own. */
 function pluginUpdateAppliesTo(
@@ -97,8 +115,11 @@ function pluginUpdateAppliesTo(
   return true;
 }
 
-/** Success toast for a finished plugin update. */
-export function pluginUpdatedToast(pluginId: string): Omit<Toast, "id"> {
+/** Success toast for a finished plugin update; `outcome` is the CLI's `updateOutcome`. */
+export function pluginUpdatedToast(pluginId: string, outcome?: string): Omit<Toast, "id"> {
+  if (outcome === "up_to_date") {
+    return { type: "info", title: `${pluginId} is already up to date` };
+  }
   return {
     type: "success",
     title: "Plugin updated",
@@ -387,41 +408,38 @@ export function skillUpdateOwnerTargets(
 /** Resolve an update only when the selected scope has one owner and that owner has an update. */
 export function skillUpdateAvailability(
   skill: Pick<InstalledSkill, "name" | "deployments" | "update_owner_ids" | "update_owners">,
-  selection: SkillLifecycleScopeSelection,
+  selection: SkillLifecycleScopeSelection | null,
 ): SkillUpdateAvailability {
+  // A skill with no managed folder (a plugin-only skill) has no scope to select; its plugin installs all apply.
   const ownerIds = new Set<string>();
-  for (const deployment of deploymentsInScope(skill, selection.scope, selection.projectPath)) {
-    if (deployment.mutability === "mutable" && deployment.owner_id) {
-      ownerIds.add(deployment.owner_id);
+  if (selection) {
+    for (const deployment of deploymentsInScope(skill, selection.scope, selection.projectPath)) {
+      if (deployment.mutability === "mutable" && deployment.owner_id) {
+        ownerIds.add(deployment.owner_id);
+      }
     }
   }
-  if (ownerIds.size > 1) {
-    return {
-      available: false,
-      reason: `${skill.name} is installed from more than one source here. Update each copy in Locations.`,
-    };
-  }
-  const pluginTargets = skillPluginUpdateTargets(skill).filter((target) =>
-    pluginUpdateAppliesTo(target, selection),
+  const updateOwnerIds = new Set(
+    skillUpdateOwnerTargets(skill).flatMap(({ owner_id }) => owner_id ?? []),
   );
-  if (ownerIds.size + pluginTargets.length > 1) {
+  const ownersWithUpdate = [...ownerIds].filter((ownerId) => updateOwnerIds.has(ownerId));
+  const pluginTargets = skillPluginUpdateTargets(skill).filter(
+    (target) => !selection || pluginUpdateAppliesTo(target, selection),
+  );
+  if (ownersWithUpdate.length + pluginTargets.length > 1) {
     return {
       available: false,
       reason: `${skill.name} is installed from more than one source here. Update each copy in Locations.`,
     };
   }
   if (pluginTargets.length === 1) return { available: true, plugin: pluginTargets[0] };
-  const ownerId = ownerIds.values().next().value;
-  if (!ownerId) {
+  if (ownerIds.size === 0) {
     return { available: false, reason: "The selected scope has no managed update owner." };
   }
-  const updateOwnerIds = new Set(
-    skillUpdateOwnerTargets(skill).flatMap(({ owner_id }) => owner_id ?? []),
-  );
-  if (!updateOwnerIds.has(ownerId)) {
+  if (ownersWithUpdate.length === 0) {
     return { available: false, reason: "The selected deployment is up to date." };
   }
-  return { available: true, target: { owner_id: ownerId } };
+  return { available: true, target: { owner_id: ownersWithUpdate[0] } };
 }
 
 /**
@@ -581,13 +599,53 @@ export function conflictedSkillsNote(skillNames: string[]): string | undefined {
   return `Conflicts to resolve in the editor: ${skillNames.join(", ")}`;
 }
 
-/** Run each owner update and return every failure for the UI. */
+/**
+ * Run each owner update, then - when `updatePluginInstall` is given and every owner update
+ * succeeded - each plugin install update, and return every failure for the UI.
+ */
 export async function updateSkillOwners(
   skill: Pick<InstalledSkill, "update_owner_ids" | "update_owners"> &
     Partial<Pick<InstalledSkill, "deployments">>,
   updateOwner: (target: LifecycleTarget) => Promise<{ success: boolean; error?: string | null }>,
+  updatePluginInstall?: PluginInstallUpdater,
 ): Promise<SkillOwnerUpdateSummary> {
-  return updateOwnerTargets(skillUpdateOwnerTargets(skill), updateOwner);
+  const owners = await updateOwnerTargets(skillUpdateOwnerTargets(skill), updateOwner);
+  const pluginTargets = updatePluginInstall ? skillPluginUpdateTargets(skill) : [];
+  if (!updatePluginInstall || pluginTargets.length === 0 || owners.failures.length > 0) {
+    return owners;
+  }
+  const plugins = await updatePluginTargets(pluginTargets, updatePluginInstall);
+  return {
+    attempted: owners.attempted + plugins.attempted,
+    succeeded: owners.succeeded + plugins.succeeded,
+    failures: plugins.failures,
+    alreadyCurrent: plugins.alreadyCurrent,
+  };
+}
+
+/** Run an update for each plugin install in turn and return every failure. */
+export async function updatePluginTargets(
+  targets: PluginUpdateTarget[],
+  updatePluginInstall: PluginInstallUpdater,
+): Promise<Required<SkillOwnerUpdateSummary>> {
+  const failures: SkillOwnerUpdateFailure[] = [];
+  let succeeded = 0;
+  let alreadyCurrent = 0;
+  for (const target of targets) {
+    try {
+      // Plugin updates are sequential because each takes the backend write lease.
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- concurrent plugin updates are refused by the backend write lease
+      const outcome = await updatePluginInstall(target);
+      succeeded += 1;
+      if (outcome === "up_to_date") alreadyCurrent += 1;
+    } catch (error) {
+      failures.push({
+        ownerId: pluginOwnerIdFor(target),
+        message: error instanceof Error ? error.message : "Update failed without an error message.",
+      });
+    }
+  }
+  return { attempted: targets.length, succeeded, failures, alreadyCurrent };
 }
 
 /** Run an update for each owner target in turn and return every failure. */
@@ -631,6 +689,9 @@ export function skillUpdateToast(
 ): Omit<Toast, "id"> {
   const failureMessage = summary.failures.map((failure) => failure.message).join("; ");
   if (summary.failures.length === 0) {
+    if (summary.attempted > 0 && summary.alreadyCurrent === summary.attempted) {
+      return { type: "info", title: `${skillName} is already up to date` };
+    }
     return { type: "success", title: `Updated ${skillName}` };
   }
   if (summary.succeeded === 0) {

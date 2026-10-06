@@ -894,6 +894,7 @@ mod tests {
             &mut skills,
             &super::super::skill_fork_registry::ForkRegistry::default(),
             &refreshed_store,
+            &super::super::skill_plugin_update::PluginVersionCache::default(),
             &[],
         );
         assert!(
@@ -1008,6 +1009,7 @@ mod tests {
             &mut skills,
             &super::super::skill_fork_registry::ForkRegistry::default(),
             &refreshed_store,
+            &super::super::skill_plugin_update::PluginVersionCache::default(),
             &[owner_id.to_string()],
         );
         assert!(
@@ -2584,18 +2586,18 @@ pub async fn update_all_skills(
 /// Shared by [`set_plugin_enabled`], [`update_plugin`] and
 /// [`uninstall_plugin`], which differ only in which `claude plugin`
 /// subcommand `action` runs.
-fn run_plugin_lifecycle_action(
+fn run_plugin_lifecycle_action<T>(
     harness: &str,
     app: &tauri::AppHandle,
     home: &Path,
-    action: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
+    action: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
     super::skill_plugin_lifecycle::require_claude_code_harness(harness)?;
     let write_lease = super::write_lease::WriteLease::default();
     let _guard = write_lease.try_acquire(home)?;
-    action()?;
+    let result = action()?;
     skill_refresh::request_snapshot_rebuild(app);
-    Ok(())
+    Ok(result)
 }
 
 /// Disable or re-enable one Claude Code plugin (`claude plugin
@@ -2624,8 +2626,10 @@ pub async fn set_plugin_enabled(
 
 /// Update one install of a Claude Code plugin (`claude plugin update
 /// <plugin_id> -s <scope>`). `scope` and `project_path` are the install's own,
-/// as the snapshot's plugin update owner reports them. Claude Code applies
-/// the update to new sessions only.
+/// as the snapshot's plugin update owner reports them, and must match an
+/// entry of `installed_plugins.json`. Returns the CLI's `updateOutcome`
+/// (`updated`, `up_to_date`). Claude Code applies the update to new sessions
+/// only.
 #[tauri::command]
 pub async fn update_plugin(
     plugin_id: String,
@@ -2633,11 +2637,17 @@ pub async fn update_plugin(
     scope: String,
     project_path: Option<String>,
     app: tauri::AppHandle,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(&timing_app, "update_plugin", move || {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         run_plugin_lifecycle_action(&harness, &app, &home, || {
+            super::skill_plugin_update::require_plugin_install(
+                &home,
+                &plugin_id,
+                &scope,
+                project_path.as_deref(),
+            )?;
             super::skill_plugin_lifecycle::update_plugin_with(
                 &RealCommandRunner::new(),
                 &plugin_id,

@@ -31,8 +31,13 @@ import {
   forkTargetForSkill,
   forkThenPull,
   lifecycleTargetForPark,
+  pluginOwnerIdFor,
+  skillPluginUpdateTargets,
   skillUpdateOwnerTargets,
+  uniquePluginTargets,
+  updatePluginTargets,
 } from "../../lib/skill-lifecycle-target";
+import type { PluginInstallUpdater } from "../../lib/skill-lifecycle-target";
 import { issueRowState, rowState, updateRowState } from "../SkillList/skill-row-state";
 import type { RowState } from "../SkillList/skill-row-state";
 
@@ -144,7 +149,9 @@ export function updateAllFailureMessage(tally: UpdateAllTally): string | undefin
  * `onProgress(done, total)` counts forks and owner targets in one sequence;
  * `updateAllOwners` reports how many of its own targets finished. A skill named
  * in `forkEdited.names` is forked first and then pulled like a fork, so its
- * local edits survive instead of being overwritten by the batch.
+ * local edits survive instead of being overwritten by the batch. Plugin installs
+ * run last, through `updatePluginInstall`, once per plugin id, scope, and project
+ * even when several skills ship from one plugin.
  */
 export async function updateAllOutdatedSkills(
   skills: Pick<
@@ -161,6 +168,7 @@ export async function updateAllOutdatedSkills(
     names: ReadonlySet<string>;
     fork: (target: LifecycleTarget) => Promise<ForkRecord>;
   },
+  updatePluginInstall?: PluginInstallUpdater,
 ): Promise<UpdateAllTally> {
   const pullsUpstream = (skill: (typeof skills)[number]) =>
     skill.source_kind === "fork" || forkEdited?.names.has(skill.name) === true;
@@ -172,10 +180,18 @@ export async function updateAllOutdatedSkills(
     const targets = skillUpdateOwnerTargets(skill);
     return pullsUpstream(skill) ? excludeForkedOwner(skill, targets) : targets;
   };
-  let total = forks.length + skills.flatMap(ownerTargetsOf).length;
+  const pluginTargetsOf = (skill: (typeof skills)[number]) =>
+    updatePluginInstall ? skillPluginUpdateTargets(skill) : [];
+  let total =
+    forks.length +
+    skills.flatMap(ownerTargetsOf).length +
+    uniquePluginTargets(skills.flatMap(pluginTargetsOf)).length;
   const ownerSkillNames = new Set(
     skills.flatMap((skill) =>
-      !pullsUpstream(skill) && skillUpdateOwnerTargets(skill).length > 0 ? [skill.name] : [],
+      !pullsUpstream(skill) &&
+      (skillUpdateOwnerTargets(skill).length > 0 || pluginTargetsOf(skill).length > 0)
+        ? [skill.name]
+        : [],
     ),
   );
   const failedSkillNames = new Set<string>();
@@ -187,6 +203,7 @@ export async function updateAllOutdatedSkills(
     skillsSucceeded: 0,
     firstError: null,
   };
+  let pluginsDone = 0;
   const fail = (count: number, message: string) => {
     tally.failures += count;
     tally.firstError ??= message;
@@ -215,8 +232,11 @@ export async function updateAllOutdatedSkills(
     failedSkillNames.has(skill.name) ? [] : ownerTargetsOf(skill),
   );
   // Their copies leave the total too, so progress still reaches it.
+  const pluginTargets = uniquePluginTargets(
+    skills.flatMap((skill) => (failedSkillNames.has(skill.name) ? [] : pluginTargetsOf(skill))),
+  );
   const plannedTotal = total;
-  total = forks.length + ownerTargets.length;
+  total = forks.length + ownerTargets.length + pluginTargets.length;
   tally.attempted = total;
   if (total !== plannedTotal) onProgress?.(forks.length, total);
   if (ownerTargets.length > 0) {
@@ -243,6 +263,26 @@ export async function updateAllOutdatedSkills(
         }
       }
       fail(ownerTargets.length, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (updatePluginInstall && pluginTargets.length > 0) {
+    const plugins = await updatePluginTargets(pluginTargets, (target) =>
+      updatePluginInstall(target).then((outcome) => {
+        pluginsDone += 1;
+        onProgress?.(forks.length + ownerTargets.length + pluginsDone, total);
+        return outcome;
+      }),
+    );
+    tally.succeeded += plugins.succeeded;
+    if (plugins.failures.length > 0) {
+      const failedIds = new Set(plugins.failures.map((failure) => failure.ownerId));
+      for (const skill of skills) {
+        if (pluginTargetsOf(skill).some((target) => failedIds.has(pluginOwnerIdFor(target)))) {
+          failedSkillNames.add(skill.name);
+        }
+      }
+      fail(plugins.failures.length, plugins.failures[0].message);
     }
   }
 

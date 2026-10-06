@@ -1,17 +1,24 @@
 // ============================================================================
 // Skills Module - skill_plugin_update
-// Detects Claude Code plugin updates from two local files: the installs in
-// `~/.claude/plugins/installed_plugins.json` and the marketplace copy Claude
-// Code keeps fresh under `~/.claude/plugins/marketplaces/<marketplace>/`.
-// No network. A missing, unreadable, or malformed file means "no claim",
-// never an error.
+// Detects Claude Code plugin updates the way Claude Code itself decides them:
+// the release version is the source's `.claude-plugin/plugin.json` `version`,
+// else the marketplace entry's `version`, and only a plugin with neither is
+// compared by git sha. The installs come from
+// `~/.claude/plugins/installed_plugins.json`, the marketplace copy from
+// `~/.claude/plugins/marketplaces/<marketplace>/`. A relative-path source
+// reads its manifest locally; a github source's manifest is fetched by the
+// background update check into `plugin-versions.json`, which the snapshot
+// overlay only reads. A missing, unreadable, or malformed file means "no
+// claim", never an error.
 // ============================================================================
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use super::gh_cli;
 
 /// Owner id a plugin update carries in `InstalledSkill::update_owner_ids`.
 pub fn plugin_owner_id(plugin_id: &str) -> String {
@@ -28,18 +35,47 @@ pub struct PluginInstall {
     pub git_commit_sha: Option<String>,
 }
 
+/// A marketplace entry's `source` that lives in a git repo.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct RemoteSource {
+    pub url: String,
+    /// Folder of the plugin inside the repo (`git-subdir`).
+    pub path: Option<String>,
+    pub sha: Option<String>,
+}
+
+/// Where a marketplace entry's plugin files live.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum PluginSource {
+    /// A folder inside the marketplace checkout (`"./plugins/codex"`).
+    Relative(String),
+    Remote(RemoteSource),
+    #[default]
+    Unsupported,
+}
+
 /// What a marketplace entry says about the latest release of a plugin.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MarketplaceRelease {
     pub version: Option<String>,
-    pub source_sha: Option<String>,
+    pub source: PluginSource,
+}
+
+/// The `version` of the source's `.claude-plugin/plugin.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManifestVersion {
+    Version(String),
+    /// The manifest is absent or has no `version`.
+    NoVersion,
+    /// Not readable (yet): no claim can be made.
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginUpdateVerdict {
     Available,
     Current,
-    /// Neither a pinned sha nor a version to compare: say nothing.
+    /// No version to compare and no sha pair: say nothing.
     NoClaim,
 }
 
@@ -54,34 +90,64 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
     value.filter(|v| !v.is_empty())
 }
 
-/// Pure decision for one install against its marketplace entry.
+/// Pure decision for one install. Version precedence follows Claude Code:
+/// manifest `version`, then marketplace `version`, then the sha.
 pub fn plugin_update_verdict(
     install: &PluginInstall,
+    manifest: &ManifestVersion,
     release: &MarketplaceRelease,
 ) -> PluginUpdateVerdict {
-    if let (Some(latest), Some(installed)) = (
-        non_empty(release.source_sha.as_deref()),
-        non_empty(install.git_commit_sha.as_deref()),
-    ) {
-        // Claude Code records full shas, marketplaces sometimes abbreviate.
-        let same = latest.starts_with(installed) || installed.starts_with(latest);
-        return if same {
-            PluginUpdateVerdict::Current
-        } else {
-            PluginUpdateVerdict::Available
+    let latest = match manifest {
+        ManifestVersion::Unknown => return PluginUpdateVerdict::NoClaim,
+        ManifestVersion::Version(version) => Some(version.as_str()),
+        ManifestVersion::NoVersion => non_empty(release.version.as_deref()),
+    };
+    if let Some(latest) = latest {
+        let Some(installed) = non_empty(install.version.as_deref()).filter(|v| *v != "unknown")
+        else {
+            return PluginUpdateVerdict::NoClaim;
         };
-    }
-    if let (Some(latest), Some(installed)) = (
-        non_empty(release.version.as_deref()),
-        non_empty(install.version.as_deref()).filter(|v| *v != "unknown"),
-    ) {
         return if latest == installed {
             PluginUpdateVerdict::Current
         } else {
             PluginUpdateVerdict::Available
         };
     }
+    if let (PluginSource::Remote(remote), Some(installed)) = (
+        &release.source,
+        non_empty(install.git_commit_sha.as_deref()),
+    ) {
+        if let Some(latest) = non_empty(remote.sha.as_deref()) {
+            // Claude Code records full shas, marketplaces sometimes abbreviate.
+            let same = latest.starts_with(installed) || installed.starts_with(latest);
+            return if same {
+                PluginUpdateVerdict::Current
+            } else {
+                PluginUpdateVerdict::Available
+            };
+        }
+    }
     PluginUpdateVerdict::NoClaim
+}
+
+fn parse_source(source: &Value) -> PluginSource {
+    if let Some(relative) = source.as_str() {
+        return PluginSource::Relative(relative.to_string());
+    }
+    let field = |name: &str| source.get(name).and_then(Value::as_str).map(str::to_string);
+    let url = match source.get("source").and_then(Value::as_str) {
+        Some("url" | "git-subdir") => field("url"),
+        Some("github") => field("repo").map(|repo| format!("https://github.com/{repo}")),
+        _ => None,
+    };
+    match url {
+        Some(url) => PluginSource::Remote(RemoteSource {
+            url,
+            path: field("path"),
+            sha: field("sha"),
+        }),
+        None => PluginSource::Unsupported,
+    }
 }
 
 /// Parses the `plugins[]` entry named `plugin` out of a `marketplace.json`
@@ -98,11 +164,7 @@ pub fn marketplace_release(marketplace_json: &str, plugin: &str) -> Option<Marke
             .get("version")
             .and_then(Value::as_str)
             .map(str::to_string),
-        source_sha: entry
-            .get("source")
-            .and_then(|source| source.get("sha"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        source: entry.get("source").map(parse_source).unwrap_or_default(),
     })
 }
 
@@ -124,9 +186,331 @@ pub fn parse_installs(installed_json: &str) -> BTreeMap<String, Vec<PluginInstal
         .collect()
 }
 
+fn manifest_version_from_json(body: &str) -> ManifestVersion {
+    let Ok(manifest) = serde_json::from_str::<Value>(body) else {
+        return ManifestVersion::Unknown;
+    };
+    match manifest.get("version").and_then(Value::as_str) {
+        Some(version) if !version.is_empty() => ManifestVersion::Version(version.to_string()),
+        _ => ManifestVersion::NoVersion,
+    }
+}
+
+/// Reads `<marketplace_dir>/<relative>/.claude-plugin/plugin.json`. A path
+/// that leaves the marketplace folder, lexically or through a symlink, is
+/// `Unknown`, as is a manifest that is not JSON.
+pub fn local_manifest_version(marketplace_dir: &Path, relative: &str) -> ManifestVersion {
+    let relative = Path::new(relative);
+    if !relative
+        .components()
+        .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
+    {
+        return ManifestVersion::Unknown;
+    }
+    let manifest = marketplace_dir
+        .join(relative)
+        .join(".claude-plugin")
+        .join("plugin.json");
+    let Ok(root) = marketplace_dir.canonicalize() else {
+        return ManifestVersion::Unknown;
+    };
+    let resolved = match manifest.canonicalize() {
+        Ok(resolved) => resolved,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return ManifestVersion::NoVersion
+        }
+        Err(_) => return ManifestVersion::Unknown,
+    };
+    if !resolved.starts_with(&root) {
+        return ManifestVersion::Unknown;
+    }
+    match std::fs::read_to_string(resolved) {
+        Ok(body) => manifest_version_from_json(&body),
+        Err(_) => ManifestVersion::Unknown,
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Remote manifest versions: fetched by the background update check, read by
+// the snapshot overlay.
+// ----------------------------------------------------------------------------
+
+/// One cached lookup. `version: None` records "the manifest has no version",
+/// so the sha fallback applies without asking GitHub again.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedPluginVersion {
+    pub version: Option<String>,
+}
+
+/// `<app data>/skill-studio/plugin-versions.json`, keyed
+/// `"{url}#{path}@{sha}"`. A sha never changes content, so an entry never
+/// goes stale.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PluginVersionCache {
+    pub entries: BTreeMap<String, CachedPluginVersion>,
+}
+
+pub fn plugin_versions_path(app_data: &Path) -> PathBuf {
+    app_data.join("skill-studio").join("plugin-versions.json")
+}
+
+/// The cache file that sits next to `update_check_path`.
+pub fn read_plugin_versions_beside(update_check_path: &Path) -> PluginVersionCache {
+    update_check_path
+        .parent()
+        .map(|dir| read_plugin_versions(&dir.join("plugin-versions.json")))
+        .unwrap_or_default()
+}
+
+pub fn read_plugin_versions(path: &Path) -> PluginVersionCache {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|body| serde_json::from_str(&body).ok())
+        .unwrap_or_default()
+}
+
+fn write_plugin_versions(path: &Path, cache: &PluginVersionCache) -> Result<(), String> {
+    let dir = path.parent().ok_or("plugin-versions.json has no folder")?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let body = serde_json::to_string_pretty(cache).map_err(|e| e.to_string())?;
+    let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
+    std::io::Write::write_all(&mut temp, body.as_bytes()).map_err(|e| e.to_string())?;
+    temp.persist(path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Cache key of a remote source. `None` without a sha: nothing pins the
+/// release, so there is nothing to look up.
+pub fn remote_cache_key(remote: &RemoteSource) -> Option<String> {
+    let sha = non_empty(remote.sha.as_deref())?;
+    Some(format!(
+        "{}#{}@{sha}",
+        remote.url,
+        remote.path.as_deref().unwrap_or("")
+    ))
+}
+
+fn is_name_part(part: &str) -> bool {
+    !part.is_empty()
+        && part != "."
+        && part != ".."
+        && part
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// `owner/repo` of a `https://github.com/<owner>/<repo>[.git]` URL, with both
+/// halves limited to URL-safe name characters.
+fn github_repo(url: &str) -> Option<(String, String)> {
+    let rest = url.strip_prefix("https://github.com/")?;
+    let rest = rest.trim_end_matches('/');
+    let rest = rest.strip_suffix(".git").unwrap_or(rest);
+    let (owner, repo) = rest.split_once('/')?;
+    (is_name_part(owner) && is_name_part(repo)).then(|| (owner.to_string(), repo.to_string()))
+}
+
+/// The `gh api` path of a remote source's manifest at its pinned sha. `None`
+/// for a non-github URL, an unsafe name or path (`..`, odd characters), or a
+/// missing sha.
+pub fn gh_manifest_api_path(remote: &RemoteSource) -> Option<String> {
+    let (owner, repo) = github_repo(&remote.url)?;
+    let sha = non_empty(remote.sha.as_deref())?;
+    if !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut folder = String::new();
+    let path = remote.path.as_deref().unwrap_or("");
+    let path = path.strip_prefix("./").unwrap_or(path).trim_matches('/');
+    if !path.is_empty() {
+        if !path.split('/').all(is_name_part) {
+            return None;
+        }
+        folder = format!("{path}/");
+    }
+    Some(format!(
+        "repos/{owner}/{repo}/contents/{folder}.claude-plugin/plugin.json?ref={sha}"
+    ))
+}
+
+/// Decodes the standard-alphabet base64 GitHub returns, newlines included.
+fn decode_base64(input: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(input.len() / 4 * 3);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for byte in input.bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            b'\n' | b'\r' | b' ' => continue,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
+/// What one GitHub contents lookup came back with.
+pub enum ManifestFetch {
+    /// The `.content` field, base64.
+    Content(String),
+    /// GitHub has no manifest at that sha.
+    Missing,
+    /// Network, auth, or rate-limit trouble: record nothing.
+    Failed,
+}
+
+fn fetch_with_gh(gh_bin: &Path, api_path: &str) -> ManifestFetch {
+    match gh_cli::run_gh(gh_bin, &["api", api_path, "--jq", ".content"], None) {
+        Ok(stdout) => ManifestFetch::Content(String::from_utf8_lossy(&stdout).trim().to_string()),
+        Err(gh_cli::GhError::Failed(message)) if message.contains("404") => ManifestFetch::Missing,
+        Err(_) => ManifestFetch::Failed,
+    }
+}
+
+/// The remote sources of every installed plugin, keyed for the cache.
+fn wanted_remote_sources(home: &Path) -> BTreeMap<String, RemoteSource> {
+    let plugins_dir = home.join(".claude").join("plugins");
+    let Ok(installed) = std::fs::read_to_string(plugins_dir.join("installed_plugins.json")) else {
+        return BTreeMap::new();
+    };
+    let mut wanted = BTreeMap::new();
+    for id in parse_installs(&installed).keys() {
+        let Some((plugin, marketplace)) = id.split_once('@') else {
+            continue;
+        };
+        let Some(body) = read_marketplace(&plugins_dir, marketplace) else {
+            continue;
+        };
+        if let Some(MarketplaceRelease {
+            source: PluginSource::Remote(remote),
+            ..
+        }) = marketplace_release(&body, plugin)
+        {
+            if gh_manifest_api_path(&remote).is_some() {
+                if let Some(key) = remote_cache_key(&remote) {
+                    wanted.insert(key, remote);
+                }
+            }
+        }
+    }
+    wanted
+}
+
+/// Looks up the manifest version of each installed plugin with a pinned
+/// github source that `plugin-versions.json` has no entry for yet, and
+/// writes the result. A failed lookup records nothing, so the next check
+/// retries it.
+pub fn refresh_plugin_versions_with(
+    home: &Path,
+    app_data: &Path,
+    fetch: &dyn Fn(&str) -> ManifestFetch,
+) {
+    let wanted = wanted_remote_sources(home);
+    let path = plugin_versions_path(app_data);
+    let previous = read_plugin_versions(&path);
+    let mut next = PluginVersionCache::default();
+    for (key, remote) in &wanted {
+        if let Some(cached) = previous.entries.get(key) {
+            next.entries.insert(key.clone(), cached.clone());
+            continue;
+        }
+        let Some(api_path) = gh_manifest_api_path(remote) else {
+            continue;
+        };
+        let version = match fetch(&api_path) {
+            ManifestFetch::Content(content) => decode_base64(&content)
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .and_then(|body| match manifest_version_from_json(&body) {
+                    ManifestVersion::Version(version) => Some(Some(version)),
+                    ManifestVersion::NoVersion => Some(None),
+                    ManifestVersion::Unknown => None,
+                }),
+            ManifestFetch::Missing => Some(None),
+            ManifestFetch::Failed => None,
+        };
+        if let Some(version) = version {
+            next.entries
+                .insert(key.clone(), CachedPluginVersion { version });
+        }
+    }
+    if next != previous {
+        if let Err(e) = write_plugin_versions(&path, &next) {
+            eprintln!("plugin versions: failed to write cache: {e}");
+        }
+    }
+}
+
+/// [`refresh_plugin_versions_with`] over the `gh` CLI.
+pub fn refresh_plugin_versions(home: &Path, app_data: &Path, gh_bin: &Path) {
+    refresh_plugin_versions_with(home, app_data, &|api_path| fetch_with_gh(gh_bin, api_path));
+}
+
+fn read_marketplace(plugins_dir: &Path, marketplace: &str) -> Option<String> {
+    // A marketplace name from the file must not walk out of the folder.
+    if marketplace.contains(['/', '\\']) || marketplace == ".." {
+        return None;
+    }
+    std::fs::read_to_string(
+        plugins_dir
+            .join("marketplaces")
+            .join(marketplace)
+            .join(".claude-plugin")
+            .join("marketplace.json"),
+    )
+    .ok()
+}
+
+fn manifest_version_for(
+    plugins_dir: &Path,
+    marketplace: &str,
+    release: &MarketplaceRelease,
+    versions: &PluginVersionCache,
+) -> ManifestVersion {
+    match &release.source {
+        PluginSource::Relative(relative) => local_manifest_version(
+            &plugins_dir.join("marketplaces").join(marketplace),
+            relative,
+        ),
+        PluginSource::Remote(remote) => remote_cache_key(remote)
+            .and_then(|key| versions.entries.get(&key))
+            .map_or(ManifestVersion::Unknown, |cached| match &cached.version {
+                Some(version) => ManifestVersion::Version(version.clone()),
+                None => ManifestVersion::NoVersion,
+            }),
+        PluginSource::Unsupported => ManifestVersion::Unknown,
+    }
+}
+
+/// True when this install can still be updated from where it says it lives:
+/// not managed by an organization, and a project or local install whose
+/// project folder still exists.
+fn install_is_updatable(install: &PluginInstall) -> bool {
+    match install.scope.as_deref().unwrap_or("user") {
+        "managed" => false,
+        "project" | "local" => install
+            .project_path
+            .as_deref()
+            .is_some_and(|path| Path::new(path).is_dir()),
+        _ => true,
+    }
+}
+
 /// Every Claude Code plugin install under `home` with an update available,
-/// keyed by `<plugin>@<marketplace>`. Two local file reads per marketplace.
-pub fn read_plugin_updates(home: &Path) -> BTreeMap<String, Vec<PluginInstallUpdate>> {
+/// keyed by `<plugin>@<marketplace>`. Local file reads only.
+pub fn read_plugin_updates(
+    home: &Path,
+    versions: &PluginVersionCache,
+) -> BTreeMap<String, Vec<PluginInstallUpdate>> {
     let plugins_dir = home.join(".claude").join("plugins");
     let Ok(installed) = std::fs::read_to_string(plugins_dir.join("installed_plugins.json")) else {
         return BTreeMap::new();
@@ -137,32 +521,22 @@ pub fn read_plugin_updates(home: &Path) -> BTreeMap<String, Vec<PluginInstallUpd
         let Some((plugin, marketplace)) = id.split_once('@') else {
             continue;
         };
-        // A marketplace name from the file must not walk out of the folder.
-        if marketplace.contains(['/', '\\']) || marketplace == ".." {
-            continue;
-        }
         let body = marketplaces
             .entry(marketplace.to_string())
-            .or_insert_with(|| {
-                std::fs::read_to_string(
-                    plugins_dir
-                        .join("marketplaces")
-                        .join(marketplace)
-                        .join(".claude-plugin")
-                        .join("marketplace.json"),
-                )
-                .ok()
-            });
+            .or_insert_with(|| read_marketplace(&plugins_dir, marketplace));
         let Some(release) = body
             .as_deref()
             .and_then(|body| marketplace_release(body, plugin))
         else {
             continue;
         };
+        let manifest = manifest_version_for(&plugins_dir, marketplace, &release, versions);
         let outdated: Vec<PluginInstallUpdate> = installs
             .iter()
+            .filter(|install| install_is_updatable(install))
             .filter(|install| {
-                plugin_update_verdict(install, &release) == PluginUpdateVerdict::Available
+                plugin_update_verdict(install, &manifest, &release)
+                    == PluginUpdateVerdict::Available
             })
             .map(|install| PluginInstallUpdate {
                 scope: install.scope.clone().unwrap_or_else(|| "user".to_string()),
@@ -176,9 +550,40 @@ pub fn read_plugin_updates(home: &Path) -> BTreeMap<String, Vec<PluginInstallUpd
     updates
 }
 
+/// Refuses an update for an install `installed_plugins.json` does not list:
+/// the command's arguments come from the webview, and this keeps them to
+/// installs Claude Code itself recorded.
+pub fn require_plugin_install(
+    home: &Path,
+    plugin_id: &str,
+    scope: &str,
+    project_path: Option<&str>,
+) -> Result<(), String> {
+    let installed = std::fs::read_to_string(
+        home.join(".claude")
+            .join("plugins")
+            .join("installed_plugins.json"),
+    )
+    .unwrap_or_default();
+    let found = parse_installs(&installed)
+        .get(plugin_id)
+        .is_some_and(|installs| {
+            installs.iter().any(|install| {
+                install.scope.as_deref().unwrap_or("user") == scope
+                    && (scope == "user" || install.project_path.as_deref() == project_path)
+            })
+        });
+    if found {
+        Ok(())
+    } else {
+        Err("This plugin install was not found.".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::fs;
 
     fn install(version: Option<&str>, sha: Option<&str>) -> PluginInstall {
@@ -190,43 +595,109 @@ mod tests {
         }
     }
 
-    fn release(version: Option<&str>, sha: Option<&str>) -> MarketplaceRelease {
-        MarketplaceRelease {
-            version: version.map(str::to_string),
-            source_sha: sha.map(str::to_string),
+    fn remote(sha: Option<&str>) -> RemoteSource {
+        RemoteSource {
+            url: "https://github.com/getsentry/sentry-for-claude".to_string(),
+            path: None,
+            sha: sha.map(str::to_string),
         }
     }
 
+    fn release(version: Option<&str>, sha: Option<&str>) -> MarketplaceRelease {
+        MarketplaceRelease {
+            version: version.map(str::to_string),
+            source: PluginSource::Remote(remote(sha)),
+        }
+    }
+
+    fn manifest(version: &str) -> ManifestVersion {
+        ManifestVersion::Version(version.to_string())
+    }
+
+    /// Flow: sentry's pinned sha moved (215e5f1b -> 73e53541) but plugin.json
+    /// says 1.4.0 at both.
+    /// Expectation: Current - `claude plugin update` reports `up_to_date`.
+    /// A failure means detection compares shas before versions again.
     #[test]
-    fn pinned_sha_differing_from_the_installed_sha_is_an_update() {
+    fn an_unchanged_pinned_version_with_a_moved_sha_is_current() {
         let verdict = plugin_update_verdict(
-            &install(None, Some("215e5f1b")),
+            &install(Some("1.4.0"), Some("215e5f1b")),
+            &manifest("1.4.0"),
             &release(None, Some("73e53541")),
+        );
+        assert_eq!(verdict, PluginUpdateVerdict::Current);
+    }
+
+    #[test]
+    fn a_changed_manifest_version_is_an_update_even_when_the_marketplace_has_none() {
+        let verdict = plugin_update_verdict(
+            &install(Some("2.1.7"), Some("aaaa")),
+            &manifest("2.2.120"),
+            &release(None, Some("bbbb")),
         );
         assert_eq!(verdict, PluginUpdateVerdict::Available);
     }
 
     #[test]
-    fn pinned_sha_equal_or_prefix_of_the_installed_sha_is_current() {
-        let full = "73e53541aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        for latest in [full, "73e53541"] {
-            let verdict =
-                plugin_update_verdict(&install(None, Some(full)), &release(None, Some(latest)));
-            assert_eq!(verdict, PluginUpdateVerdict::Current, "latest {latest}");
-        }
-        let verdict =
-            plugin_update_verdict(&install(None, Some("73e53541")), &release(None, Some(full)));
+    fn the_manifest_version_wins_over_the_marketplace_version() {
+        let verdict = plugin_update_verdict(
+            &install(Some("1.0.0"), None),
+            &manifest("1.0.0"),
+            &release(Some("9.9.9"), None),
+        );
         assert_eq!(verdict, PluginUpdateVerdict::Current);
     }
 
     #[test]
-    fn a_different_marketplace_version_is_an_update_and_the_same_is_current() {
+    fn the_marketplace_version_is_used_when_the_manifest_has_none() {
+        let no_manifest_version = ManifestVersion::NoVersion;
         assert_eq!(
-            plugin_update_verdict(&install(Some("1.0.5"), None), &release(Some("1.0.6"), None)),
+            plugin_update_verdict(
+                &install(Some("1.0.5"), None),
+                &no_manifest_version,
+                &release(Some("1.0.6"), None)
+            ),
             PluginUpdateVerdict::Available
         );
         assert_eq!(
-            plugin_update_verdict(&install(Some("1.0.6"), None), &release(Some("1.0.6"), None)),
+            plugin_update_verdict(
+                &install(Some("1.0.6"), None),
+                &no_manifest_version,
+                &release(Some("1.0.6"), None)
+            ),
+            PluginUpdateVerdict::Current
+        );
+    }
+
+    #[test]
+    fn the_sha_decides_only_when_no_version_exists_anywhere() {
+        let none = ManifestVersion::NoVersion;
+        assert_eq!(
+            plugin_update_verdict(
+                &install(None, Some("215e5f1b")),
+                &none,
+                &release(None, Some("73e53541"))
+            ),
+            PluginUpdateVerdict::Available
+        );
+        let full = "73e53541aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        for latest in [full, "73e53541"] {
+            assert_eq!(
+                plugin_update_verdict(
+                    &install(None, Some(full)),
+                    &none,
+                    &release(None, Some(latest))
+                ),
+                PluginUpdateVerdict::Current,
+                "latest {latest}"
+            );
+        }
+        assert_eq!(
+            plugin_update_verdict(
+                &install(None, Some("73e53541")),
+                &none,
+                &release(None, Some(full))
+            ),
             PluginUpdateVerdict::Current
         );
     }
@@ -235,29 +706,35 @@ mod tests {
     fn an_unknown_installed_version_makes_no_claim() {
         assert_eq!(
             plugin_update_verdict(
-                &install(Some("unknown"), None),
-                &release(Some("1.0.6"), None)
+                &install(Some("unknown"), Some("aaaa")),
+                &manifest("1.0.6"),
+                &release(None, Some("bbbb"))
             ),
             PluginUpdateVerdict::NoClaim
         );
     }
 
     #[test]
-    fn a_release_with_neither_sha_nor_version_makes_no_claim() {
-        assert_eq!(
-            plugin_update_verdict(&install(Some("1.0.0"), Some("abc")), &release(None, None)),
-            PluginUpdateVerdict::NoClaim
-        );
-    }
-
-    #[test]
-    fn a_pinned_sha_with_no_installed_sha_falls_back_to_the_version() {
+    fn an_unreadable_manifest_makes_no_claim() {
         assert_eq!(
             plugin_update_verdict(
-                &install(Some("1.0.0"), None),
-                &release(Some("1.1.0"), Some("73e53541"))
+                &install(Some("1.0.0"), Some("aaaa")),
+                &ManifestVersion::Unknown,
+                &release(Some("2.0.0"), Some("bbbb"))
             ),
-            PluginUpdateVerdict::Available
+            PluginUpdateVerdict::NoClaim
+        );
+    }
+
+    #[test]
+    fn a_release_with_no_version_and_no_sha_makes_no_claim() {
+        assert_eq!(
+            plugin_update_verdict(
+                &install(Some("1.0.0"), Some("abc")),
+                &ManifestVersion::NoVersion,
+                &MarketplaceRelease::default()
+            ),
+            PluginUpdateVerdict::NoClaim
         );
     }
 
@@ -269,23 +746,173 @@ mod tests {
     }
 
     #[test]
-    fn marketplace_release_reads_the_three_seen_entry_shapes() {
+    fn marketplace_release_reads_each_source_shape() {
         let body = r#"{"plugins":[
-            {"name":"sentry","version":null,"source":{"source":"url","url":"u","sha":"73e5"}},
+            {"name":"sentry","version":null,"source":{"source":"url","url":"https://github.com/o/r.git","sha":"73e5"}},
+            {"name":"figma","source":{"source":"git-subdir","url":"https://github.com/o/mono","path":"plugins/figma","ref":"main","sha":"abcd"}},
+            {"name":"gh","source":{"source":"github","repo":"o/gh"}},
             {"name":"codex","version":"1.0.6","source":"./plugins/codex"},
-            {"name":"plannotator","version":null,"source":"./apps/hook"}]}"#;
+            {"name":"odd","source":{"source":"npm","package":"x"}}]}"#;
+        let source = |name| marketplace_release(body, name).unwrap().source;
         assert_eq!(
-            marketplace_release(body, "sentry"),
-            Some(release(None, Some("73e5")))
+            source("sentry"),
+            PluginSource::Remote(RemoteSource {
+                url: "https://github.com/o/r.git".to_string(),
+                path: None,
+                sha: Some("73e5".to_string())
+            })
+        );
+        assert_eq!(
+            source("figma"),
+            PluginSource::Remote(RemoteSource {
+                url: "https://github.com/o/mono".to_string(),
+                path: Some("plugins/figma".to_string()),
+                sha: Some("abcd".to_string())
+            })
+        );
+        assert_eq!(
+            source("gh"),
+            PluginSource::Remote(RemoteSource {
+                url: "https://github.com/o/gh".to_string(),
+                path: None,
+                sha: None
+            })
         );
         assert_eq!(
             marketplace_release(body, "codex"),
-            Some(release(Some("1.0.6"), None))
+            Some(MarketplaceRelease {
+                version: Some("1.0.6".to_string()),
+                source: PluginSource::Relative("./plugins/codex".to_string())
+            })
+        );
+        assert_eq!(source("odd"), PluginSource::Unsupported);
+    }
+
+    #[test]
+    fn cache_key_and_gh_path_for_a_url_source() {
+        let source = RemoteSource {
+            url: "https://github.com/getsentry/sentry-for-claude.git".to_string(),
+            path: None,
+            sha: Some("73e53541".to_string()),
+        };
+        assert_eq!(
+            remote_cache_key(&source).as_deref(),
+            Some("https://github.com/getsentry/sentry-for-claude.git#@73e53541")
         );
         assert_eq!(
-            marketplace_release(body, "plannotator"),
-            Some(release(None, None))
+            gh_manifest_api_path(&source).as_deref(),
+            Some("repos/getsentry/sentry-for-claude/contents/.claude-plugin/plugin.json?ref=73e53541")
         );
+    }
+
+    #[test]
+    fn cache_key_and_gh_path_for_a_git_subdir_source() {
+        let source = RemoteSource {
+            url: "https://github.com/figma/mcp".to_string(),
+            path: Some("./plugins/figma/".to_string()),
+            sha: Some("abcd1234".to_string()),
+        };
+        assert_eq!(
+            remote_cache_key(&source).as_deref(),
+            Some("https://github.com/figma/mcp#./plugins/figma/@abcd1234")
+        );
+        assert_eq!(
+            gh_manifest_api_path(&source).as_deref(),
+            Some("repos/figma/mcp/contents/plugins/figma/.claude-plugin/plugin.json?ref=abcd1234")
+        );
+    }
+
+    #[test]
+    fn unsafe_or_unpinned_remote_sources_build_no_gh_call() {
+        let base = remote(Some("abcd"));
+        assert!(gh_manifest_api_path(&base).is_some());
+        let with = |edit: &dyn Fn(&mut RemoteSource)| {
+            let mut source = base.clone();
+            edit(&mut source);
+            gh_manifest_api_path(&source)
+        };
+        assert_eq!(with(&|s| s.sha = None), None);
+        assert_eq!(with(&|s| s.sha = Some("abc;rm".to_string())), None);
+        assert_eq!(with(&|s| s.path = Some("../etc".to_string())), None);
+        assert_eq!(with(&|s| s.path = Some("a/../b".to_string())), None);
+        assert_eq!(with(&|s| s.path = Some("a b".to_string())), None);
+        assert_eq!(
+            with(&|s| s.url = "https://gitlab.com/o/r".to_string()),
+            None
+        );
+        assert_eq!(
+            with(&|s| s.url = "https://github.com/../r".to_string()),
+            None
+        );
+        assert_eq!(
+            with(&|s| s.url = "https://github.com/o/r?x=1".to_string()),
+            None
+        );
+    }
+
+    #[test]
+    fn base64_with_newlines_decodes() {
+        assert_eq!(
+            decode_base64("eyJ2ZXJz\naW9uIjoiMS4wIn0=\n").as_deref(),
+            Some(br#"{"version":"1.0"}"#.as_slice())
+        );
+        assert_eq!(decode_base64("a$b"), None);
+    }
+
+    #[test]
+    fn local_manifest_version_reads_the_relative_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = dir.path().join("plugins/codex/.claude-plugin");
+        fs::create_dir_all(&plugin).unwrap();
+        fs::write(plugin.join("plugin.json"), r#"{"version":"1.0.7"}"#).unwrap();
+        assert_eq!(
+            local_manifest_version(dir.path(), "./plugins/codex"),
+            manifest("1.0.7")
+        );
+        assert_eq!(
+            local_manifest_version(dir.path(), "./plugins/none"),
+            ManifestVersion::NoVersion
+        );
+        fs::write(plugin.join("plugin.json"), r#"{"name":"codex"}"#).unwrap();
+        assert_eq!(
+            local_manifest_version(dir.path(), "./plugins/codex"),
+            ManifestVersion::NoVersion
+        );
+        fs::write(plugin.join("plugin.json"), "{ nope").unwrap();
+        assert_eq!(
+            local_manifest_version(dir.path(), "./plugins/codex"),
+            ManifestVersion::Unknown
+        );
+    }
+
+    /// Flow: a marketplace entry's relative source walks out of the
+    /// marketplace folder, by `..` or by a symlink.
+    /// Expectation: the manifest outside is never read (Unknown).
+    #[test]
+    fn a_relative_source_that_escapes_the_marketplace_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let market = dir.path().join("market");
+        fs::create_dir_all(&market).unwrap();
+        let outside = dir.path().join("outside/.claude-plugin");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("plugin.json"), r#"{"version":"6.6.6"}"#).unwrap();
+
+        assert_eq!(
+            local_manifest_version(&market, "../outside"),
+            ManifestVersion::Unknown
+        );
+        assert_eq!(
+            local_manifest_version(&market, dir.path().join("outside").to_str().unwrap()),
+            ManifestVersion::Unknown
+        );
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.path().join("outside"), market.join("link")).unwrap();
+            assert_eq!(
+                local_manifest_version(&market, "./link"),
+                ManifestVersion::Unknown
+            );
+        }
     }
 
     fn write_fixture(home: &Path, installed: &str, marketplace: Option<&str>) {
@@ -299,27 +926,60 @@ mod tests {
         }
     }
 
+    fn write_manifest(home: &Path, relative: &str, body: &str) {
+        let dir = home
+            .join(".claude/plugins/marketplaces/claude-plugins-official")
+            .join(relative)
+            .join(".claude-plugin");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("plugin.json"), body).unwrap();
+    }
+
     const MARKETPLACE: &str = r#"{"plugins":[
-        {"name":"sentry","version":null,"source":{"source":"url","sha":"73e53541"}},
+        {"name":"sentry","version":null,"source":{"source":"url","url":"https://github.com/getsentry/sentry-for-claude","sha":"73e53541"}},
         {"name":"codex","version":"1.0.6","source":"./plugins/codex"},
         {"name":"plugin-dev","version":"2.0.0","source":"./plugin-dev"}]}"#;
+
+    fn sentry_key() -> String {
+        "https://github.com/getsentry/sentry-for-claude#@73e53541".to_string()
+    }
+
+    fn cache_with(key: String, version: Option<&str>) -> PluginVersionCache {
+        PluginVersionCache {
+            entries: BTreeMap::from([(
+                key,
+                CachedPluginVersion {
+                    version: version.map(str::to_string),
+                },
+            )]),
+        }
+    }
 
     #[test]
     fn reader_reports_each_outdated_install_with_its_scope_and_project() {
         let home = tempfile::tempdir().unwrap();
+        let project_a = tempfile::tempdir().unwrap();
+        let project_b = tempfile::tempdir().unwrap();
+        let (a, b) = (
+            project_a.path().to_str().unwrap(),
+            project_b.path().to_str().unwrap(),
+        );
         write_fixture(
             home.path(),
-            r#"{"version":2,"plugins":{
-                "sentry@claude-plugins-official":[{"scope":"user","version":"1.4.0","gitCommitSha":"215e5f1b"}],
+            &format!(
+                r#"{{"version":2,"plugins":{{
+                "sentry@claude-plugins-official":[{{"scope":"user","version":"1.3.0","gitCommitSha":"215e5f1b"}}],
                 "codex@claude-plugins-official":[
-                    {"scope":"user","version":"1.0.6"},
-                    {"scope":"project","projectPath":"/Users/x/a","version":"1.0.5"},
-                    {"scope":"local","projectPath":"/Users/x/b","version":"1.0.4"}],
-                "plugin-dev@claude-plugins-official":[{"scope":"project","projectPath":"/Users/x/src/skills","version":"unknown","gitCommitSha":"dbc4"}]
-            }}"#,
+                    {{"scope":"user","version":"1.0.6"}},
+                    {{"scope":"project","projectPath":"{a}","version":"1.0.5"}},
+                    {{"scope":"local","projectPath":"{b}","version":"1.0.4"}}],
+                "plugin-dev@claude-plugins-official":[{{"scope":"project","projectPath":"{a}","version":"unknown","gitCommitSha":"dbc4"}}]
+            }}}}"#
+            ),
             Some(MARKETPLACE),
         );
-        let updates = read_plugin_updates(home.path());
+        let versions = cache_with(sentry_key(), Some("1.4.0"));
+        let updates = read_plugin_updates(home.path(), &versions);
         assert_eq!(
             updates.get("sentry@claude-plugins-official"),
             Some(&vec![PluginInstallUpdate {
@@ -332,11 +992,11 @@ mod tests {
             Some(&vec![
                 PluginInstallUpdate {
                     scope: "project".to_string(),
-                    project_path: Some("/Users/x/a".to_string())
+                    project_path: Some(a.to_string())
                 },
                 PluginInstallUpdate {
                     scope: "local".to_string(),
-                    project_path: Some("/Users/x/b".to_string())
+                    project_path: Some(b.to_string())
                 },
             ])
         );
@@ -344,19 +1004,87 @@ mod tests {
     }
 
     #[test]
+    fn a_manifest_only_version_change_on_a_relative_source_is_an_update() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(
+            home.path(),
+            r#"{"plugins":{"codex@claude-plugins-official":[{"scope":"user","version":"1.0.6"}]}}"#,
+            Some(MARKETPLACE),
+        );
+        let none = PluginVersionCache::default();
+        assert!(read_plugin_updates(home.path(), &none).is_empty());
+        write_manifest(home.path(), "plugins/codex", r#"{"version":"1.0.7"}"#);
+        assert!(
+            read_plugin_updates(home.path(), &none).contains_key("codex@claude-plugins-official")
+        );
+    }
+
+    #[test]
+    fn a_remote_source_with_no_cache_entry_makes_no_claim() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(
+            home.path(),
+            r#"{"plugins":{"sentry@claude-plugins-official":[{"scope":"user","version":"1.3.0","gitCommitSha":"215e5f1b"}]}}"#,
+            Some(MARKETPLACE),
+        );
+        assert!(read_plugin_updates(home.path(), &PluginVersionCache::default()).is_empty());
+    }
+
+    #[test]
+    fn a_cached_no_version_falls_back_to_the_sha() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(
+            home.path(),
+            r#"{"plugins":{"sentry@claude-plugins-official":[{"scope":"user","version":"1.3.0","gitCommitSha":"215e5f1b"}]}}"#,
+            Some(MARKETPLACE),
+        );
+        let versions = cache_with(sentry_key(), None);
+        assert!(read_plugin_updates(home.path(), &versions)
+            .contains_key("sentry@claude-plugins-official"));
+    }
+
+    #[test]
+    fn managed_and_missing_project_installs_are_skipped() {
+        let home = tempfile::tempdir().unwrap();
+        let gone = home.path().join("deleted-project");
+        write_fixture(
+            home.path(),
+            &format!(
+                r#"{{"plugins":{{"codex@claude-plugins-official":[
+                    {{"scope":"managed","version":"1.0.0"}},
+                    {{"scope":"project","version":"1.0.0"}},
+                    {{"scope":"project","projectPath":"{}","version":"1.0.0"}},
+                    {{"scope":"local","projectPath":"{}","version":"1.0.0"}}]}}}}"#,
+                gone.display(),
+                home.path().display()
+            ),
+            Some(MARKETPLACE),
+        );
+        let updates = read_plugin_updates(home.path(), &PluginVersionCache::default());
+        assert_eq!(
+            updates.get("codex@claude-plugins-official"),
+            Some(&vec![PluginInstallUpdate {
+                scope: "local".to_string(),
+                project_path: Some(home.path().display().to_string())
+            }])
+        );
+    }
+
+    #[test]
     fn reader_returns_nothing_when_files_are_missing_or_malformed() {
         let home = tempfile::tempdir().unwrap();
-        assert!(read_plugin_updates(home.path()).is_empty());
+        let none = PluginVersionCache::default();
+        assert!(read_plugin_updates(home.path(), &none).is_empty());
 
         write_fixture(home.path(), "{ not json", Some(MARKETPLACE));
-        assert!(read_plugin_updates(home.path()).is_empty());
+        assert!(read_plugin_updates(home.path(), &none).is_empty());
 
         write_fixture(
             home.path(),
             r#"{"plugins":{"codex@claude-plugins-official":[{"scope":"user","version":"1.0.0"}]}}"#,
             Some("{ broken"),
         );
-        assert!(read_plugin_updates(home.path()).is_empty());
+        assert!(read_plugin_updates(home.path(), &none).is_empty());
 
         write_fixture(
             home.path(),
@@ -364,6 +1092,113 @@ mod tests {
             None,
         );
         fs::remove_dir_all(home.path().join(".claude/plugins/marketplaces")).ok();
-        assert!(read_plugin_updates(home.path()).is_empty());
+        assert!(read_plugin_updates(home.path(), &none).is_empty());
+    }
+
+    #[test]
+    fn update_requires_an_install_that_installed_plugins_lists() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(
+            home.path(),
+            r#"{"plugins":{"codex@claude-plugins-official":[
+                {"scope":"user","version":"1.0.0"},
+                {"scope":"project","projectPath":"/p/a","version":"1.0.0"}]}}"#,
+            None,
+        );
+        let id = "codex@claude-plugins-official";
+        assert!(require_plugin_install(home.path(), id, "user", None).is_ok());
+        assert!(require_plugin_install(home.path(), id, "project", Some("/p/a")).is_ok());
+        let refused = "This plugin install was not found.";
+        for (id, scope, path) in [
+            ("other@claude-plugins-official", "user", None),
+            (id, "project", Some("/p/b")),
+            (id, "project", None),
+            (id, "local", Some("/p/a")),
+        ] {
+            assert_eq!(
+                require_plugin_install(home.path(), id, scope, path),
+                Err(refused.to_string()),
+                "{id} {scope} {path:?}"
+            );
+        }
+        let empty = tempfile::tempdir().unwrap();
+        assert!(require_plugin_install(empty.path(), id, "user", None).is_err());
+    }
+
+    fn b64_manifest(body: &str) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in body.as_bytes().chunks(3) {
+            let n = chunk
+                .iter()
+                .enumerate()
+                .fold(0u32, |acc, (i, b)| acc | (u32::from(*b) << (16 - 8 * i)));
+            for i in 0..=chunk.len() {
+                out.push(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] as char);
+            }
+            for _ in chunk.len()..3 {
+                out.push('=');
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn refresh_caches_versions_records_missing_manifests_and_skips_failures() {
+        let home = tempfile::tempdir().unwrap();
+        let app_data = tempfile::tempdir().unwrap();
+        write_fixture(
+            home.path(),
+            r#"{"plugins":{
+                "sentry@claude-plugins-official":[{"scope":"user"}],
+                "figma@claude-plugins-official":[{"scope":"user"}],
+                "gone@claude-plugins-official":[{"scope":"user"}],
+                "flaky@claude-plugins-official":[{"scope":"user"}],
+                "codex@claude-plugins-official":[{"scope":"user"}]}}"#,
+            Some(
+                r#"{"plugins":[
+                {"name":"sentry","source":{"source":"url","url":"https://github.com/o/sentry","sha":"aa11"}},
+                {"name":"figma","source":{"source":"git-subdir","url":"https://github.com/o/mono","path":"plugins/figma","sha":"bb22"}},
+                {"name":"gone","source":{"source":"url","url":"https://github.com/o/gone","sha":"cc33"}},
+                {"name":"flaky","source":{"source":"url","url":"https://github.com/o/flaky","sha":"dd44"}},
+                {"name":"codex","version":"1.0.6","source":"./plugins/codex"}]}"#,
+            ),
+        );
+        let calls = RefCell::new(Vec::new());
+        let fetch = |api_path: &str| {
+            calls.borrow_mut().push(api_path.to_string());
+            if api_path.contains("/o/sentry/") || api_path.starts_with("repos/o/sentry/") {
+                ManifestFetch::Content(b64_manifest(r#"{"version":"1.4.0"}"#))
+            } else if api_path.starts_with("repos/o/mono/contents/plugins/figma/") {
+                ManifestFetch::Content(b64_manifest(r#"{"name":"figma"}"#))
+            } else if api_path.starts_with("repos/o/gone/") {
+                ManifestFetch::Missing
+            } else {
+                ManifestFetch::Failed
+            }
+        };
+        refresh_plugin_versions_with(home.path(), app_data.path(), &fetch);
+
+        let cache = read_plugin_versions(&plugin_versions_path(app_data.path()));
+        let version = |key: &str| cache.entries.get(key).map(|entry| entry.version.clone());
+        assert_eq!(
+            version("https://github.com/o/sentry#@aa11"),
+            Some(Some("1.4.0".to_string()))
+        );
+        assert_eq!(
+            version("https://github.com/o/mono#plugins/figma@bb22"),
+            Some(None)
+        );
+        assert_eq!(version("https://github.com/o/gone#@cc33"), Some(None));
+        assert_eq!(version("https://github.com/o/flaky#@dd44"), None);
+        assert_eq!(calls.borrow().len(), 4);
+
+        // Cached entries are not fetched again; the failed one is retried.
+        calls.borrow_mut().clear();
+        refresh_plugin_versions_with(home.path(), app_data.path(), &fetch);
+        assert_eq!(
+            calls.borrow().as_slice(),
+            ["repos/o/flaky/contents/.claude-plugin/plugin.json?ref=dd44"]
+        );
     }
 }

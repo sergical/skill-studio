@@ -909,15 +909,19 @@ fn run_update_check_now(
     app_data: &Path,
 ) -> UpdateCheckStore {
     if let Some(gh_bin) = resolve_gh_binary() {
-        run_update_check_with_projects(
+        let store = run_update_check_with_projects(
             home,
             project_paths,
             app_data,
             &GhCommitLookup {
                 gh_bin: gh_bin.clone(),
             },
-            &GhTreeLookup { gh_bin },
-        )
+            &GhTreeLookup {
+                gh_bin: gh_bin.clone(),
+            },
+        );
+        super::skill_plugin_update::refresh_plugin_versions(home, app_data, &gh_bin);
+        store
     } else {
         let previous = read_update_check_store(app_data);
         let store = UpdateCheckStore {

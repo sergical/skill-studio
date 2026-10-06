@@ -573,6 +573,17 @@ pub trait CommandRunner {
     /// Runs `program args`, optionally in `cwd`.
     fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> Result<(), String>;
 
+    /// As [`CommandRunner::run`], returning the bounded stdout. Runners that
+    /// do not capture output return it empty.
+    fn run_output(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+    ) -> Result<Vec<u8>, String> {
+        self.run(program, args, cwd).map(|()| Vec::new())
+    }
+
     /// `run("npx", ...)` - the CLI both `dotagents` and `skills.sh` use.
     fn run_npx(&self, args: &[String], cwd: Option<&Path>) -> Result<(), String> {
         self.run("npx", args, cwd)
@@ -616,6 +627,22 @@ impl CommandRunner for RealCommandRunner {
     fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> Result<(), String> {
         run_controlled_program_with_control(program, args, cwd, &self.control)
             .map_err(ControlledProcessError::into_message)
+    }
+
+    fn run_output(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+    ) -> Result<Vec<u8>, String> {
+        run_controlled_command_output(
+            Path::new(program),
+            args,
+            cwd,
+            &self.control,
+            MAX_PROCESS_OUTPUT_BYTES,
+        )
+        .map_err(ControlledProcessError::into_message)
     }
 
     fn is_cancelled(&self) -> bool {

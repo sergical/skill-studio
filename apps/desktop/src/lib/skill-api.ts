@@ -749,14 +749,15 @@ export async function setPluginEnabled(
 /**
  * Update one install of a Claude Code plugin (`claude plugin update <id> -s
  * <scope>`); `scope` and `projectPath` are the install's own. Claude Code
- * applies it to new sessions only. Refused for any other harness.
+ * applies it to new sessions only. Refused for any other harness. Resolves to the
+ * CLI's `updateOutcome`: `updated`, or `up_to_date` when nothing changed.
  */
 export async function updatePlugin(
   pluginId: string,
   harness: string,
   scope: string,
   projectPath: string | null,
-): Promise<void> {
+): Promise<string> {
   return callCommand("update_plugin", { pluginId, harness, scope, projectPath });
 }
 

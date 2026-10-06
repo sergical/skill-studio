@@ -951,6 +951,7 @@ fn reconcile_skill_names_at(
         &mut replacements,
         &fork_registry,
         &update_store,
+        &skill_plugin_update::read_plugin_versions_beside(&state.update_check_path),
         &current_owner_ids,
     );
     sort_snapshot_skills(&mut replacements);
@@ -1518,6 +1519,7 @@ pub(crate) fn apply_skill_snapshot_overlays(
     skills: &mut [InstalledSkill],
     fork_registry: &super::skill_fork_registry::ForkRegistry,
     update_store: &skill_update_check::UpdateCheckStore,
+    plugin_versions: &skill_plugin_update::PluginVersionCache,
     current_owner_ids: &[String],
 ) {
     for skill in skills.iter_mut() {
@@ -1625,7 +1627,7 @@ pub(crate) fn apply_skill_snapshot_overlays(
             }
         }
     }
-    let plugin_updates = skill_plugin_update::read_plugin_updates(home);
+    let plugin_updates = skill_plugin_update::read_plugin_updates(home, plugin_versions);
     for skill in skills.iter_mut() {
         let mut seen_owners: Vec<&str> = Vec::new();
         for deployment in &skill.deployments {
@@ -2096,6 +2098,7 @@ pub fn build_snapshot(
         &mut skills,
         &fork_registry,
         &update_store,
+        &skill_plugin_update::read_plugin_versions_beside(update_check_path),
         &current_owner_ids,
     );
     let overlays_ms = overlays_start.elapsed().as_millis();
@@ -4509,6 +4512,7 @@ mod tests {
             std::slice::from_mut(&mut skill),
             &super::super::skill_fork_registry::ForkRegistry::default(),
             &skill_update_check::UpdateCheckStore::default(),
+            &skill_plugin_update::PluginVersionCache::default(),
             &[],
         );
 
@@ -4535,9 +4539,14 @@ mod tests {
         let plugins = temp.path().join(".claude/plugins");
         let marketplace = plugins.join("marketplaces/official/.claude-plugin");
         fs::create_dir_all(&marketplace).unwrap();
+        let project = temp.path().join("work/app");
+        fs::create_dir_all(&project).unwrap();
+        let project = project.to_str().unwrap();
         fs::write(
             plugins.join("installed_plugins.json"),
-            r#"{"version":2,"plugins":{"codex@official":[{"scope":"project","projectPath":"/work/app","version":"1.0.5"}]}}"#,
+            format!(
+                r#"{{"version":2,"plugins":{{"codex@official":[{{"scope":"project","projectPath":"{project}","version":"1.0.5"}}]}}}}"#
+            ),
         )
         .unwrap();
         fs::write(
@@ -4561,6 +4570,7 @@ mod tests {
             std::slice::from_mut(&mut skill),
             &super::super::skill_fork_registry::ForkRegistry::default(),
             &skill_update_check::UpdateCheckStore::default(),
+            &skill_plugin_update::PluginVersionCache::default(),
             &[],
         );
 
@@ -4573,7 +4583,7 @@ mod tests {
         );
         assert_eq!(
             skill.update_owners[0].plugin_project_path.as_deref(),
-            Some("/work/app")
+            Some(project)
         );
 
         fs::remove_dir_all(plugins.join("marketplaces")).unwrap();
@@ -4582,6 +4592,7 @@ mod tests {
             std::slice::from_mut(&mut skill),
             &super::super::skill_fork_registry::ForkRegistry::default(),
             &skill_update_check::UpdateCheckStore::default(),
+            &skill_plugin_update::PluginVersionCache::default(),
             &[],
         );
         assert!(!skill.has_update);
@@ -4638,6 +4649,7 @@ mod tests {
             std::slice::from_mut(&mut skill),
             &super::super::skill_fork_registry::ForkRegistry::default(),
             &store,
+            &skill_plugin_update::PluginVersionCache::default(),
             &all_owner_ids,
         );
         skill

@@ -7,6 +7,7 @@
 
 import { useRef, useState } from "react";
 import { forkSkill, pullForkUpstream, skillLocalEdits, updateSkill } from "../lib/skill-api";
+import { updatePluginInstall } from "./skillBatchUpdates";
 import {
   forkEditedAndUpdate,
   forkableDeployment,
@@ -42,8 +43,14 @@ export interface UpdateFinish {
 interface UpdateRequestOptions {
   /** Update this one owner instead of every owner of the skill. */
   scopeTarget?: LifecycleTarget;
-  /** Called with the outcome of a `scopeTarget` update; without it the hook toasts. */
-  onFinished?: (finish: UpdateFinish) => void;
+  /**
+   * Called with the outcome of the update, after the dialog (when one opened) was confirmed;
+   * never called when the user cancels. For a `scopeTarget` update the hook then leaves the
+   * reporting to the caller; otherwise it toasts first.
+   */
+  onFinished?: (finish: UpdateFinish) => void | Promise<void>;
+  /** Leave the skill's plugin installs alone; the caller updates them after `onFinished`. */
+  skipPlugins?: boolean;
 }
 
 /**
@@ -59,7 +66,7 @@ export function useGuardedSkillUpdate() {
   const updating = useRef(new Set<string>());
 
   const overwriteFor =
-    (skill: InstalledSkill, { scopeTarget, onFinished }: UpdateRequestOptions) =>
+    (skill: InstalledSkill, { scopeTarget, onFinished, skipPlugins }: UpdateRequestOptions) =>
     async () => {
       if (scopeTarget) {
         let finish: UpdateFinish;
@@ -76,11 +83,19 @@ export function useGuardedSkillUpdate() {
               error instanceof Error ? error.message : "Update failed without an error message.",
           };
         }
-        onFinished?.(finish);
+        await onFinished?.(finish);
         return;
       }
-      const summary = await updateSkillOwners(skill, updateSkill);
+      const summary = await updateSkillOwners(
+        skill,
+        updateSkill,
+        skipPlugins ? undefined : updatePluginInstall,
+      );
       addToast(skillUpdateToast(skill.name, summary));
+      await onFinished?.({
+        success: summary.failures.length === 0,
+        error: summary.failures.map((failure) => failure.message).join("; "),
+      });
     };
 
   const requestUpdate = async (skill: InstalledSkill, options: UpdateRequestOptions = {}) => {

@@ -36,7 +36,7 @@ pub fn plugin_uninstall_args(plugin_id: &str) -> Vec<String> {
     ]
 }
 
-/// `claude plugin update <plugin_id> -s <scope>`. Never passes `-y` or
+/// `claude plugin update <plugin_id> -s <scope> --json`. Never passes `-y` or
 /// `--accept-command`: running a command a marketplace declares is the
 /// person's decision, made in a terminal.
 pub fn plugin_update_args(plugin_id: &str, scope: &str) -> Vec<String> {
@@ -46,6 +46,7 @@ pub fn plugin_update_args(plugin_id: &str, scope: &str) -> Vec<String> {
         plugin_id.to_string(),
         "-s".to_string(),
         scope.to_string(),
+        "--json".to_string(),
     ]
 }
 
@@ -82,11 +83,10 @@ fn friendly_error(message: String) -> String {
 /// confirmation (`-y`, or a TTY) into the next step for the person.
 fn update_error(plugin_id: &str, message: String) -> String {
     let lower = message.to_lowercase();
-    let needs_confirmation = lower.contains("--yes")
-        || lower.contains(" -y")
-        || lower.contains("--accept-command")
-        || lower.contains("confirm")
-        || lower.contains("tty");
+    // The wording of `claude plugin update --help` for `-y` and
+    // `--accept-command`; bare "confirm" or "tty" also match unrelated errors.
+    let needs_confirmation =
+        lower.contains("--yes") || lower.contains("pass -y") || lower.contains("--accept-command");
     if needs_confirmation {
         format!(
             "This update runs a command from the plugin's marketplace that needs your OK. Run `claude plugin update {plugin_id}` in a terminal to review it."
@@ -141,15 +141,43 @@ pub fn uninstall_plugin_with(runner: &dyn CommandRunner, plugin_id: &str) -> Res
         .map_err(friendly_error)
 }
 
-/// Runs `claude plugin update` for one install of a plugin. `scope` is the
-/// install's own scope from `installed_plugins.json`; a project or local
-/// install runs in its project folder, where Claude Code resolves it.
+/// Reads the `--json` result line of `claude plugin update`: its
+/// `updateOutcome` (`updated`, `up_to_date`, ...). An `outcome` of `error`
+/// becomes the CLI's own message. Output that is not JSON counts as `updated`,
+/// since a zero exit code already said the command worked.
+fn parse_update_outcome(stdout: &[u8]) -> Result<String, String> {
+    let text = String::from_utf8_lossy(stdout);
+    let parsed = text
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok());
+    let Some(value) = parsed else {
+        return Ok("updated".to_string());
+    };
+    if value.get("outcome").and_then(|v| v.as_str()) == Some("error") {
+        let message = value
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("The plugin update failed.");
+        return Err(message.to_string());
+    }
+    Ok(value
+        .get("updateOutcome")
+        .and_then(|v| v.as_str())
+        .unwrap_or("updated")
+        .to_string())
+}
+
+/// Runs `claude plugin update` for one install of a plugin and returns the
+/// CLI's `updateOutcome`. `scope` is the install's own scope from
+/// `installed_plugins.json`; a project or local install runs in its project
+/// folder, where Claude Code resolves it.
 pub fn update_plugin_with(
     runner: &dyn CommandRunner,
     plugin_id: &str,
     scope: &str,
     project_path: Option<&Path>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     require_valid_plugin_id(plugin_id)?;
     match scope {
         "user" => {}
@@ -164,9 +192,16 @@ pub fn update_plugin_with(
         other => return Err(format!("Unknown plugin scope: {other}")),
     }
     let cwd = if scope == "user" { None } else { project_path };
-    runner
-        .run(CLAUDE_CLI, &plugin_update_args(plugin_id, scope), cwd)
-        .map_err(|message| update_error(plugin_id, message))
+    if let Some(dir) = cwd.filter(|dir| !dir.is_dir()) {
+        return Err(format!(
+            "The project folder {} no longer exists.",
+            dir.display()
+        ));
+    }
+    let stdout = runner
+        .run_output(CLAUDE_CLI, &plugin_update_args(plugin_id, scope), cwd)
+        .map_err(|message| update_error(plugin_id, message))?;
+    parse_update_outcome(&stdout)
 }
 
 #[cfg(test)]
@@ -180,6 +215,7 @@ mod tests {
         calls: Mutex<Vec<(String, Vec<String>)>>,
         cwds: Mutex<Vec<Option<PathBuf>>>,
         fail: Option<String>,
+        stdout: String,
     }
 
     impl CommandRunner for FakeRunner {
@@ -193,6 +229,16 @@ mod tests {
                 Some(err) => Err(err.clone()),
                 None => Ok(()),
             }
+        }
+
+        fn run_output(
+            &self,
+            program: &str,
+            args: &[String],
+            cwd: Option<&Path>,
+        ) -> Result<Vec<u8>, String> {
+            self.run(program, args, cwd)?;
+            Ok(self.stdout.clone().into_bytes())
         }
     }
 
@@ -271,7 +317,8 @@ mod tests {
                 "update",
                 "sentry@claude-plugins-official",
                 "-s",
-                "user"
+                "user",
+                "--json"
             ]
         );
         assert!(!calls[0].1.iter().any(|a| a == "-y" || a == "--yes"));
@@ -281,7 +328,8 @@ mod tests {
     #[test]
     fn project_update_runs_in_the_install_project_folder() {
         let runner = FakeRunner::default();
-        let project = Path::new("/Users/x/src/skills");
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
         update_plugin_with(
             &runner,
             "plugin-dev@claude-plugins-official",
@@ -296,10 +344,67 @@ mod tests {
                 "update",
                 "plugin-dev@claude-plugins-official",
                 "-s",
-                "project"
+                "project",
+                "--json"
             ]
         );
         assert_eq!(runner.cwds.lock().unwrap()[0].as_deref(), Some(project));
+    }
+
+    #[test]
+    fn project_update_with_a_missing_folder_names_the_folder_and_runs_nothing() {
+        let runner = FakeRunner::default();
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("deleted");
+        let err =
+            update_plugin_with(&runner, "codex@anthropics", "local", Some(&gone)).unwrap_err();
+        assert_eq!(
+            err,
+            format!("The project folder {} no longer exists.", gone.display())
+        );
+        assert!(runner.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn update_returns_the_outcome_the_cli_reports() {
+        let runner = FakeRunner {
+            stdout: r#"{"outcome":"success","updateOutcome":"up_to_date","oldVersion":"1.4.0","newVersion":"1.4.0"}"#
+                .to_string(),
+            ..Default::default()
+        };
+        let outcome = update_plugin_with(&runner, "sentry@anthropics", "user", None).unwrap();
+        assert_eq!(outcome, "up_to_date");
+
+        let runner = FakeRunner {
+            stdout: r#"{"outcome":"success","updateOutcome":"updated"}"#.to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            update_plugin_with(&runner, "sentry@anthropics", "user", None).unwrap(),
+            "updated"
+        );
+    }
+
+    #[test]
+    fn update_with_an_error_outcome_returns_the_cli_message() {
+        let runner = FakeRunner {
+            stdout: r#"{"outcome":"error","message":"Plugin not found"}"#.to_string(),
+            ..Default::default()
+        };
+        let err = update_plugin_with(&runner, "sentry@anthropics", "user", None).unwrap_err();
+        assert_eq!(err, "Plugin not found");
+    }
+
+    #[test]
+    fn unrelated_errors_mentioning_confirm_or_tty_keep_their_message() {
+        for message in ["could not confirm the marketplace", "tty allocation failed"] {
+            let runner = FakeRunner {
+                fail: Some(message.to_string()),
+                ..Default::default()
+            };
+            let err = update_plugin_with(&runner, "codex@anthropics", "user", None).unwrap_err();
+            assert_eq!(err, message);
+        }
     }
 
     #[test]

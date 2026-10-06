@@ -70,10 +70,9 @@ function deriveLifecycleTargets(
   const removalPreview = removalAvailability?.available ? removalAvailability.preview : null;
   const removalDisabledReason =
     removalAvailability && !removalAvailability.available ? removalAvailability.reason : null;
-  const updateAvailability =
-    installedSkill && selectedLifecycleScope
-      ? skillUpdateAvailability(installedSkill, selectedLifecycleScope)
-      : null;
+  const updateAvailability = installedSkill
+    ? skillUpdateAvailability(installedSkill, selectedLifecycleScope)
+    : null;
   const updateDisabledReason =
     updateAvailability && !updateAvailability.available ? updateAvailability.reason : null;
 
@@ -130,35 +129,40 @@ function useSkillLifecycleMutations(
       });
   };
 
-  const handleUpdate = async () => {
+  const handleUpdate = () => {
     const installed = skill.installed_info;
     if (!updateAvailability?.available || !installed) return;
     setIsUpdating(true);
-    try {
-      if ("plugin" in updateAvailability) {
-        const { plugin_id, scope, project_path } = updateAvailability.plugin;
-        await updatePlugin(plugin_id, "Claude Code", scope, project_path);
-        addToast(pluginUpdatedToast(plugin_id));
+    const update =
+      "plugin" in updateAvailability
+        ? updatePlugin(
+            updateAvailability.plugin.plugin_id,
+            "Claude Code",
+            updateAvailability.plugin.scope,
+            updateAvailability.plugin.project_path,
+          ).then((outcome) =>
+            addToast(pluginUpdatedToast(updateAvailability.plugin.plugin_id, outcome)),
+          )
+        : guard.requestUpdate(installed, {
+            scopeTarget: updateAvailability.target,
+            onFinished: ({ success, error }) =>
+              onInstallComplete(
+                success
+                  ? { success: true, skillName: skill.name }
+                  : { success: false, error: error ?? "Update failed.", skillName: skill.name },
+              ),
+          });
+    return update
+      .catch((error) => {
+        addToast({
+          type: "error",
+          title: "Update failed",
+          message: error instanceof Error ? error.message : "Unknown error",
+        });
+      })
+      .finally(() => {
         setIsUpdating(false);
-        return;
-      }
-      await guard.requestUpdate(installed, {
-        scopeTarget: updateAvailability.target,
-        onFinished: ({ success, error }) =>
-          onInstallComplete(
-            success
-              ? { success: true, skillName: skill.name }
-              : { success: false, error: error ?? "Update failed.", skillName: skill.name },
-          ),
       });
-    } catch (error) {
-      addToast({
-        type: "error",
-        title: "Update failed",
-        message: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
-    setIsUpdating(false);
   };
 
   return {

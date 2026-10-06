@@ -24,8 +24,13 @@ import {
   skillParkVerb,
   skillRemovalAvailability,
   skillUpdateAvailability,
+  pluginOwnerIdFor,
+  skillPluginUpdateTargets,
   skillUpdateOwnerTargets,
+  uniquePluginTargets,
+  updatePluginTargets,
 } from "../../lib/skill-lifecycle-target";
+import type { PluginInstallUpdater } from "../../lib/skill-lifecycle-target";
 import {
   INVOCATION_POLICY_OPTIONS,
   invocationFilesForSkill,
@@ -77,6 +82,7 @@ function skipReason(skill: InstalledSkill, action: BulkAction): string | null {
       return files.length === 0 ? "no SKILL.md to edit" : "no editable file";
     }
     case "update": {
+      if (skillPluginUpdateTargets(skill).length > 0) return null;
       if (skillMutableLifecycleScopes(skill).length === 0) return "no managed copy";
       if (bulkUpdateTargets(skill).length > 0) return null;
       return skillUpdateOwnerTargets(skill).length === 0
@@ -172,7 +178,9 @@ export function bulkUpdateResult(
 /**
  * The list's bulk Update: each skill in `forkNames` is forked and pulled
  * (keeping the user's edits), the rest go through one batched update call.
- * One result covers both, with the skills whose pull left conflict markers.
+ * Plugin installs update last, once per plugin id, scope, and project, for each
+ * skill whose own copies updated. One result covers all of it, with the skills
+ * whose pull left conflict markers.
  */
 export async function runBulkUpdate(
   skills: InstalledSkill[],
@@ -184,6 +192,7 @@ export async function runBulkUpdate(
       targets: LifecycleTarget[],
       onProgress: (done: number, total: number) => void,
     ) => Promise<UpdateAllOutcome>;
+    updatePluginInstall: PluginInstallUpdater;
   },
   onProgress: (done: number, total: number) => void,
 ): Promise<BulkRunResult> {
@@ -195,10 +204,12 @@ export async function runBulkUpdate(
   const forkedOthers = new Map(
     forked.map((skill) => [skill, excludeForkedOwner(skill, bulkUpdateTargets(skill))]),
   );
+  const pluginTargetCount = uniquePluginTargets(rest.flatMap(skillPluginUpdateTargets)).length;
   let total =
     forked.length +
     rest.flatMap(bulkUpdateTargets).length +
-    [...forkedOthers.values()].reduce((sum, targets) => sum + targets.length, 0);
+    [...forkedOthers.values()].reduce((sum, targets) => sum + targets.length, 0) +
+    pluginTargetCount;
   const forkFailed = new Set<InstalledSkill>();
   for (const [index, skill] of forked.entries()) {
     try {
@@ -219,14 +230,17 @@ export async function runBulkUpdate(
   const forkedToBatch = forked.filter(
     (skill) => !forkFailed.has(skill) && (forkedOthers.get(skill) ?? []).length > 0,
   );
-  const batched = [...rest, ...forkedToBatch];
+  const batched = [
+    ...rest.filter((skill) => bulkUpdateTargets(skill).length > 0),
+    ...forkedToBatch,
+  ];
   const batchTargets = [
     ...rest.flatMap(bulkUpdateTargets),
     ...forkedToBatch.flatMap((skill) => forkedOthers.get(skill) ?? []),
   ];
   // A failed fork's other copies leave the total, so progress still reaches it.
   const plannedTotal = total;
-  total = forked.length + batchTargets.length;
+  total = forked.length + batchTargets.length + pluginTargetCount;
   if (total !== plannedTotal) onProgress(forked.length, total);
   if (batched.length > 0) {
     const outcome = await deps.updateAll(batchTargets, (done) =>
@@ -248,6 +262,39 @@ export async function runBulkUpdate(
         });
       }
     }
+  }
+  const pluginSkills = rest.filter(
+    (skill) =>
+      skillPluginUpdateTargets(skill).length > 0 &&
+      !result.failed.some((failure) => failure.skill === skill),
+  );
+  if (pluginSkills.length > 0) {
+    let pluginsDone = 0;
+    const outcome = await updatePluginTargets(
+      uniquePluginTargets(pluginSkills.flatMap(skillPluginUpdateTargets)),
+      (target) =>
+        deps.updatePluginInstall(target).then((updateOutcome) => {
+          pluginsDone += 1;
+          onProgress(forked.length + batchTargets.length + pluginsDone, total);
+          return updateOutcome;
+        }),
+    );
+    const failureById = new Map(
+      outcome.failures.map((failure) => [failure.ownerId, failure.message]),
+    );
+    const succeeded = new Set(result.succeeded);
+    for (const skill of pluginSkills) {
+      const error = skillPluginUpdateTargets(skill)
+        .map((target) => failureById.get(pluginOwnerIdFor(target)))
+        .find((message) => message !== undefined);
+      if (error === undefined) {
+        succeeded.add(skill);
+      } else {
+        succeeded.delete(skill);
+        result.failed.push({ skill, error });
+      }
+    }
+    result.succeeded = [...succeeded];
   }
   if (conflicted.length > 0) result.conflicted = conflicted;
   return result;

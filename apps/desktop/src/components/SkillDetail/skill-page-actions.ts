@@ -31,11 +31,13 @@ import {
   skillPluginUpdateTargets,
   skillRemovalEmptiesSkill,
   skillUpdateOwnerTargets,
+  updatePluginTargets,
 } from "../../lib/skill-lifecycle-target";
-import type { SkillRemovalChoice } from "../../lib/skill-lifecycle-target";
+import type { PluginInstallUpdater, SkillRemovalChoice } from "../../lib/skill-lifecycle-target";
 import type { InstalledSkill, Toast } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
+import type { UpdateFinish } from "../../hooks/useGuardedSkillUpdate";
 
 /**
  * The one deployment `forkSkill` will accept: the shared-folder copy at
@@ -56,6 +58,47 @@ type AddToast = ReturnType<typeof useAppStore.getState>["addToast"];
  * Any kind, not only dotagents/skills-sh: a skill with a plugin copy reports `plugin` as its kind
  * while its skills.sh copy still has an update, and the header is the page's only Update.
  */
+/**
+ * The header Update: managed copies first, through the overwrite guard, then the
+ * skill's plugin installs. Plugins wait for the guard's `onFinished`, so a
+ * cancelled overwrite dialog or a failed copy update leaves them alone.
+ */
+export async function runHeaderUpdate<
+  S extends Pick<InstalledSkill, "deployments" | "update_owner_ids" | "update_owners">,
+>(
+  skill: S,
+  guard: {
+    requestUpdate: (
+      skill: S,
+      options: { skipPlugins: boolean; onFinished: (finish: UpdateFinish) => Promise<void> },
+    ) => Promise<void>;
+  },
+  addToast: (toast: Omit<Toast, "id">) => void,
+  updatePluginInstall: PluginInstallUpdater,
+): Promise<void> {
+  const updatePlugins = async () => {
+    const outcome = await updatePluginTargets(skillPluginUpdateTargets(skill), (target) =>
+      updatePluginInstall(target).then((result) => {
+        addToast(pluginUpdatedToast(target.plugin_id, result));
+        return result;
+      }),
+    );
+    for (const failure of outcome.failures) {
+      addToast({ type: "error", title: "Couldn't update plugin", message: failure.message });
+    }
+  };
+  if (skillUpdateOwnerTargets(skill).length === 0) {
+    await updatePlugins();
+    return;
+  }
+  await guard.requestUpdate(skill, {
+    skipPlugins: true,
+    onFinished: async ({ success }) => {
+      if (success) await updatePlugins();
+    },
+  });
+}
+
 export function headerUpdateLabel(
   skill: Pick<InstalledSkill, "source_kind" | "update_owner_ids">,
 ): "Pull latest" | "Update" | null {
@@ -252,14 +295,11 @@ export function useSkillPageActions(
     });
 
   const doUpdate = () =>
-    runAction(addToast, setIsUpdating, "Update failed", async () => {
-      if (skillUpdateOwnerTargets(skill).length > 0) await guard.requestUpdate(skill);
-      for (const { plugin_id, scope, project_path } of skillPluginUpdateTargets(skill)) {
-        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each plugin update takes the write lease, so the calls must not overlap
-        await updatePlugin(plugin_id, "Claude Code", scope, project_path);
-        addToast(pluginUpdatedToast(plugin_id));
-      }
-    });
+    runAction(addToast, setIsUpdating, "Update failed", () =>
+      runHeaderUpdate(skill, guard, addToast, (target) =>
+        updatePlugin(target.plugin_id, "Claude Code", target.scope, target.project_path),
+      ),
+    );
 
   const doRemove = async (choice: SkillRemovalChoice) => {
     const confirmed = await ask(choice.confirmMessage, {

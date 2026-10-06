@@ -749,3 +749,57 @@ describe("updateAllOutdatedSkills with edited skills", () => {
     expect(seen[seen.length - 1]).toEqual([1, 1]);
   });
 });
+
+describe("updateAllOutdatedSkills with plugin updates", () => {
+  const pluginOwner = (name: string) => ({
+    name,
+    source_kind: "plugin" as const,
+    update_owner_ids: ["plugin:codex@official"],
+    update_owners: [
+      {
+        owner_id: "plugin:codex@official",
+        latest_commit: null,
+        latest_commit_at: null,
+        plugin_scope: "user",
+        plugin_project_path: null,
+      },
+    ],
+    deployments: noDeployments,
+  });
+
+  it("update_all_updates_a_plugin_shared_by_two_skills_once_and_counts_both_skills", async () => {
+    const plugins: string[] = [];
+    const tally = await updateAllOutdatedSkills(
+      [pluginOwner("one"), pluginOwner("two")],
+      async () => {
+        throw new Error("no forks");
+      },
+      async (targets) => succeedAll(targets.map((target) => target.owner_id ?? "")),
+      undefined,
+      undefined,
+      async (target) => {
+        plugins.push(target.plugin_id);
+        return "updated";
+      },
+    );
+    expect(plugins).toEqual(["codex@official"]);
+    expect(tally).toMatchObject({ skillsAttempted: 2, skillsSucceeded: 2, failures: 0 });
+  });
+
+  it("update_all_counts_no_skill_as_updated_when_its_plugin_update_fails", async () => {
+    const tally = await updateAllOutdatedSkills(
+      [pluginOwner("one")],
+      async () => {
+        throw new Error("no forks");
+      },
+      async (targets) => succeedAll(targets.map((target) => target.owner_id ?? "")),
+      undefined,
+      undefined,
+      async () => {
+        throw new Error("marketplace unreachable");
+      },
+    );
+    expect(tally).toMatchObject({ skillsSucceeded: 0, failures: 1 });
+    expect(tally.firstError).toContain("marketplace unreachable");
+  });
+});

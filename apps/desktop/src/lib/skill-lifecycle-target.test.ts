@@ -21,6 +21,7 @@ import {
   skillPluginUpdateTargets,
   skillUpdateAvailability,
   skillUpdateOwnerTargets,
+  pluginUpdatedToast,
   skillUpdateToast,
   updateSkillOwners,
 } from "./skill-lifecycle-target";
@@ -1151,5 +1152,50 @@ describe("plugin updates", () => {
   it("keeps plugin owners out of the targets updateSkill would run", () => {
     expect(skillUpdateOwnerTargets(pluginSkill({ scope: "user" }))).toEqual([]);
     expect(skillPluginUpdateTargets(pluginSkill({ scope: "user" }))).toHaveLength(1);
+  });
+
+  it("ignores owners without an update when it counts update sources", () => {
+    const skill = pluginSkill(
+      { scope: "user" },
+      { deployments: [pluginDeployment, deployment("sh", "owner:v1/global/codex")] },
+    );
+    expect(skillUpdateAvailability(skill, everywhere)).toEqual({
+      available: true,
+      plugin: { plugin_id: "codex@official", scope: "user", project_path: null },
+    });
+  });
+
+  it("offers the plugin update for a plugin-only skill when no scope is selected", () => {
+    expect(skillUpdateAvailability(pluginSkill({ scope: "user" }), null)).toEqual({
+      available: true,
+      plugin: { plugin_id: "codex@official", scope: "user", project_path: null },
+    });
+  });
+
+  it("updates a plugin-only skill through the plugin updater once and never through updateSkill", async () => {
+    const owners: string[] = [];
+    const plugins: string[] = [];
+    const summary = await updateSkillOwners(
+      pluginSkill({ scope: "user" }),
+      async (target) => {
+        owners.push(target.owner_id ?? "");
+        return { success: true };
+      },
+      async (target) => {
+        plugins.push(target.plugin_id);
+        return "updated";
+      },
+    );
+    expect(owners).toEqual([]);
+    expect(plugins).toEqual(["codex@official"]);
+    expect(summary).toMatchObject({ attempted: 1, succeeded: 1, failures: [] });
+  });
+
+  it("reports a plugin the CLI found current as already up to date, not as updated", () => {
+    expect(pluginUpdatedToast("codex@official", "up_to_date")).toMatchObject({
+      type: "info",
+      title: expect.stringContaining("already up to date"),
+    });
+    expect(pluginUpdatedToast("codex@official", "updated").title).not.toContain("already");
   });
 });
