@@ -953,6 +953,76 @@ describe("updateAllOutdatedSkills with plugin updates", () => {
     expect(tally).toMatchObject({ skillsSucceeded: 0, failures: 1, firstError: "merge exploded" });
   });
 
+  const editedWithPlugin = {
+    ...pluginOwner("edited"),
+    source_kind: "skills-sh" as const,
+    update_owner_ids: ["owner:v1/global/edited", "plugin:codex@official"],
+    update_owners: [
+      { owner_id: "owner:v1/global/edited", latest_commit: "next", latest_commit_at: null },
+      ...pluginOwner("edited").update_owners,
+    ],
+    deployments: [
+      {
+        ...canonicalDeployment,
+        id: "dep:v1/edited",
+        owner_kind: "skills-sh" as const,
+        owner_id: "owner:v1/global/edited",
+      },
+    ],
+  };
+
+  /** Flow: Update all forks an edited skill that also ships from a plugin, and the fork is
+   * refused. Expectation: no plugin update runs, for it or for a skill sharing the plugin.
+   * Failure: the plugin changes every skill it ships although the protective fork never happened. */
+  it("update_all_runs_no_plugin_when_the_fork_is_refused", async () => {
+    const plugins: string[] = [];
+    const tally = await updateAllOutdatedSkills(
+      [editedWithPlugin, pluginOwner("sharer")],
+      async () => {
+        throw new Error("pull must not run after a failed fork");
+      },
+      async (targets) => succeedAll(targets.map((target) => target.owner_id ?? "")),
+      undefined,
+      {
+        names: new Set(["edited"]),
+        fork: async () => {
+          throw new Error("permission denied");
+        },
+      },
+      async (target) => {
+        plugins.push(target.plugin_id);
+        return updated;
+      },
+    );
+    expect(plugins).toEqual([]);
+    expect(tally).toMatchObject({ skillsSucceeded: 0, firstError: "permission denied" });
+  });
+
+  /** Flow: the fork of an edited skill is made but the pull onto it fails. Expectation: its
+   * plugin still updates. Failure: a pull problem holds back an unrelated plugin update. */
+  it("update_all_still_runs_the_plugin_when_only_the_new_fork_pull_fails", async () => {
+    const plugins: string[] = [];
+    const tally = await updateAllOutdatedSkills(
+      [editedWithPlugin],
+      async () => {
+        throw new Error("merge exploded");
+      },
+      async (targets) => succeedAll(targets.map((target) => target.owner_id ?? "")),
+      undefined,
+      {
+        names: new Set(["edited"]),
+        // SAFETY: only `deployment_id` is read from the record.
+        fork: async () => ({ deployment_id: "dep:v1/forked" }) as ForkRecord,
+      },
+      async (target) => {
+        plugins.push(target.plugin_id);
+        return updated;
+      },
+    );
+    expect(plugins).toEqual(["codex@official"]);
+    expect(tally).toMatchObject({ skillsSucceeded: 0, failures: 1 });
+  });
+
   /** Failure: a `skipped` outcome counts as updated, and progress stops short after a failed plugin. */
   it("update_all_counts_a_skipped_plugin_as_not_updated_and_still_finishes_progress", async () => {
     const seen: [number, number][] = [];

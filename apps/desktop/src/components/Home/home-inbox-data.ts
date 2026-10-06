@@ -29,6 +29,7 @@ import type {
 import {
   excludeForkedOwner,
   forkTargetForSkill,
+  ForkPullError,
   forkThenPull,
   lifecycleTargetForPark,
   pluginTargetKey,
@@ -198,7 +199,8 @@ export async function updateAllOutdatedSkills(
     ),
   );
   const failedSkillNames = new Set<string>();
-  // Skills whose own copies failed, as opposed to a fork pull: only these hold their plugins back.
+  // Skills whose own copies or fork creation failed, as opposed to a fork pull: only these hold
+  // their plugins back.
   const copyFailedNames = new Set<string>();
   const tally: UpdateAllTally = {
     attempted: total,
@@ -216,17 +218,18 @@ export async function updateAllOutdatedSkills(
   onProgress?.(0, total);
 
   for (const [index, skill] of forks.entries()) {
+    const makesFork = skill.source_kind !== "fork" && forkEdited !== undefined;
     try {
-      const pullOne =
-        skill.source_kind === "fork" || !forkEdited
-          ? () => pullFork(lifecycleTargetForPark(skill))
-          : () => forkThenPull(forkTargetForSkill(skill), forkEdited.fork, pullFork);
+      const pullOne = makesFork
+        ? () => forkThenPull(forkTargetForSkill(skill), forkEdited.fork, pullFork)
+        : () => pullFork(lifecycleTargetForPark(skill));
       // react-doctor-disable-next-line react-doctor/async-await-in-loop -- update-all runs sequentially on purpose; concurrent `npx skills update` calls race on ~/.agents/.skill-lock.json
       const pull = await pullOne();
       if (pull.conflicts.length > 0) (tally.conflicted ??= []).push(skill.name);
       tally.succeeded += 1;
     } catch (error) {
       failedSkillNames.add(skill.name);
+      if (makesFork && !(error instanceof ForkPullError)) copyFailedNames.add(skill.name);
       fail(1, error instanceof Error ? error.message : String(error));
     }
     onProgress?.(index + 1, total);

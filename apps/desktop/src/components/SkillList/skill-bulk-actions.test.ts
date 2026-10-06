@@ -673,6 +673,61 @@ describe("runBulkUpdate with plugin updates", () => {
     expect(names(result.succeeded)).toEqual(["edited"]);
   });
 
+  /** Flow: "Fork and update" on an edited skill that also ships from a plugin, and the fork is
+   * refused. Expectation: no plugin update runs, for it or for a skill sharing the plugin.
+   * Failure: the plugin changes every skill it ships although the protective fork never happened. */
+  it("bulk_update_runs_no_plugin_when_the_fork_is_refused", async () => {
+    const updatePluginInstall = vi.fn(async () => ({ outcome: "updated", message: null }));
+    const result = await runBulkUpdate(
+      [managedAndPlugin("edited"), pluginSkill("sharer")],
+      new Set(["edited"]),
+      {
+        fork: async () => {
+          throw new Error("permission denied");
+        },
+        pullFork: noop,
+        updateAll: noop,
+        updatePluginInstall,
+      },
+      () => {},
+    );
+    expect(updatePluginInstall).not.toHaveBeenCalled();
+    expect(result.succeeded).toEqual([]);
+    expect(result.failed.find((failure) => failure.skill.name === "edited")?.error).toBe(
+      "permission denied",
+    );
+    expect(result.failed.find((failure) => failure.skill.name === "sharer")?.error).toBe(
+      "Shares plugin codex@official with a skill that failed.",
+    );
+  });
+
+  /** Flow: the fork is made but pulling upstream onto it fails. Expectation: the plugin still
+   * updates and the skill fails once, with the pull reason. Failure: a pull problem holds back an
+   * unrelated plugin update. */
+  it("bulk_update_still_runs_the_plugin_when_only_the_fork_pull_fails", async () => {
+    const plugins: string[] = [];
+    const result = await runBulkUpdate(
+      [managedAndPlugin("edited")],
+      new Set(["edited"]),
+      {
+        // SAFETY: only `deployment_id` is read from the record.
+        fork: async () => ({ deployment_id: "dep:forked" }) as ForkRecord,
+        pullFork: async () => {
+          throw new Error("merge exploded");
+        },
+        updateAll: noop,
+        updatePluginInstall: async (target) => {
+          plugins.push(target.plugin_id);
+          return { outcome: "updated", message: null };
+        },
+      },
+      () => {},
+    );
+    expect(plugins).toEqual(["codex@official"]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]?.error).toContain("merge exploded");
+  });
+
   /** Failure: the plugin of a skill whose copy failed stays in the total, so the bar stops short. */
   it("bulk_update_progress_reaches_its_total_when_a_copy_fails_and_its_plugin_is_skipped", async () => {
     const seen: [number, number][] = [];
