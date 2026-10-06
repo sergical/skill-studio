@@ -29,7 +29,7 @@ describe("skillUpstreamNote", () => {
   // A failure means the user sees the wrong repo, a wrong count, or a dead link.
   it("names the original repo, the change count, and the compare link", () => {
     expect(skillUpstreamNote(skill({}), [ahead({})])).toEqual({
-      text: "mattpocock/skills has 12 changes your fork doesn't.",
+      text: "Forked from mattpocock/skills, which has 12 changes this fork doesn't.",
       href: "https://github.com/sergical/mattpocock-skills/compare/main...mattpocock:skills:main",
     });
   });
@@ -38,7 +38,7 @@ describe("skillUpstreamNote", () => {
   // Expectation: "1 change", not "1 changes".
   it("uses the singular for one change", () => {
     expect(skillUpstreamNote(skill({}), [ahead({ behind_by: 1 })])?.text).toBe(
-      "mattpocock/skills has 1 change your fork doesn't.",
+      "Forked from mattpocock/skills, which has 1 change this fork doesn't.",
     );
   });
 
