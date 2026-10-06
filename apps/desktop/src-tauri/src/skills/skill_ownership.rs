@@ -71,8 +71,23 @@ pub struct OwnershipLedgers {
 /// that has `<project>/agents.toml`, `<project>/agents.lock` (where dotagents
 /// puts its project files), or `.agents/.skill-lock.json`.
 pub fn load_ownership_ledgers(home: &Path, project_paths: &[PathBuf]) -> Vec<OwnershipLedgers> {
+    load_ownership_ledgers_checked(home, project_paths).0
+}
+
+/// `load_ownership_ledgers`, plus whether any lock or ledger file existed but
+/// could not be read or parsed. A failed file reads as empty in the ledgers, so
+/// a caller that prunes against them can skip pruning instead.
+pub fn load_ownership_ledgers_checked(
+    home: &Path,
+    project_paths: &[PathBuf],
+) -> (Vec<OwnershipLedgers>, bool) {
     let mut out = Vec::new();
-    out.push(read_ledgers(
+    let mut any_failed = false;
+    let mut push = |(ledgers, failed): (OwnershipLedgers, bool)| {
+        any_failed |= failed;
+        out.push(ledgers);
+    };
+    push(read_ledgers(
         home,
         home.join(".agents"),
         InstallScope::Global,
@@ -85,7 +100,7 @@ pub fn load_ownership_ledgers(home: &Path, project_paths: &[PathBuf]) -> Vec<Own
             || dotagents_dir.join("agents.lock").exists()
             || lock_file::lock_file_path_in(&agents_dir).exists()
         {
-            out.push(read_ledgers(
+            push(read_ledgers(
                 home,
                 agents_dir,
                 InstallScope::Project,
@@ -93,31 +108,32 @@ pub fn load_ownership_ledgers(home: &Path, project_paths: &[PathBuf]) -> Vec<Own
             ));
         }
     }
-    out
+    (out, any_failed)
 }
 
+/// The ledgers for one root, and whether a file that exists failed to read.
 fn read_ledgers(
     home: &Path,
     agents_dir: PathBuf,
     scope: InstallScope,
     project_path: Option<PathBuf>,
-) -> OwnershipLedgers {
+) -> (OwnershipLedgers, bool) {
     let fs = skill_studio_host::RealFs::new();
-    let lock = lock_file::read_lock_file(&fs, &lock_file::lock_file_path_in(&agents_dir))
-        .unwrap_or(SkillLockFile {
-            version: 3,
-            skills: HashMap::new(),
-        });
+    let lock = lock_file::read_lock_file(&fs, &lock_file::lock_file_path_in(&agents_dir));
     let dotagents_dir = dotagents_ledger::dotagents_dir(home, project_path.as_deref());
-    let dotagents =
-        dotagents_ledger::read_dotagents_ledger(&fs, &dotagents_dir).unwrap_or_default();
-    OwnershipLedgers {
+    let dotagents = dotagents_ledger::read_dotagents_ledger(&fs, &dotagents_dir);
+    let failed = lock.is_err() || dotagents.is_err();
+    let ledgers = OwnershipLedgers {
         agents_dir,
         scope,
         project_path,
-        lock,
-        dotagents,
-    }
+        lock: lock.unwrap_or(SkillLockFile {
+            version: 3,
+            skills: HashMap::new(),
+        }),
+        dotagents: dotagents.unwrap_or_default(),
+    };
+    (ledgers, failed)
 }
 
 pub fn owner_id_for(ledger: &OwnershipLedgers, name: &str) -> String {
