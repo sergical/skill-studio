@@ -12,6 +12,7 @@ import {
   forkEditedAndUpdate,
   forkableDeployment,
   lifecycleTargetForPark,
+  pullForkAndUpdatePlugins,
   pullUpstreamToast,
   skillUpdateToast,
   skillsWithLocalEdits,
@@ -185,7 +186,14 @@ export function useGuardedSkillUpdate() {
     updating.current.add(skill.name);
     try {
       if (skill.source_kind === "fork") {
-        addToast(pullUpstreamToast(await pullForkUpstream(lifecycleTargetForPark(skill))));
+        // The fork's pull and its plugin installs are separate updates: a failed pull must not
+        // hold the plugins back, and a fork whose only update is a plugin has nothing to pull.
+        await pullForkAndUpdatePlugins(
+          skill,
+          () => pullForkUpstream(lifecycleTargetForPark(skill)),
+          addToast,
+          updatePluginInstall,
+        );
       } else {
         await requestUpdate(skill);
       }

@@ -868,7 +868,7 @@ describe("forkEditedAndUpdate", () => {
       updateOwner: async () => ({ success: updateOwnerOk, error: "boom" }),
       updatePluginInstall: async (target: { plugin_id: string }) => {
         plugins.push(target.plugin_id);
-        return "updated";
+        return { outcome: "updated", message: null };
       },
     });
     const ok = await forkEditedAndUpdate(withPlugin, deps(true));
@@ -1216,7 +1216,7 @@ describe("plugin updates", () => {
       },
       async (target) => {
         plugins.push(target.plugin_id);
-        return "updated";
+        return { outcome: "updated", message: null };
       },
     );
     expect(owners).toEqual([]);
@@ -1225,10 +1225,20 @@ describe("plugin updates", () => {
   });
 
   it("reports a plugin the CLI found current as already up to date, not as updated", () => {
-    expect(pluginUpdatedToast("codex@official", "up_to_date")).toMatchObject({
+    expect(
+      pluginUpdatedToast("codex@official", { outcome: "up_to_date", message: null }),
+    ).toMatchObject({
       type: "info",
       title: expect.stringContaining("already up to date"),
     });
-    expect(pluginUpdatedToast("codex@official", "updated").title).not.toContain("already");
+    expect(
+      pluginUpdatedToast("codex@official", { outcome: "updated", message: null }).title,
+    ).not.toContain("already");
+  });
+
+  it("shows a warning, not a success, when the CLI skipped the plugin update", () => {
+    expect(
+      pluginUpdatedToast("codex@official", { outcome: "skipped", message: "not installed" }),
+    ).toMatchObject({ type: "warning", message: expect.stringContaining("not installed") });
   });
 });

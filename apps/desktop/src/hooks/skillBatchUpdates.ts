@@ -3,6 +3,7 @@
 // callers run `skillsWithLocalEdits` and the edits dialog first.
 // ============================================================================
 
+import type { PluginUpdateResult } from "../lib/skill-api";
 import {
   forkSkill,
   pullForkUpstream,
@@ -14,8 +15,8 @@ import { updateAllOutdatedSkills } from "../components/Home/home-inbox-data";
 import { runBulkUpdate } from "../components/SkillList/skill-bulk-actions";
 import type { InstalledSkill } from "@skill-studio/lib";
 
-/** Runs `claude plugin update` for one install and resolves to the CLI's `updateOutcome`. */
-export function updatePluginInstall(target: PluginUpdateTarget): Promise<string> {
+/** Runs `claude plugin update` for one install and resolves to the CLI's outcome and message. */
+export function updatePluginInstall(target: PluginUpdateTarget): Promise<PluginUpdateResult> {
   return updatePlugin(target.plugin_id, "Claude Code", target.scope, target.project_path);
 }
 

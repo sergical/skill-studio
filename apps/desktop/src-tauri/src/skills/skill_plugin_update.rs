@@ -6,9 +6,10 @@
 // compared by git sha. The installs come from
 // `~/.claude/plugins/installed_plugins.json`, the marketplace copy from
 // `~/.claude/plugins/marketplaces/<marketplace>/`. A relative-path source
-// reads its manifest locally; a github source's manifest is fetched by the
-// background update check into `plugin-versions.json`, which the snapshot
-// overlay only reads. A missing, unreadable, or malformed file means "no
+// reads its manifest locally; a github source's manifest, and the catalog of a
+// GitHub-hosted marketplace (Claude Code does not refresh third-party
+// checkouts), are fetched by the background update check into
+// `plugin-versions.json`, which the snapshot overlay only reads. A missing, unreadable, or malformed file means "no
 // claim", never an error.
 // ============================================================================
 
@@ -257,7 +258,18 @@ pub struct CachedPluginVersion {
     pub version: Option<String>,
 }
 
-/// `<app data>/skill-studio/plugin-versions.json`. `entries` is keyed
+/// A marketplace's `marketplace.json` as fetched from its GitHub repo, with
+/// the commit it was read at. Claude Code does not refresh a third-party
+/// marketplace checkout by default, so this is the newer view of the catalog.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedCatalog {
+    pub url: String,
+    pub commit: String,
+    pub body: String,
+}
+
+/// `<app data>/skill-studio/plugin-versions.json`. `catalogs` maps a
+/// marketplace name to its fetched catalog. `entries` is keyed
 /// `"{url}#{path}@{sha}"`: a sha never changes content, so an entry never
 /// goes stale. `resolved` maps a source with no pinned sha, keyed
 /// `"{url}#{path}@{ref|HEAD}"`, to the commit that ref pointed at during the
@@ -267,6 +279,7 @@ pub struct CachedPluginVersion {
 pub struct PluginVersionCache {
     pub entries: BTreeMap<String, CachedPluginVersion>,
     pub resolved: BTreeMap<String, String>,
+    pub catalogs: BTreeMap<String, CachedCatalog>,
 }
 
 pub fn plugin_versions_path(app_data: &Path) -> PathBuf {
@@ -430,13 +443,23 @@ pub enum ManifestFetch {
     Failed,
 }
 
+/// What one commit lookup came back with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitLookup {
+    Sha(String),
+    /// GitHub says the repo or ref does not exist (HTTP 404 or 422).
+    Gone,
+    /// Network, auth, or rate-limit trouble: keep what the last check knew.
+    Failed,
+}
+
 /// The GitHub lookups a refresh makes.
 pub trait PluginRemote {
-    /// The manifest at `api_path` (see [`gh_manifest_api_path`]).
+    /// The file at `api_path` (see [`gh_manifest_api_path`]); also used for a
+    /// marketplace's `marketplace.json`.
     fn manifest(&self, api_path: &str) -> ManifestFetch;
-    /// The commit sha `git_ref` points at in `owner/repo`; `None` when the
-    /// repo or commit cannot be read.
-    fn commit_sha(&self, owner: &str, repo: &str, git_ref: &str) -> Option<String>;
+    /// The commit sha `git_ref` points at in `owner/repo`.
+    fn commit_sha(&self, owner: &str, repo: &str, git_ref: &str) -> CommitLookup;
 }
 
 struct GhRemote<'a>(&'a Path);
@@ -454,57 +477,235 @@ impl PluginRemote for GhRemote<'_> {
         }
     }
 
-    fn commit_sha(&self, owner: &str, repo: &str, git_ref: &str) -> Option<String> {
+    fn commit_sha(&self, owner: &str, repo: &str, git_ref: &str) -> CommitLookup {
         let api_path = format!("repos/{owner}/{repo}/commits/{git_ref}");
-        let stdout = gh_cli::run_gh(self.0, &["api", &api_path, "--jq", ".sha"], None).ok()?;
-        let sha = String::from_utf8_lossy(&stdout).trim().to_string();
-        (sha.len() >= 7 && sha.bytes().all(|b| b.is_ascii_hexdigit())).then_some(sha)
+        match gh_cli::run_gh(self.0, &["api", &api_path, "--jq", ".sha"], None) {
+            Ok(stdout) => {
+                let sha = String::from_utf8_lossy(&stdout).trim().to_string();
+                if sha.len() >= 7 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    CommitLookup::Sha(sha)
+                } else {
+                    CommitLookup::Failed
+                }
+            }
+            Err(gh_cli::GhError::Failed(message))
+                if message.contains("HTTP 404") || message.contains("HTTP 422") =>
+            {
+                CommitLookup::Gone
+            }
+            Err(_) => CommitLookup::Failed,
+        }
+    }
+}
+
+/// One marketplace in `known_marketplaces.json` that lives on GitHub.
+struct GithubMarketplace {
+    owner: String,
+    repo: String,
+    git_ref: Option<String>,
+}
+
+fn is_safe_marketplace_name(name: &str) -> bool {
+    !name.contains(['/', '\\']) && name != ".."
+}
+
+/// The GitHub-hosted marketplaces Claude Code knows, by name. A source that is
+/// not GitHub, or has an unsafe name or ref, is left out and keeps its local
+/// checkout.
+fn github_marketplaces(plugins_dir: &Path) -> BTreeMap<String, GithubMarketplace> {
+    let Ok(body) = std::fs::read_to_string(plugins_dir.join("known_marketplaces.json")) else {
+        return BTreeMap::new();
+    };
+    let Ok(Value::Object(known)) = serde_json::from_str::<Value>(&body) else {
+        return BTreeMap::new();
+    };
+    known
+        .iter()
+        .filter(|(name, _)| is_safe_marketplace_name(name))
+        .filter_map(|(name, entry)| {
+            let source = entry.get("source")?;
+            let field = |key: &str| source.get(key).and_then(Value::as_str);
+            let (owner, repo) = match field("source")? {
+                "github" => {
+                    let (owner, repo) = field("repo")?.split_once('/')?;
+                    (is_name_part(owner) && is_name_part(repo))
+                        .then(|| (owner.to_string(), repo.to_string()))?
+                }
+                "git" | "url" => github_repo(field("url")?)?,
+                _ => return None,
+            };
+            let git_ref = non_empty(field("ref")).map(str::to_string);
+            if git_ref
+                .as_deref()
+                .is_some_and(|git_ref| !is_safe_ref(git_ref))
+            {
+                return None;
+            }
+            Some((
+                name.clone(),
+                GithubMarketplace {
+                    owner,
+                    repo,
+                    git_ref,
+                },
+            ))
+        })
+        .collect()
+}
+
+/// The remote source of a relative-path plugin of a fetched catalog: its
+/// folder in the marketplace repo, at the commit the catalog was read from.
+fn catalog_plugin_remote(catalog: &CachedCatalog, relative: &str) -> RemoteSource {
+    RemoteSource {
+        url: catalog.url.clone(),
+        path: Some(relative.to_string()),
+        sha: Some(catalog.commit.clone()),
+        git_ref: None,
+    }
+}
+
+/// Fetches the catalog of every installed plugin's GitHub marketplace at the
+/// commit its ref points at. A catalog that cannot be fetched keeps the
+/// previous one when the failure may be transient, else falls back to the
+/// local checkout (no entry).
+fn refresh_catalogs(
+    plugins_dir: &Path,
+    installed_ids: &[String],
+    previous: &PluginVersionCache,
+    remote_api: &dyn PluginRemote,
+    next: &mut PluginVersionCache,
+) {
+    for (name, marketplace) in github_marketplaces(plugins_dir) {
+        let installed_here = installed_ids
+            .iter()
+            .any(|id| id.split_once('@').is_some_and(|(_, m)| m == name));
+        if !installed_here {
+            continue;
+        }
+        let keep_previous = |next: &mut PluginVersionCache| {
+            if let Some(catalog) = previous.catalogs.get(&name) {
+                next.catalogs.insert(name.clone(), catalog.clone());
+            }
+        };
+        let git_ref = marketplace.git_ref.as_deref().unwrap_or("HEAD");
+        let commit = match remote_api.commit_sha(&marketplace.owner, &marketplace.repo, git_ref) {
+            CommitLookup::Sha(commit) => commit,
+            CommitLookup::Gone => continue,
+            CommitLookup::Failed => {
+                keep_previous(next);
+                continue;
+            }
+        };
+        let url = format!(
+            "https://github.com/{}/{}",
+            marketplace.owner, marketplace.repo
+        );
+        if let Some(cached) = previous
+            .catalogs
+            .get(&name)
+            .filter(|cached| cached.commit == commit && cached.url == url)
+        {
+            next.catalogs.insert(name, cached.clone());
+            continue;
+        }
+        let api_path = format!(
+            "repos/{}/{}/contents/.claude-plugin/marketplace.json?ref={commit}",
+            marketplace.owner, marketplace.repo
+        );
+        match remote_api.manifest(&api_path) {
+            ManifestFetch::Content(content) => {
+                let body = decode_base64(&content)
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                    .filter(|body| serde_json::from_str::<Value>(body).is_ok());
+                match body {
+                    Some(body) => {
+                        next.catalogs
+                            .insert(name, CachedCatalog { url, commit, body });
+                    }
+                    None => keep_previous(next),
+                }
+            }
+            ManifestFetch::Missing => {}
+            ManifestFetch::Failed => keep_previous(next),
+        }
+    }
+}
+
+/// The marketplace body to read: the fetched catalog when there is one, else
+/// the local checkout.
+fn marketplace_body(
+    plugins_dir: &Path,
+    marketplace: &str,
+    catalogs: &BTreeMap<String, CachedCatalog>,
+) -> Option<String> {
+    match catalogs.get(marketplace) {
+        Some(catalog) => Some(catalog.body.clone()),
+        None => read_marketplace(plugins_dir, marketplace),
     }
 }
 
 /// The remote sources of every installed plugin that can be looked up.
-fn wanted_remote_sources(home: &Path) -> Vec<RemoteSource> {
-    let plugins_dir = home.join(".claude").join("plugins");
-    let Ok(installed) = std::fs::read_to_string(plugins_dir.join("installed_plugins.json")) else {
-        return Vec::new();
-    };
+fn wanted_remote_sources(
+    plugins_dir: &Path,
+    installed_ids: &[String],
+    catalogs: &BTreeMap<String, CachedCatalog>,
+) -> Vec<RemoteSource> {
     let mut wanted: Vec<RemoteSource> = Vec::new();
-    for id in parse_installs(&installed).keys() {
+    for id in installed_ids {
         let Some((plugin, marketplace)) = id.split_once('@') else {
             continue;
         };
-        let Some(body) = read_marketplace(&plugins_dir, marketplace) else {
+        let Some(body) = marketplace_body(plugins_dir, marketplace, catalogs) else {
             continue;
         };
-        if let Some(MarketplaceRelease {
-            source: PluginSource::Remote(remote),
-            ..
-        }) = marketplace_release(&body, plugin)
-        {
-            let lookup_ok = if non_empty(remote.sha.as_deref()).is_some() {
-                gh_manifest_api_path(&remote).is_some()
-            } else {
-                is_resolvable(&remote)
-            };
-            if lookup_ok && !wanted.contains(&remote) {
-                wanted.push(remote);
+        let Some(release) = marketplace_release(&body, plugin) else {
+            continue;
+        };
+        let remote = match (release.source, catalogs.get(marketplace)) {
+            (PluginSource::Remote(remote), _) => remote,
+            (PluginSource::Relative(relative), Some(catalog)) => {
+                catalog_plugin_remote(catalog, &relative)
             }
+            _ => continue,
+        };
+        let lookup_ok = if non_empty(remote.sha.as_deref()).is_some() {
+            gh_manifest_api_path(&remote).is_some()
+        } else {
+            is_resolvable(&remote)
+        };
+        if lookup_ok && !wanted.contains(&remote) {
+            wanted.push(remote);
         }
     }
     wanted
 }
 
 /// Looks up the manifest version of each installed plugin with a github
-/// source that `plugin-versions.json` has no entry for yet, and writes the
-/// result. A source with no pinned sha first has its ref resolved to a commit
-/// on every check. A failed lookup records nothing, so the next check retries
-/// it; a missing manifest counts as "no version" only when the commit itself
-/// is readable, since GitHub also answers 404 for a private repo.
+/// source (or a relative source in a fetched catalog) that
+/// `plugin-versions.json` has no entry for yet, and writes the result. A
+/// GitHub marketplace's catalog is fetched first, at the commit its ref points
+/// at. A source with no pinned sha first has its ref resolved to a commit on
+/// every check. A failed lookup records nothing, so the next check retries it,
+/// and a transient failure to resolve a commit keeps what the last check knew;
+/// a missing manifest counts as "no version" only when the commit itself is
+/// readable, since GitHub also answers 404 for a private repo.
 pub fn refresh_plugin_versions_with(home: &Path, app_data: &Path, remote_api: &dyn PluginRemote) {
-    let wanted = wanted_remote_sources(home);
+    let plugins_dir = home.join(".claude").join("plugins");
+    let installed_ids: Vec<String> =
+        std::fs::read_to_string(plugins_dir.join("installed_plugins.json"))
+            .map(|installed| parse_installs(&installed).into_keys().collect())
+            .unwrap_or_default();
     let path = plugin_versions_path(app_data);
     let previous = read_plugin_versions(&path);
     let mut next = PluginVersionCache::default();
+    refresh_catalogs(
+        &plugins_dir,
+        &installed_ids,
+        &previous,
+        remote_api,
+        &mut next,
+    );
+    let wanted = wanted_remote_sources(&plugins_dir, &installed_ids, &next.catalogs);
     for source in &wanted {
         let Some((owner, repo)) = github_repo(&source.url) else {
             continue;
@@ -513,8 +714,13 @@ pub fn refresh_plugin_versions_with(home: &Path, app_data: &Path, remote_api: &d
             source.clone()
         } else {
             let git_ref = non_empty(source.git_ref.as_deref()).unwrap_or("HEAD");
-            let Some(sha) = remote_api.commit_sha(&owner, &repo, git_ref) else {
-                continue;
+            let sha = match remote_api.commit_sha(&owner, &repo, git_ref) {
+                CommitLookup::Sha(sha) => sha,
+                CommitLookup::Gone => continue,
+                CommitLookup::Failed => {
+                    keep_previous_resolution(source, &previous, &mut next);
+                    continue;
+                }
             };
             next.resolved.insert(unpinned_key(source), sha.clone());
             RemoteSource {
@@ -540,10 +746,11 @@ pub fn refresh_plugin_versions_with(home: &Path, app_data: &Path, remote_api: &d
                     ManifestVersion::NoVersion => Some(None),
                     ManifestVersion::Unknown => None,
                 }),
-            ManifestFetch::Missing => remote_api
-                .commit_sha(&owner, &repo, sha)
-                .is_some()
-                .then_some(None),
+            ManifestFetch::Missing => matches!(
+                remote_api.commit_sha(&owner, &repo, sha),
+                CommitLookup::Sha(_)
+            )
+            .then_some(None),
             ManifestFetch::Failed => None,
         };
         if let Some(version) = version {
@@ -557,6 +764,29 @@ pub fn refresh_plugin_versions_with(home: &Path, app_data: &Path, remote_api: &d
     }
 }
 
+/// Carries the last check's resolution of an unpinned `source`, and the
+/// version it found there, over a commit lookup that failed.
+fn keep_previous_resolution(
+    source: &RemoteSource,
+    previous: &PluginVersionCache,
+    next: &mut PluginVersionCache,
+) {
+    let key = unpinned_key(source);
+    let Some(sha) = previous.resolved.get(&key) else {
+        return;
+    };
+    next.resolved.insert(key, sha.clone());
+    let pinned = RemoteSource {
+        sha: Some(sha.clone()),
+        ..source.clone()
+    };
+    if let Some(entry_key) = remote_cache_key(&pinned) {
+        if let Some(cached) = previous.entries.get(&entry_key) {
+            next.entries.insert(entry_key, cached.clone());
+        }
+    }
+}
+
 /// [`refresh_plugin_versions_with`] over the `gh` CLI.
 pub fn refresh_plugin_versions(home: &Path, app_data: &Path, gh_bin: &Path) {
     refresh_plugin_versions_with(home, app_data, &GhRemote(gh_bin));
@@ -564,7 +794,7 @@ pub fn refresh_plugin_versions(home: &Path, app_data: &Path, gh_bin: &Path) {
 
 fn read_marketplace(plugins_dir: &Path, marketplace: &str) -> Option<String> {
     // A marketplace name from the file must not walk out of the folder.
-    if marketplace.contains(['/', '\\']) || marketplace == ".." {
+    if !is_safe_marketplace_name(marketplace) {
         return None;
     }
     std::fs::read_to_string(
@@ -583,18 +813,24 @@ fn manifest_version_for(
     release: &MarketplaceRelease,
     versions: &PluginVersionCache,
 ) -> ManifestVersion {
-    match &release.source {
-        PluginSource::Relative(relative) => local_manifest_version(
-            &plugins_dir.join("marketplaces").join(marketplace),
-            relative,
-        ),
-        PluginSource::Remote(remote) => pinned_remote(remote, versions)
+    let cached_version = |remote: Option<RemoteSource>| {
+        remote
             .and_then(|remote| remote_cache_key(&remote))
             .and_then(|key| versions.entries.get(&key))
             .map_or(ManifestVersion::Unknown, |cached| match &cached.version {
                 Some(version) => ManifestVersion::Version(version.clone()),
                 None => ManifestVersion::NoVersion,
-            }),
+            })
+    };
+    match &release.source {
+        PluginSource::Relative(relative) => match versions.catalogs.get(marketplace) {
+            Some(catalog) => cached_version(Some(catalog_plugin_remote(catalog, relative))),
+            None => local_manifest_version(
+                &plugins_dir.join("marketplaces").join(marketplace),
+                relative,
+            ),
+        },
+        PluginSource::Remote(remote) => cached_version(pinned_remote(remote, versions)),
         PluginSource::Unsupported => ManifestVersion::Unknown,
     }
 }
@@ -631,7 +867,7 @@ pub fn read_plugin_updates(
         };
         let body = marketplaces
             .entry(marketplace.to_string())
-            .or_insert_with(|| read_marketplace(&plugins_dir, marketplace));
+            .or_insert_with(|| marketplace_body(&plugins_dir, marketplace, &versions.catalogs));
         let Some(release) = body
             .as_deref()
             .and_then(|body| marketplace_release(body, plugin))
@@ -1278,6 +1514,8 @@ mod tests {
         manifests: Vec<ScriptedManifest>,
         readable_commits: Vec<&'static str>,
         refs: Vec<(&'static str, &'static str)>,
+        /// Every commit lookup fails the way a dropped network does.
+        commits_fail: bool,
     }
 
     impl PluginRemote for FakeRemote {
@@ -1289,21 +1527,26 @@ mod tests {
                 .map_or(ManifestFetch::Failed, |(_, make)| make())
         }
 
-        fn commit_sha(&self, owner: &str, repo: &str, git_ref: &str) -> Option<String> {
+        fn commit_sha(&self, owner: &str, repo: &str, git_ref: &str) -> CommitLookup {
             let repo_path = format!("{owner}/{repo}");
             self.commit_calls
                 .borrow_mut()
                 .push(format!("{repo_path}@{git_ref}"));
+            if self.commits_fail {
+                return CommitLookup::Failed;
+            }
             if let Some((_, sha)) = self
                 .refs
                 .iter()
                 .find(|(r, _)| *r == format!("{repo_path}@{git_ref}"))
             {
-                return Some((*sha).to_string());
+                return CommitLookup::Sha((*sha).to_string());
             }
-            self.readable_commits
-                .contains(&repo_path.as_str())
-                .then(|| git_ref.to_string())
+            if self.readable_commits.contains(&repo_path.as_str()) {
+                CommitLookup::Sha(git_ref.to_string())
+            } else {
+                CommitLookup::Gone
+            }
         }
     }
 
@@ -1508,5 +1751,142 @@ mod tests {
         let updates = read_plugin_updates(home.path(), &PluginVersionCache::default());
         assert!(updates.contains_key("fmt@claude-plugins-official"));
         assert!(!updates.contains_key("up@claude-plugins-official"));
+    }
+
+    const UPSTREAM_CATALOG: &str = r#"{"plugins":[
+        {"name":"codex","version":"1.1.0","source":"./plugins/codex"}]}"#;
+
+    fn upstream_catalog() -> ManifestFetch {
+        ManifestFetch::Content(b64_manifest(UPSTREAM_CATALOG))
+    }
+    fn codex_1_1_0() -> ManifestFetch {
+        ManifestFetch::Content(b64_manifest(r#"{"version":"1.1.0"}"#))
+    }
+
+    /// A GitHub marketplace whose local checkout is stale: it still lists
+    /// codex 1.0.6 while the install is 1.0.6.
+    fn stale_checkout_home() -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(
+            home.path(),
+            r#"{"plugins":{"codex@claude-plugins-official":[{"scope":"user","version":"1.0.6"}]}}"#,
+            Some(r#"{"plugins":[{"name":"codex","version":"1.0.6","source":"./plugins/codex"}]}"#),
+        );
+        write_manifest(home.path(), "plugins/codex", r#"{"version":"1.0.6"}"#);
+        fs::write(
+            home.path().join(".claude/plugins/known_marketplaces.json"),
+            r#"{"claude-plugins-official":{"source":{"source":"github","repo":"o/market"}}}"#,
+        )
+        .unwrap();
+        home
+    }
+
+    fn upstream_remote() -> FakeRemote {
+        FakeRemote {
+            manifests: vec![
+                ("repos/o/market/contents/.claude-plugin/", upstream_catalog),
+                ("repos/o/market/contents/plugins/codex/", codex_1_1_0),
+            ],
+            refs: vec![("o/market@HEAD", "c0ffee1")],
+            ..Default::default()
+        }
+    }
+
+    /// Flow: the marketplace repo released codex 1.1.0 but Claude Code never
+    /// refreshed the local checkout, which still says 1.0.6.
+    /// Expectation: the refresh reads the remote catalog and its plugin
+    /// manifest at one commit, so the update is detected.
+    /// A failure means a new release of a third-party plugin never shows.
+    #[test]
+    fn an_upstream_release_is_detected_while_the_local_checkout_is_stale() {
+        let home = stale_checkout_home();
+        let app_data = tempfile::tempdir().unwrap();
+        assert!(read_plugin_updates(home.path(), &PluginVersionCache::default()).is_empty());
+
+        let remote = upstream_remote();
+        refresh_plugin_versions_with(home.path(), app_data.path(), &remote);
+
+        let versions = read_plugin_versions(&plugin_versions_path(app_data.path()));
+        assert_eq!(
+            versions.catalogs["claude-plugins-official"].commit,
+            "c0ffee1"
+        );
+        assert!(remote.manifest_calls.borrow().contains(
+            &"repos/o/market/contents/plugins/codex/.claude-plugin/plugin.json?ref=c0ffee1"
+                .to_string()
+        ));
+        assert!(read_plugin_updates(home.path(), &versions)
+            .contains_key("codex@claude-plugins-official"));
+
+        // The same commit is not fetched again.
+        remote.manifest_calls.borrow_mut().clear();
+        refresh_plugin_versions_with(home.path(), app_data.path(), &remote);
+        assert!(remote.manifest_calls.borrow().is_empty());
+    }
+
+    /// Flow: the catalog fetch fails (no network) on a first check, and on a
+    /// later check after a good one.
+    /// Expectation: with nothing cached the local checkout decides; with a
+    /// cached catalog the badge stays.
+    /// A failure means a dropped connection hides or invents an update.
+    #[test]
+    fn a_failed_catalog_fetch_falls_back_to_the_local_checkout_or_keeps_the_last_catalog() {
+        let home = stale_checkout_home();
+        let app_data = tempfile::tempdir().unwrap();
+        let offline = FakeRemote {
+            commits_fail: true,
+            ..Default::default()
+        };
+        refresh_plugin_versions_with(home.path(), app_data.path(), &offline);
+        let versions = read_plugin_versions(&plugin_versions_path(app_data.path()));
+        assert!(versions.catalogs.is_empty());
+        assert!(read_plugin_updates(home.path(), &versions).is_empty());
+
+        refresh_plugin_versions_with(home.path(), app_data.path(), &upstream_remote());
+        refresh_plugin_versions_with(home.path(), app_data.path(), &offline);
+        let versions = read_plugin_versions(&plugin_versions_path(app_data.path()));
+        assert!(read_plugin_updates(home.path(), &versions)
+            .contains_key("codex@claude-plugins-official"));
+    }
+
+    /// Flow: an unpinned source resolved to a commit and its version was
+    /// cached; the next check cannot reach GitHub.
+    /// Expectation: the resolution and version stay, so the badge stays; a
+    /// ref GitHub answers 404 for is dropped.
+    /// A failure means a network blip makes the badge vanish.
+    #[test]
+    fn a_network_failure_keeps_the_resolved_commit_but_a_missing_ref_drops_it() {
+        let home = tempfile::tempdir().unwrap();
+        let app_data = tempfile::tempdir().unwrap();
+        write_fixture(
+            home.path(),
+            r#"{"plugins":{"gh@claude-plugins-official":[{"scope":"user","version":"1.3.0"}]}}"#,
+            Some(UNPINNED),
+        );
+        let online = FakeRemote {
+            manifests: vec![("repos/o/", sentry_content)],
+            refs: vec![("o/gh@stable", "abc1234")],
+            ..Default::default()
+        };
+        refresh_plugin_versions_with(home.path(), app_data.path(), &online);
+
+        let offline = FakeRemote {
+            commits_fail: true,
+            ..Default::default()
+        };
+        refresh_plugin_versions_with(home.path(), app_data.path(), &offline);
+        let versions = read_plugin_versions(&plugin_versions_path(app_data.path()));
+        assert_eq!(
+            versions.resolved.get("https://github.com/o/gh#@stable"),
+            Some(&"abc1234".to_string())
+        );
+        assert!(
+            read_plugin_updates(home.path(), &versions).contains_key("gh@claude-plugins-official")
+        );
+
+        refresh_plugin_versions_with(home.path(), app_data.path(), &FakeRemote::default());
+        let versions = read_plugin_versions(&plugin_versions_path(app_data.path()));
+        assert!(versions.resolved.is_empty());
+        assert!(read_plugin_updates(home.path(), &versions).is_empty());
     }
 }

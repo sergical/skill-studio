@@ -32,6 +32,7 @@ import {
   forkThenPull,
   lifecycleTargetForPark,
   pluginTargetKey,
+  skillHasManagedUpdate,
   skillPluginUpdateTargets,
   skillUpdateOwnerTargets,
   uniquePluginTargets,
@@ -151,7 +152,8 @@ export function updateAllFailureMessage(tally: UpdateAllTally): string | undefin
  * in `forkEdited.names` is forked first and then pulled like a fork, so its
  * local edits survive instead of being overwritten by the batch. Plugin installs
  * run last, through `updatePluginInstall`, once per plugin id, scope, and project
- * even when several skills ship from one plugin.
+ * even when several skills ship from one plugin. A fork is pulled only when the fork
+ * itself is outdated, and a failed pull does not stop its plugin installs.
  */
 export async function updateAllOutdatedSkills(
   skills: Pick<
@@ -171,7 +173,8 @@ export async function updateAllOutdatedSkills(
   updatePluginInstall?: PluginInstallUpdater,
 ): Promise<UpdateAllTally> {
   const pullsUpstream = (skill: (typeof skills)[number]) =>
-    skill.source_kind === "fork" || forkEdited?.names.has(skill.name) === true;
+    skillHasManagedUpdate(skill) &&
+    (skill.source_kind === "fork" || forkEdited?.names.has(skill.name) === true);
   const forks = skills.filter(pullsUpstream);
   // A skill forked because it was edited keeps its other owners (project or
   // per-harness copies) on the normal update; only the forked owner is replaced.
@@ -195,6 +198,8 @@ export async function updateAllOutdatedSkills(
     ),
   );
   const failedSkillNames = new Set<string>();
+  // Skills whose own copies failed, as opposed to a fork pull: only these hold their plugins back.
+  const copyFailedNames = new Set<string>();
   const tally: UpdateAllTally = {
     attempted: total,
     succeeded: 0,
@@ -231,12 +236,24 @@ export async function updateAllOutdatedSkills(
   const ownerTargets = skills.flatMap((skill) =>
     failedSkillNames.has(skill.name) ? [] : ownerTargetsOf(skill),
   );
-  // A skill whose copies failed keeps its plugins untouched, and they leave the total too, so
-  // progress still reaches it.
-  const pluginTargetsOfOk = () =>
-    uniquePluginTargets(
-      skills.flatMap((skill) => (failedSkillNames.has(skill.name) ? [] : pluginTargetsOf(skill))),
+  // A skill whose copies failed keeps its plugins untouched, and so does every other skill
+  // sharing one of those plugins. They leave the total too, so progress still reaches it.
+  const blockedPluginKeys = () =>
+    new Set(
+      skills.flatMap((skill) =>
+        copyFailedNames.has(skill.name) ? pluginTargetsOf(skill).map(pluginTargetKey) : [],
+      ),
     );
+  const pluginTargetsOfOk = () => {
+    const blocked = blockedPluginKeys();
+    return uniquePluginTargets(
+      skills.flatMap((skill) =>
+        copyFailedNames.has(skill.name)
+          ? []
+          : pluginTargetsOf(skill).filter((target) => !blocked.has(pluginTargetKey(target))),
+      ),
+    );
+  };
   const retotal = (done: number) => {
     const plannedTotal = total;
     total = forks.length + ownerTargets.length + pluginTargetsOfOk().length;
@@ -255,7 +272,10 @@ export async function updateAllOutdatedSkills(
       // instead (N1, review round 3).
       const failedItems = outcome.items.filter((item) => item.outcome === null);
       tally.succeeded += outcome.items.length - failedItems.length;
-      for (const item of failedItems) failedSkillNames.add(item.skill);
+      for (const item of failedItems) {
+        failedSkillNames.add(item.skill);
+        copyFailedNames.add(item.skill);
+      }
       if (failedItems.length > 0) {
         const first = failedItems[0];
         fail(failedItems.length, outcome.errors[first.skill] ?? `${first.skill} failed`);
@@ -265,6 +285,7 @@ export async function updateAllOutdatedSkills(
       for (const skill of skills) {
         if (!failedSkillNames.has(skill.name) && ownerTargetsOf(skill).length > 0) {
           failedSkillNames.add(skill.name);
+          copyFailedNames.add(skill.name);
         }
       }
       fail(ownerTargets.length, error instanceof Error ? error.message : String(error));
@@ -273,12 +294,20 @@ export async function updateAllOutdatedSkills(
 
   retotal(forks.length + ownerTargets.length);
   const pluginTargets = pluginTargetsOfOk();
+  if (updatePluginInstall) {
+    // A skill sharing a plugin with a failed one is not updated, so it does not count as updated.
+    const blocked = blockedPluginKeys();
+    for (const skill of skills) {
+      if (pluginTargetsOf(skill).some((target) => blocked.has(pluginTargetKey(target)))) {
+        failedSkillNames.add(skill.name);
+      }
+    }
+  }
   if (updatePluginInstall && pluginTargets.length > 0) {
     const plugins = await updatePluginTargets(pluginTargets, (target) =>
-      updatePluginInstall(target).then((outcome) => {
+      updatePluginInstall(target).finally(() => {
         pluginsDone += 1;
         onProgress?.(forks.length + ownerTargets.length + pluginsDone, total);
-        return outcome;
       }),
     );
     tally.succeeded += plugins.succeeded;

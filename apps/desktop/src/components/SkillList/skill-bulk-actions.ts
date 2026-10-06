@@ -26,6 +26,7 @@ import {
   skillUpdateAvailability,
   isPluginOwnerId,
   pluginTargetKey,
+  skillHasManagedUpdate,
   skillPluginUpdateTargets,
   skillUpdateOwnerTargets,
   uniquePluginTargets,
@@ -211,8 +212,12 @@ export async function runBulkUpdate(
   },
   onProgress: (done: number, total: number) => void,
 ): Promise<BulkRunResult> {
-  const forked = skills.filter((skill) => forkNames.has(skill.name));
-  const allRest = skills.filter((skill) => !forkNames.has(skill.name));
+  // An edited skill is forked only when a copy of it is outdated; one whose only update is a
+  // plugin install takes the normal path.
+  const isForked = (skill: InstalledSkill) =>
+    forkNames.has(skill.name) && skillHasManagedUpdate(skill);
+  const forked = skills.filter(isForked);
+  const allRest = skills.filter((skill) => !isForked(skill));
   const result: BulkRunResult = { succeeded: [], failed: [] };
   const conflicted: string[] = [];
   // A skill whose outdated managed copy is ambiguous is not updated at all, plugins included.
@@ -227,21 +232,32 @@ export async function runBulkUpdate(
   const forkedOthers = new Map(
     forked.map((skill) => [skill, excludeForkedOwner(skill, bulkUpdateTargets(skill))]),
   );
-  // Plugins of a skill whose copy failed are not run, so they are not counted.
+  const forkFailed = new Set<InstalledSkill>();
+  // Plugins of a skill whose copy failed are not run, nor are plugins it shares with another
+  // skill, so they are not counted. A failed fork pull does not hold its plugins back.
+  const copyFailed = (skill: InstalledSkill) =>
+    !forkFailed.has(skill) && result.failed.some((failure) => failure.skill === skill);
   const pluginSkillsNow = () =>
     [...rest, ...forked].filter(
-      (skill) =>
-        skillPluginUpdateTargets(skill).length > 0 &&
-        !result.failed.some((failure) => failure.skill === skill),
+      (skill) => skillPluginUpdateTargets(skill).length > 0 && !copyFailed(skill),
     );
-  const pluginTargetsNow = () =>
-    uniquePluginTargets(pluginSkillsNow().flatMap(skillPluginUpdateTargets));
+  const blockedPluginKeys = () =>
+    new Set(
+      [...rest, ...forked].flatMap((skill) =>
+        copyFailed(skill) ? skillPluginUpdateTargets(skill).map(pluginTargetKey) : [],
+      ),
+    );
+  const pluginTargetsNow = () => {
+    const blocked = blockedPluginKeys();
+    return uniquePluginTargets(pluginSkillsNow().flatMap(skillPluginUpdateTargets)).filter(
+      (target) => !blocked.has(pluginTargetKey(target)),
+    );
+  };
   let total =
     forked.length +
     rest.flatMap(bulkUpdateTargets).length +
     [...forkedOthers.values()].reduce((sum, targets) => sum + targets.length, 0) +
     pluginTargetsNow().length;
-  const forkFailed = new Set<InstalledSkill>();
   for (const [index, skill] of forked.entries()) {
     try {
       // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each fork and pull takes an exclusive lease, so the calls must not overlap
@@ -301,26 +317,30 @@ export async function runBulkUpdate(
   const pluginSkills = pluginSkillsNow();
   if (pluginSkills.length > 0) {
     let pluginsDone = 0;
-    const outcome = await updatePluginTargets(
-      uniquePluginTargets(pluginSkills.flatMap(skillPluginUpdateTargets)),
-      (target) =>
-        deps.updatePluginInstall(target).then((updateOutcome) => {
-          pluginsDone += 1;
-          onProgress(forked.length + batchTargets.length + pluginsDone, total);
-          return updateOutcome;
-        }),
+    const blocked = blockedPluginKeys();
+    const outcome = await updatePluginTargets(pluginTargetsNow(), (target) =>
+      deps.updatePluginInstall(target).finally(() => {
+        pluginsDone += 1;
+        onProgress(forked.length + batchTargets.length + pluginsDone, total);
+      }),
     );
     const failureByKey = new Map(
       outcome.failures.map((failure) => [pluginTargetKey(failure.target), failure.message]),
     );
     const succeeded = new Set(result.succeeded);
     for (const skill of pluginSkills) {
-      const error = skillPluginUpdateTargets(skill)
-        .map((target) => failureByKey.get(pluginTargetKey(target)))
-        .find((message) => message !== undefined);
+      const targets = skillPluginUpdateTargets(skill);
+      const error =
+        targets
+          .map((target) => failureByKey.get(pluginTargetKey(target)))
+          .find((message) => message !== undefined) ??
+        (targets.some((target) => blocked.has(pluginTargetKey(target)))
+          ? "Its plugin is shared with a skill whose update failed, so it was not updated."
+          : undefined);
       if (error === undefined) {
-        succeeded.add(skill);
-      } else {
+        // A skill whose fork pull failed is already in `failed`.
+        if (!forkFailed.has(skill)) succeeded.add(skill);
+      } else if (!forkFailed.has(skill)) {
         succeeded.delete(skill);
         result.failed.push({ skill, error });
       }

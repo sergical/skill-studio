@@ -2628,8 +2628,10 @@ pub async fn set_plugin_enabled(
 /// <plugin_id> -s <scope>`). `scope` and `project_path` are the install's own,
 /// as the snapshot's plugin update owner reports them, and must match an
 /// entry of `installed_plugins.json`. Returns the CLI's `updateOutcome`
-/// (`updated`, `up_to_date`). Claude Code applies the update to new sessions
-/// only.
+/// (`updated`, `up_to_date`, `skipped`, ...) with its message. After a
+/// successful run the plugin versions are re-checked, so the badge reflects the
+/// new install even when an unpinned ref moved meanwhile. Claude Code applies
+/// the update to new sessions only.
 #[tauri::command]
 pub async fn update_plugin(
     plugin_id: String,
@@ -2637,11 +2639,11 @@ pub async fn update_plugin(
     scope: String,
     project_path: Option<String>,
     app: tauri::AppHandle,
-) -> Result<String, String> {
+) -> Result<super::skill_plugin_lifecycle::PluginUpdateResult, String> {
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(&timing_app, "update_plugin", move || {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        run_plugin_lifecycle_action(&harness, &app, &home, || {
+        let result = run_plugin_lifecycle_action(&harness, &app, &home, || {
             super::skill_plugin_update::require_plugin_install(
                 &home,
                 &plugin_id,
@@ -2654,9 +2656,27 @@ pub async fn update_plugin(
                 &scope,
                 project_path.as_deref().map(Path::new),
             )
-        })
+        })?;
+        recheck_plugin_versions(&app, &home);
+        Ok(result)
     })
     .await
+}
+
+/// Re-runs the plugin version lookups after an update and asks for a snapshot
+/// rebuild, so the badge reflects the new install. Skipped without `gh` or a
+/// writable data folder; the next background check then catches up.
+fn recheck_plugin_versions(app: &tauri::AppHandle, home: &Path) {
+    let Ok(app_data) = app.path().app_data_dir() else {
+        return;
+    };
+    if !crate::skills::data_folder_status::data_folder_writable(app) {
+        return;
+    }
+    if let Some(gh_bin) = super::skill_update_check::resolve_gh_binary() {
+        super::skill_plugin_update::refresh_plugin_versions(home, &app_data, &gh_bin);
+        skill_refresh::request_snapshot_rebuild(app);
+    }
 }
 
 /// Uninstall one Claude Code plugin (`claude plugin uninstall <plugin_id>

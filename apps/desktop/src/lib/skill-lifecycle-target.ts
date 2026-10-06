@@ -15,6 +15,7 @@ import type {
   PullResult,
   Toast,
 } from "@skill-studio/lib";
+import type { PluginUpdateResult } from "./skill-api";
 
 type SkillLifecycleView = Pick<InstalledSkill, "name" | "deployments" | "source_kind">;
 
@@ -54,6 +55,8 @@ interface SkillOwnerUpdateSummary {
 /** A failed plugin install update, with the install it ran for. */
 export interface PluginUpdateFailure extends SkillOwnerUpdateFailure {
   target: PluginUpdateTarget;
+  /** The CLI answered without an error but did not update the plugin (`skipped`, ...). */
+  skipped?: boolean;
 }
 
 interface PluginUpdateSummary extends SkillOwnerUpdateSummary {
@@ -75,6 +78,11 @@ export type SkillUpdateAvailability =
   | { available: false; reason: string };
 
 const PLUGIN_OWNER_PREFIX = "plugin:";
+
+/** True when `skill` has an outdated owner that is not a plugin install: a managed copy or a fork. */
+export function skillHasManagedUpdate(skill: Pick<InstalledSkill, "update_owner_ids">): boolean {
+  return skill.update_owner_ids.some((ownerId) => !isPluginOwnerId(ownerId));
+}
 
 /** Plugin updates have no ledger owner: `updateSkill` cannot run them, `updatePlugin` does. */
 export function isPluginOwnerId(ownerId: string | null | undefined): boolean {
@@ -111,8 +119,13 @@ export function uniquePluginTargets(targets: PluginUpdateTarget[]): PluginUpdate
   return [...new Map(targets.map((target) => [pluginTargetKey(target), target])).values()];
 }
 
-/** Runs one plugin install update and resolves to the CLI's `updateOutcome`. */
-export type PluginInstallUpdater = (target: PluginUpdateTarget) => Promise<string>;
+/** Runs one plugin install update and resolves to the CLI's outcome and message. */
+export type PluginInstallUpdater = (target: PluginUpdateTarget) => Promise<PluginUpdateResult>;
+
+/** Only `updated` and `up_to_date` leave the plugin current; `skipped` and the rest do not. */
+export function pluginUpdateSucceeded(result: PluginUpdateResult): boolean {
+  return result.outcome === "updated" || result.outcome === "up_to_date";
+}
 
 /** A user-scope plugin serves every project; a project or local install serves only its own. */
 function pluginUpdateAppliesTo(
@@ -125,9 +138,19 @@ function pluginUpdateAppliesTo(
   return true;
 }
 
-/** Success toast for a finished plugin update; `outcome` is the CLI's `updateOutcome`. */
-export function pluginUpdatedToast(pluginId: string, outcome?: string): Omit<Toast, "id"> {
-  if (outcome === "up_to_date") {
+/** Toast for a finished plugin update; any outcome but `updated` or `up_to_date` is a warning with the CLI's message. */
+export function pluginUpdatedToast(
+  pluginId: string,
+  result: PluginUpdateResult,
+): Omit<Toast, "id"> {
+  if (!pluginUpdateSucceeded(result)) {
+    return {
+      type: "warning",
+      title: `${pluginId} was not updated`,
+      message: pluginNotUpdatedMessage(result),
+    };
+  }
+  if (result.outcome === "up_to_date") {
     return { type: "info", title: `${pluginId} is already up to date` };
   }
   return {
@@ -135,6 +158,65 @@ export function pluginUpdatedToast(pluginId: string, outcome?: string): Omit<Toa
     title: "Plugin updated",
     message: `${pluginId} is updated. Restart Claude Code sessions to use it.`,
   };
+}
+
+function pluginNotUpdatedMessage(result: PluginUpdateResult): string {
+  return result.message ?? `Claude Code reported "${result.outcome}" instead of updating it.`;
+}
+
+/**
+ * Runs every plugin install of `skill` that has an update, toasting each result:
+ * success and up-to-date as such, a skipped update as a warning with the CLI's message,
+ * and a thrown error as an error. A failing install does not stop the next one.
+ */
+export async function updateSkillPluginsWithToasts(
+  skill: Pick<InstalledSkill, "update_owners">,
+  addToast: (toast: Omit<Toast, "id">) => void,
+  updatePluginInstall: PluginInstallUpdater,
+): Promise<PluginUpdateSummary> {
+  const summary = await updatePluginTargets(skillPluginUpdateTargets(skill), (target) =>
+    updatePluginInstall(target).then((result) => {
+      if (pluginUpdateSucceeded(result)) addToast(pluginUpdatedToast(target.plugin_id, result));
+      return result;
+    }),
+  );
+  for (const failure of summary.failures) {
+    addToast(
+      failure.skipped
+        ? {
+            type: "warning",
+            title: `${failure.target.plugin_id} was not updated`,
+            message: failure.message,
+          }
+        : { type: "error", title: "Couldn't update plugin", message: failure.message },
+    );
+  }
+  return summary;
+}
+
+/**
+ * The header's "Pull latest" for a fork: pull upstream when the fork itself is outdated, then
+ * run the skill's plugin installs. A failed pull is toasted and does not stop the plugins, which
+ * are separate installs.
+ */
+export async function pullForkAndUpdatePlugins(
+  skill: Pick<InstalledSkill, "update_owner_ids" | "update_owners">,
+  pull: () => Promise<PullResult>,
+  addToast: (toast: Omit<Toast, "id">) => void,
+  updatePluginInstall: PluginInstallUpdater,
+): Promise<void> {
+  if (skillHasManagedUpdate(skill)) {
+    try {
+      addToast(pullUpstreamToast(await pull()));
+    } catch (error) {
+      addToast({
+        type: "error",
+        title: "Pull upstream failed",
+        message: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
+  await updateSkillPluginsWithToasts(skill, addToast, updatePluginInstall);
 }
 
 /** List only scopes that contain a mutable installed deployment. */
@@ -659,9 +741,18 @@ export async function updatePluginTargets(
     try {
       // Plugin updates are sequential because each takes the backend write lease.
       // react-doctor-disable-next-line react-doctor/async-await-in-loop -- concurrent plugin updates are refused by the backend write lease
-      const outcome = await updatePluginInstall(target);
-      succeeded += 1;
-      if (outcome === "up_to_date") alreadyCurrent += 1;
+      const result = await updatePluginInstall(target);
+      if (pluginUpdateSucceeded(result)) {
+        succeeded += 1;
+        if (result.outcome === "up_to_date") alreadyCurrent += 1;
+      } else {
+        failures.push({
+          ownerId: pluginOwnerIdFor(target),
+          target,
+          skipped: true,
+          message: pluginNotUpdatedMessage(result),
+        });
+      }
     } catch (error) {
       failures.push({
         ownerId: pluginOwnerIdFor(target),

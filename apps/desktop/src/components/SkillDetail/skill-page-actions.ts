@@ -23,15 +23,14 @@ import {
   lifecycleTargetForDeployment,
   lifecycleTargetForPark,
   lifecycleTargetForSkill,
-  pluginUpdatedToast,
-  pullUpstreamToast,
   skillCanPark,
   skillRemovalBlockedReason,
   skillRemovalChoices,
-  skillPluginUpdateTargets,
+  pullForkAndUpdatePlugins,
+  skillHasManagedUpdate,
   skillRemovalEmptiesSkill,
   skillUpdateOwnerTargets,
-  updatePluginTargets,
+  updateSkillPluginsWithToasts,
 } from "../../lib/skill-lifecycle-target";
 import type { PluginInstallUpdater, SkillRemovalChoice } from "../../lib/skill-lifecycle-target";
 import type { InstalledSkill, Toast } from "@skill-studio/lib";
@@ -76,34 +75,24 @@ export async function runHeaderUpdate<
   addToast: (toast: Omit<Toast, "id">) => void,
   updatePluginInstall: PluginInstallUpdater,
 ): Promise<void> {
-  const updatePlugins = async () => {
-    const outcome = await updatePluginTargets(skillPluginUpdateTargets(skill), (target) =>
-      updatePluginInstall(target).then((result) => {
-        addToast(pluginUpdatedToast(target.plugin_id, result));
-        return result;
-      }),
-    );
-    for (const failure of outcome.failures) {
-      addToast({ type: "error", title: "Couldn't update plugin", message: failure.message });
-    }
-  };
   if (skillUpdateOwnerTargets(skill).length === 0) {
-    await updatePlugins();
+    await updateSkillPluginsWithToasts(skill, addToast, updatePluginInstall);
     return;
   }
   await guard.requestUpdate(skill, {
     skipPlugins: true,
     onFinished: async ({ success }) => {
-      if (success) await updatePlugins();
+      if (success) await updateSkillPluginsWithToasts(skill, addToast, updatePluginInstall);
     },
   });
 }
 
+/** "Pull latest" only when the fork itself is outdated; a fork whose only update is a plugin takes "Update". */
 export function headerUpdateLabel(
   skill: Pick<InstalledSkill, "source_kind" | "update_owner_ids">,
 ): "Pull latest" | "Update" | null {
   if (skill.update_owner_ids.length === 0) return null;
-  return skill.source_kind === "fork" ? "Pull latest" : "Update";
+  return skill.source_kind === "fork" && skillHasManagedUpdate(skill) ? "Pull latest" : "Update";
 }
 
 /**
@@ -288,17 +277,22 @@ export function useSkillPageActions(
     });
   };
 
+  const updatePluginInstall: PluginInstallUpdater = (target) =>
+    updatePlugin(target.plugin_id, "Claude Code", target.scope, target.project_path);
+
   const doPullUpstream = () =>
-    runAction(addToast, setIsPulling, "Pull upstream failed", async () => {
-      const result = await pullForkUpstream(lifecycleTargetForSkill(skill, "global"));
-      addToast(pullUpstreamToast(result));
-    });
+    runAction(addToast, setIsPulling, "Pull upstream failed", () =>
+      pullForkAndUpdatePlugins(
+        skill,
+        () => pullForkUpstream(lifecycleTargetForSkill(skill, "global")),
+        addToast,
+        updatePluginInstall,
+      ),
+    );
 
   const doUpdate = () =>
     runAction(addToast, setIsUpdating, "Update failed", () =>
-      runHeaderUpdate(skill, guard, addToast, (target) =>
-        updatePlugin(target.plugin_id, "Claude Code", target.scope, target.project_path),
-      ),
+      runHeaderUpdate(skill, guard, addToast, updatePluginInstall),
     );
 
   const doRemove = async (choice: SkillRemovalChoice) => {

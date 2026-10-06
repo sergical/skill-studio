@@ -9,6 +9,8 @@
 
 use std::path::Path;
 
+use serde::Serialize;
+
 use super::skill_process::CommandRunner;
 
 const CLAUDE_CLI: &str = "claude";
@@ -48,6 +50,27 @@ pub fn plugin_update_args(plugin_id: &str, scope: &str) -> Vec<String> {
         scope.to_string(),
         "--json".to_string(),
     ]
+}
+
+/// `claude plugin marketplace update <marketplace>`: re-reads the marketplace
+/// from its source, since `claude plugin update` compares against the local
+/// marketplace checkout.
+pub fn plugin_marketplace_update_args(marketplace: &str) -> Vec<String> {
+    vec![
+        "plugin".to_string(),
+        "marketplace".to_string(),
+        "update".to_string(),
+        marketplace.to_string(),
+    ]
+}
+
+/// What `claude plugin update --json` reported.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PluginUpdateResult {
+    /// The CLI's `updateOutcome`: `updated`, `up_to_date`, `skipped`, ...
+    pub outcome: String,
+    /// The CLI's own `message` (or `reason`) for the outcome, when it gave one.
+    pub message: Option<String>,
 }
 
 /// True for `<plugin>@<marketplace>`, both halves non-empty and built only
@@ -156,34 +179,43 @@ pub fn uninstall_plugin_with(runner: &dyn CommandRunner, plugin_id: &str) -> Res
 }
 
 /// Reads the `--json` result line of `claude plugin update`: its
-/// `updateOutcome` (`updated`, `up_to_date`, ...). An `outcome` of `error`
-/// becomes the CLI's own message. Output that is not JSON counts as `updated`,
-/// since a zero exit code already said the command worked.
-fn parse_update_outcome(stdout: &[u8]) -> Result<String, String> {
+/// `updateOutcome` (`updated`, `up_to_date`, ...) and the CLI's message. An
+/// `outcome` of `error` becomes the CLI's own message. Output that is not JSON
+/// counts as `updated`, since a zero exit code already said the command worked.
+fn parse_update_outcome(stdout: &[u8]) -> Result<PluginUpdateResult, String> {
     let text = String::from_utf8_lossy(stdout);
     let parsed = text
         .lines()
         .rev()
         .find_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok());
     let Some(value) = parsed else {
-        return Ok("updated".to_string());
+        return Ok(PluginUpdateResult {
+            outcome: "updated".to_string(),
+            message: None,
+        });
+    };
+    let text_field = |name: &str| {
+        value
+            .get(name)
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
     };
     if value.get("outcome").and_then(|v| v.as_str()) == Some("error") {
-        let message = value
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("The plugin update failed.");
-        return Err(message.to_string());
+        return Err(
+            text_field("message").unwrap_or_else(|| "The plugin update failed.".to_string())
+        );
     }
-    Ok(value
-        .get("updateOutcome")
-        .and_then(|v| v.as_str())
-        .unwrap_or("updated")
-        .to_string())
+    Ok(PluginUpdateResult {
+        outcome: text_field("updateOutcome").unwrap_or_else(|| "updated".to_string()),
+        message: text_field("message").or_else(|| text_field("reason")),
+    })
 }
 
 /// Runs `claude plugin update` for one install of a plugin and returns the
-/// CLI's `updateOutcome`. `scope` is the install's own scope from
+/// CLI's `updateOutcome` and message. The plugin's marketplace is refreshed
+/// first, because the update reads the local marketplace checkout; a failed
+/// refresh does not stop the update. `scope` is the install's own scope from
 /// `installed_plugins.json`; a project or local install runs in its project
 /// folder, where Claude Code resolves it.
 pub fn update_plugin_with(
@@ -191,7 +223,7 @@ pub fn update_plugin_with(
     plugin_id: &str,
     scope: &str,
     project_path: Option<&Path>,
-) -> Result<String, String> {
+) -> Result<PluginUpdateResult, String> {
     require_valid_plugin_id(plugin_id)?;
     match scope {
         "user" => {}
@@ -211,6 +243,14 @@ pub fn update_plugin_with(
             "The project folder {} no longer exists.",
             dir.display()
         ));
+    }
+    if let Some((_, marketplace)) = plugin_id.split_once('@') {
+        // Best effort: the update still compares against whatever checkout exists.
+        let _ = runner.run(
+            CLAUDE_CLI,
+            &plugin_marketplace_update_args(marketplace),
+            None::<&Path>,
+        );
     }
     let stdout = runner
         .run_output(CLAUDE_CLI, &plugin_update_args(plugin_id, scope), cwd)
@@ -323,9 +363,9 @@ mod tests {
         let runner = FakeRunner::default();
         update_plugin_with(&runner, "sentry@claude-plugins-official", "user", None).unwrap();
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls[0].0, "claude");
+        assert_eq!(calls[1].0, "claude");
         assert_eq!(
-            calls[0].1,
+            calls[1].1,
             vec![
                 "plugin",
                 "update",
@@ -335,8 +375,55 @@ mod tests {
                 "--json"
             ]
         );
-        assert!(!calls[0].1.iter().any(|a| a == "-y" || a == "--yes"));
-        assert_eq!(runner.cwds.lock().unwrap()[0], None);
+        assert!(!calls[1].1.iter().any(|a| a == "-y" || a == "--yes"));
+        assert_eq!(runner.cwds.lock().unwrap()[1], None);
+    }
+
+    /// Flow: update a plugin whose marketplace checkout may be stale.
+    /// Expectation: `claude plugin marketplace update <marketplace>` runs
+    /// first, and a failing refresh still lets the plugin update run.
+    /// A failure means updates compare against an unrefreshed checkout, or a
+    /// refresh error blocks the update.
+    #[test]
+    fn update_refreshes_the_marketplace_first_and_survives_a_failed_refresh() {
+        let runner = FakeRunner::default();
+        update_plugin_with(&runner, "sentry@claude-plugins-official", "user", None).unwrap();
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["plugin", "marketplace", "update", "claude-plugins-official"]
+        );
+        assert_eq!(calls[1].1[1], "update");
+        drop(calls);
+
+        struct RefreshFails(FakeRunner);
+        impl CommandRunner for RefreshFails {
+            fn run(
+                &self,
+                program: &str,
+                args: &[String],
+                cwd: Option<&Path>,
+            ) -> Result<(), String> {
+                self.0.run(program, args, cwd)?;
+                if args.get(1).map(String::as_str) == Some("marketplace") {
+                    return Err("network down".to_string());
+                }
+                Ok(())
+            }
+            fn run_output(
+                &self,
+                program: &str,
+                args: &[String],
+                cwd: Option<&Path>,
+            ) -> Result<Vec<u8>, String> {
+                self.run(program, args, cwd)?;
+                Ok(Vec::new())
+            }
+        }
+        let runner = RefreshFails(FakeRunner::default());
+        let result = update_plugin_with(&runner, "sentry@anthropics", "user", None).unwrap();
+        assert_eq!(result.outcome, "updated");
+        assert_eq!(runner.0.calls.lock().unwrap().len(), 2);
     }
 
     #[test]
@@ -352,7 +439,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            runner.calls.lock().unwrap()[0].1,
+            runner.calls.lock().unwrap()[1].1,
             vec![
                 "plugin",
                 "update",
@@ -362,7 +449,7 @@ mod tests {
                 "--json"
             ]
         );
-        assert_eq!(runner.cwds.lock().unwrap()[0].as_deref(), Some(project));
+        assert_eq!(runner.cwds.lock().unwrap()[1].as_deref(), Some(project));
     }
 
     #[test]
@@ -387,15 +474,38 @@ mod tests {
             ..Default::default()
         };
         let outcome = update_plugin_with(&runner, "sentry@anthropics", "user", None).unwrap();
-        assert_eq!(outcome, "up_to_date");
+        assert_eq!(outcome.outcome, "up_to_date");
+        assert_eq!(outcome.message, None);
 
         let runner = FakeRunner {
             stdout: r#"{"outcome":"ok","updateOutcome":"updated"}"#.to_string(),
             ..Default::default()
         };
         assert_eq!(
-            update_plugin_with(&runner, "sentry@anthropics", "user", None).unwrap(),
+            update_plugin_with(&runner, "sentry@anthropics", "user", None)
+                .unwrap()
+                .outcome,
             "updated"
+        );
+    }
+
+    /// Flow: the CLI skips an update and says why.
+    /// Expectation: the outcome stays `skipped` and the CLI's message is kept,
+    /// so the app can show it instead of claiming success.
+    #[test]
+    fn a_skipped_outcome_keeps_the_cli_message() {
+        let runner = FakeRunner {
+            stdout: r#"{"outcome":"ok","updateOutcome":"skipped","message":"Pinned to 1.0.0"}"#
+                .to_string(),
+            ..Default::default()
+        };
+        let result = update_plugin_with(&runner, "sentry@anthropics", "user", None).unwrap();
+        assert_eq!(
+            result,
+            PluginUpdateResult {
+                outcome: "skipped".to_string(),
+                message: Some("Pinned to 1.0.0".to_string()),
+            }
         );
     }
 

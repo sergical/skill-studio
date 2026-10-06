@@ -88,6 +88,21 @@ describe("headerUpdateLabel", () => {
     );
   });
 
+  it("offers Update for a fork whose only outdated owner is its plugin", () => {
+    expect(
+      headerUpdateLabel({ source_kind: "fork", update_owner_ids: ["plugin:codex@official"] }),
+    ).toBe("Update");
+  });
+
+  it("offers Pull latest for a fork with both a managed owner and a plugin outdated", () => {
+    expect(
+      headerUpdateLabel({
+        source_kind: "fork",
+        update_owner_ids: ["plugin:codex@official", "owner-1"],
+      }),
+    ).toBe("Pull latest");
+  });
+
   it("offers nothing when no owner has an update", () => {
     expect(headerUpdateLabel({ source_kind: "skills-sh", update_owner_ids: [] })).toBeNull();
   });
@@ -136,7 +151,7 @@ describe("runHeaderUpdate", () => {
       () => {},
       async (target) => {
         plugins.push(target.plugin_id);
-        return "updated";
+        return { outcome: "updated", message: null };
       },
     );
     expect(plugins).toEqual([]);
@@ -150,7 +165,7 @@ describe("runHeaderUpdate", () => {
       () => {},
       async (target) => {
         plugins.push(target.plugin_id);
-        return "updated";
+        return { outcome: "updated", message: null };
       },
     );
     expect(plugins).toEqual(["codex@official"]);
@@ -164,7 +179,7 @@ describe("runHeaderUpdate", () => {
       () => {},
       async (target) => {
         plugins.push(target.plugin_id);
-        return "updated";
+        return { outcome: "updated", message: null };
       },
     );
     expect(plugins).toEqual([]);
@@ -182,7 +197,7 @@ describe("runHeaderUpdate", () => {
       () => {},
       async (target) => {
         plugins.push(target.plugin_id);
-        return "updated";
+        return { outcome: "updated", message: null };
       },
     );
     expect(plugins).toEqual(["codex@official"]);

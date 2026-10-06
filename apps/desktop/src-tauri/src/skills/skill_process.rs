@@ -343,7 +343,7 @@ fn run_controlled_command_with_search_dirs(
                         .lock()
                         .map(|guard| String::from_utf8_lossy(&guard).into_owned())
                         .unwrap_or_default();
-                    let message = if stderr.is_empty() { stdout } else { stderr };
+                    let message = failure_message(stdout, stderr);
                     Err(ControlledProcessError::Failed(if message.is_empty() {
                         format!("{program} exited with code {}", status.code().unwrap_or(-1))
                     } else {
@@ -495,7 +495,7 @@ fn run_controlled_command_io(
                     .lock()
                     .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
                     .unwrap_or_default();
-                let message = if stderr.is_empty() { stdout } else { stderr };
+                let message = failure_message(stdout, stderr);
                 break Err(ControlledProcessError::Failed(if message.is_empty() {
                     format!(
                         "{} exited with code {}",
@@ -535,6 +535,21 @@ fn run_controlled_command_io(
             .unwrap_or_default());
     }
     outcome
+}
+
+/// The text to show for a failed exit. A `--json` command prints its
+/// `{"outcome":"error","message":...}` object on stdout and may also write
+/// progress or warnings to stderr, so that message wins; otherwise stderr, then
+/// stdout.
+fn failure_message(stdout: String, stderr: String) -> String {
+    let json_message = stdout.lines().rev().find_map(|line| {
+        let value = serde_json::from_str::<serde_json::Value>(line.trim()).ok()?;
+        if value.get("outcome")?.as_str()? != "error" {
+            return None;
+        }
+        value.get("message")?.as_str().map(str::to_string)
+    });
+    json_message.unwrap_or(if stderr.is_empty() { stdout } else { stderr })
 }
 
 /// Same as `run_controlled_command`, for a caller that already holds an
@@ -804,6 +819,36 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, ControlledProcessError::TimedOut);
+    }
+
+    /// Flow: a `--json` command fails, printing its error object on stdout and
+    /// a warning on stderr.
+    /// Expectation: the error carries the JSON `message`, not the warning.
+    /// A failure means stderr noise hides the real reason again.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_json_command_reports_its_stdout_message_over_stderr_noise() {
+        let cancel = AtomicBool::new(false);
+        let script = r#"echo '{"outcome":"error","message":"Plugin not found"}'; echo 'warning: slow' >&2; exit 1"#;
+        let error = run_controlled_command(
+            "sh",
+            &["-c".to_string(), script.to_string()],
+            None,
+            &cancel,
+            Duration::from_secs(10),
+            MAX_PROCESS_OUTPUT_BYTES,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ControlledProcessError::Failed("Plugin not found".to_string())
+        );
+    }
+
+    #[test]
+    fn a_failed_exit_without_a_json_error_prefers_stderr_then_stdout() {
+        assert_eq!(failure_message("out".into(), "err".into()), "err");
+        assert_eq!(failure_message("out".into(), String::new()), "out");
     }
 
     /// Without the fix, `Command::new("fakeclaude")` resolves only against
