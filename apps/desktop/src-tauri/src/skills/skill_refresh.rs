@@ -3464,6 +3464,10 @@ mod tests {
     /// that reports a newer commit, and builds the snapshot. `edit_registry`
     /// can change the registry rows the split wrote before the build.
     fn snapshot_of_split_foo(edit_registry: impl FnOnce(&mut serde_json::Value)) -> SkillSnapshot {
+        // The split resolves the Codex root from `CODEX_HOME`, which other tests set.
+        let _guard = super::super::test_support::opencode_env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         let app_data = tmp.path().join("app-data");
