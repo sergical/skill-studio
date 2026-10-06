@@ -15,11 +15,14 @@
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::gh_cli;
+use super::skill_process::AddOperationControl;
 
 /// Owner id a plugin update carries in `InstalledSkill::update_owner_ids`.
 pub fn plugin_owner_id(plugin_id: &str) -> String {
@@ -462,11 +465,12 @@ pub trait PluginRemote {
     fn commit_sha(&self, owner: &str, repo: &str, git_ref: &str) -> CommitLookup;
 }
 
-struct GhRemote<'a>(&'a Path);
+/// The `gh` binary plus one shared deadline for every call of a refresh.
+struct GhRemote<'a>(&'a Path, AddOperationControl);
 
 impl PluginRemote for GhRemote<'_> {
     fn manifest(&self, api_path: &str) -> ManifestFetch {
-        match gh_cli::run_gh(self.0, &["api", api_path, "--jq", ".content"], None) {
+        match gh_cli::run_gh_controlled(self.0, &["api", api_path, "--jq", ".content"], &self.1) {
             Ok(stdout) => {
                 ManifestFetch::Content(String::from_utf8_lossy(&stdout).trim().to_string())
             }
@@ -479,7 +483,7 @@ impl PluginRemote for GhRemote<'_> {
 
     fn commit_sha(&self, owner: &str, repo: &str, git_ref: &str) -> CommitLookup {
         let api_path = format!("repos/{owner}/{repo}/commits/{git_ref}");
-        match gh_cli::run_gh(self.0, &["api", &api_path, "--jq", ".sha"], None) {
+        match gh_cli::run_gh_controlled(self.0, &["api", &api_path, "--jq", ".sha"], &self.1) {
             Ok(stdout) => {
                 let sha = String::from_utf8_lossy(&stdout).trim().to_string();
                 if sha.len() >= 7 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -617,12 +621,15 @@ fn refresh_catalogs(
                 let body = decode_base64(&content)
                     .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
                     .filter(|body| serde_json::from_str::<Value>(body).is_ok());
-                match body {
-                    Some(body) => {
-                        next.catalogs
-                            .insert(name, CachedCatalog { url, commit, body });
-                    }
-                    None => keep_previous(next),
+                if let Some(body) = body {
+                    next.catalogs
+                        .insert(name, CachedCatalog { url, commit, body });
+                } else {
+                    // GitHub's contents API returns no content for a file over 1 MB.
+                    eprintln!(
+                        "plugin versions: catalog of {name} has no readable content; using the previous or local catalog"
+                    );
+                    keep_previous(next);
                 }
             }
             ManifestFetch::Missing => {}
@@ -788,8 +795,16 @@ fn keep_previous_resolution(
 }
 
 /// [`refresh_plugin_versions_with`] over the `gh` CLI.
-pub fn refresh_plugin_versions(home: &Path, app_data: &Path, gh_bin: &Path) {
-    refresh_plugin_versions_with(home, app_data, &GhRemote(gh_bin));
+/// `timeout` bounds the whole refresh; calls after it passes fail, and a failed
+/// lookup records nothing.
+pub fn refresh_plugin_versions(
+    home: &Path,
+    app_data: &Path,
+    gh_bin: &Path,
+    timeout: std::time::Duration,
+) {
+    let control = AddOperationControl::new(Arc::new(AtomicBool::new(false)), timeout);
+    refresh_plugin_versions_with(home, app_data, &GhRemote(gh_bin, control));
 }
 
 fn read_marketplace(plugins_dir: &Path, marketplace: &str) -> Option<String> {
@@ -875,12 +890,18 @@ pub fn read_plugin_updates(
             continue;
         };
         let manifest = manifest_version_for(&plugins_dir, marketplace, &release, versions);
-        // The sha fallback compares against the commit the ref resolved to.
-        let release = match &release.source {
-            PluginSource::Remote(remote) => MarketplaceRelease {
+        // The sha fallback compares against the commit the ref resolved to. A
+        // relative plugin in a fetched catalog has no version of its own, so
+        // Claude Code versions it by the marketplace commit: compare that.
+        let release = match (&release.source, versions.catalogs.get(marketplace)) {
+            (PluginSource::Remote(remote), _) => MarketplaceRelease {
                 source: PluginSource::Remote(
                     pinned_remote(remote, versions).unwrap_or_else(|| remote.clone()),
                 ),
+                ..release
+            },
+            (PluginSource::Relative(relative), Some(catalog)) => MarketplaceRelease {
+                source: PluginSource::Remote(catalog_plugin_remote(catalog, relative)),
                 ..release
             },
             _ => release,
@@ -1888,5 +1909,46 @@ mod tests {
         let versions = read_plugin_versions(&plugin_versions_path(app_data.path()));
         assert!(versions.resolved.is_empty());
         assert!(read_plugin_updates(home.path(), &versions).is_empty());
+    }
+
+    /// Flow: a relative plugin in a fetched catalog has no version in its
+    /// manifest or catalog entry; Claude Code then versions it by the
+    /// marketplace commit.
+    /// Expectation: an install recorded at another commit is an update, one
+    /// at the catalog commit (full or abbreviated) is current.
+    /// A failure means such a plugin never badges, or badges at its own commit.
+    #[test]
+    fn a_versionless_relative_plugin_in_a_fetched_catalog_compares_the_marketplace_commit() {
+        let catalog_body = r#"{"plugins":[{"name":"codex","source":"./plugins/codex"}]}"#;
+        let versions_at = |commit: &str| {
+            let mut versions = cache_with(
+                format!("https://github.com/o/market#./plugins/codex@{commit}"),
+                None,
+            );
+            versions.catalogs.insert(
+                "claude-plugins-official".to_string(),
+                CachedCatalog {
+                    url: "https://github.com/o/market".to_string(),
+                    commit: commit.to_string(),
+                    body: catalog_body.to_string(),
+                },
+            );
+            versions
+        };
+        let updates_for = |installed_sha: &str, commit: &str| {
+            let home = tempfile::tempdir().unwrap();
+            write_fixture(
+                home.path(),
+                &format!(
+                    r#"{{"plugins":{{"codex@claude-plugins-official":[{{"scope":"user","gitCommitSha":"{installed_sha}"}}]}}}}"#
+                ),
+                Some(catalog_body),
+            );
+            read_plugin_updates(home.path(), &versions_at(commit))
+                .contains_key("codex@claude-plugins-official")
+        };
+        assert!(updates_for("1111111aaaa", "c0ffee1bbbbbbbb"));
+        assert!(!updates_for("c0ffee1bbbbb", "c0ffee1bbbbbbbb"));
+        assert!(!updates_for("c0ffee1bbbbbbbb", "c0ffee1"));
     }
 }

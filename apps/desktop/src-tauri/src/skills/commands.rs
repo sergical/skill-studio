@@ -2629,7 +2629,8 @@ pub async fn set_plugin_enabled(
 /// as the snapshot's plugin update owner reports them, and must match an
 /// entry of `installed_plugins.json`. Returns the CLI's `updateOutcome`
 /// (`updated`, `up_to_date`, `skipped`, ...) with its message. After a
-/// successful run the plugin versions are re-checked, so the badge reflects the
+/// run that updated the plugin the versions are re-checked (within a short
+/// deadline), so the badge reflects the
 /// new install even when an unpinned ref moved meanwhile. Claude Code applies
 /// the update to new sessions only.
 #[tauri::command]
@@ -2657,7 +2658,9 @@ pub async fn update_plugin(
                 project_path.as_deref().map(Path::new),
             )
         })?;
-        recheck_plugin_versions(&app, &home);
+        if result.outcome == "updated" {
+            recheck_plugin_versions(&app, &home);
+        }
         Ok(result)
     })
     .await
@@ -2665,7 +2668,8 @@ pub async fn update_plugin(
 
 /// Re-runs the plugin version lookups after an update and asks for a snapshot
 /// rebuild, so the badge reflects the new install. Skipped without `gh` or a
-/// writable data folder; the next background check then catches up.
+/// writable data folder; lookups still running after the deadline fail, and
+/// the next background check catches up.
 fn recheck_plugin_versions(app: &tauri::AppHandle, home: &Path) {
     let Ok(app_data) = app.path().app_data_dir() else {
         return;
@@ -2674,7 +2678,12 @@ fn recheck_plugin_versions(app: &tauri::AppHandle, home: &Path) {
         return;
     }
     if let Some(gh_bin) = super::skill_update_check::resolve_gh_binary() {
-        super::skill_plugin_update::refresh_plugin_versions(home, &app_data, &gh_bin);
+        super::skill_plugin_update::refresh_plugin_versions(
+            home,
+            &app_data,
+            &gh_bin,
+            std::time::Duration::from_secs(20),
+        );
         skill_refresh::request_snapshot_rebuild(app);
     }
 }

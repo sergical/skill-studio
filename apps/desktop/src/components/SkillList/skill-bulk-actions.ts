@@ -330,12 +330,13 @@ export async function runBulkUpdate(
     const succeeded = new Set(result.succeeded);
     for (const skill of pluginSkills) {
       const targets = skillPluginUpdateTargets(skill);
+      const sharedTarget = targets.find((target) => blocked.has(pluginTargetKey(target)));
       const error =
         targets
           .map((target) => failureByKey.get(pluginTargetKey(target)))
           .find((message) => message !== undefined) ??
-        (targets.some((target) => blocked.has(pluginTargetKey(target)))
-          ? "Its plugin is shared with a skill whose update failed, so it was not updated."
+        (sharedTarget
+          ? `Shares plugin ${sharedTarget.plugin_id} with a skill that failed.`
           : undefined);
       if (error === undefined) {
         // A skill whose fork pull failed is already in `failed`.

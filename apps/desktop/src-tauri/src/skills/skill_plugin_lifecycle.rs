@@ -216,7 +216,8 @@ fn parse_update_outcome(stdout: &[u8]) -> Result<PluginUpdateResult, String> {
 /// Runs `claude plugin update` for one install of a plugin and returns the
 /// CLI's `updateOutcome` and message. The plugin's marketplace is refreshed
 /// first, because the update reads the local marketplace checkout; a failed
-/// refresh does not stop the update. `scope` is the install's own scope from
+/// refresh does not stop the update, but an `up_to_date` result after one
+/// becomes `marketplace_stale`, since the checkout may be old. `scope` is the install's own scope from
 /// `installed_plugins.json`; a project or local install runs in its project
 /// folder, where Claude Code resolves it.
 pub fn update_plugin_with(
@@ -245,18 +246,27 @@ pub fn update_plugin_with(
             dir.display()
         ));
     }
-    if let Some((_, marketplace)) = plugin_id.split_once('@') {
-        // Best effort: the update still compares against whatever checkout exists.
-        let _ = runner.run(
-            CLAUDE_CLI,
-            &plugin_marketplace_update_args(marketplace),
-            None::<&Path>,
-        );
-    }
+    let refresh_error = plugin_id.split_once('@').and_then(|(_, marketplace)| {
+        runner
+            .run(
+                CLAUDE_CLI,
+                &plugin_marketplace_update_args(marketplace),
+                None::<&Path>,
+            )
+            .err()
+            .map(|message| (marketplace, friendly_error(message)))
+    });
     let stdout = runner
         .run_output(CLAUDE_CLI, &plugin_update_args(plugin_id, scope), cwd)
         .map_err(|message| update_error(plugin_id, message))?;
-    parse_update_outcome(&stdout)
+    let mut result = parse_update_outcome(&stdout)?;
+    if let (Some((marketplace, error)), "up_to_date") = (refresh_error, result.outcome.as_str()) {
+        result.outcome = "marketplace_stale".to_string();
+        result.message = Some(format!(
+            "Could not refresh the {marketplace} marketplace ({error}), so this plugin may have a newer version."
+        ));
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -425,6 +435,54 @@ mod tests {
         let result = update_plugin_with(&runner, "sentry@anthropics", "user", None).unwrap();
         assert_eq!(result.outcome, "updated");
         assert_eq!(runner.0.calls.lock().unwrap().len(), 2);
+    }
+
+    /// Flow: the marketplace refresh fails and the plugin update then says
+    /// `up_to_date`, or says `updated`.
+    /// Expectation: `up_to_date` becomes `marketplace_stale` with a message
+    /// naming the marketplace and the refresh error; `updated` stays.
+    /// A failure means a stale checkout is reported as "already current".
+    #[test]
+    fn a_failed_refresh_turns_up_to_date_into_marketplace_stale() {
+        struct RefreshFails(FakeRunner);
+        impl CommandRunner for RefreshFails {
+            fn run(
+                &self,
+                program: &str,
+                args: &[String],
+                cwd: Option<&Path>,
+            ) -> Result<(), String> {
+                self.0.run(program, args, cwd)?;
+                if args.get(1).map(String::as_str) == Some("marketplace") {
+                    return Err("network down".to_string());
+                }
+                Ok(())
+            }
+            fn run_output(
+                &self,
+                program: &str,
+                args: &[String],
+                cwd: Option<&Path>,
+            ) -> Result<Vec<u8>, String> {
+                self.run(program, args, cwd)?;
+                Ok(self.0.stdout.clone().into_bytes())
+            }
+        }
+        let current = RefreshFails(FakeRunner {
+            stdout: r#"{"updateOutcome":"up_to_date"}"#.to_string(),
+            ..Default::default()
+        });
+        let result = update_plugin_with(&current, "sentry@anthropics", "user", None).unwrap();
+        assert_eq!(result.outcome, "marketplace_stale");
+        let message = result.message.unwrap();
+        assert!(message.contains("anthropics") && message.contains("network down"));
+
+        let updated = RefreshFails(FakeRunner {
+            stdout: r#"{"updateOutcome":"updated"}"#.to_string(),
+            ..Default::default()
+        });
+        let result = update_plugin_with(&updated, "sentry@anthropics", "user", None).unwrap();
+        assert_eq!(result.outcome, "updated");
     }
 
     #[test]

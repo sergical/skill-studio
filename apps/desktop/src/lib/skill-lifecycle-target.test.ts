@@ -22,6 +22,7 @@ import {
   skillUpdateAvailability,
   skillUpdateOwnerTargets,
   pluginUpdatedToast,
+  pluginUpdateSucceeded,
   skillUpdateToast,
   updateSkillOwners,
 } from "./skill-lifecycle-target";
@@ -1240,5 +1241,18 @@ describe("plugin updates", () => {
     expect(
       pluginUpdatedToast("codex@official", { outcome: "skipped", message: "not installed" }),
     ).toMatchObject({ type: "warning", message: expect.stringContaining("not installed") });
+  });
+
+  it("shows a stale marketplace as a warning with the refresh error, and does not count it as done", () => {
+    const result = {
+      outcome: "marketplace_stale",
+      message: "Could not refresh the official marketplace (network down), so it may be newer.",
+    };
+    expect(pluginUpdatedToast("codex@official", result)).toMatchObject({
+      type: "warning",
+      title: "codex@official was not updated",
+      message: expect.stringContaining("network down"),
+    });
+    expect(pluginUpdateSucceeded(result)).toBe(false);
   });
 });

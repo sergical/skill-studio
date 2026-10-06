@@ -695,6 +695,30 @@ describe("runBulkUpdate with plugin updates", () => {
     expect(seen[seen.length - 1]).toEqual([1, 1]);
   });
 
+  /** Flow: a plugin-only skill shares its plugin with a skill whose copy update failed.
+   * Expectation: it is failed with a message naming the shared plugin, and the plugin is not run.
+   * Failure: the summary shows no reason, or the plugin is updated anyway. */
+  it("bulk_update_names_the_shared_plugin_when_a_sharing_skill_is_held_back", async () => {
+    const updatePluginInstall = vi.fn(async () => ({ outcome: "updated", message: null }));
+    const result = await runBulkUpdate(
+      [managedAndPlugin("one"), pluginSkill("sharer")],
+      new Set(),
+      {
+        fork: noop,
+        pullFork: noop,
+        updateAll: async () =>
+          // SAFETY: bulkUpdateResult reads only `items[].skill/outcome` and `errors`.
+          ({ items: [{ skill: "one", outcome: null }], errors: { one: "boom" } }) as never,
+        updatePluginInstall,
+      },
+      () => {},
+    );
+    expect(updatePluginInstall).not.toHaveBeenCalled();
+    expect(result.failed.find((failure) => failure.skill.name === "sharer")?.error).toBe(
+      "Shares plugin codex@official with a skill that failed.",
+    );
+  });
+
   /** Failure: a failed project-scope install marks a skill tied only to the user-scope install as failed. */
   it("bulk_update_fails_only_the_skills_of_the_failed_plugin_scope", async () => {
     const withScope = (name: string, scope: string, projectPath: string | null) => ({

@@ -21,6 +21,7 @@ import { removeSkill, updatePlugin } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 import {
   pluginUpdatedToast,
+  pluginUpdateSucceeded,
   skillLifecycleScopeSelection,
   skillMutableLifecycleScopes,
   skillRemovalAvailability,
@@ -140,9 +141,12 @@ function useSkillLifecycleMutations(
             "Claude Code",
             updateAvailability.plugin.scope,
             updateAvailability.plugin.project_path,
-          ).then((outcome) =>
-            addToast(pluginUpdatedToast(updateAvailability.plugin.plugin_id, outcome)),
-          )
+          ).then((outcome) => {
+            addToast(pluginUpdatedToast(updateAvailability.plugin.plugin_id, outcome));
+            if (pluginUpdateSucceeded(outcome)) {
+              onInstallComplete({ success: true, skillName: skill.name });
+            }
+          })
         : guard.requestUpdate(installed, {
             scopeTarget: updateAvailability.target,
             onFinished: ({ success, error }) =>

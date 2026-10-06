@@ -920,7 +920,12 @@ fn run_update_check_now(
                 gh_bin: gh_bin.clone(),
             },
         );
-        super::skill_plugin_update::refresh_plugin_versions(home, app_data, &gh_bin);
+        super::skill_plugin_update::refresh_plugin_versions(
+            home,
+            app_data,
+            &gh_bin,
+            super::skill_process::DEFAULT_ADD_PROCESS_TIMEOUT,
+        );
         store
     } else {
         let previous = read_update_check_store(app_data);
