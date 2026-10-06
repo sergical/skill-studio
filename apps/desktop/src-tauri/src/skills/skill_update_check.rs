@@ -80,6 +80,10 @@ pub struct UpdateCheckStore {
     pub gh_status: GhStatus,
     #[serde(default)]
     pub owners: BTreeMap<String, SkillUpdateState>,
+    /// Source repos that are forks whose original has newer commits, keyed by
+    /// the fork's `owner/repo`. Informational only; never counted as an update.
+    #[serde(default)]
+    pub upstream_ahead: BTreeMap<String, UpstreamAhead>,
     /// Version 1 used skill names as keys. It is read only as a conservative
     /// migration source and is never serialized again.
     #[serde(skip)]
@@ -93,6 +97,7 @@ impl Default for UpdateCheckStore {
             checked_at: None,
             gh_status: GhStatus::Ok,
             owners: BTreeMap::new(),
+            upstream_ahead: BTreeMap::new(),
             legacy_skills: BTreeMap::new(),
         }
     }
@@ -100,6 +105,20 @@ impl Default for UpdateCheckStore {
 
 fn update_store_version() -> u32 {
     2
+}
+
+/// A source repo that is a fork whose original repo has commits the fork
+/// does not. Shown as a note in the skill detail header; no file changes.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
+pub struct UpstreamAhead {
+    /// The fork the skill is installed from, `owner/repo`.
+    pub repo: String,
+    /// The original repo, `owner/repo`.
+    pub upstream_repo: String,
+    /// Commits the original has that the fork does not.
+    pub behind_by: u32,
+    /// GitHub page listing those commits.
+    pub compare_url: String,
 }
 
 /// The `SkillSnapshot.update_check` shape sent to the frontend: a flattened,
@@ -110,6 +129,8 @@ pub struct UpdateCheckSummary {
     pub gh_status: String, // "ok" | "missing" | "not-logged-in" | "failed"
     pub message: Option<String>,
     pub updates_available: u32,
+    #[serde(default)]
+    pub upstream_ahead: Vec<UpstreamAhead>,
 }
 
 impl Default for UpdateCheckSummary {
@@ -119,6 +140,7 @@ impl Default for UpdateCheckSummary {
             gh_status: "ok".to_string(),
             message: None,
             updates_available: 0,
+            upstream_ahead: Vec::new(),
         }
     }
 }
@@ -182,6 +204,7 @@ pub fn read_update_check_store_at(path: &Path) -> UpdateCheckStore {
             checked_at: legacy.checked_at,
             gh_status: legacy.gh_status,
             owners: BTreeMap::new(),
+            upstream_ahead: BTreeMap::new(),
             legacy_skills: legacy.skills,
         },
     )
@@ -269,6 +292,7 @@ pub fn summarize(store: &UpdateCheckStore) -> UpdateCheckSummary {
         gh_status: gh_status.to_string(),
         message,
         updates_available,
+        upstream_ahead: store.upstream_ahead.values().cloned().collect(),
     }
 }
 
@@ -492,6 +516,182 @@ fn parse_tree_response(repo: &str, stdout: &[u8]) -> Result<HashMap<String, Stri
         shas.insert(path.to_string(), sha.to_string());
     }
     Ok(shas)
+}
+
+/// A repo's fork facts, as `gh api repos/{repo}` reports them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoForkInfo {
+    pub default_branch: String,
+    /// `None` when the repo is not a fork (or GitHub names no parent).
+    pub parent: Option<ForkParent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForkParent {
+    /// `owner/repo` of the original.
+    pub full_name: String,
+    pub default_branch: String,
+}
+
+/// The two GitHub questions the fork note asks, behind a trait so the logic
+/// runs without network in tests.
+pub trait ForkLookup {
+    fn repo_info(&self, repo: &str) -> Result<RepoForkInfo, String>;
+
+    /// Commits `base_repo`'s `base_branch` has that `head_owner:head_branch`
+    /// does not (`behind_by` in GitHub's compare response).
+    fn commits_behind(
+        &self,
+        base_repo: &str,
+        base_branch: &str,
+        head_owner: &str,
+        head_branch: &str,
+    ) -> Result<u32, String>;
+}
+
+/// Real `ForkLookup` backed by the `gh` CLI.
+pub struct GhForkLookup {
+    pub gh_bin: PathBuf,
+}
+
+impl ForkLookup for GhForkLookup {
+    fn repo_info(&self, repo: &str) -> Result<RepoForkInfo, String> {
+        let api_path = format!("repos/{repo}");
+        let stdout = super::gh_cli::run_gh(
+            &self.gh_bin,
+            &[
+                "api",
+                &api_path,
+                "--jq",
+                r#"[.fork, .default_branch, (.parent.full_name // ""), (.parent.default_branch // "")] | @tsv"#,
+            ],
+            None,
+        )
+        .map_err(|e| e.message())?;
+        let stdout = String::from_utf8_lossy(&stdout);
+        let mut parts = stdout.trim_end_matches('\n').splitn(4, '\t');
+        let is_fork = parts.next() == Some("true");
+        let default_branch = parts.next().unwrap_or_default().to_string();
+        let parent_name = parts.next().unwrap_or_default();
+        let parent_branch = parts.next().unwrap_or_default();
+        let parent =
+            (is_fork && !parent_name.is_empty() && !parent_branch.is_empty()).then(|| ForkParent {
+                full_name: parent_name.to_string(),
+                default_branch: parent_branch.to_string(),
+            });
+        Ok(RepoForkInfo {
+            default_branch,
+            parent,
+        })
+    }
+
+    fn commits_behind(
+        &self,
+        base_repo: &str,
+        base_branch: &str,
+        head_owner: &str,
+        head_branch: &str,
+    ) -> Result<u32, String> {
+        // `per_page=1` keeps the commit list small; `behind_by` is a total.
+        let api_path = format!(
+            "repos/{base_repo}/compare/{base_branch}...{head_owner}:{head_branch}?per_page=1"
+        );
+        let stdout = super::gh_cli::run_gh(
+            &self.gh_bin,
+            &["api", &api_path, "--jq", ".behind_by"],
+            None,
+        )
+        .map_err(|e| e.message())?;
+        String::from_utf8_lossy(&stdout)
+            .trim()
+            .parse()
+            .map_err(|e| format!("{base_repo}: could not read behind_by: {e}"))
+    }
+}
+
+/// True for names safe to place in a GitHub API URL path: letters, digits,
+/// `.`, `_`, `-`, and (for branches) `/`. Rejects empty names and `..`.
+fn is_url_safe_name(name: &str, allow_slash: bool) -> bool {
+    !name.is_empty()
+        && !name.contains("..")
+        && name.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') || (allow_slash && c == '/')
+        })
+}
+
+/// Splits `owner/repo` when both halves are URL-safe.
+fn split_safe_repo(repo: &str) -> Option<(&str, &str)> {
+    let (owner, name) = repo.split_once('/')?;
+    (is_url_safe_name(owner, false) && is_url_safe_name(name, false)).then_some((owner, name))
+}
+
+/// One record for `repo` when it is a fork whose original is ahead. `Ok(None)`
+/// for a non-fork, an up-to-date fork, or names that are unsafe for a URL.
+fn upstream_ahead_for_repo(
+    repo: &str,
+    lookup: &dyn ForkLookup,
+) -> Result<Option<UpstreamAhead>, String> {
+    let Some((owner, _)) = split_safe_repo(repo) else {
+        return Ok(None);
+    };
+    let info = lookup.repo_info(repo)?;
+    let Some(parent) = info.parent else {
+        return Ok(None);
+    };
+    let Some((parent_owner, parent_name)) = split_safe_repo(&parent.full_name) else {
+        return Ok(None);
+    };
+    if !is_url_safe_name(&info.default_branch, true)
+        || !is_url_safe_name(&parent.default_branch, true)
+    {
+        return Ok(None);
+    }
+    let behind_by = lookup.commits_behind(
+        &parent.full_name,
+        &parent.default_branch,
+        owner,
+        &info.default_branch,
+    )?;
+    if behind_by == 0 {
+        return Ok(None);
+    }
+    Ok(Some(UpstreamAhead {
+        repo: repo.to_string(),
+        compare_url: format!(
+            "https://github.com/{repo}/compare/{}...{parent_owner}:{parent_name}:{}",
+            info.default_branch, parent.default_branch
+        ),
+        upstream_repo: parent.full_name,
+        behind_by,
+    }))
+}
+
+/// For each distinct source repo among `candidates`, find forks whose original
+/// has commits the fork lacks. A repo whose lookup fails is skipped, so one
+/// 404 or rate limit never hides the other repos' notes. Keyed by repo.
+fn find_upstream_ahead(
+    candidates: &[Candidate],
+    lookup: &dyn ForkLookup,
+) -> BTreeMap<String, UpstreamAhead> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut found = BTreeMap::new();
+    for candidate in candidates {
+        let key = skill_studio_core::skill_update_check::normalize_repo_key(&candidate.repo);
+        if !seen.insert(key) {
+            continue;
+        }
+        match upstream_ahead_for_repo(&candidate.repo, lookup) {
+            Ok(Some(record)) => {
+                found.insert(record.repo.clone(), record);
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!(
+                "skill update check: fork lookup for {} failed: {e}",
+                candidate.repo
+            ),
+        }
+    }
+    found
 }
 
 /// Resolve `gh` on `$PATH` via a login shell, the same way
@@ -847,6 +1047,7 @@ fn run_update_check_impl(
         checked_at: Some(now),
         gh_status,
         owners,
+        upstream_ahead: previous.upstream_ahead,
         legacy_skills: BTreeMap::new(),
     };
     if let Err(e) = write_store(app_data, &store) {
@@ -909,15 +1110,27 @@ fn run_update_check_now(
     app_data: &Path,
 ) -> UpdateCheckStore {
     if let Some(gh_bin) = resolve_gh_binary() {
-        run_update_check_with_projects(
+        let mut store = run_update_check_with_projects(
             home,
             project_paths,
             app_data,
             &GhCommitLookup {
                 gh_bin: gh_bin.clone(),
             },
-            &GhTreeLookup { gh_bin },
-        )
+            &GhTreeLookup {
+                gh_bin: gh_bin.clone(),
+            },
+        );
+        if store.gh_status == GhStatus::Ok {
+            store.upstream_ahead = find_upstream_ahead(
+                &build_candidates(home, project_paths),
+                &GhForkLookup { gh_bin },
+            );
+            if let Err(e) = write_store(app_data, &store) {
+                eprintln!("skill update check: failed to write store: {e}");
+            }
+        }
+        store
     } else {
         let previous = read_update_check_store(app_data);
         let store = UpdateCheckStore {
@@ -925,6 +1138,7 @@ fn run_update_check_now(
             checked_at: Some(Utc::now().to_rfc3339()),
             gh_status: GhStatus::Missing,
             owners: previous.owners,
+            upstream_ahead: previous.upstream_ahead,
             legacy_skills: previous.legacy_skills,
         };
         if let Err(e) = write_store(app_data, &store) {
@@ -1450,6 +1664,7 @@ resolved_commit = "{commit}"
                     error: None,
                 },
             )]),
+            upstream_ahead: BTreeMap::new(),
             legacy_skills: BTreeMap::new(),
         };
         write_store(&app_data, &seeded).unwrap();
@@ -1674,6 +1889,7 @@ resolved_commit = "{commit}"
                     error: None,
                 },
             )]),
+            upstream_ahead: BTreeMap::new(),
             legacy_skills: BTreeMap::new(),
         };
         write_store(&app_data, &seeded).unwrap();
@@ -1733,6 +1949,7 @@ resolved_commit = "{commit}"
                     error: None,
                 },
             )]),
+            upstream_ahead: BTreeMap::new(),
             legacy_skills: BTreeMap::new(),
         };
         write_store(&app_data, &seeded).unwrap();
@@ -1976,6 +2193,7 @@ resolved_commit = "{commit}"
                         checked_at: Some(format!("run-{i}")),
                         gh_status: GhStatus::Ok,
                         owners: BTreeMap::new(),
+                        upstream_ahead: BTreeMap::new(),
                         legacy_skills: BTreeMap::new(),
                     };
                     write_store(&app_data, &store).unwrap();
@@ -1998,5 +2216,194 @@ resolved_commit = "{commit}"
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
             .count();
         assert_eq!(leftover_temp_files, 0);
+    }
+
+    // --- fork note: the original repo is ahead of the fork ----------------
+
+    /// Fake `ForkLookup`: `repos` answers `repo_info`, `behind` answers the
+    /// compare; every call is recorded so tests can assert what was (not) asked.
+    struct FakeForkLookup {
+        repos: HashMap<String, Result<RepoForkInfo, String>>,
+        behind: HashMap<String, u32>,
+        info_calls: StdMutex<Vec<String>>,
+        compare_calls: StdMutex<Vec<String>>,
+    }
+
+    impl FakeForkLookup {
+        fn new() -> Self {
+            Self {
+                repos: HashMap::new(),
+                behind: HashMap::new(),
+                info_calls: StdMutex::new(Vec::new()),
+                compare_calls: StdMutex::new(Vec::new()),
+            }
+        }
+
+        fn fork(mut self, repo: &str, parent: &str, behind_by: u32) -> Self {
+            self.repos.insert(
+                repo.to_string(),
+                Ok(RepoForkInfo {
+                    default_branch: "main".to_string(),
+                    parent: Some(ForkParent {
+                        full_name: parent.to_string(),
+                        default_branch: "main".to_string(),
+                    }),
+                }),
+            );
+            self.behind.insert(parent.to_string(), behind_by);
+            self
+        }
+    }
+
+    impl ForkLookup for FakeForkLookup {
+        fn repo_info(&self, repo: &str) -> Result<RepoForkInfo, String> {
+            self.info_calls.lock().unwrap().push(repo.to_string());
+            self.repos
+                .get(repo)
+                .cloned()
+                .unwrap_or_else(|| Err(format!("{repo}: HTTP 404")))
+        }
+
+        fn commits_behind(
+            &self,
+            base_repo: &str,
+            _base_branch: &str,
+            _head_owner: &str,
+            _head_branch: &str,
+        ) -> Result<u32, String> {
+            self.compare_calls
+                .lock()
+                .unwrap()
+                .push(base_repo.to_string());
+            Ok(self.behind.get(base_repo).copied().unwrap_or(0))
+        }
+    }
+
+    fn repo_candidate(name: &str, repo: &str) -> Candidate {
+        Candidate {
+            owner_id: format!("owner:v1/global/{name}"),
+            name: name.to_string(),
+            scope: InstallScope::Global,
+            repo: repo.to_string(),
+            path: format!("skills/{name}"),
+            kind: CandidateKind::Dotagents {
+                installed_commit: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_fork_behind_its_original_yields_one_record_with_the_exact_compare_url() {
+        let lookup =
+            FakeForkLookup::new().fork("sergical/mattpocock-skills", "mattpocock/skills", 12);
+        let found = find_upstream_ahead(
+            &[repo_candidate("tdd", "sergical/mattpocock-skills")],
+            &lookup,
+        );
+        assert_eq!(
+            found.into_values().collect::<Vec<_>>(),
+            vec![UpstreamAhead {
+                repo: "sergical/mattpocock-skills".to_string(),
+                upstream_repo: "mattpocock/skills".to_string(),
+                behind_by: 12,
+                compare_url:
+                    "https://github.com/sergical/mattpocock-skills/compare/main...mattpocock:skills:main"
+                        .to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_fork_level_with_its_original_yields_no_record() {
+        let lookup = FakeForkLookup::new().fork("me/fork", "them/orig", 0);
+        let found = find_upstream_ahead(&[repo_candidate("a", "me/fork")], &lookup);
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn a_non_fork_yields_no_record_and_makes_no_compare_call() {
+        let mut lookup = FakeForkLookup::new();
+        lookup.repos.insert(
+            "me/plain".to_string(),
+            Ok(RepoForkInfo {
+                default_branch: "main".to_string(),
+                parent: None,
+            }),
+        );
+        let found = find_upstream_ahead(&[repo_candidate("a", "me/plain")], &lookup);
+        assert!(found.is_empty());
+        assert!(lookup.compare_calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failing_repo_lookup_is_skipped_while_another_repo_still_gets_its_record() {
+        let lookup = FakeForkLookup::new().fork("me/good", "them/orig", 3);
+        let found = find_upstream_ahead(
+            &[
+                repo_candidate("a", "me/gone"),
+                repo_candidate("b", "me/good"),
+            ],
+            &lookup,
+        );
+        assert_eq!(found.keys().collect::<Vec<_>>(), vec!["me/good"]);
+    }
+
+    #[test]
+    fn two_skills_from_the_same_repo_cause_one_lookup() {
+        let lookup = FakeForkLookup::new().fork("me/fork", "them/orig", 1);
+        let found = find_upstream_ahead(
+            &[
+                repo_candidate("a", "me/fork"),
+                repo_candidate("b", "Me/Fork"),
+            ],
+            &lookup,
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(lookup.info_calls.lock().unwrap().len(), 1);
+        assert_eq!(lookup.compare_calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_invalid_owner_or_branch_is_skipped_without_a_call() {
+        let lookup = FakeForkLookup::new();
+        let found = find_upstream_ahead(
+            &[
+                repo_candidate("a", "bad owner/repo"),
+                repo_candidate("b", "me/re?po"),
+            ],
+            &lookup,
+        );
+        assert!(found.is_empty());
+        assert!(lookup.info_calls.lock().unwrap().is_empty());
+
+        let mut bad_branch = FakeForkLookup::new().fork("me/fork", "them/orig", 5);
+        bad_branch.repos.insert(
+            "me/fork".to_string(),
+            Ok(RepoForkInfo {
+                default_branch: "main?x=1".to_string(),
+                parent: Some(ForkParent {
+                    full_name: "them/orig".to_string(),
+                    default_branch: "main".to_string(),
+                }),
+            }),
+        );
+        let found = find_upstream_ahead(&[repo_candidate("a", "me/fork")], &bad_branch);
+        assert!(found.is_empty());
+        assert!(bad_branch.compare_calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_old_cache_file_without_upstream_ahead_still_loads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = update_check_path(tmp.path());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"version":2,"checked_at":"t","gh_status":{"kind":"ok"},"owners":{}}"#,
+        )
+        .unwrap();
+        let store = read_update_check_store(tmp.path());
+        assert_eq!(store.checked_at.as_deref(), Some("t"));
+        assert!(store.upstream_ahead.is_empty());
     }
 }

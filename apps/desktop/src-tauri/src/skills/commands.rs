@@ -833,6 +833,7 @@ mod tests {
             ]
             .into_iter()
             .collect(),
+            upstream_ahead: Default::default(),
             legacy_skills: Default::default(),
         };
         let update_check_path = skill_update_check::update_check_path(&app_data);

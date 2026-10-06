@@ -23,10 +23,12 @@ import type {
   FrontmatterRepairKind,
   FrontmatterRepairPreview,
   InstalledSkill,
+  UpstreamAhead,
 } from "@skill-studio/lib";
 import { useSkillInstalls } from "../../hooks/useSkillInstalls";
 import { TooltipControl } from "../ui/TooltipControl";
 import { skillSourceLine } from "./skill-source-line";
+import { skillUpstreamNote } from "./skill-upstream-note";
 import {
   canOfferLocalQuote,
   fixLineFor,
@@ -36,6 +38,8 @@ import {
 
 interface InstalledSkillHeaderProps {
   skill: InstalledSkill;
+  /** Forks whose original repo is ahead; the header notes the one this skill installs from. */
+  upstreamAhead?: UpstreamAhead[];
   /** The deployment whose SKILL.md the page renders - the header's violation line follows it. */
   deployment?: Deployment;
   /** The previews the backend accepted, one per repair kind. */
@@ -66,6 +70,7 @@ function parkedChipLabel(parkedAt: string | null | undefined): string {
  */
 export function InstalledSkillHeader({
   skill,
+  upstreamAhead = [],
   deployment,
   frontmatterRepairs = [],
   isFrontmatterPreviewSettled = false,
@@ -77,6 +82,7 @@ export function InstalledSkillHeader({
   // Notes from the skill's own copies only, as on list rows - a plugin copy's notes are not the
   // user's to fix. A plugin-only skill has no own copy, so it counts every copy.
   const sourceLine = skillSourceLine(skill, useSkillInstalls(skill));
+  const upstreamNote = skillUpstreamNote(skill, upstreamAhead);
   const own = ownDeployments(skill);
   const noteSources = own.length > 0 ? own : skill.deployments;
   const nonBlockingNotes = [
@@ -166,6 +172,20 @@ export function InstalledSkillHeader({
           )}
           {sourceLine.installs && ` · ${sourceLine.installs}`}
         </p>
+        {upstreamNote && (
+          <p className="mt-1 select-text text-small text-text-tertiary">
+            {upstreamNote.text}{" "}
+            <a
+              href={upstreamNote.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-text-tertiary no-underline transition-colors hover:text-accent hover:underline"
+            >
+              See changes
+              <ExternalLink size={12} />
+            </a>
+          </p>
+        )}
         {skill.description && (
           <p className="mt-3 select-text text-pretty text-body leading-[1.5] text-text-secondary">
             {skill.description}

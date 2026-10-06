@@ -19,6 +19,7 @@ import type {
   FrontmatterQuoteRepair,
   FrontmatterRepairKind,
   InstalledSkill,
+  UpstreamAhead,
 } from "@skill-studio/lib";
 import type { ActiveView } from "../../store/appStore";
 import { useAppStore } from "../../store/appStore";
@@ -47,6 +48,8 @@ import { useSkillMdEditorState } from "./useSkillMdEditorState";
 interface SkillPageProps {
   /** `null` when the skill named by the route was removed since the page opened. */
   skill: InstalledSkill | null;
+  /** The snapshot's forks whose original repo is ahead. */
+  upstreamAhead?: UpstreamAhead[];
   /** The specific deployment the caller clicked, when known - see `ActiveView`'s "skill" kind. */
   deploymentPath?: string;
   onBack: () => void;
@@ -202,6 +205,7 @@ function useSkillMdContent({ skill, skillMdPath, deployment, addToast }: UseSkil
  */
 export function SkillPage({
   skill,
+  upstreamAhead,
   deploymentPath,
   onBack,
   onRemoveComplete,
@@ -333,6 +337,7 @@ export function SkillPage({
         <div className="flex min-w-0 flex-col gap-6">
           <InstalledSkillHeader
             skill={skill}
+            upstreamAhead={upstreamAhead}
             deployment={deployment ?? undefined}
             frontmatterRepairs={frontmatterRepairs}
             isFrontmatterPreviewSettled={isFrontmatterPreviewSettled}

@@ -670,6 +670,29 @@ export interface UpdateCheckSummary {
   gh_status: string;
   message: string | null;
   updates_available: number;
+  upstream_ahead: UpstreamAhead[];
+}
+/**
+ * A source repo that is a fork whose original repo has commits the fork
+ * does not. Shown as a note in the skill detail header; no file changes.
+ */
+export interface UpstreamAhead {
+  /**
+   * The fork the skill is installed from, `owner/repo`.
+   */
+  repo: string;
+  /**
+   * The original repo, `owner/repo`.
+   */
+  upstream_repo: string;
+  /**
+   * Commits the original has that the fork does not.
+   */
+  behind_by: number;
+  /**
+   * GitHub page listing those commits.
+   */
+  compare_url: string;
 }
 /**
  * Agent target with paths resolved
