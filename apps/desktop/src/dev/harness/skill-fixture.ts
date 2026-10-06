@@ -1323,7 +1323,13 @@ export function buildHarnessSnapshot(skillCount = 0): SkillSnapshot {
     scan_partial: false,
     unread_roots: [],
     last_test_by_skill: {},
-    update_check: { checked_at: SCANNED_AT, gh_status: "ok", message: null, updates_available: 2 },
+    update_check: {
+      checked_at: SCANNED_AT,
+      gh_status: "ok",
+      message: null,
+      updates_available: 2,
+      upstream_ahead: [],
+    },
     opencode_config_kind: "json",
   };
 }

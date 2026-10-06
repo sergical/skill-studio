@@ -76,6 +76,7 @@ export type {
   ForkInfo,
   OwnerUpdateInfo,
   UpdateCheckSummary,
+  UpstreamAhead,
   SkillsShAccessInfo,
   UpdatePackResult,
   LifecycleTarget,

@@ -16,6 +16,7 @@ function snapshot(revision: number, scannedAt: string): SkillSnapshot {
       gh_status: "ok",
       message: null,
       updates_available: 0,
+      upstream_ahead: [],
     },
     opencode_config_kind: null,
     scan_partial: false,
