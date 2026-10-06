@@ -4,7 +4,7 @@
 // installed skill's source line. Informational; never an update.
 // ============================================================================
 
-import type { InstalledSkill, UpstreamAhead } from "@skill-studio/lib";
+import type { Deployment, InstalledSkill, UpstreamAhead } from "@skill-studio/lib";
 
 export interface SkillUpstreamNote {
   /** "Forked from mattpocock/skills, which has 12 changes this fork doesn't." */
@@ -13,16 +13,18 @@ export interface SkillUpstreamNote {
   href: string;
 }
 
-/** The note for a dotagents or skills.sh skill installed from a fork behind its original. */
+/** The note for the page's deployment, when a dotagents or skills.sh fork behind its original owns it. */
 export function skillUpstreamNote(
   skill: InstalledSkill,
+  deployment: Deployment | undefined,
   upstreamAhead: UpstreamAhead[],
 ): SkillUpstreamNote | null {
   if (skill.source_kind !== "dotagents" && skill.source_kind !== "skills-sh") return null;
-  // A dotagents-only install has `source: "local"`, so match on the lifecycle owner instead.
-  const record = upstreamAhead.find((r) =>
-    skill.deployments.some((d) => d.owner_id != null && r.owner_ids.includes(d.owner_id)),
-  );
+  // A global and a project copy of one name can come from different forks, so only the shown
+  // copy's owner counts. A dotagents-only install has `source: "local"`, hence the owner id.
+  const ownerId = deployment?.owner_id;
+  if (ownerId == null) return null;
+  const record = upstreamAhead.find((r) => r.owner_ids.includes(ownerId));
   if (!record) return null;
   const changes = record.behind_by === 1 ? "1 change" : `${record.behind_by} changes`;
   return {

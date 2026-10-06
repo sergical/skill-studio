@@ -38,7 +38,7 @@ import {
 
 interface InstalledSkillHeaderProps {
   skill: InstalledSkill;
-  /** Forks whose original repo is ahead; the header notes the one this skill installs from. */
+  /** Forks whose original repo is ahead; the header notes the one the rendered copy installs from. */
   upstreamAhead?: UpstreamAhead[];
   /** The deployment whose SKILL.md the page renders - the header's violation line follows it. */
   deployment?: Deployment;
@@ -82,7 +82,6 @@ export function InstalledSkillHeader({
   // Notes from the skill's own copies only, as on list rows - a plugin copy's notes are not the
   // user's to fix. A plugin-only skill has no own copy, so it counts every copy.
   const sourceLine = skillSourceLine(skill, useSkillInstalls(skill));
-  const upstreamNote = skillUpstreamNote(skill, upstreamAhead);
   const own = ownDeployments(skill);
   const noteSources = own.length > 0 ? own : skill.deployments;
   const nonBlockingNotes = [
@@ -98,6 +97,7 @@ export function InstalledSkillHeader({
   // Locations rows instead (see `SkillLocationsCard`). Home's spec-violation
   // issue still relies on `skill.spec_violations` covering every copy.
   const renderedDeployment = deployment ?? skill.deployments.find((d) => d.content_hash);
+  const upstreamNote = skillUpstreamNote(skill, renderedDeployment, upstreamAhead);
   const blockingViolations = (renderedDeployment?.spec_violations ?? []).filter(
     isBlockingSpecViolation,
   );
