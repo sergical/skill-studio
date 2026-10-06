@@ -527,7 +527,9 @@ fn parse_tree_response(repo: &str, stdout: &[u8]) -> Result<HashMap<String, Stri
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoForkInfo {
     pub default_branch: String,
-    /// `None` when the repo is not a fork (or GitHub names no parent).
+    /// The original repo of the fork's whole network (GitHub's `source`, not
+    /// the direct `parent`), so a chain A -> B -> C compares C with A.
+    /// `None` when the repo is not a fork (or GitHub names no source).
     pub parent: Option<ForkParent>,
 }
 
@@ -558,8 +560,8 @@ pub trait ForkLookup: Sync {
 }
 
 /// Parses the `@tsv` line `GhForkLookup::repo_info` asks `gh` for:
-/// `fork \t default_branch \t parent.full_name \t parent.default_branch`,
-/// the parent columns empty when GitHub names none.
+/// `fork \t default_branch \t source.full_name \t source.default_branch`,
+/// the source columns empty when GitHub names none.
 fn parse_repo_fork_info(stdout: &str) -> RepoForkInfo {
     let mut parts = stdout.trim_end_matches('\n').splitn(4, '\t');
     let is_fork = parts.next() == Some("true");
@@ -615,7 +617,7 @@ impl ForkLookup for GhForkLookup {
             "api",
             &api_path,
             "--jq",
-            r#"[.fork, .default_branch, (.parent.full_name // ""), (.parent.default_branch // "")] | @tsv"#,
+            r#"[.fork, .default_branch, (.source.full_name // ""), (.source.default_branch // "")] | @tsv"#,
         ])?;
         Ok(parse_repo_fork_info(&String::from_utf8_lossy(&stdout)))
     }
@@ -942,6 +944,11 @@ struct Sources {
     candidates: Vec<Candidate>,
     /// The fork lookups and the pruning of their notes.
     fork_candidates: Vec<ForkCandidate>,
+    /// Owners a readable file names for certain: every fork candidate except a
+    /// skills.sh lock entry in a root whose dotagents ledger failed (the
+    /// ledger may own that name and shadow the entry), plus every name in a
+    /// readable dotagents ledger, even one with no GitHub repo.
+    resolved_owners: std::collections::BTreeSet<String>,
     /// Owner id prefixes (`owner_id_for` with an empty name) of the roots whose
     /// lock, ledger, or fork registry file exists but could not be read. Both
     /// lists may miss that root's skills, so its notes must not be pruned.
@@ -956,7 +963,7 @@ impl Sources {
     }
 
     fn is_resolved(&self, owner_id: &str) -> bool {
-        self.fork_candidates.iter().any(|c| c.owner_id == owner_id)
+        self.resolved_owners.contains(owner_id)
     }
 
     /// Adds back the owners of `previous` notes that live in a root that
@@ -1029,6 +1036,8 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
         Default::default()
     });
     let mut path_less: Vec<ForkCandidate> = Vec::new();
+    let mut unverified_lock_ids: std::collections::BTreeSet<String> = Default::default();
+    let mut ledger_names: std::collections::BTreeSet<String> = Default::default();
     let mut candidates: Vec<Candidate> = fork_registry
         .forks
         .iter()
@@ -1047,10 +1056,11 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
         fork_registry.forks.keys().cloned().collect();
 
     for ledger in load_ownership_ledgers(home, project_paths) {
-        if ledger.read_failed {
+        if ledger.lock_failed || ledger.ledger_failed {
             failed_roots.push(owner_id_for(&ledger, ""));
         }
         let owner_id = |name: &str| owner_id_for(&ledger, name);
+        ledger_names.extend(ledger.dotagents.iter().map(|skill| owner_id(&skill.name)));
         let global_fork = ledger.scope == InstallScope::Global;
         let mut dotagents_names: std::collections::BTreeSet<String> = ledger
             .dotagents
@@ -1084,6 +1094,9 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
             let Some(repo) = dotagents_ledger::github_repo_from_source(&entry.source) else {
                 continue;
             };
+            if ledger.ledger_failed {
+                unverified_lock_ids.insert(owner_id(name));
+            }
             let Some(skill_path) = &entry.skill_path else {
                 // A skill at the repo root has no path: no owner update
                 // check, but it can still be a fork.
@@ -1120,9 +1133,16 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
         .chain(path_less)
         .collect();
     fork_candidates.sort_by(|a, b| a.owner_id.cmp(&b.owner_id));
+    let resolved_owners = fork_candidates
+        .iter()
+        .map(|c| c.owner_id.clone())
+        .filter(|id| !unverified_lock_ids.contains(id))
+        .chain(ledger_names)
+        .collect();
     Sources {
         candidates,
         fork_candidates,
+        resolved_owners,
         failed_roots,
     }
 }
@@ -2752,6 +2772,21 @@ resolved_commit = "{commit}"
         assert!(found.is_empty());
     }
 
+    /// Flow: a fork chain A -> B -> C where B equals C but A is ahead; GitHub
+    /// reports B as `parent` and A as `source`, and the lookup carries the
+    /// source, so B is never asked about.
+    /// Expectation: C gets a note naming A (`them/a`) as the upstream.
+    /// A failure here means the lookup compared C with its direct parent B,
+    /// so the note disappeared while the original was still ahead.
+    #[test]
+    fn a_nested_fork_is_compared_with_the_original_not_its_direct_parent() {
+        let lookup = FakeForkLookup::new().fork("me/c", "them/a", 5);
+        let found = find_upstream_ahead(&[repo_candidate("a", "me/c")], &lookup, &BTreeMap::new());
+        assert_eq!(found["me/c"].upstream_repo, "them/a");
+        assert_eq!(found["me/c"].behind_by, 5);
+        assert_eq!(*lookup.compare_calls.lock().unwrap(), vec!["them/a"]);
+    }
+
     #[test]
     fn a_non_fork_yields_no_record_and_makes_no_compare_call() {
         let mut lookup = FakeForkLookup::new();
@@ -3261,6 +3296,54 @@ resolved_commit = "{commit}"
         let mut repos: Vec<_> = summary.upstream_ahead.iter().map(|n| &n.repo).collect();
         repos.sort();
         assert_eq!(repos, vec!["me/fork", "me/lock-only"]);
+    }
+
+    /// Flow: a dotagents skill with a note, a stale skills.sh lock entry for
+    /// the same name naming another repo, and a malformed `agents.lock`.
+    /// Expectation: the note is kept, since the ledger that would shadow the
+    /// stale entry is unreadable.
+    /// A failure here means the stale lock entry counted as the owner's
+    /// source and the note was pruned against the wrong repo.
+    #[test]
+    fn a_malformed_ledger_keeps_the_note_despite_a_stale_lock_entry_for_the_same_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(home.join(".agents")).unwrap();
+        fs::write(home.join(".agents/agents.lock"), "{ not toml").unwrap();
+        write_skill_lock(&home, "tdd", "stale/other", "skills/tdd", "hash");
+        let store = UpdateCheckStore {
+            upstream_ahead: previous_map(&[previous_record("me/fork", "tdd", 4)]),
+            ..UpdateCheckStore::default()
+        };
+
+        let repos: Vec<_> = summarize_current(&store, &home, &[])
+            .upstream_ahead
+            .into_iter()
+            .map(|n| n.repo)
+            .collect();
+        assert_eq!(repos, vec!["me/fork"]);
+    }
+
+    /// Flow: a dotagents entry with a local (non-GitHub) source and an old
+    /// note, beside a malformed skills.sh lock.
+    /// Expectation: the note is dropped, because the readable ledger names
+    /// the skill and it has no fork repo.
+    /// A failure here means an entry with no `github_repo` was not counted as
+    /// resolved, so its stale note survived the unreadable lock.
+    #[test]
+    fn a_malformed_lock_drops_the_note_of_a_local_source_dotagents_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        seed_one_dotagents_skill(&home, "path:../local-skills");
+        fs::write(home.join(".agents/.skill-lock.json"), "{ not json").unwrap();
+        let store = UpdateCheckStore {
+            upstream_ahead: previous_map(&[previous_record("me/fork", "tdd", 4)]),
+            ..UpdateCheckStore::default()
+        };
+
+        assert!(summarize_current(&store, &home, &[])
+            .upstream_ahead
+            .is_empty());
     }
 
     #[test]

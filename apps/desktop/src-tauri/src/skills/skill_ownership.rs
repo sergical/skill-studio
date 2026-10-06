@@ -65,9 +65,13 @@ pub struct OwnershipLedgers {
     pub project_path: Option<PathBuf>,
     pub lock: SkillLockFile,
     pub dotagents: Vec<DotagentsSkill>,
-    /// A lock or ledger file for this root exists but could not be read or
-    /// parsed, so `lock` and `dotagents` may be missing skills.
-    pub read_failed: bool,
+    /// The skills.sh lock for this root exists but could not be read or
+    /// parsed, so `lock` may be missing skills.
+    pub lock_failed: bool,
+    /// The dotagents ledger for this root exists but could not be read or
+    /// parsed, so `dotagents` may be missing skills, and a `lock` entry it
+    /// would have shadowed may be stale.
+    pub ledger_failed: bool,
 }
 
 /// Load the home Universal ledger (`~/.agents`) plus one ledger per project
@@ -99,7 +103,7 @@ pub fn load_ownership_ledgers(home: &Path, project_paths: &[PathBuf]) -> Vec<Own
 }
 
 /// The ledgers for one root. A file that exists but failed to read reads as
-/// empty and sets `read_failed`, so a caller that prunes can skip that root.
+/// empty and sets `lock_failed` or `ledger_failed`, so a caller that prunes can skip that root.
 fn read_ledgers(
     home: &Path,
     agents_dir: PathBuf,
@@ -110,7 +114,8 @@ fn read_ledgers(
     let lock = lock_file::read_lock_file(&fs, &lock_file::lock_file_path_in(&agents_dir));
     let dotagents_dir = dotagents_ledger::dotagents_dir(home, project_path.as_deref());
     let dotagents = dotagents_ledger::read_dotagents_ledger(&fs, &dotagents_dir);
-    let read_failed = lock.is_err() || dotagents.is_err();
+    let lock_failed = lock.is_err();
+    let ledger_failed = dotagents.is_err();
     OwnershipLedgers {
         agents_dir,
         scope,
@@ -120,7 +125,8 @@ fn read_ledgers(
             skills: HashMap::new(),
         }),
         dotagents: dotagents.unwrap_or_default(),
-        read_failed,
+        lock_failed,
+        ledger_failed,
     }
 }
 
