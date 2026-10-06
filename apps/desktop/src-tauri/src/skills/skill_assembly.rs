@@ -597,6 +597,22 @@ mod tests {
     }
 
     #[test]
+    fn a_dotagents_only_install_has_source_local_and_keeps_its_deployment_owner_id() {
+        let mut dto = deployment_dto("tdd", "Claude Code");
+        dto.source_kind = SourceKind::Dotagents;
+        dto.owner_kind = CoreLifecycleOwnerKind::Dotagents;
+        dto.owner_id =
+            Some(skill_studio_core::identity::OwnerId::parse("owner:v1/global/tdd").unwrap());
+
+        let skills = assemble_installed_skills(&skills_from(vec![("tdd", dto)]), &empty_lock());
+        assert_eq!(skills[0].source, "local");
+        assert_eq!(
+            skills[0].deployments[0].owner_id.as_deref(),
+            Some("owner:v1/global/tdd")
+        );
+    }
+
+    #[test]
     fn assembled_skills_are_sorted_by_name() {
         let skills = assemble_installed_skills(
             &skills_from(vec![

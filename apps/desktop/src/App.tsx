@@ -151,6 +151,7 @@ function App() {
     return (
       <SkillPage
         skill={skill}
+        upstreamAhead={snapshot?.update_check.upstream_ahead}
         deploymentPath={view.deploymentPath}
         onBack={closeSkill}
         onRemoveComplete={closeSkill}

@@ -2983,6 +2983,7 @@ mod tests {
                     error: None,
                 },
             )]),
+            upstream_ahead: BTreeMap::new(),
             legacy_skills: BTreeMap::new(),
         };
         fs::write(

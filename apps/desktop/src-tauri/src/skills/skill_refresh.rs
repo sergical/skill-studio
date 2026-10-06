@@ -2089,7 +2089,7 @@ pub fn build_snapshot(
     let assembly_ms = assembly_start.elapsed().as_millis();
 
     let update_store = skill_update_check::read_update_check_store_at(update_check_path);
-    let update_check = skill_update_check::summarize(&update_store);
+    let update_check = skill_update_check::summarize_current(&update_store, home, &project_paths);
 
     let current_owner_ids = snapshot_owner_ids(&skills);
     let overlays_start = Instant::now();
