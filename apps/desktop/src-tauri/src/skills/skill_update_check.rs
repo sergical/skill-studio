@@ -549,6 +549,26 @@ pub trait ForkLookup {
     ) -> Result<u32, String>;
 }
 
+/// Parses the `@tsv` line `GhForkLookup::repo_info` asks `gh` for:
+/// `fork \t default_branch \t parent.full_name \t parent.default_branch`,
+/// the parent columns empty when GitHub names none.
+fn parse_repo_fork_info(stdout: &str) -> RepoForkInfo {
+    let mut parts = stdout.trim_end_matches('\n').splitn(4, '\t');
+    let is_fork = parts.next() == Some("true");
+    let default_branch = parts.next().unwrap_or_default().to_string();
+    let parent_name = parts.next().unwrap_or_default();
+    let parent_branch = parts.next().unwrap_or_default();
+    let parent =
+        (is_fork && !parent_name.is_empty() && !parent_branch.is_empty()).then(|| ForkParent {
+            full_name: parent_name.to_string(),
+            default_branch: parent_branch.to_string(),
+        });
+    RepoForkInfo {
+        default_branch,
+        parent,
+    }
+}
+
 /// Real `ForkLookup` backed by the `gh` CLI.
 pub struct GhForkLookup {
     pub gh_bin: PathBuf,
@@ -568,21 +588,7 @@ impl ForkLookup for GhForkLookup {
             None,
         )
         .map_err(|e| e.message())?;
-        let stdout = String::from_utf8_lossy(&stdout);
-        let mut parts = stdout.trim_end_matches('\n').splitn(4, '\t');
-        let is_fork = parts.next() == Some("true");
-        let default_branch = parts.next().unwrap_or_default().to_string();
-        let parent_name = parts.next().unwrap_or_default();
-        let parent_branch = parts.next().unwrap_or_default();
-        let parent =
-            (is_fork && !parent_name.is_empty() && !parent_branch.is_empty()).then(|| ForkParent {
-                full_name: parent_name.to_string(),
-                default_branch: parent_branch.to_string(),
-            });
-        Ok(RepoForkInfo {
-            default_branch,
-            parent,
-        })
+        Ok(parse_repo_fork_info(&String::from_utf8_lossy(&stdout)))
     }
 
     fn commits_behind(
@@ -667,11 +673,13 @@ fn upstream_ahead_for_repo(
 }
 
 /// For each distinct source repo among `candidates`, find forks whose original
-/// has commits the fork lacks. A repo whose lookup fails is skipped, so one
-/// 404 or rate limit never hides the other repos' notes. Keyed by repo.
+/// has commits the fork lacks. A repo whose lookup fails keeps its record from
+/// `previous` (if any), so one 404 or rate limit neither hides nor invents a
+/// note; repos no longer among `candidates` are dropped. Keyed by repo.
 fn find_upstream_ahead(
     candidates: &[Candidate],
     lookup: &dyn ForkLookup,
+    previous: &BTreeMap<String, UpstreamAhead>,
 ) -> BTreeMap<String, UpstreamAhead> {
     let mut seen = std::collections::BTreeSet::new();
     let mut found = BTreeMap::new();
@@ -685,10 +693,15 @@ fn find_upstream_ahead(
                 found.insert(record.repo.clone(), record);
             }
             Ok(None) => {}
-            Err(e) => eprintln!(
-                "skill update check: fork lookup for {} failed: {e}",
-                candidate.repo
-            ),
+            Err(e) => {
+                eprintln!(
+                    "skill update check: fork lookup for {} failed: {e}",
+                    candidate.repo
+                );
+                if let Some(old) = previous.get(&candidate.repo) {
+                    found.insert(old.repo.clone(), old.clone());
+                }
+            }
         }
     }
     found
@@ -952,7 +965,9 @@ fn check_candidate(
 
 /// Build owner candidates, optionally filter by owner ID, check them in a
 /// small worker pool, and write the result. A filtered run preserves every
-/// other owner's previous state.
+/// other owner's previous state. `upstream_ahead` replaces the recorded fork
+/// notes when `gh` works; otherwise the previous notes stay. Writes the store
+/// exactly once, so a concurrent `clear_owner_after_update` is never undone.
 fn run_update_check_impl(
     home: &Path,
     project_paths: &[PathBuf],
@@ -960,6 +975,7 @@ fn run_update_check_impl(
     lookup: &dyn CommitLookup,
     tree_lookup: &dyn TreeLookup,
     only_owner_ids: Option<&[String]>,
+    upstream_ahead: Option<BTreeMap<String, UpstreamAhead>>,
 ) -> UpdateCheckStore {
     let previous = read_update_check_store(app_data);
     let now = Utc::now().to_rfc3339();
@@ -1042,12 +1058,16 @@ fn run_update_check_impl(
         computed
     };
 
+    let upstream_ahead = match upstream_ahead {
+        Some(fresh) if gh_status == GhStatus::Ok => fresh,
+        _ => previous.upstream_ahead,
+    };
     let store = UpdateCheckStore {
         version: update_store_version(),
         checked_at: Some(now),
         gh_status,
         owners,
-        upstream_ahead: previous.upstream_ahead,
+        upstream_ahead,
         legacy_skills: BTreeMap::new(),
     };
     if let Err(e) = write_store(app_data, &store) {
@@ -1065,18 +1085,71 @@ pub fn run_update_check(
     lookup: &dyn CommitLookup,
     tree_lookup: &dyn TreeLookup,
 ) -> UpdateCheckStore {
-    run_update_check_impl(home, &[], app_data, lookup, tree_lookup, None)
+    run_update_check_impl(home, &[], app_data, lookup, tree_lookup, None, None)
 }
 
 /// Check Global and the supplied registered Project Universal owners.
+/// `upstream_ahead`, when given, is stored if `gh` turns out to be usable.
 pub fn run_update_check_with_projects(
     home: &Path,
     project_paths: &[PathBuf],
     app_data: &Path,
     lookup: &dyn CommitLookup,
     tree_lookup: &dyn TreeLookup,
+    upstream_ahead: Option<BTreeMap<String, UpstreamAhead>>,
 ) -> UpdateCheckStore {
-    run_update_check_impl(home, project_paths, app_data, lookup, tree_lookup, None)
+    run_update_check_impl(
+        home,
+        project_paths,
+        app_data,
+        lookup,
+        tree_lookup,
+        None,
+        upstream_ahead,
+    )
+}
+
+/// `run_update_check_with_projects` with the fork lookups done first, so the
+/// slow GitHub calls finish before the single store write.
+fn run_update_check_with_forks(
+    home: &Path,
+    project_paths: &[PathBuf],
+    app_data: &Path,
+    lookup: &dyn CommitLookup,
+    tree_lookup: &dyn TreeLookup,
+    fork_lookup: &dyn ForkLookup,
+) -> UpdateCheckStore {
+    let previous = read_update_check_store(app_data);
+    let upstream_ahead = find_upstream_ahead(
+        &build_candidates(home, project_paths),
+        fork_lookup,
+        &previous.upstream_ahead,
+    );
+    run_update_check_with_projects(
+        home,
+        project_paths,
+        app_data,
+        lookup,
+        tree_lookup,
+        Some(upstream_ahead),
+    )
+}
+
+/// Records `gh_status: Missing` and keeps every previously recorded state.
+fn write_gh_missing_store(app_data: &Path) -> UpdateCheckStore {
+    let previous = read_update_check_store(app_data);
+    let store = UpdateCheckStore {
+        version: update_store_version(),
+        checked_at: Some(Utc::now().to_rfc3339()),
+        gh_status: GhStatus::Missing,
+        owners: previous.owners,
+        upstream_ahead: previous.upstream_ahead,
+        legacy_skills: previous.legacy_skills,
+    };
+    if let Err(e) = write_store(app_data, &store) {
+        eprintln!("skill update check: failed to write store: {e}");
+    }
+    store
 }
 
 /// Re-check exact lifecycle owners and preserve every other recorded owner.
@@ -1097,6 +1170,7 @@ pub fn run_update_check_for_owners(
         lookup,
         tree_lookup,
         Some(owner_ids),
+        None,
     )
 }
 
@@ -1110,7 +1184,7 @@ fn run_update_check_now(
     app_data: &Path,
 ) -> UpdateCheckStore {
     if let Some(gh_bin) = resolve_gh_binary() {
-        let mut store = run_update_check_with_projects(
+        run_update_check_with_forks(
             home,
             project_paths,
             app_data,
@@ -1120,31 +1194,10 @@ fn run_update_check_now(
             &GhTreeLookup {
                 gh_bin: gh_bin.clone(),
             },
-        );
-        if store.gh_status == GhStatus::Ok {
-            store.upstream_ahead = find_upstream_ahead(
-                &build_candidates(home, project_paths),
-                &GhForkLookup { gh_bin },
-            );
-            if let Err(e) = write_store(app_data, &store) {
-                eprintln!("skill update check: failed to write store: {e}");
-            }
-        }
-        store
+            &GhForkLookup { gh_bin },
+        )
     } else {
-        let previous = read_update_check_store(app_data);
-        let store = UpdateCheckStore {
-            version: update_store_version(),
-            checked_at: Some(Utc::now().to_rfc3339()),
-            gh_status: GhStatus::Missing,
-            owners: previous.owners,
-            upstream_ahead: previous.upstream_ahead,
-            legacy_skills: previous.legacy_skills,
-        };
-        if let Err(e) = write_store(app_data, &store) {
-            eprintln!("skill update check: failed to write store: {e}");
-        }
-        store
+        write_gh_missing_store(app_data)
     }
 }
 
@@ -2026,6 +2079,7 @@ resolved_commit = "{commit}"
             &app_data,
             &RepoLookup,
             &UnusedTreeLookup,
+            None,
         );
         let global = store.owners.get("owner:v1/global/shared-name").unwrap();
         let project_a_id = owner_id_for(
@@ -2131,6 +2185,7 @@ resolved_commit = "{commit}"
             &app_data,
             &AlwaysErrorLookup,
             &UnusedTreeLookup,
+            None,
         );
         assert_eq!(store.owners.len(), 2);
         assert!(store
@@ -2299,6 +2354,7 @@ resolved_commit = "{commit}"
         let found = find_upstream_ahead(
             &[repo_candidate("tdd", "sergical/mattpocock-skills")],
             &lookup,
+            &BTreeMap::new(),
         );
         assert_eq!(
             found.into_values().collect::<Vec<_>>(),
@@ -2316,7 +2372,8 @@ resolved_commit = "{commit}"
     #[test]
     fn a_fork_level_with_its_original_yields_no_record() {
         let lookup = FakeForkLookup::new().fork("me/fork", "them/orig", 0);
-        let found = find_upstream_ahead(&[repo_candidate("a", "me/fork")], &lookup);
+        let found =
+            find_upstream_ahead(&[repo_candidate("a", "me/fork")], &lookup, &BTreeMap::new());
         assert!(found.is_empty());
     }
 
@@ -2330,7 +2387,11 @@ resolved_commit = "{commit}"
                 parent: None,
             }),
         );
-        let found = find_upstream_ahead(&[repo_candidate("a", "me/plain")], &lookup);
+        let found = find_upstream_ahead(
+            &[repo_candidate("a", "me/plain")],
+            &lookup,
+            &BTreeMap::new(),
+        );
         assert!(found.is_empty());
         assert!(lookup.compare_calls.lock().unwrap().is_empty());
     }
@@ -2344,6 +2405,7 @@ resolved_commit = "{commit}"
                 repo_candidate("b", "me/good"),
             ],
             &lookup,
+            &BTreeMap::new(),
         );
         assert_eq!(found.keys().collect::<Vec<_>>(), vec!["me/good"]);
     }
@@ -2357,6 +2419,7 @@ resolved_commit = "{commit}"
                 repo_candidate("b", "Me/Fork"),
             ],
             &lookup,
+            &BTreeMap::new(),
         );
         assert_eq!(found.len(), 1);
         assert_eq!(lookup.info_calls.lock().unwrap().len(), 1);
@@ -2372,6 +2435,7 @@ resolved_commit = "{commit}"
                 repo_candidate("b", "me/re?po"),
             ],
             &lookup,
+            &BTreeMap::new(),
         );
         assert!(found.is_empty());
         assert!(lookup.info_calls.lock().unwrap().is_empty());
@@ -2387,9 +2451,204 @@ resolved_commit = "{commit}"
                 }),
             }),
         );
-        let found = find_upstream_ahead(&[repo_candidate("a", "me/fork")], &bad_branch);
+        let found = find_upstream_ahead(
+            &[repo_candidate("a", "me/fork")],
+            &bad_branch,
+            &BTreeMap::new(),
+        );
         assert!(found.is_empty());
         assert!(bad_branch.compare_calls.lock().unwrap().is_empty());
+    }
+
+    fn previous_record(repo: &str, behind_by: u32) -> UpstreamAhead {
+        UpstreamAhead {
+            repo: repo.to_string(),
+            upstream_repo: "them/orig".to_string(),
+            behind_by,
+            compare_url: format!("https://github.com/{repo}/compare/old"),
+        }
+    }
+
+    fn previous_map(records: &[UpstreamAhead]) -> BTreeMap<String, UpstreamAhead> {
+        records
+            .iter()
+            .map(|r| (r.repo.clone(), r.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_failing_lookup_keeps_the_previous_record_for_that_repo() {
+        let lookup = FakeForkLookup::new();
+        let previous = previous_map(&[previous_record("me/gone", 4)]);
+        let found = find_upstream_ahead(&[repo_candidate("a", "me/gone")], &lookup, &previous);
+        assert_eq!(found, previous);
+    }
+
+    #[test]
+    fn a_fork_now_level_loses_its_previous_record() {
+        let lookup = FakeForkLookup::new().fork("me/fork", "them/orig", 0);
+        let previous = previous_map(&[previous_record("me/fork", 4)]);
+        let found = find_upstream_ahead(&[repo_candidate("a", "me/fork")], &lookup, &previous);
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn a_successful_lookup_replaces_the_previous_record() {
+        let lookup = FakeForkLookup::new().fork("me/fork", "them/orig", 9);
+        let previous = previous_map(&[previous_record("me/fork", 4)]);
+        let found = find_upstream_ahead(&[repo_candidate("a", "me/fork")], &lookup, &previous);
+        assert_eq!(found["me/fork"].behind_by, 9);
+    }
+
+    #[test]
+    fn a_repo_no_longer_installed_loses_its_previous_record() {
+        let lookup = FakeForkLookup::new().fork("me/kept", "them/orig", 2);
+        let previous = previous_map(&[previous_record("me/removed", 4)]);
+        let found = find_upstream_ahead(&[repo_candidate("a", "me/kept")], &lookup, &previous);
+        assert_eq!(found.keys().collect::<Vec<_>>(), vec!["me/kept"]);
+    }
+
+    /// Reads the store while the fork lookups run, to show nothing was
+    /// written to it yet.
+    struct StoreProbingForkLookup<'a> {
+        app_data: &'a Path,
+        inner: FakeForkLookup,
+        checked_at_seen: StdMutex<Vec<Option<String>>>,
+    }
+
+    impl ForkLookup for StoreProbingForkLookup<'_> {
+        fn repo_info(&self, repo: &str) -> Result<RepoForkInfo, String> {
+            self.checked_at_seen
+                .lock()
+                .unwrap()
+                .push(read_update_check_store(self.app_data).checked_at);
+            self.inner.repo_info(repo)
+        }
+
+        fn commits_behind(
+            &self,
+            base_repo: &str,
+            base_branch: &str,
+            head_owner: &str,
+            head_branch: &str,
+        ) -> Result<u32, String> {
+            self.inner
+                .commits_behind(base_repo, base_branch, head_owner, head_branch)
+        }
+    }
+
+    fn seed_one_dotagents_skill(home: &Path, repo: &str) {
+        write_agents_lock(home, "tdd", repo, "skills/tdd", "a".repeat(40).as_str());
+    }
+
+    #[test]
+    fn a_run_does_its_fork_lookups_before_its_only_store_write_and_stores_the_notes_in_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_data = tmp.path().join("data");
+        seed_one_dotagents_skill(&home, "me/fork");
+        let forks = StoreProbingForkLookup {
+            app_data: &app_data,
+            inner: FakeForkLookup::new().fork("me/fork", "them/orig", 7),
+            checked_at_seen: StdMutex::new(Vec::new()),
+        };
+
+        let returned = run_update_check_with_forks(
+            &home,
+            &[],
+            &app_data,
+            &FakeLookup::with_answers(vec![Ok(None)]),
+            &UnusedTreeLookup,
+            &forks,
+        );
+
+        assert_eq!(*forks.checked_at_seen.lock().unwrap(), vec![None]);
+        let stored = read_update_check_store(&app_data);
+        assert_eq!(stored.upstream_ahead["me/fork"].behind_by, 7);
+        assert_eq!(stored.upstream_ahead, returned.upstream_ahead);
+    }
+
+    #[test]
+    fn a_run_with_gh_not_logged_in_keeps_the_previous_fork_notes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_data = tmp.path().join("data");
+        seed_one_dotagents_skill(&home, "me/fork");
+        let seeded = UpdateCheckStore {
+            upstream_ahead: previous_map(&[previous_record("me/fork", 4)]),
+            ..UpdateCheckStore::default()
+        };
+        write_store(&app_data, &seeded).unwrap();
+        let lookup = FakeLookup::with_answers(vec![Err("run: gh auth login".to_string())]);
+
+        let store = run_update_check_with_forks(
+            &home,
+            &[],
+            &app_data,
+            &lookup,
+            &UnusedTreeLookup,
+            &FakeForkLookup::new().fork("me/fork", "them/orig", 9),
+        );
+
+        assert_eq!(store.gh_status, GhStatus::NotLoggedIn);
+        assert_eq!(store.upstream_ahead["me/fork"].behind_by, 4);
+        assert_eq!(
+            read_update_check_store(&app_data).upstream_ahead["me/fork"].behind_by,
+            4
+        );
+    }
+
+    // `run_update_check_now` reaches this when `resolve_gh_binary` finds no
+    // `gh`; that call needs a login shell, so the branch is tested below it.
+    #[test]
+    fn a_run_with_gh_missing_keeps_the_previous_fork_notes_and_owner_states() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app_data = tmp.path().join("data");
+        let seeded = UpdateCheckStore {
+            upstream_ahead: previous_map(&[previous_record("me/fork", 4)]),
+            ..UpdateCheckStore::default()
+        };
+        write_store(&app_data, &seeded).unwrap();
+
+        let store = write_gh_missing_store(&app_data);
+
+        assert_eq!(store.gh_status, GhStatus::Missing);
+        assert_eq!(store.upstream_ahead, seeded.upstream_ahead);
+        assert_eq!(
+            read_update_check_store(&app_data).upstream_ahead,
+            seeded.upstream_ahead
+        );
+    }
+
+    #[test]
+    fn a_fork_tsv_line_yields_the_parent_and_both_default_branches() {
+        assert_eq!(
+            parse_repo_fork_info("true\tmain\tthem/orig\ttrunk\n"),
+            RepoForkInfo {
+                default_branch: "main".to_string(),
+                parent: Some(ForkParent {
+                    full_name: "them/orig".to_string(),
+                    default_branch: "trunk".to_string(),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn a_non_fork_tsv_line_yields_no_parent() {
+        assert_eq!(
+            parse_repo_fork_info("false\tmain\t\t\n"),
+            RepoForkInfo {
+                default_branch: "main".to_string(),
+                parent: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_fork_tsv_line_with_an_empty_parent_yields_no_parent() {
+        assert_eq!(parse_repo_fork_info("true\tmain\t\t\n").parent, None);
+        assert_eq!(parse_repo_fork_info("true\tmain\n").parent, None);
     }
 
     #[test]

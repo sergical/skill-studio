@@ -64,4 +64,28 @@ describe("skillUpstreamNote", () => {
       ]),
     ).not.toBeNull();
   });
+
+  // Flow: the lock file records the source as a git URL, with or without `git:` and `.git`.
+  // Expectation: the note still matches the fork's `owner/repo` record.
+  // A failure means a skills.sh skill installed from a URL never shows its fork note.
+  it.each([
+    "git:https://github.com/sergical/mattpocock-skills.git",
+    "https://github.com/sergical/mattpocock-skills",
+    "git@github.com:sergical/mattpocock-skills.git",
+    "Sergical/Mattpocock-Skills#main",
+    "sergical/mattpocock-skills@v2",
+  ])("matches the record when the lock source is %s", (source) => {
+    expect(skillUpstreamNote(skill({ source }), [ahead({})])?.text).toContain("mattpocock/skills");
+  });
+
+  // Flow: a skill whose source is a GitLab URL, with a record for the same owner/repo path.
+  // Expectation: no note; the record is about GitHub only.
+  it("shows no note for a source that is not on github.com", () => {
+    expect(
+      skillUpstreamNote(
+        skill({ source: "git:https://gitlab.com/sergical/mattpocock-skills.git" }),
+        [ahead({})],
+      ),
+    ).toBeNull();
+  });
 });
