@@ -953,6 +953,32 @@ describe("updateAllOutdatedSkills with plugin updates", () => {
     expect(tally).toMatchObject({ skillsSucceeded: 0, failures: 1, firstError: "merge exploded" });
   });
 
+  /** Flow: Update all with edited-skill forking on, and a skill that is already a fork fails its
+   * pull. Expectation: its plugin still updates. Failure: a pull on an existing fork is mistaken
+   * for a refused fork and holds the plugin back. */
+  it("update_all_still_updates_the_plugin_of_an_existing_fork_whose_pull_failed_while_forking_is_on", async () => {
+    const plugins: string[] = [];
+    await updateAllOutdatedSkills(
+      [forkWithPlugin(true)],
+      async () => {
+        throw new Error("merge exploded");
+      },
+      async (targets) => succeedAll(targets.map((target) => target.owner_id ?? "")),
+      undefined,
+      {
+        names: new Set(),
+        fork: async () => {
+          throw new Error("an existing fork must not be forked again");
+        },
+      },
+      async (target) => {
+        plugins.push(target.plugin_id);
+        return updated;
+      },
+    );
+    expect(plugins).toEqual(["codex@official"]);
+  });
+
   const editedWithPlugin = {
     ...pluginOwner("edited"),
     source_kind: "skills-sh" as const,
