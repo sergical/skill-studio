@@ -97,7 +97,7 @@ export function InstalledSkillHeader({
   // Locations rows instead (see `SkillLocationsCard`). Home's spec-violation
   // issue still relies on `skill.spec_violations` covering every copy.
   const renderedDeployment = deployment ?? skill.deployments.find((d) => d.content_hash);
-  const upstreamNote = skillUpstreamNote(skill, renderedDeployment, upstreamAhead);
+  const upstreamNote = skillUpstreamNote(renderedDeployment, upstreamAhead);
   const blockingViolations = (renderedDeployment?.spec_violations ?? []).filter(
     isBlockingSpecViolation,
   );

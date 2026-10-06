@@ -4,7 +4,7 @@
 // installed skill's source line. Informational; never an update.
 // ============================================================================
 
-import type { Deployment, InstalledSkill, UpstreamAhead } from "@skill-studio/lib";
+import type { Deployment, UpstreamAhead } from "@skill-studio/lib";
 
 export interface SkillUpstreamNote {
   /** "Forked from mattpocock/skills, which has 12 changes this fork doesn't." */
@@ -15,13 +15,14 @@ export interface SkillUpstreamNote {
 
 /** The note for the page's deployment, when a dotagents or skills.sh fork behind its original owns it. */
 export function skillUpstreamNote(
-  skill: InstalledSkill,
   deployment: Deployment | undefined,
   upstreamAhead: UpstreamAhead[],
 ): SkillUpstreamNote | null {
-  if (skill.source_kind !== "dotagents" && skill.source_kind !== "skills-sh") return null;
-  // A global and a project copy of one name can come from different forks, so only the shown
-  // copy's owner counts. A dotagents-only install has `source: "local"`, hence the owner id.
+  // The shown copy decides, not the skill: a same-named plugin copy or a Skill Studio fork of
+  // another copy changes the skill's source kind but not this copy's install. A dotagents-only
+  // install has `source: "local"`, hence the owner id.
+  const kind = deployment?.owner_kind;
+  if (kind !== "dotagents" && kind !== "wildcard-dotagents" && kind !== "skills-sh") return null;
   const ownerId = deployment?.owner_id;
   if (ownerId == null) return null;
   const record = upstreamAhead.find((r) => r.owner_ids.includes(ownerId));
