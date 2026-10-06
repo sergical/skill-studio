@@ -70,7 +70,8 @@ describe("skillUpstreamNote", () => {
   it("matches only the deployment the page shows", () => {
     const PROJECT_OWNER = "owner:v1/project/%2Fwork%2Fapp/tdd";
     const both = skill({ owners: [OWNER_ID, PROJECT_OWNER] });
-    const [global, project] = both.deployments as [Deployment, Deployment];
+    const global: Deployment | undefined = both.deployments[0];
+    const project: Deployment | undefined = both.deployments[1];
     expect(skillUpstreamNote(both, global, [ahead({})])).not.toBeNull();
     expect(skillUpstreamNote(both, project, [ahead({})])).toBeNull();
     const other = ahead({ upstream_repo: "someone/skills", owner_ids: [PROJECT_OWNER] });
