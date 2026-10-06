@@ -12,6 +12,7 @@ import {
   forkEditedAndUpdate,
   forkableDeployment,
   lifecycleTargetForPark,
+  pluginFailureToast,
   pullForkAndUpdatePlugins,
   pullUpstreamToast,
   skillUpdateToast,
@@ -156,7 +157,7 @@ export function useGuardedSkillUpdate() {
       addToast(pullUpstreamToast(pull));
       if (others.attempted > 0) addToast(skillUpdateToast(skill.name, others));
       for (const failure of plugins?.failures ?? []) {
-        addToast({ type: "error", title: "Couldn't update plugin", message: failure.message });
+        addToast(pluginFailureToast(failure));
       }
       const failures = [...others.failures, ...(plugins?.failures ?? [])];
       await options.onFinished?.({

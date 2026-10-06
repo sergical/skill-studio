@@ -43,6 +43,8 @@ const ACTION_BUTTON_CLASS =
 interface InstalledSkillLifecycleActionsProps {
   skill: SkillWithStatus;
   onInstallComplete: (result: SkillInstallCompletion) => void;
+  /** Refresh only: the plugin update shows its own toast. */
+  onUpdateComplete: () => void;
   onRemoveComplete: () => void;
 }
 
@@ -99,6 +101,7 @@ function useSkillLifecycleMutations(
   removalPreview: SkillRemovalPreview | null,
   updateAvailability: SkillUpdateAvailability | null,
   onInstallComplete: (result: SkillInstallCompletion) => void,
+  onUpdateComplete: () => void,
   onRemoveComplete: () => void,
 ) {
   const addToast = useAppStore((state) => state.addToast);
@@ -144,7 +147,7 @@ function useSkillLifecycleMutations(
           ).then((outcome) => {
             addToast(pluginUpdatedToast(updateAvailability.plugin.plugin_id, outcome));
             if (pluginUpdateSucceeded(outcome)) {
-              onInstallComplete({ success: true, skillName: skill.name });
+              onUpdateComplete();
             }
           })
         : guard.requestUpdate(installed, {
@@ -227,6 +230,7 @@ function LifecycleScopePicker({
 export function InstalledSkillLifecycleActions({
   skill,
   onInstallComplete,
+  onUpdateComplete,
   onRemoveComplete,
 }: InstalledSkillLifecycleActionsProps) {
   const installedSkill = skill.installed_info;
@@ -257,6 +261,7 @@ export function InstalledSkillLifecycleActions({
     removalPreview,
     updateAvailability,
     onInstallComplete,
+    onUpdateComplete,
     onRemoveComplete,
   );
 

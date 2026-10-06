@@ -180,18 +180,19 @@ export async function updateSkillPluginsWithToasts(
       return result;
     }),
   );
-  for (const failure of summary.failures) {
-    addToast(
-      failure.skipped
-        ? {
-            type: "warning",
-            title: `${failure.target.plugin_id} was not updated`,
-            message: failure.message,
-          }
-        : { type: "error", title: "Couldn't update plugin", message: failure.message },
-    );
-  }
+  for (const failure of summary.failures) addToast(pluginFailureToast(failure));
   return summary;
+}
+
+/** A skipped plugin is a warning, any other failure an error. */
+export function pluginFailureToast(failure: PluginUpdateFailure): Omit<Toast, "id"> {
+  return failure.skipped
+    ? {
+        type: "warning",
+        title: `${failure.target.plugin_id} was not updated`,
+        message: failure.message,
+      }
+    : { type: "error", title: "Couldn't update plugin", message: failure.message };
 }
 
 /**

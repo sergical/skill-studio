@@ -22,6 +22,7 @@ interface SkillDetailPanelProps {
     skillName?: string;
     warning?: string;
   }) => void;
+  onUpdateComplete: () => void;
   onRemoveComplete: () => void;
 }
 
@@ -31,6 +32,7 @@ export function SkillDetailPanel({
   onInstallStart,
   onInstallPaused,
   onInstallComplete,
+  onUpdateComplete,
   onRemoveComplete,
 }: SkillDetailPanelProps) {
   const [details, setDetails] = useState<SkillDetails | null>(null);
@@ -95,6 +97,7 @@ export function SkillDetailPanel({
         onInstallStart={onInstallStart}
         onInstallPaused={onInstallPaused}
         onInstallComplete={onInstallComplete}
+        onUpdateComplete={onUpdateComplete}
         onRemoveComplete={onRemoveComplete}
       />
     </DrawerContent>

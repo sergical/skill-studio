@@ -21,11 +21,13 @@ import {
   skillPluginUpdateTargets,
   skillUpdateAvailability,
   skillUpdateOwnerTargets,
+  pluginFailureToast,
   pluginUpdatedToast,
   pluginUpdateSucceeded,
   skillUpdateToast,
   updateSkillOwners,
 } from "./skill-lifecycle-target";
+import type { PluginUpdateFailure } from "./skill-lifecycle-target";
 import type { Deployment, ForkRecord, InstalledSkill, PullResult } from "@skill-studio/lib";
 
 function deployment(id: string, ownerId?: string, projectPath?: string): Deployment {
@@ -1235,6 +1237,25 @@ describe("plugin updates", () => {
     expect(
       pluginUpdatedToast("codex@official", { outcome: "updated", message: null }).title,
     ).not.toContain("already");
+  });
+
+  /**
+   * Flow: the fork route runs a plugin install update that fails, once skipped and once thrown.
+   * Expectation: the skipped failure is a warning, the other an error.
+   * A failure here means a stale or skipped plugin shows as a red error again.
+   */
+  it("toasts a skipped plugin failure as a warning and any other as an error", () => {
+    const failure = (skipped?: boolean): PluginUpdateFailure => ({
+      ownerId: "codex@official",
+      message: skipped ? "stale" : "boom",
+      target: { plugin_id: "codex@official", scope: "user", project_path: null },
+      skipped,
+    });
+    expect(pluginFailureToast(failure(true))).toMatchObject({
+      type: "warning",
+      title: "codex@official was not updated",
+    });
+    expect(pluginFailureToast(failure())).toMatchObject({ type: "error", message: "boom" });
   });
 
   it("shows a warning, not a success, when the CLI skipped the plugin update", () => {

@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -465,12 +465,21 @@ pub trait PluginRemote {
     fn commit_sha(&self, owner: &str, repo: &str, git_ref: &str) -> CommitLookup;
 }
 
+/// Output bound for a manifest or catalog fetch. The contents API caps files
+/// at 1 MB (about 1.4 MB as base64); this leaves room above that.
+const MAX_MANIFEST_BYTES: usize = 8 * 1024 * 1024;
+
 /// The `gh` binary plus one shared deadline for every call of a refresh.
 struct GhRemote<'a>(&'a Path, AddOperationControl);
 
 impl PluginRemote for GhRemote<'_> {
     fn manifest(&self, api_path: &str) -> ManifestFetch {
-        match gh_cli::run_gh_controlled(self.0, &["api", api_path, "--jq", ".content"], &self.1) {
+        match gh_cli::run_gh_controlled_whole(
+            self.0,
+            &["api", api_path, "--jq", ".content"],
+            &self.1,
+            MAX_MANIFEST_BYTES,
+        ) {
             Ok(stdout) => {
                 ManifestFetch::Content(String::from_utf8_lossy(&stdout).trim().to_string())
             }
@@ -803,6 +812,12 @@ pub fn refresh_plugin_versions(
     gh_bin: &Path,
     timeout: std::time::Duration,
 ) {
+    // Each refresh reads, fetches, then writes the cache; two overlapping runs
+    // could let the older one overwrite the newer result.
+    static REFRESH_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = REFRESH_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let control = AddOperationControl::new(Arc::new(AtomicBool::new(false)), timeout);
     refresh_plugin_versions_with(home, app_data, &GhRemote(gh_bin, control));
 }
