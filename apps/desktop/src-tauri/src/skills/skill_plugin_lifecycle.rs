@@ -117,7 +117,7 @@ fn json_error_message(text: &str) -> Option<String> {
 
 /// Rewrites the CLI's refusal to run a marketplace-declared command without
 /// confirmation (`-y`, or a TTY) into the next step for the person.
-fn update_error(plugin_id: &str, message: String) -> String {
+fn update_error(plugin_id: &str, scope: &str, cwd: Option<&Path>, message: String) -> String {
     // A failed run can still print the `--json` error object on stdout.
     let message = json_error_message(&message).unwrap_or(message);
     let lower = message.to_lowercase();
@@ -126,12 +126,22 @@ fn update_error(plugin_id: &str, message: String) -> String {
     let needs_confirmation =
         lower.contains("--yes") || lower.contains("pass -y") || lower.contains("--accept-command");
     if needs_confirmation {
+        // Without `-s` the CLI picks the scope itself, so a project install run
+        // from elsewhere could update the user copy instead.
+        let cd = cwd
+            .map(|dir| format!("cd {} && ", shell_quote(&dir.to_string_lossy())))
+            .unwrap_or_default();
         format!(
-            "This update runs a command from the plugin's marketplace that needs your OK. Run `claude plugin update {plugin_id}` in a terminal to review it."
+            "This update runs a command from the plugin's marketplace that needs your OK. Run `{cd}claude plugin update {plugin_id} -s {scope}` in a terminal to review it."
         )
     } else {
         friendly_error(message)
     }
+}
+
+/// `text` as one POSIX shell word.
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 /// The Tauri commands in this module refuse to run against anything but
@@ -258,7 +268,7 @@ pub fn update_plugin_with(
     });
     let stdout = runner
         .run_output(CLAUDE_CLI, &plugin_update_args(plugin_id, scope), cwd)
-        .map_err(|message| update_error(plugin_id, message))?;
+        .map_err(|message| update_error(plugin_id, scope, cwd, message))?;
     let mut result = parse_update_outcome(&stdout)?;
     if let (Some((marketplace, error)), "up_to_date") = (refresh_error, result.outcome.as_str()) {
         result.outcome = "marketplace_stale".to_string();
@@ -632,7 +642,30 @@ mod tests {
         let err = update_plugin_with(&runner, "codex@anthropics", "user", None).unwrap_err();
         assert_eq!(
             err,
-            "This update runs a command from the plugin's marketplace that needs your OK. Run `claude plugin update codex@anthropics` in a terminal to review it."
+            "This update runs a command from the plugin's marketplace that needs your OK. Run `claude plugin update codex@anthropics -s user` in a terminal to review it."
+        );
+    }
+
+    /// Flow: a project install's update needs the marketplace command confirmed.
+    /// Expect: the terminal hint changes into the (shell-quoted) project folder and names the scope.
+    /// Fails if: the hint drops either, so running it updates the user copy instead.
+    #[test]
+    fn a_project_confirmation_hint_keeps_the_scope_and_folder() {
+        let parent = tempfile::tempdir().unwrap();
+        let project = parent.path().join("it's app");
+        std::fs::create_dir(&project).unwrap();
+        let runner = FakeRunner {
+            fail: Some("Pass --yes to accept the install command.".to_string()),
+            ..Default::default()
+        };
+        let err =
+            update_plugin_with(&runner, "codex@anthropics", "project", Some(&project)).unwrap_err();
+        let quoted = format!("'{}/it'\\''s app'", parent.path().display());
+        assert!(
+            err.contains(&format!(
+                "Run `cd {quoted} && claude plugin update codex@anthropics -s project`"
+            )),
+            "{err}"
         );
     }
 
