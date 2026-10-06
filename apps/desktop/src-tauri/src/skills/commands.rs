@@ -421,11 +421,15 @@ mod tests {
                     owner_id: "skills-sh/global".to_string(),
                     latest_commit: Some("aaa1111".to_string()),
                     latest_commit_at: None,
+                    plugin_scope: None,
+                    plugin_project_path: None,
                 },
                 super::super::skill_dto::OwnerUpdateInfo {
                     owner_id: "dotagents/global".to_string(),
                     latest_commit: Some("bbb2222".to_string()),
                     latest_commit_at: None,
+                    plugin_scope: None,
+                    plugin_project_path: None,
                 },
             ],
             update_commit: Some("aaa1111".to_string()),
@@ -891,6 +895,7 @@ mod tests {
             &mut skills,
             &super::super::skill_fork_registry::ForkRegistry::default(),
             &refreshed_store,
+            &super::super::skill_plugin_update::PluginVersionCache::default(),
             &[],
         );
         assert!(
@@ -1005,6 +1010,7 @@ mod tests {
             &mut skills,
             &super::super::skill_fork_registry::ForkRegistry::default(),
             &refreshed_store,
+            &super::super::skill_plugin_update::PluginVersionCache::default(),
             &[owner_id.to_string()],
         );
         assert!(
@@ -2578,20 +2584,21 @@ pub async fn update_all_skills(
 
 /// Runs one Claude-Code-only plugin lifecycle action: checks `harness`,
 /// holds the write lease for the CLI call, then requests a snapshot rebuild.
-/// Shared by [`set_plugin_enabled`] and [`uninstall_plugin`], which differ
-/// only in which `claude plugin` subcommand `action` runs.
-fn run_plugin_lifecycle_action(
+/// Shared by [`set_plugin_enabled`], [`update_plugin`] and
+/// [`uninstall_plugin`], which differ only in which `claude plugin`
+/// subcommand `action` runs.
+fn run_plugin_lifecycle_action<T>(
     harness: &str,
     app: &tauri::AppHandle,
     home: &Path,
-    action: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
+    action: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
     super::skill_plugin_lifecycle::require_claude_code_harness(harness)?;
     let write_lease = super::write_lease::WriteLease::default();
     let _guard = write_lease.try_acquire(home)?;
-    action()?;
+    let result = action()?;
     skill_refresh::request_snapshot_rebuild(app);
-    Ok(())
+    Ok(result)
 }
 
 /// Disable or re-enable one Claude Code plugin (`claude plugin
@@ -2616,6 +2623,73 @@ pub async fn set_plugin_enabled(
         })
     })
     .await
+}
+
+/// Update one install of a Claude Code plugin (`claude plugin update
+/// <plugin_id> -s <scope>`). `scope` and `project_path` are the install's own,
+/// as the snapshot's plugin update owner reports them, and must match an
+/// entry of `installed_plugins.json`. Returns the CLI's `updateOutcome`
+/// (`updated`, `up_to_date`, `skipped`, ...) with its message. After a
+/// run that updated the plugin the versions are re-checked (within a short
+/// deadline), so the badge reflects the
+/// new install even when an unpinned ref moved meanwhile. Claude Code applies
+/// the update to new sessions only.
+#[tauri::command]
+pub async fn update_plugin(
+    plugin_id: String,
+    harness: String,
+    scope: String,
+    project_path: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<super::skill_plugin_lifecycle::PluginUpdateResult, String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "update_plugin", move || {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let result = run_plugin_lifecycle_action(&harness, &app, &home, || {
+            super::skill_plugin_update::require_plugin_install(
+                &home,
+                &plugin_id,
+                &scope,
+                project_path.as_deref(),
+            )?;
+            super::skill_plugin_lifecycle::update_plugin_with(
+                &RealCommandRunner::new(),
+                &plugin_id,
+                &scope,
+                project_path.as_deref().map(Path::new),
+            )
+        })?;
+        // An up-to-date result can still follow a stale cached version, whose
+        // badge would otherwise outlive the click until the next background check.
+        if matches!(result.outcome.as_str(), "updated" | "up_to_date") {
+            recheck_plugin_versions(&app, &home);
+        }
+        Ok(result)
+    })
+    .await
+}
+
+/// Re-runs the plugin version lookups after an update and asks for a snapshot
+/// rebuild, so the badge reflects the new install. Skipped without `gh`, a
+/// writable data folder, or while a background check already refreshes;
+/// lookups still running after the deadline fail, and the next background
+/// check catches up.
+fn recheck_plugin_versions(app: &tauri::AppHandle, home: &Path) {
+    let Ok(app_data) = app.path().app_data_dir() else {
+        return;
+    };
+    if !crate::skills::data_folder_status::data_folder_writable(app) {
+        return;
+    }
+    if let Some(gh_bin) = super::skill_update_check::resolve_gh_binary() {
+        super::skill_plugin_update::try_refresh_plugin_versions(
+            home,
+            &app_data,
+            &gh_bin,
+            std::time::Duration::from_secs(20),
+        );
+        skill_refresh::request_snapshot_rebuild(app);
+    }
 }
 
 /// Uninstall one Claude Code plugin (`claude plugin uninstall <plugin_id>

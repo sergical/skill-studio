@@ -31,6 +31,7 @@ use super::skill_assembly;
 use super::skill_dto::{Deployment, InstalledSkill};
 use super::skill_fork_registry::ForkRegistry;
 use super::skill_harness_disable;
+use super::skill_plugin_update;
 use super::skill_run_history::{self, SkillRunSummary};
 use super::skill_update_check::{self, UpdateCheckSummary};
 use skill_studio_core::lock_file;
@@ -950,6 +951,7 @@ fn reconcile_skill_names_at(
         &mut replacements,
         &fork_registry,
         &update_store,
+        &skill_plugin_update::read_plugin_versions_beside(&state.update_check_path),
         &current_owner_ids,
     );
     sort_snapshot_skills(&mut replacements);
@@ -1517,6 +1519,7 @@ pub(crate) fn apply_skill_snapshot_overlays(
     skills: &mut [InstalledSkill],
     fork_registry: &super::skill_fork_registry::ForkRegistry,
     update_store: &skill_update_check::UpdateCheckStore,
+    plugin_versions: &skill_plugin_update::PluginVersionCache,
     current_owner_ids: &[String],
 ) {
     for skill in skills.iter_mut() {
@@ -1624,6 +1627,7 @@ pub(crate) fn apply_skill_snapshot_overlays(
             }
         }
     }
+    let plugin_updates = skill_plugin_update::read_plugin_updates(home, plugin_versions);
     for skill in skills.iter_mut() {
         let mut seen_owners: Vec<&str> = Vec::new();
         for deployment in &skill.deployments {
@@ -1655,7 +1659,36 @@ pub(crate) fn apply_skill_snapshot_overlays(
                 owner_id: owner_id.to_string(),
                 latest_commit: state.latest_commit.clone(),
                 latest_commit_at: state.latest_commit_at.clone(),
+                plugin_scope: None,
+                plugin_project_path: None,
             });
+        }
+        // Plugins have no ledger owner; their update state comes straight
+        // from Claude Code's own files on every build.
+        let mut plugin_ids: Vec<&str> = skill
+            .deployments
+            .iter()
+            .filter_map(|deployment| deployment.plugin.as_ref())
+            .filter(|plugin| plugin.harness == "Claude Code")
+            .map(|plugin| plugin.id.as_str())
+            .collect();
+        plugin_ids.sort_unstable();
+        plugin_ids.dedup();
+        for plugin_id in plugin_ids {
+            let Some(installs) = plugin_updates.get(plugin_id) else {
+                continue;
+            };
+            let owner_id = skill_plugin_update::plugin_owner_id(plugin_id);
+            skill.update_owner_ids.push(owner_id.clone());
+            for install in installs {
+                skill.update_owners.push(super::skill_dto::OwnerUpdateInfo {
+                    owner_id: owner_id.clone(),
+                    latest_commit: None,
+                    latest_commit_at: None,
+                    plugin_scope: Some(install.scope.clone()),
+                    plugin_project_path: install.project_path.clone(),
+                });
+            }
         }
         skill.has_update = !skill.update_owner_ids.is_empty();
         let shared_metadata = skill.update_owners.first().filter(|first| {
@@ -2065,6 +2098,7 @@ pub fn build_snapshot(
         &mut skills,
         &fork_registry,
         &update_store,
+        &skill_plugin_update::read_plugin_versions_beside(update_check_path),
         &current_owner_ids,
     );
     let overlays_ms = overlays_start.elapsed().as_millis();
@@ -3430,6 +3464,10 @@ mod tests {
     /// that reports a newer commit, and builds the snapshot. `edit_registry`
     /// can change the registry rows the split wrote before the build.
     fn snapshot_of_split_foo(edit_registry: impl FnOnce(&mut serde_json::Value)) -> SkillSnapshot {
+        // The split resolves the Codex root from `CODEX_HOME`, which other tests set.
+        let _guard = super::super::test_support::opencode_env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         let app_data = tmp.path().join("app-data");
@@ -4478,6 +4516,7 @@ mod tests {
             std::slice::from_mut(&mut skill),
             &super::super::skill_fork_registry::ForkRegistry::default(),
             &skill_update_check::UpdateCheckStore::default(),
+            &skill_plugin_update::PluginVersionCache::default(),
             &[],
         );
 
@@ -4491,6 +4530,76 @@ mod tests {
         assert_eq!(skill.deployments[0].disabled_by, None);
         assert!(skill.deployments[0].disabled_readers.is_empty());
         assert_eq!(skill.deployments[0].codex_implicit_invocation, None);
+    }
+
+    /// Flow: a snapshot overlay runs over a skill shipped by a Claude Code
+    /// plugin whose marketplace copy names a newer version.
+    /// Expectation: the skill gets the `plugin:<id>` update owner carrying the
+    /// install's scope and project, and `has_update` is true; a plugin skill
+    /// whose marketplace is unreadable stays without an update.
+    #[test]
+    fn plugin_skill_gets_a_plugin_update_owner_from_claude_code_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let plugins = temp.path().join(".claude/plugins");
+        let marketplace = plugins.join("marketplaces/official/.claude-plugin");
+        fs::create_dir_all(&marketplace).unwrap();
+        let project = temp.path().join("work/app");
+        fs::create_dir_all(&project).unwrap();
+        let project = project.to_str().unwrap();
+        fs::write(
+            plugins.join("installed_plugins.json"),
+            format!(
+                r#"{{"version":2,"plugins":{{"codex@official":[{{"scope":"project","projectPath":"{project}","version":"1.0.5"}}]}}}}"#
+            ),
+        )
+        .unwrap();
+        fs::write(
+            marketplace.join("marketplace.json"),
+            r#"{"plugins":[{"name":"codex","version":"1.0.6","source":"./codex"}]}"#,
+        )
+        .unwrap();
+        let mut skill = fixture_snapshot(&temp.path().join("skill"))
+            .skills
+            .remove(0);
+        skill.deployments[0].plugin = Some(super::super::skill_dto::PluginInfo {
+            name: "codex".to_string(),
+            version: Some("1.0.5".to_string()),
+            harness: "Claude Code".to_string(),
+            marketplace: "official".to_string(),
+            id: "codex@official".to_string(),
+        });
+
+        apply_skill_snapshot_overlays(
+            temp.path(),
+            std::slice::from_mut(&mut skill),
+            &super::super::skill_fork_registry::ForkRegistry::default(),
+            &skill_update_check::UpdateCheckStore::default(),
+            &skill_plugin_update::PluginVersionCache::default(),
+            &[],
+        );
+
+        assert!(skill.has_update);
+        assert_eq!(skill.update_owner_ids, vec!["plugin:codex@official"]);
+        assert_eq!(skill.update_owners.len(), 1);
+        assert_eq!(
+            skill.update_owners[0].plugin_scope.as_deref(),
+            Some("project")
+        );
+        assert_eq!(
+            skill.update_owners[0].plugin_project_path.as_deref(),
+            Some(project)
+        );
+
+        fs::remove_dir_all(plugins.join("marketplaces")).unwrap();
+        apply_skill_snapshot_overlays(
+            temp.path(),
+            std::slice::from_mut(&mut skill),
+            &super::super::skill_fork_registry::ForkRegistry::default(),
+            &skill_update_check::UpdateCheckStore::default(),
+            &skill_plugin_update::PluginVersionCache::default(),
+            &[],
+        );
+        assert!(!skill.has_update);
     }
 
     /// One skill with a deployment per `(owner id, kind)`, every owner
@@ -4544,6 +4653,7 @@ mod tests {
             std::slice::from_mut(&mut skill),
             &super::super::skill_fork_registry::ForkRegistry::default(),
             &store,
+            &skill_plugin_update::PluginVersionCache::default(),
             &all_owner_ids,
         );
         skill

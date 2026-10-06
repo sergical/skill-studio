@@ -466,6 +466,8 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           return { bundled: [], referenced: [], errors: [] };
         case "abandon_pack_import_trust":
           return true;
+        case "update_plugin":
+          return { outcome: "updated", message: null };
         case "set_plugin_enabled":
         case "uninstall_plugin":
           return undefined;

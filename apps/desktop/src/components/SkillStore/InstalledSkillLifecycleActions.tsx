@@ -17,9 +17,11 @@ import {
 } from "@skill-studio/ui";
 import { ProjectDirectorySelect } from "./ProjectDirectorySelect";
 import { ScopeToggleGroup } from "./ScopeToggleGroup";
-import { removeSkill } from "../../lib/skill-api";
+import { removeSkill, updatePlugin } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 import {
+  pluginUpdatedToast,
+  pluginUpdateSucceeded,
   skillLifecycleScopeSelection,
   skillMutableLifecycleScopes,
   skillRemovalAvailability,
@@ -41,6 +43,8 @@ const ACTION_BUTTON_CLASS =
 interface InstalledSkillLifecycleActionsProps {
   skill: SkillWithStatus;
   onInstallComplete: (result: SkillInstallCompletion) => void;
+  /** Refresh only: the plugin update shows its own toast. */
+  onUpdateComplete: () => void;
   onRemoveComplete: () => void;
 }
 
@@ -69,10 +73,9 @@ function deriveLifecycleTargets(
   const removalPreview = removalAvailability?.available ? removalAvailability.preview : null;
   const removalDisabledReason =
     removalAvailability && !removalAvailability.available ? removalAvailability.reason : null;
-  const updateAvailability =
-    installedSkill && selectedLifecycleScope
-      ? skillUpdateAvailability(installedSkill, selectedLifecycleScope)
-      : null;
+  const updateAvailability = installedSkill
+    ? skillUpdateAvailability(installedSkill, selectedLifecycleScope)
+    : null;
   const updateDisabledReason =
     updateAvailability && !updateAvailability.available ? updateAvailability.reason : null;
 
@@ -98,6 +101,7 @@ function useSkillLifecycleMutations(
   removalPreview: SkillRemovalPreview | null,
   updateAvailability: SkillUpdateAvailability | null,
   onInstallComplete: (result: SkillInstallCompletion) => void,
+  onUpdateComplete: () => void,
   onRemoveComplete: () => void,
 ) {
   const addToast = useAppStore((state) => state.addToast);
@@ -129,28 +133,43 @@ function useSkillLifecycleMutations(
       });
   };
 
-  const handleUpdate = async () => {
+  const handleUpdate = () => {
     const installed = skill.installed_info;
     if (!updateAvailability?.available || !installed) return;
     setIsUpdating(true);
-    try {
-      await guard.requestUpdate(installed, {
-        scopeTarget: updateAvailability.target,
-        onFinished: ({ success, error }) =>
-          onInstallComplete(
-            success
-              ? { success: true, skillName: skill.name }
-              : { success: false, error: error ?? "Update failed.", skillName: skill.name },
-          ),
+    const update =
+      "plugin" in updateAvailability
+        ? updatePlugin(
+            updateAvailability.plugin.plugin_id,
+            "Claude Code",
+            updateAvailability.plugin.scope,
+            updateAvailability.plugin.project_path,
+          ).then((outcome) => {
+            addToast(pluginUpdatedToast(updateAvailability.plugin.plugin_id, outcome));
+            if (pluginUpdateSucceeded(outcome)) {
+              onUpdateComplete();
+            }
+          })
+        : guard.requestUpdate(installed, {
+            scopeTarget: updateAvailability.target,
+            onFinished: ({ success, error }) =>
+              onInstallComplete(
+                success
+                  ? { success: true, skillName: skill.name }
+                  : { success: false, error: error ?? "Update failed.", skillName: skill.name },
+              ),
+          });
+    return update
+      .catch((error) => {
+        addToast({
+          type: "error",
+          title: "Update failed",
+          message: error instanceof Error ? error.message : "Unknown error",
+        });
+      })
+      .finally(() => {
+        setIsUpdating(false);
       });
-    } catch (error) {
-      addToast({
-        type: "error",
-        title: "Update failed",
-        message: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
-    setIsUpdating(false);
   };
 
   return {
@@ -211,6 +230,7 @@ function LifecycleScopePicker({
 export function InstalledSkillLifecycleActions({
   skill,
   onInstallComplete,
+  onUpdateComplete,
   onRemoveComplete,
 }: InstalledSkillLifecycleActionsProps) {
   const installedSkill = skill.installed_info;
@@ -241,6 +261,7 @@ export function InstalledSkillLifecycleActions({
     removalPreview,
     updateAvailability,
     onInstallComplete,
+    onUpdateComplete,
     onRemoveComplete,
   );
 

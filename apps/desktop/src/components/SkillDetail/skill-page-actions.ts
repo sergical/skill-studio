@@ -17,21 +17,26 @@ import {
   removeSkill,
   unforkSkill,
   unparkSkill,
+  updatePlugin,
 } from "../../lib/skill-api";
 import {
   lifecycleTargetForDeployment,
   lifecycleTargetForPark,
   lifecycleTargetForSkill,
-  pullUpstreamToast,
   skillCanPark,
   skillRemovalBlockedReason,
   skillRemovalChoices,
+  pullForkAndUpdatePlugins,
+  skillHasManagedUpdate,
   skillRemovalEmptiesSkill,
+  skillUpdateOwnerTargets,
+  updateSkillPluginsWithToasts,
 } from "../../lib/skill-lifecycle-target";
-import type { SkillRemovalChoice } from "../../lib/skill-lifecycle-target";
+import type { PluginInstallUpdater, SkillRemovalChoice } from "../../lib/skill-lifecycle-target";
 import type { InstalledSkill, Toast } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
+import type { UpdateFinish } from "../../hooks/useGuardedSkillUpdate";
 
 /**
  * The one deployment `forkSkill` will accept: the shared-folder copy at
@@ -52,11 +57,42 @@ type AddToast = ReturnType<typeof useAppStore.getState>["addToast"];
  * Any kind, not only dotagents/skills-sh: a skill with a plugin copy reports `plugin` as its kind
  * while its skills.sh copy still has an update, and the header is the page's only Update.
  */
+/**
+ * The header Update: managed copies first, through the overwrite guard, then the
+ * skill's plugin installs. Plugins wait for the guard's `onFinished`, so a
+ * cancelled overwrite dialog or a failed copy update leaves them alone.
+ */
+export async function runHeaderUpdate<
+  S extends Pick<InstalledSkill, "deployments" | "update_owner_ids" | "update_owners">,
+>(
+  skill: S,
+  guard: {
+    requestUpdate: (
+      skill: S,
+      options: { skipPlugins: boolean; onFinished: (finish: UpdateFinish) => Promise<void> },
+    ) => Promise<void>;
+  },
+  addToast: (toast: Omit<Toast, "id">) => void,
+  updatePluginInstall: PluginInstallUpdater,
+): Promise<void> {
+  if (skillUpdateOwnerTargets(skill).length === 0) {
+    await updateSkillPluginsWithToasts(skill, addToast, updatePluginInstall);
+    return;
+  }
+  await guard.requestUpdate(skill, {
+    skipPlugins: true,
+    onFinished: async ({ success }) => {
+      if (success) await updateSkillPluginsWithToasts(skill, addToast, updatePluginInstall);
+    },
+  });
+}
+
+/** "Pull latest" only when the fork itself is outdated; a fork whose only update is a plugin takes "Update". */
 export function headerUpdateLabel(
   skill: Pick<InstalledSkill, "source_kind" | "update_owner_ids">,
 ): "Pull latest" | "Update" | null {
   if (skill.update_owner_ids.length === 0) return null;
-  return skill.source_kind === "fork" ? "Pull latest" : "Update";
+  return skill.source_kind === "fork" && skillHasManagedUpdate(skill) ? "Pull latest" : "Update";
 }
 
 /**
@@ -241,14 +277,23 @@ export function useSkillPageActions(
     });
   };
 
+  const updatePluginInstall: PluginInstallUpdater = (target) =>
+    updatePlugin(target.plugin_id, "Claude Code", target.scope, target.project_path);
+
   const doPullUpstream = () =>
-    runAction(addToast, setIsPulling, "Pull upstream failed", async () => {
-      const result = await pullForkUpstream(lifecycleTargetForSkill(skill, "global"));
-      addToast(pullUpstreamToast(result));
-    });
+    runAction(addToast, setIsPulling, "Pull upstream failed", () =>
+      pullForkAndUpdatePlugins(
+        skill,
+        () => pullForkUpstream(lifecycleTargetForSkill(skill, "global")),
+        addToast,
+        updatePluginInstall,
+      ),
+    );
 
   const doUpdate = () =>
-    runAction(addToast, setIsUpdating, "Update failed", () => guard.requestUpdate(skill));
+    runAction(addToast, setIsUpdating, "Update failed", () =>
+      runHeaderUpdate(skill, guard, addToast, updatePluginInstall),
+    );
 
   const doRemove = async (choice: SkillRemovalChoice) => {
     const confirmed = await ask(choice.confirmMessage, {

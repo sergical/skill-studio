@@ -833,6 +833,39 @@ describe("rowMenu", () => {
     expect(menu.hint).toBe("Applies to every skill the codex plugin ships.");
   });
 
+  it("offers Update the plugin only on a plugin row whose plugin has an update", () => {
+    const plugin = fixtureDeployment({
+      agent: "Claude Code",
+      scope: "plugin",
+      mutability: "read-only",
+      path: "/home/.claude/plugins/cache/anthropics/codex/1.0.6/skills/find-bugs",
+      plugin: {
+        name: "codex",
+        harness: "Claude Code",
+        version: "1.0.5",
+        marketplace: "anthropics",
+        id: "codex@anthropics",
+      },
+    });
+    const labelsFor = (update_owners: InstalledSkill["update_owners"]) => {
+      const [global] = buildScopeGroups(fixtureSkill({ deployments: [plugin], update_owners }));
+      const row = global.rows.find((r) => r.kind === "plugin")!;
+      return rowMenu(row, global.label).entries.map((e) => e.label);
+    };
+
+    expect(labelsFor([])).not.toContain("Update the codex plugin");
+    expect(
+      labelsFor([
+        {
+          owner_id: "plugin:codex@anthropics",
+          latest_commit: null,
+          latest_commit_at: null,
+          plugin_scope: "user",
+        },
+      ]),
+    ).toContain("Update the codex plugin");
+  });
+
   it("offers enable for a Claude Code plugin row disabled by claude-plugin-disabled", () => {
     const plugin = fixtureDeployment({
       agent: "Claude Code",

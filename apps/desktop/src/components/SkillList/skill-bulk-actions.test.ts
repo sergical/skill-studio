@@ -344,6 +344,10 @@ describe("runBulkUpdate", () => {
         calls.push(`pull ${target.deployment_id}`);
         return pullResult(conflicts);
       },
+      updatePluginInstall: async (target: { plugin_id: string }) => {
+        calls.push(`plugin ${target.plugin_id}`);
+        return { outcome: "updated", message: null };
+      },
       updateAll: async (targets: { owner_id?: string | null }[]) => {
         calls.push(`update ${targets.map((t) => t.owner_id).join(",")}`);
         const outcome = {
@@ -497,5 +501,309 @@ describe("bulkActionToast conflicts", () => {
       title: "Updated 1 skill",
       message: "Conflicts to resolve in the editor: a",
     });
+  });
+});
+
+describe("runBulkUpdate with plugin updates", () => {
+  const pluginSkill = (name: string): InstalledSkill => ({
+    ...outdatedSkillsSh(name),
+    deployments: [],
+    update_owner_ids: ["plugin:codex@official"],
+    update_owners: [
+      {
+        owner_id: "plugin:codex@official",
+        latest_commit: null,
+        latest_commit_at: null,
+        plugin_scope: "user",
+        plugin_project_path: null,
+      },
+    ],
+  });
+  const noop = async () => {
+    throw new Error("unused");
+  };
+
+  it("bulk_update_runs_a_plugin_shared_by_two_skills_once_and_succeeds_both", async () => {
+    const plugins: string[] = [];
+    const result = await runBulkUpdate(
+      [pluginSkill("one"), pluginSkill("two")],
+      new Set(),
+      {
+        fork: noop,
+        pullFork: noop,
+        updateAll: noop,
+        updatePluginInstall: async (target) => {
+          plugins.push(target.plugin_id);
+          return { outcome: "updated", message: null };
+        },
+      },
+      () => {},
+    );
+    expect(plugins).toEqual(["codex@official"]);
+    expect(result.succeeded).toHaveLength(2);
+    expect(result.failed).toEqual([]);
+  });
+
+  it("bulk_update_fails_a_skill_whose_plugin_update_fails", async () => {
+    const result = await runBulkUpdate(
+      [pluginSkill("one")],
+      new Set(),
+      {
+        fork: noop,
+        pullFork: noop,
+        updateAll: noop,
+        updatePluginInstall: async () => {
+          throw new Error("marketplace unreachable");
+        },
+      },
+      () => {},
+    );
+    expect(result.succeeded).toEqual([]);
+    expect(result.failed[0]?.error).toContain("marketplace unreachable");
+  });
+
+  const pluginOwnerEntry = (scope = "user", projectPath: string | null = null) => ({
+    owner_id: "plugin:codex@official",
+    latest_commit: null,
+    latest_commit_at: null,
+    plugin_scope: scope,
+    plugin_project_path: projectPath,
+  });
+  /** A skills.sh skill whose managed copy and plugin install are both outdated. */
+  const managedAndPlugin = (name: string): InstalledSkill => {
+    const base = outdatedSkillsSh(name);
+    return {
+      ...base,
+      update_owner_ids: [...base.update_owner_ids, "plugin:codex@official"],
+      update_owners: [...(base.update_owners ?? []), pluginOwnerEntry()],
+    };
+  };
+  const batchOk = async (targets: { owner_id?: string | null }[]) =>
+    // SAFETY: bulkUpdateResult reads only `items[].skill/outcome` and `errors`.
+    ({
+      items: targets.map((t) => ({ skill: t.owner_id?.split("/").pop() ?? "", outcome: {} })),
+      errors: {},
+    }) as never;
+
+  /** Flow: bulk Update on a skill with an outdated managed copy and an outdated plugin.
+   * Expectation: both update and the skill succeeds. Failure: the managed target is dropped as
+   * ambiguous while the plugin runs and the skill still counts as updated. */
+  it("bulk_update_updates_the_managed_copy_and_the_plugin_of_one_skill", async () => {
+    const calls: string[] = [];
+    const skill = managedAndPlugin("both");
+    expect(planBulkAction([skill], { kind: "update" }).applicable).toEqual([skill]);
+    const result = await runBulkUpdate(
+      [skill],
+      new Set(),
+      {
+        fork: noop,
+        pullFork: noop,
+        updateAll: async (targets) => {
+          calls.push(`update ${targets.map((t) => t.owner_id).join(",")}`);
+          return batchOk(targets);
+        },
+        updatePluginInstall: async (target) => {
+          calls.push(`plugin ${target.plugin_id}`);
+          return { outcome: "updated", message: null };
+        },
+      },
+      () => {},
+    );
+    expect(calls).toEqual(["update owner:v1/global/both", "plugin codex@official"]);
+    expect(names(result.succeeded)).toEqual(["both"]);
+  });
+
+  /** Flow: two managed owners in one scope are outdated, plus an outdated plugin.
+   * Expectation: the skill is skipped as needing a specific location and its plugin is not run.
+   * Failure: the skill is reported updated after only its plugin ran. */
+  it("bulk_update_skips_a_skill_with_an_ambiguous_managed_copy_and_leaves_its_plugin_alone", async () => {
+    const base = managedAndPlugin("amb");
+    const skill: InstalledSkill = {
+      ...base,
+      deployments: [
+        ...base.deployments,
+        realCopyDeployment(
+          { agent: "Claude Code", path: "/home/.claude/skills/amb" },
+          { owner_kind: "copy", mutability: "mutable", owner_id: "owner:v1/global/other" },
+        ),
+      ],
+      update_owner_ids: [...base.update_owner_ids, "owner:v1/global/other"],
+      update_owners: [
+        ...(base.update_owners ?? []),
+        { owner_id: "owner:v1/global/other", latest_commit: "next", latest_commit_at: null },
+      ],
+    };
+    expect(planBulkAction([skill], { kind: "update" }).skipped.map((s) => s.reason)).toEqual([
+      "needs a specific location",
+    ]);
+    const updateAll = vi.fn(noop);
+    const updatePluginInstall = vi.fn(async () => ({ outcome: "updated", message: null }));
+    const result = await runBulkUpdate(
+      [skill],
+      new Set(),
+      { fork: noop, pullFork: noop, updateAll, updatePluginInstall },
+      () => {},
+    );
+    expect(updateAll).not.toHaveBeenCalled();
+    expect(updatePluginInstall).not.toHaveBeenCalled();
+    expect(result.succeeded).toEqual([]);
+    expect(result.failed[0]?.error).toContain("more than one source");
+  });
+
+  /** Failure: a forked skill is reported updated while its plugin stays outdated. */
+  it("bulk_update_runs_the_plugin_of_a_forked_skill", async () => {
+    const plugins: string[] = [];
+    const forkedSkill = managedAndPlugin("edited");
+    const result = await runBulkUpdate(
+      [forkedSkill],
+      new Set(["edited"]),
+      {
+        // SAFETY: only `deployment_id` is read from the record.
+        fork: async () => ({ deployment_id: "dep:forked" }) as ForkRecord,
+        pullFork: async () => pullResult([]),
+        updateAll: noop,
+        updatePluginInstall: async (target) => {
+          plugins.push(target.plugin_id);
+          return { outcome: "updated", message: null };
+        },
+      },
+      () => {},
+    );
+    expect(plugins).toEqual(["codex@official"]);
+    expect(names(result.succeeded)).toEqual(["edited"]);
+  });
+
+  /** Failure: the plugin of a skill whose copy failed stays in the total, so the bar stops short. */
+  it("bulk_update_progress_reaches_its_total_when_a_copy_fails_and_its_plugin_is_skipped", async () => {
+    const seen: [number, number][] = [];
+    const updatePluginInstall = vi.fn(async () => ({ outcome: "updated", message: null }));
+    const result = await runBulkUpdate(
+      [managedAndPlugin("one")],
+      new Set(),
+      {
+        fork: noop,
+        pullFork: noop,
+        updateAll: async () =>
+          // SAFETY: bulkUpdateResult reads only `items[].skill/outcome` and `errors`.
+          ({ items: [{ skill: "one", outcome: null }], errors: { one: "boom" } }) as never,
+        updatePluginInstall,
+      },
+      (done, total) => seen.push([done, total]),
+    );
+    expect(updatePluginInstall).not.toHaveBeenCalled();
+    expect(result.failed[0]?.error).toBe("boom");
+    expect(seen[seen.length - 1]).toEqual([1, 1]);
+  });
+
+  /** Flow: a plugin-only skill shares its plugin with a skill whose copy update failed.
+   * Expectation: it is failed with a message naming the shared plugin, and the plugin is not run.
+   * Failure: the summary shows no reason, or the plugin is updated anyway. */
+  it("bulk_update_names_the_shared_plugin_when_a_sharing_skill_is_held_back", async () => {
+    const updatePluginInstall = vi.fn(async () => ({ outcome: "updated", message: null }));
+    const result = await runBulkUpdate(
+      [managedAndPlugin("one"), pluginSkill("sharer")],
+      new Set(),
+      {
+        fork: noop,
+        pullFork: noop,
+        updateAll: async () =>
+          // SAFETY: bulkUpdateResult reads only `items[].skill/outcome` and `errors`.
+          ({ items: [{ skill: "one", outcome: null }], errors: { one: "boom" } }) as never,
+        updatePluginInstall,
+      },
+      () => {},
+    );
+    expect(updatePluginInstall).not.toHaveBeenCalled();
+    expect(result.failed.find((failure) => failure.skill.name === "sharer")?.error).toBe(
+      "Shares plugin codex@official with a skill that failed.",
+    );
+  });
+
+  /** Failure: a failed project-scope install marks a skill tied only to the user-scope install as failed. */
+  it("bulk_update_fails_only_the_skills_of_the_failed_plugin_scope", async () => {
+    const withScope = (name: string, scope: string, projectPath: string | null) => ({
+      ...pluginSkill(name),
+      update_owners: [pluginOwnerEntry(scope, projectPath)],
+    });
+    const result = await runBulkUpdate(
+      [withScope("usr", "user", null), withScope("proj", "project", "/p")],
+      new Set(),
+      {
+        fork: noop,
+        pullFork: noop,
+        updateAll: noop,
+        updatePluginInstall: async (target) => {
+          if (target.scope === "project") throw new Error("project install broken");
+          return { outcome: "updated", message: null };
+        },
+      },
+      () => {},
+    );
+    expect(names(result.succeeded)).toEqual(["usr"]);
+    expect(names(result.failed.map((failure) => failure.skill))).toEqual(["proj"]);
+  });
+
+  /** Flow: a fork whose only outdated owner is its plugin. Expectation: no fork pull, the plugin runs.
+   * Failure: the pull runs with nothing to pull, or the plugin is skipped. */
+  it("bulk_update_runs_only_the_plugin_of_a_fork_with_nothing_to_pull", async () => {
+    const pullFork = vi.fn(async () => pullResult([]));
+    const plugins: string[] = [];
+    const result = await runBulkUpdate(
+      [pluginSkill("edited")],
+      new Set(["edited"]),
+      {
+        fork: noop,
+        pullFork,
+        updateAll: noop,
+        updatePluginInstall: async (target) => {
+          plugins.push(target.plugin_id);
+          return { outcome: "updated", message: null };
+        },
+      },
+      () => {},
+    );
+    expect(pullFork).not.toHaveBeenCalled();
+    expect(plugins).toHaveLength(1);
+    expect(names(result.succeeded)).toEqual(["edited"]);
+  });
+
+  /** Flow: a plugin step ends as skipped. Expectation: the skill counts as failed with the CLI message.
+   * Failure: a skipped plugin is reported as updated. */
+  it("bulk_update_counts_a_skipped_plugin_as_failed_and_finishes_progress", async () => {
+    const seen: [number, number][] = [];
+    const result = await runBulkUpdate(
+      [pluginSkill("skip")],
+      new Set(),
+      {
+        fork: noop,
+        pullFork: noop,
+        updateAll: noop,
+        updatePluginInstall: async () => ({ outcome: "skipped", message: "not installed" }),
+      },
+      (done, total) => seen.push([done, total]),
+    );
+    expect(result.succeeded).toEqual([]);
+    expect(result.failed[0]?.error).toContain("not installed");
+    expect(seen[seen.length - 1]).toEqual([1, 1]);
+  });
+
+  /** Flow: a plugin step throws. Expectation: progress still reaches its total. */
+  it("bulk_update_progress_counts_a_plugin_that_throws", async () => {
+    const seen: [number, number][] = [];
+    const result = await runBulkUpdate(
+      [pluginSkill("boom")],
+      new Set(),
+      {
+        fork: noop,
+        pullFork: noop,
+        updateAll: noop,
+        updatePluginInstall: async () => {
+          throw new Error("broken");
+        },
+      },
+      (done, total) => seen.push([done, total]),
+    );
+    expect(names(result.failed.map((failure) => failure.skill))).toEqual(["boom"]);
+    expect(seen[seen.length - 1]).toEqual([1, 1]);
   });
 });

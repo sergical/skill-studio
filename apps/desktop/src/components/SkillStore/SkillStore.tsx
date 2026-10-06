@@ -497,6 +497,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
             onInstallStart={handleInstallStart}
             onInstallPaused={handleInstallPaused}
             onInstallComplete={handleInstallComplete}
+            onUpdateComplete={loadInstalledSkills}
             onRemoveComplete={handleRemoveComplete}
           />
         )}

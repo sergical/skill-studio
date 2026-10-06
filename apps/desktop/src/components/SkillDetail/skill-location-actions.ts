@@ -27,12 +27,14 @@ import {
   repairSkillLink,
   restoreMovedDeployment,
   setPluginEnabled,
+  updatePlugin,
   setSkillsInvocation,
   unparkSkill,
 } from "../../lib/skill-api";
 import {
   lifecycleTargetForDeployment,
   lifecycleTargetForSkill,
+  pluginUpdatedToast,
 } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
 import type { TurnOffAction } from "./skill-agent-off-model";
@@ -153,14 +155,14 @@ export function useLocationActions(
   const [turnOffRequest, setTurnOffRequest] = useState<TurnOffAction | null>(null);
 
   /** Resolves `true` when `fn` succeeded, `false` after showing its error toast. Never rejects. */
-  const runWithErrorToast = (
+  const runWithErrorToast = <T = void>(
     title: string,
-    fn: () => Promise<void>,
-    onSuccess?: () => void,
+    fn: () => Promise<T>,
+    onSuccess?: (result: T) => void,
   ): Promise<boolean> =>
     fn().then(
-      () => {
-        onSuccess?.();
+      (result) => {
+        onSuccess?.(result);
         return true;
       },
       (err) => {
@@ -213,6 +215,14 @@ export function useLocationActions(
         return runWithErrorToast(
           enabled ? "Couldn't enable plugin" : "Couldn't disable plugin",
           () => setPluginEnabled(deployment.plugin!.id, deployment.agent, enabled),
+        );
+      }
+      case "update-plugin": {
+        const { deployment, target } = action;
+        return runWithErrorToast(
+          "Couldn't update plugin",
+          () => updatePlugin(target.plugin_id, deployment.agent, target.scope, target.project_path),
+          (outcome) => addToast(pluginUpdatedToast(target.plugin_id, outcome)),
         );
       }
       case "uninstall-plugin":

@@ -18,10 +18,16 @@ import {
   skillRemovalDescription,
   skillRemovalPreview,
   skillsWithLocalEdits,
+  skillPluginUpdateTargets,
+  skillUpdateAvailability,
   skillUpdateOwnerTargets,
+  pluginFailureToast,
+  pluginUpdatedToast,
+  pluginUpdateSucceeded,
   skillUpdateToast,
   updateSkillOwners,
 } from "./skill-lifecycle-target";
+import type { PluginUpdateFailure } from "./skill-lifecycle-target";
 import type { Deployment, ForkRecord, InstalledSkill, PullResult } from "@skill-studio/lib";
 
 function deployment(id: string, ownerId?: string, projectPath?: string): Deployment {
@@ -843,6 +849,39 @@ describe("forkEditedAndUpdate", () => {
     );
     expect(updated).toEqual([]);
   });
+
+  it("fork_and_update_runs_the_plugin_installs_after_the_copies_or_a_forked_skill_keeps_its_plugin_outdated", async () => {
+    const withPlugin = {
+      ...skill,
+      update_owners: [
+        ...skill.update_owners,
+        {
+          owner_id: "plugin:codex@official",
+          latest_commit: null,
+          latest_commit_at: null,
+          plugin_scope: "user",
+          plugin_project_path: null,
+        },
+      ],
+    };
+    const plugins: string[] = [];
+    const deps = (updateOwnerOk: boolean) => ({
+      fork: async () => record,
+      pullFork: async () => pull,
+      updateOwner: async () => ({ success: updateOwnerOk, error: "boom" }),
+      updatePluginInstall: async (target: { plugin_id: string }) => {
+        plugins.push(target.plugin_id);
+        return { outcome: "updated", message: null };
+      },
+    });
+    const ok = await forkEditedAndUpdate(withPlugin, deps(true));
+    expect(plugins).toEqual(["codex@official"]);
+    expect(ok.plugins?.succeeded).toBe(1);
+
+    plugins.length = 0;
+    await forkEditedAndUpdate(withPlugin, deps(false));
+    expect(plugins).toEqual([]);
+  });
 });
 
 describe("removing a skills.sh skill that has other real folders", () => {
@@ -1048,5 +1087,193 @@ describe("removing a skills.sh skill that has other real folders", () => {
     expect(globalRemovalTarget(skillOf([universalCopy, perAgentCopy], "manual"))).toEqual({
       deployment_id: "universal-copy",
     });
+  });
+});
+
+describe("plugin updates", () => {
+  const pluginDeployment: Deployment = {
+    ...deployment("plugin-dep"),
+    owner_kind: "plugin",
+    mutability: "read-only",
+    agent: "Claude Code",
+    scope: "plugin",
+    plugin: {
+      name: "codex",
+      version: "1.0.5",
+      harness: "Claude Code",
+      marketplace: "official",
+      id: "codex@official",
+    },
+  };
+  const pluginSkill = (
+    update: { scope?: string; project?: string } | null,
+    extra: Partial<Pick<InstalledSkill, "deployments" | "update_owner_ids" | "update_owners">> = {},
+  ) => ({
+    name: "codex",
+    deployments: [pluginDeployment],
+    update_owner_ids: update ? ["plugin:codex@official"] : [],
+    update_owners: update
+      ? [
+          {
+            owner_id: "plugin:codex@official",
+            latest_commit: null,
+            latest_commit_at: null,
+            plugin_scope: update.scope ?? "user",
+            plugin_project_path: update.project ?? null,
+          },
+        ]
+      : [],
+    ...extra,
+  });
+  const everywhere = { skillName: "codex", scope: "global", projectPath: null } as const;
+
+  it("offers a user-scope plugin update in every scope with the plugin id and scope", () => {
+    const skill = pluginSkill({ scope: "user" });
+    const inProject = { skillName: "codex", scope: "project", projectPath: "/work/a" } as const;
+    for (const selection of [everywhere, inProject]) {
+      expect(skillUpdateAvailability(skill, selection)).toEqual({
+        available: true,
+        plugin: { plugin_id: "codex@official", scope: "user", project_path: null },
+      });
+    }
+  });
+
+  it("offers a project plugin update only inside its own project", () => {
+    const skill = pluginSkill({ scope: "project", project: "/work/a" });
+    const own = skillUpdateAvailability(skill, {
+      skillName: "codex",
+      scope: "project",
+      projectPath: "/work/a",
+    });
+    expect(own).toMatchObject({ available: true, plugin: { project_path: "/work/a" } });
+    expect(
+      skillUpdateAvailability(skill, {
+        skillName: "codex",
+        scope: "project",
+        projectPath: "/work/b",
+      }).available,
+    ).toBe(false);
+    expect(skillUpdateAvailability(skill, everywhere).available).toBe(false);
+  });
+
+  it("does not offer an update for a plugin without one", () => {
+    expect(skillUpdateAvailability(pluginSkill(null), everywhere)).toEqual({
+      available: false,
+      reason: "The selected scope has no managed update owner.",
+    });
+  });
+
+  it("keeps the more-than-one-source message when a plugin and a skills.sh copy both have updates", () => {
+    const skill = pluginSkill(
+      { scope: "user" },
+      {
+        deployments: [pluginDeployment, deployment("sh", "owner:v1/global/codex")],
+        update_owner_ids: ["plugin:codex@official", "owner:v1/global/codex"],
+        update_owners: [
+          {
+            owner_id: "plugin:codex@official",
+            latest_commit: null,
+            latest_commit_at: null,
+            plugin_scope: "user",
+          },
+          { owner_id: "owner:v1/global/codex", latest_commit: null, latest_commit_at: null },
+        ],
+      },
+    );
+    const result = skillUpdateAvailability(skill, everywhere);
+    expect(result).toMatchObject({ available: false });
+    expect(result.available === false && result.reason).toContain("more than one source");
+  });
+
+  it("keeps plugin owners out of the targets updateSkill would run", () => {
+    expect(skillUpdateOwnerTargets(pluginSkill({ scope: "user" }))).toEqual([]);
+    expect(skillPluginUpdateTargets(pluginSkill({ scope: "user" }))).toHaveLength(1);
+  });
+
+  it("ignores owners without an update when it counts update sources", () => {
+    const skill = pluginSkill(
+      { scope: "user" },
+      { deployments: [pluginDeployment, deployment("sh", "owner:v1/global/codex")] },
+    );
+    expect(skillUpdateAvailability(skill, everywhere)).toEqual({
+      available: true,
+      plugin: { plugin_id: "codex@official", scope: "user", project_path: null },
+    });
+  });
+
+  it("offers the plugin update for a plugin-only skill when no scope is selected", () => {
+    expect(skillUpdateAvailability(pluginSkill({ scope: "user" }), null)).toEqual({
+      available: true,
+      plugin: { plugin_id: "codex@official", scope: "user", project_path: null },
+    });
+  });
+
+  it("updates a plugin-only skill through the plugin updater once and never through updateSkill", async () => {
+    const owners: string[] = [];
+    const plugins: string[] = [];
+    const summary = await updateSkillOwners(
+      pluginSkill({ scope: "user" }),
+      async (target) => {
+        owners.push(target.owner_id ?? "");
+        return { success: true };
+      },
+      async (target) => {
+        plugins.push(target.plugin_id);
+        return { outcome: "updated", message: null };
+      },
+    );
+    expect(owners).toEqual([]);
+    expect(plugins).toEqual(["codex@official"]);
+    expect(summary).toMatchObject({ attempted: 1, succeeded: 1, failures: [] });
+  });
+
+  it("reports a plugin the CLI found current as already up to date, not as updated", () => {
+    expect(
+      pluginUpdatedToast("codex@official", { outcome: "up_to_date", message: null }),
+    ).toMatchObject({
+      type: "info",
+      title: expect.stringContaining("already up to date"),
+    });
+    expect(
+      pluginUpdatedToast("codex@official", { outcome: "updated", message: null }).title,
+    ).not.toContain("already");
+  });
+
+  /**
+   * Flow: the fork route runs a plugin install update that fails, once skipped and once thrown.
+   * Expectation: the skipped failure is a warning, the other an error.
+   * A failure here means a stale or skipped plugin shows as a red error again.
+   */
+  it("toasts a skipped plugin failure as a warning and any other as an error", () => {
+    const failure = (skipped?: boolean): PluginUpdateFailure => ({
+      ownerId: "codex@official",
+      message: skipped ? "stale" : "boom",
+      target: { plugin_id: "codex@official", scope: "user", project_path: null },
+      skipped,
+    });
+    expect(pluginFailureToast(failure(true))).toMatchObject({
+      type: "warning",
+      title: "codex@official was not updated",
+    });
+    expect(pluginFailureToast(failure())).toMatchObject({ type: "error", message: "boom" });
+  });
+
+  it("shows a warning, not a success, when the CLI skipped the plugin update", () => {
+    expect(
+      pluginUpdatedToast("codex@official", { outcome: "skipped", message: "not installed" }),
+    ).toMatchObject({ type: "warning", message: expect.stringContaining("not installed") });
+  });
+
+  it("shows a stale marketplace as a warning with the refresh error, and does not count it as done", () => {
+    const result = {
+      outcome: "marketplace_stale",
+      message: "Could not refresh the official marketplace (network down), so it may be newer.",
+    };
+    expect(pluginUpdatedToast("codex@official", result)).toMatchObject({
+      type: "warning",
+      title: "codex@official was not updated",
+      message: expect.stringContaining("network down"),
+    });
+    expect(pluginUpdateSucceeded(result)).toBe(false);
   });
 });

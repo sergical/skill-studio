@@ -746,6 +746,30 @@ export async function setPluginEnabled(
   return callCommand("set_plugin_enabled", { pluginId, harness, enabled });
 }
 
+/** What `claude plugin update --json` reported for one install. */
+export interface PluginUpdateResult {
+  /** The CLI's `updateOutcome`: `updated`, `up_to_date`, or another value such as `skipped`. */
+  outcome: string;
+  /** The CLI's own message or reason for the outcome, when it gave one. */
+  message: string | null;
+}
+
+/**
+ * Update one install of a Claude Code plugin (`claude plugin update <id> -s
+ * <scope>`); `scope` and `projectPath` are the install's own. Claude Code
+ * applies it to new sessions only. Refused for any other harness. Resolves to the
+ * CLI's `updateOutcome` and message: only `updated` and `up_to_date` mean the
+ * plugin is current.
+ */
+export async function updatePlugin(
+  pluginId: string,
+  harness: string,
+  scope: string,
+  projectPath: string | null,
+): Promise<PluginUpdateResult> {
+  return callCommand("update_plugin", { pluginId, harness, scope, projectPath });
+}
+
 /**
  * Uninstall a Claude Code plugin (`claude plugin uninstall <id> -s user -y`),
  * removing every skill it ships. Refused for any other harness.

@@ -1521,7 +1521,7 @@ fn run_update_check_now(
     app_data: &Path,
 ) -> UpdateCheckStore {
     if let Some(gh_bin) = resolve_gh_binary() {
-        run_update_check_with_forks(
+        let store = run_update_check_with_forks(
             home,
             project_paths,
             app_data,
@@ -1532,10 +1532,17 @@ fn run_update_check_now(
                 gh_bin: gh_bin.clone(),
             },
             &GhForkLookup {
-                gh_bin,
+                gh_bin: gh_bin.clone(),
                 timeout: FORK_LOOKUP_TIMEOUT,
             },
-        )
+        );
+        super::skill_plugin_update::refresh_plugin_versions(
+            home,
+            app_data,
+            &gh_bin,
+            super::skill_process::DEFAULT_ADD_PROCESS_TIMEOUT,
+        );
+        store
     } else {
         write_gh_missing_store(home, project_paths, app_data)
     }

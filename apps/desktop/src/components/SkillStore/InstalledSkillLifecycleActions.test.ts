@@ -70,9 +70,14 @@ describe("InstalledSkillLifecycleActions update selection", () => {
     ).toEqual({ available: true, target: { owner_id: secondProjectOwner } });
   });
 
-  it("disables Update when one selected scope has several owners", () => {
+  it("disables Update when one selected scope has several owners with updates", () => {
     const ambiguous = {
       ...skill,
+      update_owner_ids: [globalOwner, firstProjectOwner],
+      update_owners: [
+        { owner_id: globalOwner, latest_commit: "global-next", latest_commit_at: null },
+        { owner_id: firstProjectOwner, latest_commit: "project-next", latest_commit_at: null },
+      ],
       deployments: [
         deployment("global-one", globalOwner),
         deployment("global-two", firstProjectOwner),
@@ -86,5 +91,18 @@ describe("InstalledSkillLifecycleActions update selection", () => {
     expect(availability.available).toBe(false);
     if (!availability.available)
       expect(availability.reason).toContain("Update each copy in Locations");
+  });
+
+  it("offers Update when a scope has several owners but only one has an update", () => {
+    const sameScope = {
+      ...skill,
+      deployments: [
+        deployment("global-one", globalOwner),
+        deployment("global-two", firstProjectOwner),
+      ],
+    };
+    expect(
+      skillUpdateAvailability(sameScope, { skillName: "x", scope: "global", projectPath: null }),
+    ).toEqual({ available: true, target: { owner_id: globalOwner } });
   });
 });
