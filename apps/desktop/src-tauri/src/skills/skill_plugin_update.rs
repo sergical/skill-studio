@@ -803,6 +803,10 @@ fn keep_previous_resolution(
     }
 }
 
+// Each refresh reads, fetches, then writes the cache; two overlapping runs
+// could let the older one overwrite the newer result.
+static REFRESH_LOCK: Mutex<()> = Mutex::new(());
+
 /// [`refresh_plugin_versions_with`] over the `gh` CLI.
 /// `timeout` bounds the whole refresh; calls after it passes fail, and a failed
 /// lookup records nothing.
@@ -812,12 +816,31 @@ pub fn refresh_plugin_versions(
     gh_bin: &Path,
     timeout: std::time::Duration,
 ) {
-    // Each refresh reads, fetches, then writes the cache; two overlapping runs
-    // could let the older one overwrite the newer result.
-    static REFRESH_LOCK: Mutex<()> = Mutex::new(());
     let _guard = REFRESH_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    run_refresh(home, app_data, gh_bin, timeout);
+}
+
+/// [`refresh_plugin_versions`], skipped while another refresh runs: a waiting
+/// caller could sit behind a background check for its full timeout.
+/// Returns false when it skipped.
+pub fn try_refresh_plugin_versions(
+    home: &Path,
+    app_data: &Path,
+    gh_bin: &Path,
+    timeout: std::time::Duration,
+) -> bool {
+    let _guard = match REFRESH_LOCK.try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return false,
+    };
+    run_refresh(home, app_data, gh_bin, timeout);
+    true
+}
+
+fn run_refresh(home: &Path, app_data: &Path, gh_bin: &Path, timeout: std::time::Duration) {
     let control = AddOperationControl::new(Arc::new(AtomicBool::new(false)), timeout);
     refresh_plugin_versions_with(home, app_data, &GhRemote(gh_bin, control));
 }
@@ -969,6 +992,35 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::fs;
+
+    // Flow: a plugin update finishes while the background check holds the refresh lock.
+    // Expectation: the post-update re-check returns at once instead of waiting; with the lock
+    // free it runs.
+    // A failure means the Update button spins until the background check ends, up to its timeout.
+    #[test]
+    fn the_post_update_recheck_skips_while_another_refresh_runs() {
+        let home = tempfile::tempdir().unwrap();
+        let app_data = tempfile::tempdir().unwrap();
+        let gh = Path::new("/nonexistent/gh");
+        let timeout = std::time::Duration::from_secs(1);
+        {
+            let _held = REFRESH_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            assert!(!try_refresh_plugin_versions(
+                home.path(),
+                app_data.path(),
+                gh,
+                timeout
+            ));
+        }
+        assert!(try_refresh_plugin_versions(
+            home.path(),
+            app_data.path(),
+            gh,
+            timeout
+        ));
+    }
 
     fn install(version: Option<&str>, sha: Option<&str>) -> PluginInstall {
         PluginInstall {

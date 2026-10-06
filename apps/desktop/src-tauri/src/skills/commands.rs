@@ -2658,7 +2658,9 @@ pub async fn update_plugin(
                 project_path.as_deref().map(Path::new),
             )
         })?;
-        if result.outcome == "updated" {
+        // An up-to-date result can still follow a stale cached version, whose
+        // badge would otherwise outlive the click until the next background check.
+        if matches!(result.outcome.as_str(), "updated" | "up_to_date") {
             recheck_plugin_versions(&app, &home);
         }
         Ok(result)
@@ -2667,9 +2669,10 @@ pub async fn update_plugin(
 }
 
 /// Re-runs the plugin version lookups after an update and asks for a snapshot
-/// rebuild, so the badge reflects the new install. Skipped without `gh` or a
-/// writable data folder; lookups still running after the deadline fail, and
-/// the next background check catches up.
+/// rebuild, so the badge reflects the new install. Skipped without `gh`, a
+/// writable data folder, or while a background check already refreshes;
+/// lookups still running after the deadline fail, and the next background
+/// check catches up.
 fn recheck_plugin_versions(app: &tauri::AppHandle, home: &Path) {
     let Ok(app_data) = app.path().app_data_dir() else {
         return;
@@ -2678,7 +2681,7 @@ fn recheck_plugin_versions(app: &tauri::AppHandle, home: &Path) {
         return;
     }
     if let Some(gh_bin) = super::skill_update_check::resolve_gh_binary() {
-        super::skill_plugin_update::refresh_plugin_versions(
+        super::skill_plugin_update::try_refresh_plugin_versions(
             home,
             &app_data,
             &gh_bin,
