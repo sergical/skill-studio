@@ -1131,12 +1131,14 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
             repo: c.repo.clone(),
         })
         .chain(path_less)
+        // A lock entry the unreadable ledger might shadow is not looked up:
+        // a stale entry naming another fork would add a second note.
+        .filter(|c| !unverified_lock_ids.contains(&c.owner_id))
         .collect();
     fork_candidates.sort_by(|a, b| a.owner_id.cmp(&b.owner_id));
     let resolved_owners = fork_candidates
         .iter()
         .map(|c| c.owner_id.clone())
-        .filter(|id| !unverified_lock_ids.contains(id))
         .chain(ledger_names)
         .collect();
     Sources {
@@ -3322,6 +3324,42 @@ resolved_commit = "{commit}"
             .map(|n| n.repo)
             .collect();
         assert_eq!(repos, vec!["me/fork"]);
+    }
+
+    /// Flow: a malformed `agents.lock`, a stale skills.sh lock entry for a
+    /// dotagents skill naming another fork, and a lookup that would find that
+    /// fork behind its original.
+    /// Expectation: only the previous note survives; the stale fork is never
+    /// looked up.
+    /// A failure here means the detail page can show an unrelated upstream,
+    /// change count, and compare link next to the real note.
+    #[test]
+    fn a_malformed_ledger_does_not_look_up_a_stale_lock_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(home.join(".agents")).unwrap();
+        fs::write(home.join(".agents/agents.lock"), "{ not toml").unwrap();
+        write_skill_lock(&home, "tdd", "stale/other", "skills/tdd", "hash");
+        let app_data = tmp.path().join("data");
+        let store = UpdateCheckStore {
+            upstream_ahead: previous_map(&[previous_record("me/fork", "tdd", 4)]),
+            ..UpdateCheckStore::default()
+        };
+        write_store(&app_data, &store).unwrap();
+
+        let run = run_update_check_with_forks(
+            &home,
+            &[],
+            &app_data,
+            &FakeLookup::with_answers(vec![]),
+            &FakeTreeLookup::with_tree("stale/other", HashMap::new()),
+            &FakeForkLookup::new().fork("stale/other", "them/orig", 5),
+        );
+
+        assert_eq!(
+            run.upstream_ahead.keys().collect::<Vec<_>>(),
+            vec!["me/fork"]
+        );
     }
 
     /// Flow: a dotagents entry with a local (non-GitHub) source and an old
