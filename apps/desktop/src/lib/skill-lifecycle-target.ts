@@ -49,9 +49,62 @@ interface SkillOwnerUpdateSummary {
   failures: SkillOwnerUpdateFailure[];
 }
 
+/** One install of a Claude Code plugin that has an update, as `update_owners` reports it. */
+export interface PluginUpdateTarget {
+  plugin_id: string;
+  /** The install's own scope: `user`, `project`, `local`, or `managed`. */
+  scope: string;
+  project_path: string | null;
+}
+
 export type SkillUpdateAvailability =
   | { available: true; target: LifecycleTarget }
+  | { available: true; plugin: PluginUpdateTarget }
   | { available: false; reason: string };
+
+const PLUGIN_OWNER_PREFIX = "plugin:";
+
+/** Plugin updates have no ledger owner: `updateSkill` cannot run them, `updatePlugin` does. */
+function isPluginOwnerId(ownerId: string | null | undefined): boolean {
+  return ownerId?.startsWith(PLUGIN_OWNER_PREFIX) === true;
+}
+
+/** Every plugin install of `skill` with an update available. */
+export function skillPluginUpdateTargets(
+  skill: Pick<InstalledSkill, "update_owners">,
+): PluginUpdateTarget[] {
+  return (skill.update_owners ?? []).flatMap((update) =>
+    isPluginOwnerId(update.owner_id)
+      ? [
+          {
+            plugin_id: update.owner_id.slice(PLUGIN_OWNER_PREFIX.length),
+            scope: update.plugin_scope ?? "user",
+            project_path: update.plugin_project_path ?? null,
+          },
+        ]
+      : [],
+  );
+}
+
+/** A user-scope plugin serves every project; a project or local install serves only its own. */
+function pluginUpdateAppliesTo(
+  target: PluginUpdateTarget,
+  selection: SkillLifecycleScopeSelection,
+): boolean {
+  if (target.scope === "project" || target.scope === "local") {
+    return selection.scope === "project" && selection.projectPath === target.project_path;
+  }
+  return true;
+}
+
+/** Success toast for a finished plugin update. */
+export function pluginUpdatedToast(pluginId: string): Omit<Toast, "id"> {
+  return {
+    type: "success",
+    title: "Plugin updated",
+    message: `${pluginId} is updated. Restart Claude Code sessions to use it.`,
+  };
+}
 
 /** List only scopes that contain a mutable installed deployment. */
 export function skillMutableLifecycleScopes(
@@ -319,7 +372,9 @@ export function skillUpdateOwnerTargets(
   skill: Pick<InstalledSkill, "update_owner_ids" | "update_owners"> &
     Partial<Pick<InstalledSkill, "deployments">>,
 ): LifecycleTarget[] {
-  const ownerIds = skill.update_owners?.map((update) => update.owner_id) ?? skill.update_owner_ids;
+  const ownerIds = (
+    skill.update_owners?.map((update) => update.owner_id) ?? skill.update_owner_ids
+  ).filter((ownerId) => !isPluginOwnerId(ownerId));
   const deployments = skill.deployments ?? [];
   return [...new Set(ownerIds)].flatMap((owner_id) => {
     const owned = deployments.filter((deployment) => deployment.owner_id === owner_id);
@@ -346,6 +401,16 @@ export function skillUpdateAvailability(
       reason: `${skill.name} is installed from more than one source here. Update each copy in Locations.`,
     };
   }
+  const pluginTargets = skillPluginUpdateTargets(skill).filter((target) =>
+    pluginUpdateAppliesTo(target, selection),
+  );
+  if (ownerIds.size + pluginTargets.length > 1) {
+    return {
+      available: false,
+      reason: `${skill.name} is installed from more than one source here. Update each copy in Locations.`,
+    };
+  }
+  if (pluginTargets.length === 1) return { available: true, plugin: pluginTargets[0] };
   const ownerId = ownerIds.values().next().value;
   if (!ownerId) {
     return { available: false, reason: "The selected scope has no managed update owner." };

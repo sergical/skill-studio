@@ -442,6 +442,14 @@ pub struct OwnerUpdateInfo {
     pub latest_commit: Option<String>,
     #[serde(default)]
     pub latest_commit_at: Option<String>,
+    /// For a `plugin:<plugin>@<marketplace>` owner: the install's scope
+    /// (`user`, `project`, `local`, `managed`) from Claude Code's
+    /// `installed_plugins.json`. `None` for every other owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_scope: Option<String>,
+    /// For a project or local plugin install: the project it belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_project_path: Option<String>,
 }
 
 // ============================================================================

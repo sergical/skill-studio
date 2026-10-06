@@ -18,6 +18,8 @@ import {
   skillRemovalDescription,
   skillRemovalPreview,
   skillsWithLocalEdits,
+  skillPluginUpdateTargets,
+  skillUpdateAvailability,
   skillUpdateOwnerTargets,
   skillUpdateToast,
   updateSkillOwners,
@@ -1048,5 +1050,106 @@ describe("removing a skills.sh skill that has other real folders", () => {
     expect(globalRemovalTarget(skillOf([universalCopy, perAgentCopy], "manual"))).toEqual({
       deployment_id: "universal-copy",
     });
+  });
+});
+
+describe("plugin updates", () => {
+  const pluginDeployment: Deployment = {
+    ...deployment("plugin-dep"),
+    owner_kind: "plugin",
+    mutability: "read-only",
+    agent: "Claude Code",
+    scope: "plugin",
+    plugin: {
+      name: "codex",
+      version: "1.0.5",
+      harness: "Claude Code",
+      marketplace: "official",
+      id: "codex@official",
+    },
+  };
+  const pluginSkill = (
+    update: { scope?: string; project?: string } | null,
+    extra: Partial<Pick<InstalledSkill, "deployments" | "update_owner_ids" | "update_owners">> = {},
+  ) => ({
+    name: "codex",
+    deployments: [pluginDeployment],
+    update_owner_ids: update ? ["plugin:codex@official"] : [],
+    update_owners: update
+      ? [
+          {
+            owner_id: "plugin:codex@official",
+            latest_commit: null,
+            latest_commit_at: null,
+            plugin_scope: update.scope ?? "user",
+            plugin_project_path: update.project ?? null,
+          },
+        ]
+      : [],
+    ...extra,
+  });
+  const everywhere = { skillName: "codex", scope: "global", projectPath: null } as const;
+
+  it("offers a user-scope plugin update in every scope with the plugin id and scope", () => {
+    const skill = pluginSkill({ scope: "user" });
+    const inProject = { skillName: "codex", scope: "project", projectPath: "/work/a" } as const;
+    for (const selection of [everywhere, inProject]) {
+      expect(skillUpdateAvailability(skill, selection)).toEqual({
+        available: true,
+        plugin: { plugin_id: "codex@official", scope: "user", project_path: null },
+      });
+    }
+  });
+
+  it("offers a project plugin update only inside its own project", () => {
+    const skill = pluginSkill({ scope: "project", project: "/work/a" });
+    const own = skillUpdateAvailability(skill, {
+      skillName: "codex",
+      scope: "project",
+      projectPath: "/work/a",
+    });
+    expect(own).toMatchObject({ available: true, plugin: { project_path: "/work/a" } });
+    expect(
+      skillUpdateAvailability(skill, {
+        skillName: "codex",
+        scope: "project",
+        projectPath: "/work/b",
+      }).available,
+    ).toBe(false);
+    expect(skillUpdateAvailability(skill, everywhere).available).toBe(false);
+  });
+
+  it("does not offer an update for a plugin without one", () => {
+    expect(skillUpdateAvailability(pluginSkill(null), everywhere)).toEqual({
+      available: false,
+      reason: "The selected scope has no managed update owner.",
+    });
+  });
+
+  it("keeps the more-than-one-source message when a plugin and a skills.sh copy both have updates", () => {
+    const skill = pluginSkill(
+      { scope: "user" },
+      {
+        deployments: [pluginDeployment, deployment("sh", "owner:v1/global/codex")],
+        update_owner_ids: ["plugin:codex@official", "owner:v1/global/codex"],
+        update_owners: [
+          {
+            owner_id: "plugin:codex@official",
+            latest_commit: null,
+            latest_commit_at: null,
+            plugin_scope: "user",
+          },
+          { owner_id: "owner:v1/global/codex", latest_commit: null, latest_commit_at: null },
+        ],
+      },
+    );
+    const result = skillUpdateAvailability(skill, everywhere);
+    expect(result).toMatchObject({ available: false });
+    expect(result.available === false && result.reason).toContain("more than one source");
+  });
+
+  it("keeps plugin owners out of the targets updateSkill would run", () => {
+    expect(skillUpdateOwnerTargets(pluginSkill({ scope: "user" }))).toEqual([]);
+    expect(skillPluginUpdateTargets(pluginSkill({ scope: "user" }))).toHaveLength(1);
   });
 });

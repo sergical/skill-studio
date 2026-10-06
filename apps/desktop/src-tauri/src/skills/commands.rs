@@ -421,11 +421,15 @@ mod tests {
                     owner_id: "skills-sh/global".to_string(),
                     latest_commit: Some("aaa1111".to_string()),
                     latest_commit_at: None,
+                    plugin_scope: None,
+                    plugin_project_path: None,
                 },
                 super::super::skill_dto::OwnerUpdateInfo {
                     owner_id: "dotagents/global".to_string(),
                     latest_commit: Some("bbb2222".to_string()),
                     latest_commit_at: None,
+                    plugin_scope: None,
+                    plugin_project_path: None,
                 },
             ],
             update_commit: Some("aaa1111".to_string()),
@@ -2577,8 +2581,9 @@ pub async fn update_all_skills(
 
 /// Runs one Claude-Code-only plugin lifecycle action: checks `harness`,
 /// holds the write lease for the CLI call, then requests a snapshot rebuild.
-/// Shared by [`set_plugin_enabled`] and [`uninstall_plugin`], which differ
-/// only in which `claude plugin` subcommand `action` runs.
+/// Shared by [`set_plugin_enabled`], [`update_plugin`] and
+/// [`uninstall_plugin`], which differ only in which `claude plugin`
+/// subcommand `action` runs.
 fn run_plugin_lifecycle_action(
     harness: &str,
     app: &tauri::AppHandle,
@@ -2611,6 +2616,33 @@ pub async fn set_plugin_enabled(
                 &RealCommandRunner::new(),
                 &plugin_id,
                 enabled,
+            )
+        })
+    })
+    .await
+}
+
+/// Update one install of a Claude Code plugin (`claude plugin update
+/// <plugin_id> -s <scope>`). `scope` and `project_path` are the install's own,
+/// as the snapshot's plugin update owner reports them. Claude Code applies
+/// the update to new sessions only.
+#[tauri::command]
+pub async fn update_plugin(
+    plugin_id: String,
+    harness: String,
+    scope: String,
+    project_path: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "update_plugin", move || {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        run_plugin_lifecycle_action(&harness, &app, &home, || {
+            super::skill_plugin_lifecycle::update_plugin_with(
+                &RealCommandRunner::new(),
+                &plugin_id,
+                &scope,
+                project_path.as_deref().map(Path::new),
             )
         })
     })

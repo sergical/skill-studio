@@ -107,7 +107,7 @@ export function planBulkAction(skills: InstalledSkill[], action: BulkAction): Bu
 export function bulkUpdateTargets(skill: InstalledSkill): LifecycleTarget[] {
   return skillMutableLifecycleScopes(skill).flatMap((selection) => {
     const availability = skillUpdateAvailability(skill, selection);
-    return availability.available ? [availability.target] : [];
+    return availability.available && "target" in availability ? [availability.target] : [];
   });
 }
 

@@ -485,6 +485,7 @@ pub fn run() {
             skills::skill_invocation::set_skills_invocation,
             skills::commands::set_plugin_enabled,
             skills::commands::uninstall_plugin,
+            skills::commands::update_plugin,
             // Event store: History and per-harness materialize disable
             skills::event_commands::list_skill_events,
             skills::event_commands::restore_skill_event,

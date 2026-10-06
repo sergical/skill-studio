@@ -27,12 +27,14 @@ import {
   repairSkillLink,
   restoreMovedDeployment,
   setPluginEnabled,
+  updatePlugin,
   setSkillsInvocation,
   unparkSkill,
 } from "../../lib/skill-api";
 import {
   lifecycleTargetForDeployment,
   lifecycleTargetForSkill,
+  pluginUpdatedToast,
 } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
 import type { TurnOffAction } from "./skill-agent-off-model";
@@ -213,6 +215,14 @@ export function useLocationActions(
         return runWithErrorToast(
           enabled ? "Couldn't enable plugin" : "Couldn't disable plugin",
           () => setPluginEnabled(deployment.plugin!.id, deployment.agent, enabled),
+        );
+      }
+      case "update-plugin": {
+        const { deployment, target } = action;
+        return runWithErrorToast(
+          "Couldn't update plugin",
+          () => updatePlugin(target.plugin_id, deployment.agent, target.scope, target.project_path),
+          () => addToast(pluginUpdatedToast(target.plugin_id)),
         );
       }
       case "uninstall-plugin":

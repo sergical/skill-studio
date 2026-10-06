@@ -17,16 +17,20 @@ import {
   removeSkill,
   unforkSkill,
   unparkSkill,
+  updatePlugin,
 } from "../../lib/skill-api";
 import {
   lifecycleTargetForDeployment,
   lifecycleTargetForPark,
   lifecycleTargetForSkill,
+  pluginUpdatedToast,
   pullUpstreamToast,
   skillCanPark,
   skillRemovalBlockedReason,
   skillRemovalChoices,
+  skillPluginUpdateTargets,
   skillRemovalEmptiesSkill,
+  skillUpdateOwnerTargets,
 } from "../../lib/skill-lifecycle-target";
 import type { SkillRemovalChoice } from "../../lib/skill-lifecycle-target";
 import type { InstalledSkill, Toast } from "@skill-studio/lib";
@@ -248,7 +252,14 @@ export function useSkillPageActions(
     });
 
   const doUpdate = () =>
-    runAction(addToast, setIsUpdating, "Update failed", () => guard.requestUpdate(skill));
+    runAction(addToast, setIsUpdating, "Update failed", async () => {
+      if (skillUpdateOwnerTargets(skill).length > 0) await guard.requestUpdate(skill);
+      for (const { plugin_id, scope, project_path } of skillPluginUpdateTargets(skill)) {
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each plugin update takes the write lease, so the calls must not overlap
+        await updatePlugin(plugin_id, "Claude Code", scope, project_path);
+        addToast(pluginUpdatedToast(plugin_id));
+      }
+    });
 
   const doRemove = async (choice: SkillRemovalChoice) => {
     const confirmed = await ask(choice.confirmMessage, {

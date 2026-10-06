@@ -1,6 +1,6 @@
 // ============================================================================
 // Skills Module - skill_plugin_lifecycle
-// Claude Code plugin actions: disable, enable, and uninstall a plugin
+// Claude Code plugin actions: disable, enable, update, and uninstall a plugin
 // through the scriptable `claude plugin` CLI. Every skill a plugin ships
 // moves together, since Claude Code tracks the switch per plugin, not per
 // skill. Codex has no plugin CLI - plugins there are managed with
@@ -36,6 +36,19 @@ pub fn plugin_uninstall_args(plugin_id: &str) -> Vec<String> {
     ]
 }
 
+/// `claude plugin update <plugin_id> -s <scope>`. Never passes `-y` or
+/// `--accept-command`: running a command a marketplace declares is the
+/// person's decision, made in a terminal.
+pub fn plugin_update_args(plugin_id: &str, scope: &str) -> Vec<String> {
+    vec![
+        "plugin".to_string(),
+        "update".to_string(),
+        plugin_id.to_string(),
+        "-s".to_string(),
+        scope.to_string(),
+    ]
+}
+
 /// True for `<plugin>@<marketplace>`, both halves non-empty and built only
 /// from the characters a plugin cache directory name allows (letters,
 /// digits, `.`, `_`, `-`) - the same id core's `PluginSourceDto` and the
@@ -65,7 +78,25 @@ fn friendly_error(message: String) -> String {
     }
 }
 
-/// Both Tauri commands in this module refuse to run against anything but
+/// Rewrites the CLI's refusal to run a marketplace-declared command without
+/// confirmation (`-y`, or a TTY) into the next step for the person.
+fn update_error(plugin_id: &str, message: String) -> String {
+    let lower = message.to_lowercase();
+    let needs_confirmation = lower.contains("--yes")
+        || lower.contains(" -y")
+        || lower.contains("--accept-command")
+        || lower.contains("confirm")
+        || lower.contains("tty");
+    if needs_confirmation {
+        format!(
+            "This update runs a command from the plugin's marketplace that needs your OK. Run `claude plugin update {plugin_id}` in a terminal to review it."
+        )
+    } else {
+        friendly_error(message)
+    }
+}
+
+/// The Tauri commands in this module refuse to run against anything but
 /// Claude Code: Codex has no plugin CLI, and plugins there are managed with
 /// `/plugins` inside a Codex session instead.
 pub fn require_claude_code_harness(harness: &str) -> Result<(), String> {
@@ -110,19 +141,50 @@ pub fn uninstall_plugin_with(runner: &dyn CommandRunner, plugin_id: &str) -> Res
         .map_err(friendly_error)
 }
 
+/// Runs `claude plugin update` for one install of a plugin. `scope` is the
+/// install's own scope from `installed_plugins.json`; a project or local
+/// install runs in its project folder, where Claude Code resolves it.
+pub fn update_plugin_with(
+    runner: &dyn CommandRunner,
+    plugin_id: &str,
+    scope: &str,
+    project_path: Option<&Path>,
+) -> Result<(), String> {
+    require_valid_plugin_id(plugin_id)?;
+    match scope {
+        "user" => {}
+        "project" | "local" => {
+            if project_path.is_none() {
+                return Err(format!(
+                    "The {scope} install of {plugin_id} has no project folder to update from."
+                ));
+            }
+        }
+        "managed" => return Err("This plugin is managed by your organization.".to_string()),
+        other => return Err(format!("Unknown plugin scope: {other}")),
+    }
+    let cwd = if scope == "user" { None } else { project_path };
+    runner
+        .run(CLAUDE_CLI, &plugin_update_args(plugin_id, scope), cwd)
+        .map_err(|message| update_error(plugin_id, message))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::sync::Mutex;
 
     #[derive(Default)]
     struct FakeRunner {
         calls: Mutex<Vec<(String, Vec<String>)>>,
+        cwds: Mutex<Vec<Option<PathBuf>>>,
         fail: Option<String>,
     }
 
     impl CommandRunner for FakeRunner {
-        fn run(&self, program: &str, args: &[String], _cwd: Option<&Path>) -> Result<(), String> {
+        fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> Result<(), String> {
+            self.cwds.lock().unwrap().push(cwd.map(Path::to_path_buf));
             self.calls
                 .lock()
                 .unwrap()
@@ -194,5 +256,105 @@ mod tests {
         assert!(require_claude_code_harness("Claude Code").is_ok());
         let err = require_claude_code_harness("Codex").unwrap_err();
         assert!(err.contains("Claude Code"));
+    }
+
+    #[test]
+    fn user_update_runs_claude_plugin_update_in_user_scope_without_yes() {
+        let runner = FakeRunner::default();
+        update_plugin_with(&runner, "sentry@claude-plugins-official", "user", None).unwrap();
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].0, "claude");
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "plugin",
+                "update",
+                "sentry@claude-plugins-official",
+                "-s",
+                "user"
+            ]
+        );
+        assert!(!calls[0].1.iter().any(|a| a == "-y" || a == "--yes"));
+        assert_eq!(runner.cwds.lock().unwrap()[0], None);
+    }
+
+    #[test]
+    fn project_update_runs_in_the_install_project_folder() {
+        let runner = FakeRunner::default();
+        let project = Path::new("/Users/x/src/skills");
+        update_plugin_with(
+            &runner,
+            "plugin-dev@claude-plugins-official",
+            "project",
+            Some(project),
+        )
+        .unwrap();
+        assert_eq!(
+            runner.calls.lock().unwrap()[0].1,
+            vec![
+                "plugin",
+                "update",
+                "plugin-dev@claude-plugins-official",
+                "-s",
+                "project"
+            ]
+        );
+        assert_eq!(runner.cwds.lock().unwrap()[0].as_deref(), Some(project));
+    }
+
+    #[test]
+    fn managed_update_is_refused_without_running_anything() {
+        let runner = FakeRunner::default();
+        let err = update_plugin_with(&runner, "codex@anthropics", "managed", None).unwrap_err();
+        assert_eq!(err, "This plugin is managed by your organization.");
+        assert!(runner.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn project_update_without_a_project_folder_runs_nothing() {
+        let runner = FakeRunner::default();
+        assert!(update_plugin_with(&runner, "codex@anthropics", "project", None).is_err());
+        assert!(runner.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn update_with_an_invalid_plugin_id_runs_nothing() {
+        let runner = FakeRunner::default();
+        let err = update_plugin_with(&runner, "codex@", "user", None).unwrap_err();
+        assert!(err.contains("plugin"));
+        assert!(runner.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn update_that_needs_marketplace_command_confirmation_points_to_the_terminal() {
+        let runner = FakeRunner {
+            fail: Some("This update runs an install command. Pass --yes to accept it.".to_string()),
+            ..Default::default()
+        };
+        let err = update_plugin_with(&runner, "codex@anthropics", "user", None).unwrap_err();
+        assert_eq!(
+            err,
+            "This update runs a command from the plugin's marketplace that needs your OK. Run `claude plugin update codex@anthropics` in a terminal to review it."
+        );
+    }
+
+    #[test]
+    fn update_with_claude_missing_names_the_missing_binary() {
+        let runner = FakeRunner {
+            fail: Some("No such file or directory (os error 2)".to_string()),
+            ..Default::default()
+        };
+        let err = update_plugin_with(&runner, "codex@anthropics", "user", None).unwrap_err();
+        assert!(err.contains("`claude`"));
+    }
+
+    #[test]
+    fn an_unrelated_update_failure_keeps_its_message() {
+        let runner = FakeRunner {
+            fail: Some("Plugin not found in marketplace".to_string()),
+            ..Default::default()
+        };
+        let err = update_plugin_with(&runner, "codex@anthropics", "user", None).unwrap_err();
+        assert_eq!(err, "Plugin not found in marketplace");
     }
 }

@@ -29,6 +29,8 @@ import type {
   LifecycleTarget,
 } from "@skill-studio/lib";
 import type { TooltipLine } from "../ui/TooltipControl";
+import { skillPluginUpdateTargets } from "../../lib/skill-lifecycle-target";
+import type { PluginUpdateTarget } from "../../lib/skill-lifecycle-target";
 
 export type StatusLevel = "error" | "warning" | "off";
 
@@ -62,6 +64,7 @@ export type LocationAction =
   | { kind: "make-independent-copy"; deployment: Deployment; scopeLabel: string }
   | { kind: "restore-moved"; deployment: Deployment }
   | { kind: "set-plugin-enabled"; deployment: Deployment; enabled: boolean }
+  | { kind: "update-plugin"; deployment: Deployment; target: PluginUpdateTarget }
   | { kind: "uninstall-plugin"; deployment: Deployment }
   | { kind: "park"; deployment: Deployment; scopeLabel: string; projectPath: string | null }
   | { kind: "unpark"; deployment: Deployment }
@@ -132,6 +135,8 @@ interface BaseLocationRow {
   invocation: InvocationPolicy | null;
   /** Set when a parked copy came back at this live copy's origin: the left-behind fix, not Park, acts on the pair. */
   leftBehindLive?: true;
+  /** Set on a plugin row whose plugin has an update to install. */
+  pluginUpdates?: PluginUpdateTarget[];
 }
 
 /** The shared-folder row - its `harness` is the literal `"shared"`, never a real `AgentId`. */
@@ -543,6 +548,15 @@ function scopeLabelOf(key: string): string {
  * agents that read the Universal folder natively with no deployment of their
  * own, and each row's/folder's dot and tooltip.
  */
+function pluginUpdatesFor(skill: InstalledSkill, deployment: Deployment) {
+  const pluginId = deployment.plugin?.id;
+  if (!pluginId || deployment.agent !== "Claude Code") return {};
+  const pluginUpdates = skillPluginUpdateTargets(skill).filter(
+    (target) => target.plugin_id === pluginId,
+  );
+  return pluginUpdates.length > 0 ? { pluginUpdates } : {};
+}
+
 export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
   const byKey = new Map<string, Deployment[]>();
   for (const d of skill.deployments) {
@@ -623,6 +637,7 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
         switchOn: !d.disabled,
         invocation: d.invocation ?? skill.invocation,
         ...liveInPair(d),
+        ...pluginUpdatesFor(skill, d),
       };
     });
 
@@ -1045,6 +1060,16 @@ export function rowMenu(
         },
         false,
       );
+      for (const target of row.pluginUpdates ?? []) {
+        const where = target.project_path ? ` in ${homeRelativePath(target.project_path)}` : "";
+        push(
+          {
+            label: `Update the ${name} plugin${where}`,
+            action: { kind: "update-plugin", deployment: row.deployment, target },
+          },
+          false,
+        );
+      }
       push(
         {
           label: `Uninstall the ${name} plugin…`,

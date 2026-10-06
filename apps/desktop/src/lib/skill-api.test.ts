@@ -227,6 +227,7 @@ const EXPECTED_WRAPPER_COMMANDS = {
   unparkSkills: { kind: "command", command: "unpark_skills", registeredInLibRs: true },
   setPluginEnabled: { kind: "command", command: "set_plugin_enabled", registeredInLibRs: true },
   uninstallPlugin: { kind: "command", command: "uninstall_plugin", registeredInLibRs: true },
+  updatePlugin: { kind: "command", command: "update_plugin", registeredInLibRs: true },
   listSkillEvents: { kind: "command", command: "list_skill_events", registeredInLibRs: true },
   restoreSkillEvent: {
     kind: "command",

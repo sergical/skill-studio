@@ -327,6 +327,16 @@ export interface OwnerUpdateInfo {
   owner_id: string;
   latest_commit: string | null;
   latest_commit_at: string | null;
+  /**
+   * For a `plugin:<plugin>@<marketplace>` owner: the install's scope
+   * (`user`, `project`, `local`, `managed`) from Claude Code's
+   * `installed_plugins.json`. `None` for every other owner.
+   */
+  plugin_scope?: string | null;
+  /**
+   * For a project or local plugin install: the project it belongs to.
+   */
+  plugin_project_path?: string | null;
 }
 /**
  * Where a skill is deployed on disk for a specific agent

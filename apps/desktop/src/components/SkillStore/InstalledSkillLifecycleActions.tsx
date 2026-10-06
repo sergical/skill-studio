@@ -17,9 +17,10 @@ import {
 } from "@skill-studio/ui";
 import { ProjectDirectorySelect } from "./ProjectDirectorySelect";
 import { ScopeToggleGroup } from "./ScopeToggleGroup";
-import { removeSkill } from "../../lib/skill-api";
+import { removeSkill, updatePlugin } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 import {
+  pluginUpdatedToast,
   skillLifecycleScopeSelection,
   skillMutableLifecycleScopes,
   skillRemovalAvailability,
@@ -134,6 +135,13 @@ function useSkillLifecycleMutations(
     if (!updateAvailability?.available || !installed) return;
     setIsUpdating(true);
     try {
+      if ("plugin" in updateAvailability) {
+        const { plugin_id, scope, project_path } = updateAvailability.plugin;
+        await updatePlugin(plugin_id, "Claude Code", scope, project_path);
+        addToast(pluginUpdatedToast(plugin_id));
+        setIsUpdating(false);
+        return;
+      }
       await guard.requestUpdate(installed, {
         scopeTarget: updateAvailability.target,
         onFinished: ({ success, error }) =>

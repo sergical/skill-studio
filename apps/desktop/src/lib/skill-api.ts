@@ -747,6 +747,20 @@ export async function setPluginEnabled(
 }
 
 /**
+ * Update one install of a Claude Code plugin (`claude plugin update <id> -s
+ * <scope>`); `scope` and `projectPath` are the install's own. Claude Code
+ * applies it to new sessions only. Refused for any other harness.
+ */
+export async function updatePlugin(
+  pluginId: string,
+  harness: string,
+  scope: string,
+  projectPath: string | null,
+): Promise<void> {
+  return callCommand("update_plugin", { pluginId, harness, scope, projectPath });
+}
+
+/**
  * Uninstall a Claude Code plugin (`claude plugin uninstall <id> -s user -y`),
  * removing every skill it ships. Refused for any other harness.
  */
