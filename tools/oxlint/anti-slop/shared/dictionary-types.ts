@@ -141,6 +141,42 @@ function indexSignatureKeyKind(member: ESTree.TSIndexSignature): string {
 	return parameter === undefined ? "" : primitiveKeyKind(parameter.typeAnnotation.typeAnnotation);
 }
 
+const SAFE_VALUE_KINDS = new Set([
+	"TSStringKeyword",
+	"TSNumberKeyword",
+	"TSBooleanKeyword",
+	"TSBigIntKeyword",
+	"TSSymbolKeyword",
+	"TSNullKeyword",
+	"TSUndefinedKeyword",
+	"TSNeverKeyword",
+	"TSLiteralType",
+	"TSTemplateLiteralType",
+]);
+
+/**
+ * An override hides an inherited signature only when its value is provably
+ * safe. A value the classifier cannot read (a conditional, an unresolved type
+ * parameter) must keep the inherited evidence, or an unsafe contract slips by.
+ */
+function isProvablySafeValue(
+	type: ESTree.TSType,
+	substitutions: TypeSubstitutionEnvironment,
+): boolean {
+	const unwrapped = unwrapTransparentType(type);
+	if (SAFE_VALUE_KINDS.has(unwrapped.type)) return true;
+	if (unwrapped.type === "TSUnionType")
+		return unwrapped.types.every((member) => isProvablySafeValue(member, substitutions));
+	if (unwrapped.type !== "TSTypeReference") return false;
+	const name = typeReferenceName(unwrapped);
+	const substitution = name === null ? undefined : substitutions.get(name);
+	return (
+		substitution !== undefined &&
+		substitution !== UNRESOLVED_TYPE_PARAMETER &&
+		isProvablySafeValue(substitution.type, substitution.substitutions)
+	);
+}
+
 function isNeverType(type: ESTree.TSType): boolean {
 	return unwrapTransparentType(type).type === "TSNeverKeyword";
 }
@@ -732,7 +768,10 @@ function interfaceDictionaryValueTypes(
 					: [],
 		);
 		const directKeyKinds = new Set(
-			directValueTypes.map((entry) => entry.keyKind).filter((kind) => kind !== ""),
+			directValueTypes
+				.filter((entry) => isProvablySafeValue(entry.value.type, entry.value.substitutions))
+				.map((entry) => entry.keyKind)
+				.filter((kind) => kind !== ""),
 		);
 		const inheritedValueTypes = declaration.extends.flatMap((heritage): readonly KeyedValue[] => {
 			if (heritage.expression.type !== "Identifier") return [];

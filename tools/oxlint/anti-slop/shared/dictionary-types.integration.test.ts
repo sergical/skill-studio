@@ -800,4 +800,20 @@ describe("anti-slop interface dictionary rules", () => {
 
 		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
 	});
+
+	it("keeps an inherited unsafe signature when the override value is a conditional the rule cannot classify", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived<T> extends Base<unknown> {
+				[key: string]: T extends string ? string : unknown;
+			}
+			const derived: Derived<number> = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
 });
