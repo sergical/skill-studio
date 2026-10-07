@@ -20,6 +20,10 @@ const RETRY_INTERVAL: Duration = Duration::from_millis(20);
 const STALE_TAKEOVER_TIMEOUT: Duration = Duration::from_millis(500);
 const STALE_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
+/// A lock file untouched for this long is safe to sweep. Every acquire
+/// refreshes the file's modified time, so a root in use never gets this old.
+const SWEEP_MIN_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// `LeaseProvider` backed by one advisory-locked file per canonical root,
 /// under `lease_root`.
 pub struct FileLease {
@@ -35,31 +39,28 @@ impl FileLease {
         FileLease { lease_root }
     }
 
-    /// Removes every lock file in `lease_root` that no process holds, and
-    /// returns how many it removed.
+    /// Removes lock files in `lease_root` that no process holds and that no
+    /// lease touched for [`SWEEP_MIN_AGE`], and returns how many it removed.
     ///
-    /// The release path already removes its own file; this catches files an
-    /// earlier build left behind, or that a crash or a simultaneous release
-    /// kept. A held file fails the exclusive try-lock and stays, so the sweep
-    /// is safe to run while other processes lease.
+    /// A lease never deletes its own file on release: a client that kept the
+    /// old file open, or an older build that never rechecks the file it
+    /// locked, would then share a lease with a client on the replacement
+    /// file. Only this sweep deletes, and only files so old that no client in
+    /// the middle of an acquire still has them open. Meant for app startup.
     pub fn sweep_unheld(&self) -> usize {
+        self.sweep_older_than(SWEEP_MIN_AGE)
+    }
+
+    fn sweep_older_than(&self, min_age: Duration) -> usize {
         let Ok(entries) = fs::read_dir(&self.lease_root) else {
             return 0;
         };
-        let mut removed = 0;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_none_or(|ext| ext != "lock") {
-                continue;
-            }
-            let Ok(file) = OpenOptions::new().read(true).write(true).open(&path) else {
-                continue;
-            };
-            if file.try_lock().is_ok() && fs::remove_file(&path).is_ok() {
-                removed += 1;
-            }
-        }
-        removed
+        entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "lock"))
+            .filter(|path| remove_if_idle(path, min_age, || {}))
+            .count()
     }
 
     fn lock_path(&self, key: &LeaseKey) -> PathBuf {
@@ -71,41 +72,37 @@ impl FileLease {
 /// Keys and open, locked files held for the lifetime of the handle.
 ///
 /// Invariant: dropping the handle drops every `File`, which releases each
-/// advisory lock; no explicit unlock call is needed. Before that, `Drop`
-/// removes each lock file nobody else holds, so the lease folder holds one
-/// file per lease in use rather than one per root ever leased.
+/// advisory lock; no explicit unlock call is needed. The lock files stay in
+/// place: the same root always maps to the same file, and the startup sweep
+/// removes the ones nobody has used for a long time.
 struct FileLeaseHandle {
     keys: Vec<LeaseKey>,
     mode: LeaseMode,
-    /// Kept so the advisory locks release when this handle drops, and so
-    /// `Drop` can unlink the path.
-    held: Vec<(PathBuf, File)>,
+    /// Kept so the advisory locks release when this handle drops.
+    _held: Vec<File>,
 }
 
-impl Drop for FileLeaseHandle {
-    fn drop(&mut self) {
-        for (path, file) in &self.held {
-            remove_if_unheld(path, file);
-        }
-    }
-}
-
-/// Unlinks `path` when `file` is the only open, locked holder of it.
+/// Locks `path` and unlinks it when nobody holds it, it has sat idle for
+/// `min_age`, and it is still the file we locked. Returns whether it unlinked.
 ///
-/// Deleting a lock file is safe only together with the inode check in
-/// `acquire`: a process that opened `path` before this unlink and locks it
-/// afterwards holds an orphan inode, sees that `path` no longer names its
-/// file, and reopens. The exclusive try-lock fails while any other holder is
-/// alive, so a file in use is never removed.
-#[cfg(unix)]
-fn remove_if_unheld(path: &Path, file: &File) {
-    if file.try_lock().is_ok() {
-        let _ = fs::remove_file(path);
+/// `after_lock` runs once the lock is ours, before the checks; a test uses it
+/// to replace the file at that moment. The checks look at the open file, not
+/// the path, so a replacement that other clients lease is never the one
+/// removed: it names a different inode, and is young.
+fn remove_if_idle(path: &Path, min_age: Duration, after_lock: impl FnOnce()) -> bool {
+    let Ok(file) = OpenOptions::new().read(true).write(true).open(path) else {
+        return false;
+    };
+    if !matches!(try_lock(&file, LeaseMode::Exclusive), Ok(true)) {
+        return false;
     }
+    after_lock();
+    let idle = file
+        .metadata()
+        .and_then(|meta| meta.modified())
+        .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age >= min_age));
+    idle && names_open_file(path, &file) && fs::remove_file(path).is_ok()
 }
-
-#[cfg(not(unix))]
-fn remove_if_unheld(_path: &Path, _file: &File) {}
 
 /// Whether `path` still names the very file `file` has open. False when the
 /// path was unlinked, or unlinked and recreated, since `file` was opened.
@@ -227,11 +224,13 @@ impl LeaseProvider for FileLease {
                 match try_lock(&file, mode) {
                     Ok(true) => {
                         if !names_open_file(&path, &file) {
-                            // A releasing holder unlinked this file while we
-                            // waited on it; the lock we got guards an orphan.
+                            // A sweep unlinked this file between our open
+                            // and our lock; the lock we got guards an orphan.
                             file = open_lock_file(&path)?;
                             continue;
                         }
+                        // Keeps a root in use young, out of the sweep's reach.
+                        let _ = file.set_modified(SystemTime::now());
                         if mode == LeaseMode::Exclusive {
                             let _ = write_holder(&file);
                         }
@@ -276,13 +275,13 @@ impl LeaseProvider for FileLease {
                     Err(e) => return Err(CoreError::io(&path, e)),
                 }
             }
-            files.push((path, file));
+            files.push(file);
         }
 
         Ok(Box::new(FileLeaseHandle {
             keys: sorted_keys,
             mode,
-            held: files,
+            _held: files,
         }))
     }
 }
@@ -549,80 +548,129 @@ mod tests {
         fs::read_dir(dir).unwrap().count()
     }
 
+    /// Makes the lock file for `name` look untouched for two days.
+    fn age_lock_file(lease: &FileLease, name: &str) -> PathBuf {
+        let path = lease.lock_path(&key(name));
+        let file = OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_modified(SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60))
+            .unwrap();
+        path
+    }
+
+    #[cfg(unix)]
     #[test]
-    fn lease_folder_stays_empty_across_many_acquire_release_cycles_of_distinct_keys() {
+    fn one_root_keeps_one_lock_file_and_inode_across_many_acquire_release_cycles() {
+        use std::os::unix::fs::MetadataExt;
         let dir = tempfile::tempdir().unwrap();
         let lease = FileLease::new(dir.path().to_path_buf());
-        for n in 0..50 {
+        let keys = [key("busy-root")];
+        let mut inodes = Vec::new();
+        for n in 0..20 {
             let mode = if n % 2 == 0 {
                 LeaseMode::Shared
             } else {
                 LeaseMode::Exclusive
             };
-            let handle = lease
-                .acquire(
-                    &[key(&format!("root-{n}"))],
-                    mode,
-                    Duration::from_millis(100),
-                )
-                .unwrap();
-            drop(handle);
+            drop(
+                lease
+                    .acquire(&keys, mode, Duration::from_millis(100))
+                    .unwrap(),
+            );
+            inodes.push(fs::metadata(lease.lock_path(&keys[0])).unwrap().ino());
         }
-        assert_eq!(
-            lock_file_count(dir.path()),
-            0,
-            "every released lease should remove its lock file"
+        assert_eq!(lock_file_count(dir.path()), 1);
+        assert!(
+            inodes.windows(2).all(|pair| pair[0] == pair[1]),
+            "release must not delete the lock file: a client holding the old file \
+             would share the lease with one locking a replacement; inodes {inodes:?}"
         );
     }
 
     #[test]
-    fn a_lock_file_survives_while_another_shared_holder_remains() {
+    fn sweep_keeps_a_young_unheld_lock_file_and_removes_an_old_one() {
         let dir = tempfile::tempdir().unwrap();
         let lease = FileLease::new(dir.path().to_path_buf());
-        let keys = [key("shared-root")];
-        let first = lease
-            .acquire(&keys, LeaseMode::Shared, Duration::from_millis(100))
-            .unwrap();
-        let second = lease
-            .acquire(&keys, LeaseMode::Shared, Duration::from_millis(100))
-            .unwrap();
-        drop(first);
-        assert_eq!(lock_file_count(dir.path()), 1);
-        // The remaining holder still excludes a writer.
-        assert!(lease
-            .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
-            .is_err());
-        drop(second);
-        assert_eq!(lock_file_count(dir.path()), 0);
+        drop(
+            lease
+                .acquire(&[key("young")], LeaseMode::Shared, Duration::ZERO)
+                .unwrap(),
+        );
+        drop(
+            lease
+                .acquire(&[key("old")], LeaseMode::Shared, Duration::ZERO)
+                .unwrap(),
+        );
+        let old_path = age_lock_file(&lease, "old");
+        assert_eq!(lease.sweep_unheld(), 1);
+        assert!(!old_path.exists());
+        assert!(lease.lock_path(&key("young")).exists());
     }
 
     #[test]
-    fn sweep_removes_unheld_lock_files_and_keeps_a_held_one() {
+    fn sweep_keeps_an_old_lock_file_that_a_process_holds() {
         let dir = tempfile::tempdir().unwrap();
         let lease = FileLease::new(dir.path().to_path_buf());
-        for n in 0..5 {
-            fs::write(dir.path().join(format!("{n:064}.lock")), "99999|0").unwrap();
-        }
         let held = lease
-            .acquire(&[key("held-root")], LeaseMode::Exclusive, Duration::ZERO)
+            .acquire(&[key("held-root")], LeaseMode::Shared, Duration::ZERO)
             .unwrap();
-        assert_eq!(lease.sweep_unheld(), 5);
-        assert_eq!(lock_file_count(dir.path()), 1, "the held file must stay");
+        let path = age_lock_file(&lease, "held-root");
+        assert_eq!(lease.sweep_unheld(), 0);
+        assert!(path.exists());
         drop(held);
-        assert_eq!(lock_file_count(dir.path()), 0);
     }
 
     #[test]
-    fn acquire_after_a_sweep_still_excludes_the_other_holder() {
+    fn acquire_makes_an_old_lock_file_young_again() {
         let dir = tempfile::tempdir().unwrap();
         let lease = FileLease::new(dir.path().to_path_buf());
-        let keys = [key("swept-root")];
-        let held = lease
-            .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
-            .unwrap();
-        lease.sweep_unheld();
-        let busy = lease.acquire(&keys, LeaseMode::Exclusive, Duration::ZERO);
-        assert!(matches!(busy, Err(e) if e.code == ErrorCode::ScopeBusy));
-        drop(held);
+        let keys = [key("returning-root")];
+        drop(
+            lease
+                .acquire(&keys, LeaseMode::Shared, Duration::ZERO)
+                .unwrap(),
+        );
+        age_lock_file(&lease, "returning-root");
+        drop(
+            lease
+                .acquire(&keys, LeaseMode::Shared, Duration::ZERO)
+                .unwrap(),
+        );
+        assert_eq!(
+            lease.sweep_unheld(),
+            0,
+            "a root leased today must not be swept"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sweep_leaves_a_replacement_lock_file_that_a_client_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = FileLease::new(dir.path().to_path_buf());
+        let keys = [key("replaced-root")];
+        drop(
+            lease
+                .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
+                .unwrap(),
+        );
+        let path = age_lock_file(&lease, "replaced-root");
+
+        // The sweep has the old file open and locked. Meanwhile another
+        // process unlinks it and a client leases the replacement.
+        let mut replacement = None;
+        let removed = remove_if_idle(&path, Duration::from_secs(60), || {
+            fs::remove_file(&path).unwrap();
+            replacement = Some(
+                lease
+                    .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
+                    .unwrap(),
+            );
+        });
+
+        assert!(!removed, "the sweep must not unlink a file it did not lock");
+        assert!(path.exists(), "the replacement lock file must stay");
+        let second = lease.acquire(&keys, LeaseMode::Exclusive, Duration::ZERO);
+        assert!(matches!(second, Err(e) if e.code == ErrorCode::ScopeBusy));
+        drop(replacement);
     }
 }
