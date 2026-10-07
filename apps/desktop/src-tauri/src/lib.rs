@@ -404,16 +404,6 @@ pub fn run() {
             app.manage(skills::event_commands::EventStoreState(
                 std::sync::Mutex::new(event_store),
             ));
-            // Older builds left one lock file per root ever leased (tens of
-            // thousands). The sweep skips held and recently used files.
-            tauri::async_runtime::spawn_blocking(|| {
-                let lease_root = skills::core_runtime::data_root().join("leases");
-                let removed = skill_studio_host::FileLease::new(lease_root).sweep_unheld();
-                if removed > 0 {
-                    eprintln!("[lease] removed {removed} unheld lock files");
-                }
-            });
-
             // Reconciliation is filesystem work (unit 1.2's journal
             // reconcile), so it runs off the UI thread; every event command
             // already tolerates the store not being reconciled yet the same

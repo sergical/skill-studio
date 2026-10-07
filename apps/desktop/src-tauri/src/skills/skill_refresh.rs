@@ -575,6 +575,20 @@ pub async fn set_discovery_source(
     .await
 }
 
+/// The shared home lease a full rebuild needs. When a write holds it past the
+/// wait, the rebuild gives up, and skills go dirty again: the refresh loop
+/// clears the flag before it rebuilds, and an error alone would leave the
+/// snapshot stale until some later file event.
+fn acquire_rebuild_lease(
+    lease: &super::write_lease::WriteLease,
+    state: &SkillRefreshState,
+    home: &Path,
+) -> Result<super::write_lease::ScanLeaseGuard, String> {
+    lease
+        .acquire_scan_lease(home, &effective_project_paths(home))
+        .inspect_err(|_| state.mark_skills_dirty())
+}
+
 /// Build a full snapshot right now on the calling thread, store it, and emit
 /// `SNAPSHOT_EVENT`. Used both by the background loop's full-rebuild path and
 /// by commands that need the caller's next read to see fresh data (a new
@@ -587,8 +601,8 @@ pub fn rebuild_snapshot_now(
 ) -> Result<SkillSnapshot, String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     // Before `rebuild_lock`: see `ScanLeaseGuard` for the order.
-    let _scan_lease = super::write_lease::WriteLease::default()
-        .acquire_scan_lease(&home, &effective_project_paths(&home))?;
+    let _scan_lease =
+        acquire_rebuild_lease(&super::write_lease::WriteLease::default(), state, &home)?;
     let _guard = state
         .rebuild_lock
         .lock()
@@ -5168,6 +5182,58 @@ mod tests {
                 rebuild_lock_free,
                 "the reconcile held rebuild_lock while it waited for the home lease"
             );
+        });
+    }
+
+    /// Flow: an update holds the home lease past the rebuild's wait. The
+    /// refresh loop has already cleared `skills_dirty` when it calls the
+    /// rebuild. Expectation: the timed-out rebuild sets skills dirty again, so
+    /// the next tick retries with no file event, and once the update lets go
+    /// the same lease call succeeds. Failure it catches: a rebuild that only
+    /// returns the error, which leaves the snapshot stale until a file event.
+    /// (The loop needs a real `AppHandle`, so this covers the lease step it
+    /// calls; the loop's own `if skills_dirty` check is unchanged.)
+    #[test]
+    fn a_rebuild_that_times_out_on_the_home_lease_leaves_skills_dirty_for_the_next_tick() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let lease_root = tmp.path().join("leases");
+        let state = fixture_state();
+        let wait = std::time::Duration::from_millis(50);
+        let rebuild_lease = super::super::write_lease::WriteLease::with_lease_root_and_wait(
+            lease_root.clone(),
+            wait,
+        );
+        let update_lease = super::super::write_lease::WriteLease::with_lease_root(lease_root);
+
+        // The update runs on its own thread: a thread that holds the home
+        // lease never waits for it, so the rebuild would not time out here.
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let (update_lease, home) = (&update_lease, &home);
+            let update = scope.spawn(move || {
+                let guard = update_lease.try_acquire(home).unwrap();
+                held_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                drop(guard);
+            });
+            held_rx.recv().unwrap();
+
+            // The loop clears the flag before it rebuilds.
+            state.skills_dirty.store(false, Ordering::SeqCst);
+            let timed_out = acquire_rebuild_lease(&rebuild_lease, &state, home).is_err();
+            let dirty = state.is_skills_dirty();
+
+            release_tx.send(()).unwrap();
+            update.join().unwrap();
+            assert!(timed_out, "the rebuild got a lease a write held");
+            assert!(
+                dirty,
+                "a timed-out rebuild must leave skills dirty so the next tick retries"
+            );
+            assert!(acquire_rebuild_lease(&rebuild_lease, &state, home).is_ok());
         });
     }
 
