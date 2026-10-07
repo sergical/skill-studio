@@ -6,7 +6,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { Deployment, InstalledSkill, UpdateOutcome } from "@skill-studio/lib";
 import { updateAllTitle } from "../components/Home/home-inbox-data";
-import { requestUpdateAllStop, runHomeUpdateAll } from "./skillBatchUpdates";
+import {
+  getActiveUpdateAll,
+  requestUpdateAllStop,
+  runHomeUpdateAll,
+  startHomeUpdateAll,
+  stopHomeUpdateAll,
+} from "./skillBatchUpdates";
 import { newUpdateAllControl } from "./skillBatchUpdates";
 
 // Plain Node environment: `mockIPC` needs a `window` to hang its bridge off and `recordIpcCall`
@@ -193,5 +199,54 @@ describe("Home Update all cancel", () => {
     const cancel = payloads.find((call) => call.command === "cancel_update_all");
     expect(cancel?.payload).toMatchObject({ batchId: control.batchId });
     expect(calls).not.toContain("update_all_skills");
+  });
+
+  it("a_cancel_from_a_remounted_group_reaches_the_batch_that_started_it_or_the_loop_keeps_writing", async () => {
+    let releaseFork: () => void = () => {};
+    const forkHeld = new Promise<void>((resolve) => (releaseFork = resolve));
+    mockCommands(async (command) => {
+      if (command === "pull_fork_upstream") {
+        await forkHeld;
+        return pullResult;
+      }
+      return null;
+    });
+
+    const running = startHomeUpdateAll([
+      outdated("forked", "fork"),
+      outdated("alpha", "skills-sh"),
+    ]);
+    const batchId = getActiveUpdateAll()?.control.batchId;
+    // A remounted group knows nothing but the store, so it stops through the store.
+    await stopHomeUpdateAll();
+    releaseFork();
+    await running;
+
+    const cancel = payloads.find((call) => call.command === "cancel_update_all");
+    expect(batchId).toBeDefined();
+    expect(cancel?.payload).toMatchObject({ batchId });
+    expect(calls).not.toContain("update_all_skills");
+    expect(getActiveUpdateAll()).toBeNull();
+  });
+
+  it("a_second_update_all_while_one_runs_does_not_start_or_two_batches_write_the_same_skills", async () => {
+    let releaseFork: () => void = () => {};
+    const forkHeld = new Promise<void>((resolve) => (releaseFork = resolve));
+    mockCommands(async (command) => {
+      if (command === "pull_fork_upstream") {
+        await forkHeld;
+        return pullResult;
+      }
+      return null;
+    });
+    const updates = [outdated("forked", "fork")];
+
+    const first = startHomeUpdateAll(updates);
+    const second = await startHomeUpdateAll(updates);
+    releaseFork();
+    await first;
+
+    expect(second).toBeNull();
+    expect(calls.filter((command) => command === "pull_fork_upstream")).toHaveLength(1);
   });
 });
