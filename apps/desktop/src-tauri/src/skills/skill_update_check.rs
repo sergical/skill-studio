@@ -3542,11 +3542,9 @@ resolved_commit = "{commit}"
     #[cfg(unix)]
     #[test]
     fn the_real_fork_lookup_gives_up_on_a_gh_that_never_answers() {
-        use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         let gh_bin = tmp.path().join("gh");
-        fs::write(&gh_bin, "#!/bin/sh\nexec sleep 30\n").unwrap();
-        fs::set_permissions(&gh_bin, fs::Permissions::from_mode(0o755)).unwrap();
+        super::super::test_support::write_fake_executable(&gh_bin, "exec sleep 30");
         let lookup = GhForkLookup {
             gh_bin,
             timeout: Duration::from_millis(200),
