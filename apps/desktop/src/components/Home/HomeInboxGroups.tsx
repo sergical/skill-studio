@@ -4,7 +4,7 @@
 // header and rows, and the per-row actions (Fix, Compare, Park, Pull latest).
 // ============================================================================
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { Button, Collapsible, CollapsiblePanel, Progress } from "@skill-studio/ui";
 import { formatRelativeTime, formatTokens, shortSha } from "@skill-studio/lib";
@@ -18,7 +18,8 @@ import {
   skillsWithLocalEdits,
 } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
-import { runHomeUpdateAll } from "../../hooks/skillBatchUpdates";
+import { requestUpdateAllStop, runHomeUpdateAll } from "../../hooks/skillBatchUpdates";
+import type { UpdateAllControl } from "../../hooks/skillBatchUpdates";
 import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
 import { UpdateOverwritesEditsDialog } from "../SkillDetail/UpdateOverwritesEditsDialog";
 import { GroupHead } from "../SkillList/GroupHead";
@@ -37,6 +38,7 @@ import {
   rowAt,
   skillKey,
   updateAllFailureMessage,
+  updateAllTitle,
 } from "./home-inbox-data";
 import { HomeLeftBehindActions } from "./HomeLeftBehindActions";
 import { rowClickOpensSkill } from "./home-row-click";
@@ -548,9 +550,13 @@ function UpdatesGroup({
   const addToast = useAppStore((state) => state.addToast);
   const [editedSkills, setEditedSkills] = useState<InstalledSkill[]>([]);
   const [isCheckingEdits, setIsCheckingEdits] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const stopControl = useRef<UpdateAllControl>({ stopRequested: false });
   const isUpdatingAll = progress !== null || isCheckingEdits;
 
   const runUpdateAll = async (forkNames?: ReadonlySet<string>) => {
+    stopControl.current = { stopRequested: false };
+    setIsStopping(false);
     setProgress({ done: 0, total: 0, current: null });
     // `updateAllOutdatedSkills` catches every `pullFork`/`updateAllOwners`
     // rejection itself and folds it into `failures`, so this await never
@@ -560,17 +566,31 @@ function UpdatesGroup({
       updates,
       (done, total, current) => setProgress({ done, total, current }),
       forkNames,
+      stopControl.current,
     );
-    const { skillsAttempted, skillsSucceeded, failures } = tally;
+    const { failures } = tally;
     const conflictNote = conflictedSkillsNote(tally.conflicted ?? []);
     addToast({
-      type: failures > 0 || conflictNote ? "warning" : "success",
-      title: `Updated ${skillsSucceeded} of ${skillsAttempted} skill${skillsAttempted === 1 ? "" : "s"}`,
+      type: failures > 0 || conflictNote || tally.stopped ? "warning" : "success",
+      title: updateAllTitle(tally),
       message:
         [updateAllFailureMessage(tally), conflictNote].filter(Boolean).join(". ") || undefined,
     });
     // react-doctor-disable-next-line react-doctor/no-loading-flag-reset-outside-finally -- the React Compiler rejects try/finally here (react-hooks-js/todo); `updateAllOutdatedSkills` never rejects, so this always runs
     setProgress(null);
+  };
+
+  const handleStop = async () => {
+    setIsStopping(true);
+    try {
+      await requestUpdateAllStop(stopControl.current);
+    } catch (error) {
+      addToast({
+        type: "error",
+        title: "Could not stop Update all",
+        message: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
   };
 
   const handleUpdateAll = async () => {
@@ -629,6 +649,14 @@ function UpdatesGroup({
                 Updating {progress.current ?? "skills"}
                 {progress.total > 0 && ` · ${progress.done} of ${progress.total}`}
               </p>
+              <Button
+                variant="link"
+                className="h-auto self-start p-0 text-small"
+                onClick={handleStop}
+                disabled={isStopping}
+              >
+                {isStopping ? "Stopping…" : "Cancel"}
+              </Button>
             </div>
           )}
         </div>

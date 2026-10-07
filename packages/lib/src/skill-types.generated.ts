@@ -150,6 +150,14 @@ export type FixApplied = {
   event_id: string;
   kind: "frontmatter_repair";
 };
+/**
+ * Lexical skill name: the directory name that holds `SKILL.md`.
+ *
+ * Invariant: two deployments with the same `SkillName` are the same skill,
+ * even when their bytes differ. A symlink alias with another name is another
+ * skill.
+ */
+export type SkillName = string;
 
 /**
  * Everything the frontend needs about installed skills, discovered
@@ -1615,6 +1623,11 @@ export interface UpdateAllOutcome {
   errors: {
     [k: string]: string;
   };
+  /**
+   * Skills never started because the batch's cancel token was set; they
+   * have no entry in `items` or `errors`.
+   */
+  not_run: SkillName[];
 }
 /**
  * One skill's result inside an `update_all` batch.

@@ -1271,7 +1271,14 @@ fn update_all_body(
     // that update's journal row already backs up their folders. Later
     // requests the install covered reuse its row instead of installing again.
     let mut installed: Vec<DotagentsBatch> = Vec::new();
+    let mut not_run = Vec::new();
     for (index, req) in requests.iter().enumerate() {
+        // Checked only between requests: a running install is never killed,
+        // because a half-written skill is worse than a slow stop.
+        if ctx.cancel.is_cancelled() {
+            not_run.push(req.skill.clone());
+            continue;
+        }
         let is_dotagents = req.method == InstallMethod::Dotagents;
         let result = if let Some(covered) = cover_under_lease(&installed, rt, req) {
             covered
@@ -1330,7 +1337,11 @@ fn update_all_body(
         start,
         Vec::new(),
     ));
-    UpdateAllOutcome { items, errors }
+    UpdateAllOutcome {
+        items,
+        errors,
+        not_run,
+    }
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { recordIpcCall } from "./perf-marks";
+import { isUpdateAllRunning, plainBusyMessage } from "./skill-busy-message";
 import type {
   AddMethodDefaults,
   AddSkillOperationEvent,
@@ -82,7 +83,13 @@ function callCommand<T>(command: string, args?: InvokeArgs): Promise<T> {
     },
     (cause: unknown) => {
       finish(false);
-      throw cause instanceof Error ? cause : new Error(String(cause));
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      // The batch's own refusal is not caused by the batch, so it never gets the Update all wording.
+      error.message = plainBusyMessage(
+        error.message,
+        command !== "update_all_skills" && isUpdateAllRunning(),
+      );
+      throw error;
     },
   );
 }
@@ -342,6 +349,11 @@ export async function updateSkill(
  */
 async function updateAllSkills(targets: LifecycleTarget[]): Promise<UpdateAllOutcome> {
   return callCommand("update_all_skills", { targets });
+}
+
+/** Asks the running "Update all" to stop after the skill it is on. */
+export async function cancelUpdateAll(): Promise<void> {
+  return callCommand("cancel_update_all");
 }
 
 /** Event name each finished "Update all" target is reported on. */

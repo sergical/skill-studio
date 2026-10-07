@@ -260,6 +260,7 @@ mod tests {
                 Ok(UpdateAllOutcome {
                     items,
                     errors: Default::default(),
+                    not_run: Vec::new(),
                 })
             },
             |event| progress.push((event.done, event.total, event.skill_name)),
@@ -1453,6 +1454,7 @@ mod tests {
                 "beta".to_string(),
                 "update failed".to_string(),
             )]),
+            not_run: Vec::new(),
         };
         let owners = vec![
             (
@@ -1526,6 +1528,7 @@ mod tests {
                 },
             ],
             errors: std::collections::BTreeMap::new(),
+            not_run: Vec::new(),
         };
         let owners = vec![
             (
@@ -1595,6 +1598,7 @@ mod tests {
                 "beta".to_string(),
                 "update failed".to_string(),
             )]),
+            not_run: Vec::new(),
         };
         let owners = vec![
             (
@@ -2323,7 +2327,12 @@ async fn update_all_with_runtime(
         + 'static,
 ) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        run_update_all_sync(&requests, build_runtime, on_outcome)
+        run_update_all_sync(
+            &requests,
+            build_runtime,
+            std::sync::Arc::new(skill_studio_core::ports::NeverCancel),
+            on_outcome,
+        )
     })
     .await;
     crate::timing_log::join_result_to_err("update_all_skills", joined)
@@ -2341,14 +2350,16 @@ async fn update_all_with_runtime(
 fn run_update_all_sync(
     requests: &[skill_studio_core::dto::UpdateRequest],
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
+    cancel: std::sync::Arc<dyn skill_studio_core::ports::CancelToken>,
     mut on_outcome: impl FnMut(
         &skill_studio_core::identity::SkillName,
         &Result<skill_studio_core::dto::UpdateOutcome, skill_studio_core::error::CoreError>,
     ),
 ) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
     let rt = build_runtime()?;
-    let ctx = skill_studio_core::ports::OpContext::uncancellable(
+    let ctx = skill_studio_core::ports::OpContext::with_cancel(
         skill_studio_core::identity::CorrelationId(ulid::Ulid::new().to_string()),
+        cancel,
     );
     Ok(skill_studio_core::ops::update_all(
         &rt,
@@ -2468,6 +2479,7 @@ fn run_update_all_batch(
         skill_studio_core::dto::UpdateAllOutcome {
             items: Vec::new(),
             errors: std::collections::BTreeMap::new(),
+            not_run: Vec::new(),
         }
     } else {
         run(&requests, &mut |skill_name| {
@@ -2506,6 +2518,37 @@ fn unresolved_target_skill(
     skill_studio_core::identity::SkillName(name)
 }
 
+/// Whether the running "Update all" batch should stop before its next skill.
+#[derive(Default)]
+struct UpdateAllCancelFlag(std::sync::atomic::AtomicBool);
+
+impl skill_studio_core::ports::CancelToken for UpdateAllCancelFlag {
+    fn is_cancelled(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// The one active "Update all" batch's cancel flag. Home runs a single batch
+/// at a time, so one flag is enough: a new batch clears it, `cancel_update_all`
+/// sets it.
+#[derive(Default)]
+pub struct UpdateAllCancelState(std::sync::Arc<UpdateAllCancelFlag>);
+
+impl UpdateAllCancelState {
+    fn begin_batch(&self) -> std::sync::Arc<UpdateAllCancelFlag> {
+        self.0 .0.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.0.clone()
+    }
+}
+
+/// Asks the running "Update all" to stop after the skill it is on. The skill
+/// in progress finishes; no later skill starts.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri's command extractor requires an owned `State<T>`.
+pub fn cancel_update_all(state: tauri::State<UpdateAllCancelState>) {
+    state.0 .0.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// "Update all": resolves every target, then runs `ops::update_all` over the
 /// resolvable ones via `run_update_all_sync` (shared with the test-only
 /// `update_all_with_runtime`, N1 review round 2) in the one `spawn_blocking`
@@ -2528,6 +2571,7 @@ pub async fn update_all_skills(
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(&timing_app, "update_all_skills", move || {
         let refresh_state = app.state::<SkillRefreshState>();
+        let cancel = app.state::<UpdateAllCancelState>().begin_batch();
         let snapshot = rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
         let app_data = app
             .path()
@@ -2560,6 +2604,7 @@ pub async fn update_all_skills(
                 run_update_all_sync(
                     requests,
                     super::core_runtime::build_runtime_write,
+                    cancel.clone(),
                     |skill, _| on_finished(&skill.0),
                 )
             },

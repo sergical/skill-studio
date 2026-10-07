@@ -5,11 +5,13 @@
 
 import type { PluginUpdateResult } from "../lib/skill-api";
 import {
+  cancelUpdateAll,
   forkSkill,
   pullForkUpstream,
   updateAllSkillsWithProgress,
   updatePlugin,
 } from "../lib/skill-api";
+import { setUpdateAllRunning } from "../lib/skill-busy-message";
 import type { PluginUpdateTarget } from "../lib/skill-lifecycle-target";
 import { updateAllOutdatedSkills } from "../components/Home/home-inbox-data";
 import { runBulkUpdate } from "../components/SkillList/skill-bulk-actions";
@@ -20,21 +22,41 @@ export function updatePluginInstall(target: PluginUpdateTarget): Promise<PluginU
   return updatePlugin(target.plugin_id, "Claude Code", target.scope, target.project_path);
 }
 
+/** Stop request for one `runHomeUpdateAll` batch. */
+export interface UpdateAllControl {
+  stopRequested: boolean;
+}
+
+/** Stops the batch after the step it is on, in the frontend phases and in the backend's own loop. */
+export async function requestUpdateAllStop(control: UpdateAllControl): Promise<void> {
+  control.stopRequested = true;
+  await cancelUpdateAll();
+}
+
 /** Home's "Update all"; `forkNames` are the edited skills to fork and merge instead of overwrite. `onProgress`'s third argument names the skill that starts next. */
-export function runHomeUpdateAll(
+export async function runHomeUpdateAll(
   updates: InstalledSkill[],
   onProgress: (done: number, total: number, current: string | null) => void,
   forkNames?: ReadonlySet<string>,
+  control?: UpdateAllControl,
 ) {
-  return updateAllOutdatedSkills(
-    updates,
-    pullForkUpstream,
-    (targets, onOwnerDone) =>
-      updateAllSkillsWithProgress(targets, ({ done, skill_name }) => onOwnerDone(done, skill_name)),
-    onProgress,
-    forkNames && { names: forkNames, fork: forkSkill },
-    updatePluginInstall,
-  );
+  setUpdateAllRunning(true);
+  try {
+    return await updateAllOutdatedSkills(
+      updates,
+      pullForkUpstream,
+      (targets, onOwnerDone) =>
+        updateAllSkillsWithProgress(targets, ({ done, skill_name }) =>
+          onOwnerDone(done, skill_name),
+        ),
+      onProgress,
+      forkNames && { names: forkNames, fork: forkSkill },
+      updatePluginInstall,
+      control && (() => control.stopRequested),
+    );
+  } finally {
+    setUpdateAllRunning(false);
+  }
 }
 
 /** The list's bulk Update; `forkNames` as for `runHomeUpdateAll`. */

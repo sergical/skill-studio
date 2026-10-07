@@ -373,6 +373,7 @@ pub fn run() {
             let refresh_state = skills::skill_refresh::init(app.handle());
             app.manage(refresh_state);
             app.manage(skills::skill_add_operation::AddSkillOperationState::default());
+            app.manage(skills::commands::UpdateAllCancelState::default());
             app.manage(skills::skill_pack::PackImportTrustState::default());
             if let Some(home) = dirs::home_dir() {
                 if let Err(error) =
@@ -444,6 +445,7 @@ pub fn run() {
             skills::commands::remove_skill,
             skills::commands::update_skill,
             skills::commands::update_all_skills,
+            skills::commands::cancel_update_all,
             skills::commands::read_installed_skill_md,
             skills::commands::write_installed_skill_md_if_unchanged,
             skills::skill_frontmatter_repair::preview_skill_frontmatter_repair,

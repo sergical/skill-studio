@@ -110,6 +110,7 @@ const EXPECTED_WRAPPER_COMMANDS = {
   },
   removeSkill: { kind: "command", command: "remove_skill", registeredInLibRs: true },
   updateSkill: { kind: "command", command: "update_skill", registeredInLibRs: true },
+  cancelUpdateAll: { kind: "command", command: "cancel_update_all", registeredInLibRs: true },
   updateAllSkillsWithProgress: { kind: "event", event: "skills://update-all-progress" },
   readInstalledSkillMd: {
     kind: "command",
