@@ -52,9 +52,12 @@ const CODEX_ROOT_RELATIVE: &str = ".codex/skills";
 /// `.skill-lock.json` entry, when one exists - both real `npx ... remove`
 /// side effects this op's own post-call check (`remove_via_cli`) and the
 /// CLI trace parity test below rely on.
+/// One `npx` call: its argv, working folder, and extra environment.
+type RecordedCall = (Vec<String>, Option<PathBuf>, Vec<(String, String)>);
+
 struct FakeNpxSpawner {
     home: PathBuf,
-    recorded: Mutex<Vec<(Vec<String>, Option<PathBuf>)>>,
+    recorded: Mutex<Vec<RecordedCall>>,
     /// Set by [`FakeNpxSpawner::fail_next_call`]: the next `run` call
     /// returns a nonzero exit before touching disk, simulating an `npx`
     /// process crashing before it deletes anything - the CLI-based
@@ -86,7 +89,7 @@ impl ProcessSpawner for FakeNpxSpawner {
         self.recorded
             .lock()
             .unwrap()
-            .push((spec.args.clone(), spec.cwd.clone()));
+            .push((spec.args.clone(), spec.cwd.clone(), spec.env.clone()));
         if self.fail_next.swap(false, Ordering::SeqCst) {
             return Ok(ProcessOutput {
                 status: Some(1),
@@ -192,6 +195,8 @@ fn runtime_with_clock(
         discovery: None,
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
+
+        telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
     };
     Runtime::new(&scope, ports).unwrap()
 }
@@ -214,11 +219,14 @@ fn copy_request(skill: &str) -> InstallRequest {
             relative_path: PathBuf::from("SKILL.md"),
             contents: format!("---\nname: {skill}\ndescription: a copied skill\n---\nBody.\n")
                 .into_bytes(),
+            mode: None,
         }],
         source: None,
         trust_identity: None,
         trust_confirmed: false,
         save_as_preference: false,
+        link_mode: skill_studio_core::dto::InstallLinkMode::Link,
+        destination: skill_studio_core::identity::SkillDestination::Universal,
     }
 }
 
@@ -405,7 +413,10 @@ fn setup_owner_kind_with_claude_link(
 ) -> DeploymentId {
     if kind == LifecycleOwnerKind::Copy {
         let mut req = copy_request(skill);
-        req.harnesses = vec![AgentId::parse(AgentId::CLAUDE_CODE).unwrap()];
+        req.harnesses = vec![
+            AgentId::parse("universal").unwrap(),
+            AgentId::parse(AgentId::CLAUDE_CODE).unwrap(),
+        ];
         let InstallOutcome::Installed { .. } = ops::install(rt, &ctx(), &req).unwrap() else {
             panic!("expected Installed");
         };
@@ -624,22 +635,14 @@ fn undo_after_remove_restores_the_links_and_the_provenance_state_or_names_the_mi
         )
         .unwrap();
 
-        let raw_target = std::fs::read_link(&claude_link).unwrap_or_else(|e| {
+        std::fs::read_link(&claude_link).unwrap_or_else(|e| {
             panic!("{kind:?}: the Claude Code link must be back after restore: {e}")
         });
-        // `restore_event` always recreates the link with an absolute target
-        // (see `ScopeFs::symlink`'s own doc), even when the original target
-        // it is restoring from was relative - so this asserts the recorded
-        // target is absolute rather than resolving it against the link's
-        // own parent: that resolution would keep any `..` components a
-        // relative target had, giving a path that only accidentally matches
-        // `universal_path`.
-        assert!(
-            raw_target.is_absolute(),
-            "{kind:?}: the restored link's target must be absolute"
-        );
+        // `restore_event` keeps the recorded target's form (relative stays
+        // relative), so compare where the link lands, not its raw text.
         assert_eq!(
-            raw_target, universal_path,
+            std::fs::canonicalize(&claude_link).ok(),
+            std::fs::canonicalize(&universal_path).ok(),
             "{kind:?}: the restored link must resolve to the restored tree"
         );
 
@@ -1542,14 +1545,24 @@ fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_times
         1,
         "remove_via_cli must call npx exactly once"
     );
-    let (args, cwd) = &recorded[0];
+    let (args, cwd, env) = &recorded[0];
     assert_eq!(
         args, &trace.args,
         "remove_via_cli's argv drifted from the recorded skills.sh trace"
     );
+    // The trace records no cwd for a global remove; the core runs it in the
+    // home folder so the CLI also clears Eve's `~/agent/skills`.
     assert_eq!(
-        cwd, &trace.cwd,
+        cwd,
+        &trace.cwd.clone().or_else(|| Some(home.clone())),
         "remove_via_cli's cwd drifted from the recorded skills.sh trace"
+    );
+    // The CLI reads its home from `$HOME`, so a `--home` run must point it at
+    // the same home the guard checked, not the user's real one.
+    assert_eq!(
+        env,
+        &vec![("HOME".to_string(), home.display().to_string())],
+        "remove_via_cli must run the CLI with HOME set to the scope home"
     );
 
     assert!(
@@ -1573,5 +1586,311 @@ fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_times
     assert_eq!(
         lock_bytes, expected_bytes,
         "the lock file's remaining bytes must match lock_before with only {skill:?} removed"
+    );
+}
+
+/// Flow: Copy-install `lambda`, remove it, Copy-install `mu` and save a
+/// preference, then undo the removal of `lambda`. Expectation: `lambda`'s
+/// `copies` row is back and `mu`'s row and the preference stay. Failure here
+/// means undo restored the whole registry file from the remove's backup and
+/// erased every later registry change.
+#[test]
+fn undo_of_a_copy_remove_keeps_registry_rows_added_after_it_or_names_the_erased_key() {
+    let home = unique_temp_dir("remove_undo_keeps_later_registry_rows");
+    std::fs::create_dir_all(&home).unwrap();
+    let rt = runtime_for(&home);
+    let deployment_id = install_and_resolve(&rt, "lambda");
+    let registry_file = home.join(".agents").join("skill-studio.json");
+    let read = || -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(&registry_file).unwrap()).unwrap()
+    };
+    let has_row = |doc: &serde_json::Value, skill: &str| {
+        doc["copies"]
+            .as_object()
+            .is_some_and(|m| m.values().any(|row| row["name"] == skill))
+    };
+
+    let outcome = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+    assert!(!has_row(&read(), "lambda"), "setup: remove drops the row");
+    install_and_resolve(&rt, "mu");
+    let mut doc = read();
+    doc["preferred_method"] = serde_json::json!("copy");
+    std::fs::write(&registry_file, serde_json::to_vec(&doc).unwrap()).unwrap();
+
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+
+    let after = read();
+    assert!(has_row(&after, "lambda"), "lambda's row must be back");
+    assert!(has_row(&after, "mu"), "mu's row must stay: {after}");
+    assert_eq!(after["preferred_method"], "copy");
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A project at `<home>/proj` with a skills.sh install of `x` in `.agents/skills`, and a runtime
+/// that scans it.
+struct ProjectInstall {
+    project: PathBuf,
+    spawner: Arc<FakeNpxSpawner>,
+    rt: Runtime,
+}
+
+fn write_skill_md(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: x\ndescription: a project skill\n---\nBody.\n",
+    )
+    .unwrap();
+}
+
+fn project_install(label: &str) -> ProjectInstall {
+    let home = unique_temp_dir(label);
+    let project = home.join("proj");
+    write_skill_md(&project.join(UNIVERSAL_ROOT_RELATIVE).join("x"));
+    std::fs::write(
+        project.join("skills-lock.json"),
+        r#"{"version":1,"skills":{"x":{"source":"owner/x","sourceType":"github","computedHash":"deadbeef"}}}"#,
+    )
+    .unwrap();
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    let mut scope = RuntimeScope::fixture(&home);
+    scope.projects = skill_studio_core::scope::ProjectSelection::Explicit {
+        paths: vec![project.clone()],
+    };
+    let ports = Ports {
+        fs: Arc::new(RealFs::new()),
+        clock: Arc::new(FakeClock::at(0)),
+        ids: Arc::new(FakeIds::default()),
+        leases: Arc::new(FileLease::new(home.join(".leases"))),
+        history: Arc::new(SqliteHistoryOpener::new(
+            home.join(".history").join("events.sqlite3"),
+        )),
+        sink: Arc::new(RecordingSink::default()),
+        spawner: Some(spawner.clone()),
+        discovery: None,
+        tools: None,
+        catalog: Arc::new(HarnessCatalog::builtin()),
+        telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+    };
+    let rt = Runtime::new(&scope, ports).unwrap();
+    ProjectInstall {
+        project,
+        spawner,
+        rt,
+    }
+}
+
+impl ProjectInstall {
+    fn remove_install(
+        &self,
+    ) -> Result<skill_studio_core::dto::RemoveOutcome, skill_studio_core::CoreError> {
+        let inventory = ops::scan(
+            &self.rt,
+            &ctx(),
+            &skill_studio_core::dto::ScanRequest::default(),
+        )
+        .unwrap();
+        let deployment = inventory
+            .skills
+            .iter()
+            .find(|s| s.name.0 == "x")
+            .and_then(|s| {
+                s.deployments.iter().find(|d| {
+                    d.root.kind == RootKind::Universal
+                        && matches!(d.root.scope, RootScope::Project(_))
+                })
+            })
+            .expect("the scan lists the project install of x");
+        assert_eq!(deployment.owner_kind, LifecycleOwnerKind::SkillsSh);
+        ops::remove(
+            &self.rt,
+            &ctx(),
+            &RemoveRequest {
+                deployment_id: deployment.id.clone(),
+            },
+        )
+    }
+
+    fn assert_refused_naming(&self, folder: &std::path::Path) {
+        let error = self
+            .remove_install()
+            .expect_err("the remove must be refused");
+        assert!(
+            error.to_string().contains(&folder.display().to_string()),
+            "the refusal names {}, got: {error}",
+            folder.display()
+        );
+        assert!(folder.join("SKILL.md").exists(), "the folder survives");
+        assert!(
+            self.project
+                .join(UNIVERSAL_ROOT_RELATIVE)
+                .join("x")
+                .exists(),
+            "the install survives a refused remove"
+        );
+        assert!(
+            self.spawner.recorded.lock().unwrap().is_empty(),
+            "the CLI must not run"
+        );
+    }
+}
+
+/// Flow: a skill-authoring project keeps its source in `skills/x`, and also has a skills.sh
+/// install of `x` under `.agents/skills`; the user removes the install.
+/// Expectation: the remove is refused with the folder named, the CLI never runs, and
+/// `skills/x` is still there.
+/// A failure here means skills CLI 1.7.0's project `rm -rf <project>/skills/x` deletes the
+/// author's source with no backup for Undo to restore.
+#[test]
+fn project_skills_sh_remove_is_refused_when_the_cli_would_delete_a_real_skills_folder_or_names_the_lost_folder(
+) {
+    let fixture = project_install("remove_project_source_folder");
+    let source = fixture.project.join("skills").join("x");
+    write_skill_md(&source);
+    fixture.assert_refused_naming(&source);
+}
+
+/// Flow: the project's `skills` folder is a link to `.agents/skills`, so `skills/x` is the
+/// installed folder itself; the user removes the install.
+/// Expectation: the guard lets the remove through and the CLI runs.
+/// A failure here means the guard mistakes the removed folder for a second one and blocks the
+/// remove for good.
+#[cfg(unix)]
+#[test]
+fn project_skills_sh_remove_is_allowed_when_skills_is_a_link_to_the_installed_folder_or_names_the_false_refusal(
+) {
+    let fixture = project_install("remove_project_skills_link");
+    std::os::unix::fs::symlink(
+        fixture.project.join(".agents/skills"),
+        fixture.project.join("skills"),
+    )
+    .unwrap();
+    fixture
+        .remove_install()
+        .expect("a folder that is the install itself must not block its removal");
+    assert!(!fixture.project.join(".agents/skills/x").exists());
+}
+
+/// Flow: the reverse layout, `.agents/skills` is a link to the project's `skills` folder.
+/// Expectation: the remove goes through.
+/// A failure here means the guard only tests one direction of the link.
+#[cfg(unix)]
+#[test]
+fn project_skills_sh_remove_is_allowed_when_the_installed_folder_is_reached_through_a_link_to_skills_or_names_the_false_refusal(
+) {
+    let fixture = project_install("remove_project_agents_link");
+    let agents_skills = fixture.project.join(".agents/skills");
+    std::fs::rename(&agents_skills, fixture.project.join("skills")).unwrap();
+    std::os::unix::fs::symlink(fixture.project.join("skills"), &agents_skills).unwrap();
+    fixture
+        .remove_install()
+        .expect("a folder that is the install itself must not block its removal");
+}
+
+/// Flow: an Eve project has a subagent `helper-bot` whose `skills/x` folder is real.
+/// Expectation: the remove is refused naming that folder, because the CLI deletes
+/// `agent/subagents/<sanitizeName(subagent)>/skills/x` for every subagent folder.
+/// A failure here means a subagent's own skill is deleted with no backup.
+#[test]
+fn project_skills_sh_remove_is_refused_when_an_eve_subagent_has_a_real_skill_folder_or_names_the_lost_folder(
+) {
+    let fixture = project_install("remove_project_eve_subagent");
+    let subagent_skill = fixture.project.join("agent/subagents/helper-bot/skills/x");
+    write_skill_md(&subagent_skill);
+    fixture.assert_refused_naming(&subagent_skill);
+}
+
+/// Flow: a global skills.sh install of `x` and a real `~/agent/skills/x` folder (Eve's fallback
+/// for a global install); the user removes the global install.
+/// Expectation: the remove is refused with that folder named and the CLI never runs.
+/// A failure here means the CLI's `rm -rf ~/agent/skills/x` goes unchecked.
+#[test]
+fn global_skills_sh_remove_is_refused_when_the_cli_would_delete_a_real_home_agent_skills_folder_or_names_the_lost_folder(
+) {
+    let home = unique_temp_dir("remove_global_eve_folder");
+    std::fs::create_dir_all(&home).unwrap();
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    let folder = home.join("agent/skills/x");
+    write_skill_md(&folder);
+
+    let error = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id })
+        .expect_err("the remove must be refused");
+
+    assert!(
+        error.to_string().contains(&folder.display().to_string()),
+        "the refusal names {}, got: {error}",
+        folder.display()
+    );
+    assert!(folder.join("SKILL.md").exists(), "the folder survives");
+    assert!(
+        spawner.recorded.lock().unwrap().is_empty(),
+        "the CLI must not run"
+    );
+}
+
+/// Flow: an Eve project has a subagent folder named `Helper Bot` with a real `skills/x`; the
+/// user removes the project's skills.sh install of `x`.
+/// Expectation: the remove goes through, because the CLI looks for `helper-bot/skills/x`, a
+/// folder that does not exist, and so never touches `Helper Bot/skills/x`.
+/// A failure here means the guard refuses for a folder the CLI leaves alone.
+#[cfg(unix)]
+#[test]
+fn project_skills_sh_remove_is_allowed_when_an_eve_subagent_folder_name_needs_sanitizing_or_names_the_false_refusal(
+) {
+    let fixture = project_install("remove_project_eve_sanitized");
+    let subagent_skill = fixture.project.join("agent/subagents/Helper Bot/skills/x");
+    write_skill_md(&subagent_skill);
+    fixture
+        .remove_install()
+        .expect("the CLI never reaches `Helper Bot`, so the guard must not refuse");
+    assert!(subagent_skill.join("SKILL.md").exists());
+}
+
+/// Flow: a global skills.sh install of `x` and a real `~/agent/subagents/helper-bot/skills/x`,
+/// which the CLI deletes when it runs in the home folder; the user removes the global install.
+/// Expectation: refused with that folder named, and the CLI never runs.
+/// A failure here means a global remove deletes an Eve subagent's skill with no backup.
+#[test]
+fn global_skills_sh_remove_is_refused_when_an_eve_subagent_under_home_has_a_real_skill_folder_or_names_the_lost_folder(
+) {
+    let home = unique_temp_dir("remove_global_eve_subagent");
+    std::fs::create_dir_all(&home).unwrap();
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    let folder = home.join("agent/subagents/helper-bot/skills/x");
+    write_skill_md(&folder);
+
+    let error = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id })
+        .expect_err("the remove must be refused");
+
+    assert!(
+        error.to_string().contains(&folder.display().to_string()),
+        "the refusal names {}, got: {error}",
+        folder.display()
+    );
+    assert!(folder.join("SKILL.md").exists(), "the folder survives");
+    assert!(
+        spawner.recorded.lock().unwrap().is_empty(),
+        "the CLI must not run"
     );
 }

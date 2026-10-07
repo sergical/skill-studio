@@ -5,7 +5,8 @@
 import { Download, Check, ArrowUp, Link2, FileCheck2, AlertTriangle } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import type { SkillWithStatus } from "@skill-studio/lib";
-import { SOURCE_KIND_LABELS } from "@skill-studio/lib";
+import { SOURCE_KIND_LABELS, specViolationSeverity } from "@skill-studio/lib";
+import { formatInstalls } from "../../lib/skill-installs-format";
 
 /**
  * The Browse tab pages through skills.sh and shows an install indicator per
@@ -15,7 +16,7 @@ import { SOURCE_KIND_LABELS } from "@skill-studio/lib";
  * on/off pairs (e.g. `isLoadingMore` true while `hideInstalledIndicator` is
  * also true) that no call site ever actually produces.
  */
-export type SkillBrowserMode =
+type SkillBrowserMode =
   | {
       kind: "browse";
       isLoading: boolean;
@@ -61,7 +62,7 @@ export function SkillBrowser({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto py-5 pl-7 gutter-pr-7">
+    <div className="flex-1 overflow-y-scroll py-5 pl-7 gutter-pr-7">
       <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
         {skills.map((skill) => (
           <SkillCard
@@ -103,14 +104,6 @@ interface SkillCardProps {
   hideInstalledIndicator: boolean | undefined;
 }
 
-/** 1,000+ installs show as e.g. "1.2k". */
-function formatInstalls(count: number): string {
-  if (count >= 1000) {
-    return `${(count / 1000).toFixed(1)}k`;
-  }
-  return count.toString();
-}
-
 /** The installed indicator badge - an update arrow when an owning source has
  * an update pending, else a plain checkmark. `null` when the card doesn't
  * mark installs at all (the Browse tab's own indicator). */
@@ -142,6 +135,9 @@ function InstalledSkillTags({
 }: {
   installedInfo: NonNullable<SkillWithStatus["installed_info"]>;
 }) {
+  const specProblems = installedInfo.spec_violations.filter(
+    (v) => specViolationSeverity(v) !== "note",
+  );
   return (
     <div className="flex flex-wrap items-center gap-1">
       <span
@@ -158,10 +154,10 @@ function InstalledSkillTags({
           spec
         </span>
       )}
-      {installedInfo.spec_violations.length > 0 && (
+      {specProblems.length > 0 && (
         <span
           className="inline-flex items-center gap-[3px] rounded-sm bg-warning-soft px-1.5 py-0.5 text-caption text-warning"
-          title={installedInfo.spec_violations.join("\n")}
+          title={specProblems.join("\n")}
         >
           <AlertTriangle size={11} />
           spec issues
@@ -197,7 +193,7 @@ function SkillCard({ skill, isSelected, onClick, hideInstalledIndicator }: Skill
   return (
     <Button
       variant="ghost"
-      className={`h-auto flex-col items-stretch gap-2 rounded-md border p-4 justify-start text-left ${borderClass} ${bgClass}`}
+      className={`h-auto flex-col items-stretch gap-2 rounded-md border bg-clip-border p-4 justify-start text-left ${borderClass} ${bgClass}`}
       onClick={onClick}
     >
       <div className="flex items-center justify-between gap-2">

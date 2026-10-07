@@ -167,9 +167,9 @@ export function SkillListTable({
    * `useRowCursor`'s return value before it exists. */
   const cursorKeyRef = useRef<string | null>(null);
 
-  /** The deployment path this row's selection checkbox stands for. */
-  const rowPath = (skill: InstalledSkill): string | undefined =>
-    deploymentPathForSkill?.(skill) ?? skill.deployments[0]?.path;
+  /** The deployment path this row's selection checkbox stands for - the skill's first copy, so it
+   * stays put when the copy the row opens changes with a rescan. */
+  const rowPath = (skill: InstalledSkill): string | undefined => skill.deployments[0]?.path;
 
   const { buckets, statesBySkill, rows } = groupSkillRows(skills, sort, stats);
   /** Row keys `useRowCursor` navigates, in rendered order - a collapsed group's rows drop out. */
@@ -184,7 +184,11 @@ export function SkillListTable({
     syncSelectionMode,
     handleRowCheckboxClick,
   } = useSkillListSelection(rows, rowPath);
-  const handleAct = useSkillListAct(onSelectSkill, deploymentPathForSkill);
+  const {
+    handleAct,
+    pendingLabelFor,
+    dialog: updateDialog,
+  } = useSkillListAct(onSelectSkill, deploymentPathForSkill);
   const { scrollElement, scrollMargin, setGridElement } = useSkillListScrollMargin();
 
   /** The flat item list the virtualizer measures, and each group's offset/size in that same
@@ -334,6 +338,7 @@ export function SkillListTable({
         glyphSize={GLYPH_SIZE}
         rowRef={rowRef(skill.name)}
         onOpen={() => onSelectSkill(skill.name, deploymentPathForSkill?.(skill))}
+        busyLabel={pendingLabelFor(skill)}
         onAct={(label) => void handleAct(label, skill)}
         onCheckedChange={(shiftKey) => handleRowCheckboxClick(index, shiftKey)}
         onMenuOpenChange={(open) => {
@@ -398,8 +403,16 @@ export function SkillListTable({
           </div>
 
           {selectedPaths.size > 0 && (
-            <SkillListSelectionBar count={selectedPaths.size} onCancel={exitSelectionMode} />
+            <SkillListSelectionBar
+              selectedSkills={rows.filter((skill) => selectedPaths.has(rowPath(skill) ?? ""))}
+              onCancel={exitSelectionMode}
+              onActionFinished={(hadFailures) => {
+                // A failure keeps the selection so the user can retry.
+                if (!hadFailures) exitSelectionMode();
+              }}
+            />
           )}
+          {updateDialog}
         </div>
       </SkillRowMenuScope>
     </RichTooltipScope>

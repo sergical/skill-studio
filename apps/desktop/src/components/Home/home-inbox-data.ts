@@ -5,6 +5,7 @@
 // ============================================================================
 
 import {
+  deploymentWithSpecViolations,
   attentionGroups,
   collectDashboardIssues,
   homeInvocationCounts,
@@ -18,16 +19,32 @@ import type {
   HealthIssue,
   HealthIssueKind,
   InstalledSkill,
+  ForkRecord,
   LifecycleTarget,
   PullResult,
   RecentlyUsedSkill,
   SkillSnapshot,
   UpdateAllOutcome,
 } from "@skill-studio/lib";
-import { lifecycleTargetForPark, skillUpdateOwnerTargets } from "../../lib/skill-lifecycle-target";
+import {
+  excludeForkedOwner,
+  forkTargetForSkill,
+  ForkPullError,
+  forkThenPull,
+  lifecycleTargetForPark,
+  pluginTargetKey,
+  skillHasManagedUpdate,
+  skillPluginUpdateTargets,
+  skillUpdateOwnerTargets,
+  uniquePluginTargets,
+  updatePluginTargets,
+} from "../../lib/skill-lifecycle-target";
+import type { PluginInstallUpdater, PluginUpdateTarget } from "../../lib/skill-lifecycle-target";
+import { issueRowState, rowState, updateRowState } from "../SkillList/skill-row-state";
+import type { RowState } from "../SkillList/skill-row-state";
 
 /** How many of "Recently used" to show. */
-export const RECENTLY_USED_COUNT = 5;
+const RECENTLY_USED_COUNT = 5;
 /** How many rows any other group shows before it collapses into a "Show all" link. */
 export const MAX_ROWS_PER_GROUP = 6;
 
@@ -52,6 +69,36 @@ export function skillKey(groupId: GroupId, skill: InstalledSkill): string {
   return `${groupId}:${skill.name}`;
 }
 
+/** The state a row shows, by which group it sits in - so a Broken/Warnings row always matches the
+ * group's own severity instead of `rowState`'s ladder over the skill's other conditions (an
+ * unrelated update, or nothing at all for a warning kind the ladder doesn't know about). `issue`
+ * is required for "broken"/"warn" (every row in those groups has one) and ignored elsewhere. */
+export function homeRowState(
+  group: GroupId,
+  skill: InstalledSkill,
+  issue: HealthIssue | null,
+): RowState | null {
+  switch (group) {
+    case "broken":
+    case "warn":
+      return issue ? issueRowState(issue) : null;
+    case "upd":
+      return updateRowState(skill);
+    case "unused":
+    case "rec":
+      return rowState(skill);
+  }
+}
+
+/** The copy a Home issue row opens: a spec-violation issue opens the copy that has the violation
+ * (the skill's first copy may be clean); other kinds open the skill's default copy. */
+export function issueDeploymentPath(issue: HealthIssue): string | undefined {
+  if (issue.kind === "spec-violation") return deploymentWithSpecViolations(issue.skill)?.path;
+  if (issue.kind === "spec-warning")
+    return deploymentWithSpecViolations(issue.skill, "warning")?.path;
+  return undefined;
+}
+
 /** The row-level action label for one health issue kind - see NeedsAttentionCard's former mapping. */
 export function issueActionLabel(kind: HealthIssueKind): string {
   switch (kind) {
@@ -63,22 +110,52 @@ export function issueActionLabel(kind: HealthIssueKind): string {
       return "Convert to per-skill links";
     case "parked-but-reinstalled":
     case "spec-violation":
+    case "spec-warning":
     case "lock-only":
       return "Open";
   }
 }
 
-export interface UpdateAllTally {
+interface UpdateAllTally {
   attempted: number;
   succeeded: number;
   failures: number;
+  /** `attempted`/`succeeded` count update targets (one per copy); these count distinct skills, which is what the toast names. */
+  skillsAttempted: number;
+  skillsSucceeded: number;
+  /** The first failed target's message, so the toast can say why. */
+  firstError: string | null;
+  /** Skills whose pull left conflict markers; set only when there are any. */
+  conflicted?: string[];
+}
+
+const MAX_ERROR_LENGTH = 140;
+
+/** "1 failed: <first error>" for the toast, or `undefined` when nothing failed. Counts skills, matching the toast title; a skill with any failed copy counts once. */
+export function updateAllFailureMessage(tally: UpdateAllTally): string | undefined {
+  if (tally.failures === 0) return undefined;
+  const failedSkills = tally.skillsAttempted - tally.skillsSucceeded;
+  if (!tally.firstError) return `${failedSkills} failed`;
+  const reason =
+    tally.firstError.length > MAX_ERROR_LENGTH
+      ? `${tally.firstError.slice(0, MAX_ERROR_LENGTH - 1)}…`
+      : tally.firstError;
+  return `${failedSkills} failed: ${reason}`;
 }
 
 /**
  * Home's "Update all": a fork pulls upstream one at a time (no batched CLI
  * form for that path), while every other outdated owner flattens into one
  * `updateAllOwners` call - one IPC round trip and one rescan for the whole
- * batch, instead of one `updateSkill` round trip and rescan per skill.
+ * batch, instead of one update round trip and rescan per skill.
+ * `onProgress(done, total, current)` counts forks and owner targets in one sequence;
+ * `updateAllOwners` reports how many of its own targets finished. `current` names
+ * the skill that starts next, or is `null` once everything finished. A skill named
+ * in `forkEdited.names` is forked first and then pulled like a fork, so its
+ * local edits survive instead of being overwritten by the batch. Plugin installs
+ * run last, through `updatePluginInstall`, once per plugin id, scope, and project
+ * even when several skills ship from one plugin. A fork is pulled only when the fork
+ * itself is outdated, and a failed pull does not stop its plugin installs.
  */
 export async function updateAllOutdatedSkills(
   skills: Pick<
@@ -86,44 +163,199 @@ export async function updateAllOutdatedSkills(
     "name" | "deployments" | "source_kind" | "update_owner_ids" | "update_owners"
   >[],
   pullFork: (target: LifecycleTarget) => Promise<PullResult>,
-  updateAllOwners: (targets: LifecycleTarget[]) => Promise<UpdateAllOutcome>,
+  updateAllOwners: (
+    targets: LifecycleTarget[],
+    onOwnerDone: (done: number, skillName: string) => void,
+  ) => Promise<UpdateAllOutcome>,
+  onProgress?: (done: number, total: number, current: string | null) => void,
+  forkEdited?: {
+    names: ReadonlySet<string>;
+    fork: (target: LifecycleTarget) => Promise<ForkRecord>;
+  },
+  updatePluginInstall?: PluginInstallUpdater,
 ): Promise<UpdateAllTally> {
-  let attempted = 0;
-  let succeeded = 0;
-  let failures = 0;
+  const pullsUpstream = (skill: (typeof skills)[number]) =>
+    skillHasManagedUpdate(skill) &&
+    (skill.source_kind === "fork" || forkEdited?.names.has(skill.name) === true);
+  const forks = skills.filter(pullsUpstream);
+  // A skill forked because it was edited keeps its other owners (project or
+  // per-harness copies) on the normal update; only the forked owner is replaced.
+  const ownerTargetsOf = (skill: (typeof skills)[number]) => {
+    if (skill.source_kind === "fork") return [];
+    const targets = skillUpdateOwnerTargets(skill);
+    return pullsUpstream(skill) ? excludeForkedOwner(skill, targets) : targets;
+  };
+  const pluginTargetsOf = (skill: (typeof skills)[number]) =>
+    updatePluginInstall ? skillPluginUpdateTargets(skill) : [];
+  let total =
+    forks.length +
+    skills.flatMap(ownerTargetsOf).length +
+    uniquePluginTargets(skills.flatMap(pluginTargetsOf)).length;
+  const ownerSkillNames = new Set(
+    skills.flatMap((skill) =>
+      !pullsUpstream(skill) &&
+      (skillUpdateOwnerTargets(skill).length > 0 || pluginTargetsOf(skill).length > 0)
+        ? [skill.name]
+        : [],
+    ),
+  );
+  const failedSkillNames = new Set<string>();
+  // Skills whose own copies or fork creation failed, as opposed to a fork pull: only these hold
+  // their plugins back.
+  const copyFailedNames = new Set<string>();
+  const tally: UpdateAllTally = {
+    attempted: total,
+    succeeded: 0,
+    failures: 0,
+    skillsAttempted: forks.length + ownerSkillNames.size,
+    skillsSucceeded: 0,
+    firstError: null,
+  };
+  let pluginsDone = 0;
+  const fail = (count: number, message: string) => {
+    tally.failures += count;
+    tally.firstError ??= message;
+  };
+  // A skill whose copies failed keeps its plugins untouched, and so does every other skill
+  // sharing one of those plugins. They leave the total too, so progress still reaches it.
+  const blockedPluginKeys = () =>
+    new Set(
+      skills.flatMap((skill) =>
+        copyFailedNames.has(skill.name) ? pluginTargetsOf(skill).map(pluginTargetKey) : [],
+      ),
+    );
+  const pluginTargetsOfOk = () => {
+    const blocked = blockedPluginKeys();
+    return uniquePluginTargets(
+      skills.flatMap((skill) =>
+        copyFailedNames.has(skill.name)
+          ? []
+          : pluginTargetsOf(skill).filter((target) => !blocked.has(pluginTargetKey(target))),
+      ),
+    );
+  };
+  // The first skill that ships `target`'s plugin install: the name shown while it updates.
+  const pluginSkillName = (target: PluginUpdateTarget) =>
+    skills.find((skill) =>
+      pluginTargetsOf(skill).some((own) => pluginTargetKey(own) === pluginTargetKey(target)),
+    )?.name ?? null;
+  // A skill whose fork failed keeps all its owners untouched, so its other copies are not updated either.
+  const ownerEntries = () =>
+    skills.flatMap((skill) =>
+      failedSkillNames.has(skill.name)
+        ? []
+        : ownerTargetsOf(skill).map((target) => ({ name: skill.name, target })),
+    );
+  const firstPluginName = () => {
+    const [first] = pluginTargetsOfOk();
+    return first ? pluginSkillName(first) : null;
+  };
+  const afterForksName = () => ownerEntries()[0]?.name ?? firstPluginName();
+  onProgress?.(0, total, forks[0]?.name ?? afterForksName());
 
-  for (const skill of skills.filter((skill) => skill.source_kind === "fork")) {
+  for (const [index, skill] of forks.entries()) {
+    const makesFork = skill.source_kind !== "fork" && forkEdited !== undefined;
     try {
+      const pullOne = makesFork
+        ? () => forkThenPull(forkTargetForSkill(skill), forkEdited.fork, pullFork)
+        : () => pullFork(lifecycleTargetForPark(skill));
       // react-doctor-disable-next-line react-doctor/async-await-in-loop -- update-all runs sequentially on purpose; concurrent `npx skills update` calls race on ~/.agents/.skill-lock.json
-      await pullFork(lifecycleTargetForPark(skill));
-      attempted += 1;
-      succeeded += 1;
-    } catch {
-      attempted += 1;
-      failures += 1;
+      const pull = await pullOne();
+      if (pull.conflicts.length > 0) (tally.conflicted ??= []).push(skill.name);
+      tally.succeeded += 1;
+    } catch (error) {
+      failedSkillNames.add(skill.name);
+      if (makesFork && !(error instanceof ForkPullError)) copyFailedNames.add(skill.name);
+      fail(1, error instanceof Error ? error.message : String(error));
     }
+    onProgress?.(index + 1, total, forks[index + 1]?.name ?? afterForksName());
   }
 
-  const ownerTargets = skills.flatMap((skill) =>
-    skill.source_kind === "fork" ? [] : skillUpdateOwnerTargets(skill),
-  );
+  const owners = ownerEntries();
+  const ownerTargets = owners.map((entry) => entry.target);
+  const retotal = (done: number, current: string | null) => {
+    const plannedTotal = total;
+    total = forks.length + ownerTargets.length + pluginTargetsOfOk().length;
+    tally.attempted = total;
+    if (total !== plannedTotal) onProgress?.(done, total, current);
+  };
+  retotal(forks.length, afterForksName());
   if (ownerTargets.length > 0) {
-    attempted += ownerTargets.length;
     try {
-      const outcome = await updateAllOwners(ownerTargets);
+      // Refused targets finish first, so `done` alone cannot say which owner is next:
+      // each event consumes one entry of the skill it names.
+      const pending = [...owners];
+      const outcome = await updateAllOwners(ownerTargets, (done, skillName) => {
+        const finished = pending.findIndex((entry) => entry.name === skillName);
+        if (finished >= 0) pending.splice(finished, 1);
+        onProgress?.(forks.length + done, total, pending[0]?.name ?? firstPluginName());
+      });
       // `errors` is keyed by skill name, so two failing owners of one
       // twice-installed skill collapse to one entry there; `items` carries
       // one entry per owner regardless, so count failures from `items`
       // instead (N1, review round 3).
-      const failedCount = outcome.items.filter((item) => item.outcome === null).length;
-      succeeded += outcome.items.length - failedCount;
-      failures += failedCount;
-    } catch {
-      failures += ownerTargets.length;
+      const failedItems = outcome.items.filter((item) => item.outcome === null);
+      tally.succeeded += outcome.items.length - failedItems.length;
+      for (const item of failedItems) {
+        failedSkillNames.add(item.skill);
+        copyFailedNames.add(item.skill);
+      }
+      if (failedItems.length > 0) {
+        const first = failedItems[0];
+        fail(failedItems.length, outcome.errors[first.skill] ?? `${first.skill} failed`);
+      }
+    } catch (error) {
+      // Every skill in the rejected batch failed, including a forked skill's other copies.
+      for (const skill of skills) {
+        if (!failedSkillNames.has(skill.name) && ownerTargetsOf(skill).length > 0) {
+          failedSkillNames.add(skill.name);
+          copyFailedNames.add(skill.name);
+        }
+      }
+      fail(ownerTargets.length, error instanceof Error ? error.message : String(error));
     }
   }
 
-  return { attempted, succeeded, failures };
+  retotal(forks.length + ownerTargets.length, firstPluginName());
+  const pluginTargets = pluginTargetsOfOk();
+  if (updatePluginInstall) {
+    // A skill sharing a plugin with a failed one is not updated, so it does not count as updated.
+    const blocked = blockedPluginKeys();
+    for (const skill of skills) {
+      if (pluginTargetsOf(skill).some((target) => blocked.has(pluginTargetKey(target)))) {
+        failedSkillNames.add(skill.name);
+      }
+    }
+  }
+  if (updatePluginInstall && pluginTargets.length > 0) {
+    const plugins = await updatePluginTargets(pluginTargets, (target) =>
+      updatePluginInstall(target).finally(() => {
+        pluginsDone += 1;
+        const next = pluginTargets[pluginsDone];
+        onProgress?.(
+          forks.length + ownerTargets.length + pluginsDone,
+          total,
+          next ? pluginSkillName(next) : null,
+        );
+      }),
+    );
+    tally.succeeded += plugins.succeeded;
+    if (plugins.failures.length > 0) {
+      const failedKeys = new Set(
+        plugins.failures.map((failure) => pluginTargetKey(failure.target)),
+      );
+      for (const skill of skills) {
+        if (pluginTargetsOf(skill).some((target) => failedKeys.has(pluginTargetKey(target)))) {
+          failedSkillNames.add(skill.name);
+        }
+      }
+      fail(plugins.failures.length, plugins.failures[0].message);
+    }
+  }
+
+  // Core can report one requested skill under two names, so the difference can go below zero.
+  tally.skillsSucceeded = Math.max(0, tally.skillsAttempted - failedSkillNames.size);
+  return tally;
 }
 
 export interface HomeGroups {
@@ -173,7 +405,7 @@ export function buildHomeRowPlan(params: {
   groups: HomeGroups;
   isGroupVisible: (id: GroupId) => boolean;
   isGroupExpanded: (id: GroupId) => boolean;
-  onSelectSkill: (name: string) => void;
+  onSelectSkill: (name: string, deploymentPath?: string) => void;
 }): HomeRowPlan {
   const { groups, isGroupVisible, isGroupExpanded, onSelectSkill } = params;
   const { broken, warnings, updates, unused, recent } = groups;
@@ -213,11 +445,11 @@ export function buildHomeRowPlan(params: {
   const openByKey = new Map<string, () => void>([
     ...brokenRows.map((issue): [string, () => void] => [
       issueKey("broken", issue),
-      () => onSelectSkill(issue.skill.name),
+      () => onSelectSkill(issue.skill.name, issueDeploymentPath(issue)),
     ]),
     ...warnRows.map((issue): [string, () => void] => [
       issueKey("warn", issue),
-      () => onSelectSkill(issue.skill.name),
+      () => onSelectSkill(issue.skill.name, issueDeploymentPath(issue)),
     ]),
     ...updRows.map((skill): [string, () => void] => [
       skillKey("upd", skill),

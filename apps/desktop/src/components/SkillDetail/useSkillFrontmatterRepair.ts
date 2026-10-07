@@ -1,43 +1,71 @@
 // ============================================================================
-// useSkillFrontmatterRepair - Previews a malformed-YAML repair for the page's
-// current deployment as soon as it's detected, and keeps that preview
-// selected only while it still matches the deployment on screen.
+// useSkillFrontmatterRepair - Previews a frontmatter repair once per file
+// state (deployment id + content hash) as soon as it's detected, and keeps
+// that preview only while it still matches the file on screen. Reports when
+// the preview has settled so the page never swaps one repair button for another.
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import type { Dispatch, SetStateAction } from "react";
 import { previewSkillFrontmatterRepair } from "../../lib/skill-api";
 import { lifecycleTargetForDeployment } from "../../lib/skill-lifecycle-target";
 import type { Deployment, FrontmatterRepairPreview } from "@skill-studio/lib";
-import { hasMalformedYamlWarning } from "./skill-frontmatter-repair-policy";
+import {
+  frontmatterPreviewKey,
+  frontmatterRepairKindsFor,
+} from "./skill-frontmatter-repair-policy";
 
-export interface UseSkillFrontmatterRepair {
-  selectedFrontmatterRepair: FrontmatterRepairPreview | null;
-  setFrontmatterRepair: Dispatch<SetStateAction<FrontmatterRepairPreview | null>>;
+interface UseSkillFrontmatterRepair {
+  /** One preview per repair kind the backend accepted; a refused kind is absent. */
+  frontmatterRepairs: FrontmatterRepairPreview[];
+  /** True when no backend preview is pending for the file on screen: each answered, failed, or does not apply. */
+  isFrontmatterPreviewSettled: boolean;
+  clearFrontmatterRepair: () => void;
+}
+
+interface PreviewAnswer {
+  key: string;
+  previews: FrontmatterRepairPreview[];
 }
 
 export function useSkillFrontmatterRepair(
   deployment: Deployment | undefined,
 ): UseSkillFrontmatterRepair {
-  const [frontmatterRepair, setFrontmatterRepair] = useState<FrontmatterRepairPreview | null>(null);
+  const [answer, setAnswer] = useState<PreviewAnswer | null>(null);
+
+  const key = frontmatterPreviewKey(deployment);
+  const kinds = frontmatterRepairKindsFor(deployment);
+  const kindsKey = kinds.join(",");
+  const hasRepairableViolation = kinds.length > 0;
 
   useEffect(() => {
-    if (!deployment || !hasMalformedYamlWarning(deployment)) return;
+    if (!deployment || key === null || kinds.length === 0) return;
     let ignore = false;
-    previewSkillFrontmatterRepair(lifecycleTargetForDeployment(deployment))
-      .then((preview) => {
-        if (!ignore && preview.deployment_id === deployment.id) setFrontmatterRepair(preview);
-      })
-      .catch(() => undefined);
+    const target = lifecycleTargetForDeployment(deployment);
+    Promise.all(
+      kinds.map((kind) =>
+        previewSkillFrontmatterRepair(target, kind)
+          .then((preview) => (preview.deployment_id === deployment.id ? preview : null))
+          .catch(() => null),
+      ),
+    ).then((previews) => {
+      if (ignore) return;
+      setAnswer({
+        key,
+        previews: previews.filter((preview) => preview !== null),
+      });
+    });
     return () => {
       ignore = true;
     };
-  }, [deployment]);
+    // Keyed on the file state, not the deployment object, which changes on every snapshot.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, kindsKey]);
 
-  const frontmatterRepairDeploymentId = frontmatterRepair?.deployment_id;
-  const currentDeploymentId = deployment?.id;
-  const selectedFrontmatterRepair =
-    frontmatterRepairDeploymentId === currentDeploymentId ? frontmatterRepair : null;
+  const current = answer !== null && answer.key === key ? answer : null;
 
-  return { selectedFrontmatterRepair, setFrontmatterRepair };
+  return {
+    frontmatterRepairs: current?.previews ?? [],
+    isFrontmatterPreviewSettled: !hasRepairableViolation || current !== null,
+    clearFrontmatterRepair: () => key !== null && setAnswer({ key, previews: [] }),
+  };
 }

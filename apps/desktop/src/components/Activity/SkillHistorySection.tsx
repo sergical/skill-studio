@@ -23,6 +23,7 @@ import { useAppStore } from "../../store/appStore";
 import { HARNESS_LABELS } from "../../lib/harness-labels";
 import {
   canRestoreSkillEvent,
+  eventLabel,
   kindLabel,
   shouldOfferForceRestore,
 } from "./skill-history-restore-policy";
@@ -59,11 +60,11 @@ function restoreDescription(event: SkillEvent): string {
   const skillPart = event.skill ? `${event.skill}` : (event.harness ?? "this item");
   switch (event.kind) {
     case "unlink_harness":
-      return `Restore ${skillPart}'s link for ${event.harness ?? "its harness"}`;
+      return `Restore ${skillPart}'s link for ${event.harness ?? "its agent"}`;
     case "explode_shared_dir":
-      return `Restore ${event.harness ?? "the harness"}'s whole-folder link`;
+      return `Restore ${event.harness ?? "the agent"}'s whole-folder link`;
     case "distribute_from_shared":
-      return `Move ${skillPart} back into the Universal folder and remove the per-harness copies`;
+      return `Move ${skillPart} back into the Universal folder and remove the per-agent copies`;
     case "make_independent_copy":
       return `Restore ${skillPart}'s exact Universal link`;
     case "move_aside_disable":
@@ -204,8 +205,8 @@ function EventRow({ event, onRestored }: { event: SkillEvent; onRestored: () => 
       <span className="min-w-0 flex-1 truncate text-body text-text-primary" title={event.skill}>
         {event.skill || (event.harness ?? kindLabel(event.kind))}
       </span>
-      <span className="text-small text-text-tertiary">{kindLabel(event.kind)}</span>
-      {harnessLabel && (
+      <span className="text-small text-text-tertiary">{eventLabel(event, harnessLabel)}</span>
+      {harnessLabel && event.kind !== "split" && (
         <span className="shrink-0 text-small text-text-tertiary">{harnessLabel}</span>
       )}
       <span className="shrink-0 text-small text-text-tertiary tabular-nums">

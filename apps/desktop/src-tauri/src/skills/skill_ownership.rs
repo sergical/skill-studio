@@ -65,24 +65,34 @@ pub struct OwnershipLedgers {
     pub project_path: Option<PathBuf>,
     pub lock: SkillLockFile,
     pub dotagents: Vec<DotagentsSkill>,
+    /// The skills.sh lock for this root exists but could not be read or
+    /// parsed, so `lock` may be missing skills.
+    pub lock_failed: bool,
+    /// The dotagents ledger for this root exists but could not be read or
+    /// parsed, so `dotagents` may be missing skills, and a `lock` entry it
+    /// would have shadowed may be stale.
+    pub ledger_failed: bool,
 }
 
 /// Load the home Universal ledger (`~/.agents`) plus one ledger per project
-/// that has `.agents/agents.toml`, `agents.lock`, or `.skill-lock.json`.
+/// that has `<project>/agents.toml`, `<project>/agents.lock` (where dotagents
+/// puts its project files), or `.agents/.skill-lock.json`.
 pub fn load_ownership_ledgers(home: &Path, project_paths: &[PathBuf]) -> Vec<OwnershipLedgers> {
-    let mut out = Vec::new();
-    out.push(read_ledgers(
+    let mut out = vec![read_ledgers(
+        home,
         home.join(".agents"),
         InstallScope::Global,
         None,
-    ));
+    )];
     for project in project_paths {
         let agents_dir = project.join(".agents");
-        if agents_dir.join("agents.toml").exists()
-            || agents_dir.join("agents.lock").exists()
+        let dotagents_dir = dotagents_ledger::dotagents_dir(home, Some(project));
+        if dotagents_dir.join("agents.toml").exists()
+            || dotagents_dir.join("agents.lock").exists()
             || lock_file::lock_file_path_in(&agents_dir).exists()
         {
             out.push(read_ledgers(
+                home,
                 agents_dir,
                 InstallScope::Project,
                 Some(project.clone()),
@@ -92,24 +102,31 @@ pub fn load_ownership_ledgers(home: &Path, project_paths: &[PathBuf]) -> Vec<Own
     out
 }
 
+/// The ledgers for one root. A file that exists but failed to read reads as
+/// empty and sets `lock_failed` or `ledger_failed`, so a caller that prunes can skip that root.
 fn read_ledgers(
+    home: &Path,
     agents_dir: PathBuf,
     scope: InstallScope,
     project_path: Option<PathBuf>,
 ) -> OwnershipLedgers {
     let fs = skill_studio_host::RealFs::new();
-    let lock = lock_file::read_lock_file(&fs, &lock_file::lock_file_path_in(&agents_dir))
-        .unwrap_or(SkillLockFile {
-            version: 3,
-            skills: HashMap::new(),
-        });
-    let dotagents = dotagents_ledger::read_dotagents_ledger(&fs, &agents_dir).unwrap_or_default();
+    let lock = lock_file::read_lock_file(&fs, &lock_file::lock_file_path_in(&agents_dir));
+    let dotagents_dir = dotagents_ledger::dotagents_dir(home, project_path.as_deref());
+    let dotagents = dotagents_ledger::read_dotagents_ledger(&fs, &dotagents_dir);
+    let lock_failed = lock.is_err();
+    let ledger_failed = dotagents.is_err();
     OwnershipLedgers {
         agents_dir,
         scope,
         project_path,
-        lock,
-        dotagents,
+        lock: lock.unwrap_or(SkillLockFile {
+            version: 3,
+            skills: HashMap::new(),
+        }),
+        dotagents: dotagents.unwrap_or_default(),
+        lock_failed,
+        ledger_failed,
     }
 }
 

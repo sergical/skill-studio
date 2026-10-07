@@ -8,12 +8,7 @@
 
 import { useState } from "react";
 import { Button } from "@skill-studio/ui";
-import {
-  defaultSkillListFilter,
-  formatTokens,
-  homeInvocationCounts,
-  homePromptCost,
-} from "@skill-studio/lib";
+import { formatTokens, homeInvocationCounts, homePromptCost } from "@skill-studio/lib";
 import type {
   HealthIssue,
   InstalledSkill,
@@ -37,7 +32,7 @@ import { useHomeRowCursor } from "./useHomeRowCursor";
 interface HomeViewProps {
   snapshot: SkillSnapshot | undefined;
   isLoading: boolean;
-  onSelectSkill: (name: string) => void;
+  onSelectSkill: (name: string, deploymentPath?: string) => void;
   /** Whether Home is the view on screen right now - `false` while it's kept mounted but hidden
    * behind an open skill's page, so its window-level keyboard shortcuts stay off. */
   active: boolean;
@@ -157,7 +152,7 @@ function HomeStatTiles({
         </Button>
         <span className="absolute top-3.5 right-3.5 opacity-0 group-hover/stat:opacity-100 group-focus-within/stat:opacity-100 has-[[aria-expanded=true]]:opacity-100">
           <InfoPopover label="About warnings" title="Broken and warnings" onLearnMore={onLearnMore}>
-            Everything still loads, but the state drifted: copies that differ between harnesses,
+            Everything still loads, but the state drifted: copies that differ between agents,
             lock-file entries with no folder on disk.
           </InfoPopover>
         </span>
@@ -225,8 +220,9 @@ function InvocationCostCard({
           {inv.both > 0 && (
             <TooltipControl content="Open in Skills">
               <Button
+                variant="secondary"
                 size="sm"
-                className="gap-1 overflow-hidden rounded-xs bg-accent-soft px-2.5 text-small whitespace-nowrap text-text-primary hover:brightness-115 aria-pressed:shadow-[inset_0_0_0_1px_var(--color-accent)]"
+                className="gap-1 overflow-hidden rounded-xs bg-accent-soft px-2.5 text-small whitespace-nowrap text-text-primary hover:bg-accent-soft-hover active:bg-accent-soft-hover aria-pressed:shadow-[inset_0_0_0_1px_var(--color-accent)]"
                 style={{ flex: `${inv.both} 0 auto` }}
                 onClick={() => goToInvocation("both")}
               >
@@ -239,7 +235,7 @@ function InvocationCostCard({
               <Button
                 variant="secondary"
                 size="sm"
-                className="gap-1 overflow-hidden rounded-xs bg-accent-softer px-2.5 text-small whitespace-nowrap text-text-secondary hover:brightness-115 aria-pressed:shadow-[inset_0_0_0_1px_var(--color-accent)] aria-pressed:text-text-primary"
+                className="gap-1 overflow-hidden rounded-xs bg-accent-softer px-2.5 text-small whitespace-nowrap text-text-secondary hover:bg-accent-softer-hover active:bg-accent-softer-hover aria-pressed:shadow-[inset_0_0_0_1px_var(--color-accent)] aria-pressed:text-text-primary"
                 style={{ flex: `${inv.modelOnly} 0 auto` }}
                 onClick={() => goToInvocation("model-only")}
               >
@@ -252,7 +248,7 @@ function InvocationCostCard({
               <Button
                 variant="secondary"
                 size="sm"
-                className="gap-1 overflow-hidden rounded-xs bg-bg-tertiary px-2.5 text-small whitespace-nowrap text-text-secondary hover:brightness-115 aria-pressed:shadow-[inset_0_0_0_1px_var(--color-accent)] aria-pressed:text-text-primary"
+                className="gap-1 overflow-hidden rounded-xs bg-bg-tertiary px-2.5 text-small whitespace-nowrap text-text-secondary hover:bg-bg-tertiary-hover active:bg-bg-tertiary-hover aria-pressed:shadow-[inset_0_0_0_1px_var(--color-accent)] aria-pressed:text-text-primary"
                 style={{ flex: `${inv.userOnly} 0 auto` }}
                 onClick={() => goToInvocation("user-only")}
               >
@@ -291,8 +287,9 @@ function InvocationCostCard({
             <>
               <TooltipControl content="Open in Skills">
                 <Button
+                  variant="secondary"
                   size="sm"
-                  className="gap-1 overflow-hidden rounded-xs bg-accent-soft px-2.5 text-small whitespace-nowrap text-text-primary hover:brightness-115"
+                  className="gap-1 overflow-hidden rounded-xs bg-accent-soft px-2.5 text-small whitespace-nowrap text-text-primary hover:bg-accent-soft-hover active:bg-accent-soft-hover"
                   style={{ flex: `${cost.usedTokens} 0 auto` }}
                   onClick={() => goToSkills({ usage: "used-30d" })}
                 >
@@ -304,7 +301,7 @@ function InvocationCostCard({
                 <Button
                   variant="secondary"
                   size="sm"
-                  className="gap-1 overflow-hidden rounded-xs bg-bg-tertiary px-2.5 text-small whitespace-nowrap text-text-secondary hover:brightness-115 aria-pressed:text-text-primary aria-pressed:shadow-[inset_0_0_0_1px_var(--color-accent)]"
+                  className="gap-1 overflow-hidden rounded-xs bg-bg-tertiary px-2.5 text-small whitespace-nowrap text-text-secondary hover:bg-bg-tertiary-hover active:bg-bg-tertiary-hover aria-pressed:text-text-primary aria-pressed:shadow-[inset_0_0_0_1px_var(--color-accent)]"
                   style={{ flex: `${cost.idleTokens} 0 auto` }}
                   aria-pressed={filter === "unused"}
                   onClick={() => toggleFilter("unused")}
@@ -328,7 +325,7 @@ function InvocationCostCard({
  */
 export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeViewProps) {
   const setActiveView = useAppStore((state) => state.setActiveView);
-  const setSkillListFilter = useAppStore((state) => state.setSkillListFilter);
+  const replaceSkillListFilter = useAppStore((state) => state.replaceSkillListFilter);
   const openSkill = useAppStore((state) => state.openSkill);
 
   const [linkedRootDialog, setLinkedRootDialog] = useState<{
@@ -354,8 +351,8 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
     toggleGroup,
   } = useHomeGroupVisibility();
 
-  const goToSkills = (patch: Parameters<typeof setSkillListFilter>[0]) => {
-    setSkillListFilter({ ...defaultSkillListFilter(), ...patch });
+  const goToSkills = (patch: Parameters<typeof replaceSkillListFilter>[0]) => {
+    replaceSkillListFilter(patch);
     setActiveView({ kind: "skills" });
   };
   const goToInvocation = (invocation: InvocationPolicy) => goToSkills({ invocation });
@@ -421,7 +418,7 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
         toggleGroup={toggleGroup}
         onSelectSkill={onSelectSkill}
         onShowAllIssues={() => goToSkills({ issue: "any" })}
-        onShowAllUpdates={() => setActiveView({ kind: "skills" })}
+        onShowAllUpdates={() => goToSkills({ update: "available" })}
         onShowAllUnused={() => goToSkills({ usage: "unused-30d" })}
         onShowAllRecent={() => setActiveView({ kind: "activity" })}
         openSkill={openSkill}

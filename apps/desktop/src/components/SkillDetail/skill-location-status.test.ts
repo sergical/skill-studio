@@ -6,41 +6,49 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { TooltipProvider } from "@skill-studio/ui";
-import { SkillLocationRow } from "./SkillLocationRow";
+import { findLeftBehindPairs } from "@skill-studio/lib";
 import type { Deployment, InstalledSkill } from "@skill-studio/lib";
+import { SkillLocationScope } from "./SkillLocationScope";
 import {
   buildInvocationFiles,
   buildScopeGroups,
   folderReaders,
   invocationFooterNote,
+  parkActionFor,
   promoteToGlobal,
   rowMenu,
   siblingRows,
   skillRollup,
   titleLink,
 } from "./skill-location-status";
+import type { ScopeGroup } from "./skill-location-status";
+import { phaseAfter, rowSwitchView } from "./skill-location-switch-view";
+import {
+  perSkillLinkDeployment,
+  realCopyDeployment,
+  universalDeployment,
+  wholeFolderDeployment,
+  withScannerIdentity,
+} from "../../dev/harness/scanned-deployment";
 
+/**
+ * A Global Universal row, with `overrides` applied and then `id`,
+ * `destination`, and `backing` derived from the result the way the scanner
+ * derives them - so a test can move a row to another harness or scope and
+ * still get a shape the scanner produces.
+ */
 function fixtureDeployment(overrides: Partial<Deployment> = {}): Deployment {
-  return {
-    id: "dep:v1/global/universal/find-bugs",
-    destination: "universal",
-    owner_kind: "manual",
-    mutability: "read-only",
-    backing: { kind: "canonical" },
-    agent: "shared",
-    scope: "global",
-    path: "/home/.agents/skills/find-bugs",
-    is_symlink: false,
-    symlink_is_broken: false,
-    content_hash: "abc",
-    disabled: false,
-    codex_implicit_invocation: null,
-    disabled_by: null,
-    invocation: "both",
-    spec_violations: [],
-    shared_via_whole_dir_link: false,
+  return withScannerIdentity({
+    ...universalDeployment(
+      { universalPath: "/home/.agents/skills/find-bugs" },
+      {
+        owner_kind: "manual",
+        mutability: "read-only",
+        content_hash: "abc",
+      },
+    ),
     ...overrides,
-  };
+  });
 }
 
 function fixtureSkill(overrides: Partial<InstalledSkill> = {}): InstalledSkill {
@@ -79,6 +87,32 @@ function fixtureSkill(overrides: Partial<InstalledSkill> = {}): InstalledSkill {
   };
 }
 
+/** A parked copy of the Universal folder, overridable per test. */
+function parkedCopy(overrides: Partial<Deployment> = {}): Deployment {
+  return fixtureDeployment({
+    scope: "parked",
+    agent: "parked",
+    path: "/home/.agents/skills-parked/universal/find-bugs",
+    parked_origin: { kind: "universal", scope: "global", project_path: null },
+    ...overrides,
+  });
+}
+
+/** One scope block as the card renders it. */
+function renderGroup(group: ScopeGroup): string {
+  return renderToStaticMarkup(
+    createElement(
+      TooltipProvider,
+      null,
+      createElement(SkillLocationScope, {
+        group,
+        showEyebrow: false,
+        onAction: () => Promise.resolve(true),
+      }),
+    ),
+  );
+}
+
 describe("buildScopeGroups", () => {
   it("flags a broken link with the error dot and its relink/remove menu", () => {
     const claude = fixtureDeployment({
@@ -112,18 +146,30 @@ describe("buildScopeGroups", () => {
     expect(row?.conditions[0].status).toBe("Link unreadable");
   });
 
-  it("treats a missing required field as blocking (error), won't-load wording", () => {
+  it("treats a missing required field as blocking (error) and says some agents skip it, or the row claims no agent loads a skill Claude Code still loads", () => {
     const shared = fixtureDeployment({
       spec_violations: ["missing required frontmatter field: description"],
     });
     const skill = fixtureSkill({ deployments: [shared], has_spec: false });
     const [global] = buildScopeGroups(skill);
     expect(global.shared?.level).toBe("error");
-    expect(global.shared?.conditions[0].what).toContain("SKILL.md will not load:");
+    expect(global.shared?.conditions[0].status).toBe("Skipped by some agents");
+    expect(global.shared?.conditions[0].what).toBe(
+      "SKILL.md: SKILL.md has no description in its frontmatter. Codex, OpenCode, and pi skip it. Claude Code still loads it.",
+    );
   });
 
-  it("treats a non-blocking violation as a soft warning that still loads", () => {
-    const shared = fixtureDeployment({ spec_violations: ["description is over 1024 characters"] });
+  it("gives a notes-only copy no spec condition, so a length note never raises a dot", () => {
+    const shared = fixtureDeployment({ spec_violations: ["description exceeds 1024 characters"] });
+    const skill = fixtureSkill({ deployments: [shared] });
+    const [global] = buildScopeGroups(skill);
+    expect(global.shared?.conditions).toEqual([]);
+  });
+
+  it("treats a warning-severity violation as a soft warning that still loads", () => {
+    const shared = fixtureDeployment({
+      spec_violations: ['name "other" does not match its directory name "find-bugs"'],
+    });
     const skill = fixtureSkill({ deployments: [shared] });
     const [global] = buildScopeGroups(skill);
     expect(global.shared?.level).toBe("warning");
@@ -147,26 +193,32 @@ describe("buildScopeGroups", () => {
     expect(row?.conditions[0].what).toBe("This copy differs from the Universal folder.");
   });
 
-  it("treats a whole-root link as a plain link row with a switch", () => {
+  it("treats a whole-root link as a plain link row with no agent switch", () => {
     const shared = fixtureDeployment();
-    const claude = fixtureDeployment({
+    const claude = wholeFolderDeployment({
       agent: "Claude Code",
-      is_symlink: true,
-      shared_via_whole_dir_link: true,
       path: "/home/.claude/skills/find-bugs",
+      universalPath: "/home/.agents/skills/find-bugs",
     });
     const skill = fixtureSkill({ deployments: [shared, claude] });
     const [global] = buildScopeGroups(skill);
     const row = global.rows.find((r) => r.harness === "claude-code");
     expect(row?.kind).toBe("link");
     expect(row?.level).toBe(null);
-    expect(row?.hasSwitch).toBe(true);
+    expect(row?.hasSwitch).toBe(false);
     expect(row?.conditions).toHaveLength(0);
   });
 
   it.each([
-    ["codex-config", "Off for Codex — switched off in ~/.codex/config.toml."],
-    ["opencode-permission", "Off for OpenCode — denied in opencode.json."],
+    ["codex-config", "Hidden by Codex setting — switched off in ~/.codex/config.toml."],
+    [
+      "opencode-permission",
+      "Hidden by OpenCode setting — denied in ~/.config/opencode/opencode.json.",
+    ],
+    [
+      "claude-skill-overrides",
+      "Hidden by Claude Code setting — switched off in ~/.claude/settings.json.",
+    ],
     ["claude-link-removed", "Off for Claude Code — the link under ~/.claude/skills was removed."],
     ["studio-moved", "Off for pi — moved into .skill-studio-disabled."],
   ] as const)("reports the %s off mode with its own sentence", (disabledBy, expectedWhat) => {
@@ -182,9 +234,15 @@ describe("buildScopeGroups", () => {
     const row = fixtureDeployment({
       agent: agentLabel,
       is_symlink: agentLabel === "Claude Code",
+      symlink_target: agentLabel === "Claude Code" ? "/home/.agents/skills/find-bugs" : null,
       disabled: true,
       disabled_by: disabledBy,
       path: `/home/.${agentLabel.toLowerCase()}/skills/find-bugs`,
+      disabling_config_files: [
+        { agent: "codex", path: "/Users/dev/.codex/config.toml" },
+        { agent: "open-code", path: "/Users/dev/.config/opencode/opencode.json" },
+        { agent: "claude-code", path: "/Users/dev/.claude/settings.json" },
+      ],
     });
     const skill = fixtureSkill({ deployments: [shared, row] });
     const [global] = buildScopeGroups(skill);
@@ -193,59 +251,185 @@ describe("buildScopeGroups", () => {
     expect(found?.conditions[0].what).toBe(expectedWhat);
   });
 
-  it("marks the whole scope off and parked when the skill is parked", () => {
-    const parkedShared = fixtureDeployment({
-      scope: "parked",
-      path: "/home/.agents/skills-parked/find-bugs",
-    });
+  // Flow: one copy is live, another parked. Failure caught: the skill reads as parked as a whole,
+  // its live copy loses the Park button, or the parked copy hides inside the live rows.
+  it("keeps a live copy live and gives the parked copy its own Turn on row", () => {
     const claude = fixtureDeployment({
       agent: "Claude Code",
-      is_symlink: true,
-      disabled: true,
-      disabled_by: "claude-link-removed",
       path: "/home/.claude/skills/find-bugs",
     });
-    const skill = fixtureSkill({
-      deployments: [parkedShared, claude],
-      parked: true,
-      parked_at: "2026-01-01T00:00:00Z",
+    const parked = parkedCopy({
+      path: "/home/.agents/skills-parked/codex/find-bugs",
+      parked_origin: { kind: "codex", scope: "global", project_path: null },
     });
+    const skill = fixtureSkill({ deployments: [fixtureDeployment(), claude, parked] });
     const [global] = buildScopeGroups(skill);
-    expect(global.parkedScope).toBe(true);
-    expect(global.shared?.level).toBe("off");
-    expect(global.shared?.conditions[0].what).toContain("Off everywhere");
-    expect(global.rows.find((r) => r.harness === "claude-code")?.level).toBe("off");
-    const pi = global.rows.find((row) => row.harness === "pi")!;
-    const markup = renderToStaticMarkup(
-      createElement(
-        TooltipProvider,
+
+    expect(global.shared?.switchOn).toBe(true);
+    expect(global.rows.map((r) => r.kind)).not.toContain("parked");
+    expect(global.parked).toHaveLength(1);
+    expect(global.parked[0]).toMatchObject({
+      kind: "parked",
+      harnessLabel: "Codex",
+      level: "off",
+      leftBehind: null,
+    });
+    expect(rowMenu(global.parked[0], global.label).entries[0]).toMatchObject({
+      label: "Turn on",
+      action: { kind: "unpark", deployment: parked },
+    });
+    expect(skillRollup(skill, [global]).level).toBeNull();
+    expect(parkActionFor(global.shared!, global.label, null)).toMatchObject({ kind: "park" });
+    expect(
+      parkActionFor(
+        global.rows.find((r) => r.harness === "claude-code")!,
+        "Global",
         null,
-        createElement(SkillLocationRow, {
-          row: pi,
-          scopeLabel: global.label,
-          onAction: () => undefined,
-        }),
       ),
-    );
-    expect(markup).toContain('aria-checked="false"');
-    expect(markup).toContain('aria-label="Disabled for pi while this skill is off"');
+    ).toMatchObject({
+      kind: "park",
+      deployment: claude,
+    });
   });
 
-  it("flags parked-but-live with an error dot on the Universal folder", () => {
-    const parkedShared = fixtureDeployment({
-      scope: "parked",
-      path: "/home/.agents/skills-parked/find-bugs",
-    });
-    const liveCopy = fixtureDeployment({
+  // Flow: every copy is parked. Failure caught: no row offers Turn on, or the card still draws a live folder.
+  it("shows a fully parked skill as one off switch row and no live rows", () => {
+    const parked = parkedCopy();
+    const skill = fixtureSkill({ deployments: [parked], parked: true });
+    const [global] = buildScopeGroups(skill);
+
+    expect(global.shared).toBeNull();
+    expect(global.rows).toEqual([]);
+    expect(global.parked.map((r) => r.harnessLabel)).toEqual(["Universal folder"]);
+    expect(skillRollup(skill, [global]).level).toBe("off");
+
+    const markup = renderGroup(global);
+    expect(markup).toContain('aria-label="Universal folder copy"');
+    expect(markup.match(/role="switch"/g)).toHaveLength(1);
+    expect(markup).toContain('aria-checked="false"');
+    expect(buildInvocationFiles([global])).toEqual([]);
+  });
+
+  // Failure caught: the parked copy shows in the Invocation section, where a segmented control
+  // would edit a SKILL.md that no agent reads.
+  it("leaves parked copies out of the Invocation section", () => {
+    const skill = fixtureSkill({ deployments: [fixtureDeployment(), parkedCopy()] });
+    const files = buildInvocationFiles(buildScopeGroups(skill));
+    expect(files.map((f) => f.path)).toEqual(["/home/.agents/skills/find-bugs"]);
+  });
+
+  // Flow: a project copy was parked. Failure caught: it lands in the Global block and its Turn on
+  // looks like it acts on a global copy.
+  it("puts a parked project copy in the block of the project it came from", () => {
+    const projectLive = fixtureDeployment({
       agent: "Codex",
       scope: "project",
       project_path: "/repo",
       path: "/repo/.codex/skills/find-bugs",
     });
-    const skill = fixtureSkill({ deployments: [parkedShared, liveCopy], parked: true });
+    const parked = parkedCopy({
+      path: "/home/.agents/skills-parked/project/find-bugs",
+      parked_origin: { kind: "universal", scope: "project", project_path: "/repo" },
+    });
+    const groups = buildScopeGroups(fixtureSkill({ deployments: [projectLive, parked] }));
+    expect(groups.find((g) => g.isGlobal)?.parked ?? []).toEqual([]);
+    expect(groups.find((g) => g.projectPath === "/repo")?.parked).toHaveLength(1);
+  });
+
+  // Flow: a hand `mv` or install put a live folder back beside the parked one. Failure caught:
+  // the parked row offers Turn on, which core refuses because a copy sits at the origin.
+  it("flags a parked copy with a live copy at its origin and offers the two fixes instead of Turn on", () => {
+    const live = fixtureDeployment();
+    const parked = parkedCopy();
+    const skill = fixtureSkill({ deployments: [live, parked] });
     const [global] = buildScopeGroups(skill);
-    expect(global.shared?.level).toBe("error");
-    expect(global.shared?.conditions[0].status).toBe("Parked but live");
+    const row = global.parked[0];
+
+    expect(row.level).toBe("error");
+    expect(row.conditions[0].status).toBe("Left behind");
+    expect(row.leftBehind).toEqual({ live, parked });
+    expect(rowMenu(row, global.label).entries.map((e) => e.label)).toEqual([
+      "Keep live",
+      "Keep parked",
+      "Reveal in Finder",
+    ]);
+    expect(skillRollup(skill, [global]).level).toBe("error");
+
+    const markup = renderGroup(global);
+    expect(markup).toContain("Keep live");
+    expect(markup).toContain("Keep parked");
+    expect(markup).not.toContain("Turn on");
+  });
+
+  // Failure caught: the live copy of a left-behind pair keeps a Park button, a second way to
+  // act on the pair that skips the parked copy.
+  it("offers no Park on the live copy of a left-behind pair", () => {
+    const skill = fixtureSkill({ deployments: [fixtureDeployment(), parkedCopy()] });
+    const [global] = buildScopeGroups(skill);
+
+    expect(global.shared?.leftBehindLive).toBe(true);
+    expect(parkActionFor(global.shared!, global.label, null)).toBeNull();
+  });
+
+  // Failure caught: a parked project copy pairs with a live copy in another project or in
+  // Global, so Keep live would delete the wrong folder.
+  it("pairs a parked project copy only with a live copy in the same project", () => {
+    const otherProject = fixtureDeployment({
+      scope: "project",
+      project_path: "/other",
+      path: "/other/.agents/skills/find-bugs",
+    });
+    const parked = parkedCopy({
+      path: "/home/.agents/skills-parked/project/find-bugs",
+      parked_origin: { kind: "universal", scope: "project", project_path: "/repo" },
+    });
+    const apart = fixtureSkill({ deployments: [fixtureDeployment(), otherProject, parked] });
+    expect(findLeftBehindPairs(apart)).toEqual([]);
+
+    const sameProject = fixtureDeployment({
+      scope: "project",
+      project_path: "/repo",
+      path: "/repo/.agents/skills/find-bugs",
+    });
+    const together = fixtureSkill({ deployments: [fixtureDeployment(), sameProject, parked] });
+    expect(findLeftBehindPairs(together)).toEqual([{ live: sameProject, parked }]);
+  });
+
+  // Failure caught: Park shows on a plugin copy or a link, which core refuses; or a project row
+  // loses its project path and skips the git confirm.
+  it("offers Park only on real copies and carries the project path for the confirm", () => {
+    const shared = fixtureDeployment({
+      scope: "project",
+      project_path: "/repo",
+      path: "/repo/.agents/skills/find-bugs",
+    });
+    const link = fixtureDeployment({
+      agent: "Claude Code",
+      scope: "project",
+      project_path: "/repo",
+      is_symlink: true,
+      symlink_target: "/repo/.agents/skills/find-bugs",
+      path: "/repo/.claude/skills/find-bugs",
+    });
+    const [project] = buildScopeGroups(fixtureSkill({ deployments: [shared, link] }));
+    expect(parkActionFor(project.shared!, project.label, "/repo")).toMatchObject({
+      kind: "park",
+      projectPath: "/repo",
+    });
+    expect(
+      parkActionFor(
+        project.rows.find((r) => r.kind === "link")!,
+        project.label,
+        "/repo",
+      ),
+    ).toBeNull();
+    expect(
+      parkActionFor(
+        project.rows.find((r) => r.kind === "reader")!,
+        project.label,
+        "/repo",
+      ),
+    ).toBeNull();
   });
 
   it("synthesizes reader rows for agents that read the Universal folder natively", () => {
@@ -253,6 +437,7 @@ describe("buildScopeGroups", () => {
     const claude = fixtureDeployment({
       agent: "Claude Code",
       is_symlink: true,
+      symlink_target: "/home/.agents/skills/find-bugs",
       path: "/home/.claude/skills/find-bugs",
     });
     const skill = fixtureSkill({ deployments: [shared, claude] });
@@ -262,7 +447,7 @@ describe("buildScopeGroups", () => {
     expect(pi?.hasSwitch).toBe(false);
     expect(pi?.switchOn).toBe(true);
     const codex = global.rows.find((r) => r.harness === "codex");
-    expect(codex?.hasSwitch).toBe(true);
+    expect(codex?.hasSwitch).toBe(false);
   });
 
   it("keeps broken link errors on their own rows, not the folder", () => {
@@ -270,12 +455,14 @@ describe("buildScopeGroups", () => {
     const claude = fixtureDeployment({
       agent: "Claude Code",
       is_symlink: true,
+      symlink_target: "/home/.agents/skills/find-bugs",
       symlink_is_broken: true,
       path: "/home/.claude/skills/find-bugs",
     });
     const codex = fixtureDeployment({
       agent: "Codex",
       is_symlink: true,
+      symlink_target: "/home/.agents/skills/find-bugs",
       symlink_is_broken: true,
       path: "/home/.codex/skills/find-bugs",
     });
@@ -286,29 +473,113 @@ describe("buildScopeGroups", () => {
     expect(global.rows.find((r) => r.harness === "codex")?.level).toBe("error");
   });
 
-  it("rolls up to an all-off folder when every row is off but nothing errors", () => {
-    // The folder rollup only looks at readers - Claude Code and Codex have
-    // their own link deployments here, so only OpenCode (the one switchable
-    // reader left) needs to be off for the folder to roll up as all-off.
+  it("leaves_the_folder_dot_empty_when_only_agent_settings_hide_the_skill_or_names_the_dot_it_shows", () => {
+    // Agent settings are read-only here. Only the shared-folder switch or a
+    // park makes a folder all-off, so settings-hidden rows do not roll up.
     const shared = fixtureDeployment({ disabled_readers: ["open-code"] });
     const claude = fixtureDeployment({
       agent: "Claude Code",
       is_symlink: true,
+      symlink_target: "/home/.agents/skills/find-bugs",
       disabled: true,
-      disabled_by: "claude-link-removed",
+      disabled_by: "claude-skill-overrides",
       path: "/home/.claude/skills/find-bugs",
     });
     const codex = fixtureDeployment({
       agent: "Codex",
       is_symlink: true,
+      symlink_target: "/home/.agents/skills/find-bugs",
       disabled: true,
       disabled_by: "codex-config",
       path: "/home/.codex/skills/find-bugs",
     });
     const skill = fixtureSkill({ deployments: [shared, claude, codex] });
     const [global] = buildScopeGroups(skill);
-    expect(global.folderLevel).toBe("off");
-    expect(global.folderTip.startsWith("Off everywhere:")).toBe(true);
+    expect(global.folderLevel).toBe(null);
+  });
+
+  it("keeps_the_claude_code_row_visible_with_a_caption_and_no_switch_while_skill_overrides_has_it_off_or_names_the_layout", () => {
+    const universalPath = "/home/.agents/skills/find-bugs";
+    const path = "/home/.claude/skills/find-bugs";
+    const off: Partial<Deployment> = {
+      disabled: true,
+      disabled_by: "claude-skill-overrides",
+      disabling_config_files: [{ agent: "claude-code", path: "/Users/dev/.claude/settings.json" }],
+    };
+    const layouts = {
+      "per-skill link": perSkillLinkDeployment({ agent: "Claude Code", path, universalPath }, off),
+      "whole-folder link": wholeFolderDeployment(
+        { agent: "Claude Code", path, universalPath },
+        off,
+      ),
+      "real copy": realCopyDeployment({ agent: "Claude Code", path }, off),
+    };
+    for (const [layout, claude] of Object.entries(layouts)) {
+      const [global] = buildScopeGroups(
+        fixtureSkill({ deployments: [fixtureDeployment(), claude] }),
+      );
+      const row = global.rows.find((r) => r.harness === "claude-code");
+      expect(row, `${layout}: the Claude Code row is gone while off`).toBeDefined();
+      expect(row?.switchOn, `${layout}: the switch shows on`).toBe(false);
+      expect(row?.hasSwitch, `${layout}: the row offers a switch that writes settings.json`).toBe(
+        false,
+      );
+      expect(row?.caption, `${layout}: the caption is missing`).toBe(
+        "Hidden by Claude Code setting",
+      );
+      expect(
+        row?.conditions.map((c) => c.what),
+        `${layout}: the off sentence is missing`,
+      ).toContain("Hidden by Claude Code setting — switched off in ~/.claude/settings.json.");
+    }
+  });
+
+  it("shows_a_not_linked_claude_code_row_for_a_universal_only_skill_with_no_switch_or_names_what_is_missing", () => {
+    const shared = fixtureDeployment({ disabled_readers: ["claude-code"] });
+    const [global] = buildScopeGroups(fixtureSkill({ deployments: [shared] }));
+
+    const claudeRows = global.rows.filter((r) => r.harness === "claude-code");
+    expect(claudeRows, "expected exactly one Claude Code row").toHaveLength(1);
+    const [row] = claudeRows;
+    expect(row).toMatchObject({
+      kind: "reader",
+      hasSwitch: false,
+      switchOn: false,
+      level: "off",
+    });
+    expect(row.conditions[0]?.status).toBe("Not linked");
+    expect(rowMenu(row, global.label).entries.map((entry) => entry.action.kind)).toEqual([
+      "reveal",
+    ]);
+  });
+
+  it("shows_no_not_linked_row_when_a_whole_folder_link_already_gives_claude_code_the_skill_or_names_the_extra_row", () => {
+    // Even a stale `disabled_readers` entry must not add a second Claude row
+    // beside the one the whole-folder link already produces.
+    const shared = fixtureDeployment({ disabled_readers: ["claude-code"] });
+    const claude = wholeFolderDeployment({
+      agent: "Claude Code",
+      path: "/home/.claude/skills/find-bugs",
+      universalPath: "/home/.agents/skills/find-bugs",
+    });
+    const [global] = buildScopeGroups(fixtureSkill({ deployments: [shared, claude] }));
+    const claudeRows = global.rows.filter((r) => r.harness === "claude-code");
+    expect(claudeRows.map((r) => r.kind)).toEqual(["link"]);
+    expect(claudeRows[0].conditions.map((c) => c.status)).not.toContain("Not linked");
+  });
+
+  it("shows_no_not_linked_row_for_a_project_universal_skill_or_names_the_extra_row", () => {
+    // Project-scope per-harness switches stay hidden in 0.1.0.
+    const shared = fixtureDeployment({
+      scope: "project",
+      project_path: "/repo",
+      path: "/repo/.agents/skills/find-bugs",
+      disabled_readers: ["claude-code"],
+    });
+    const project = buildScopeGroups(fixtureSkill({ deployments: [shared] })).find(
+      (g) => !g.isGlobal,
+    )!;
+    expect(project.rows.some((r) => r.harness === "claude-code")).toBe(false);
   });
 
   it("puts Claude Code beside the folder, not inside it", () => {
@@ -316,6 +587,7 @@ describe("buildScopeGroups", () => {
     const claude = fixtureDeployment({
       agent: "Claude Code",
       is_symlink: true,
+      symlink_target: "/home/.agents/skills/find-bugs",
       path: "/home/.claude/skills/find-bugs",
     });
     const skill = fixtureSkill({ deployments: [shared, claude] });
@@ -342,7 +614,7 @@ describe("buildScopeGroups", () => {
     expect(siblingRows(project)).toHaveLength(1);
   });
 
-  it("locations_card_switch_is_disabled_for_a_copy_that_cannot_park_or_names_the_row", () => {
+  it("locations_card_offers_no_agent_switch_on_a_copy_row_or_names_the_row", () => {
     const shared = fixtureDeployment();
     const projectClaudeCopy = fixtureDeployment({
       id: "dep:v1/project/claude-code/find-bugs",
@@ -359,41 +631,14 @@ describe("buildScopeGroups", () => {
       is_symlink: false,
       path: "/home/.codex/skills/find-bugs",
     });
-    const skill = fixtureSkill({ deployments: [shared, projectClaudeCopy, globalCodex] });
-    const groups = buildScopeGroups(skill);
-    const global = groups.find((g) => g.isGlobal)!;
-    const project = groups.find((g) => !g.isGlobal)!;
-
-    // A project-scope Claude Code copy has no native per-skill disable and is
-    // not the Global Universal deployment, so the card must not offer a
-    // switch that only ends in the "This copy has no off switch" toast.
-    const copyRow = project.rows.find((row) => row.harness === "claude-code")!;
-    expect(copyRow.hasSwitch).toBe(false);
-    expect(copyRow.switchDisabledReason).toBe(
-      "This copy has no off switch; park the skill from the header instead",
+    const groups = buildScopeGroups(
+      fixtureSkill({ deployments: [shared, projectClaudeCopy, globalCodex] }),
     );
-
-    // A harness with a native per-skill disable (Codex, global scope) keeps
-    // its live switch.
-    const nativeRow = global.rows.find((row) => row.harness === "codex")!;
-    expect(nativeRow.hasSwitch).toBe(true);
-    expect(nativeRow.switchDisabledReason).toBeUndefined();
-
-    const markup = renderToStaticMarkup(
-      createElement(
-        TooltipProvider,
-        null,
-        createElement(SkillLocationRow, {
-          row: copyRow,
-          scopeLabel: project.label,
-          onAction: () => undefined,
-        }),
-      ),
-    );
-    expect(markup).toContain("disabled=");
-    expect(markup).toContain(
-      'aria-label="This copy has no off switch; park the skill from the header instead"',
-    );
+    for (const group of groups) {
+      for (const row of group.rows) {
+        expect(row.hasSwitch, `${group.label}: ${row.harnessLabel} offers a switch`).toBe(false);
+      }
+    }
   });
 });
 
@@ -411,6 +656,7 @@ describe("skillRollup", () => {
     const claude = fixtureDeployment({
       agent: "Claude Code",
       is_symlink: true,
+      symlink_target: "/home/.agents/skills/find-bugs",
       symlink_is_broken: true,
       path: "/home/.claude/skills/find-bugs",
     });
@@ -422,39 +668,25 @@ describe("skillRollup", () => {
 });
 
 describe("titleLink", () => {
-  it("orders unpark above drift, install-again, enable-everywhere and update", () => {
-    const parkedShared = fixtureDeployment({ scope: "parked" });
-    const liveCopy = fixtureDeployment({ agent: "Codex", scope: "project", project_path: "/repo" });
-    const skill = fixtureSkill({
-      deployments: [parkedShared, liveCopy],
-      parked: true,
-      has_update: true,
-    });
-    expect(titleLink(skill, true)).toBe("Unpark");
-  });
-
   it("prefers Compare copies over Install again and Update when there's drift", () => {
     const skill = fixtureSkill({ has_update: true });
     expect(titleLink(skill, true)).toBe("Compare copies");
   });
 
-  it("prefers Install again over Enable everywhere and Update for a lock-only skill", () => {
-    const skill = fixtureSkill({ deployments: [], parked: true, has_update: true });
+  // Failure caught: a title link comes back that unparks the whole skill, hiding which copy turns on.
+  it("never offers an unpark link, because each parked row has its own Turn on", () => {
+    const skill = fixtureSkill({ deployments: [parkedCopy()], parked: true, has_update: true });
+    expect(titleLink(skill, false)).toBeNull();
+  });
+
+  it("prefers Install again for a lock-only skill", () => {
+    const skill = fixtureSkill({ deployments: [], has_update: true });
     expect(titleLink(skill, false)).toBe("Install again");
   });
 
-  it("prefers Enable everywhere over Update for a parked skill", () => {
-    const skill = fixtureSkill({
-      deployments: [fixtureDeployment({ scope: "parked" })],
-      parked: true,
-      has_update: true,
-    });
-    expect(titleLink(skill, false)).toBe("Enable everywhere");
-  });
-
-  it("falls back to Update when nothing else applies", () => {
+  it("leaves Update to the page header, so the card title never reads as updating locations", () => {
     const skill = fixtureSkill({ has_update: true });
-    expect(titleLink(skill, false)).toBe("Update");
+    expect(titleLink(skill, false)).toBeNull();
   });
 
   it("returns null when there is nothing to fix", () => {
@@ -469,23 +701,39 @@ describe("rowMenu", () => {
     const claude = fixtureDeployment({
       agent: "Claude Code",
       is_symlink: true,
+      symlink_target: "/home/.agents/skills/find-bugs",
       path: "/home/.claude/skills/find-bugs",
     });
     const [global] = buildScopeGroups(fixtureSkill({ deployments: [shared, claude] }));
 
-    for (const row of global.rows.filter((candidate) => candidate.hasSwitch)) {
+    for (const row of global.rows) {
       const menu = rowMenu(row, global.label);
       const labels = [...menu.entries, ...menu.danger].map((entry) => entry.label);
       expect(labels).not.toContain(`Disable for ${row.harnessLabel}`);
     }
   });
 
+  it("hides Remove copy on a per-agent copy row, or the menu offers a Remove the backend refuses", () => {
+    const perAgent = realCopyDeployment(
+      { agent: "Claude Code", path: "/home/.claude/skills/find-bugs" },
+      { owner_kind: "copy", mutability: "mutable" },
+    );
+    const [group] = buildScopeGroups(
+      fixtureSkill({ deployments: [fixtureDeployment(), perAgent] }),
+    );
+    const row = group.rows.find((candidate) => candidate.kind === "copy")!;
+    const menu = rowMenu(row, group.label);
+
+    expect([...menu.entries, ...menu.danger].map((entry) => entry.label)).not.toContain(
+      "Remove Claude Code copy…",
+    );
+  });
+
   it("offers an independent copy only for a healthy enabled Universal-backed link", () => {
-    const linked = fixtureDeployment({
+    const linked = perSkillLinkDeployment({
       agent: "Claude Code",
-      is_symlink: true,
-      backing: { kind: "linked-to", deployment_id: "dep:v1/global/universal/find-bugs" },
       path: "/home/.claude/skills/find-bugs",
+      universalPath: "/home/.agents/skills/find-bugs",
     });
     const skill = fixtureSkill({ deployments: [fixtureDeployment(), linked] });
     const [global] = buildScopeGroups(skill);
@@ -498,8 +746,13 @@ describe("rowMenu", () => {
     for (const deployment of [
       { ...linked, disabled: true },
       { ...linked, symlink_is_broken: true },
-      { ...linked, backing: { kind: "independent" as const } },
-      { ...linked, is_symlink: false, shared_via_whole_dir_link: false },
+      fixtureDeployment({
+        agent: "Claude Code",
+        is_symlink: true,
+        symlink_target: "/home/src/find-bugs",
+        path: "/home/.claude/skills/find-bugs",
+      }),
+      realCopyDeployment({ agent: "Claude Code", path: "/home/.claude/skills/find-bugs" }),
     ]) {
       const [scope] = buildScopeGroups(
         fixtureSkill({ deployments: [fixtureDeployment(), deployment] }),
@@ -530,6 +783,7 @@ describe("rowMenu", () => {
     const claude = fixtureDeployment({
       agent: "Claude Code",
       is_symlink: true,
+      symlink_target: "/home/.agents/skills/find-bugs",
       path: "/home/.claude/skills/find-bugs",
     });
     const skill = fixtureSkill({ deployments: [shared, claude] });
@@ -540,20 +794,22 @@ describe("rowMenu", () => {
     expect(menu.danger.map((e) => e.label)).toContain("Remove link");
   });
 
-  it("puts the mechanism hint under the enable action for an off row", () => {
+  it("offers_open_config_file_for_a_row_hidden_by_a_codex_setting_or_names_the_missing_entry", () => {
     const shared = fixtureDeployment();
     const codex = fixtureDeployment({
       agent: "Codex",
       is_symlink: true,
+      symlink_target: "/home/.agents/skills/find-bugs",
       disabled: true,
       disabled_by: "codex-config",
+      disabling_config_files: [{ agent: "codex", path: "/Users/dev/.codex/config.toml" }],
       path: "/home/.codex/skills/find-bugs",
     });
     const skill = fixtureSkill({ deployments: [shared, codex] });
     const [global] = buildScopeGroups(skill);
     const row = global.rows.find((r) => r.harness === "codex")!;
     const menu = rowMenu(row, global.label);
-    expect(menu.hint).toBe("Turns it back on in Codex's config.toml.");
+    expect(menu.entries.map((entry) => entry.label)).toContain("Open config.toml");
   });
 
   it("offers disable and uninstall for a Claude Code plugin row", () => {
@@ -577,6 +833,39 @@ describe("rowMenu", () => {
     expect(menu.entries.map((e) => e.label)).toContain("Disable the codex plugin for Claude Code");
     expect(menu.danger.map((e) => e.label)).toContain("Uninstall the codex plugin…");
     expect(menu.hint).toBe("Applies to every skill the codex plugin ships.");
+  });
+
+  it("offers Update the plugin only on a plugin row whose plugin has an update", () => {
+    const plugin = fixtureDeployment({
+      agent: "Claude Code",
+      scope: "plugin",
+      mutability: "read-only",
+      path: "/home/.claude/plugins/cache/anthropics/codex/1.0.6/skills/find-bugs",
+      plugin: {
+        name: "codex",
+        harness: "Claude Code",
+        version: "1.0.5",
+        marketplace: "anthropics",
+        id: "codex@anthropics",
+      },
+    });
+    const labelsFor = (update_owners: InstalledSkill["update_owners"]) => {
+      const [global] = buildScopeGroups(fixtureSkill({ deployments: [plugin], update_owners }));
+      const row = global.rows.find((r) => r.kind === "plugin")!;
+      return rowMenu(row, global.label).entries.map((e) => e.label);
+    };
+
+    expect(labelsFor([])).not.toContain("Update the codex plugin");
+    expect(
+      labelsFor([
+        {
+          owner_id: "plugin:codex@anthropics",
+          latest_commit: null,
+          latest_commit_at: null,
+          plugin_scope: "user",
+        },
+      ]),
+    ).toContain("Update the codex plugin");
   });
 
   it("offers enable for a Claude Code plugin row disabled by claude-plugin-disabled", () => {
@@ -633,11 +922,12 @@ describe("buildInvocationFiles / invocationFooterNote", () => {
     const claude = fixtureDeployment({
       agent: "Claude Code",
       is_symlink: true,
+      symlink_target: "/home/.agents/skills/find-bugs",
       path: "/home/.claude/skills/find-bugs",
     });
     const skill = fixtureSkill({ deployments: [shared, claude] });
     const groups = buildScopeGroups(skill);
-    const files = buildInvocationFiles(groups, skill);
+    const files = buildInvocationFiles(groups);
     expect(files).toHaveLength(1);
     expect(files[0].kind).toBe("shared");
   });
@@ -646,7 +936,7 @@ describe("buildInvocationFiles / invocationFooterNote", () => {
     const shared = fixtureDeployment({ invocation: "user-only" });
     const skill = fixtureSkill({ deployments: [shared], invocation: "user-only" });
     const groups = buildScopeGroups(skill);
-    const files = buildInvocationFiles(groups, skill);
+    const files = buildInvocationFiles(groups);
     expect(invocationFooterNote(files, skill.name)).toBe("User only: only /find-bugs starts it.");
   });
 
@@ -660,10 +950,10 @@ describe("buildInvocationFiles / invocationFooterNote", () => {
     });
     const skill = fixtureSkill({ deployments: [shared, codexCopy] });
     const groups = buildScopeGroups(skill);
-    const files = buildInvocationFiles(groups, skill);
+    const files = buildInvocationFiles(groups);
     expect(files).toHaveLength(2);
     expect(invocationFooterNote(files, skill.name)).toBe(
-      "Each file sets its own. Symlinks follow the folder they point to.",
+      "All locations sets every file; a file can still differ. Symlinks follow the folder they point to.",
     );
   });
 });
@@ -672,7 +962,7 @@ describe("buildInvocationFiles editability", () => {
   it("keeps the global Universal folder editable even when the skill is managed", () => {
     const shared = fixtureDeployment();
     const skill = fixtureSkill({ deployments: [shared], source_kind: "dotagents" });
-    const files = buildInvocationFiles(buildScopeGroups(skill), skill);
+    const files = buildInvocationFiles(buildScopeGroups(skill));
     expect(files[0]).toMatchObject({ kind: "shared", editable: true });
   });
 
@@ -681,9 +971,10 @@ describe("buildInvocationFiles editability", () => {
       scope: "project",
       project_path: "/repo",
       path: "/repo/.agents/skills/find-bugs",
+      owner_kind: "skills-sh",
     });
     const skill = fixtureSkill({ deployments: [projectShared], source_kind: "skills-sh" });
-    const files = buildInvocationFiles(buildScopeGroups(skill), skill);
+    const files = buildInvocationFiles(buildScopeGroups(skill));
     expect(files[0]).toMatchObject({ kind: "shared", editable: false });
     expect(files[0].disabledReason).toContain("skills.sh");
   });
@@ -695,11 +986,32 @@ describe("buildInvocationFiles editability", () => {
       project_path: "/repo",
       is_symlink: false,
       path: "/repo/.cursor/skills/find-bugs",
+      owner_kind: "dotagents",
     });
     const skill = fixtureSkill({ deployments: [copy], source_kind: "dotagents" });
-    const files = buildInvocationFiles(buildScopeGroups(skill), skill);
+    const files = buildInvocationFiles(buildScopeGroups(skill));
     expect(files[0]).toMatchObject({ kind: "copy", editable: false });
     expect(files[0].disabledReason).toContain("dotagents");
+  });
+
+  it("keeps_an_ambiguous_copy_editable_even_though_the_skill_reads_as_dotagents", () => {
+    const copy = fixtureDeployment({
+      agent: "Cursor",
+      scope: "project",
+      project_path: "/repo",
+      is_symlink: false,
+      path: "/repo/.cursor/skills/find-bugs",
+      owner_kind: "ambiguous",
+    });
+    const skill = fixtureSkill({ deployments: [copy], source_kind: "dotagents" });
+    const files = buildInvocationFiles(buildScopeGroups(skill));
+    expect(
+      files[0],
+      "no ledger row owns it, so nothing upstream would overwrite an edit",
+    ).toMatchObject({
+      kind: "copy",
+      editable: true,
+    });
   });
 
   it("keeps a manual copy editable in place", () => {
@@ -711,7 +1023,7 @@ describe("buildInvocationFiles editability", () => {
       path: "/repo/.cursor/skills/find-bugs",
     });
     const skill = fixtureSkill({ deployments: [copy], source_kind: "manual" });
-    const files = buildInvocationFiles(buildScopeGroups(skill), skill);
+    const files = buildInvocationFiles(buildScopeGroups(skill));
     expect(files[0]).toMatchObject({ kind: "copy", editable: true });
   });
 
@@ -730,7 +1042,7 @@ describe("buildInvocationFiles editability", () => {
       },
     });
     const skill = fixtureSkill({ deployments: [plugin], source_kind: "manual" });
-    const files = buildInvocationFiles(buildScopeGroups(skill), skill);
+    const files = buildInvocationFiles(buildScopeGroups(skill));
     expect(files[0]).toMatchObject({ kind: "plugin", editable: false });
     expect(files[0].disabledReason).toContain("openai-templates");
   });
@@ -777,5 +1089,118 @@ describe("promoteToGlobal", () => {
   it("offers nothing for a single project", () => {
     const skill = fixtureSkill({ deployments: [projectShared("/repo-a")] });
     expect(promoteToGlobal(buildScopeGroups(skill))).toBe(null);
+  });
+});
+
+describe("rowSwitchView", () => {
+  // Flow: a global park runs at once. Failure caught: the switch stays on while the copy is being parked.
+  it("shows the target state and busy while a direct action is pending", () => {
+    expect(rowSwitchView({ checked: true, changesAtOnce: true, phase: "pending" })).toEqual({
+      shown: false,
+      busy: true,
+    });
+  });
+
+  // Failure caught: a project park flips off, then back on as its confirm dialog opens.
+  it("keeps the current state, busy, while a confirm-first action is pending", () => {
+    expect(rowSwitchView({ checked: true, changesAtOnce: false, phase: "pending" })).toEqual({
+      shown: true,
+      busy: true,
+    });
+  });
+
+  // Failure caught: the switch bounces back to its old state before the refreshed row arrives.
+  it("holds the target state, busy, after a direct action succeeds", () => {
+    expect(rowSwitchView({ checked: false, changesAtOnce: true, phase: "held" })).toEqual({
+      shown: true,
+      busy: true,
+    });
+  });
+
+  // Failure caught: an idle switch stays disabled or shows a stale state.
+  it("shows the current state and is not busy when idle", () => {
+    expect(rowSwitchView({ checked: true, changesAtOnce: true, phase: "idle" })).toEqual({
+      shown: true,
+      busy: false,
+    });
+  });
+
+  // Failure caught: a confirm-first or failed action holds the switch busy, or a direct one bounces.
+  it.each([
+    [true, true, "held"],
+    [true, false, "idle"],
+    [false, true, "idle"],
+    [false, false, "idle"],
+  ] as const)("after ok=%s changesAtOnce=%s the switch is %s", (ok, changesAtOnce, expected) => {
+    expect(phaseAfter(ok, changesAtOnce)).toBe(expected);
+  });
+});
+
+/** The `aria-checked` of the switch with this accessible name, so a neighbour's switch can't pass. */
+function switchChecked(markup: string, label: string): string | null {
+  const tag = markup.match(new RegExp(`<[^>]*aria-label="${label}"[^>]*>`))?.[0];
+  return tag?.match(/aria-checked="(\w+)"/)?.[1] ?? null;
+}
+
+describe("Locations row switch markup", () => {
+  // Failure caught: a live own copy renders a button, or a reader announces the off action as its name.
+  it("renders a live global own copy as an on switch named for the copy", () => {
+    const claude = realCopyDeployment(
+      { agent: "Claude Code", path: "/home/.claude/skills/find-bugs" },
+      { owner_kind: "copy", mutability: "mutable" },
+    );
+    const [global] = buildScopeGroups(fixtureSkill({ deployments: [claude] }));
+    const markup = renderGroup(global);
+    expect(markup).toContain('role="switch"');
+    expect(markup).toContain('aria-checked="true"');
+    expect(markup).toContain('aria-label="Claude Code copy"');
+  });
+
+  // Failure caught: the shared folder switch does not say it acts on every agent.
+  it("renders a live shared folder as an on switch named for every agent", () => {
+    const [global] = buildScopeGroups(fixtureSkill());
+    const markup = renderGroup(global);
+    expect(markup).toContain('aria-checked="true"');
+    expect(markup).toContain('aria-label="Universal folder for every agent"');
+  });
+
+  // Failure caught: the turn-off-for-one-agent row shows no switch, or names it by the off action.
+  it("renders an agent row under a live shared folder as an on switch named for the agent", () => {
+    const [global] = buildScopeGroups(
+      fixtureSkill({
+        deployments: [
+          fixtureDeployment(),
+          perSkillLinkDeployment({
+            agent: "Claude Code",
+            path: "/home/.claude/skills/find-bugs",
+            universalPath: "/home/.agents/skills/find-bugs",
+          }),
+        ],
+      }),
+    );
+    expect(switchChecked(renderGroup(global), "Claude Code")).toBe("true");
+  });
+
+  // Flow: Codex's config.toml turns off a real Codex copy. Failure caught: the row shows an on
+  // switch whose off parks the copy and whose on leaves the setting in place, or Park disappears.
+  it("renders a copy an agent setting turns off as a disabled off switch with Park in the menu", () => {
+    const codex = realCopyDeployment(
+      { agent: "Codex", path: "/home/.codex/skills/find-bugs" },
+      {
+        owner_kind: "copy",
+        mutability: "mutable",
+        disabled: true,
+        disabled_by: "codex-config",
+        disabling_config_files: [{ agent: "codex", path: "/Users/dev/.codex/config.toml" }],
+      },
+    );
+    const [global] = buildScopeGroups(fixtureSkill({ deployments: [codex] }));
+    const markup = renderGroup(global);
+    expect(switchChecked(markup, "Codex copy")).toBe("false");
+    expect(markup.match(/<[^>]*aria-label="Codex copy"[^>]*>/)?.[0]).toContain("aria-disabled");
+    const row = global.rows.find((r) => r.harness === "codex")!;
+    expect(rowMenu(row, global.label).entries.map((entry) => entry.label)).toContain(
+      "Park this copy",
+    );
   });
 });

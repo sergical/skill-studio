@@ -44,8 +44,13 @@ struct Run {
 }
 
 fn run(args: &[&str]) -> Run {
+    run_with_env(args, &[])
+}
+
+fn run_with_env(args: &[&str], env: &[(&str, &str)]) -> Run {
     let output = Command::new(bin())
         .args(args)
+        .envs(env.iter().copied())
         .output()
         .expect("run skill-studio");
     let status = output.status.code().expect("no signal");
@@ -269,9 +274,8 @@ fn a_lease_held_by_another_process_exits_3() {
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// Lists every path under `dir`, relative to it, sorted - `None` when `dir`
-/// doesn't exist. Used to snapshot the real ambient data root before and
-/// after a `--home <tempdir>` run.
+/// Lists every file under `dir`, relative to it, sorted - `None` when `dir`
+/// doesn't exist.
 fn snapshot_tree(dir: &Path) -> Option<Vec<PathBuf>> {
     if !dir.exists() {
         return None;
@@ -291,15 +295,6 @@ fn snapshot_tree(dir: &Path) -> Option<Vec<PathBuf>> {
     walk(dir, dir, &mut out);
     out.sort();
     Some(out)
-}
-
-fn real_ambient_data_root() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("skill-studio");
-        }
-    }
-    dirs::home_dir().unwrap().join(".local/share/skill-studio")
 }
 
 /// A universal, skills.sh-owned skill with the unquoted `description: a: b`
@@ -330,10 +325,21 @@ fn repairable_live_home() -> PathBuf {
 /// the real machine's ambient XDG data root - checked end to end through
 /// `apply-repair`, the write command that exercises both the lease and the
 /// history store.
+///
+/// Each run's `HOME` is a private empty directory and `XDG_DATA_HOME` is
+/// cleared, so its ambient data root sits where only this test can write.
+/// The real `~/.local/share/skill-studio` also takes writes from the
+/// desktop app and other test runs, which a before/after snapshot of it
+/// cannot tell apart from a leak.
 #[test]
 fn home_flag_writes_nothing_outside_the_given_directory() {
-    let real_root = real_ambient_data_root();
-    let before = snapshot_tree(&real_root);
+    let ambient_home = tempfile::tempdir().unwrap();
+    let ambient_home = ambient_home.path().canonicalize().unwrap();
+    let ambient_env = [
+        ("HOME", ambient_home.to_str().unwrap()),
+        ("XDG_DATA_HOME", ""),
+    ];
+    let run = |args: &[&str]| run_with_env(args, &ambient_env);
 
     let home = repairable_live_home();
     // The deployment id is opaque (embeds the percent-encoded home path);
@@ -385,12 +391,11 @@ fn home_flag_writes_nothing_outside_the_given_directory() {
         .iter()
         .any(|e| e["id"] == event_id));
 
-    let after = snapshot_tree(&real_root);
     assert_eq!(
-        before,
-        after,
-        "--home run touched the real ambient data root {}",
-        real_root.display()
+        snapshot_tree(&ambient_home),
+        Some(Vec::new()),
+        "--home run wrote under the ambient home {}",
+        ambient_home.display()
     );
 
     std::fs::remove_dir_all(&home).ok();
@@ -567,21 +572,10 @@ fn harnesses_with_no_binaries_on_path_prints_unknown_for_every_row() {
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// A universal, canonical `alpha` skill with no Claude Code link yet, built
-/// directly (not via `--fixture`) so `set-harness-enabled`'s live-scope
-/// write - creating `<home>/.claude/skills/alpha` - has somewhere real to
-/// land, and a second, unrelated `zeta-bad` skill with the same malformed
-/// frontmatter `repairable_live_home` uses, so one `--home` scope carries
-/// two independent write kinds to undo in turn.
+/// A live home with one `zeta-bad` skill whose frontmatter is malformed the
+/// way `repairable_live_home` makes it, so `apply-repair` has a write to undo.
 fn undoable_live_home() -> PathBuf {
     let home = tempfile::tempdir().unwrap().keep();
-    let alpha_dir = home.join(".agents/skills/alpha");
-    std::fs::create_dir_all(&alpha_dir).unwrap();
-    std::fs::write(
-        alpha_dir.join("SKILL.md"),
-        b"---\nname: alpha\ndescription: A universal skill.\n---\nBody.\n",
-    )
-    .unwrap();
     let zeta_dir = home.join(".claude/skills/zeta-bad");
     std::fs::create_dir_all(&zeta_dir).unwrap();
     std::fs::write(
@@ -592,48 +586,9 @@ fn undoable_live_home() -> PathBuf {
     home.canonicalize().unwrap()
 }
 
-/// `undo` reverts the newest journal entry this CLI slice writes, whichever
-/// write kind it came from: a `set-harness-enabled` link toggle, then an
-/// `apply-repair` frontmatter fix, each undone in turn without touching the
-/// other's already-reverted change.
-#[test]
-fn skill_studio_undo_reverses_the_last_journal_entry_for_every_write_kind_in_this_slices_scope() {
-    let home = undoable_live_home();
-    let link_path = home.join(".claude/skills/alpha");
-    let zeta_skill_md = home.join(".claude/skills/zeta-bad/SKILL.md");
-    let original_zeta_content = std::fs::read(&zeta_skill_md).unwrap();
-
-    // Write kind 1: `set-harness-enabled` links Claude Code to `alpha`.
-    assert!(
-        !link_path.exists(),
-        "alpha should start with no Claude Code link"
-    );
-    let enable = run(&[
-        "set-harness-enabled",
-        "--home",
-        home.to_str().unwrap(),
-        "--skill",
-        "alpha",
-        "--harness",
-        "claude-code",
-        "--enabled",
-        "--json",
-    ]);
-    assert_eq!(enable.json["status"], "ok", "{:?}", enable.json);
-    assert!(
-        link_path.symlink_metadata().is_ok(),
-        "set-harness-enabled should have created the Claude Code link"
-    );
-
-    // `undo` reverts that link toggle - the only unreverted event so far.
-    let undo_link = run(&["undo", "--home", home.to_str().unwrap(), "--json"]);
-    assert_eq!(undo_link.json["status"], "ok", "{:?}", undo_link.json);
-    assert!(
-        link_path.symlink_metadata().is_err(),
-        "undo should have removed the Claude Code link set-harness-enabled created"
-    );
-
-    // Write kind 2: `apply-repair` fixes `zeta-bad`'s frontmatter.
+/// Previews and applies the frontmatter repair for `zeta-bad` through the
+/// CLI, so the journal holds one restorable event.
+fn apply_zeta_repair(home: &Path) {
     let scan = run(&["scan", "--home", home.to_str().unwrap(), "--json"]);
     let zeta = scan.json["data"]["skills"]
         .as_array()
@@ -666,25 +621,29 @@ fn skill_studio_undo_reverses_the_last_journal_entry_for_every_write_kind_in_thi
         "--json",
     ]);
     assert_eq!(apply.json["status"], "ok", "{:?}", apply.json);
-    let repaired_content = std::fs::read(&zeta_skill_md).unwrap();
+}
+
+/// `undo` reverts the newest restorable journal entry: an `apply-repair`
+/// frontmatter fix puts the original `SKILL.md` back.
+#[test]
+fn skill_studio_undo_reverses_an_apply_repair_or_names_the_change_it_left() {
+    let home = undoable_live_home();
+    let zeta_skill_md = home.join(".claude/skills/zeta-bad/SKILL.md");
+    let original_zeta_content = std::fs::read(&zeta_skill_md).unwrap();
+
+    apply_zeta_repair(&home);
     assert_ne!(
-        repaired_content, original_zeta_content,
+        std::fs::read(&zeta_skill_md).unwrap(),
+        original_zeta_content,
         "apply-repair should have changed zeta-bad's SKILL.md"
     );
 
-    // `undo` now reverts the repair - the link toggle it already reverted
-    // above stays reverted, proving each `undo` call only touches the
-    // newest still-unreverted entry.
-    let undo_repair = run(&["undo", "--home", home.to_str().unwrap(), "--json"]);
-    assert_eq!(undo_repair.json["status"], "ok", "{:?}", undo_repair.json);
+    let undo = run(&["undo", "--home", home.to_str().unwrap(), "--json"]);
+    assert_eq!(undo.json["status"], "ok", "{:?}", undo.json);
     assert_eq!(
         std::fs::read(&zeta_skill_md).unwrap(),
         original_zeta_content,
         "undo should have put zeta-bad's original malformed frontmatter back"
-    );
-    assert!(
-        link_path.symlink_metadata().is_err(),
-        "undoing the repair must not resurrect the already-undone Claude Code link"
     );
 
     std::fs::remove_dir_all(&home).ok();
@@ -876,20 +835,21 @@ fn cli_runtime_for(home: &Path) -> skill_studio_core::ports::Runtime {
 }
 
 /// `undo` pages past a default-sized page of unrestorable history to find
-/// the one restorable row underneath it: `DEFAULT_EVENT_LIMIT + 1` no-op
-/// Claude Code toggles (each recording no inverse, since the link is
-/// already in the state asked for) sit on top of the one real toggle that
-/// actually moved the link. A single-page read of `list_events` never sees
-/// that real toggle, so `undo` must keep paging with `after` until it does.
+/// the one restorable row underneath it: `DEFAULT_EVENT_LIMIT + 1` park and
+/// unpark rows (each records no inverse) sit on top of the one real
+/// `apply-repair` that rewrote `zeta-bad`'s `SKILL.md`. A single-page read of
+/// `list_events` never sees that repair, so `undo` must keep paging with
+/// `after` until it does.
 #[test]
 fn undo_finds_the_last_restorable_event_past_the_default_page_or_names_the_event_it_missed() {
-    use skill_studio_core::dto::SetHarnessEnabledRequest;
-    use skill_studio_core::identity::{AgentId, SkillName};
+    use skill_studio_core::dto::{ParkRequest, UnparkRequest};
+    use skill_studio_core::identity::RootKind;
     use skill_studio_core::ops;
     use skill_studio_core::testing::golden::ctx;
 
-    let home = tempfile::tempdir().unwrap().keep();
-    let home = home.canonicalize().unwrap();
+    let home = undoable_live_home();
+    let zeta_skill_md = home.join(".claude/skills/zeta-bad/SKILL.md");
+    let original_zeta_content = std::fs::read(&zeta_skill_md).unwrap();
     let alpha_dir = home.join(".agents/skills/alpha");
     std::fs::create_dir_all(&alpha_dir).unwrap();
     std::fs::write(
@@ -897,39 +857,36 @@ fn undo_finds_the_last_restorable_event_past_the_default_page_or_names_the_event
         b"---\nname: alpha\ndescription: A universal skill.\n---\nBody.\n",
     )
     .unwrap();
-    let claude_skills = home.join(".claude/skills");
-    std::fs::create_dir_all(&claude_skills).unwrap();
-    let link_path = claude_skills.join("alpha");
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&alpha_dir, &link_path).unwrap();
 
+    // The one restorable row.
+    apply_zeta_repair(&home);
+
+    // Bury it under more than a page of park and unpark rows.
     let rt = cli_runtime_for(&home);
-    let req = SetHarnessEnabledRequest {
-        skill: SkillName("alpha".into()),
-        harness: AgentId::from(AgentId::CLAUDE_CODE),
-        enabled: false,
-        project_path: None,
+    let alpha_in = |kind: RootKind| {
+        let inventory = ops::scan(&rt, &ctx(), &Default::default()).unwrap();
+        inventory
+            .skills
+            .iter()
+            .find(|s| s.name.0 == "alpha")
+            .and_then(|s| s.deployments.iter().find(|d| d.root.kind == kind))
+            .map(|d| d.id.clone())
+            .expect("alpha should have a deployment in the root it was moved to")
     };
-
-    // The one restorable row: this toggle actually removes the link.
-    ops::set_harness_enabled(&rt, &ctx(), &req).unwrap();
-    assert!(
-        link_path.symlink_metadata().is_err(),
-        "fixture setup: the first disable should have removed the link"
-    );
-
-    // Bury it under `DEFAULT_EVENT_LIMIT + 1` no-op repeats: the link is
-    // already gone, so each of these records no inverse.
-    for _ in 0..=ops::DEFAULT_EVENT_LIMIT {
-        ops::set_harness_enabled(&rt, &ctx(), &req).unwrap();
+    for _ in 0..=ops::DEFAULT_EVENT_LIMIT.div_ceil(2) {
+        let deployment_id = alpha_in(RootKind::Universal);
+        ops::park(&rt, &ctx(), &ParkRequest { deployment_id }).unwrap();
+        let deployment_id = alpha_in(RootKind::Parked);
+        ops::unpark(&rt, &ctx(), &UnparkRequest { deployment_id }).unwrap();
     }
     drop(rt);
 
     let undo = run(&["undo", "--home", home.to_str().unwrap(), "--json"]);
     assert_eq!(undo.json["status"], "ok", "{:?}", undo.json);
-    assert!(
-        link_path.symlink_metadata().is_ok(),
-        "undo should have paged past the no-op rows and restored the buried link toggle, got {:?}",
+    assert_eq!(
+        std::fs::read(&zeta_skill_md).unwrap(),
+        original_zeta_content,
+        "undo should have paged past the park rows and reverted the buried repair, got {:?}",
         undo.json
     );
 
@@ -1193,4 +1150,43 @@ fn add_copy_with_a_symlinked_file_copies_it_as_a_file_or_names_the_missing_path(
 
     std::fs::remove_dir_all(&home).ok();
     std::fs::remove_dir_all(&source).ok();
+}
+
+/// Flow: `split` the universal `gamma` deployment through the CLI, keeping
+/// only Codex.
+/// Expectation: an `ok` envelope with one Codex copy, the update note, a
+/// real folder at `.codex/skills/gamma`, and no Universal folder or Claude
+/// Code link left.
+/// A failure here means `split` has no working CLI surface, or the CLI
+/// parses `--harness` differently from the core.
+#[test]
+fn split_writes_the_chosen_copy_and_drops_the_rest_or_names_the_envelope() {
+    let (_home_dir, home) = parkable_live_home();
+    let split = run(&[
+        "split",
+        "--home",
+        home.to_str().unwrap(),
+        "--deployment-id",
+        &deployment_id_in_root(&home, "gamma", "universal"),
+        "--harness",
+        "codex",
+        "--json",
+    ]);
+
+    assert_eq!(split.status, 0, "{:?}", split.json);
+    assert_eq!(split.json["operation"], "split", "{:?}", split.json);
+    assert_eq!(
+        split.json["data"]["copies"][0]["harness"], "codex",
+        "{:?}",
+        split.json
+    );
+    assert!(split.json["data"]["update_note"]
+        .as_str()
+        .is_some_and(|note| note.contains("npx skills update")));
+    assert!(home.join(".codex/skills/gamma/SKILL.md").is_file());
+    assert!(!home.join(".agents/skills/gamma").exists());
+    assert!(home
+        .join(".claude/skills/gamma")
+        .symlink_metadata()
+        .is_err());
 }

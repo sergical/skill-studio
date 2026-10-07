@@ -52,6 +52,34 @@ fn backup_root_for(app_data: &Path, data_root: &Path, backup_dir: &str) -> Optio
     None
 }
 
+/// Old builds wrote `harness_disable` and `harness_enable` rows to switch a
+/// skill off in an agent's own config. Undoing one, or a restore that points
+/// at one, would put a config file back from a backup, so neither gets an
+/// Undo button.
+fn is_agent_config_event(store: &EventStore, row: &EventRow) -> bool {
+    let mut kind = row.kind.clone();
+    let mut payload = row.payload.clone();
+    // The cap only stops a cycle of restore rows.
+    for _ in 0..64 {
+        match kind.as_str() {
+            "harness_disable" | "harness_enable" => return true,
+            "restore" => {}
+            _ => return false,
+        }
+        let Some(next) = payload.get("target_event").and_then(|v| v.as_str()) else {
+            return false;
+        };
+        match store.get(next) {
+            Ok(Some(target)) => {
+                kind = target.kind;
+                payload = target.payload;
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// `pub` (not `pub(crate)`) so `tests/undo_activity_history.rs` can check
 /// exactly what `list_skill_events` would hand the renderer for a row,
 /// without a `tauri::AppHandle`.
@@ -62,7 +90,12 @@ pub fn dto_from_row(
     row: EventRow,
 ) -> SkillEventDto {
     let restorable = row.restorable
+        && !is_agent_config_event(store, &row)
         && row.inverse.is_some()
+        && row
+            .payload
+            .get(skill_studio_core::events::ROLLED_BACK_PAYLOAD_KEY)
+            .is_none()
         && row.reverted_by.is_none()
         && matches!(row.status.as_str(), "done" | "failed" | "interrupted");
     let backup_path = row.backup_dir.as_ref().map(|dir| {
@@ -121,8 +154,7 @@ pub async fn list_skill_events(
 /// Legacy desktop rows with no `backup_dir`, whose inverse only the
 /// desktop's own `EventStore::restore` can apply: their
 /// `InverseOp::RecreateSymlink`/`RemoveSymlink`/`MoveBack` uses the field
-/// name `"link"`, which the core's `events::parse_symlink_inverse` (field
-/// `"path"`) does not recognize, and `make_independent_copy` has its own
+/// name `"link"`, which the core's restore does not recognize, and `make_independent_copy` has its own
 /// bespoke restore path below. No core code writes any of these kinds, so
 /// there's no ambiguity to resolve by filesystem probe the way
 /// `repair_skill_frontmatter` needs - `distribute_from_shared` and
@@ -319,9 +351,9 @@ fn validate_materialize_request(
     let deployment_id = target
         .deployment_id
         .as_deref()
-        .ok_or("Materialization needs one deployment_id")?;
+        .ok_or("Conversion needs one copy id")?;
     if target.owner_id.is_some() {
-        return Err("Materialization targets one deployment, not an owner group".to_string());
+        return Err("Conversion targets one copy, not a group of copies".to_string());
     }
     let (_, deployment) = super::skill_lifecycle::find_deployment(snapshot, deployment_id)?;
     super::skill_lifecycle::revalidate_deployment(deployment, deployment_id)?;
@@ -336,7 +368,7 @@ fn validate_materialize_request(
         );
     if deployment.agent != display || !deployment.shared_via_whole_dir_link {
         return Err(format!(
-            "Deployment {deployment_id} is not a recorded whole-directory link for {harness}"
+            "Copy {deployment_id} is not a recorded whole-directory link for {harness}"
         ));
     }
     let deployment_root = Path::new(&deployment.path)
@@ -344,14 +376,14 @@ fn validate_materialize_request(
         .ok_or_else(|| format!("{} has no skills root", deployment.path))?;
     if deployment_root != Path::new(root) {
         return Err(format!(
-            "{root} is not the harness root of deployment {deployment_id}"
+            "{root} is not the agent folder of copy {deployment_id}"
         ));
     }
     let super::skill_deployment::BackingRelationship::LinkedTo {
         deployment_id: universal_id,
     } = &deployment.backing
     else {
-        return Err("Materialization requires a deployment linked to Universal".to_string());
+        return Err("Conversion requires a copy linked to Universal".to_string());
     };
     let (_, universal) = super::skill_lifecycle::find_deployment(snapshot, universal_id)?;
     if universal.scope != deployment.scope
@@ -362,8 +394,7 @@ fn validate_materialize_request(
         )
     {
         return Err(
-            "The harness deployment does not match its exact scoped Universal deployment"
-                .to_string(),
+            "The agent copy does not match its exact scoped Universal folder copy".to_string(),
         );
     }
     Path::new(&universal.path)
@@ -408,7 +439,7 @@ pub async fn materialize_harness_root(
         })?;
         if resolved_harness_root != resolved_universal_root {
             return Err(format!(
-                "{root} does not point to the selected deployment's exact scoped Universal root {}",
+                "{root} does not point to the selected copy's exact scoped Universal root {}",
                 universal_root.display()
             ));
         }
@@ -445,10 +476,10 @@ pub async fn materialize_harness_root_then_disable(
             let deployment_id = target
                 .deployment_id
                 .as_deref()
-                .ok_or("Convert and turn off needs one deployment_id")?;
+                .ok_or("Convert and turn off needs one copy id")?;
             if target.owner_id.is_some() {
                 return Err(
-                    "Convert and turn off targets one deployment, not an owner group".to_string(),
+                    "Convert and turn off targets one copy, not a group of copies".to_string(),
                 );
             }
             let root_path = PathBuf::from(&root);
@@ -459,7 +490,7 @@ pub async fn materialize_harness_root_then_disable(
             let (installed_skill, deployment) =
                 super::skill_lifecycle::find_deployment(&snapshot, deployment_id)?;
             let parsed = super::skill_deployment::parse_deployment_id(deployment_id)
-                .ok_or_else(|| format!("Not a deployment id: {deployment_id}"))?;
+                .ok_or_else(|| format!("Not a copy id: {deployment_id}"))?;
             let deployment_path = PathBuf::from(&deployment.path);
             if parsed.name != installed_skill.name
                 || parsed.scope != deployment.scope
@@ -468,7 +499,7 @@ pub async fn materialize_harness_root_then_disable(
                 || deployment_path.parent() != Some(root_path.as_path())
             {
                 return Err(
-                    "The selected deployment identity no longer matches its exact path".to_string(),
+                    "The selected copy identity no longer matches its exact path".to_string(),
                 );
             }
             validate_skill_dir_name(&installed_skill.name)?;
@@ -483,9 +514,9 @@ pub async fn materialize_harness_root_then_disable(
                 })?;
             if resolved_harness_root != resolved_universal_root {
                 return Err(format!(
-            "{root} does not point to the selected deployment's exact scoped Universal root {}",
-            universal_root.display()
-        ));
+                    "{root} does not point to the selected copy's exact scoped Universal root {}",
+                    universal_root.display()
+                ));
             }
 
             let guard = locked_store(&event_store)?;
@@ -532,10 +563,10 @@ pub async fn make_skill_independent_copy(
             let deployment_id = target
                 .deployment_id
                 .as_deref()
-                .ok_or("Make independent copy needs one deployment_id")?;
+                .ok_or("Make independent copy needs one copy id")?;
             if target.owner_id.is_some() {
                 return Err(
-                    "Make independent copy targets one deployment, not an owner group".to_string(),
+                    "Make independent copy targets one copy, not a group of copies".to_string(),
                 );
             }
 
@@ -557,9 +588,7 @@ pub async fn make_skill_independent_copy(
                 return Err("Make independent copy requires a Universal-backed link".to_string());
             };
             if !deployment.is_symlink && !deployment.shared_via_whole_dir_link {
-                return Err(
-                    "Make independent copy requires a symlink-backed deployment".to_string()
-                );
+                return Err("Make independent copy requires a symlink-backed copy".to_string());
             }
             let (_, universal) = super::skill_lifecycle::find_deployment(&snapshot, universal_id)?;
             if universal.scope != deployment.scope
@@ -570,25 +599,23 @@ pub async fn make_skill_independent_copy(
                 )
             {
                 return Err(
-                    "The link does not match its exact scoped Universal deployment".to_string(),
+                    "The link does not match its exact scoped Universal folder copy".to_string(),
                 );
             }
             let parsed = super::skill_deployment::parse_deployment_id(deployment_id)
-                .ok_or_else(|| format!("Not a deployment id: {deployment_id}"))?;
+                .ok_or_else(|| format!("Not a copy id: {deployment_id}"))?;
             if parsed.name != installed_skill.name
                 || parsed.project_path != deployment.project_path
                 || parsed.lexical_path != Path::new(&deployment.path)
             {
-                return Err(
-                    "The selected deployment identity no longer matches its path".to_string(),
-                );
+                return Err("The selected copy identity no longer matches its path".to_string());
             }
             let scope = match deployment.scope.as_str() {
                 "global" => super::skill_dto::InstallScope::Global,
                 "project" => super::skill_dto::InstallScope::Project,
                 _ => {
                     return Err(
-                        "Make independent copy supports global or project deployments".to_string(),
+                        "Make independent copy supports global or project copies".to_string()
                     )
                 }
             };
@@ -720,7 +747,7 @@ pub async fn repair_skill_link(
                 let (target_skill, target_deployment) = find_deployment_at(&snapshot, &target_path)
                     .ok_or_else(|| format!("Target is not an installed skill: {target}"))?;
                 if target_skill != skill_name {
-                    return Err("Target must be a deployment of the same skill".to_string());
+                    return Err("Target must be a copy of the same skill".to_string());
                 }
                 if is_unresolved(target_deployment) {
                     return Err("Target location is not healthy".to_string());

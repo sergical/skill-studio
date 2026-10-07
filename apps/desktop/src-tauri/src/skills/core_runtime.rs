@@ -22,15 +22,34 @@ use skill_studio_core::{OpStatus, RuntimeScope};
 /// `pub(crate)` so `write_lease.rs` can root every desktop write's lease
 /// under the same `leases` directory `build_runtime_write` uses for park
 /// and unpark, instead of a second, unrelated location.
+#[cfg(test)]
 pub(crate) fn data_root() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("skill-studio");
-        }
+    // Unit tests swap the process-wide `HOME` while other tests run in
+    // parallel, so a lease root derived from it moved or vanished mid-write
+    // (ENOENT, EINVAL) and wrote into the real data folder. One fixed
+    // folder for the whole test process keeps the "every writer shares
+    // one lease root" behaviour the lease tests rely on.
+    static TEST_DATA_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    TEST_DATA_ROOT
+        .get_or_init(|| tempfile::tempdir().unwrap().keep().join("skill-studio"))
+        .clone()
+}
+
+#[cfg(not(test))]
+pub(crate) fn data_root() -> PathBuf {
+    data_root_for(
+        std::env::var("XDG_DATA_HOME").ok().as_deref(),
+        dirs::home_dir(),
+    )
+}
+
+fn data_root_for(xdg_data_home: Option<&str>, home: Option<PathBuf>) -> PathBuf {
+    match xdg_data_home {
+        Some(xdg) if !xdg.is_empty() => PathBuf::from(xdg).join("skill-studio"),
+        _ => home
+            .unwrap_or_else(|| PathBuf::from("/"))
+            .join(".local/share/skill-studio"),
     }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/"))
-        .join(".local/share/skill-studio")
 }
 
 /// `<data_root>/history/events.sqlite3` - the one `SQLite` file every core
@@ -52,7 +71,7 @@ pub fn history_db_path(data_root: &Path) -> PathBuf {
 /// spawner, rooted at the host's home directory. Every desktop command that
 /// calls a core `ops` function that opens a `MutationSession` (park, unpark,
 /// update, and every write to come) takes its `Runtime` from here. The
-/// spawner (unused by park/unpark/`set_harness_enabled`) is what lets
+/// spawner (unused by park/unpark) is what lets
 /// `ops::update`'s `Dotagents`/`SkillsSh` methods shell out to `npx` - the
 /// same `RealProcessSpawner` the CLI's own `build_runtime_write` wires in
 /// `apps/cli/src/main.rs`.
@@ -62,12 +81,8 @@ pub fn build_runtime_write() -> Result<Runtime, String> {
 }
 
 /// [`build_runtime_write`], but rooted at `home` and `data_root` given
-/// directly rather than read from the host. `set_harness_enabled_with`
-/// (Codex's `[[skills.config]]` write) takes this so it stays testable
-/// against a tempdir `home`, the way it was before that write moved onto
-/// `ops::set_codex_skill_disabled_with` - the real command still calls
-/// `build_runtime_write` above, which resolves `home` and `data_root` from
-/// the host exactly as it did before this function existed. `pub` (not
+/// directly rather than read from the host, so a test can root it under a
+/// tempdir `home`. `pub` (not
 /// `pub(crate)`) so `tests/fix_parity.rs` can build the desktop side of its
 /// parity check with the desktop adapter's own runtime constructor instead
 /// of a hand-mirrored copy of it.
@@ -114,6 +129,10 @@ pub fn build_runtime_write_at_with_search_dirs(
     let lease_root = data_root.join("leases");
     let db_path = history_db_path(data_root);
     let mut ports = skill_studio_host::default_ports_with_history(lease_root, catalog, db_path);
+    ports.telemetry = skill_studio_host::telemetry::port(
+        skill_studio_host::telemetry::Surface::Desktop,
+        env!("CARGO_PKG_VERSION"),
+    );
     ports.discovery = Some(Arc::new(skill_studio_host::HostProjectDiscovery::new()));
     // A packaged `.app` launched from Finder gets `launchd`'s minimal `PATH`
     // (`/usr/bin:/bin:/usr/sbin:/sbin`), which has neither `npx` nor the
@@ -156,5 +175,29 @@ pub fn to_command_result<T: Outcome>(envelope: ResultEnvelope<T>) -> Result<T, S
             .errors
             .first()
             .map_or_else(|| "operation failed".to_string(), |e| e.message.clone())),
+    }
+}
+
+#[cfg(test)]
+mod data_root_tests {
+    use super::*;
+
+    /// `a_set_xdg_data_home_wins_over_home_or_the_data_folder_moves`: the CLI
+    /// and desktop must agree on one data folder. Fails if an empty or unset
+    /// `XDG_DATA_HOME` does not fall back to `~/.local/share`, or a set one
+    /// is ignored.
+    #[test]
+    fn a_set_xdg_data_home_wins_over_home_or_the_data_folder_moves() {
+        let home = Some(PathBuf::from("/home/u"));
+        assert_eq!(
+            data_root_for(Some("/xdg"), home.clone()),
+            PathBuf::from("/xdg/skill-studio")
+        );
+        for unset in [None, Some("")] {
+            assert_eq!(
+                data_root_for(unset, home.clone()),
+                PathBuf::from("/home/u/.local/share/skill-studio")
+            );
+        }
     }
 }

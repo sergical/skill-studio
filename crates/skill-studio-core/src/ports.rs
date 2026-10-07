@@ -114,6 +114,43 @@ pub fn confine(
     }
 }
 
+/// [`confine`] for a file about to be rewritten in place: when `path` is a
+/// link (a dotfiles repo linking `~/.claude/settings.json`), the link's
+/// resolved file is confined and returned instead, so the write goes
+/// through the link and the link survives. A dangling link is refused
+/// rather than replaced by a regular file.
+pub fn confine_write_through(
+    scope: &NormalizedScope,
+    fs: &dyn ScopeFs,
+    path: &Path,
+) -> Result<ScopedPath, CoreError> {
+    confine(scope, fs, &resolve_config_link(fs, path)?)
+}
+
+/// The file a config path really names: `path` itself, or the file its
+/// leaf link resolves to. An op that edits a config file reads, backs up,
+/// writes, and fingerprints this path, so its undo restores the real file
+/// rather than the link (whose backup would read back the edited bytes).
+/// A dangling link is an [`ErrorCode::InvalidRequest`] error.
+pub fn resolve_config_link(fs: &dyn ScopeFs, path: &Path) -> Result<PathBuf, CoreError> {
+    let is_link = fs
+        .symlink_metadata(path)
+        .is_ok_and(|facts| facts.kind == FileKind::Symlink);
+    if !is_link {
+        return Ok(path.to_path_buf());
+    }
+    fs.canonicalize(path).map_err(|_| {
+        CoreError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "{} is a link to a file that does not exist; fix or remove the link first",
+                path.display()
+            ),
+        )
+        .at(path)
+    })
+}
+
 /// Shared body for every [`ScopeFs::ancestor_holds`] implementation: walk
 /// `start` and its ancestors via `fs.symlink_metadata`, one directory at a
 /// time, stopping as soon as `dir.join(name)` resolves or the walk runs out
@@ -215,6 +252,16 @@ impl ScopeFs for ScopedReads<'_> {
     ) -> std::io::Result<()> {
         self.inner.symlink(guard, target, link)
     }
+    fn symlink_relative(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        relative_target: &Path,
+        link: &ScopedPath,
+    ) -> std::io::Result<()> {
+        self.inner
+            .symlink_relative(guard, target, relative_target, link)
+    }
     fn fsops_device_inode(&self, path: &Path) -> std::io::Result<(u64, u64)> {
         self.inner.fsops_device_inode(path)
     }
@@ -229,6 +276,14 @@ impl ScopeFs for ScopedReads<'_> {
     }
     fn fsops_write_new_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         self.inner.fsops_write_new_file(path, bytes)
+    }
+    fn fsops_write_new_file_with_mode(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        mode: u32,
+    ) -> std::io::Result<()> {
+        self.inner.fsops_write_new_file_with_mode(path, bytes, mode)
     }
     fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
         self.inner.fsops_rename(from, to)
@@ -296,6 +351,22 @@ pub trait ScopeFs: Send + Sync {
         target: &ScopedPath,
         link: &ScopedPath,
     ) -> std::io::Result<()>;
+    /// Creates a symlink at `link` that stores `relative_target` (a path
+    /// relative to `link`'s parent that resolves to `target`), the way the
+    /// `skills` CLI writes its per-harness links. A relative link keeps
+    /// working when the scope folder is moved or mounted at another path.
+    /// The default stores `target` as is, for a fake filesystem that only
+    /// needs the link to resolve.
+    fn symlink_relative(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        relative_target: &Path,
+        link: &ScopedPath,
+    ) -> std::io::Result<()> {
+        let _ = relative_target;
+        self.symlink(guard, target, link)
+    }
 
     /// Device and inode of the entry at `path`, without following a final
     /// symlink. [`crate::fsops::Root`] rereads this before and after every
@@ -315,6 +386,14 @@ pub trait ScopeFs: Send + Sync {
     /// [`crate::fsops::write_file`], which goes through a temp name and a
     /// rename instead.
     fn fsops_write_new_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()>;
+    /// [`Self::fsops_write_new_file`] that leaves the file with exactly the
+    /// `mode` permission bits, whatever the process umask is.
+    fn fsops_write_new_file_with_mode(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        mode: u32,
+    ) -> std::io::Result<()>;
     /// Renames within one filesystem, confined by the caller's own
     /// [`crate::fsops::Root`] rather than a [`ScopedPath`].
     fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
@@ -553,17 +632,17 @@ pub trait HistoryStore: Send {
     /// [`Self::read_manifest`]. Never called for an absent entry.
     fn read_backup_bytes(&self, backup_dir: &str, relative: &str) -> Result<Vec<u8>, CoreError>;
     /// Lists every regular file under `relative` inside `backup_dir`
-    /// (recursively, paths relative to `relative` itself) with its bytes.
-    /// Used only when [`Self::read_manifest`] names a directory entry: a
-    /// restore of a directory reads the whole subtree this way and replays
-    /// it with [`crate::fsops::stage`]. A symlink inside the backed-up tree
-    /// is an [`crate::error::ErrorCode::Unsupported`] error; nothing writes
-    /// one into a skill folder today.
+    /// (recursively, paths relative to `relative` itself) with its bytes and
+    /// permission bits. Used only when [`Self::read_manifest`] names a
+    /// directory entry: a restore of a directory reads the whole subtree
+    /// this way and replays it with [`crate::fsops::stage_files`]. A symlink
+    /// inside the backed-up tree is an
+    /// [`crate::error::ErrorCode::Unsupported`] error.
     fn read_backup_files(
         &self,
         backup_dir: &str,
         relative: &str,
-    ) -> Result<Vec<(PathBuf, Vec<u8>)>, CoreError>;
+    ) -> Result<Vec<crate::fsops::StageFile>, CoreError>;
     /// Merges `patch`'s top-level keys into an already-recorded event's
     /// payload, leaving every other key as-is. For best-effort follow-up
     /// work a mutation performs after its own row already exists (e.g.
@@ -572,6 +651,17 @@ pub trait HistoryStore: Send {
     /// failure just to report it. The default no-op is fine for a host that
     /// never calls it.
     fn patch_payload(
+        &mut self,
+        _guard: &ExclusiveGuard,
+        _id: &EventId,
+        _patch: serde_json::Value,
+    ) -> Result<(), CoreError> {
+        Ok(())
+    }
+    /// [`Self::patch_payload`] for the event's inverse: an op records its
+    /// inverse before the first write (journal first) and fills in what only
+    /// the write can know, such as the fingerprint of each folder it wrote.
+    fn patch_inverse(
         &mut self,
         _guard: &ExclusiveGuard,
         _id: &EventId,
@@ -836,16 +926,75 @@ pub trait EventSink: Send + Sync {
     fn notify(&self, notice: CoreNotice);
 }
 
-/// Receives sanitized error reports. Must not block: queuing and flushing
-/// happen on the adapter's own schedule, never on the caller's thread.
-///
-/// This port is separate from [`Ports`]: reporting is a cross-cutting,
-/// opt-in side channel triggered by a panic or a command failure, not part
-/// of any op's own plumbing. An adapter wires it independently - see
-/// `skill_studio_host::sink::QueuedReportSink`.
-pub trait ReportSink: Send + Sync {
-    /// Queues one already-sanitized envelope for later delivery.
-    fn report(&self, envelope: crate::report_sanitizer::SanitizedEnvelope);
+/// Outcome of one op call, as [`OpRecord`] tags it. Never carries the
+/// message text of the error - only its stable [`ErrorCode`] - so a
+/// telemetry port can send this without redacting free text itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpOutcome {
+    /// The op returned `Ok`.
+    Ok,
+    /// The op returned `Err`; `code` is `CoreError::code`.
+    Err {
+        /// The error's stable code.
+        code: ErrorCode,
+    },
+}
+
+/// One nested `Operation` a top-level op's body called through the same
+/// [`OpContext`] (e.g. `doctor` calling `diagnose`, which itself calls
+/// `scan`) - reported as a child of the top-level [`OpRecord`] rather than
+/// a record of its own, so `doctor` sends one transaction, not three.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedOp {
+    /// Which operation ran.
+    pub operation: crate::ops::Operation,
+    /// Whether it succeeded, and the error code if not.
+    pub outcome: OpOutcome,
+    /// Elapsed time and step timings this nested call filed.
+    pub timing: crate::timing::OpTiming,
+    /// How many `run` calls this one is nested under: `1` for an op the
+    /// top-level op's own body called directly, `2` for one a depth-1 op's
+    /// body called, and so on.
+    pub depth: usize,
+    /// Milliseconds from the top-level run's start to this nested run's
+    /// start, from `ports.clock` - what an adapter needs to place this
+    /// [`NestedOp`]'s span at its real offset under its real parent instead
+    /// of laying every nested op end to end after the root's own steps.
+    pub offset_ms: u64,
+}
+
+/// What one operation run looked like. Built only from typed fields: no free
+/// text can carry a path or a skill name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpRecord {
+    /// Which operation ran.
+    pub operation: crate::ops::Operation,
+    /// The call's correlation id.
+    pub correlation_id: CorrelationId,
+    /// Whether it succeeded, and the error code if not.
+    pub outcome: OpOutcome,
+    /// Elapsed time and step timings, as filed through [`OpContext::record_timing`].
+    /// Empty `steps` when the op failed before recording them.
+    pub timing: crate::timing::OpTiming,
+    /// Operations this one called through the same `OpContext`, in call
+    /// order.
+    pub nested: Vec<NestedOp>,
+}
+
+/// Receives one [`OpRecord`] per op call. Must not block: a telemetry port
+/// runs on the same thread as the op it is recording.
+pub trait Telemetry: Send + Sync {
+    /// Records one op call.
+    fn record(&self, record: OpRecord);
+}
+
+/// A [`Telemetry`] that does nothing - the default until a host binds a real
+/// one.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopTelemetry;
+
+impl Telemetry for NoopTelemetry {
+    fn record(&self, _record: OpRecord) {}
 }
 
 /// A child process to run.
@@ -857,7 +1006,8 @@ pub struct ProcessSpec {
     pub args: Vec<String>,
     /// Working directory.
     pub cwd: Option<PathBuf>,
-    /// Extra environment; the adapter decides what else is inherited.
+    /// Extra environment; the adapter decides what else is inherited. An
+    /// entry with an empty value removes that variable from the child.
     pub env: Vec<(String, String)>,
     /// Hard deadline in milliseconds.
     pub timeout_ms: u64,
@@ -928,6 +1078,8 @@ pub struct Ports {
     pub tools: Option<Arc<dyn ToolLookup>>,
     /// Harness facts.
     pub catalog: Arc<HarnessCatalog>,
+    /// Op-call telemetry sink.
+    pub telemetry: Arc<dyn Telemetry>,
 }
 
 /// Per-call context.
@@ -938,16 +1090,61 @@ pub struct OpContext {
     pub cancel: Arc<dyn CancelToken>,
     /// Where the op function in progress files its [`crate::timing::OpTiming`].
     pub timing: std::sync::Mutex<Option<crate::timing::OpTiming>>,
+    /// How many [`Runtime::run`] calls are currently nested through this
+    /// context - `0` outside any call, `1` for a top-level op, `2+` for an
+    /// op called from inside another op's own body. Not `pub`: only
+    /// [`Runtime::run`] may raise or lower it, so nothing outside this
+    /// module can desync it from `nested`.
+    pub(crate) depth: std::sync::atomic::AtomicUsize,
+    /// [`NestedOp`]s a top-level [`Runtime::run`] call has collected so far
+    /// from ops its own body called through this same context. Not `pub`
+    /// for the same reason as `depth`.
+    pub(crate) nested: std::sync::Mutex<Vec<NestedOp>>,
+    /// The top-level run's `ports.clock.monotonic()` start, set when
+    /// `depth` goes `0` -> `1` and cleared when it returns to `0`. A nested
+    /// run reads this to compute its own [`NestedOp::offset_ms`].
+    pub(crate) root_start: std::sync::Mutex<Option<Duration>>,
 }
 
 impl OpContext {
     /// A context that cannot be cancelled.
     pub fn uncancellable(correlation_id: CorrelationId) -> Self {
+        OpContext::with_cancel(correlation_id, Arc::new(NeverCancel))
+    }
+
+    /// A context cancelled through `cancel`, for a caller that has its own
+    /// [`CancelToken`] to bridge (e.g. the desktop's `AddOperationControl`)
+    /// rather than [`NeverCancel`]. The struct's fields besides
+    /// `correlation_id` and `cancel` are `pub(crate)`, so this - not a
+    /// struct literal - is how code outside this crate builds one.
+    pub fn with_cancel(correlation_id: CorrelationId, cancel: Arc<dyn CancelToken>) -> Self {
         OpContext {
             correlation_id,
-            cancel: Arc::new(NeverCancel),
+            cancel,
             timing: std::sync::Mutex::new(None),
+            depth: std::sync::atomic::AtomicUsize::new(0),
+            nested: std::sync::Mutex::new(Vec::new()),
+            root_start: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Appends one [`NestedOp`] a call nested through this context just
+    /// finished.
+    fn push_nested(&self, op: NestedOp) {
+        self.nested
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(op);
+    }
+
+    /// Takes every [`NestedOp`] collected so far, leaving the list empty.
+    fn take_nested(&self) -> Vec<NestedOp> {
+        std::mem::take(
+            &mut self
+                .nested
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     /// Fails with [`ErrorCode::Cancelled`] once the token is set.
@@ -1002,6 +1199,149 @@ impl Runtime {
         )?;
         Ok(Runtime { scope, ports })
     }
+
+    /// Runs one operation body and records it. Elapsed time comes from
+    /// `ports.clock`; the steps come from what the body filed through
+    /// `ctx.record_timing`. Every `Operation` in [`crate::ops`] and its
+    /// sibling modules runs through this, so a call cannot bypass
+    /// telemetry - `set_codex_skill_disabled_with` and `skill_content_hash`
+    /// are public helpers, not ops, and call no `Operation` variant, so
+    /// they are exempt.
+    ///
+    /// A `body` may itself call another op through the same `ctx` (`doctor`
+    /// calling `diagnose`, which calls `scan`). `ctx.depth` tracks how many
+    /// `run` calls are nested right now: the outermost one (`depth` back to
+    /// `0` once `body` returns) is the one [`Telemetry::record`] sees, with
+    /// every op nested inside it attached as a [`NestedOp`]; an inner one
+    /// only appends to `ctx.nested` and records nothing of its own, so
+    /// `doctor` sends one transaction, not three.
+    pub fn run<T>(
+        &self,
+        operation: crate::ops::Operation,
+        ctx: &OpContext,
+        body: impl FnOnce() -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        let clock = self.ports.clock.as_ref();
+        let start = clock.monotonic();
+        let depth_before = ctx.depth.load(std::sync::atomic::Ordering::SeqCst);
+        if depth_before == 0 {
+            *ctx.root_start
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(start);
+            // Nested ops an earlier top-level body collected and then lost
+            // by panicking must not be attributed to this run.
+            ctx.take_nested();
+        }
+        // A timing filed through `ctx` before this call started - either a
+        // stale one left by an unrelated earlier op (`depth_before == 0`) or
+        // the enclosing body's own timing, filed before it called us
+        // (`depth_before > 0`) - must never be attributed to this call.
+        // `saved` restores the latter after we're done; the former is
+        // simply dropped.
+        let saved = ctx.take_timing();
+        let depth_guard = DepthGuard::enter(ctx);
+        let result = body();
+        // Ends `depth_guard`'s raise deterministically here (not at `run`'s
+        // natural scope end) so `depth_after` below reflects the drop that
+        // already ran - including on the panic path, where `body()` never
+        // returns and this line never executes, but the guard's `Drop` still
+        // fires while the stack unwinds through this frame.
+        drop(depth_guard);
+        let depth_after = ctx.depth.load(std::sync::atomic::Ordering::SeqCst);
+
+        let filed = ctx.take_timing();
+        let mut timing = filed.unwrap_or_else(|| crate::timing::OpTiming {
+            op: String::new(),
+            elapsed_ms: clock.monotonic().saturating_sub(start).as_millis() as u64,
+            steps: Vec::new(),
+        });
+        // The operation this `run` call was given decides the name, never
+        // whatever string a nested call (or the body itself) filed.
+        timing.op = op_snake_case_name(operation);
+
+        let outcome = match &result {
+            Ok(_) => OpOutcome::Ok,
+            Err(e) => OpOutcome::Err { code: e.code },
+        };
+
+        if depth_after == 0 {
+            self.ports.telemetry.record(OpRecord {
+                operation,
+                correlation_id: ctx.correlation_id.clone(),
+                outcome,
+                timing: timing.clone(),
+                nested: ctx.take_nested(),
+            });
+            // Leaves the final timing in `ctx` so a caller building a
+            // `ResultEnvelope` from this same `ctx` after `run` returns
+            // (every CLI/MCP surface) still finds it.
+            ctx.record_timing(timing);
+        } else {
+            let root_start = ctx
+                .root_start
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or(start);
+            ctx.push_nested(NestedOp {
+                operation,
+                outcome,
+                timing,
+                depth: depth_before,
+                offset_ms: start.saturating_sub(root_start).as_millis() as u64,
+            });
+            // Puts the enclosing body's own timing (filed before it called
+            // us) back, so it survives this nested call the way it would if
+            // the call had never happened.
+            if let Some(saved) = saved {
+                ctx.record_timing(saved);
+            }
+        }
+        result
+    }
+}
+
+/// Raises [`OpContext::depth`] by one for the lifetime of the guard, and
+/// lowers it again - clearing `root_start` too, once it returns to `0` -
+/// on drop, whether that drop is [`Runtime::run`] finishing normally or a
+/// panic in `body` unwinding through it. Without this, a panicking body
+/// would leave `depth` permanently raised, wrongly nesting every later call
+/// through the same `ctx`.
+struct DepthGuard<'a> {
+    ctx: &'a OpContext,
+}
+
+impl<'a> DepthGuard<'a> {
+    fn enter(ctx: &'a OpContext) -> Self {
+        ctx.depth.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        DepthGuard { ctx }
+    }
+}
+
+impl Drop for DepthGuard<'_> {
+    fn drop(&mut self) {
+        let depth_after = self
+            .ctx
+            .depth
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+            - 1;
+        if depth_after == 0 {
+            *self
+                .ctx
+                .root_start
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
+    }
+}
+
+/// `operation`'s serde `snake_case` wire name - used as [`crate::timing::OpTiming::op`]
+/// when a body files no timing of its own, so the fallback still matches the
+/// op it measured.
+fn op_snake_case_name(operation: crate::ops::Operation) -> String {
+    match serde_json::to_value(operation) {
+        Ok(serde_json::Value::String(name)) => name,
+        _ => unreachable!("Operation always serializes to a string"),
+    }
 }
 
 /// The state a mutation holds from lease to commit.
@@ -1019,8 +1359,25 @@ pub struct MutationSession {
 
 impl MutationSession {
     /// Takes the exclusive lease, opens history, recovers interrupted rows,
-    /// and scans a fresh inventory.
+    /// and scans a fresh inventory of every skill.
+    ///
+    /// Use [`Self::begin_for`] when the op can name the skills it touches.
     pub fn begin(rt: &Runtime, ctx: &OpContext) -> Result<Self, CoreError> {
+        Self::begin_for(rt, ctx, &[])
+    }
+
+    /// Like [`Self::begin`], but `fresh` holds only the named skills.
+    ///
+    /// A full scan walks every root, project, and plugin cache, which costs
+    /// seconds on a large machine; a write that resolves one skill needs
+    /// none of that. An empty `skills` slice, or a recovery or journal
+    /// reconcile that repaired anything, scans everything: the repair may
+    /// have touched skills the caller did not name.
+    pub fn begin_for(
+        rt: &Runtime,
+        ctx: &OpContext,
+        skills: &[crate::identity::SkillName],
+    ) -> Result<Self, CoreError> {
         ctx.checkpoint()?;
         let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)?;
         let Some(mut store) = rt.ports.history.open(&rt.scope, HistoryAccess::ReadWrite)? else {
@@ -1029,7 +1386,7 @@ impl MutationSession {
                 "this host build has no history store; mutations are not available",
             ));
         };
-        crate::events::recover_interrupted(
+        let recovery = crate::events::recover_interrupted(
             &guard,
             store.as_mut(),
             rt.ports.fs.as_ref(),
@@ -1047,7 +1404,18 @@ impl MutationSession {
         let install_journal_root = crate::ops_install::journal_root(&rt.scope.home.lexical);
         let install_journal =
             crate::journal::FsJournal::new(install_journal_root, rt.ports.fs.clone());
-        crate::journal::reconcile(&install_journal, &guard, rt.ports.fs.as_ref())?;
+        let reconciliation =
+            crate::journal::reconcile(&install_journal, &guard, rt.ports.fs.as_ref())?;
+        let repaired = !recovery.interrupted.is_empty()
+            || !recovery.completed.is_empty()
+            || !reconciliation.reversed.is_empty()
+            || !reconciliation.interrupted.is_empty()
+            || !reconciliation.resolved_without_steps.is_empty();
+        let scanned_skills = if repaired {
+            Vec::new()
+        } else {
+            skills.to_vec()
+        };
         // Scan under the exclusive lease already held: `crate::ops::scan`
         // would try to acquire a second (shared) lease over the same keys,
         // and an advisory file lock does not nest within one process.
@@ -1055,7 +1423,7 @@ impl MutationSession {
             rt,
             ctx,
             &crate::dto::ScanRequest {
-                skills: Vec::new(),
+                skills: scanned_skills,
                 timings: false,
             },
         )?;
@@ -1064,6 +1432,17 @@ impl MutationSession {
             store,
             fresh,
         })
+    }
+
+    /// [`Self::begin_for`] for the skill a deployment id names; a full scan
+    /// when the id does not name one.
+    pub(crate) fn begin_for_deployment(
+        rt: &Runtime,
+        ctx: &OpContext,
+        id: &DeploymentId,
+    ) -> Result<Self, CoreError> {
+        let skills: Vec<_> = id.skill_name().into_iter().collect();
+        Self::begin_for(rt, ctx, &skills)
     }
 
     /// Finds exactly one deployment by id in the fresh inventory.
@@ -1081,11 +1460,11 @@ impl MutationSession {
             (Some(one), None) => Ok(one),
             (None, _) => Err(CoreError::new(
                 ErrorCode::AmbiguousTarget,
-                format!("no deployment matches {}", id.as_str()),
+                format!("no copy matches {}", id.as_str()),
             )),
             (Some(_), Some(_)) => Err(CoreError::new(
                 ErrorCode::AmbiguousTarget,
-                format!("more than one deployment matches {}", id.as_str()),
+                format!("more than one copy matches {}", id.as_str()),
             )),
         }
     }

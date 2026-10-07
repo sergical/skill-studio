@@ -9,6 +9,7 @@
 // ============================================================================
 
 use std::path::Path;
+use std::time::Duration;
 
 use serde::Deserialize;
 
@@ -220,12 +221,12 @@ fn connection_error(access: &SkillsShAccess, e: &reqwest::Error) -> String {
 
 /// The connection-failure message for `Server` mode, pulled out as a pure
 /// function so tests can cover both branches without a real transport
-/// failure. `npm run dev:server` is only right for the local dev server
+/// failure. `pnpm run dev:server` is only right for the local dev server
 /// (loopback) - a release build's hosted default fails for reasons that
 /// advice can't fix, so it points at the network instead.
 fn server_unreachable_message(server_root: &str) -> String {
     if is_loopback_server_root(server_root) {
-        format!("Skill Studio server not reachable at {server_root}. Start it with `npm run dev:server`.")
+        format!("Skill Studio server not reachable at {server_root}. Start it with `pnpm run dev:server`.")
     } else {
         format!(
             "Skill Studio server at {server_root} is not reachable. Check your network connection."
@@ -346,10 +347,106 @@ pub async fn get_skill_details(
     }
 
     let url = format!("{}/skills/{}", access.base(), skill_id);
+    let url = reqwest::Url::parse(&url).map_err(|e| format!("Invalid skill id: {e}"))?;
+    fetch_skill_details(access, url).await
+}
 
+/// Builds `<base>/skills/{owner}/{repo}/{skill}` one pushed segment at a
+/// time, so a segment can never add or remove path levels, and refuses any
+/// URL whose parsed path is not exactly the base plus those four segments.
+/// Callers validate the segments' characters first; this is the second wall.
+fn skill_details_url(
+    access: &SkillsShAccess,
+    owner: &str,
+    repo: &str,
+    skill: &str,
+) -> Result<reqwest::Url, String> {
+    let invalid = || format!("Invalid skill id: {owner}/{repo}/{skill}");
+    let mut url = reqwest::Url::parse(access.base()).map_err(|_| invalid())?;
+    let mut expected: Vec<String> = url
+        .path_segments()
+        .ok_or_else(invalid)?
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    url.path_segments_mut()
+        .map_err(|()| invalid())?
+        .pop_if_empty()
+        .extend(["skills", owner, repo, skill]);
+    expected.extend(["skills", owner, repo, skill].map(str::to_string));
+    let actual: Vec<&str> = url.path_segments().ok_or_else(invalid)?.collect();
+    if actual != expected {
+        return Err(invalid());
+    }
+    Ok(url)
+}
+
+/// `get_skill_details` for an id already split into owner, repo and slug,
+/// with the URL built per segment (see `skill_details_url`).
+pub async fn get_skill_details_by_segments(
+    access: &SkillsShAccess,
+    owner: &str,
+    repo: &str,
+    skill: &str,
+) -> Result<SkillDetails, DetailsFailure> {
+    let url = skill_details_url(access, owner, repo, skill)?;
+    send_skill_details(access, url).await
+}
+
+async fn fetch_skill_details(
+    access: &SkillsShAccess,
+    url: reqwest::Url,
+) -> Result<SkillDetails, String> {
+    send_skill_details(access, url)
+        .await
+        .map_err(|failure| failure.message)
+}
+
+/// Why a details request failed; `rate_limit_wait` is set for a 429 so the
+/// install-count scheduler can stop sending until it passes.
+pub struct DetailsFailure {
+    pub message: String,
+    pub rate_limit_wait: Option<Duration>,
+}
+
+impl From<String> for DetailsFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            rate_limit_wait: None,
+        }
+    }
+}
+
+/// How long to stop sending after a 403/429: `Retry-After` seconds, else
+/// `X-RateLimit-Reset` (epoch seconds) when `X-RateLimit-Remaining` is 0,
+/// else 15 minutes.
+pub fn rate_limit_wait(headers: &reqwest::header::HeaderMap) -> Duration {
+    let number =
+        |name: &str| -> Option<u64> { headers.get(name)?.to_str().ok()?.trim().parse().ok() };
+    if let Some(seconds) = number("retry-after") {
+        return Duration::from_secs(seconds);
+    }
+    if number("x-ratelimit-remaining") == Some(0) {
+        if let Some(reset) = number("x-ratelimit-reset") {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            return Duration::from_secs(reset.saturating_sub(now));
+        }
+    }
+    DEFAULT_RATE_LIMIT_WAIT
+}
+
+const DEFAULT_RATE_LIMIT_WAIT: Duration = Duration::from_secs(15 * 60);
+
+async fn send_skill_details(
+    access: &SkillsShAccess,
+    url: reqwest::Url,
+) -> Result<SkillDetails, DetailsFailure> {
     let (client, headers) = client_for(access)?;
     let response = client
-        .get(&url)
+        .get(url)
         .headers(headers)
         .header("User-Agent", "AgentStudio/0.1.0")
         .send()
@@ -357,7 +454,12 @@ pub async fn get_skill_details(
         .map_err(|e| connection_error(access, &e))?;
 
     if !response.status().is_success() {
-        return Err(status_error(response.status()));
+        let rate_limit_wait = (response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS)
+            .then(|| rate_limit_wait(response.headers()));
+        return Err(DetailsFailure {
+            message: status_error(response.status()),
+            rate_limit_wait,
+        });
     }
 
     let data: SkillDetailsResponse = response
@@ -384,6 +486,69 @@ mod tests {
             path: path.to_string(),
             contents: contents.to_string(),
         }
+    }
+
+    /// Flow: build the details URL for a normal skill and for names that try
+    /// to add path levels.
+    /// Expectation: the path is exactly base + skills + owner + repo + skill;
+    /// a segment carrying a slash or dot-dot is encoded or refused, never a
+    /// different path.
+    /// A failure here means a crafted skill name can reach another repo's page.
+    #[test]
+    fn skill_details_url_has_exactly_the_four_segments() {
+        let access = SkillsShAccess::Server {
+            base_url: "http://127.0.0.1:8787/api/v1".to_string(),
+        };
+
+        let url = skill_details_url(&access, "obra", "write-tests", "tdd").unwrap();
+        let segments: Vec<&str> = url.path_segments().unwrap().collect();
+        assert_eq!(
+            segments,
+            ["api", "v1", "skills", "obra", "write-tests", "tdd"]
+        );
+
+        for hostile in ["..", "a/b", "%2e%2e/%2e%2e/x/y/z"] {
+            if let Ok(url) = skill_details_url(&access, "obra", "write-tests", hostile) {
+                assert_eq!(url.path_segments().unwrap().count(), 6, "{url}");
+            }
+        }
+    }
+
+    /// Flow: a 403/429 carries Retry-After, only a rate-limit reset, or nothing.
+    /// Expectation: Retry-After wins; a reset counts only with remaining 0;
+    /// otherwise 15 minutes.
+    /// A failure here means a rate limit is retried too early or blocks for ever.
+    #[test]
+    fn rate_limit_wait_reads_retry_after_then_reset_then_defaults() {
+        let headers = |pairs: &[(&'static str, String)]| {
+            let mut map = reqwest::header::HeaderMap::new();
+            for (name, value) in pairs {
+                map.insert(*name, value.parse().unwrap());
+            }
+            map
+        };
+        assert_eq!(
+            rate_limit_wait(&headers(&[("retry-after", "30".into())])),
+            Duration::from_secs(30)
+        );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let reset = (now + 600).to_string();
+        let wait = rate_limit_wait(&headers(&[
+            ("x-ratelimit-remaining", "0".into()),
+            ("x-ratelimit-reset", reset.clone()),
+        ]));
+        assert!((598..=600).contains(&wait.as_secs()), "{wait:?}");
+        assert_eq!(
+            rate_limit_wait(&headers(&[
+                ("x-ratelimit-remaining", "5".into()),
+                ("x-ratelimit-reset", reset),
+            ])),
+            DEFAULT_RATE_LIMIT_WAIT
+        );
+        assert_eq!(rate_limit_wait(&headers(&[])), DEFAULT_RATE_LIMIT_WAIT);
     }
 
     #[test]
@@ -524,11 +689,11 @@ mod tests {
     fn server_unreachable_message_names_the_local_dev_server_for_loopback_hosts() {
         assert_eq!(
             server_unreachable_message("http://127.0.0.1:8787"),
-            "Skill Studio server not reachable at http://127.0.0.1:8787. Start it with `npm run dev:server`."
+            "Skill Studio server not reachable at http://127.0.0.1:8787. Start it with `pnpm run dev:server`."
         );
         assert_eq!(
             server_unreachable_message("http://localhost:8787"),
-            "Skill Studio server not reachable at http://localhost:8787. Start it with `npm run dev:server`."
+            "Skill Studio server not reachable at http://localhost:8787. Start it with `pnpm run dev:server`."
         );
     }
 

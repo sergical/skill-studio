@@ -5,9 +5,7 @@
 // through that one op, run inside `tauri::async_runtime::spawn_blocking` so
 // a `gh` fetch, an `npx` shell-out, or a file copy never sits on the UI
 // task, the same shape `harness_first_run.rs`'s `detect_with_runtime`
-// already uses. `install_preferences` is the second, much smaller adapter:
-// it reads the same saved-preference/environment-default fact
-// `add_method_defaults.rs` used to compute locally.
+// already uses.
 //
 // Old path deleted in this unit: `skill_add.rs`'s own `add_via_copy`/
 // `add_via_dotagents`/`add_via_skills_sh` (direct `std::fs`/`npx` calls,
@@ -16,18 +14,19 @@
 // except the one unrelated Un-fork argv builder now living in
 // `skill_fork.rs`).
 //
-// `SkillDestination::PerHarness` stays on the wire (see the module's own
-// doc, `AddSkillSheet.tsx` builds it directly and is out of scope here), but
-// this adapter treats it identically to `Universal`: `ops::install` only
-// ever writes the one shared root, so a `PerHarness` request still gets a
-// Universal write, linked into exactly the harnesses `request.agents` names
-// - the same disk shape `docs/action-map/install.md`'s desired state
-// describes for every method, not just Copy.
+// `Universal` is the `skills` CLI's interactive pick, where the shared
+// `.agents/skills` folder is always included: the request installs for
+// `universal` plus `request.agents`, and `request.link_mode` says whether
+// Claude Code, pi, and Grok Build get a link to that copy or a real folder
+// of their own. `PerHarness` (Copy only) installs for `request.agents`
+// alone, each with a real folder in its own skills folder.
 // ============================================================================
 
 use std::path::{Path, PathBuf};
 
-use skill_studio_core::dto::{InstallFile, InstallMethod, InstallOutcome, InstallRequest};
+use skill_studio_core::dto::{
+    InstallFile, InstallHarnessResult, InstallMethod, InstallOutcome, InstallRequest,
+};
 use skill_studio_core::identity::{
     CorrelationId, ProjectRef, RootScope, SkillName, UNIVERSAL_ROOT_RELATIVE,
 };
@@ -36,7 +35,6 @@ use skill_studio_core::ports::{OpContext, Runtime};
 
 use super::agents::AgentId;
 use super::github_skill_listing::GithubSkillEntry;
-#[cfg(test)]
 use super::skill_deployment::SkillDestination;
 use super::skill_dto::{
     AddSkillRequest, AddSkillResult, AddSkillsRequest, InstallScope, ParsedSkillSource,
@@ -63,7 +61,7 @@ fn core_method(method: AddMethod) -> InstallMethod {
 
 /// `AgentId` (the desktop's catalog id) -> `skill_studio_core::identity::AgentId`
 /// (the op's harness newtype), by the catalog's own CLI name string - the
-/// same conversion `set_harness_enabled`'s desktop adapter already uses.
+/// same conversion the desktop's other core adapters use.
 fn core_harness(agent: AgentId) -> Result<skill_studio_core::identity::AgentId, String> {
     skill_studio_core::identity::AgentId::parse_harness(agent.cli_name()).map_err(|e| e.message)
 }
@@ -167,6 +165,22 @@ fn guard_local_copy_source(
     Ok(canonical_source)
 }
 
+/// The permission bits of a file read from disk, for `InstallFile::mode`;
+/// `None` off Unix.
+#[allow(clippy::unnecessary_wraps)] // `None` off Unix
+fn unix_mode(metadata: &std::fs::Metadata) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Some(metadata.permissions().mode() & 0o777)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        None
+    }
+}
+
 /// Reads `dir` into the `InstallFile` list `InstallMethod::Copy` stages -
 /// same walk as the CLI's own `read_skill_files` (`apps/cli/src/main.rs`),
 /// duplicated rather than shared across the crate boundary the CLI binary
@@ -180,11 +194,13 @@ fn read_skill_files(dir: &Path) -> Result<Vec<InstallFile>, String> {
             if file_type.is_dir() {
                 walk(root, &path, out)?;
             } else if file_type.is_file() {
+                let mode = unix_mode(&entry.metadata()?);
                 let contents = std::fs::read(&path)?;
                 let relative_path = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
                 out.push(InstallFile {
                     relative_path,
                     contents,
+                    mode,
                 });
             }
         }
@@ -234,10 +250,18 @@ pub(crate) fn gather_copy_files(
             } else {
                 let commit = match &source.git_ref {
                     Some(r) => r.clone(),
-                    None => lookup
-                        .latest_commit(&repo, &path, None)?
-                        .map(|(sha, _)| sha)
-                        .ok_or("Could not determine the skill's latest commit")?,
+                    // A store install sends the bare skill name as `path`.
+                    // GitHub has no commit for a path the skill does not
+                    // live at, so the tarball comes from the repo's latest
+                    // commit and `locate_extracted_skill_dir` finds the
+                    // skill in it by name.
+                    None => match lookup.latest_commit(&repo, &path, None)? {
+                        Some((sha, _)) => sha,
+                        None => lookup
+                            .latest_commit(&repo, "", None)?
+                            .map(|(sha, _)| sha)
+                            .ok_or("Could not determine the skill's latest commit")?,
+                    },
                 };
                 fetch.fetch_skill_dir(&repo, &path, &commit, staging.path())?;
             }
@@ -264,7 +288,7 @@ pub(crate) fn request_for_entry(
         method: batch.method,
         destination: batch.destination,
         agents: batch.agents.clone(),
-        disabled_harnesses: batch.disabled_harnesses.clone(),
+        link_mode: batch.link_mode,
         scope: batch.scope,
         project_path: batch.project_path.clone(),
     }
@@ -336,8 +360,8 @@ fn request_scope_root(request: &AddSkillRequest, rt: &Runtime) -> Result<PathBuf
 }
 
 /// Builds the op's own request from the desktop's wire request plus the
-/// files a `Copy` install already gathered. `destination` is read but not
-/// otherwise threaded through: see the module doc on `PerHarness`.
+/// files a `Copy` install already gathered. `harnesses` is `universal`
+/// followed by `request.agents`, or `request.agents` alone for `PerHarness`.
 ///
 /// `pub(crate)`: shared with `skill_add_operation.rs`'s batch worker.
 pub(crate) fn build_install_request(
@@ -345,11 +369,15 @@ pub(crate) fn build_install_request(
     files: Vec<InstallFile>,
 ) -> Result<InstallRequest, String> {
     let name = derive_and_validate_name(request)?;
-    let harnesses = request
-        .agents
-        .iter()
-        .copied()
-        .map(core_harness)
+    let per_harness = request.destination == SkillDestination::PerHarness;
+    let harnesses = (!per_harness)
+        .then(|| {
+            Ok(skill_studio_core::identity::AgentId::from(
+                skill_studio_core::install_targets::UNIVERSAL_TARGET,
+            ))
+        })
+        .into_iter()
+        .chain(request.agents.iter().copied().map(core_harness))
         .collect::<Result<Vec<_>, _>>()?;
     let scope = match request.scope {
         InstallScope::Global => RootScope::Global,
@@ -382,6 +410,12 @@ pub(crate) fn build_install_request(
         trust_identity,
         trust_confirmed: false,
         save_as_preference: true,
+        link_mode: request.link_mode,
+        destination: if per_harness {
+            skill_studio_core::identity::SkillDestination::PerHarness
+        } else {
+            skill_studio_core::identity::SkillDestination::Universal
+        },
     })
 }
 
@@ -408,52 +442,54 @@ pub(crate) fn needs_trust_message(identity: &str) -> String {
     )
 }
 
-/// Turns the op's outcome into the sheet's `AddSkillResult`, running the
-/// `disabled_harnesses` follow-up `ops::install` does not own (decision 2,
-/// `launch-3-5c.md`): it runs after the op's own write succeeds, inside the
-/// same `spawn_blocking` task as the install itself. A follow-up failure
-/// becomes `warning`, not an error - the install already succeeded and the
-/// skill is on disk and usable.
+/// Turns the op's outcome into the sheet's `AddSkillResult`. Link and copy
+/// problems the op reports become `warning`, not an error - the install
+/// already succeeded and the skill is on disk and usable.
 ///
 /// `pub(crate)`: shared with `skill_add_operation.rs`'s batch worker.
 pub(crate) fn finish_install(
-    rt: &Runtime,
     request: &AddSkillRequest,
     outcome: InstallOutcome,
 ) -> InstallAdapterOutcome {
-    let (skill, deployment_path, linked_harnesses) = match outcome {
+    let (skill, deployment_path, harness_results) = match outcome {
         InstallOutcome::Installed {
             skill,
             deployment_path,
-            linked_harnesses,
+            harness_results,
             ..
-        } => (skill, deployment_path, linked_harnesses),
+        } => (skill, deployment_path, harness_results),
         InstallOutcome::NeedsTrust { identity } => {
             return InstallAdapterOutcome::NeedsTrust { identity };
         }
     };
 
     let mut deployments_created = vec![deployment_path.to_string_lossy().into_owned()];
-    let claude_link_path = linked_harnesses
-        .iter()
-        .any(|h| h.as_str() == skill_studio_core::identity::AgentId::CLAUDE_CODE)
-        .then(|| {
-            let root = match &request.scope {
-                InstallScope::Global => rt.scope.home.lexical.clone(),
-                InstallScope::Project => {
-                    PathBuf::from(request.project_path.clone().unwrap_or_default())
-                }
-            };
-            root.join(".claude").join("skills").join(&skill.0)
-        });
-    if let Some(link) = &claude_link_path {
-        deployments_created.push(link.to_string_lossy().into_owned());
-    }
-
     let mut warnings = Vec::new();
-    for agent in &request.disabled_harnesses {
-        if let Err(e) = disable_harness(rt, &skill.0, *agent, request.project_path.as_deref()) {
-            warnings.push(format!("{}: {e}", agent.cli_name()));
+    for result in harness_results {
+        match result {
+            InstallHarnessResult::Linked { path, .. }
+            | InstallHarnessResult::Copied { path, .. }
+                if path == deployment_path => {}
+            InstallHarnessResult::Linked { path, .. } => {
+                deployments_created.push(path.to_string_lossy().into_owned());
+            }
+            InstallHarnessResult::Copied {
+                harness,
+                path,
+                link_failed,
+            } => {
+                if link_failed {
+                    warnings.push(format!(
+                        "{}: the link failed, so the skill was copied instead",
+                        harness.as_str()
+                    ));
+                }
+                deployments_created.push(path.to_string_lossy().into_owned());
+            }
+            InstallHarnessResult::Skipped { reason, .. } => {
+                warnings.push(format!("skipped: {reason}"));
+            }
+            InstallHarnessResult::ReadsShared { .. } => {}
         }
     }
 
@@ -469,30 +505,6 @@ pub(crate) fn finish_install(
         deployments_created,
         warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
     })
-}
-
-/// One `ops::set_harness_enabled(enabled: false)` call per
-/// `disabled_harnesses` entry - directly, not through the legacy
-/// `set_harness_enabled_with`/`set_new_universal_reader_enabled` dispatch
-/// `skill_harness_disable.rs`'s own command still uses for a user-driven
-/// toggle (decision 2).
-fn disable_harness(
-    rt: &Runtime,
-    skill: &str,
-    agent: AgentId,
-    project_path: Option<&str>,
-) -> Result<(), String> {
-    let harness = core_harness(agent)?;
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
-    let req = skill_studio_core::dto::SetHarnessEnabledRequest {
-        skill: SkillName(skill.to_string()),
-        harness,
-        enabled: false,
-        project_path: project_path.map(PathBuf::from),
-    };
-    ops::set_harness_enabled(rt, &ctx, &req)
-        .map(|_| ())
-        .map_err(|e| e.message)
 }
 
 // Review item 11: `add_skill_runs_on_a_blocking_thread_...` only proved
@@ -521,7 +533,7 @@ pub(crate) fn set_install_one_thread_probe(
 
 /// One skill through `ops::install`: gather `Copy` files (if applicable,
 /// against a batch's shared `snapshot` when given), build the op's request,
-/// call `ops::install`, then run `finish_install`'s follow-ups. Shared by
+/// call `ops::install`, then run `finish_install`. Shared by
 /// `add_skill_with_runtime` below and `skill_add_operation.rs`'s single and
 /// batch workers, so there is exactly one place that calls `ops::install`.
 pub(crate) fn install_one(
@@ -560,7 +572,7 @@ pub(crate) fn install_one(
     let result = ops::install(rt, &ctx, &install_req);
     let envelope = ResultEnvelope::from_result(Operation::Install, &rt.scope, &ctx, result);
     let outcome = super::core_runtime::to_command_result(envelope)?;
-    Ok(finish_install(rt, request, outcome))
+    Ok(finish_install(request, outcome))
 }
 
 /// The GitHub-facing pair `Copy` needs, same shape `skill_add.rs`'s
@@ -656,36 +668,6 @@ pub async fn add_skill(
     .await
 }
 
-/// The saved or environment-default install method/harnesses, so
-/// `AddSkillSheet.tsx` can pre-fill the second install the way it already
-/// pre-fills the first from `add_method_defaults.rs`. `add_method_defaults.rs`
-/// stays as-is: `ops::install_preferences` falls back to the exact same
-/// environment default (`npx` on `PATH` -> `SkillsSh`, else `Copy`) when
-/// nothing has been saved yet, so nothing downstream needs to reconcile two
-/// different defaults.
-#[tauri::command]
-pub async fn install_preferences(
-    scope: InstallScope,
-    project_path: Option<String>,
-    app: tauri::AppHandle,
-) -> Result<skill_studio_core::dto::InstallPreferences, String> {
-    crate::timing_log::time_command_blocking(&app, "install_preferences", move || {
-        let rt = super::core_runtime::build_runtime_write()?;
-        let root_scope = match scope {
-            InstallScope::Global => RootScope::Global,
-            InstallScope::Project => RootScope::Project(ProjectRef(PathBuf::from(
-                project_path.ok_or("Project scope needs a project path")?,
-            ))),
-        };
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
-        let result = ops::install_preferences(&rt, &ctx, &root_scope);
-        let envelope =
-            ResultEnvelope::from_result(Operation::InstallPreferences, &rt.scope, &ctx, result);
-        super::core_runtime::to_command_result(envelope)
-    })
-    .await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,7 +725,7 @@ mod tests {
             method: AddMethod::Copy,
             destination: SkillDestination::Universal,
             agents: vec![],
-            disabled_harnesses: vec![],
+            link_mode: skill_studio_core::dto::InstallLinkMode::Link,
             scope: InstallScope::Global,
             project_path: None,
         }
@@ -769,7 +751,7 @@ mod tests {
             method: AddMethod::SkillsSh,
             destination: SkillDestination::Universal,
             agents: vec![],
-            disabled_harnesses: vec![],
+            link_mode: skill_studio_core::dto::InstallLinkMode::Link,
             scope: InstallScope::Global,
             project_path: None,
         }
@@ -822,6 +804,62 @@ mod tests {
             )))
         }
     }
+    /// Answers only for the repo root, like GitHub for a store install's
+    /// bare skill name when the skill lives at `skills/<name>`.
+    struct RootOnlyLookup;
+    impl CommitLookup for RootOnlyLookup {
+        fn latest_commit(
+            &self,
+            _repo: &str,
+            path: &str,
+            _until: Option<&str>,
+        ) -> Result<Option<(String, String)>, String> {
+            Ok(path
+                .is_empty()
+                .then(|| ("headsha".to_string(), "2024-01-01T00:00:00Z".to_string())))
+        }
+    }
+    struct RecordingFetch(std::sync::Mutex<Option<String>>);
+    impl UpstreamFetch for RecordingFetch {
+        fn fetch_skill_dir(
+            &self,
+            _repo: &str,
+            _path: &str,
+            commit: &str,
+            into: &Path,
+        ) -> Result<(), String> {
+            *self.0.lock().unwrap() = Some(commit.to_string());
+            super::super::test_support::write_skill(into, "find-bugs");
+            Ok(())
+        }
+    }
+
+    /// Flow: a Copy install from the store sends `path: "find-bugs"` with no
+    /// ref, and GitHub has no commit for that path because the skill lives
+    /// at `skills/find-bugs`. Expect the files read from the tarball at the
+    /// repo's latest commit. Catches an install that fails with "Could not
+    /// determine the skill's latest commit" before the by-name search runs.
+    #[test]
+    fn copy_install_of_a_bare_skill_name_fetches_the_repo_head_when_the_path_has_no_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut source = github_source("getsentry/skills", "find-bugs");
+        source.path = Some("find-bugs".to_string());
+        let fetch = RecordingFetch(std::sync::Mutex::new(None));
+
+        let files = gather_copy_files(
+            &source,
+            tmp.path(),
+            &tmp.path().join("dest"),
+            &fetch,
+            &RootOnlyLookup,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(fetch.0.lock().unwrap().as_deref(), Some("headsha"));
+        assert!(!files.is_empty(), "the skill's files must be read");
+    }
+
     fn stub_github() -> GithubTools {
         (Box::new(StubFetch), Box::new(StubLookup))
     }
@@ -867,7 +905,7 @@ mod tests {
             method: AddMethod::Copy,
             destination: SkillDestination::Universal,
             agents: vec![],
-            disabled_harnesses: vec![],
+            link_mode: skill_studio_core::dto::InstallLinkMode::Link,
             scope: InstallScope::Global,
             project_path: None,
         }
@@ -1139,72 +1177,6 @@ mod tests {
         assert_eq!(result.name, "visual-recap");
     }
 
-    /// `add_skill_with_disabled_harnesses_ends_with_that_harness_switched_off_or_names_the_harness_still_enabled`
-    /// (review item 3): decision 2 (`launch-3-5c.md`) runs
-    /// `disabled_harnesses` as a follow-up after `ops::install`'s own write
-    /// succeeds, directly through `ops::set_harness_enabled`. Installs Claude
-    /// Code linked, then disabled, and checks the disk state
-    /// `set_harness_enabled` itself mutates (the per-skill symlink under
-    /// `.claude/skills`), not just that the call returned without an error.
-    #[tokio::test]
-    async fn add_skill_with_disabled_harnesses_ends_with_that_harness_switched_off_or_names_the_harness_still_enabled(
-    ) {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let source_dir = tmp.path().join("source");
-        std::fs::create_dir_all(&home).unwrap();
-        super::super::test_support::write_skill(&source_dir, "find-bugs");
-
-        let rt = test_runtime(&home);
-        let mut request = copy_request(&source_dir, "find-bugs");
-        request.agents = vec![AgentId::ClaudeCode];
-        request.disabled_harnesses = vec![AgentId::ClaudeCode];
-
-        let result = add_skill_with_runtime(move || Ok(rt), request, never_github())
-            .await
-            .unwrap();
-
-        assert_eq!(
-            result.warning, None,
-            "disabling claude-code right after install should not have failed"
-        );
-        let link = home.join(".claude/skills/find-bugs");
-        assert!(
-            !link.exists(),
-            "claude-code should end disabled, but {} still exists",
-            link.display()
-        );
-    }
-
-    /// `a_harness_that_cannot_be_disabled_becomes_a_warning_not_a_failed_install`
-    /// (review item 5): re-added from the deleted `skill_add.rs`, adapted to
-    /// `ops::set_harness_enabled`'s own refusal - unlike the legacy
-    /// `skill_harness_disable.rs` dispatch this crate's `disable_harness`
-    /// now goes through, `pi` has a native switch here (`set_pi_switch`), so
-    /// `cursor` (no native per-skill switch at all, `ops.rs`'s `other =>`
-    /// arm) is the one that still names the refusal. Asking to disable it is
-    /// a `finish_install` follow-up failure, not an install failure.
-    #[tokio::test]
-    async fn a_harness_that_cannot_be_disabled_becomes_a_warning_not_a_failed_install() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let source_dir = tmp.path().join("source");
-        std::fs::create_dir_all(&home).unwrap();
-        super::super::test_support::write_skill(&source_dir, "find-bugs");
-
-        let rt = test_runtime(&home);
-        let mut request = copy_request(&source_dir, "find-bugs");
-        request.disabled_harnesses = vec![AgentId::Cursor];
-
-        let result = add_skill_with_runtime(move || Ok(rt), request, never_github())
-            .await
-            .unwrap();
-
-        assert!(home.join(".agents/skills/find-bugs").exists());
-        let warning = result.warning.expect("expected a disable warning");
-        assert!(warning.contains("no native per-skill switch"), "{warning}");
-    }
-
     // Review item 1: the deleted `skill_add.rs`'s four local-Copy-source
     // guard tests, restored against `gather_copy_files` directly (the guard
     // now lives in `guard_local_copy_source`, called from there before any
@@ -1296,6 +1268,48 @@ mod tests {
         assert_eq!(
             std::fs::read_dir(source.parent().unwrap()).unwrap().count(),
             1
+        );
+    }
+
+    /// `per_harness_request_names_only_the_ticked_harnesses_and_no_shared_folder_or_writes_a_copy_the_user_left_out`:
+    /// a per-harness request for Codex must reach the core as `PerHarness`
+    /// with Codex alone; the `universal` id a Universal request always adds
+    /// would write the shared folder. Fails when the shared id stays in, or
+    /// the destination is lost on the way to the core.
+    #[test]
+    fn per_harness_request_names_only_the_ticked_harnesses_and_no_shared_folder_or_writes_a_copy_the_user_left_out(
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut per_harness = copy_request(tmp.path(), "find-bugs");
+        per_harness.destination = SkillDestination::PerHarness;
+        per_harness.agents = vec![AgentId::Codex];
+        let universal = AddSkillRequest {
+            destination: SkillDestination::Universal,
+            ..copy_request(tmp.path(), "find-bugs")
+        };
+
+        let per_harness_req = build_install_request(&per_harness, Vec::new()).unwrap();
+        let universal_req = build_install_request(&universal, Vec::new()).unwrap();
+
+        assert_eq!(
+            per_harness_req.destination,
+            skill_studio_core::identity::SkillDestination::PerHarness
+        );
+        assert_eq!(
+            per_harness_req
+                .harnesses
+                .iter()
+                .map(skill_studio_core::identity::AgentId::as_str)
+                .collect::<Vec<_>>(),
+            vec!["codex"]
+        );
+        assert_eq!(
+            universal_req
+                .harnesses
+                .iter()
+                .map(skill_studio_core::identity::AgentId::as_str)
+                .collect::<Vec<_>>(),
+            vec!["universal"]
         );
     }
 }

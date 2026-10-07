@@ -93,17 +93,46 @@ pub(crate) fn run_gh(
 
 /// Runs a read-only `gh` call with Add operation cancellation, deadline, and
 /// bounded output. Add's commit lookup uses this instead of `wait_with_output`.
+/// Output past the bound is cut to its last bytes, so only use this for
+/// output that is short or whose tail is enough.
 pub(crate) fn run_gh_controlled(
     gh_bin: &Path,
     args: &[&str],
     control: &AddOperationControl,
 ) -> Result<Vec<u8>, GhError> {
+    run_gh_limited(gh_bin, args, control, MAX_PROCESS_OUTPUT_BYTES)
+}
+
+/// As [`run_gh_controlled`] for output that must arrive whole, such as a file
+/// from the contents API. Output that reaches `max_output_bytes` is an error,
+/// never a truncated success.
+pub(crate) fn run_gh_controlled_whole(
+    gh_bin: &Path,
+    args: &[&str],
+    control: &AddOperationControl,
+    max_output_bytes: usize,
+) -> Result<Vec<u8>, GhError> {
+    let stdout = run_gh_limited(gh_bin, args, control, max_output_bytes)?;
+    if stdout.len() >= max_output_bytes {
+        return Err(GhError::Failed(format!(
+            "gh output reached the {max_output_bytes} byte limit"
+        )));
+    }
+    Ok(stdout)
+}
+
+fn run_gh_limited(
+    gh_bin: &Path,
+    args: &[&str],
+    control: &AddOperationControl,
+    max_output_bytes: usize,
+) -> Result<Vec<u8>, GhError> {
     let args = args
         .iter()
         .map(|arg| (*arg).to_string())
         .collect::<Vec<_>>();
-    run_controlled_command_output(gh_bin, &args, None, control, MAX_PROCESS_OUTPUT_BYTES).map_err(
-        |error| match error {
+    run_controlled_command_output(gh_bin, &args, None, control, max_output_bytes).map_err(|error| {
+        match error {
             ControlledProcessError::Cancelled | ControlledProcessError::TimedOut => {
                 GhError::Failed(error.into_message())
             }
@@ -111,8 +140,8 @@ pub(crate) fn run_gh_controlled(
                 GhError::NotLoggedIn
             }
             ControlledProcessError::Failed(message) => GhError::Failed(message),
-        },
-    )
+        }
+    })
 }
 
 #[cfg(test)]
@@ -142,5 +171,47 @@ mod tests {
     fn run_gh_reports_the_binary_that_failed_to_spawn() {
         let err = run_gh(Path::new("/nonexistent/gh-binary"), &["api", "x"], None).unwrap_err();
         assert!(err.message().contains("Failed to run gh"));
+    }
+
+    #[cfg(unix)]
+    fn fake_gh_printing(tmp: &Path, bytes: usize) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = tmp.join("gh");
+        std::fs::write(
+            &script,
+            format!("#!/usr/bin/env sh\nhead -c {bytes} /dev/zero | tr '\\0' 'a'\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    /// Flow: a catalog file larger than the 64 KiB default capture comes back
+    /// from `gh api`.
+    /// Expectation: the whole-output runner returns every byte.
+    /// A failure here means big marketplace catalogs arrive cut off, fail to
+    /// parse, and the stale catalog is used silently.
+    #[cfg(unix)]
+    #[test]
+    fn whole_runner_returns_output_larger_than_the_default_capture() {
+        let tmp = tempfile::tempdir().unwrap();
+        let gh = fake_gh_printing(tmp.path(), 300_000);
+        let control = AddOperationControl::bounded_default();
+        let out = run_gh_controlled_whole(&gh, &[], &control, 8 * 1024 * 1024).unwrap();
+        assert_eq!(out.len(), 300_000);
+    }
+
+    /// Flow: `gh` prints more than the caller's limit.
+    /// Expectation: an error, not the last bytes as if they were the file.
+    /// A failure here means a truncated tail is parsed as content.
+    #[cfg(unix)]
+    #[test]
+    fn whole_runner_errors_when_output_reaches_the_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let gh = fake_gh_printing(tmp.path(), 5_000);
+        let control = AddOperationControl::bounded_default();
+        let err = run_gh_controlled_whole(&gh, &[], &control, 1_000).unwrap_err();
+        assert!(matches!(err, GhError::Failed(_)));
     }
 }

@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+# The tag ruleset lets a tag be updated, so a re-pushed tag can start a second
+# run that mutates the same release with `--clobber` assets; serialize runs per
+# tag. Never cancel one that is mid-publish.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   check-version:
     runs-on: ubuntu-latest
@@ -16,12 +23,58 @@ jobs:
         with:
           persist-credentials: false
       - run: ./scripts/release/check-version-matches-tag.sh "${{ github.ref_name }}"
+      - name: Require SKILL_STUDIO_SERVER_URL for release builds
+        # The released binary's skills.sh backend is compiled in from this
+        # repository variable (see `default_server_url` in
+        # apps/desktop/src-tauri/src/skills/api.rs). Unset or blank, the
+        # build falls back to the `http://127.0.0.1:8787` local-dev URL with
+        # no error, so every shipped discovery call fails and the app tells
+        # users to run `pnpm run dev:server` - a fail-silent path on the
+        # product's core journey, at the moment the artifact goes public.
+        # Fail before the build rather than publish a binary pointed at
+        # localhost. See also the sibling hard fail for the Apple signing
+        # secrets in the `build` job below.
+        env:
+          SKILL_STUDIO_SERVER_URL: ${{ vars.SKILL_STUDIO_SERVER_URL }}
+        run: |
+          set -euo pipefail
+          url="$(printf '%s' "$SKILL_STUDIO_SERVER_URL" | tr -d '[:space:]')"
+          if [ -z "$url" ]; then
+            echo "::error::Repository variable SKILL_STUDIO_SERVER_URL is unset or blank - refusing to build a release whose compiled backend URL would fall back to http://127.0.0.1:8787."
+            echo "Set it to https://api.useskillstudio.com (Settings -> Secrets and variables -> Actions -> Variables), then re-run the release."
+            exit 1
+          fi
+          case "${url,,}" in
+            http://127.*|https://127.*|http://localhost*|https://localhost*|http://\[::1\]*|https://\[::1\]*)
+              echo "::error::Repository variable SKILL_STUDIO_SERVER_URL points at a loopback host ($url) - refusing to build a release pointed at a local dev server."
+              exit 1
+              ;;
+          esac
+          echo "SKILL_STUDIO_SERVER_URL is set to '$url'; the release build will bake it in."
+
+  # A `v*` tag push never runs the branch ruleset's required checks and never
+  # proves the tagged commit was merged; before this job the release path's
+  # only pre-build assertions compared version strings. Assert the tagged
+  # commit is reachable from the default branch here, before `build` spends a
+  # macOS runner and publishes public artifacts - see
+  # scripts/release/check-tag-ancestry.sh.
+  check-on-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Assert the tagged commit is on the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/release/check-tag-ancestry.sh "${{ github.sha }}" "${{ github.event.repository.default_branch }}"
 
   build:
-    needs: check-version
+    needs: [check-version, check-on-main]
     runs-on: macos-14
-    # tauri-action creates the GitHub release and `gh release upload` attaches
-    # the .dSYM archive; the default GITHUB_TOKEN is read-only.
+    # tauri-action creates the GitHub release as a draft and `gh release
+    # upload` attaches the .dSYM archive to it; the default GITHUB_TOKEN is
+    # read-only. Publication happens later, in the `publish` job.
     permissions:
       contents: write
     strategy:
@@ -32,8 +85,10 @@ jobs:
       # race-free.
       max-parallel: 1
       # A failure on one architecture must not cancel the other leg still
-      # running - each leg uploads its own artifacts to the same release,
-      # so the surviving leg's build is still worth finishing and shipping.
+      # running - each leg uploads its own artifacts to the same draft
+      # release, so the surviving leg's build is still worth finishing. The
+      # release is not published until both legs land and `publish` verifies
+      # the result, so a failed leg cannot ship a half release.
       fail-fast: false
       matrix:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
@@ -49,11 +104,12 @@ jobs:
           toolchain: 1.92.0
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Compute the release version
         # A pre-release tag's base version (e.g. "0.1.0" from
         # "v0.1.0-rc.1") is what CHANGELOG.md and the committed
@@ -86,42 +142,59 @@ jobs:
         # "set" and `security import`s an empty file. They must be
         # entirely ABSENT from the build step's environment when the
         # certificate secret is empty, which is why this step (not the
-        # build step's own `env:`) is the only place that ever writes them,
-        # and only inside this `if`. `$GITHUB_ENV` receives them - never
-        # `echo`d to stdout - and the heredoc form guards a multi-line
-        # secret (the .p12 is base64, expected to be one line, but this
-        # doesn't assume it).
+        # build step's own `env:`) is the only place that ever writes them.
+        # `$GITHUB_ENV` receives them - never `echo`d to stdout - and the
+        # heredoc form guards a multi-line secret (the .p12 is base64,
+        # expected to be one line, but this doesn't assume it).
+        #
+        # A missing secret is a hard failure here, not a fallback. This
+        # step runs immediately before tauri-action, which uploads the DMGs
+        # to the draft release that the `publish` job later makes public; an
+        # unsigned, unnotarized build is not a rehearsal anyone can use -
+        # every download hits Gatekeeper's unverified-developer warning
+        # (and, unnotarized, often the "app is damaged and can't be opened"
+        # dead end). So every Apple signing and notarization secret must be
+        # set or the job stops before anything is published. The four
+        # v0.1.0-rc.* releases were published before this gate existed and
+        # are unsigned (docs/action-map/release-readiness.md, step 1).
         run: |
           set -euo pipefail
-          if [ -n "$APPLE_CERTIFICATE" ]; then
-            delimiter="$(openssl rand -hex 16)"
-            {
-              echo "APPLE_CERTIFICATE<<$delimiter"
-              echo "$APPLE_CERTIFICATE"
-              echo "$delimiter"
-              echo "APPLE_CERTIFICATE_PASSWORD<<$delimiter"
-              echo "$APPLE_CERTIFICATE_PASSWORD"
-              echo "$delimiter"
-              echo "APPLE_SIGNING_IDENTITY=Developer ID Application"
-              echo "KEYCHAIN_PASSWORD<<$delimiter"
-              echo "$APPLE_KEYCHAIN_PASSWORD"
-              echo "$delimiter"
-              echo "APPLE_ID<<$delimiter"
-              echo "$APPLE_ID"
-              echo "$delimiter"
-              echo "APPLE_PASSWORD<<$delimiter"
-              echo "$APPLE_APP_SPECIFIC_PASSWORD"
-              echo "$delimiter"
-              echo "APPLE_TEAM_ID<<$delimiter"
-              echo "$APPLE_TEAM_ID"
-              echo "$delimiter"
-            } >> "$GITHUB_ENV"
-            echo "Apple code signing secrets present - build will sign and notarize."
-          else
-            echo "Apple code signing secrets are unset - building an unsigned rehearsal."
+          missing=""
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_KEYCHAIN_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "$(printenv "$name" 2>/dev/null)" ]; then
+              missing="${missing:+$missing, }$name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Apple code signing secrets are unset ($missing) - refusing to build a release that would be unsigned and unnotarized."
+            echo "Set the missing repository secrets, then re-run the release (docs/action-map/release-readiness.md, step 1)."
+            exit 1
           fi
+          delimiter="$(openssl rand -hex 16)"
+          {
+            echo "APPLE_CERTIFICATE<<$delimiter"
+            echo "$APPLE_CERTIFICATE"
+            echo "$delimiter"
+            echo "APPLE_CERTIFICATE_PASSWORD<<$delimiter"
+            echo "$APPLE_CERTIFICATE_PASSWORD"
+            echo "$delimiter"
+            echo "APPLE_SIGNING_IDENTITY=Developer ID Application"
+            echo "KEYCHAIN_PASSWORD<<$delimiter"
+            echo "$APPLE_KEYCHAIN_PASSWORD"
+            echo "$delimiter"
+            echo "APPLE_ID<<$delimiter"
+            echo "$APPLE_ID"
+            echo "$delimiter"
+            echo "APPLE_PASSWORD<<$delimiter"
+            echo "$APPLE_APP_SPECIFIC_PASSWORD"
+            echo "$delimiter"
+            echo "APPLE_TEAM_ID<<$delimiter"
+            echo "$APPLE_TEAM_ID"
+            echo "$delimiter"
+          } >> "$GITHUB_ENV"
+          echo "Apple code signing secrets present - build will sign and notarize."
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -137,10 +210,16 @@ jobs:
           # `default_server_url` in api.rs) - an unset repo variable keeps
           # the `http://127.0.0.1:8787` local-dev default.
           SKILL_STUDIO_SERVER_URL: ${{ vars.SKILL_STUDIO_SERVER_URL }}
+          # Compiled into the release binary via `option_env!` (see
+          # `skill_studio_host::telemetry::resolve_dsn`) - an unset repo
+          # variable expands to an empty string, which `resolve_dsn` treats
+          # as absent, so telemetry stays off until this is set.
+          SKILL_STUDIO_SENTRY_DSN: ${{ vars.SKILL_STUDIO_SENTRY_DSN }}
           # Apple's APPLE_CERTIFICATE/APPLE_SIGNING_IDENTITY/etc. are
           # deliberately NOT set here - see "Configure Apple code signing"
-          # above, which appends them to $GITHUB_ENV (so they still reach
-          # this step) only when the certificate secret is non-empty.
+          # above, the only place that writes them; that step fails the job
+          # unless every one of them is set, so this step only ever runs for
+          # a build that signs and notarizes.
           #
           # Minisign key pair for the in-app updater (unit 6.2): the public
           # half is committed in tauri.conf.json; the private half signs
@@ -155,7 +234,11 @@ jobs:
           args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
           tagName: ${{ github.ref_name }}
           releaseName: "Skill Studio ${{ github.ref_name }}"
-          releaseDraft: false
+          # Create the release as a draft; the `publish` job flips it public
+          # only after asserting both matrix legs' artifacts are present, so a
+          # failure anywhere in this job leaves an unpublished draft rather
+          # than a public release missing an architecture.
+          releaseDraft: true
           # A tag with a pre-release suffix (e.g. v0.1.0-rc.1) publishes as a
           # GitHub pre-release; a plain vX.Y.Z tag publishes normally.
           prerelease: ${{ contains(github.ref_name, '-') }}
@@ -191,6 +274,246 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ github.ref_name }}" "$dsym_zip" --clobber
 
+      # The fixed names let the website link to /releases/latest/download/;
+      # tauri-action's DMG names carry the version.
+      - name: Attach the fixed-name DMG to the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          case "$TARGET" in
+            aarch64-apple-darwin) fixed_name="Skill-Studio-arm64.dmg" ;;
+            x86_64-apple-darwin) fixed_name="Skill-Studio-intel.dmg" ;;
+            *) echo "no fixed DMG name for $TARGET" >&2; exit 1 ;;
+          esac
+          dmg_dir="target/$TARGET/release/bundle/dmg"
+          shopt -s nullglob
+          dmgs=("$dmg_dir"/*.dmg)
+          if [[ ${#dmgs[@]} -ne 1 ]]; then
+            echo "expected exactly one DMG in $dmg_dir, found ${#dmgs[@]}" >&2
+            exit 1
+          fi
+          cp "${dmgs[0]}" "$RUNNER_TEMP/$fixed_name"
+          gh release upload "$TAG" "$RUNNER_TEMP/$fixed_name" --clobber
+
+      # The npm packages ship the CLI binary on its own, outside the .app, so
+      # it needs its own build, signature and notarization. Same compile-time
+      # env as the tauri-action step above, so the CLI reports the same commit
+      # and telemetry DSN as the app.
+      - name: Build the CLI
+        env:
+          SKILL_STUDIO_COMMIT: ${{ github.sha }}
+          SKILL_STUDIO_SERVER_URL: ${{ vars.SKILL_STUDIO_SERVER_URL }}
+          SKILL_STUDIO_SENTRY_DSN: ${{ vars.SKILL_STUDIO_SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p skill-studio-cli --target "${{ matrix.target }}"
+          cli_dir="$RUNNER_TEMP/cli"
+          mkdir -p "$cli_dir"
+          cp "target/${{ matrix.target }}/release/skill-studio" "$cli_dir/skill-studio"
+          echo "cli_bin=$cli_dir/skill-studio" >> "$GITHUB_ENV"
+
+      # Runs on the native leg only: both legs build the same source, and the
+      # x86_64 binary would need Rosetta to run on this arm64 runner.
+      - name: Check the CLI has every command the npm README documents
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: ./scripts/release/check-cli-commands.sh "$cli_bin"
+
+      # Uses the certificate that "Configure Apple code signing" wrote to
+      # $GITHUB_ENV. tauri-bundler deletes its own signing keychain when it
+      # finishes, so this step imports the certificate into a keychain of its
+      # own and deletes that keychain on exit.
+      - name: Sign the CLI
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/skill-studio-cli.keychain-db"
+          cert="$RUNNER_TEMP/skill-studio-cli.p12"
+          trap 'rm -f "$cert"; security delete-keychain "$keychain" 2>/dev/null || true' EXIT
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$cert"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security import "$cert" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain" > /dev/null
+          # shellcheck disable=SC2046 # the existing list is space-separated paths
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          codesign --force --options runtime --timestamp --keychain "$keychain" --sign "$APPLE_SIGNING_IDENTITY" "$cli_bin"
+          codesign --verify --strict --verbose=2 "$cli_bin"
+
+      # A bare Mach-O binary cannot be stapled, so Gatekeeper looks the ticket
+      # up online if a quarantined copy is ever opened. npm does not set the
+      # quarantine flag, so most installs never ask.
+      - name: Notarize the CLI
+        run: |
+          set -euo pipefail
+          zip="$RUNNER_TEMP/skill-studio-cli-notarize.zip"
+          ditto -c -k --keepParent "$cli_bin" "$zip"
+          # Read the status from the JSON rather than trust the exit code, so
+          # an "Invalid" result can never pass.
+          result="$(xcrun notarytool submit "$zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_PASSWORD" --wait --output-format json)" || true
+          status="$(jq -r '.status // empty' <<< "$result" 2> /dev/null || true)"
+          if [[ "$status" != "Accepted" ]]; then
+            echo "::error::Notarization of the CLI for ${{ matrix.target }} ended with status '${status:-unknown}'."
+            id="$(jq -r '.id // empty' <<< "$result" 2> /dev/null || true)"
+            if [[ -n "$id" ]]; then
+              xcrun notarytool log "$id" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_PASSWORD" || true
+            fi
+            exit 1
+          fi
+          echo "The CLI for ${{ matrix.target }} is notarized."
+
+      - name: Package the CLI
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/skill-studio-cli-${{ matrix.target }}.tar.gz"
+          # tar keeps the exec bit, which upload-artifact's zip would drop.
+          COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "$archive" -C "$(dirname "$cli_bin")" skill-studio
+          echo "cli_archive=$archive" >> "$GITHUB_ENV"
+
+      - name: Attach the CLI to the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "$cli_archive" --clobber
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: skill-studio-cli-${{ matrix.target }}
+          path: ${{ env.cli_archive }}
+          if-no-files-found: error
+          overwrite: true
+
+  # Publication is a separate job on purpose: it runs only after both matrix
+  # legs have finished, and it verifies the draft release actually carries both
+  # architectures before anyone can download it. This is what makes a release
+  # atomic - a leg that failed leaves the draft unpublished instead of a public
+  # release that only ships one architecture.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Assert the draft release is complete
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/release/check-release-complete.sh "${{ github.ref_name }}"
+      # npmjs.com lets you set a trusted publisher only on a package that
+      # already exists, so a package never published by hand cannot accept
+      # the OIDC publish in `npm-publish`. Checked here, while the release is
+      # still a draft, so a missing package never leaves a public release
+      # with no matching npm version.
+      - name: Assert every npm package exists on the registry
+        run: |
+          set -euo pipefail
+          status=0
+          for package in cli-darwin-arm64 cli-darwin-x64 skill-studio; do
+            name="$(jq -r .name "packages/npm/$package/package.json")"
+            if ! npm view "$name" name --registry https://registry.npmjs.org > /dev/null 2>&1; then
+              echo "::error::$name is not on npm. Publish a 0.0.0 placeholder by hand and set its trusted publisher before tagging."
+              status=1
+            fi
+          done
+          exit "$status"
+      # A pre-release tag (e.g. v0.1.0-rc.1) stays a GitHub pre-release; a
+      # plain vX.Y.Z tag becomes the latest release. Same rule tauri-action's
+      # `prerelease` input used when it created the draft.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF_NAME" == *-* ]]; then
+            gh release edit "$REF_NAME" --draft=false --prerelease
+          else
+            gh release edit "$REF_NAME" --draft=false --latest
+          fi
+
+  # Publishes the CLI to npm only after `publish` has verified the GitHub
+  # release, so npm never carries a version whose release is incomplete.
+  # Auth is npm trusted publishing (GitHub OIDC, hence id-token: write): no
+  # stored token. One-time setup before the first tag, for each of the three
+  # packages: publish a 0.0.0 placeholder by hand (npmjs.com offers trusted
+  # publisher settings only on a package that exists), then set this
+  # repository and release.yml as its trusted publisher. `publish` checks
+  # that the packages exist before it makes the release public.
+  npm-publish:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # Trusted publishing needs Node 22.14.0+ and npm 11.5.1+.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g "npm@^11.5.1"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: skill-studio-cli-*
+          path: ${{ runner.temp }}/cli
+          merge-multiple: true
+      - name: Put each binary in its platform package and stamp the version
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          for pair in aarch64-apple-darwin:cli-darwin-arm64:arm64 x86_64-apple-darwin:cli-darwin-x64:x86_64; do
+            IFS=: read -r target package arch <<< "$pair"
+            dir="packages/npm/$package"
+            mkdir -p "$dir/bin"
+            tar -xzf "$RUNNER_TEMP/cli/skill-studio-cli-$target.tar.gz" -C "$dir/bin" skill-studio
+            chmod 755 "$dir/bin/skill-studio"
+            if ! file "$dir/bin/skill-studio" | grep -q "Mach-O 64-bit.*$arch"; then
+              echo "::error::$dir/bin/skill-studio is not a $arch Mach-O binary: $(file -b "$dir/bin/skill-studio")"
+              exit 1
+            fi
+          done
+          # A pre-release tag publishes its full version (0.1.0-rc.1), not the
+          # committed base version, so the platform pins must follow it.
+          for package in cli-darwin-arm64 cli-darwin-x64 skill-studio; do
+            manifest="packages/npm/$package/package.json"
+            jq --arg v "$version" '.version = $v | if .optionalDependencies then .optionalDependencies |= map_values($v) else . end' "$manifest" > "$manifest.tmp"
+            mv "$manifest.tmp" "$manifest"
+          done
+          for package in cli-darwin-arm64 cli-darwin-x64; do
+            mode="$(npm pack "./packages/npm/$package" --dry-run --json | jq '.[0].files[] | select(.path == "bin/skill-studio") | .mode')"
+            if [[ "$mode" != "493" ]]; then
+              echo "::error::@skill-studio/$package would ship bin/skill-studio with mode '$mode', expected 755 (493)."
+              exit 1
+            fi
+          done
+      # Platform packages first: the main package pins them, so publishing it
+      # first would leave a window where installs resolve no binary. A package
+      # already on npm at this version is skipped, so a re-run can finish a
+      # half-done publish.
+      - name: Publish to npm
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          dist_tag=()
+          if [[ "$version" == *-* ]]; then
+            dist_tag=(--tag next)
+          fi
+          for package in cli-darwin-arm64 cli-darwin-x64 skill-studio; do
+            dir="packages/npm/$package"
+            name="$(jq -r .name "$dir/package.json")"
+            if npm view "$name@$version" version > /dev/null 2>&1; then
+              echo "$name@$version is already on npm; skipping."
+              continue
+            fi
+            npm publish "./$dir" --access public --provenance "${dist_tag[@]}"
+          done
+
   # Unit 6.3: prints the rollback rehearsal checklist once per release
   # (not once per `build` matrix leg) so the release author has one place
   # to record it. This is a summary, not a gate - nothing here blocks the
@@ -199,7 +522,7 @@ jobs:
   # that ran the previous tag, and copies this section into the release
   # notes (`docs/action-map/release-readiness.md` carries the same steps).
   rehearsal-summary:
-    needs: build
+    needs: publish
     runs-on: ubuntu-latest
     steps:
       - name: Print the n-1 over n rollback rehearsal checklist

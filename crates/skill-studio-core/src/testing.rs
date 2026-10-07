@@ -25,8 +25,8 @@ use crate::identity::EventId;
 use crate::ports::{
     CancelToken, Clock, CoreNotice, DirEntryFacts, EventSink, ExclusiveGuard, FileFacts, FileKind,
     HistoryAccess, HistoryOpener, HistoryStore, IdSource, LeaseHandle, LeaseKey, LeaseMode,
-    LeaseProvider, ProcessOutput, ProcessSpawner, ProcessSpec, ProjectDiscovery, ScopeFs,
-    ScopedPath, ToolLookup,
+    LeaseProvider, OpRecord, ProcessOutput, ProcessSpawner, ProcessSpec, ProjectDiscovery, ScopeFs,
+    ScopedPath, Telemetry, ToolLookup,
 };
 use crate::scope::NormalizedScope;
 
@@ -735,6 +735,16 @@ impl ScopeFs for FixtureFs {
         Ok(())
     }
 
+    /// The fixture does not model permission bits.
+    fn fsops_write_new_file_with_mode(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        _mode: u32,
+    ) -> std::io::Result<()> {
+        self.fsops_write_new_file(path, bytes)
+    }
+
     fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
         let from = &self.resolve_leaf(from);
         let to = &self.resolve_leaf(to);
@@ -829,6 +839,9 @@ pub struct FailingFs {
     inner: Arc<dyn ScopeFs>,
     fail_next_write_atomic: AtomicBool,
     fail_next_rename: AtomicBool,
+    fail_next_rename_cross_device: AtomicBool,
+    corrupt_next_new_file_with_mode: AtomicBool,
+    fail_rename_after_cross_device: AtomicBool,
     fail_next_remove_file: AtomicBool,
     /// `-1` means unlimited. Otherwise the number of `write_atomic` calls
     /// still allowed to succeed before every later call fails; see
@@ -881,6 +894,9 @@ impl FailingFs {
             inner,
             fail_next_write_atomic: AtomicBool::new(false),
             fail_next_rename: AtomicBool::new(false),
+            fail_next_rename_cross_device: AtomicBool::new(false),
+            corrupt_next_new_file_with_mode: AtomicBool::new(false),
+            fail_rename_after_cross_device: AtomicBool::new(false),
             fail_next_remove_file: AtomicBool::new(false),
             write_atomic_budget: AtomicI64::new(-1),
             fail_next_create_dir: AtomicBool::new(false),
@@ -922,6 +938,28 @@ impl FailingFs {
     /// example park's link removal landing before the directory rename.
     pub fn fail_next_rename(&self) {
         self.fail_next_rename.store(true, Ordering::SeqCst);
+    }
+
+    /// The next `rename` call fails the way a move to another volume does
+    /// (`EXDEV`); later calls delegate normally again.
+    pub fn fail_next_rename_cross_device(&self) {
+        self.fail_next_rename_cross_device
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// After the next cross-device rename failure, the rename that follows it
+    /// fails too (a plain error). Lets a test fail the step after a copy.
+    pub fn fail_rename_after_cross_device(&self) {
+        self.fail_rename_after_cross_device
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// The next `fsops_write_new_file_with_mode` call writes its bytes with
+    /// the first byte flipped, the way a bad disk would; later calls write
+    /// normally again. Lets a test prove a cross-volume copy is verified.
+    pub fn corrupt_next_new_file_with_mode(&self) {
+        self.corrupt_next_new_file_with_mode
+            .store(true, Ordering::SeqCst);
     }
 
     /// The next `remove_file` call returns an error instead of reaching
@@ -1160,6 +1198,18 @@ impl ScopeFs for FailingFs {
         if self.fail_next_rename.swap(false, Ordering::SeqCst) {
             return Err(std::io::Error::other("FailingFs: injected rename failure"));
         }
+        if self
+            .fail_next_rename_cross_device
+            .swap(false, Ordering::SeqCst)
+        {
+            if self
+                .fail_rename_after_cross_device
+                .swap(false, Ordering::SeqCst)
+            {
+                self.fail_next_rename.store(true, Ordering::SeqCst);
+            }
+            return Err(std::io::Error::from_raw_os_error(18));
+        }
         self.inner.rename(guard, from, to)
     }
     fn remove_file(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
@@ -1188,6 +1238,19 @@ impl ScopeFs for FailingFs {
             return Err(std::io::Error::other("FailingFs: injected symlink failure"));
         }
         self.inner.symlink(guard, target, link)
+    }
+    fn symlink_relative(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        relative_target: &Path,
+        link: &ScopedPath,
+    ) -> std::io::Result<()> {
+        if self.fail_next_symlink.swap(false, Ordering::SeqCst) {
+            return Err(std::io::Error::other("FailingFs: injected symlink failure"));
+        }
+        self.inner
+            .symlink_relative(guard, target, relative_target, link)
     }
     fn fsops_device_inode(&self, path: &Path) -> std::io::Result<(u64, u64)> {
         if self
@@ -1230,6 +1293,26 @@ impl ScopeFs for FailingFs {
     }
     fn fsops_write_new_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         self.inner.fsops_write_new_file(path, bytes)
+    }
+    fn fsops_write_new_file_with_mode(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        mode: u32,
+    ) -> std::io::Result<()> {
+        if self
+            .corrupt_next_new_file_with_mode
+            .swap(false, Ordering::SeqCst)
+        {
+            let mut flipped = bytes.to_vec();
+            if let Some(first) = flipped.first_mut() {
+                *first ^= 0xff;
+            }
+            return self
+                .inner
+                .fsops_write_new_file_with_mode(path, &flipped, mode);
+        }
+        self.inner.fsops_write_new_file_with_mode(path, bytes, mode)
     }
     fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
         if self.fail_next_fsops_rename.swap(false, Ordering::SeqCst) {
@@ -1295,6 +1378,37 @@ impl Clock for FakeClock {
 
     fn monotonic(&self) -> Duration {
         Duration::from_millis(self.now_ms.load(Ordering::SeqCst))
+    }
+}
+
+/// A clock whose `monotonic()` advances by one millisecond on every read -
+/// so a telemetry test's `elapsed_ms`/`offset_ms` assertions are always
+/// strictly positive and distinct without the test threading its own
+/// `advance` calls through the op body under test, the way [`FakeClock`]
+/// requires.
+#[derive(Debug)]
+pub struct TickingClock {
+    now_ms: AtomicU64,
+}
+
+impl TickingClock {
+    /// Starts at the given epoch milliseconds.
+    pub fn at(epoch_ms: u64) -> Self {
+        TickingClock {
+            now_ms: AtomicU64::new(epoch_ms),
+        }
+    }
+}
+
+impl Clock for TickingClock {
+    fn now(&self) -> DateTime<Utc> {
+        Utc.timestamp_millis_opt(self.now_ms.load(Ordering::SeqCst) as i64)
+            .single()
+            .unwrap_or_else(Utc::now)
+    }
+
+    fn monotonic(&self) -> Duration {
+        Duration::from_millis(self.now_ms.fetch_add(1, Ordering::SeqCst))
     }
 }
 
@@ -1431,6 +1545,31 @@ impl EventSink for RecordingSink {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(notice);
+    }
+}
+
+/// Collects [`OpRecord`]s for assertions, instead of sending them anywhere.
+#[derive(Debug, Default)]
+pub struct RecordingTelemetry {
+    records: Mutex<Vec<OpRecord>>,
+}
+
+impl RecordingTelemetry {
+    /// Everything recorded so far.
+    pub fn records(&self) -> Vec<OpRecord> {
+        self.records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl Telemetry for RecordingTelemetry {
+    fn record(&self, record: OpRecord) {
+        self.records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(record);
     }
 }
 
@@ -1740,6 +1879,7 @@ pub mod golden {
             discovery: None,
             tools: None,
             catalog: Arc::new(HarnessCatalog::builtin()),
+            telemetry: Arc::new(crate::ports::NoopTelemetry),
         }
     }
 

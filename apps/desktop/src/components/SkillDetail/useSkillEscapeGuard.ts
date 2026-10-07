@@ -1,14 +1,15 @@
 // ============================================================================
 // useSkillEscapeGuard - Escape-to-back for SkillPage: guarded by a discard-
 // changes dialog while an edit is dirty, skipped while Escape belongs to an
-// input, menu, listbox, or dialog on the page instead.
+// input, menu, listbox, or dialog on the page instead. Back/forward history
+// steps (`goBack`/`goForward`) leave through the same dialog.
 // ============================================================================
 
 import { useEffect, useEffectEvent, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { useAppStore } from "../../store/appStore";
 
-export interface UseSkillEscapeGuard {
+interface UseSkillEscapeGuard {
   pendingDiscard: (() => void) | null;
   setPendingDiscard: Dispatch<SetStateAction<(() => void) | null>>;
 }
@@ -32,6 +33,18 @@ export function useSkillEscapeGuard(
     }
     onBack();
   });
+
+  const guardLeave = useEffectEvent((proceed: () => void) => {
+    if (!(isEditing && isEditorDirty)) return false;
+    setPendingDiscard(() => proceed);
+    return true;
+  });
+
+  useEffect(() => {
+    const { setLeaveGuard } = useAppStore.getState();
+    setLeaveGuard((proceed) => guardLeave(proceed));
+    return () => setLeaveGuard(null);
+  }, []);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {

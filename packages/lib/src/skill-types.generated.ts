@@ -15,7 +15,9 @@
  * skills root, for harnesses with no native switch.
  */
 export type DisabledBy =
-  | ("codex-config" | "opencode-permission" | "claude-link-removed" | "studio-moved")
+  | ("codex-config" | "opencode-permission" | "studio-moved")
+  | "claude-link-removed"
+  | "claude-skill-overrides"
   | "claude-plugin-disabled";
 /**
  * Which CLI a forked skill was originally managed by.
@@ -92,6 +94,18 @@ export type SkillDestination = "universal" | "per-harness";
  * Scope for skill installation
  */
 export type InstallScope = "global" | "project";
+/**
+ * Which deterministic fix to propose.
+ */
+export type FrontmatterRepairKind =
+  | "colon-scalar"
+  | "name-mismatch"
+  | "name-format"
+  | "invocation-conflict";
+/**
+ * Which side of the invocation conflict survives.
+ */
+export type InvocationConflictChoice = "user-only" | "model-only";
 export type FrontmatterRepairApplyMode = "apply-fix" | "fix-installed-copy" | "fork-and-fix";
 /**
  * Pack import either completes immediately or pauses for explicit trust.
@@ -313,6 +327,16 @@ export interface OwnerUpdateInfo {
   owner_id: string;
   latest_commit: string | null;
   latest_commit_at: string | null;
+  /**
+   * For a `plugin:<plugin>@<marketplace>` owner: the install's scope
+   * (`user`, `project`, `local`, `managed`) from Claude Code's
+   * `installed_plugins.json`. `None` for every other owner.
+   */
+  plugin_scope?: string | null;
+  /**
+   * For a project or local plugin install: the project it belongs to.
+   */
+  plugin_project_path?: string | null;
 }
 /**
  * Where a skill is deployed on disk for a specific agent
@@ -424,6 +448,14 @@ export interface Deployment {
    */
   disabled_readers?: string[];
   /**
+   * The agent config files that hide this skill, with the path Skill
+   * Studio actually read (honours `CODEX_HOME`, `XDG_CONFIG_HOME`). One
+   * entry per hiding agent: this deployment's own agent, or each reader
+   * listed in `disabled_readers`. The files are global, so a project row
+   * carries the global path. Empty when no setting hides the skill.
+   */
+  disabling_config_files?: DisablingConfigFile[];
+  /**
    * Codex's own `agents/openai.yaml` `policy.allow_implicit_invocation`
    * value, read straight off disk - note-only, doesn't affect
    * `InstalledSkill.invocation` (that's driven by SKILL.md frontmatter).
@@ -452,6 +484,11 @@ export interface Deployment {
    * field existed (fixtures, cached snapshots).
    */
   invocation: "both" | "user-only" | "model-only";
+  /**
+   * For a parked copy (`scope == "parked"`): the folder it was parked
+   * from, so Unpark can say where it returns to.
+   */
+  parked_origin?: ParkedOrigin | null;
 }
 /**
  * A plugin that shipped a skill, per the agent-plugins.org convention
@@ -473,6 +510,35 @@ export interface PluginInfo {
    * `"<plugin>@<marketplace>"`, the id the harness's plugin CLI expects.
    */
   id: string;
+}
+/**
+ * One agent's config file that hides a skill. Skill Studio reads it and
+ * never writes it.
+ */
+export interface DisablingConfigFile {
+  /**
+   * Agent id as in `AgentId`: `"codex"`, `"open-code"` or `"claude-code"`.
+   */
+  agent: string;
+  path: string;
+}
+/**
+ * Where a parked copy came from.
+ */
+export interface ParkedOrigin {
+  /**
+   * `"universal"` for the shared `.agents/skills` folder, or the agent id
+   * (`"codex"`) whose own skills folder held the copy.
+   */
+  kind: string;
+  /**
+   * `"global"` | `"project"`.
+   */
+  scope: string;
+  /**
+   * The project directory, for a project copy.
+   */
+  project_path?: string | null;
 }
 /**
  * Fork provenance shown on a forked skill's detail header - see
@@ -614,6 +680,35 @@ export interface UpdateCheckSummary {
   gh_status: string;
   message: string | null;
   updates_available: number;
+  upstream_ahead: UpstreamAhead[];
+}
+/**
+ * A source repo that is a fork whose original repo has commits the fork
+ * does not. Shown as a note in the skill detail header; no file changes.
+ */
+export interface UpstreamAhead {
+  /**
+   * The fork the skill is installed from, `owner/repo`.
+   */
+  repo: string;
+  /**
+   * The original repo, `owner/repo`.
+   */
+  upstream_repo: string;
+  /**
+   * Commits the original has that the fork does not.
+   */
+  behind_by: number;
+  /**
+   * GitHub page listing those commits.
+   */
+  compare_url: string;
+  /**
+   * Lifecycle owner ids of every installed skill from this repo, sorted.
+   * The frontend matches a skill's deployments against these, because a
+   * dotagents-only install has no lock-file `source` to compare.
+   */
+  owner_ids: string[];
 }
 /**
  * Agent target with paths resolved
@@ -644,9 +739,10 @@ export interface AddMethodDefaults {
    */
   installed_harnesses: AgentId[];
   /**
-   * Whether `~/.claude/skills` is a symlink into the shared folder -
-   * true when Claude Code already reads `.agents/skills` on its own,
-   * false when it's a real directory (or doesn't exist yet).
+   * Whether the install scope's `.claude/skills` is a symlink that resolves
+   * to the same scope's `.agents/skills` - true when Claude Code already
+   * reads the shared folder on its own, false when it's a real directory,
+   * a link to any other folder, or doesn't exist yet.
    */
   claude_reads_shared_folder: boolean;
 }
@@ -684,6 +780,23 @@ export interface SkillDetails {
   skill_md: string | null;
 }
 /**
+ * One installed skills.sh skill to look up: the lock file's `source`
+ * (`owner/repo`) and the skill's name (its slug under that source).
+ */
+export interface InstallCountKey {
+  source: string;
+  name: string;
+}
+/**
+ * The skills.sh install count for one `InstallCountKey`; `installs` is
+ * `None` when the lookup failed or the skill is unknown to skills.sh.
+ */
+export interface InstallCount {
+  source: string;
+  name: string;
+  installs: number | null;
+}
+/**
  * How discovery requests reach skills.sh - see `api::resolve_skills_sh_access`.
  * `"direct"` means a developer-override key is configured (`server_url` is
  * `None`); `"server"` means requests go through the local Skill Studio
@@ -713,14 +826,6 @@ export interface InstallResult {
   command: string | null;
 }
 /**
- * Exact deployment plus the harness whose visibility will change. Universal
- * deployments are valid for readers that discover that scope directly.
- */
-export interface HarnessVisibilityTarget {
-  deployment_id: string;
-  reader_agent: AgentId;
-}
-/**
  * `add_skill`'s request - see `AddSkillSheet`.
  */
 export interface AddSkillRequest {
@@ -728,14 +833,13 @@ export interface AddSkillRequest {
   method: AddMethod;
   destination: SkillDestination;
   agents: AgentId[];
-  /**
-   * Harnesses to switch off for this skill right after a successful
-   * install: readers of the Universal folder the install itself cannot
-   * avoid reaching. Unused for Per harness Copy.
-   */
-  disabled_harnesses: AgentId[];
   scope: InstallScope;
   project_path: string | null;
+  /**
+   * Link or copy into each chosen harness folder that is not the shared
+   * folder. Ignored when the choice writes one folder only.
+   */
+  link_mode: "link" | "copy";
 }
 /**
  * A parsed "Source" field from the add-skill sheet - see
@@ -763,14 +867,13 @@ export interface AddSkillsRequest {
   method: AddMethod;
   destination: SkillDestination;
   agents: AgentId[];
-  /**
-   * Harnesses to switch off for this skill right after a successful
-   * install: readers of the Universal folder the install itself cannot
-   * avoid reaching. Unused for Per harness Copy.
-   */
-  disabled_harnesses: AgentId[];
   scope: InstallScope;
   project_path: string | null;
+  /**
+   * Link or copy into each chosen harness folder that is not the shared
+   * folder. Ignored when the choice writes one folder only.
+   */
+  link_mode: "link" | "copy";
 }
 /**
  * One skill folder inside a repo: `path` is repo-relative and `""` for a
@@ -798,11 +901,9 @@ export interface AddSkillResult {
   command: string;
   deployments_created: string[];
   /**
-   * Set when the install itself succeeded but a follow-up step (turning
-   * the skill off for a `disabled_harnesses` entry) failed - the skill is
-   * on disk and usable, it just isn't disabled where it was asked to be.
-   * The sheet shows this as a warning toast rather than treating the
-   * whole request as failed.
+   * Set when the install itself succeeded but a link or copy step had a
+   * problem - the skill is on disk and usable. The sheet shows this as a
+   * warning toast rather than treating the whole request as failed.
    */
   warning: string | null;
 }
@@ -875,6 +976,11 @@ export interface FrontmatterRepairPreview {
   path: string;
   scope: string;
   reason: string;
+  kind: FrontmatterRepairKind;
+  /**
+   * Set once the user picked a side of an invocation conflict.
+   */
+  choice: InvocationConflictChoice | null;
   expected_content_fingerprint: string;
   proposal_id: string;
   original_content: string;
@@ -1277,6 +1383,29 @@ export interface ParkOutcome {
    * Where the directory now lives, under the parked root.
    */
   parked_path: string;
+  /**
+   * Notes for the caller; never a reason the park failed. An adapter that
+   * ran `park_check` first puts its git warning here.
+   */
+  warnings?: string[];
+}
+/**
+ * Result of `park_check`.
+ */
+export interface ParkCheck {
+  /**
+   * True when the copy sits in a git work tree and git lists a file under
+   * it, so moving or removing it shows as deleted files in that repo.
+   * False when git is missing, the folder is not in a repo, or git does
+   * not track it (untracked or ignored). `None` when the check could not
+   * run: on macOS without the command line tools, `git` is a stub that
+   * opens an install dialog, so it is not run.
+   */
+  git_tracked: boolean | null;
+  /**
+   * The project the copy belongs to, when it is a project copy.
+   */
+  project: string | null;
 }
 /**
  * Result of `unpark`.
@@ -1291,9 +1420,130 @@ export interface UnparkOutcome {
    */
   deployment_id: string;
   /**
-   * Where the directory now lives, under the universal root.
+   * Where the directory now lives: the folder it was parked from.
    */
   restored_path: string;
+}
+/**
+ * Result of `split`.
+ */
+export interface SplitOutcome {
+  /**
+   * The `split` event.
+   */
+  event_id: string;
+  /**
+   * The Universal deployment that was split.
+   */
+  deployment_id: string;
+  /**
+   * The skill's name.
+   */
+  skill: string;
+  /**
+   * One entry per chosen harness.
+   */
+  copies: SplitCopy[];
+  /**
+   * Links into the Universal folder that were removed.
+   */
+  removed_links: string[];
+  /**
+   * Where the Universal folder was moved (quarantine), kept for undo.
+   */
+  quarantine_path: string;
+  /**
+   * Plain-language note: `npx skills update` updates only a Universal
+   * copy, so these copies no longer get updates from it.
+   */
+  update_note: string;
+}
+/**
+ * One folder `split` wrote.
+ */
+export interface SplitCopy {
+  /**
+   * Kebab-case harness identifier, for example `claude-code` or `open-code`.
+   *
+   * Invariant: the string is the serde wire name used by the desktop app
+   * today. `open-code` is canonical; `opencode` is only a CLI binary name and
+   * is never stored in an `AgentId`.
+   */
+  harness: string;
+  /**
+   * The copy's folder.
+   */
+  path: string;
+}
+/**
+ * Result of `turn_off_for_agent`.
+ */
+export interface AgentOffOutcome {
+  /**
+   * The one event Activity can undo: it puts the shared folder back and
+   * removes the per-agent copies and the parked copy.
+   */
+  event_id: string;
+  /**
+   * The Universal deployment that was split.
+   */
+  deployment_id: string;
+  /**
+   * The skill's name.
+   */
+  skill: string;
+  /**
+   * Kebab-case harness identifier, for example `claude-code` or `open-code`.
+   *
+   * Invariant: the string is the serde wire name used by the desktop app
+   * today. `open-code` is canonical; `opencode` is only a CLI binary name and
+   * is never stored in an `AgentId`.
+   */
+  agent: string;
+  /**
+   * One entry per agent that got its own copy, including `agent`.
+   */
+  copies: SplitCopy[];
+  /**
+   * Where `agent`'s copy now lives, under the parked root.
+   */
+  parked_path: string;
+  /**
+   * Plain-language note: `npx skills update` updates only a Universal
+   * copy, so these copies no longer get updates from it.
+   */
+  update_note: string;
+}
+/**
+ * Result of `turn_off_check`: what to show before the user confirms.
+ */
+export interface AgentOffCheck {
+  /**
+   * Set when `turn_off_for_agent` would refuse.
+   */
+  refusal: AgentOffRefusal | null;
+  /**
+   * The shared folder's `park_check` answer: git tracks it, so the move
+   * shows as deleted files. `None` when git could not be asked.
+   */
+  git_tracked: boolean | null;
+  /**
+   * The project the copy belongs to, when it is a project copy.
+   */
+  project: string | null;
+}
+/**
+ * Why `turn_off_for_agent` would write nothing.
+ */
+export interface AgentOffRefusal {
+  /**
+   * One plain line a person can act on.
+   */
+  reason: string;
+  /**
+   * True when parking the shared copy for every agent is the way out.
+   */
+  off_everywhere: boolean;
 }
 /**
  * Result of `remove`.
@@ -1427,4 +1677,36 @@ export interface DoctorViolation {
    * Message for a person.
    */
   detail: string;
+}
+/**
+ * One target's outcome inside a batch command. Results come back in the
+ * order the targets were sent, so the caller pairs them by index.
+ */
+export interface BulkTargetResult {
+  /**
+   * `None` when the target was written; otherwise why it was not.
+   */
+  error: string | null;
+}
+/**
+ * Whether one update target's installed folder differs from what the
+ * install recorded, so the UI can warn before Update overwrites the edit.
+ */
+export interface LocalEditsDto {
+  /**
+   * True only when the check ran and the folder differs from the lock hash.
+   */
+  edited: boolean;
+  /**
+   * False when the check could not run (no lock hash, project scope, a
+   * dotagents or other owner, an unreadable folder); `edited` is then false.
+   */
+  checked: boolean;
+}
+/**
+ * One SKILL.md a batch invocation change should write.
+ */
+export interface InvocationTarget {
+  name: string;
+  path: string;
 }

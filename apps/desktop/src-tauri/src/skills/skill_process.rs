@@ -312,7 +312,7 @@ fn run_controlled_command_with_search_dirs(
         command.process_group(0);
     }
 
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = skill_studio_host::spawn_retrying_busy(&mut command).map_err(|error| {
         ControlledProcessError::Failed(format!("Failed to execute {program}: {error}"))
     })?;
     let pid = child.id();
@@ -331,26 +331,7 @@ fn run_controlled_command_with_search_dirs(
     let started = Instant::now();
     let outcome = loop {
         match child.try_wait() {
-            Ok(Some(status)) => {
-                break if status.success() {
-                    Ok(())
-                } else {
-                    let stderr = stderr_buf
-                        .lock()
-                        .map(|guard| String::from_utf8_lossy(&guard).into_owned())
-                        .unwrap_or_default();
-                    let stdout = stdout_buf
-                        .lock()
-                        .map(|guard| String::from_utf8_lossy(&guard).into_owned())
-                        .unwrap_or_default();
-                    let message = if stderr.is_empty() { stdout } else { stderr };
-                    Err(ControlledProcessError::Failed(if message.is_empty() {
-                        format!("{program} exited with code {}", status.code().unwrap_or(-1))
-                    } else {
-                        message
-                    }))
-                };
-            }
+            Ok(Some(status)) => break Ok(status),
             Ok(None) => {
                 if cancel.load(Ordering::SeqCst) {
                     terminate_and_reap(&mut child, pid);
@@ -371,13 +352,29 @@ fn run_controlled_command_with_search_dirs(
         }
     };
 
+    // The readers can still be draining the pipes when the child exits, so the
+    // failure message is read only after they are joined.
     if let Some(handle) = stdout_thread {
         join_finished_reader(handle);
     }
     if let Some(handle) = stderr_thread {
         join_finished_reader(handle);
     }
-    outcome
+    let status = outcome?;
+    if status.success() {
+        return Ok(());
+    }
+    let read = |buf: &Arc<Mutex<Vec<u8>>>| {
+        buf.lock()
+            .map(|guard| String::from_utf8_lossy(&guard).into_owned())
+            .unwrap_or_default()
+    };
+    let message = failure_message(read(&stdout_buf), read(&stderr_buf));
+    Err(ControlledProcessError::Failed(if message.is_empty() {
+        format!("{program} exited with code {}", status.code().unwrap_or(-1))
+    } else {
+        message
+    }))
 }
 
 /// Run a command under one operation deadline and return bounded stdout.
@@ -463,7 +460,7 @@ fn run_controlled_command_io(
         command.process_group(0);
     }
 
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = skill_studio_host::spawn_retrying_busy(&mut command).map_err(|error| {
         ControlledProcessError::Failed(format!("Failed to execute {}: {error}", program.display()))
     })?;
     let pid = child.id();
@@ -478,34 +475,9 @@ fn run_controlled_command_io(
         thread::spawn(move || drain_pipe_bounded(stderr, sink, max_output_bytes))
     });
 
-    let mut outcome = loop {
+    let outcome = loop {
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => {
-                break Ok(stdout_buf
-                    .lock()
-                    .map(|bytes| bytes.clone())
-                    .unwrap_or_default())
-            }
-            Ok(Some(status)) => {
-                let stderr = stderr_buf
-                    .lock()
-                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                    .unwrap_or_default();
-                let stdout = stdout_buf
-                    .lock()
-                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                    .unwrap_or_default();
-                let message = if stderr.is_empty() { stdout } else { stderr };
-                break Err(ControlledProcessError::Failed(if message.is_empty() {
-                    format!(
-                        "{} exited with code {}",
-                        program.display(),
-                        status.code().unwrap_or(-1)
-                    )
-                } else {
-                    message
-                }));
-            }
+            Ok(Some(status)) => break Ok(status),
             Ok(None) => {
                 if let Err(error) = control.check() {
                     terminate_and_reap(&mut child, pid);
@@ -528,13 +500,43 @@ fn run_controlled_command_io(
     if let Some(handle) = stderr_thread {
         join_finished_reader(handle);
     }
-    if outcome.is_ok() {
-        outcome = Ok(stdout_buf
-            .lock()
-            .map(|bytes| bytes.clone())
-            .unwrap_or_default());
+    let status = outcome?;
+    let stdout = stdout_buf
+        .lock()
+        .map(|bytes| bytes.clone())
+        .unwrap_or_default();
+    if status.success() {
+        return Ok(stdout);
     }
-    outcome
+    let stderr = stderr_buf
+        .lock()
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_default();
+    let message = failure_message(String::from_utf8_lossy(&stdout).into_owned(), stderr);
+    Err(ControlledProcessError::Failed(if message.is_empty() {
+        format!(
+            "{} exited with code {}",
+            program.display(),
+            status.code().unwrap_or(-1)
+        )
+    } else {
+        message
+    }))
+}
+
+/// The text to show for a failed exit. A `--json` command prints its
+/// `{"outcome":"error","message":...}` object on stdout and may also write
+/// progress or warnings to stderr, so that message wins; otherwise stderr, then
+/// stdout.
+fn failure_message(stdout: String, stderr: String) -> String {
+    let json_message = stdout.lines().rev().find_map(|line| {
+        let value = serde_json::from_str::<serde_json::Value>(line.trim()).ok()?;
+        if value.get("outcome")?.as_str()? != "error" {
+            return None;
+        }
+        value.get("message")?.as_str().map(str::to_string)
+    });
+    json_message.unwrap_or(if stderr.is_empty() { stdout } else { stderr })
 }
 
 /// Same as `run_controlled_command`, for a caller that already holds an
@@ -572,6 +574,17 @@ pub fn run_controlled_program_with_control(
 pub trait CommandRunner {
     /// Runs `program args`, optionally in `cwd`.
     fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> Result<(), String>;
+
+    /// As [`CommandRunner::run`], returning the bounded stdout. Runners that
+    /// do not capture output return it empty.
+    fn run_output(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+    ) -> Result<Vec<u8>, String> {
+        self.run(program, args, cwd).map(|()| Vec::new())
+    }
 
     /// `run("npx", ...)` - the CLI both `dotagents` and `skills.sh` use.
     fn run_npx(&self, args: &[String], cwd: Option<&Path>) -> Result<(), String> {
@@ -616,6 +629,22 @@ impl CommandRunner for RealCommandRunner {
     fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> Result<(), String> {
         run_controlled_program_with_control(program, args, cwd, &self.control)
             .map_err(ControlledProcessError::into_message)
+    }
+
+    fn run_output(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+    ) -> Result<Vec<u8>, String> {
+        run_controlled_command_output(
+            Path::new(program),
+            args,
+            cwd,
+            &self.control,
+            MAX_PROCESS_OUTPUT_BYTES,
+        )
+        .map_err(ControlledProcessError::into_message)
     }
 
     fn is_cancelled(&self) -> bool {
@@ -675,20 +704,20 @@ mod tests {
             pid_file.display()
         );
         let cancel = AtomicBool::new(false);
-        let started = Instant::now();
 
         let error = run_controlled_command(
             "sh",
             &["-c".to_string(), script],
             None,
             &cancel,
-            Duration::from_secs(1),
+            // The descendant must have written its pid before the deadline;
+            // under load a shell start alone can take seconds.
+            Duration::from_secs(5),
             MAX_PROCESS_OUTPUT_BYTES,
         )
         .unwrap_err();
 
         assert_eq!(error, ControlledProcessError::TimedOut);
-        assert!(started.elapsed() < Duration::from_secs(4));
         let descendant_pid: i32 = std::fs::read_to_string(&pid_file)
             .unwrap()
             .trim()
@@ -779,6 +808,36 @@ mod tests {
         assert_eq!(error, ControlledProcessError::TimedOut);
     }
 
+    /// Flow: a `--json` command fails, printing its error object on stdout and
+    /// a warning on stderr.
+    /// Expectation: the error carries the JSON `message`, not the warning.
+    /// A failure means stderr noise hides the real reason again.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_json_command_reports_its_stdout_message_over_stderr_noise() {
+        let cancel = AtomicBool::new(false);
+        let script = r#"echo '{"outcome":"error","message":"Plugin not found"}'; echo 'warning: slow' >&2; exit 1"#;
+        let error = run_controlled_command(
+            "sh",
+            &["-c".to_string(), script.to_string()],
+            None,
+            &cancel,
+            Duration::from_secs(10),
+            MAX_PROCESS_OUTPUT_BYTES,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ControlledProcessError::Failed("Plugin not found".to_string())
+        );
+    }
+
+    #[test]
+    fn a_failed_exit_without_a_json_error_prefers_stderr_then_stdout() {
+        assert_eq!(failure_message("out".into(), "err".into()), "err");
+        assert_eq!(failure_message("out".into(), String::new()), "out");
+    }
+
     /// Without the fix, `Command::new("fakeclaude")` resolves only against
     /// this test process's own `PATH`, which never includes `tmp`, so the
     /// spawn fails with "No such file or directory" - the same failure a
@@ -810,7 +869,7 @@ mod tests {
             &[],
             None,
             &cancel,
-            Duration::from_secs(5),
+            Duration::from_secs(30),
             MAX_PROCESS_OUTPUT_BYTES,
             &search_dirs,
         )

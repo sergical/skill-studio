@@ -21,7 +21,9 @@ use super::skill_dto::InstallScope;
 #[serde(rename_all = "kebab-case")]
 pub enum SkillDestination {
     Universal,
+    /// The core's `split` and `install` write the `per_harness` spelling.
     #[default]
+    #[serde(alias = "per_harness")]
     PerHarness,
 }
 
@@ -37,7 +39,7 @@ impl SkillDestination {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "universal" => Some(Self::Universal),
-            "per-harness" => Some(Self::PerHarness),
+            "per-harness" | "per_harness" => Some(Self::PerHarness),
             _ => None,
         }
     }

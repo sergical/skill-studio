@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, ErrorCode};
-use crate::ports::{confine, ExclusiveGuard, ScopeFs};
+use crate::ports::{confine, ExclusiveGuard, FileKind, ScopeFs};
 use crate::scope::NormalizedScope;
+use crate::tree_hash::{is_install_junk, tree_hash_ignoring_junk};
 
 /// Largest lock file the core will read. Larger is treated as corrupt
 /// rather than silently truncated.
@@ -170,12 +171,57 @@ pub fn restore_lock_entry(
         return Ok(());
     }
     skills.insert(skill_name.to_string(), entry.clone());
+    write_lock_document(guard, fs, scope, path, &doc)
+}
+
+/// Sets `skill_name`'s `skillFolderHash` in the lock file at `path`, keeping
+/// every other key as `npx skills` wrote it, so the update check sees the
+/// skill as current after a write that did not go through the CLI. A no-op
+/// when the file or the row is missing.
+pub fn set_skill_folder_hash(
+    guard: &ExclusiveGuard,
+    fs: &dyn ScopeFs,
+    scope: &NormalizedScope,
+    path: &Path,
+    skill_name: &str,
+    hash: &str,
+) -> Result<(), CoreError> {
+    let bytes = match fs.read_capped(path, LOCK_FILE_MAX_BYTES) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(CoreError::io(path, e)),
+    };
+    let mut doc: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+        CoreError::new(ErrorCode::Io, format!("failed to parse lock file: {e}")).at(path)
+    })?;
+    let Some(row) = doc
+        .get_mut("skills")
+        .and_then(|skills| skills.get_mut(skill_name))
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+    row.insert(
+        "skillFolderHash".to_string(),
+        serde_json::Value::String(hash.to_string()),
+    );
+    write_lock_document(guard, fs, scope, path, &doc)
+}
+
+/// Serializes `doc` the way `npx skills` does and writes it atomically.
+fn write_lock_document(
+    guard: &ExclusiveGuard,
+    fs: &dyn ScopeFs,
+    scope: &NormalizedScope,
+    path: &Path,
+    doc: &serde_json::Value,
+) -> Result<(), CoreError> {
     // The `npx skills` CLI itself always writes this file pretty-printed
     // (`JSON.stringify(doc, null, 2) + "\n"` - checked against its packed
     // `dist/cli.mjs`), so restoring a row compactly would leave the file in
     // a shape that CLI never produces, even though both parse identically.
     // `to_vec_pretty`'s default indent is the same two spaces.
-    let mut bytes = serde_json::to_vec_pretty(&doc).map_err(|e| {
+    let mut bytes = serde_json::to_vec_pretty(doc).map_err(|e| {
         CoreError::new(ErrorCode::Io, format!("failed to serialize lock file: {e}")).at(path)
     })?;
     bytes.push(b'\n');
@@ -222,6 +268,83 @@ pub fn read_project_lock_skill_names(fs: &dyn ScopeFs, path: &Path) -> HashSet<S
     serde_json::from_slice::<ProjectLockFile>(&bytes)
         .map(|f| f.skills.into_keys().collect())
         .unwrap_or_default()
+}
+
+/// Whether an installed skills.sh folder still matches what `npx skills`
+/// installed, as [`local_edits`] decides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalEdits {
+    /// The folder's tree hash equals the lock entry's `skillFolderHash`.
+    Unedited,
+    /// The folder's tree hash differs from the lock entry's hash.
+    Edited,
+    /// The check could not run: no lock entry, an empty hash, or a folder
+    /// that could not be hashed. Callers treat this as "not edited".
+    Unknown,
+}
+
+/// Length of a hex SHA-1. The CLI records a git tree SHA only for GitHub
+/// sources; other sources get a sha256 (64 hex chars) that can never equal
+/// a tree hash.
+const TREE_SHA_HEX_LEN: usize = 40;
+
+/// Compares the git tree hash of `folder` - the installed copy an update
+/// would replace - with `skill_name`'s `skillFolderHash` in `lock`.
+///
+/// The recorded hash is GitHub's tree SHA, which includes upstream files
+/// the CLI never copies (`metadata.json`). A mismatch alone therefore does
+/// not prove an edit: it counts as [`LocalEdits::Edited`] only when a file
+/// was modified after the entry's `updatedAt`. When mtimes or the
+/// timestamp are unavailable, a mismatch counts as edited.
+pub fn local_edits(
+    fs: &dyn ScopeFs,
+    lock: &SkillLockFile,
+    skill_name: &str,
+    folder: &Path,
+) -> LocalEdits {
+    let Some(entry) = lock.skills.get(skill_name) else {
+        return LocalEdits::Unknown;
+    };
+    if entry.skill_folder_hash.len() != TREE_SHA_HEX_LEN {
+        return LocalEdits::Unknown;
+    }
+    match tree_hash_ignoring_junk(fs, folder) {
+        Ok(hash) if hash == entry.skill_folder_hash => LocalEdits::Unedited,
+        Ok(_) => {
+            let installed = chrono::DateTime::parse_from_rfc3339(&entry.updated_at).ok();
+            // A per-agent link's own mtime is when it was linked, not when
+            // the skill changed; walk the folder it points to.
+            let real = fs
+                .canonicalize(folder)
+                .unwrap_or_else(|_| folder.to_path_buf());
+            match (installed, newest_modified(fs, &real)) {
+                (Some(installed), Some(newest)) if newest <= installed => LocalEdits::Unknown,
+                _ => LocalEdits::Edited,
+            }
+        }
+        Err(_) => LocalEdits::Unknown,
+    }
+}
+
+/// The latest mtime of `dir`, its non-junk files and its non-junk
+/// subfolders, or `None` when the platform reports none. Folder mtimes
+/// matter: adding, deleting or renaming an entry bumps the parent's mtime
+/// even when `cp -p`, `rsync -a` or `mv` keep the file's own.
+fn newest_modified(fs: &dyn ScopeFs, dir: &Path) -> Option<chrono::DateTime<chrono::Utc>> {
+    let mut newest = fs.symlink_metadata(dir).ok().and_then(|f| f.modified);
+    for item in fs.read_dir(dir).ok()? {
+        if is_install_junk(&item.name, item.kind) {
+            continue;
+        }
+        let path = dir.join(&item.name);
+        let modified = match item.kind {
+            FileKind::Dir => newest_modified(fs, &path),
+            FileKind::File => fs.symlink_metadata(&path).ok().and_then(|f| f.modified),
+            _ => None,
+        };
+        newest = newest.max(modified);
+    }
+    newest
 }
 
 #[cfg(test)]
@@ -360,6 +483,125 @@ mod tests {
         assert!(
             names.is_empty(),
             "a file over the size cap must yield no names, not a truncated parse"
+        );
+    }
+
+    const INSTALLED_AT: &str = "2026-01-01T00:00:00.000Z";
+    const SKILL_MD: &[u8] = b"---\nname: write-tests\n---\nBody\n";
+
+    /// A lock file recording `hash` for `write-tests`.
+    fn lock_with_hash(hash: &str) -> SkillLockFile {
+        let mut skills = HashMap::new();
+        skills.insert(
+            "write-tests".to_string(),
+            InstalledSkillEntry {
+                source: "owner/repo".into(),
+                source_type: "github".into(),
+                source_url: "https://github.com/owner/repo".into(),
+                skill_path: None,
+                skill_folder_hash: hash.into(),
+                installed_at: INSTALLED_AT.into(),
+                updated_at: INSTALLED_AT.into(),
+                extra: serde_json::Map::new(),
+            },
+        );
+        SkillLockFile { version: 3, skills }
+    }
+
+    /// The hash `npx skills` would have recorded for an untouched install.
+    fn installed_hash() -> String {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", SKILL_MD)
+            .build_fs();
+        crate::tree_hash::tree_hash(&fs, Path::new("/skill")).unwrap()
+    }
+
+    #[test]
+    fn an_unedited_install_reads_as_unedited_or_every_update_warns() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", SKILL_MD)
+            .build_fs();
+        let lock = lock_with_hash(&installed_hash());
+        assert_eq!(
+            local_edits(&fs, &lock, "write-tests", Path::new("/skill")),
+            LocalEdits::Unedited
+        );
+    }
+
+    #[test]
+    fn one_changed_byte_reads_as_edited_or_update_overwrites_silently() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", b"---\nname: write-tests\n---\nBody!\n")
+            .build_fs();
+        let lock = lock_with_hash(&installed_hash());
+        assert_eq!(
+            local_edits(&fs, &lock, "write-tests", Path::new("/skill")),
+            LocalEdits::Edited
+        );
+    }
+
+    #[test]
+    fn an_added_file_reads_as_edited_or_update_deletes_it_silently() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", SKILL_MD)
+            .file("/skill/notes.md", b"mine\n")
+            .build_fs();
+        let lock = lock_with_hash(&installed_hash());
+        assert_eq!(
+            local_edits(&fs, &lock, "write-tests", Path::new("/skill")),
+            LocalEdits::Edited
+        );
+    }
+
+    #[test]
+    fn a_skill_without_a_lock_entry_reads_as_unknown_or_it_is_wrongly_called_edited() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", b"anything\n")
+            .build_fs();
+        let lock = lock_with_hash(&installed_hash());
+        assert_eq!(
+            local_edits(&fs, &lock, "other-skill", Path::new("/skill")),
+            LocalEdits::Unknown
+        );
+    }
+
+    #[test]
+    fn finder_and_python_litter_is_ignored_or_an_untouched_install_warns() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", SKILL_MD)
+            .file("/skill/.DS_Store", b"\0\0")
+            .file("/skill/scripts/__pycache__/a.pyc", b"x")
+            .file("/skill/.git/HEAD", b"ref")
+            .build_fs();
+        let lock = lock_with_hash(&installed_hash());
+        assert_eq!(
+            local_edits(&fs, &lock, "write-tests", Path::new("/skill")),
+            LocalEdits::Unedited
+        );
+    }
+
+    #[test]
+    fn an_edit_beside_litter_still_reads_as_edited_or_the_ignore_hides_real_edits() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", b"changed\n")
+            .file("/skill/.DS_Store", b"\0\0")
+            .build_fs();
+        let lock = lock_with_hash(&installed_hash());
+        assert_eq!(
+            local_edits(&fs, &lock, "write-tests", Path::new("/skill")),
+            LocalEdits::Edited
+        );
+    }
+
+    #[test]
+    fn a_sha256_lock_hash_reads_as_unknown_or_every_non_github_skill_warns() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", SKILL_MD)
+            .build_fs();
+        let lock = lock_with_hash(&"a".repeat(64));
+        assert_eq!(
+            local_edits(&fs, &lock, "write-tests", Path::new("/skill")),
+            LocalEdits::Unknown
         );
     }
 }

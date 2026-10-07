@@ -7,12 +7,15 @@
 import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
-export interface UseSkillMdEditorState {
+interface UseSkillMdEditorState {
   editorOpenedContent: string | null;
   setEditorOpenedContent: Dispatch<SetStateAction<string | null>>;
   isEditing: boolean;
   isEditorDirty: boolean;
   setIsEditorDirty: Dispatch<SetStateAction<boolean>>;
+  /** The SKILL.md line the editor opened on (a YAML error's line), if any. */
+  editorHighlightLine: number | undefined;
+  setEditorHighlightLine: Dispatch<SetStateAction<number | undefined>>;
 }
 
 /**
@@ -29,6 +32,7 @@ export function useSkillMdEditorState(
   const [editorOpenedContent, setEditorOpenedContent] = useState<string | null>(null);
   const isEditing = editorOpenedContent !== null;
   const [isEditorDirty, setIsEditorDirty] = useState(false);
+  const [editorHighlightLine, setEditorHighlightLine] = useState<number | undefined>(undefined);
 
   const [prevSkillName, setPrevSkillName] = useState(skillName);
   if (prevSkillName !== skillName) {
@@ -50,5 +54,7 @@ export function useSkillMdEditorState(
     isEditing,
     isEditorDirty,
     setIsEditorDirty,
+    editorHighlightLine,
+    setEditorHighlightLine,
   };
 }

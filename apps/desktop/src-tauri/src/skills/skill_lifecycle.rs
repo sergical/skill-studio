@@ -7,6 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use skill_studio_core::dotagents_ledger::DotagentsSkill;
+
 use super::skill_deployment::{
     parse_deployment_id, BackingRelationship, DeploymentMutability, SkillDestination,
 };
@@ -45,7 +47,7 @@ pub fn find_deployment<'a>(
         }
     }
     Err(format!(
-        "Deployment {deployment_id} is not in the current snapshot"
+        "Copy {deployment_id} is not in the current snapshot"
     ))
 }
 
@@ -53,29 +55,29 @@ pub fn find_deployment<'a>(
 pub fn revalidate_deployment(deployment: &Deployment, expected_id: &str) -> Result<(), String> {
     if deployment.id != expected_id {
         return Err(format!(
-            "Deployment id drifted: expected {expected_id}, found {}",
+            "Copy id drifted: expected {expected_id}, found {}",
             deployment.id
         ));
     }
-    let parsed = parse_deployment_id(expected_id)
-        .ok_or_else(|| format!("Not a deployment id: {expected_id}"))?;
+    let parsed =
+        parse_deployment_id(expected_id).ok_or_else(|| format!("Not a copy id: {expected_id}"))?;
     let path = Path::new(&deployment.path);
     let leaf = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     if leaf != parsed.name && !deployment.path.contains(&parsed.name) {
         return Err(format!(
-            "Deployment path {} no longer matches {}",
+            "Copy path {} no longer matches {}",
             deployment.path, parsed.name
         ));
     }
     if deployment.scope != parsed.scope {
         return Err(format!(
-            "Deployment scope drifted: id has {}, snapshot has {}",
+            "Copy scope drifted: id has {}, snapshot has {}",
             parsed.scope, deployment.scope
         ));
     }
     if deployment.destination != parsed.destination {
         return Err(format!(
-            "Deployment destination drifted: id has {}, snapshot has {}",
+            "Copy destination drifted: id has {}, snapshot has {}",
             parsed.destination.as_str(),
             deployment.destination.as_str()
         ));
@@ -151,7 +153,7 @@ pub fn resolve_lifecycle_target(
                 revalidate_deployment(deployment, &affected_deployment.id)?;
                 if deployment.owner_id.as_deref() != Some(owner_id) {
                     return Err(format!(
-                        "{action} refused: deployment {} changed owner",
+                        "{action} refused: copy {} changed owner",
                         deployment.id
                     ));
                 }
@@ -170,7 +172,7 @@ pub fn resolve_lifecycle_target(
             require_owner_adapter_deployment_mutable(deployment, action)?;
             Ok((skill.clone(), deployment.clone()))
         }
-        _ => Err("Lifecycle target must contain exactly one deployment_id or owner_id".to_string()),
+        _ => Err("Lifecycle target must contain exactly one skill copy or one source".to_string()),
     }
 }
 
@@ -191,7 +193,7 @@ pub fn require_global_universal_park_target(deployment: &Deployment) -> Result<(
         return Ok(());
     }
     Err(
-        "Park is only available for the Global Universal folder. Project and Per harness copies stay independent."
+        "Park is only available for the Global Universal folder. Project and Per agent copies stay independent."
             .to_string(),
     )
 }
@@ -210,6 +212,70 @@ pub fn require_direct_deployment_mutable(
         deployment.path,
         deployment.owner_kind.as_str()
     ))
+}
+
+/// The dotagents ledger entry an update of `deployment` would run against,
+/// or the reason there is none to update from: no matching ledger, no entry,
+/// a wildcard entry (no manifest row), or a local `path:` folder.
+pub fn dotagents_update_entry<'a>(
+    ledgers: &'a [OwnershipLedgers],
+    deployment: &Deployment,
+    skill_name: &str,
+) -> Result<&'a DotagentsSkill, String> {
+    let ledger = ledger_matching_deployment(ledgers, deployment)
+        .ok_or("Update is not available: the matching ownership ledger is missing")?;
+    let entry = ledger
+        .dotagents
+        .iter()
+        .find(|entry| entry.name == skill_name)
+        .ok_or_else(|| {
+            format!("Update is not available: {skill_name} is not in the matching agents.lock")
+        })?;
+    if !entry.has_manifest_row {
+        return Err(format!(
+            "Update is not available: {skill_name} is a wildcard dotagents entry"
+        ));
+    }
+    if entry.is_local_path() {
+        return Err(
+            "Update is not available: dotagents tracks this as a local folder; there is nothing upstream to update from"
+                .to_string(),
+        );
+    }
+    Ok(entry)
+}
+
+/// The deployment an owner-wide action runs its adapter against: the
+/// canonical one when the owner has it, else the first.
+pub fn owner_adapter_deployment<'a>(
+    deployments: impl Iterator<Item = &'a Deployment>,
+) -> Option<&'a Deployment> {
+    let mut first = None;
+    for deployment in deployments {
+        if matches!(deployment.backing, BackingRelationship::Canonical) {
+            return Some(deployment);
+        }
+        first.get_or_insert(deployment);
+    }
+    first
+}
+
+/// Why the update path refuses `deployment`, or `None` when it can run.
+/// The one rule behind both `build_update_request` and the overlay that
+/// decides which owners a skill lists as outdated, so the app never offers
+/// an update it cannot run.
+pub fn update_refusal(
+    deployment: &Deployment,
+    skill_name: &str,
+    ledgers: &[OwnershipLedgers],
+) -> Option<String> {
+    if let Err(reason) = require_direct_deployment_mutable(deployment, "Update") {
+        return Some(reason);
+    }
+    if deployment.owner_kind == LifecycleOwnerKind::Dotagents {
+        return dotagents_update_entry(ledgers, deployment, skill_name).err();
+    }
+    None
 }
 
 /// Require the deployment selected to represent an owner group to be mutable.
@@ -250,7 +316,7 @@ pub fn preview_owner_deployments(
     }
     if out.is_empty() {
         return Err(format!(
-            "Owner {owner_id} has no matching deployments in the current snapshot"
+            "Owner {owner_id} has no matching copies in the current snapshot"
         ));
     }
     Ok(out)
@@ -371,10 +437,12 @@ mod tests {
             disabled: false,
             disabled_by: None,
             disabled_readers: Vec::new(),
+            disabling_config_files: Vec::new(),
             codex_implicit_invocation: None,
             shared_via_whole_dir_link: false,
             spec_violations: Vec::new(),
             invocation: InvocationPolicy::Both,
+            parked_origin: None,
         }
     }
 
@@ -542,7 +610,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.contains("no matching deployments"));
+        assert!(error.contains("no matching copies"));
     }
 
     #[test]

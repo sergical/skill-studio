@@ -25,13 +25,38 @@ struct Exclusion {
 
 const EXCLUSIONS: &[Exclusion] = &[
     Exclusion {
+        name: "update_split_copies",
+        reason: "takes the new version's files from its caller, and no CLI or MCP surface \
+                  fetches a skill's files yet",
+    },
+    Exclusion {
         name: "skill_content_hash",
         reason: "a hashing helper `scan`/`diagnose` call internally, not a request/outcome op",
     },
     Exclusion {
-        name: "set_codex_skill_disabled_with",
-        reason: "an implementation detail behind the set_harness_enabled surface \
-                  (desktop's skill_harness_disable.rs calls it directly for the Codex arm)",
+        name: "codex_disabled_skill_md_paths",
+        reason: "a read helper the desktop's scan overlay shares with the core scan, \
+                  not a request/outcome op",
+    },
+    Exclusion {
+        name: "codex_path_form",
+        reason: "the path normalization Codex applies before matching a row, shared with \
+                  the desktop's scan overlay, not a request/outcome op",
+    },
+    Exclusion {
+        name: "park_check",
+        reason: "a read-only question the desktop asks before its park/remove confirm; the CLI \
+                  and MCP park without a prompt, so they have nothing to warn before",
+    },
+    Exclusion {
+        name: "park_git_warning",
+        reason: "the git warning the CLI and MCP park commands attach to their own outcome, \
+                  not a request/outcome op",
+    },
+    Exclusion {
+        name: "discard",
+        reason: "the confirmed fix for a parked copy left behind, offered only in the desktop's \
+                  Locations card and Needs attention list; the CLI and MCP have no such issue",
     },
 ];
 

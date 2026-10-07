@@ -11,6 +11,7 @@
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
     "anti-slop/no-known-value-widening": "error",
+    "anti-slop/no-internal-vocabulary": "off",
     "anti-slop/no-module-mocking": "error",
     "anti-slop/no-object-parameters": "error",
     "anti-slop/no-raw-form-elements": "error",
@@ -52,6 +53,11 @@
   "ignorePatterns": ["**/dist", "**/node_modules", "**/src-tauri/target", "**/src-tauri/gen"],
   "overrides": [
     {
+      "files": ["apps/desktop/src/**", "packages/ui/**"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx", "apps/desktop/src/dev/**"],
+      "rules": { "anti-slop/no-internal-vocabulary": "error" }
+    },
+    {
       "files": ["packages/ui/**", "apps/tui/**", "packages/marketing/**"],
       "rules": { "anti-slop/no-raw-form-elements": "off" }
     },
@@ -71,9 +77,11 @@
         "apps/desktop/src/components/Settings/AppVersionCard.tsx",
         "apps/desktop/src/components/Settings/CommandHealthCard.tsx",
         "apps/desktop/src/components/Settings/EditorCard.tsx",
-        "apps/desktop/src/components/Settings/ErrorReportingCard.tsx",
         "apps/desktop/src/components/Settings/ProjectFoldersCard.tsx",
+        "apps/desktop/src/components/Settings/TelemetryCard.tsx",
+        "apps/desktop/src/components/SkillDetail/LeftBehindDialog.tsx",
         "apps/desktop/src/components/SkillDetail/MakeIndependentCopyDialog.tsx",
+        "apps/desktop/src/components/SkillDetail/ParkCopyDialog.tsx",
         "apps/desktop/src/components/SkillDetail/RemoveDeploymentsDialog.tsx",
         "apps/desktop/src/components/SkillDetail/skill-location-actions.ts",
         "apps/desktop/src/components/SkillDetail/skill-page-actions.ts",
@@ -85,6 +93,8 @@
         "apps/desktop/src/components/SkillDetail/SkillRepairCard.tsx",
         "apps/desktop/src/components/SkillDetail/UninstallPluginDialog.tsx",
         "apps/desktop/src/components/SkillDetail/useSkillFrontmatterRepair.ts",
+        "apps/desktop/src/components/SkillList/skill-bulk-run.ts",
+        "apps/desktop/src/components/SkillList/useSkillBulkActions.ts",
         "apps/desktop/src/components/SkillList/useSkillListAct.ts",
         "apps/desktop/src/components/SkillStore/InstalledSkillLifecycleActions.tsx",
         "apps/desktop/src/components/SkillStore/SkillDetailPanel.tsx",

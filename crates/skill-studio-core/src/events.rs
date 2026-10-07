@@ -32,9 +32,9 @@ pub enum EventKind {
     Park,
     /// Parked skill moved back.
     Unpark,
-    /// Native harness disable written.
+    /// Native harness disable written (older builds; kept so old journals load).
     HarnessDisable,
-    /// Native harness disable cleared.
+    /// Native harness disable cleared (older builds; kept so old journals load).
     HarnessEnable,
     /// Folder moved into `.skill-studio-disabled`.
     MoveAsideDisable,
@@ -67,11 +67,13 @@ pub enum EventKind {
     /// `ops::remove`'s own quarantine prune; `payload.pruned` names every
     /// entry it deleted.
     QuarantinePrune,
+    /// Universal folder replaced by one copy per chosen harness.
+    Split,
 }
 
 impl EventKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EventKind; 22] = [
+    pub const ALL: [EventKind; 23] = [
         EventKind::Install,
         EventKind::Remove,
         EventKind::Update,
@@ -94,6 +96,7 @@ impl EventKind {
         EventKind::RepairSkillFrontmatter,
         EventKind::Restore,
         EventKind::QuarantinePrune,
+        EventKind::Split,
     ];
 
     /// The literal stored in the `kind` column.
@@ -121,6 +124,7 @@ impl EventKind {
             EventKind::RepairSkillFrontmatter => "repair_skill_frontmatter",
             EventKind::Restore => "restore",
             EventKind::QuarantinePrune => "quarantine_prune",
+            EventKind::Split => "split",
         }
     }
 
@@ -167,6 +171,10 @@ impl EventStatus {
         .find(|s| s.as_str() == raw)
     }
 }
+
+/// Payload key an op sets on a row it rolled back itself, after which
+/// [`EventRecord::restore_capability`] reports no inverse.
+pub const ROLLED_BACK_PAYLOAD_KEY: &str = "rolled_back";
 
 /// One row of the `events` table.
 ///
@@ -253,6 +261,17 @@ impl EventRecord {
             self.kind(),
         ) {
             (Some(by), _, _, _) => RestoreCapability::Reverted { by: by.clone() },
+            // Old builds wrote these to turn a skill off in an agent's own
+            // config. Restoring one would put a whole config file back from
+            // a backup and drop every edit the user made since.
+            (None, _, _, Some(EventKind::HarnessDisable | EventKind::HarnessEnable)) => {
+                RestoreCapability::NoInverse
+            }
+            // The op put everything back itself before it gave up, so the
+            // inverse it kept has nothing left to undo.
+            (None, _, _, _) if self.payload.get(ROLLED_BACK_PAYLOAD_KEY).is_some() => {
+                RestoreCapability::NoInverse
+            }
             (None, false, _, _) | (None, true, None, _) => RestoreCapability::NoInverse,
             (None, true, Some(_), None) => RestoreCapability::UnknownKind,
             (None, true, Some(_), Some(_)) => RestoreCapability::Yes,
@@ -416,6 +435,14 @@ pub(crate) fn fingerprint_path(
     fingerprint_entry(fs, path, meta.kind).map(Some)
 }
 
+/// The [`fingerprint_path`] of a link whose raw target text is `target`,
+/// known before the link exists.
+pub(crate) fn link_fingerprint(target: &Path) -> Fingerprint {
+    let mut buf = vec![b'L'];
+    buf.extend_from_slice(target.to_string_lossy().as_bytes());
+    Fingerprint::of_bytes(&buf)
+}
+
 /// One entry of [`fingerprint_path`]'s recursion; `kind` is the caller's
 /// already-known [`FileKind`] so a directory's children are not re-stat'd
 /// beyond the [`ScopeFs::read_dir`] call that named them.
@@ -427,9 +454,7 @@ fn fingerprint_entry(
     let buf = match kind {
         FileKind::Symlink => {
             let target = fs.read_link(path).map_err(|e| CoreError::io(path, e))?;
-            let mut buf = vec![b'L'];
-            buf.extend_from_slice(target.to_string_lossy().as_bytes());
-            buf
+            return Ok(link_fingerprint(&target));
         }
         FileKind::Dir => {
             let mut entries = fs.read_dir(path).map_err(|e| CoreError::io(path, e))?;
@@ -482,8 +507,7 @@ pub(crate) fn restore_backup_inverse(
 /// `inverse` - `restore_event` applies these best-effort, after its own
 /// `path` restore succeeds, via [`crate::ports::ScopeFs::symlink`] rather
 /// than the byte-write `RestorePlan` branches: those would turn a symlink
-/// into a regular file holding its target's text, per this module's own
-/// [`SymlinkInverse`] doc. An old reader that does not know `"links"` still
+/// into a regular file holding its target's text. An old reader that does not know `"links"` still
 /// restores `path` correctly; the field is additive.
 pub(crate) fn restore_backup_inverse_with_links(
     path: &Path,
@@ -561,6 +585,149 @@ pub(crate) fn parse_restore_links(inverse: &serde_json::Value) -> Vec<(PathBuf, 
         .collect()
 }
 
+/// Adds a `"remove_copies"` array to a `restore_backup` inverse: folders the
+/// same event wrote (one per harness `ops::split` copied into), each with
+/// the fingerprint it had right after the write. `restore_event` removes
+/// them before it recreates `"links"`, because a split copy can sit where a
+/// removed link used to be. Additive like `"links"`.
+pub(crate) fn with_remove_copies(
+    mut inverse: serde_json::Value,
+    copies: &[(PathBuf, Fingerprint)],
+) -> serde_json::Value {
+    if !copies.is_empty() {
+        let copies: Vec<serde_json::Value> = copies
+            .iter()
+            .map(|(path, fingerprint)| {
+                serde_json::json!({ "path": path, "fingerprint": fingerprint.bare_hex() })
+            })
+            .collect();
+        inverse["remove_copies"] = serde_json::Value::Array(copies);
+    }
+    inverse
+}
+
+/// Reads back the `"remove_copies"` array [`with_remove_copies`] adds, or an
+/// empty list for an inverse that has none.
+pub(crate) fn parse_restore_remove_copies(inverse: &serde_json::Value) -> Vec<(PathBuf, String)> {
+    inverse
+        .get("remove_copies")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let path = PathBuf::from(entry.get("path")?.as_str()?);
+            let fingerprint = entry.get("fingerprint")?.as_str()?.to_string();
+            Some((path, fingerprint))
+        })
+        .collect()
+}
+
+/// Adds a `"write_back"` array to a `restore_backup` inverse: folders the
+/// same restore removed (a split's copies), to write back from this event's
+/// own backup when the restore is undone. Mirrors `"remove_copies"`.
+pub(crate) fn with_write_back(
+    mut inverse: serde_json::Value,
+    paths: &[PathBuf],
+) -> serde_json::Value {
+    if !paths.is_empty() {
+        inverse["write_back"] = serde_json::json!(paths);
+    }
+    inverse
+}
+
+/// Reads back the `"write_back"` array [`with_write_back`] adds, or an empty
+/// list for an inverse that has none.
+pub(crate) fn parse_restore_write_back(inverse: &serde_json::Value) -> Vec<PathBuf> {
+    inverse
+        .get("write_back")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.as_str().map(PathBuf::from))
+        .collect()
+}
+
+/// Adds a `"remove_links"` array to a `restore_backup` inverse: links the
+/// same restore recreated, each with the target text it was created with.
+/// Mirrors `"links"`.
+pub(crate) fn with_remove_links(
+    mut inverse: serde_json::Value,
+    links: &[(PathBuf, PathBuf)],
+) -> serde_json::Value {
+    if !links.is_empty() {
+        let links: Vec<serde_json::Value> = links
+            .iter()
+            .map(|(path, target)| serde_json::json!({ "path": path, "target": target }))
+            .collect();
+        inverse["remove_links"] = serde_json::Value::Array(links);
+    }
+    inverse
+}
+
+/// Reads back the `"remove_links"` array [`with_remove_links`] adds, or an
+/// empty list for an inverse that has none.
+pub(crate) fn parse_restore_remove_links(inverse: &serde_json::Value) -> Vec<(PathBuf, PathBuf)> {
+    inverse
+        .get("remove_links")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let path = PathBuf::from(entry.get("path")?.as_str()?);
+            let target = PathBuf::from(entry.get("target")?.as_str()?);
+            Some((path, target))
+        })
+        .collect()
+}
+
+/// The `secondary_post` value for a path that could not be fingerprinted
+/// (an `Err` entry): it never equals a live fingerprint, so
+/// undo needs `force`.
+const UNREADABLE_FINGERPRINT: &str = "unknown";
+
+/// Adds a `"secondary_post"` array to a `restore_backup` inverse: every
+/// extra path the same event backed up beside `path` (an update's config,
+/// lock, and sibling skill folders), each with the fingerprint it had after
+/// the write, `"absent"` for none. Undo compares each against the live path
+/// so an edit made after the event is not overwritten without `force`.
+pub(crate) fn with_secondary_post(
+    mut inverse: serde_json::Value,
+    entries: &[(PathBuf, Result<Option<Fingerprint>, crate::CoreError>)],
+) -> serde_json::Value {
+    if !entries.is_empty() {
+        let entries: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|(path, fingerprint)| {
+                serde_json::json!({
+                    "path": path,
+                    "fingerprint": match fingerprint {
+                        Ok(fingerprint) => fingerprint.as_ref().map_or("absent", Fingerprint::bare_hex),
+                        Err(_) => UNREADABLE_FINGERPRINT,
+                    },
+                })
+            })
+            .collect();
+        inverse["secondary_post"] = serde_json::Value::Array(entries);
+    }
+    inverse
+}
+
+/// Reads back the `"secondary_post"` array [`with_secondary_post`] adds, or
+/// an empty list for an inverse that has none.
+pub(crate) fn parse_restore_secondary_post(inverse: &serde_json::Value) -> Vec<(PathBuf, String)> {
+    inverse
+        .get("secondary_post")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let path = PathBuf::from(entry.get("path")?.as_str()?);
+            let fingerprint = entry.get("fingerprint")?.as_str()?.to_string();
+            Some((path, fingerprint))
+        })
+        .collect()
+}
+
 /// Reads a `restore_backup` inverse payload back into its path and
 /// fingerprints. `None` for either fingerprint means `"absent"`. Returns
 /// `None` when `inverse` is not a `restore_backup` op (an unrecognized op,
@@ -580,76 +747,6 @@ pub(crate) fn parse_restore_backup_inverse(
         pre.filter(|s| *s != "absent").map(str::to_string),
         post.filter(|s| *s != "absent").map(str::to_string),
     ))
-}
-
-/// Undo shape for a symlink toggle: `recreate_symlink` (put a link with
-/// `target` back at `path`) or `remove_symlink` (take the link at `path`
-/// back out). Kept apart from `restore_backup`: that shape's restore writes
-/// raw bytes with `write_atomic`, which would turn a symlink into a regular
-/// file carrying its target's content instead of recreating the link.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SymlinkInverse {
-    /// Recreate the link.
-    Recreate {
-        /// Where the link goes.
-        path: PathBuf,
-        /// What it points to.
-        target: PathBuf,
-    },
-    /// Remove the link.
-    Remove {
-        /// The link to remove.
-        path: PathBuf,
-        /// What the link pointed at when it was created - not used to
-        /// remove it, only to refuse the removal if the link has since been
-        /// retargeted to something the event never put there (see
-        /// `restore_symlink_event`'s drift guard). `None` for a row written
-        /// before this field existed: `restore_symlink_event` treats that
-        /// as force-only, since there is nothing recorded to compare the
-        /// live link against.
-        target: Option<PathBuf>,
-    },
-}
-
-pub(crate) fn recreate_symlink_inverse(path: &Path, target: &Path) -> serde_json::Value {
-    serde_json::json!({ "op": "recreate_symlink", "path": path, "target": target })
-}
-
-/// `target` is `None` when a target-less remove row is restored against an
-/// already-absent link; a restore of such a row needs `--force`. Kept
-/// optional so a pre-existing row without one still parses instead of
-/// losing its `restore_capability`.
-pub(crate) fn remove_symlink_inverse(path: &Path, target: Option<&Path>) -> serde_json::Value {
-    match target {
-        Some(target) => {
-            serde_json::json!({ "op": "remove_symlink", "path": path, "target": target })
-        }
-        None => serde_json::json!({ "op": "remove_symlink", "path": path }),
-    }
-}
-
-/// Reads a `recreate_symlink`/`remove_symlink` inverse payload back. Returns
-/// `None` for any other shape. A `remove_symlink` row's `target` is read as
-/// present-but-optional, not required: a row from before that field existed
-/// must still parse, so `restore_capability()` (which only checks that the
-/// row's kind is understood, not the shape underneath) keeps reporting
-/// `Yes` for it instead of silently falling to `UnknownKind`.
-pub(crate) fn parse_symlink_inverse(inverse: &serde_json::Value) -> Option<SymlinkInverse> {
-    let obj = inverse.as_object()?;
-    match obj.get("op").and_then(|v| v.as_str()) {
-        Some("recreate_symlink") => Some(SymlinkInverse::Recreate {
-            path: PathBuf::from(obj.get("path")?.as_str()?),
-            target: PathBuf::from(obj.get("target")?.as_str()?),
-        }),
-        Some("remove_symlink") => Some(SymlinkInverse::Remove {
-            path: PathBuf::from(obj.get("path")?.as_str()?),
-            target: obj
-                .get("target")
-                .and_then(|v| v.as_str())
-                .map(PathBuf::from),
-        }),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -734,5 +831,31 @@ mod tests {
                 "a {status:?} row must name its own status, not fall through to Yes"
             );
         }
+    }
+
+    #[test]
+    fn inverse_from_before_the_mirror_fields_parses_to_empty_lists() {
+        let old = restore_backup_inverse_with_links(
+            Path::new("/home/u/.agents/skills/a"),
+            None,
+            None,
+            &[(PathBuf::from("/l"), PathBuf::from("/t"))],
+        );
+        assert!(parse_restore_write_back(&old).is_empty());
+        assert!(parse_restore_remove_links(&old).is_empty());
+        assert!(parse_restore_secondary_post(&old).is_empty());
+    }
+
+    #[test]
+    fn mirror_fields_round_trip_through_their_parsers() {
+        let inverse = with_remove_links(
+            with_write_back(serde_json::json!({}), &[PathBuf::from("/c")]),
+            &[(PathBuf::from("/l"), PathBuf::from("../t"))],
+        );
+        assert_eq!(parse_restore_write_back(&inverse), [PathBuf::from("/c")]);
+        assert_eq!(
+            parse_restore_remove_links(&inverse),
+            [(PathBuf::from("/l"), PathBuf::from("../t"))]
+        );
     }
 }

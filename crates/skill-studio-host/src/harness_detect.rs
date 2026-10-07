@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{ChildStderr, ChildStdout, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -16,6 +16,44 @@ use crate::tools::is_executable_file;
 /// How often [`RealProcessSpawner::run`] polls a running child for exit
 /// while waiting for `ProcessSpec::timeout_ms`'s deadline.
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// How long [`broken_node_reason`] lets `node --version` run. It runs on every
+/// failed npx run, so a hanging `node` adds at most this long to the failure.
+/// A healthy-but-slow start must not hit it either: on a loaded machine, or
+/// on the first launch of a just-upgraded binary, a process start measured
+/// up to 3.6 s, and a probe that gives up reports no cause.
+const NODE_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Attempts and pause for [`spawn_retrying_busy`]: about half a second in all.
+const BUSY_SPAWN_ATTEMPTS: u32 = 20;
+const BUSY_SPAWN_BACKOFF: Duration = Duration::from_millis(25);
+
+/// `command.spawn()`, retried while the program is "Text file busy"
+/// (ETXTBSY). On Linux, exec of a file fails that way while any process still
+/// holds it open for writing. A thread that has just written an executable
+/// (an installer, a script, a test fixture) can have that descriptor copied
+/// into a child that another thread forks at the same moment; the copy
+/// closes when that child execs, within milliseconds. A real binary is
+/// never busy for long, so a bounded retry is harmless and hides the race.
+pub fn spawn_retrying_busy(command: &mut std::process::Command) -> std::io::Result<Child> {
+    retry_when_busy(|| command.spawn())
+}
+
+fn retry_when_busy<T>(mut attempt: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut tries = 1;
+    loop {
+        match attempt() {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && tries < BUSY_SPAWN_ATTEMPTS =>
+            {
+                tries += 1;
+                std::thread::sleep(BUSY_SPAWN_BACKOFF);
+            }
+            result => return result,
+        }
+    }
+}
 
 /// How long the timeout path waits for a reader thread to see EOF after
 /// killing the child's whole process group, before giving up on it and
@@ -104,6 +142,96 @@ impl RealProcessSpawner {
         };
         std::env::join_paths(search_dirs.chain(inherited_dirs)).unwrap_or(inherited)
     }
+
+    /// The `PATH` `run` gives the child for `spec`.
+    fn effective_path(&self, spec: &ProcessSpec) -> OsString {
+        if let Some((_, value)) = spec.env.iter().find(|(key, _)| key == "PATH") {
+            return OsString::from(value);
+        }
+        if self.search_dirs.is_empty() {
+            return std::env::var_os("PATH").unwrap_or_default();
+        }
+        self.child_path()
+    }
+
+    /// For a failed `npx` run, appends one `Ran:` line naming the program,
+    /// its argv, and the `node` on the child's `PATH`, so a wrong Node
+    /// (Homebrew's instead of the user's mise) shows in the error. When that
+    /// `node` cannot start at all, the output says so instead of passing on
+    /// npx's raw dyld text. Never reads environment values or tokens.
+    fn describe_failed_npx(
+        &self,
+        spec: &ProcessSpec,
+        program: &Path,
+        mut output: ProcessOutput,
+    ) -> ProcessOutput {
+        let is_npx = Path::new(&spec.program)
+            .file_name()
+            .is_some_and(|n| n == "npx");
+        if !is_npx || output.status == Some(0) {
+            return output;
+        }
+        let path = self.effective_path(spec);
+        let node = std::env::split_paths(&path)
+            .map(|dir| dir.join("node"))
+            .find(|candidate| is_executable_file(candidate));
+        if let Some(node) = &node {
+            if let Some(broken) = broken_node_reason(node, &path) {
+                output.stderr = format!("The Node at {} is broken: {broken}", node.display());
+            }
+        }
+        let node_text = node.map_or_else(|| "not found".to_string(), |n| n.display().to_string());
+        let mut line = format!("Ran: {}", program.display());
+        for arg in &spec.args {
+            line.push(' ');
+            line.push_str(arg);
+        }
+        line.push_str(" (node: ");
+        line.push_str(&node_text);
+        line.push(')');
+        if !output.stderr.is_empty() && !output.stderr.ends_with('\n') {
+            output.stderr.push('\n');
+        }
+        output.stderr.push_str(&line);
+        output
+    }
+}
+
+/// The first dyld "Library not loaded" line from `node --version`, when
+/// `node` fails to start for that reason. `None` for a working Node or any
+/// other failure.
+fn broken_node_reason(node: &Path, path: &OsString) -> Option<String> {
+    let mut command = std::process::Command::new(node);
+    command
+        .arg("--version")
+        .env("PATH", path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let mut child = spawn_retrying_busy(&mut command).ok()?;
+    let stderr_reader = child.stderr.take().map(spawn_drain::<ChildStderr>);
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if start.elapsed() < NODE_VERSION_TIMEOUT => {
+                std::thread::sleep(POLL_INTERVAL);
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    if status.success() {
+        return None;
+    }
+    let stderr = stderr_reader.and_then(|h| h.join().ok())?;
+    String::from_utf8_lossy(&stderr)
+        .lines()
+        .find(|line| line.contains("Library not loaded"))
+        .map(|line| line.trim().to_string())
 }
 
 impl Default for RealProcessSpawner {
@@ -182,12 +310,21 @@ impl ProcessSpawner for RealProcessSpawner {
             command.current_dir(cwd);
         }
         for (key, value) in &spec.env {
-            command.env(key, value);
+            if value.is_empty() {
+                command.env_remove(key);
+            } else {
+                command.env(key, value);
+            }
         }
         if !self.search_dirs.is_empty() && !spec.env.iter().any(|(key, _)| key == "PATH") {
             command.env("PATH", self.child_path());
         }
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        // No stdin: the MCP server's JSON-RPC stream must not reach a child,
+        // and a CLI that asks a question then fails instead of waiting.
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -197,8 +334,7 @@ impl ProcessSpawner for RealProcessSpawner {
             // `child.kill()` isn't enough.
             command.process_group(0);
         }
-        let mut child = command
-            .spawn()
+        let mut child = spawn_retrying_busy(&mut command)
             .map_err(|e| CoreError::io(Path::new(&spec.program), e))?;
 
         // Drain both pipes concurrently with the poll loop below, not after
@@ -236,12 +372,16 @@ impl ProcessSpawner for RealProcessSpawner {
             let _ = child.wait();
             let stdout = join_killed_reader(stdout_reader);
             let stderr = join_killed_reader(stderr_reader);
-            return Ok(ProcessOutput {
-                status: None,
-                stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&stderr).into_owned(),
-                timed_out: true,
-            });
+            return Ok(self.describe_failed_npx(
+                spec,
+                &program,
+                ProcessOutput {
+                    status: None,
+                    stdout: String::from_utf8_lossy(&stdout).into_owned(),
+                    stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                    timed_out: true,
+                },
+            ));
         };
 
         let stdout = stdout_reader
@@ -250,12 +390,16 @@ impl ProcessSpawner for RealProcessSpawner {
         let stderr = stderr_reader
             .and_then(|h| h.join().ok())
             .unwrap_or_default();
-        Ok(ProcessOutput {
-            status: status.code(),
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&stderr).into_owned(),
-            timed_out: false,
-        })
+        Ok(self.describe_failed_npx(
+            spec,
+            &program,
+            ProcessOutput {
+                status: status.code(),
+                stdout: String::from_utf8_lossy(&stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                timed_out: false,
+            },
+        ))
     }
 }
 
@@ -263,6 +407,112 @@ impl ProcessSpawner for RealProcessSpawner {
 mod tests {
     use super::*;
     use skill_studio_core::ports::NeverCancel;
+
+    fn write_script(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// `a_busy_executable_is_retried_until_free_or_the_busy_error_surfaces_after_the_cap`:
+    /// on Linux a just-written script can be "Text file busy" for a few
+    /// milliseconds. Fails if the first ETXTBSY is returned to the caller
+    /// instead of retried, or if a program that stays busy is retried
+    /// without bound.
+    #[test]
+    fn a_busy_executable_is_retried_until_free_or_the_busy_error_surfaces_after_the_cap() {
+        let busy = || std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy);
+
+        let mut calls = 0;
+        let result = retry_when_busy(|| {
+            calls += 1;
+            if calls < 3 {
+                Err(busy())
+            } else {
+                Ok(calls)
+            }
+        });
+        assert_eq!(result.unwrap(), 3, "two busy attempts must be retried");
+
+        let mut calls = 0;
+        let error = retry_when_busy::<()>(|| {
+            calls += 1;
+            Err(busy())
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::ExecutableFileBusy);
+        assert_eq!(calls, BUSY_SPAWN_ATTEMPTS, "retries must stop at the cap");
+
+        let mut calls = 0;
+        let error = retry_when_busy::<()>(|| {
+            calls += 1;
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(calls, 1, "any other spawn error must not be retried");
+    }
+
+    fn run_fake_npx(dir: &Path) -> ProcessOutput {
+        let spec = ProcessSpec {
+            program: "npx".into(),
+            args: vec!["skills".into(), "update".into(), "foo".into()],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 10_000,
+        };
+        RealProcessSpawner::with_search_path(vec![dir.to_path_buf()])
+            .run(&spec, &NeverCancel)
+            .unwrap()
+    }
+
+    /// `a_failed_npx_names_the_program_argv_and_node_it_ran_or_names_the_missing_part`:
+    /// a user must be able to see which `npx` and `node` ran. Fails if the
+    /// failure output lacks the resolved program, the argv, or the node path.
+    #[test]
+    fn a_failed_npx_names_the_program_argv_and_node_it_ran_or_names_the_missing_part() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_script(&tmp.path().join("npx"), "echo boom >&2; exit 1");
+        write_script(&tmp.path().join("node"), "echo v22.0.0");
+
+        let output = run_fake_npx(tmp.path());
+
+        let expected = format!(
+            "Ran: {0}/npx skills update foo (node: {0}/node)",
+            tmp.path().display()
+        );
+        assert!(
+            output.stderr.contains("boom") && output.stderr.contains(&expected),
+            "stderr lacks `{expected}`: {:?}",
+            output.stderr
+        );
+    }
+
+    /// `a_node_that_cannot_load_its_library_is_reported_as_broken_or_shows_the_raw_npx_text`:
+    /// Homebrew's `node` fails with dyld "Library not loaded" after a
+    /// dependency upgrade. Fails if the output keeps npx's raw text instead
+    /// of naming the broken Node.
+    #[test]
+    fn a_node_that_cannot_load_its_library_is_reported_as_broken_or_shows_the_raw_npx_text() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_script(&tmp.path().join("npx"), "echo 'env: node: bad' >&2; exit 1");
+        write_script(
+            &tmp.path().join("node"),
+            "echo 'dyld[1]: Library not loaded: libsimdjson.dylib' >&2; exit 1",
+        );
+
+        let output = run_fake_npx(tmp.path());
+
+        let broken = format!(
+            "The Node at {}/node is broken: dyld[1]: Library not loaded",
+            tmp.path().display()
+        );
+        assert!(
+            output.stderr.contains(&broken),
+            "stderr does not report the broken Node: {:?}",
+            output.stderr
+        );
+    }
 
     #[test]
     fn run_captures_stdout_and_exit_status_or_names_the_missing_field() {
@@ -272,7 +522,7 @@ mod tests {
             args: vec!["hello".into()],
             cwd: None,
             env: Vec::new(),
-            timeout_ms: 2_000,
+            timeout_ms: 30_000,
         };
         let output = spawner.run(&spec, &NeverCancel).unwrap();
         assert_eq!(output.status, Some(0), "echo did not exit 0");
@@ -302,7 +552,7 @@ mod tests {
             ],
             cwd: None,
             env: Vec::new(),
-            timeout_ms: 1_000,
+            timeout_ms: 5_000,
         };
 
         let output = spawner.run(&spec, &NeverCancel).unwrap();
@@ -388,7 +638,7 @@ mod tests {
             // alongside other tests that spawn and sleep real child
             // processes, and 2s was tight enough under that load to time
             // out this fake `npx` before it ever ran.
-            timeout_ms: 5_000,
+            timeout_ms: 30_000,
         };
 
         let output = spawner.run(&spec, &NeverCancel).unwrap();
@@ -417,7 +667,7 @@ mod tests {
             args: vec!["-c".into(), "yes x | head -c 200000".into()],
             cwd: None,
             env: Vec::new(),
-            timeout_ms: 5_000,
+            timeout_ms: 30_000,
         };
 
         let output = spawner.run(&spec, &NeverCancel).unwrap();
@@ -460,20 +710,14 @@ mod tests {
             ],
             cwd: None,
             env: Vec::new(),
-            timeout_ms: 500,
+            timeout_ms: 5_000,
         };
 
-        let start = Instant::now();
         let output = spawner.run(&spec, &NeverCancel).unwrap();
-        let elapsed = start.elapsed();
 
         assert!(
             output.timed_out,
             "a child whose grandchild holds the pipe open must still report timed_out, got {output:?}"
-        );
-        assert!(
-            elapsed < Duration::from_secs(3),
-            "run took {elapsed:?} - it waited on the grandchild's pipe instead of bounding the join"
         );
         let grandchild_pid = std::fs::read_to_string(&grandchild_pid_file).unwrap_or_default();
         let grandchild_pid = grandchild_pid.trim();

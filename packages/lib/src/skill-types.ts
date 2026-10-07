@@ -21,6 +21,8 @@ export type {
   ParsedSkillSourceKind,
   OriginTool,
   FrontmatterRepairApplyMode,
+  FrontmatterRepairKind,
+  InvocationConflictChoice,
   PackImportPreflightResult,
   HarnessId,
   OpencodeConfigKind,
@@ -42,7 +44,6 @@ export type {
   HarnessReport,
   HarnessDetection,
   HarnessesChoice,
-  HarnessVisibilityTarget,
   ImportResult,
   InstallResult,
   InstallPreferences,
@@ -54,7 +55,14 @@ export type {
   SkillSearchResult,
   PullResult,
   RemoveOutcome,
+  SplitCopy,
+  SplitOutcome,
+  AgentOffCheck,
+  AgentOffOutcome,
+  AgentOffRefusal,
   SkillDetails,
+  InstallCount,
+  InstallCountKey,
   SkillEventDto,
   SkillEventDto as SkillEvent,
   SkillInvocation,
@@ -68,6 +76,7 @@ export type {
   ForkInfo,
   OwnerUpdateInfo,
   UpdateCheckSummary,
+  UpstreamAhead,
   SkillsShAccessInfo,
   UpdatePackResult,
   LifecycleTarget,
@@ -81,6 +90,10 @@ export type {
   UpdateAllItem,
   DoctorReport,
   DoctorViolation,
+  BulkTargetResult,
+  LocalEditsDto,
+  ParkCheck,
+  InvocationTarget,
 } from "./skill-types.generated";
 
 import type { Deployment, InstalledSkill, SkillSearchResult } from "./skill-types.generated";
@@ -196,14 +209,17 @@ export interface AppVersion {
 
 /**
  * Settings' "Version" card update state (unit 6.2) - see the Rust
- * `skill_update::UpdateStatus`. `"error"` names the failure but is not
- * itself an install failure: no update ever installs without
- * `installUpdate`, which the card's "Restart to update" button is the only
- * caller of.
+ * `skill_update::UpdateStatus`. `"up-to-date"` means a check ran and found
+ * nothing newer; `"check-failed"` means a background check could not reach
+ * the update endpoint, so the channel is broken and an update was not ruled
+ * out. `"error"` names the failure but is not itself an install failure: no
+ * update ever installs without `installUpdate`, which the card's "Restart to
+ * update" button is the only caller of.
  */
 export type UpdateStatus =
   | { status: "up-to-date" }
   | { status: "checking" }
   | { status: "downloading"; version: string }
   | { status: "ready-to-install"; version: string }
+  | { status: "check-failed"; message: string }
   | { status: "error"; message: string };
