@@ -347,10 +347,57 @@ describe("parkForEveryAgent", () => {
     const fallback = await parkForEveryAgent(before, noSnapshot.api);
 
     expect(rescanned.calls).toEqual([{ kind: "park", ids: ["shared"] }]);
-    expect(toast?.type).toBe("warning");
-    expect(toast?.message).toContain(".claude/plugins/cache/official/tidy/skills/tidy");
-    expect(toast?.message).toContain("/plugin");
-    expect(fallback).toEqual(toast);
+    for (const result of [toast, fallback]) {
+      expect(result?.type).toBe("warning");
+      expect(result?.message).toContain(".claude/plugins/cache/official/tidy/skills/tidy");
+      expect(result?.message).toContain("/plugin");
+    }
+  });
+
+  it("park_for_every_agent_warns_it_could_not_confirm_when_no_rescan_lands_instead_of_reporting_success", async () => {
+    // ~/.codex/skills -> ~/src: Codex keeps loading the checkout, and without a rescan nothing shows it.
+    const codexAlias = folder("codex-alias", {
+      backing: { kind: "linked-to", deployment_id: "dev-link" },
+      shared_via_whole_dir_link: true,
+      path: "/home/u/.codex/skills/tidy",
+      resolved_path: "/home/u/src/tidy",
+    });
+    const { calls, api } = fakeApi([], { rescanned: null });
+
+    const toast = await parkForEveryAgent(skill(false, [devLink, codexAlias]), api);
+
+    expect(calls).toEqual([{ kind: "park", ids: ["dev-link"] }]);
+    expect(toast).toEqual({
+      type: "warning",
+      title: "Parked tidy, not confirmed",
+      message: "Skill Studio couldn't rescan to confirm which agents still load it.",
+    });
+  });
+
+  it("turn_on_for_every_agent_names_a_copy_an_agent_still_has_off_in_its_own_settings", async () => {
+    const parkedCodex = folder("parked-codex", {
+      scope: "parked",
+      agent: "Codex",
+      parked_origin: { kind: "codex", scope: "global" },
+    });
+    const restoredButOff = folder("codex-copy", {
+      destination: "per-harness",
+      agent: "Codex",
+      backing: { kind: "independent" },
+      path: "/home/u/.codex/skills/tidy",
+      disabled_by: "codex-config",
+    });
+    const { calls, api } = fakeApi([], { rescanned: [restoredButOff] });
+
+    const toast = await parkForEveryAgent(skill(true, [parkedCodex]), api);
+
+    expect(calls).toEqual([{ kind: "unpark", ids: ["parked-codex"] }]);
+    expect(toast).toEqual({
+      type: "warning",
+      title: "Turned on tidy, but a copy is still off",
+      message:
+        "Still off in agent settings: ~/.codex/skills/tidy (Codex). The skill page shows where to turn it on.",
+    });
   });
 
   const devLink = folder("dev-link", {

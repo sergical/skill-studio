@@ -192,16 +192,42 @@ function stillOnMessage(stillOn: Deployment[]): string | null {
   return `Still on: ${paths}.${pluginHint}`;
 }
 
+const UNCONFIRMED = "Skill Studio couldn't rescan to confirm which agents still load it.";
+
+/** Lists the copies an agent still has off in its own settings after Turn on. */
+function stillOffMessage(fresh: Deployment[]): string | null {
+  const off = fresh.filter(
+    (deployment) => deployment.scope !== "parked" && deployment.disabled_by !== null,
+  );
+  if (off.length === 0) return null;
+  const paths = off
+    .map((deployment) => `${homeRelativePath(deployment.path)} (${deployment.agent})`)
+    .join(", ");
+  return `Still off in agent settings: ${paths}. The skill page shows where to turn it on.`;
+}
+
 /**
- * The copies an agent still loads after Park, read from a rescan. Without a
- * rescan only plugin copies are certain: Park never moves them.
+ * Reads the skill back from a rescan after the write and names anything that
+ * did not change: copies still on after Park, copies still off after Turn on.
+ * Without a rescan the result is unknown, so it says so instead of reporting
+ * success. Only plugin copies are certain without one: Park never moves them.
  */
-async function copiesStillOn(skill: InstalledSkill, rescan: ParkForEveryAgentApi["rescan"]) {
+async function leftoverCheck(
+  skill: InstalledSkill,
+  rescan: ParkForEveryAgentApi["rescan"],
+): Promise<{ message: string | null; confirmed: boolean }> {
   const skills = await rescan();
-  if (!skills)
-    return skill.deployments.filter((deployment) => deployment.plugin && isLiveCopy(deployment));
-  const fresh = skills.find((candidate) => candidate.name === skill.name);
-  return fresh ? fresh.deployments.filter(isLiveCopy) : [];
+  if (!skills) {
+    const plugins = skill.parked
+      ? null
+      : stillOnMessage(
+          skill.deployments.filter((deployment) => deployment.plugin && isLiveCopy(deployment)),
+        );
+    return { message: [plugins, UNCONFIRMED].filter(Boolean).join(" "), confirmed: false };
+  }
+  const fresh = skills.find((candidate) => candidate.name === skill.name)?.deployments ?? [];
+  const message = skill.parked ? stillOffMessage(fresh) : stillOnMessage(fresh.filter(isLiveCopy));
+  return { message, confirmed: true };
 }
 
 /**
@@ -228,20 +254,23 @@ export async function parkForEveryAgent(
     : await api.parkSkills(plan.targets);
   const errors = results.flatMap((result) => (result.error ? [result.error] : []));
   const done = skill.parked ? "Turned on" : "Parked";
-  const stillOn = skill.parked ? null : stillOnMessage(await copiesStillOn(skill, api.rescan));
+  const leftover = await leftoverCheck(skill, api.rescan);
   if (errors.length > 0) {
     const total = plan.targets.length;
     return {
       type: "warning",
       title: `${done} ${total - errors.length} of ${total} copies of ${skill.name}`,
-      message: [errors[0], stillOn].filter(Boolean).join(" "),
+      message: [errors[0], leftover.message].filter(Boolean).join(" "),
     };
   }
-  if (stillOn) {
+  if (leftover.message) {
+    const still = skill.parked ? "still off" : "still on";
     return {
       type: "warning",
-      title: `${done} ${skill.name}, but a copy is still on`,
-      message: stillOn,
+      title: leftover.confirmed
+        ? `${done} ${skill.name}, but a copy is ${still}`
+        : `${done} ${skill.name}, not confirmed`,
+      message: leftover.message,
     };
   }
   return { type: "success", title: `${done} ${skill.name}` };
