@@ -157,16 +157,20 @@ function cacheTtlSecondsFor(path: string): number {
  * params in a different order) is dropped so it can't fragment the cache or
  * drain a caller's rate-limit quota with cache-busting variations. The skill
  * detail route takes no query params at all. */
-const ALLOWED_QUERY_PARAMS: Partial<Record<string, readonly string[]>> = {
+const ALLOWED_QUERY_PARAMS = {
   "/api/v1/skills": ["page", "per_page", "view"],
   "/api/v1/skills/search": ["limit", "q"],
-};
+} satisfies Record<string, readonly string[]>;
+
+function hasAllowedQueryParams(path: string): path is keyof typeof ALLOWED_QUERY_PARAMS {
+  return Object.prototype.hasOwnProperty.call(ALLOWED_QUERY_PARAMS, path);
+}
 
 /** Rebuilds `url`'s query string using only `path`'s allowed params, in
  * sorted order - used for both the upstream request and the cache key so the
  * two always agree. */
 function normalizedSearch(path: string, url: string): string {
-  const allowed = ALLOWED_QUERY_PARAMS[path] ?? [];
+  const allowed = hasAllowedQueryParams(path) ? ALLOWED_QUERY_PARAMS[path] : [];
   const params = new URL(url).searchParams;
   const kept = new URLSearchParams();
   for (const key of allowed) {
