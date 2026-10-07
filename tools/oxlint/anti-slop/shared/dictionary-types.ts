@@ -131,11 +131,14 @@ const PRIMITIVE_KEY_KINDS = new Set(["TSStringKeyword", "TSNumberKeyword", "TSSy
  * suppress one: comparing their node kinds would treat `string | symbol` and
  * `string | number` as the same key.
  */
+function primitiveKeyKind(type: ESTree.TSType): string {
+	const kind = unwrapTransparentType(type).type;
+	return PRIMITIVE_KEY_KINDS.has(kind) ? kind : "";
+}
+
 function indexSignatureKeyKind(member: ESTree.TSIndexSignature): string {
 	const parameter = member.parameters[0];
-	if (parameter === undefined) return "";
-	const kind = unwrapTransparentType(parameter.typeAnnotation.typeAnnotation).type;
-	return PRIMITIVE_KEY_KINDS.has(kind) ? kind : "";
+	return parameter === undefined ? "" : primitiveKeyKind(parameter.typeAnnotation.typeAnnotation);
 }
 
 function isNeverType(type: ESTree.TSType): boolean {
@@ -586,7 +589,8 @@ function dictionaryValueTypes(
 			: [
 					{
 						value: { type: unwrapped.typeAnnotation, substitutions: valueSubstitutions },
-						keyKind: unwrapTransparentType(unwrapped.constraint).type,
+						// An `as` clause remaps the keys, so the constraint no longer names them.
+						keyKind: unwrapped.nameType ? "" : primitiveKeyKind(unwrapped.constraint),
 					},
 				];
 	}

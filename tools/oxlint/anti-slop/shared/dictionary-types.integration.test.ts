@@ -786,4 +786,18 @@ describe("anti-slop interface dictionary rules", () => {
 
 		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
 	});
+
+	it("keeps an inherited unsafe mapped signature whose keys an as clause remaps to another key type", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`type Base<V> = { [K in string as symbol]: V };
+			interface Derived extends Base<unknown> {
+				[key: string]: string;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
 });
