@@ -752,4 +752,38 @@ describe("anti-slop interface dictionary rules", () => {
 		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(1);
 		expect(diagnostics[0]?.message).toContain("union");
 	});
+
+	it("keeps an inherited unsafe symbol key when the override covers a different key union", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`interface Base<V> {
+				[key: string | symbol]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string | number]: string;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("keeps an inherited unsafe signature when the override key is an alias of a different key type", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`type SymbolKey = symbol;
+			type StringKey = string;
+			interface Base<V> {
+				[key: SymbolKey]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: StringKey]: string;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
 });

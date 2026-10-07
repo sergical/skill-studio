@@ -123,10 +123,19 @@ function unwrapTransparentType(type: ESTree.TSType): ESTree.TSType {
 	return current;
 }
 
+const PRIMITIVE_KEY_KINDS = new Set(["TSStringKeyword", "TSNumberKeyword", "TSSymbolKeyword"]);
+
+/**
+ * Only a bare `string`, `number`, or `symbol` key proves an override covers an
+ * inherited signature. Unions, aliases, and template keys return "" so they never
+ * suppress one: comparing their node kinds would treat `string | symbol` and
+ * `string | number` as the same key.
+ */
 function indexSignatureKeyKind(member: ESTree.TSIndexSignature): string {
 	const parameter = member.parameters[0];
 	if (parameter === undefined) return "";
-	return unwrapTransparentType(parameter.typeAnnotation.typeAnnotation).type;
+	const kind = unwrapTransparentType(parameter.typeAnnotation.typeAnnotation).type;
+	return PRIMITIVE_KEY_KINDS.has(kind) ? kind : "";
 }
 
 function isNeverType(type: ESTree.TSType): boolean {
