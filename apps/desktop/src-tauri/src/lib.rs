@@ -404,7 +404,7 @@ pub fn run() {
                 std::sync::Mutex::new(event_store),
             ));
             // Older builds left one lock file per root ever leased (tens of
-            // thousands); a held file fails the sweep's try-lock and stays.
+            // thousands). The sweep skips held and recently used files.
             tauri::async_runtime::spawn_blocking(|| {
                 let lease_root = skills::core_runtime::data_root().join("leases");
                 let removed = skill_studio_host::FileLease::new(lease_root).sweep_unheld();

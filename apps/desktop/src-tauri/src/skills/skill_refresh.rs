@@ -569,12 +569,14 @@ pub fn rebuild_snapshot_now(
     app: &AppHandle,
     state: &SkillRefreshState,
 ) -> Result<SkillSnapshot, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    // Before `rebuild_lock`: see `ScanLeaseGuard` for the order.
+    let _scan_lease = super::write_lease::WriteLease::default()
+        .acquire_scan_lease(&home, &effective_project_paths(&home))?;
     let _guard = state
         .rebuild_lock
         .lock()
         .map_err(|e| format!("rebuild lock poisoned: {e}"))?;
-
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
 
     let mut invocation_index = state
         .invocation_index
@@ -860,6 +862,15 @@ fn reconcile_skill_names_at(
     }
 
     let reconcile_start = Instant::now();
+    // Before `rebuild_lock`: see `ScanLeaseGuard` for the order. A write still
+    // holding its lease past the wait leaves the skills dirty for the next
+    // full rebuild.
+    let Ok(_scan_lease) = super::write_lease::WriteLease::default()
+        .acquire_scan_lease(home, &effective_project_paths(home))
+    else {
+        state.mark_skills_dirty();
+        return Ok(());
+    };
     let _guard = state
         .rebuild_lock
         .lock()
@@ -1963,7 +1974,7 @@ pub(crate) fn core_scan_installed_skills(
 
     let catalog = std::sync::Arc::new(skill_studio_core::harness::HarnessCatalog::builtin());
     let mut ports = skill_studio_host::default_ports(lease_root, catalog);
-    if super::write_lease::current_thread_holds_write_lease() {
+    if super::write_lease::current_thread_holds_home_lease() {
         ports.leases = std::sync::Arc::new(CallerHoldsLease);
     }
     ports.telemetry = skill_studio_host::telemetry::port(
@@ -5150,6 +5161,44 @@ mod tests {
         let names = rx.recv().unwrap();
         scanner.join().unwrap();
         assert_eq!(names, vec!["mover".to_string()]);
+    }
+
+    /// Flow: a write command holds the home lease and then needs
+    /// `rebuild_lock` to patch the snapshot, while a background reconcile
+    /// waits for the same lease. Expectation: the reconcile waits without
+    /// holding `rebuild_lock`, so the write gets the lock, finishes, and
+    /// releases the lease. Failure it catches: a reconcile that takes
+    /// `rebuild_lock` first and then waits for the lease, which leaves the
+    /// write and the reconcile each waiting for what the other holds.
+    #[test]
+    fn a_reconcile_waiting_for_the_home_lease_does_not_hold_the_rebuild_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        write_skill(&home, "mover");
+        let state = fixture_state();
+
+        let guard = super::super::write_lease::WriteLease::default()
+            .try_acquire(&home)
+            .unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        super::super::write_lease::scan_wait_probe::watch(home.canonicalize().unwrap(), tx);
+
+        std::thread::scope(|scope| {
+            let reconcile = scope.spawn(|| {
+                reconcile_skill_names_at(&home, &state, ["mover".to_string()], &[], false, |_| {
+                    Ok(())
+                })
+            });
+            let reached_lease_wait = rx.recv_timeout(std::time::Duration::from_secs(10)).is_ok();
+            let rebuild_lock_free = state.rebuild_lock.try_lock().is_ok();
+            drop(guard);
+            reconcile.join().unwrap().unwrap();
+            assert!(reached_lease_wait, "the reconcile never reached its lease");
+            assert!(
+                rebuild_lock_free,
+                "the reconcile held rebuild_lock while it waited for the home lease"
+            );
+        });
     }
 
     /// Flow: a command holds the home write lease and rebuilds the snapshot on
