@@ -84,7 +84,7 @@ function collectNestedTypeNames(roots: readonly ESTree.Node[], names: Set<string
 	for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
 		const name = nestedDeclaredTypeName(node);
 		if (name !== null) names.add(name);
-		pending.push(...astChildNodes(node));
+		for (const child of astChildNodes(node)) pending.push(child);
 	}
 }
 
@@ -207,6 +207,9 @@ const safetyVerdicts = new WeakMap<
 
 const NO_SUBSTITUTIONS: TypeSubstitutionEnvironment = new Map();
 
+/** Deeper nesting reads as not provably safe, so a long alias chain cannot overflow the stack. */
+const MAX_SAFETY_DEPTH = 256;
+
 /**
  * An override hides an inherited signature only when its value is provably
  * safe. A value the classifier cannot read (a conditional, an unresolved type
@@ -218,7 +221,9 @@ function isProvablySafeValue(
 	type: ESTree.TSType,
 	substitutions: TypeSubstitutionEnvironment,
 	environment: TypeEnvironment,
+	depth = 0,
 ): boolean {
+	if (depth > MAX_SAFETY_DEPTH) return false;
 	let byNode = safetyVerdicts.get(environment);
 	if (byNode === undefined) {
 		byNode = new WeakMap();
@@ -232,7 +237,7 @@ function isProvablySafeValue(
 	const known = bySubstitutions.get(substitutions);
 	if (known !== undefined) return known;
 	bySubstitutions.set(substitutions, false);
-	const verdict = computeProvablySafeValue(type, substitutions, environment);
+	const verdict = computeProvablySafeValue(type, substitutions, environment, depth);
 	bySubstitutions.set(substitutions, verdict);
 	return verdict;
 }
@@ -241,9 +246,10 @@ function computeProvablySafeValue(
 	type: ESTree.TSType,
 	substitutions: TypeSubstitutionEnvironment,
 	environment: TypeEnvironment,
+	depth: number,
 ): boolean {
 	const isSafe = (inner: ESTree.TSType): boolean =>
-		isProvablySafeValue(inner, substitutions, environment);
+		isProvablySafeValue(inner, substitutions, environment, depth + 1);
 	const unwrapped = unwrapTransparentType(type);
 	if (SAFE_VALUE_KINDS.has(unwrapped.type)) return true;
 	if (unwrapped.type === "TSUnionType") return unwrapped.types.every(isSafe);
@@ -270,13 +276,13 @@ function computeProvablySafeValue(
 	if (substitution !== undefined) {
 		return (
 			substitution !== UNRESOLVED_TYPE_PARAMETER &&
-			isProvablySafeValue(substitution.type, substitution.substitutions, environment)
+			isProvablySafeValue(substitution.type, substitution.substitutions, environment, depth + 1)
 		);
 	}
 	const alias = environment.aliases.get(name);
 	if (alias === undefined || environment.nestedTypeNames.has(name)) return false;
 	if (alias.typeParameters != null || unwrapped.typeArguments != null) return false;
-	return isProvablySafeValue(alias.typeAnnotation, NO_SUBSTITUTIONS, environment);
+	return isProvablySafeValue(alias.typeAnnotation, NO_SUBSTITUTIONS, environment, depth + 1);
 }
 
 function isNeverType(type: ESTree.TSType): boolean {
