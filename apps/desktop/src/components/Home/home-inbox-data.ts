@@ -165,7 +165,7 @@ export async function updateAllOutdatedSkills(
   pullFork: (target: LifecycleTarget) => Promise<PullResult>,
   updateAllOwners: (
     targets: LifecycleTarget[],
-    onOwnerDone: (done: number) => void,
+    onOwnerDone: (done: number, skillName: string) => void,
   ) => Promise<UpdateAllOutcome>,
   onProgress?: (done: number, total: number, current: string | null) => void,
   forkEdited?: {
@@ -282,9 +282,14 @@ export async function updateAllOutdatedSkills(
   retotal(forks.length, afterForksName());
   if (ownerTargets.length > 0) {
     try {
-      const outcome = await updateAllOwners(ownerTargets, (done) =>
-        onProgress?.(forks.length + done, total, owners[done]?.name ?? firstPluginName()),
-      );
+      // Refused targets finish first, so `done` alone cannot say which owner is next:
+      // each event consumes one entry of the skill it names.
+      const pending = [...owners];
+      const outcome = await updateAllOwners(ownerTargets, (done, skillName) => {
+        const finished = pending.findIndex((entry) => entry.name === skillName);
+        if (finished >= 0) pending.splice(finished, 1);
+        onProgress?.(forks.length + done, total, pending[0]?.name ?? firstPluginName());
+      });
       // `errors` is keyed by skill name, so two failing owners of one
       // twice-installed skill collapse to one entry there; `items` carries
       // one entry per owner regardless, so count failures from `items`

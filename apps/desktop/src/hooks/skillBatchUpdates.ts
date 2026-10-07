@@ -29,7 +29,8 @@ export function runHomeUpdateAll(
   return updateAllOutdatedSkills(
     updates,
     pullForkUpstream,
-    (targets, onOwnerDone) => updateAllSkillsWithProgress(targets, ({ done }) => onOwnerDone(done)),
+    (targets, onOwnerDone) =>
+      updateAllSkillsWithProgress(targets, ({ done, skill_name }) => onOwnerDone(done, skill_name)),
     onProgress,
     forkNames && { names: forkNames, fork: forkSkill },
     updatePluginInstall,

@@ -547,7 +547,8 @@ function UpdatesGroup({
   } | null>(null);
   const addToast = useAppStore((state) => state.addToast);
   const [editedSkills, setEditedSkills] = useState<InstalledSkill[]>([]);
-  const isUpdatingAll = progress !== null;
+  const [isCheckingEdits, setIsCheckingEdits] = useState(false);
+  const isUpdatingAll = progress !== null || isCheckingEdits;
 
   const runUpdateAll = async (forkNames?: ReadonlySet<string>) => {
     setProgress({ done: 0, total: 0, current: null });
@@ -573,12 +574,12 @@ function UpdatesGroup({
   };
 
   const handleUpdateAll = async () => {
-    setProgress({ done: 0, total: 0, current: null });
+    setIsCheckingEdits(true);
     // `skillsWithLocalEdits` treats a failed check as "no edits", so it never rejects.
     const edited = await skillsWithLocalEdits(updates, skillLocalEdits);
+    setIsCheckingEdits(false);
     if (edited.length > 0) {
       setEditedSkills(edited);
-      setProgress(null);
       return;
     }
     await runUpdateAll();
@@ -609,7 +610,9 @@ function UpdatesGroup({
                     ? progress.total > 0
                       ? `Updating ${progress.done} of ${progress.total}…`
                       : "Updating…"
-                    : "Update all"}
+                    : isCheckingEdits
+                      ? "Updating…"
+                      : "Update all"}
                 </Button>
               )
             }

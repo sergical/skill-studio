@@ -120,6 +120,8 @@ interface AppState {
   // HomeView.tsx.
   skillListFilter: SkillListFilter;
   setSkillListFilter: (patch: Partial<SkillListFilter>) => void;
+  /** Starts from the default filter, so no earlier `update`/`usage`/`issue` survives. */
+  replaceSkillListFilter: (patch: Partial<SkillListFilter>) => void;
   resetSkillListFilter: () => void;
   /** Bumped by the sidebar's search icon so the filter bar's search input can focus itself. */
   skillSearchFocusRequest: number;
@@ -359,6 +361,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSkillListFilter: (patch) =>
     set((state) => {
       const skillListFilter = { ...state.skillListFilter, ...patch };
+      return sameSkillListScope(state.skillListFilter.scope, skillListFilter.scope)
+        ? { skillListFilter }
+        : { skillListFilter, selectedSkillPaths: new Set(), selectionMode: false };
+    }),
+  replaceSkillListFilter: (patch) =>
+    set((state) => {
+      const skillListFilter = { ...defaultSkillListFilter(), ...patch };
       return sameSkillListScope(state.skillListFilter.scope, skillListFilter.scope)
         ? { skillListFilter }
         : { skillListFilter, selectedSkillPaths: new Set(), selectionMode: false };

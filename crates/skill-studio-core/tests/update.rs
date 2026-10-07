@@ -108,9 +108,13 @@ impl ProcessSpawner for FakeNpxUpdateSpawner {
                 cwd.join(".agents")
             };
             std::fs::write(lock_dir.join("agents.lock"), "# rewritten by install\n").unwrap();
+            // Only declared entries are refreshed, so a folder `agents.toml`
+            // does not name stays as it was.
+            let declared = std::fs::read_to_string(lock_dir.join("agents.toml")).unwrap();
             std::fs::read_dir(root)
                 .unwrap()
                 .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| declared.contains(&format!("name = \"{name}\"")))
                 .chain(self.installs_new.iter().map(|s| (*s).to_string()))
                 .collect()
         } else {
@@ -2146,6 +2150,168 @@ fn update_all_refuses_a_parked_dotagents_skill_after_an_install_or_runs_the_cli_
     assert!(result.items[1].outcome.is_none());
     assert!(result.errors["other"].contains("is parked"));
     assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+const THREE_DECLARED_TOML: &str = "version = 1\n\n[[skills]]\nname = \"alpha\"\nsource = \"o/r\"\n\n[[skills]]\nname = \"beta\"\nsource = \"o/r\"\n\n[[skills]]\nname = \"gamma\"\nsource = \"o/r\"\n";
+
+/// Flow: update-all asks for a declared dotagents skill, then a folder that
+/// `agents.toml` does not name.
+/// Expectation: the undeclared one is an error item, as for a single update,
+/// and the spawner ran once.
+/// A failure means the batch reported success for a skill the install never
+/// touched.
+#[test]
+fn update_all_reports_an_undeclared_dotagents_folder_as_an_error_after_a_declared_install() {
+    let home = unique_temp_dir("update_all_dotagents_undeclared");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_installed_skill(&home, "stray", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let requests = vec![
+        cli_request("delta", InstallMethod::Dotagents),
+        cli_request("stray", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.items[0].outcome.is_some());
+    assert!(result.items[1].outcome.is_none());
+    assert!(
+        result.errors["stray"].contains("no [[skills]] entry"),
+        "{:?}",
+        result.errors
+    );
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: update-all with A unpinned, B pinned, C unpinned in one scope.
+/// Expectation: C reports B's event id, since B's install ran after A's and
+/// refreshed C's folder.
+/// A failure means C points at A's journal row, so undoing C restores the
+/// wrong files.
+#[test]
+fn update_all_shares_the_latest_dotagents_install_event_with_a_later_covered_skill() {
+    let home = unique_temp_dir("update_all_dotagents_latest_event");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    seed_dotagents_files(&home, THREE_DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let mut pinned = cli_request("beta", InstallMethod::Dotagents);
+    pinned.ref_pin = Some("bbb".to_string());
+    let requests = vec![
+        cli_request("alpha", InstallMethod::Dotagents),
+        pinned,
+        cli_request("gamma", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
+    let event = |i: usize| result.items[i].outcome.as_ref().unwrap().event_id.clone();
+    assert_ne!(event(0), event(1));
+    assert_eq!(event(2), event(1));
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: update-all with one dotagents skill in the global scope and one in
+/// a project.
+/// Expectation: each scope runs its own install and gets its own event.
+/// A failure means a global install stood in for a project skill.
+#[test]
+fn update_all_runs_one_dotagents_install_in_each_scope() {
+    let home = unique_temp_dir("update_all_dotagents_two_scopes");
+    let project = home.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    seed_installed_skill(&project, "delta", "v1");
+    std::fs::write(project.join("agents.toml"), DECLARED_TOML).unwrap();
+    std::fs::write(project.join("agents.lock"), LOCK_BEFORE).unwrap();
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let mut scope = RuntimeScope::fixture(&home);
+    scope.projects = skill_studio_core::scope::ProjectSelection::Explicit {
+        paths: vec![project.clone()],
+    };
+    let ports = Ports {
+        fs: Arc::new(RealFs::new()),
+        clock: Arc::new(FakeClock::at(0)),
+        ids: Arc::new(FakeIds::default()),
+        leases: Arc::new(FileLease::new(home.join(".leases"))),
+        history: Arc::new(SqliteHistoryOpener::new(
+            home.join(".history").join("events.sqlite3"),
+        )),
+        sink: Arc::new(RecordingSink::default()),
+        spawner: Some(spawner.clone()),
+        discovery: None,
+        tools: None,
+        catalog: Arc::new(HarnessCatalog::builtin()),
+        telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+    };
+    let rt = Runtime::new(&scope, ports).unwrap();
+
+    let mut in_project = cli_request("delta", InstallMethod::Dotagents);
+    in_project.scope = RootScope::Project(skill_studio_core::identity::ProjectRef(project.clone()));
+    let requests = vec![cli_request("delta", InstallMethod::Dotagents), in_project];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
+    let first = result.items[0].outcome.as_ref().unwrap();
+    let second = result.items[1].outcome.as_ref().unwrap();
+    assert_ne!(first.event_id, second.event_id);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: update-all covers a second dotagents skill with the first install,
+/// then the shared event is undone.
+/// Expectation: the covered skill's folder is back at its old content.
+/// A failure means the shared row did not back up the covered folder.
+#[test]
+fn undoing_the_shared_dotagents_event_restores_the_covered_skill_folder() {
+    let home = unique_temp_dir("update_all_dotagents_undo_shared");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_installed_skill(&home, "other", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let requests = vec![
+        cli_request("delta", InstallMethod::Dotagents),
+        cli_request("other", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    let other = home.join(UNIVERSAL_ROOT_RELATIVE).join("other/SKILL.md");
+    assert!(std::fs::read_to_string(&other)
+        .unwrap()
+        .contains("Body at v2"));
+
+    let event_id = result.items[1].outcome.as_ref().unwrap().event_id.clone();
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id,
+            force: false,
+        },
+    )
+    .unwrap_or_else(|e| panic!("undo of the shared event must succeed: {e}"));
+
+    assert!(std::fs::read_to_string(&other)
+        .unwrap()
+        .contains("Body at v1"));
 
     std::fs::remove_dir_all(&home).ok();
 }
