@@ -671,20 +671,28 @@ pub fn update(
     ctx: &OpContext,
     req: &UpdateRequest,
 ) -> Result<UpdateOutcome, CoreError> {
-    update_then_release(rt, ctx, req, &mut || {})
+    update_then_release(rt, ctx, req, &mut |_| {})
 }
 
-/// [`update`], calling `before_release` after a successful write while the
-/// lease is still held, so it sees exactly what the update left.
+/// A point inside [`update_body`] where the lease is held, for
+/// [`update_all`] to see the scope exactly as this update does.
+enum UpdateStage<'a> {
+    /// `agents.toml` was read and checked; nothing is written yet.
+    DotagentsPlanned(&'a DotagentsPlan),
+    /// The update succeeded and its row is done; the lease is not released yet.
+    Written,
+}
+
+/// [`update`], calling `on_stage` at each [`UpdateStage`].
 fn update_then_release(
     rt: &Runtime,
     ctx: &OpContext,
     req: &UpdateRequest,
-    before_release: &mut dyn FnMut(),
+    on_stage: &mut dyn FnMut(UpdateStage<'_>),
 ) -> Result<UpdateOutcome, CoreError> {
     rt.run(Operation::Update, ctx, || {
         refuse_parked(rt, req)?;
-        update_body(rt, ctx, req, before_release)
+        update_body(rt, ctx, req, on_stage)
     })
 }
 
@@ -731,7 +739,7 @@ fn update_body(
     rt: &Runtime,
     ctx: &OpContext,
     req: &UpdateRequest,
-    before_release: &mut dyn FnMut(),
+    on_stage: &mut dyn FnMut(UpdateStage<'_>),
 ) -> Result<UpdateOutcome, CoreError> {
     ctx.checkpoint()?;
     let clock = rt.ports.clock.as_ref();
@@ -771,6 +779,9 @@ fn update_body(
         InstallMethod::Dotagents => Some(plan_dotagents_update(rt, fs, req)?),
         InstallMethod::Copy | InstallMethod::SkillsSh => None,
     };
+    if let Some(plan) = &dotagents {
+        on_stage(UpdateStage::DotagentsPlanned(plan));
+    }
 
     let step_start = clock.monotonic();
     let id = rt.ports.ids.next_event_id();
@@ -883,7 +894,7 @@ fn update_body(
     session
         .store
         .finish(&session.guard, &id, EventStatus::Done, post_fingerprint)?;
-    before_release();
+    on_stage(UpdateStage::Written);
     session.finish(rt, ctx);
     let write_step = crate::timing::step(clock, "write", step_start);
     ctx.record_timing(crate::timing::op_timing(
@@ -1249,25 +1260,24 @@ fn update_all_body(
         let result = if let Some(batch) = DotagentsBatch::covering(&installed, rt, req) {
             refuse_parked(rt, req).map(|()| covered_by_install(req, batch, rt))
         } else {
-            // Read before the install runs: a pinned request edits
-            // `agents.toml`, but never the names it declares.
-            let hashes_before = if is_dotagents {
-                plan_dotagents_update(rt, rt.ports.fs.as_ref(), req)
-                    .map(|plan| {
-                        hash_later_dotagents(rt, &requests[index + 1..], &req.scope, &plan.declared)
-                    })
-                    .unwrap_or_default()
-            } else {
-                BTreeMap::new()
-            };
+            let mut hashes_before = BTreeMap::new();
             let mut snapshot = None;
-            let result = update_then_release(rt, ctx, req, &mut || {
-                if is_dotagents {
+            let result = update_then_release(rt, ctx, req, &mut |stage| match stage {
+                UpdateStage::DotagentsPlanned(plan) => {
+                    hashes_before = hash_later_dotagents(
+                        rt,
+                        &requests[index + 1..],
+                        &req.scope,
+                        &plan.declared,
+                    );
+                }
+                UpdateStage::Written if is_dotagents => {
                     snapshot = Some((
                         hash_after_install(rt, &req.scope, &hashes_before),
                         read_dotagents_files(rt, &req.scope),
                     ));
                 }
+                UpdateStage::Written => {}
             });
             // Any other write in the scope (another method, a failed or pinned
             // install) may have changed what the cached install left behind.

@@ -21,8 +21,8 @@ use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::{AgentId, LifecycleOwnerKind, RootScope, SkillName};
 use skill_studio_core::ops;
 use skill_studio_core::ports::{
-    CancelToken, CoreNotice, EventSink, MutationSession, OpState, Ports, ProcessOutput,
-    ProcessSpawner, ProcessSpec, Runtime,
+    CancelToken, CoreNotice, EventSink, LeaseHandle, LeaseKey, LeaseMode, LeaseProvider,
+    MutationSession, OpState, Ports, ProcessOutput, ProcessSpawner, ProcessSpec, Runtime,
 };
 use skill_studio_core::scope::RuntimeScope;
 use skill_studio_core::testing::golden::{ctx, unique_temp_dir};
@@ -2384,6 +2384,71 @@ fn update_all_snapshots_the_dotagents_install_before_its_lease_is_released() {
     assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
     let event = |i: usize| result.items[i].outcome.as_ref().unwrap().event_id.clone();
     assert_ne!(event(1), event(0));
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Rewrites `agents.toml` just before the first exclusive lease is granted,
+/// as another client could while the update waits for the lease.
+struct EditBeforeFirstLease {
+    inner: FileLease,
+    toml: PathBuf,
+    text: &'static str,
+    done: Mutex<bool>,
+}
+
+impl LeaseProvider for EditBeforeFirstLease {
+    fn acquire(
+        &self,
+        keys: &[LeaseKey],
+        mode: LeaseMode,
+        wait: std::time::Duration,
+    ) -> Result<Box<dyn LeaseHandle>, skill_studio_core::error::CoreError> {
+        let mut done = self.done.lock().unwrap();
+        if !*done && mode == LeaseMode::Exclusive {
+            std::fs::write(&self.toml, self.text).unwrap();
+            *done = true;
+        }
+        self.inner.acquire(keys, mode, wait)
+    }
+}
+
+/// Flow: update-all asks for alpha then beta, and another client drops beta
+/// from `agents.toml` while alpha's update waits for the lease.
+/// Expectation: beta is not covered by alpha's install; it fails as an
+/// undeclared skill, and the spawner ran once.
+/// A failure means coverage came from `agents.toml` as read before the lease,
+/// so beta was reported as updated by an install that no longer declared it.
+#[test]
+fn update_all_takes_dotagents_coverage_from_agents_toml_read_under_the_lease() {
+    let home = unique_temp_dir("update_all_dotagents_toml_before_lease");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    seed_dotagents_files(&home, THREE_DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let mut rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+    rt.ports.leases = Arc::new(EditBeforeFirstLease {
+        inner: FileLease::new(home.join(".leases")),
+        toml: home.join(".agents/agents.toml"),
+        text: "version = 1\n\n[[skills]]\nname = \"alpha\"\nsource = \"o/r\"\n\n[[skills]]\nname = \"gamma\"\nsource = \"o/r\"\n",
+        done: Mutex::new(false),
+    });
+
+    let requests = vec![
+        cli_request("alpha", InstallMethod::Dotagents),
+        cli_request("beta", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.items[0].outcome.is_some());
+    assert!(
+        result.items[1].outcome.is_none(),
+        "beta must not be covered"
+    );
+    assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
 
     std::fs::remove_dir_all(&home).ok();
 }
