@@ -63,6 +63,10 @@ struct FakeNpxSpawner {
     /// process crashing before it deletes anything - the CLI-based
     /// counterpart to `FailingFs::fail_next_rename` for `Copy`/`Fork`.
     fail_next: AtomicBool,
+    /// Set by [`FakeNpxSpawner::clear_cli_agent_folders`]: `remove` also deletes
+    /// `<agent skills folder>/<name>` for every agent skills CLI 1.7.0 knows, the way the real
+    /// CLI does (`rm -rf` on a real folder, unlink on a symlink).
+    clears_cli_agent_folders: AtomicBool,
 }
 
 impl FakeNpxSpawner {
@@ -71,7 +75,12 @@ impl FakeNpxSpawner {
             home,
             recorded: Mutex::new(Vec::new()),
             fail_next: AtomicBool::new(false),
+            clears_cli_agent_folders: AtomicBool::new(false),
         }
+    }
+
+    fn clear_cli_agent_folders(&self) {
+        self.clears_cli_agent_folders.store(true, Ordering::SeqCst);
     }
 
     fn fail_next_call(&self) {
@@ -114,6 +123,22 @@ impl ProcessSpawner for FakeNpxSpawner {
             // already-removed rather than an error.
             let claude_link = cwd.join(CLAUDE_ROOT_RELATIVE).join(&name);
             std::fs::remove_file(&claude_link).ok();
+            if self.clears_cli_agent_folders.load(Ordering::SeqCst) {
+                let scope = if spec.args.iter().any(|a| a == "--global") {
+                    RootScope::Global
+                } else {
+                    RootScope::Project(skill_studio_core::identity::ProjectRef(cwd.clone()))
+                };
+                for target in
+                    skill_studio_core::skills_cli_agents::cli_removal_targets(&cwd, &scope, &name)
+                {
+                    match std::fs::symlink_metadata(&target) {
+                        Ok(facts) if facts.is_dir() => std::fs::remove_dir_all(&target).unwrap(),
+                        Ok(_) => std::fs::remove_file(&target).unwrap(),
+                        Err(_) => {}
+                    }
+                }
+            }
             let lock_path = cwd.join(".agents").join(".skill-lock.json");
             if let Ok(bytes) = std::fs::read(&lock_path) {
                 if let Ok(mut doc) = serde_json::from_slice::<serde_json::Value>(&bytes) {
@@ -1892,5 +1917,96 @@ fn global_skills_sh_remove_is_refused_when_an_eve_subagent_under_home_has_a_real
     assert!(
         spawner.recorded.lock().unwrap().is_empty(),
         "the CLI must not run"
+    );
+}
+
+/// Every file under `dir` as (relative path, bytes), sorted, so two folders compare byte for byte.
+fn folder_bytes(dir: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
+    fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                let relative = path.strip_prefix(root).unwrap().to_path_buf();
+                out.push((relative, std::fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+/// Flow: a global skills.sh install of `x`, plus a real folder `x` in `~/.cursor/skills` and in
+/// `~/.deepagents/agent/skills` (an agent folder Skill Studio does not scan), and a symlink in
+/// `~/.gemini/skills` that points outside `.agents/skills`. The user removes the install, the
+/// CLI clears every agent folder, and the user then undoes the remove.
+/// Expectation: Undo restores both real folders byte for byte and the symlink with its target.
+/// A failure here means the CLI's `rm -rf` in agent folders Skill Studio does not back up
+/// loses the user's data for good.
+#[test]
+fn undo_after_global_skills_sh_remove_restores_every_agent_folder_the_cli_cleared_or_names_the_lost_folder(
+) {
+    let home = unique_temp_dir("remove_undo_cli_agent_folders");
+    std::fs::create_dir_all(&home).unwrap();
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    let cursor = home.join(".cursor/skills/x");
+    let deepagents = home.join(".deepagents/agent/skills/x");
+    for (folder, note) in [(&cursor, "cursor"), (&deepagents, "deepagents")] {
+        write_skill_md(folder);
+        std::fs::create_dir_all(folder.join("notes")).unwrap();
+        std::fs::write(
+            folder.join("notes/own.txt"),
+            format!("my own {note} notes\n"),
+        )
+        .unwrap();
+    }
+    let elsewhere = home.join("elsewhere/x");
+    write_skill_md(&elsewhere);
+    let gemini_link = home.join(".gemini/skills/x");
+    std::fs::create_dir_all(gemini_link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &gemini_link).unwrap();
+    let cursor_before = folder_bytes(&cursor);
+    let deepagents_before = folder_bytes(&deepagents);
+
+    let outcome = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+    assert!(!cursor.exists(), "the fake CLI clears the cursor folder");
+    assert!(
+        !deepagents.exists(),
+        "the fake CLI clears the deepagents folder"
+    );
+    assert!(
+        std::fs::symlink_metadata(&gemini_link).is_err(),
+        "the fake CLI clears the gemini link"
+    );
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(folder_bytes(&cursor), cursor_before, "cursor folder");
+    assert_eq!(
+        folder_bytes(&deepagents),
+        deepagents_before,
+        "deepagents folder"
+    );
+    assert_eq!(
+        std::fs::read_link(&gemini_link).ok().as_deref(),
+        Some(elsewhere.as_path()),
+        "gemini link"
     );
 }

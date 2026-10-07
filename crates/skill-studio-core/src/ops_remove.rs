@@ -222,6 +222,44 @@ fn refuse_unbacked_cli_deletions(
     Ok(())
 }
 
+/// What skills CLI 1.7.0 deletes in the agent skills folders it knows
+/// ([`crate::skills_cli_agents`]) for a skills.sh removal, read before the CLI runs: real
+/// folders to back up as copies, and symlinks as `(link, target)` pairs for the inverse's
+/// `links`. Both skip the removed folder itself (even when reached through a directory link)
+/// and the links `links` already holds, and neither repeats a folder two agent folders share.
+fn cli_agent_folder_backups(
+    fs: &dyn ScopeFs,
+    home: &Path,
+    scope: &RootScope,
+    name: &str,
+    removed: &Path,
+    links: &[PathBuf],
+) -> (Vec<PathBuf>, Vec<(PathBuf, PathBuf)>) {
+    let removed_real = fs.canonicalize(removed).ok();
+    let mut folders: Vec<PathBuf> = Vec::new();
+    let mut folder_reals: Vec<PathBuf> = Vec::new();
+    let mut link_targets: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for path in crate::skills_cli_agents::cli_removal_targets(home, scope, &cli_sanitize_name(name))
+    {
+        let Ok(facts) = fs.symlink_metadata(&path) else {
+            continue;
+        };
+        if facts.kind == FileKind::Symlink {
+            if let (false, Ok(target)) = (links.contains(&path), fs.read_link(&path)) {
+                link_targets.push((path, target));
+            }
+            continue;
+        }
+        let real = fs.canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if removed_real.as_ref() == Some(&real) || folder_reals.contains(&real) {
+            continue;
+        }
+        folder_reals.push(real);
+        folders.push(path);
+    }
+    (folders, link_targets)
+}
+
 /// Runs `owner_kind`'s `remove` argv through the spawner port and checks
 /// `path` no longer exists - mirrors `ops_install_cli::install_via_cli`'s
 /// own post-call check, in reverse.
@@ -563,10 +601,25 @@ fn remove_body(
     // below can recreate it verbatim - the CLI kinds' own links target
     // `deployment.path` itself, about to be renamed away or deleted, so
     // reading the target after the write would find nothing to read.
-    let link_targets: Vec<(PathBuf, PathBuf)> = links
+    let mut link_targets: Vec<(PathBuf, PathBuf)> = links
         .iter()
         .filter_map(|link| fs.read_link(link).ok().map(|target| (link.clone(), target)))
         .collect();
+    // The skills CLI also deletes `<agent skills folder>/<name>` for every agent it knows,
+    // scanned or not; back those up like the tree itself so Undo can bring them back.
+    let (cli_folders, cli_links) = if deployment.owner_kind == LifecycleOwnerKind::SkillsSh {
+        cli_agent_folder_backups(
+            fs,
+            &rt.scope.home.lexical,
+            &deployment.root.scope,
+            &skill.name.0,
+            &deployment.path,
+            &links,
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    link_targets.extend(cli_links);
     let begin_step = crate::timing::step(clock, "begin_session", step_start);
 
     let step_start = clock.monotonic();
@@ -606,7 +659,8 @@ fn remove_body(
     // link this removes goes in `inverse.links` instead (see
     // `restore_backup_inverse_with_links`'s own doc): a symlink copied into
     // a backup manifest would restore as a plain file, not a link.
-    let backup_targets = vec![deployment.path.clone()];
+    let mut backup_targets = vec![deployment.path.clone()];
+    backup_targets.extend(cli_folders);
     // The registry row goes in the inverse's `registry_undo` instead of a
     // whole-file backup: undo puts back only this row, so registry edits made
     // after the remove survive it.
