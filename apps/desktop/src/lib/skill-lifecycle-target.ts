@@ -979,6 +979,29 @@ export function skillParkVerb(
   return skill.parked ? "Unpark" : "Park";
 }
 
+/**
+ * Every folder the skill page's "Park for every agent" / "Turn on for every
+ * agent" moves: each live real folder (the shared copy, agent copies, project
+ * copies), or each parked copy once the whole skill is parked. Links and
+ * plugin folders are skipped because parking the folder they read covers
+ * them, or the core refuses them. Empty when a parked copy sits beside a live
+ * one; the Locations card resolves that first.
+ */
+export function parkEveryAgentTargets(skill: ParkView): LifecycleTarget[] {
+  if (findLeftBehindPairs(skill).length > 0) return [];
+  const folders = skill.parked
+    ? skill.deployments.filter((deployment) => deployment.scope === "parked")
+    : skill.deployments.filter(
+        (deployment) =>
+          deployment.scope !== "parked" &&
+          !deployment.plugin &&
+          !deployment.is_symlink &&
+          !deployment.symlink_is_broken &&
+          !deployment.shared_via_whole_dir_link,
+      );
+  return folders.map((deployment) => ({ deployment_id: deployment.id }));
+}
+
 /** The Global Universal folder park/unpark may move. Project and Per harness stay independent. */
 export function lifecycleTargetForPark(skill: ParkView): LifecycleTarget {
   const canonical = parkableDeployment(skill);

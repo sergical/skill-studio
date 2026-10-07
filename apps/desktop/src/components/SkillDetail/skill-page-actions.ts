@@ -12,18 +12,17 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import {
   forkSkill,
   openSkillPath,
-  parkSkill,
+  parkSkills,
   pullForkUpstream,
   removeSkill,
   unforkSkill,
-  unparkSkill,
+  unparkSkills,
   updatePlugin,
 } from "../../lib/skill-api";
 import {
   lifecycleTargetForDeployment,
-  lifecycleTargetForPark,
   lifecycleTargetForSkill,
-  skillCanPark,
+  parkEveryAgentTargets,
   skillRemovalBlockedReason,
   skillRemovalChoices,
   pullForkAndUpdatePlugins,
@@ -108,6 +107,30 @@ export function removeSuccessToast(skillName: string): Omit<Toast, "id"> {
  * Runs `fn` with `setBusy` bracketing it, and reports a thrown error as an
  * error toast titled `errorTitle`. Every action below is this same shape.
  */
+/**
+ * Park every live folder of `skill`, or turn every parked one back on, in one
+ * batch. Returns the toast to show: success, or a warning naming how many
+ * folders the core refused and the first reason.
+ */
+export async function parkForEveryAgent(
+  skill: InstalledSkill,
+  api: { parkSkills: typeof parkSkills; unparkSkills: typeof unparkSkills } = {
+    parkSkills,
+    unparkSkills,
+  },
+): Promise<Omit<Toast, "id">> {
+  const targets = parkEveryAgentTargets(skill);
+  const results = skill.parked ? await api.unparkSkills(targets) : await api.parkSkills(targets);
+  const errors = results.flatMap((result) => (result.error ? [result.error] : []));
+  const done = skill.parked ? "Turned on" : "Parked";
+  if (errors.length === 0) return { type: "success", title: `${done} ${skill.name}` };
+  return {
+    type: "warning",
+    title: `${done} ${targets.length - errors.length} of ${targets.length} copies of ${skill.name}`,
+    message: errors[0],
+  };
+}
+
 async function runAction(
   addToast: AddToast,
   setBusy: (busy: boolean) => void,
@@ -235,15 +258,9 @@ export function useSkillPageActions(
     runAction(
       addToast,
       setIsParking,
-      skill.parked ? "Couldn't unpark skill" : "Couldn't park skill",
+      skill.parked ? "Couldn't turn skill on" : "Couldn't park skill",
       async () => {
-        if (skill.parked) {
-          await unparkSkill(lifecycleTargetForPark(skill));
-          addToast({ type: "success", title: `Unparked ${skill.name}` });
-        } else {
-          await parkSkill(lifecycleTargetForPark(skill));
-          addToast({ type: "success", title: `Parked ${skill.name}` });
-        }
+        addToast(await parkForEveryAgent(skill));
       },
     );
 
@@ -338,13 +355,14 @@ export function useSkillPageActions(
     openEditor,
     copyPath,
     primaryAction,
-    parkAction: skillCanPark(skill)
-      ? {
-          label: skill.parked ? "Turn on for every agent" : "Park for every agent",
-          run: togglePark,
-          busy: isParking,
-        }
-      : null,
+    parkAction:
+      parkEveryAgentTargets(skill).length > 0
+        ? {
+            label: skill.parked ? "Turn on for every agent" : "Park for every agent",
+            run: togglePark,
+            busy: isParking,
+          }
+        : null,
     forkAction,
     removeActions,
     removeBlockedReason: skillRemovalBlockedReason(skill),

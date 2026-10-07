@@ -3,11 +3,16 @@
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
-import type { InstalledSkill, PullResult } from "@skill-studio/lib";
+import type { BulkTargetResult, Deployment, InstalledSkill, PullResult } from "@skill-studio/lib";
 
 import { pullUpstreamToast } from "../../lib/skill-lifecycle-target";
 import type { UpdateFinish } from "../../hooks/useGuardedSkillUpdate";
-import { headerUpdateLabel, removeSuccessToast, runHeaderUpdate } from "./skill-page-actions";
+import {
+  headerUpdateLabel,
+  parkForEveryAgent,
+  removeSuccessToast,
+  runHeaderUpdate,
+} from "./skill-page-actions";
 
 function fixtureResult(overrides: Partial<PullResult> = {}): PullResult {
   return {
@@ -201,5 +206,95 @@ describe("runHeaderUpdate", () => {
       },
     );
     expect(plugins).toEqual(["codex@official"]);
+  });
+});
+
+describe("parkForEveryAgent", () => {
+  const folder = (id: string, overrides: Partial<Deployment> = {}): Deployment => ({
+    id,
+    destination: "universal",
+    owner_kind: "skills-sh",
+    mutability: "mutable",
+    backing: { kind: "canonical" },
+    agent: "Universal",
+    scope: "global",
+    path: `/home/u/.agents/skills/${id}`,
+    is_symlink: false,
+    symlink_is_broken: false,
+    content_hash: "x",
+    disabled: false,
+    codex_implicit_invocation: null,
+    disabled_by: null,
+    invocation: "both",
+    spec_violations: [],
+    shared_via_whole_dir_link: false,
+    ...overrides,
+  });
+  const skill = (parked: boolean, deployments: Deployment[]) =>
+    // SAFETY: parkForEveryAgent reads only name, parked and deployments.
+    ({ name: "tidy", parked, source_kind: "skills-sh", deployments }) as InstalledSkill;
+  const fakeApi = (errors: (string | null)[] = []) => {
+    const calls: { kind: "park" | "unpark"; ids: string[] }[] = [];
+    const respond =
+      (kind: "park" | "unpark") =>
+      async (targets: { deployment_id?: string | null }[]): Promise<BulkTargetResult[]> => {
+        calls.push({ kind, ids: targets.map((target) => target.deployment_id ?? "") });
+        return targets.map((_, i) => ({ error: errors[i] ?? null }));
+      };
+    return { calls, api: { parkSkills: respond("park"), unparkSkills: respond("unpark") } };
+  };
+
+  it("park_for_every_agent_parks_the_separate_agent_copy_too_not_only_the_shared_folder", async () => {
+    const shared = folder("shared");
+    const codexCopy = folder("codex-copy", {
+      destination: "per-harness",
+      agent: "Codex",
+      backing: { kind: "independent" },
+      path: "/home/u/.codex/skills/tidy",
+    });
+    const claudeLink = folder("claude-link", {
+      destination: "per-harness",
+      agent: "Claude Code",
+      is_symlink: true,
+      path: "/home/u/.claude/skills/tidy",
+    });
+    const { calls, api } = fakeApi();
+
+    const toast = await parkForEveryAgent(skill(false, [shared, codexCopy, claudeLink]), api);
+
+    expect(calls).toEqual([{ kind: "park", ids: ["shared", "codex-copy"] }]);
+    expect(toast).toEqual({ type: "success", title: "Parked tidy" });
+  });
+
+  it("turn_on_for_every_agent_unparks_every_parked_copy_not_only_the_universal_one", async () => {
+    const parkedShared = folder("parked-shared", {
+      scope: "parked",
+      parked_origin: { kind: "universal", scope: "global" },
+    });
+    const parkedCodex = folder("parked-codex", {
+      scope: "parked",
+      parked_origin: { kind: "codex", scope: "global" },
+    });
+    const { calls, api } = fakeApi();
+
+    const toast = await parkForEveryAgent(skill(true, [parkedShared, parkedCodex]), api);
+
+    expect(calls).toEqual([{ kind: "unpark", ids: ["parked-shared", "parked-codex"] }]);
+    expect(toast.title).toBe("Turned on tidy");
+  });
+
+  it("park_for_every_agent_warns_with_the_first_refusal_when_one_copy_stays_live", async () => {
+    const { api } = fakeApi([null, "the folder changed on disk"]);
+
+    const toast = await parkForEveryAgent(
+      skill(false, [folder("shared"), folder("project", { scope: "project" })]),
+      api,
+    );
+
+    expect(toast).toEqual({
+      type: "warning",
+      title: "Parked 1 of 2 copies of tidy",
+      message: "the folder changed on disk",
+    });
   });
 });
