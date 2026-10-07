@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, Implementation, ProgressNotificationParam, ServerCapabilities, ServerInfo,
+    CallToolResult, Implementation, ProgressNotificationParam, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::RequestContext;
 use rmcp::transport::stdio;
@@ -746,8 +746,8 @@ fn inline_value(
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SkillStudioServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new(
                 "skill-studio",
                 env!("CARGO_PKG_VERSION"),

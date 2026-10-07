@@ -724,21 +724,7 @@ export async function restoreMovedDeployment(target: LifecycleTarget): Promise<v
 }
 
 /**
- * Rewrite `disable-model-invocation`/`user-invocable` in `path`'s SKILL.md
- * frontmatter to match `policy`, byte-identical otherwise. Also
- * writes/patches `agents/openai.yaml`'s `policy.allow_implicit_invocation`
- * when the skill has a Codex deployment.
- */
-export async function setSkillInvocation(
-  name: string,
-  path: string,
-  policy: InvocationPolicy,
-): Promise<void> {
-  return callCommand("set_skill_invocation", { name, path, policy });
-}
-
-/**
- * `setSkillInvocation` for many SKILL.md files in one call, with one snapshot
+ * Rewrite `disable-model-invocation`/`user-invocable` for many SKILL.md files in one call, with one snapshot
  * reconcile at the end. One result per target, in order; a failing target
  * does not stop the others.
  */

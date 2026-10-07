@@ -209,11 +209,6 @@ const EXPECTED_WRAPPER_COMMANDS = {
     command: "restore_moved_deployment",
     registeredInLibRs: true,
   },
-  setSkillInvocation: {
-    kind: "command",
-    command: "set_skill_invocation",
-    registeredInLibRs: true,
-  },
   setSkillsInvocation: {
     kind: "command",
     command: "set_skills_invocation",
