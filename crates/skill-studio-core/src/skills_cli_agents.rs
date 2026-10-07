@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 
 use crate::identity::RootScope;
 
-/// From skills CLI 1.7.0 `dist/cli.mjs`, the `agents` table. Where the CLI reads a folder from
-/// an env var (`XDG_CONFIG_HOME`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, ...) this keeps the
-/// default location: the core has no env port, and a host that sets one has moved the folder.
+/// From skills CLI 1.7.0 `dist/cli.mjs`, the `agents` table. Folders the CLI reads from an env
+/// var (see [`cli_env_pins`]) are listed at their default location: `ops::remove` pins those
+/// vars when it runs the CLI, so the CLI deletes where this table says.
 ///
 /// Each row is (agent, global folder relative to the home, project folder relative to the
 /// project). A global folder of `None` means the CLI has none for the agent and falls back to
@@ -156,13 +156,39 @@ const AGENTS: &[(&str, Option<&str>, &str)] = &[
     ("openclaw", Some(".moltbot/skills"), "skills"),
 ];
 
+/// The env vars skills CLI 1.7.0 reads agent skills folders from, each set to the folder this
+/// table assumes: the default under `home`, and Codex's own directory as the adapter resolved
+/// it (`codex_home`). `ops::remove` hands these to the CLI, replacing whatever the process
+/// inherited, so a `VIBE_HOME` or `XDG_CONFIG_HOME` the user set cannot send the CLI's
+/// `rm -rf` to a folder that was not backed up.
+pub fn cli_env_pins(home: &Path, codex_home: &Path) -> Vec<(String, String)> {
+    [
+        ("XDG_CONFIG_HOME", home.join(".config")),
+        ("CODEX_HOME", codex_home.to_path_buf()),
+        ("CLAUDE_CONFIG_DIR", home.join(".claude")),
+        ("VIBE_HOME", home.join(".vibe")),
+        ("HERMES_HOME", home.join(".hermes")),
+        ("AUTOHAND_HOME", home.join(".autohand")),
+        ("GROK_HOME", home.join(".grok")),
+    ]
+    .into_iter()
+    .map(|(name, folder)| (name.to_string(), folder.display().to_string()))
+    .collect()
+}
+
 /// Every `<agent skills folder>/<name>` the CLI deletes for a removal in `scope`, without
 /// duplicates. `name` must be the CLI's sanitized folder name. A global removal runs the CLI
 /// in `home`, so an agent with no global folder resolves under `home`.
-pub fn cli_removal_targets(home: &Path, scope: &RootScope, name: &str) -> Vec<PathBuf> {
+pub fn cli_removal_targets(
+    home: &Path,
+    codex_home: &Path,
+    scope: &RootScope,
+    name: &str,
+) -> Vec<PathBuf> {
     let mut targets: Vec<PathBuf> = Vec::new();
-    for &(_, global, project_folder) in AGENTS {
+    for &(agent, global, project_folder) in AGENTS {
         let folder = match scope {
+            RootScope::Global if agent == "codex" => codex_home.join("skills"),
             RootScope::Global => home.join(global.unwrap_or(project_folder)),
             RootScope::Project(project) => project.0.join(project_folder),
         };

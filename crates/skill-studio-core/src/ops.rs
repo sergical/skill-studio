@@ -4594,8 +4594,15 @@ fn restore_event_body(
                         .read_backup_bytes(backup_dir, &other.relative)
                         .map(RestorePlan::Write)
                 };
-                if let Ok(other_plan) = other_plan {
-                    extra_plans.push((other.original.clone(), other_plan));
+                // Only a path the event vouched for with a `secondary_post` row fails the
+                // restore: Undo would otherwise report success and leave that folder lost.
+                // Other unreadable extras stay skipped, as before that field existed.
+                match other_plan {
+                    Ok(other_plan) => extra_plans.push((other.original.clone(), other_plan)),
+                    Err(e) if secondary_post.iter().any(|(p, _)| p == &other.original) => {
+                        return Err(e)
+                    }
+                    Err(_) => {}
                 }
             }
             plan

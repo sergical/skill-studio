@@ -107,7 +107,7 @@ fn remove_cli_args_and_cwd(
 /// project scope on top of the agents' own skills folders: the openclaw, eve and astrbot
 /// agents, whether or not they are installed. A skill-authoring repo keeps its source in
 /// `skills/<name>`, so the CLI would delete it, and the backup of a CLI removal does not
-/// cover it. Issue #382 replaces this guard with a backup.
+/// cover it. The agent folders in [`crate::skills_cli_agents`] are backed up instead.
 const CLI_PROJECT_EXTRA_SKILL_DIRS: [&str; 3] = ["skills", "agent/skills", "data/skills"];
 
 /// The CLI's `sanitizeName` (1.7.0, `dist/cli.mjs`): the folder name it deletes for a skill.
@@ -230,6 +230,7 @@ fn refuse_unbacked_cli_deletions(
 fn cli_agent_folder_backups(
     fs: &dyn ScopeFs,
     home: &Path,
+    codex_home: &Path,
     scope: &RootScope,
     name: &str,
     removed: &Path,
@@ -239,13 +240,21 @@ fn cli_agent_folder_backups(
     let mut folders: Vec<PathBuf> = Vec::new();
     let mut folder_reals: Vec<PathBuf> = Vec::new();
     let mut link_targets: Vec<(PathBuf, PathBuf)> = Vec::new();
-    for path in crate::skills_cli_agents::cli_removal_targets(home, scope, &cli_sanitize_name(name))
-    {
+    for path in crate::skills_cli_agents::cli_removal_targets(
+        home,
+        codex_home,
+        scope,
+        &cli_sanitize_name(name),
+    ) {
+        // Before any fs call: the caller's link loop reads these paths next.
+        if links.contains(&path) {
+            continue;
+        }
         let Ok(facts) = fs.symlink_metadata(&path) else {
             continue;
         };
         if facts.kind == FileKind::Symlink {
-            if let (false, Ok(target)) = (links.contains(&path), fs.read_link(&path)) {
+            if let Ok(target) = fs.read_link(&path) {
                 link_targets.push((path, target));
             }
             continue;
@@ -258,6 +267,39 @@ fn cli_agent_folder_backups(
         folders.push(path);
     }
     (folders, link_targets)
+}
+
+/// The first symlink inside the real folder at `dir`, if any. A backup copy cannot hold a
+/// symlink, so Undo could not bring such a folder back.
+fn find_nested_symlink(fs: &dyn ScopeFs, dir: &Path) -> Option<PathBuf> {
+    let entries = fs.read_dir(dir).ok()?;
+    for entry in entries {
+        let path = dir.join(&entry.name);
+        match entry.kind {
+            FileKind::Symlink => return Some(path),
+            FileKind::Dir => {
+                if let Some(found) = find_nested_symlink(fs, &path) {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The env the CLI child gets: `HOME`, plus for skills.sh the vars it reads agent folders
+/// from, pinned to the folders [`crate::skills_cli_agents`] backs up.
+fn cli_env(rt: &Runtime, owner_kind: LifecycleOwnerKind) -> Vec<(String, String)> {
+    let home = &rt.scope.home.lexical;
+    let mut env = vec![("HOME".to_string(), home.display().to_string())];
+    if owner_kind == LifecycleOwnerKind::SkillsSh {
+        env.extend(crate::skills_cli_agents::cli_env_pins(
+            home,
+            &rt.scope.codex_home,
+        ));
+    }
+    env
 }
 
 /// Runs `owner_kind`'s `remove` argv through the spawner port and checks
@@ -288,10 +330,7 @@ fn remove_via_cli(
         program: "npx".to_string(),
         args,
         cwd,
-        env: vec![(
-            "HOME".to_string(),
-            rt.scope.home.lexical.display().to_string(),
-        )],
+        env: cli_env(rt, owner_kind),
         timeout_ms: 120_000,
     };
     let output = spawner.run(&spec, ctx.cancel.as_ref())?;
@@ -611,6 +650,7 @@ fn remove_body(
         cli_agent_folder_backups(
             fs,
             &rt.scope.home.lexical,
+            &rt.scope.codex_home,
             &deployment.root.scope,
             &skill.name.0,
             &deployment.path,
@@ -619,6 +659,19 @@ fn remove_body(
     } else {
         (Vec::new(), Vec::new())
     };
+    if let Some(nested) = cli_folders
+        .iter()
+        .find_map(|folder| find_nested_symlink(fs, folder))
+    {
+        return Err(CoreError::new(
+            ErrorCode::Unsupported,
+            format!(
+                "Removing would also delete a folder holding the link {}, and Undo could not bring it back. Move that link first.",
+                nested.display()
+            ),
+        )
+        .at(&nested));
+    }
     link_targets.extend(cli_links);
     let begin_step = crate::timing::step(clock, "begin_session", step_start);
 
@@ -660,7 +713,7 @@ fn remove_body(
     // `restore_backup_inverse_with_links`'s own doc): a symlink copied into
     // a backup manifest would restore as a plain file, not a link.
     let mut backup_targets = vec![deployment.path.clone()];
-    backup_targets.extend(cli_folders);
+    backup_targets.extend(cli_folders.iter().cloned());
     // The registry row goes in the inverse's `registry_undo` instead of a
     // whole-file backup: undo puts back only this row, so registry edits made
     // after the remove survive it.
@@ -730,7 +783,20 @@ fn remove_body(
             link_paths: &links,
             quarantine_target: quarantine_target.as_deref(),
         },
-    );
+    )
+    .and_then(|()| {
+        // What each extra folder holds now (normally nothing), so Undo refuses to overwrite
+        // a folder put there after the remove unless forced.
+        let secondary_post: Vec<_> = cli_folders
+            .iter()
+            .map(|folder| (folder.clone(), crate::events::fingerprint_path(fs, folder)))
+            .collect();
+        session.store.patch_inverse(
+            &session.guard,
+            &id,
+            crate::events::with_secondary_post(serde_json::json!({}), &secondary_post),
+        )
+    });
     if let Err(e) = write_result {
         let _ = session
             .store
