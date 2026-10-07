@@ -15,7 +15,6 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -149,14 +148,18 @@ pub struct SkillInstallSpec {
     pub harnesses: Vec<AgentId>,
 }
 
-/// Universal skills.sh argv. Never includes Codex as a proxy for Universal.
+/// Universal skills.sh argv, and the process cwd to run it in. Never
+/// includes Codex as a proxy for Universal. `skills@1.7.0` has no `--cwd`
+/// flag (PR #101 / `fix/project-install-runs-in-project-dir`), so a project
+/// scope returns the project path as the process cwd instead of an argv
+/// token - the same fix as `ops_install_cli.rs`'s `cli_args_and_cwd`.
 pub fn skills_sh_universal_add_args(
     repo_source: &str,
     skill_name: Option<&str>,
     spec: &SkillInstallSpec,
-) -> Result<Vec<String>, String> {
+) -> Result<(Vec<String>, Option<PathBuf>), String> {
     if spec.destination != SkillDestination::Universal {
-        return Err("skills.sh Universal argv is only for the Universal destination".to_string());
+        return Err("That install option is only for the shared Universal folder".to_string());
     }
     let mut args = vec![
         "skills".to_string(),
@@ -164,17 +167,19 @@ pub fn skills_sh_universal_add_args(
         repo_source.to_string(),
         "--yes".to_string(),
     ];
-    match spec.scope {
-        InstallScope::Global => args.push("--global".to_string()),
+    let cwd = match spec.scope {
+        InstallScope::Global => {
+            args.push("--global".to_string());
+            None
+        }
         InstallScope::Project => {
             let path = spec
                 .project_path
                 .as_deref()
                 .ok_or("Project scope needs a project path")?;
-            args.push("--cwd".to_string());
-            args.push(path.to_string());
+            Some(PathBuf::from(path))
         }
-    }
+    };
     if let Some(name) = skill_name {
         args.push("--skill".to_string());
         args.push(name.to_string());
@@ -185,10 +190,19 @@ pub fn skills_sh_universal_add_args(
         args.push("--agent".to_string());
         args.push("claude-code".to_string());
     }
-    Ok(args)
+    Ok((args, cwd))
 }
 
-fn skills_sh_unfork_add_args(rec: &ForkRecord, name: &str) -> Result<Vec<String>, String> {
+fn skills_sh_unfork_add_args(
+    rec: &ForkRecord,
+    name: &str,
+) -> Result<(Vec<String>, Option<PathBuf>), String> {
+    // Fork only ever applies to a global-scope skill (see
+    // `skill_refresh::build_snapshot`), so this reinstall is always global
+    // and the cwd `skills_sh_universal_add_args` returns is always `None` -
+    // still threaded through `run_npx` rather than discarded, so a future
+    // caller that reinstalls a project-scope fork gets the right cwd for
+    // free instead of a silently dropped one.
     let spec = SkillInstallSpec {
         scope: InstallScope::Global,
         destination: SkillDestination::Universal,
@@ -198,17 +212,58 @@ fn skills_sh_unfork_add_args(rec: &ForkRecord, name: &str) -> Result<Vec<String>
     skills_sh_universal_add_args(&rec.origin_source, Some(name), &spec)
 }
 
-fn run_npx(args: &[String]) -> Result<(), String> {
-    let output = Command::new("npx")
-        .args(args)
-        .output()
-        .map_err(|e| format!("Failed to execute npx: {e}"))?;
-    if output.status.success() {
+/// Timeout for the un-fork `npx` remove/reinstall, matching
+/// `ops_install_cli`/`ops_update`/`ops_remove`'s own `npx` deadline in
+/// `skill-studio-core` so this desktop-only spawn isn't a special case.
+const NPX_TIMEOUT_MS: u64 = 120_000;
+
+fn run_npx(args: &[String], cwd: Option<&Path>) -> Result<(), String> {
+    // Un-fork runs outside `core_runtime`'s `Runtime`/`Ports`, so it needs
+    // its own search dirs: launched from Finder, this process only has
+    // `launchd`'s minimal `PATH`, which has neither `npx` nor the `node` its
+    // shebang needs (see `core_runtime::build_runtime_write_at`).
+    // `LoginShellToolLookup::new()` reads the same process-wide login-shell
+    // `PATH` cache `core_runtime` does, so this doesn't spawn a second real
+    // shell when a `Runtime` has already probed one this launch.
+    let search_dirs = skill_studio_host::LoginShellToolLookup::new()
+        .dirs()
+        .to_vec();
+    let spawner = skill_studio_host::RealProcessSpawner::with_search_path(search_dirs);
+    run_npx_with_spawner(&spawner, args, cwd)
+}
+
+/// [`run_npx`], but taking `spawner` directly - a testable seam so a test
+/// can give it a `RealProcessSpawner::with_search_path` over a fake `npx`
+/// script instead of paying for a real login-shell spawn or mutating the
+/// process's own `PATH`.
+fn run_npx_with_spawner(
+    spawner: &dyn skill_studio_core::ports::ProcessSpawner,
+    args: &[String],
+    cwd: Option<&Path>,
+) -> Result<(), String> {
+    use skill_studio_core::ports::{NeverCancel, ProcessSpec};
+
+    let spec = ProcessSpec {
+        program: "npx".to_string(),
+        args: args.to_vec(),
+        cwd: cwd.map(Path::to_path_buf),
+        env: Vec::new(),
+        timeout_ms: NPX_TIMEOUT_MS,
+    };
+    let output = spawner
+        .run(&spec, &NeverCancel)
+        .map_err(|e| format!("Failed to execute npx: {}", e.message))?;
+    if output.timed_out {
+        return Err("npx timed out".to_string());
+    }
+    if output.status == Some(0) {
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        Err(if stderr.is_empty() { stdout } else { stderr })
+        Err(if output.stderr.is_empty() {
+            output.stdout
+        } else {
+            output.stderr
+        })
     }
 }
 
@@ -221,17 +276,18 @@ impl LedgerTool for RealLedgerTool {
             // target the global scope.
             OriginTool::SkillsSh => skills_sh_remove_args_for_scope(name, InstallScope::Global),
         };
-        run_npx(&args)
+        run_npx(&args, None)
     }
 
     fn reinstall(&self, rec: &ForkRecord, name: &str) -> Result<(), String> {
-        let args = match rec.origin_tool {
-            OriginTool::Dotagents => {
-                dotagents_add_args(&rec.origin_source, name, rec.declared_ref.as_deref())
-            }
+        let (args, cwd) = match rec.origin_tool {
+            OriginTool::Dotagents => (
+                dotagents_add_args(&rec.origin_source, name, rec.declared_ref.as_deref()),
+                None,
+            ),
             OriginTool::SkillsSh => skills_sh_unfork_add_args(rec, name)?,
         };
-        run_npx(&args)
+        run_npx(&args, cwd.as_deref())
     }
 }
 
@@ -454,12 +510,112 @@ fn locate_extracted_skill_dir(extract_dir: &Path, path: &str) -> Result<PathBuf,
     let candidate = top.join(path);
     let canonical_extract = fs::canonicalize(extract_dir)
         .map_err(|e| format!("Failed to resolve {}: {e}", extract_dir.display()))?;
-    let canonical_candidate = fs::canonicalize(&candidate)
-        .map_err(|_| format!("{path} was not found in the fetched tarball"))?;
+    let Ok(canonical_candidate) = fs::canonicalize(&candidate) else {
+        return find_skill_dir_by_name(&top, path, &canonical_extract);
+    };
     if !canonical_candidate.starts_with(&canonical_extract) {
         return Err("Refusing to extract a path outside the tarball".to_string());
     }
     Ok(canonical_candidate)
+}
+
+/// Deepest folder level below the tarball's top directory that the by-name
+/// search visits.
+const SKILL_SEARCH_MAX_DEPTH: usize = 6;
+/// Most folders the by-name search reads, so a huge repo cannot stall an install.
+const SKILL_SEARCH_MAX_DIRS: usize = 5_000;
+
+/// Fallback for a `path` that is only a skill name (the store sends one) when
+/// the repo keeps its skills under a subfolder such as `skills/<name>`. Like
+/// the `npx skills` CLI, it accepts a folder holding `SKILL.md` whose own name
+/// or whose frontmatter `name` equals the skill. Exactly one match is used;
+/// several are an error that lists them. Never follows symlinks and skips
+/// `node_modules` and `.git`.
+fn find_skill_dir_by_name(
+    top: &Path,
+    path: &str,
+    canonical_extract: &Path,
+) -> Result<PathBuf, String> {
+    let not_found = || format!("{path} was not found in the fetched tarball");
+    let Some(name) = Path::new(path).file_name().and_then(|n| n.to_str()) else {
+        return Err(not_found());
+    };
+    let mut matches: Vec<PathBuf> = Vec::new();
+    let mut pending = vec![(top.to_path_buf(), 0usize)];
+    let mut visited = 0usize;
+    while let Some((dir, depth)) = pending.pop() {
+        visited += 1;
+        if visited > SKILL_SEARCH_MAX_DIRS {
+            break;
+        }
+        if dir != top && skill_dir_matches(&dir, name) {
+            matches.push(dir.clone());
+        }
+        if depth >= SKILL_SEARCH_MAX_DEPTH {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let file_name = entry.file_name();
+            if file_name == ".git" || file_name == "node_modules" {
+                continue;
+            }
+            // `DirEntry::file_type` does not follow a symlink.
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                pending.push((entry.path(), depth + 1));
+            }
+        }
+    }
+    matches.sort();
+    match matches.as_slice() {
+        [] => Err(not_found()),
+        [only] => {
+            let canonical = fs::canonicalize(only).map_err(|_| not_found())?;
+            if canonical.starts_with(canonical_extract) {
+                Ok(canonical)
+            } else {
+                Err("Refusing to extract a path outside the tarball".to_string())
+            }
+        }
+        several => {
+            let listed: Vec<String> = several
+                .iter()
+                .map(|dir| {
+                    dir.strip_prefix(top)
+                        .unwrap_or(dir)
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            Err(format!(
+                "{name} matches several folders in the fetched tarball: {}",
+                listed.join(", ")
+            ))
+        }
+    }
+}
+
+/// True when `dir` holds a regular `SKILL.md` and either `dir`'s folder name
+/// or the file's frontmatter `name` equals `name`.
+fn skill_dir_matches(dir: &Path, name: &str) -> bool {
+    use std::io::Read;
+
+    let skill_md = dir.join("SKILL.md");
+    if !fs::symlink_metadata(&skill_md).is_ok_and(|meta| meta.is_file()) {
+        return false;
+    }
+    if dir.file_name().and_then(|n| n.to_str()) == Some(name) {
+        return true;
+    }
+    let mut head = String::new();
+    let read =
+        fs::File::open(&skill_md).and_then(|file| file.take(64 * 1024).read_to_string(&mut head));
+    read.is_ok()
+        && super::frontmatter::frontmatter_fields(&head)
+            .get("name")
+            .is_some_and(|declared| declared == name)
 }
 
 /// Every relative file path (`/`-separated) under `dir`, skipping `.git` and
@@ -1054,10 +1210,10 @@ pub async fn fork_skill(
         let id = target
             .deployment_id
             .as_deref()
-            .ok_or("Fork needs one Global Universal deployment_id")?;
+            .ok_or("Fork needs one Global Universal folder copy")?;
         if target.owner_id.is_some() {
             return Err(
-                "Fork targets one Global Universal deployment, not an owner group".to_string(),
+                "Fork targets one Global Universal folder, not a group of copies".to_string(),
             );
         }
         let (skill, deployment) = super::skill_lifecycle::find_deployment(&snapshot, id)?;
@@ -1552,11 +1708,10 @@ fn resolve_recorded_fork_target(
     let id = target
         .deployment_id
         .as_deref()
-        .ok_or("Fork lifecycle needs one Global Universal deployment_id")?;
+        .ok_or("Fork lifecycle needs one Global Universal folder copy")?;
     if target.owner_id.is_some() {
         return Err(
-            "Fork lifecycle targets one Global Universal deployment, not an owner group"
-                .to_string(),
+            "Fork lifecycle targets one Global Universal folder, not a group of copies".to_string(),
         );
     }
     let (skill, deployment) = super::skill_lifecycle::find_deployment(snapshot, id)?;
@@ -1579,8 +1734,7 @@ fn resolve_recorded_fork_target(
         || Path::new(&deployment.path) != expected_path
     {
         return Err(
-            "The fork record does not belong to the selected Global Universal deployment"
-                .to_string(),
+            "The fork record does not belong to the selected Global Universal folder".to_string(),
         );
     }
     Ok((skill.name.clone(), record))
@@ -1594,6 +1748,7 @@ fn resolve_recorded_fork_target(
 mod tests {
     use super::super::skill_fork_registry::write_fork_registry;
     use super::*;
+    use std::process::Command;
     use std::sync::Mutex;
 
     fn test_guard(home: &Path) -> super::super::write_lease::WriteLeaseGuard {
@@ -1615,7 +1770,7 @@ mod tests {
 
     #[test]
     fn universal_skills_sh_uses_agent_universal_and_global_or_names_the_wrong_argv() {
-        let argv =
+        let (argv, cwd) =
             skills_sh_universal_add_args("o/r", Some("find-bugs"), &universal_global()).unwrap();
         assert_eq!(
             argv,
@@ -1632,13 +1787,14 @@ mod tests {
             ]
         );
         assert!(!argv.iter().any(|a| a == "codex"));
+        assert_eq!(cwd, None);
     }
 
     #[test]
     fn universal_skills_sh_may_add_claude_code_not_codex_or_names_the_missing_agent() {
         let mut spec = universal_global();
         spec.harnesses = vec![AgentId::ClaudeCode];
-        let argv = skills_sh_universal_add_args("o/r", None, &spec).unwrap();
+        let (argv, _cwd) = skills_sh_universal_add_args("o/r", None, &spec).unwrap();
         assert!(argv.windows(2).any(|w| w == ["--agent", "universal"]));
         assert!(argv.windows(2).any(|w| w == ["--agent", "claude-code"]));
         assert!(!argv.iter().any(|a| a == "codex"));
@@ -1648,22 +1804,26 @@ mod tests {
     fn universal_skills_sh_ignores_direct_readers_or_names_the_leaked_agent() {
         let mut spec = universal_global();
         spec.harnesses = vec![AgentId::Codex];
-        let argv = skills_sh_universal_add_args("o/r", None, &spec).unwrap();
+        let (argv, _cwd) = skills_sh_universal_add_args("o/r", None, &spec).unwrap();
         assert!(!argv.iter().any(|arg| arg == "codex"));
     }
 
+    /// `skills@1.7.0` has no `--cwd` flag: a project scope must carry the
+    /// project path as the process cwd, not as an argv token, or the CLI
+    /// writes into whatever directory the process happened to start in.
     #[test]
-    fn project_universal_uses_cwd_not_global_or_names_the_wrong_scope() {
+    fn project_universal_runs_in_project_dir_not_via_cwd_flag_or_names_the_wrong_scope() {
         let spec = SkillInstallSpec {
             scope: InstallScope::Project,
             destination: SkillDestination::Universal,
             project_path: Some("/work/app".to_string()),
             harnesses: vec![],
         };
-        let argv = skills_sh_universal_add_args("o/r", None, &spec).unwrap();
-        assert!(argv.contains(&"--cwd".to_string()));
-        assert!(argv.contains(&"/work/app".to_string()));
+        let (argv, cwd) = skills_sh_universal_add_args("o/r", None, &spec).unwrap();
+        assert!(!argv.contains(&"--cwd".to_string()));
+        assert!(!argv.contains(&"/work/app".to_string()));
         assert!(!argv.contains(&"--global".to_string()));
+        assert_eq!(cwd, Some(PathBuf::from("/work/app")));
     }
 
     /// Records every `remove`/`reinstall` call so tests can assert "called
@@ -2823,6 +2983,7 @@ mod tests {
                     error: None,
                 },
             )]),
+            upstream_ahead: BTreeMap::new(),
             legacy_skills: BTreeMap::new(),
         };
         fs::write(
@@ -3242,8 +3403,9 @@ mod tests {
             base_commit: "a".repeat(40),
         };
 
+        let (args, cwd) = skills_sh_unfork_add_args(&record, "find-bugs").unwrap();
         assert_eq!(
-            skills_sh_unfork_add_args(&record, "find-bugs").unwrap(),
+            args,
             vec![
                 "skills",
                 "add",
@@ -3255,6 +3417,56 @@ mod tests {
                 "--agent",
                 "universal",
             ]
+        );
+        assert_eq!(
+            cwd, None,
+            "a fork is always global-scope, so unfork never sets a process cwd"
+        );
+    }
+
+    /// `run_npx(args, Some(cwd))` must run the child process itself in
+    /// `cwd`, not just log it - a fake `npx` script records its own working
+    /// directory (via `pwd`) so this asserts the real
+    /// `Command::current_dir` call, not the argv this function builds.
+    /// Goes through `run_npx_with_spawner`, over a `RealProcessSpawner`
+    /// scoped to the fake `npx`'s own dir: `run_npx` itself now resolves
+    /// `npx` off a real login-shell probe, which a fake on this process's
+    /// `PATH` can no longer intercept.
+    #[test]
+    fn run_npx_with_a_cwd_runs_the_process_there_or_names_the_ignored_cwd() {
+        let bin_dir = tempfile::tempdir().expect("fake bin dir");
+        let recording = bin_dir.path().join("pwd.log");
+        let fake_npx = bin_dir.path().join("npx");
+        std::fs::write(
+            &fake_npx,
+            format!("#!/bin/sh\npwd > '{}'\nexit 0\n", recording.display()),
+        )
+        .expect("write fake npx");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake_npx, std::fs::Permissions::from_mode(0o700))
+                .expect("chmod fake npx");
+        }
+
+        let target_dir = tempfile::tempdir().expect("target cwd");
+        let spawner =
+            skill_studio_host::RealProcessSpawner::with_search_path(vec![bin_dir.path().into()]);
+        let result = run_npx_with_spawner(
+            &spawner,
+            &["--version".to_string()],
+            Some(target_dir.path()),
+        );
+
+        assert!(result.is_ok(), "{result:?}");
+        let recorded_cwd = std::fs::read_to_string(&recording)
+            .expect("read recording")
+            .trim()
+            .to_string();
+        assert_eq!(
+            std::fs::canonicalize(&recorded_cwd).expect("canonicalize recorded cwd"),
+            std::fs::canonicalize(target_dir.path()).expect("canonicalize target cwd"),
+            "run_npx must launch the process in the given cwd, not wherever the test process runs"
         );
     }
 
@@ -3374,5 +3586,83 @@ mod tests {
 
         let err = locate_extracted_skill_dir(&extract_dir, "../../etc").unwrap_err();
         assert!(err.contains("outside") || err.contains("not found"));
+    }
+
+    fn extraction_with(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        for (relative, body) in files {
+            write_file(&tmp.path().join("owner-repo-abc1234").join(relative), body);
+        }
+        tmp
+    }
+
+    /// Flow: a Copy install sends the bare skill name as the path, and the repo
+    /// keeps the skill under `skills/<name>`. Expectation: the folder is found
+    /// by name. Failure means the install stops with "<name> was not found in
+    /// the fetched tarball" for every repo that nests its skills.
+    #[test]
+    fn locate_extracted_skill_dir_falls_back_to_a_nested_folder_named_like_the_skill_or_reports_not_found(
+    ) {
+        let tmp = extraction_with(&[
+            ("skills/find-bugs/SKILL.md", "body"),
+            ("skills/other/SKILL.md", "body"),
+        ]);
+
+        let found = locate_extracted_skill_dir(tmp.path(), "find-bugs").unwrap();
+        assert!(found.ends_with("skills/find-bugs"), "{found:?}");
+    }
+
+    #[test]
+    fn locate_extracted_skill_dir_matches_a_skill_by_frontmatter_name_when_no_folder_carries_it() {
+        let tmp = extraction_with(&[
+            (
+                "skills/renamed-folder/SKILL.md",
+                "---\nname: find-bugs\ndescription: d\n---\nbody",
+            ),
+            ("skills/other/SKILL.md", "---\nname: other\n---\nbody"),
+        ]);
+
+        let found = locate_extracted_skill_dir(tmp.path(), "find-bugs").unwrap();
+        assert!(found.ends_with("skills/renamed-folder"), "{found:?}");
+    }
+
+    #[test]
+    fn locate_extracted_skill_dir_prefers_the_exact_path_over_a_nested_match() {
+        let tmp = extraction_with(&[
+            ("find-bugs/SKILL.md", "exact"),
+            ("skills/find-bugs/SKILL.md", "nested"),
+        ]);
+
+        let found = locate_extracted_skill_dir(tmp.path(), "find-bugs").unwrap();
+        assert_eq!(fs::read_to_string(found.join("SKILL.md")).unwrap(), "exact");
+    }
+
+    #[test]
+    fn locate_extracted_skill_dir_names_every_candidate_when_several_folders_match() {
+        let tmp = extraction_with(&[
+            ("skills/find-bugs/SKILL.md", "a"),
+            ("plugins/x/skills/find-bugs/SKILL.md", "b"),
+        ]);
+
+        let err = locate_extracted_skill_dir(tmp.path(), "find-bugs").unwrap_err();
+        assert!(err.contains("skills/find-bugs"), "{err}");
+        assert!(err.contains("plugins/x/skills/find-bugs"), "{err}");
+    }
+
+    #[test]
+    fn locate_extracted_skill_dir_keeps_the_not_found_error_and_skips_node_modules_and_symlinks() {
+        let tmp = extraction_with(&[
+            ("node_modules/pkg/find-bugs/SKILL.md", "vendored"),
+            ("skills/other/SKILL.md", "body"),
+        ]);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            tmp.path().join("owner-repo-abc1234/skills/other"),
+            tmp.path().join("owner-repo-abc1234/skills/find-bugs"),
+        )
+        .unwrap();
+
+        let err = locate_extracted_skill_dir(tmp.path(), "find-bugs").unwrap_err();
+        assert_eq!(err, "find-bugs was not found in the fetched tarball");
     }
 }

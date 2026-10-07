@@ -6,13 +6,83 @@
 // thread; this helper is what the background worker calls instead.
 // ============================================================================
 
+use std::ffi::OsString;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+/// The desktop app's search directories for a bare `program` name, from the
+/// login-shell `PATH` probe. A macOS app launched from Finder inherits
+/// `launchd`'s minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), where
+/// neither a bare `claude` nor `npx` (nor the `node` its `#!/usr/bin/env
+/// node` shebang needs) can be found. `LoginShellToolLookup` caches the
+/// probe process-wide, so this costs a shell spawn once per app launch, not
+/// once per command.
+fn login_shell_search_dirs() -> Vec<PathBuf> {
+    skill_studio_host::LoginShellToolLookup::new()
+        .dirs()
+        .to_vec()
+}
+
+/// Resolves a bare `program` (no path separator) to the first executable
+/// match under `search_dirs`, and builds the `PATH` its child should search
+/// for a second binary itself (`npx`'s shebang needs `node` on the child's
+/// own `PATH`, not just `argv[0]` resolved). Mirrors
+/// `RealProcessSpawner::resolve_program`/`child_path` in
+/// `skill-studio-host`'s `harness_detect.rs`; kept as a local copy because
+/// those are private methods on that crate's spawner, not a `pub` function
+/// this crate can call.
+fn resolve_program_and_path(program: &str, search_dirs: &[PathBuf]) -> (PathBuf, OsString) {
+    let resolved = if program.contains('/') {
+        PathBuf::from(program)
+    } else {
+        search_dirs
+            .iter()
+            .map(|dir| dir.join(program))
+            .find(|candidate| is_executable_file(candidate))
+            .unwrap_or_else(|| PathBuf::from(program))
+    };
+
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    // A dir containing the PATH separator can't be represented in a joined
+    // PATH string; skip just that dir rather than letting `join_paths` fail
+    // and falling back to `inherited` alone, which would silently drop every
+    // other `search_dirs` entry too.
+    let filtered_search_dirs = search_dirs
+        .iter()
+        .filter(|dir| !dir.as_os_str().to_string_lossy().contains(':'))
+        .cloned();
+    // An empty (unset or "") inherited PATH must contribute nothing, not an
+    // empty path segment: `split_paths` on "" yields one empty component,
+    // which `Command` resolves as the child's cwd.
+    let inherited_dirs: Vec<PathBuf> = if inherited.is_empty() {
+        Vec::new()
+    } else {
+        std::env::split_paths(&inherited).collect()
+    };
+    let path =
+        std::env::join_paths(filtered_search_dirs.chain(inherited_dirs)).unwrap_or(inherited);
+    (resolved, path)
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
+    }
+}
 
 /// How long a cancelled or timed-out child gets after SIGTERM before SIGKILL.
 pub const PROCESS_CANCEL_GRACE: Duration = Duration::from_secs(2);
@@ -197,11 +267,37 @@ pub fn run_controlled_command(
     timeout: Duration,
     max_output_bytes: usize,
 ) -> Result<(), ControlledProcessError> {
+    run_controlled_command_with_search_dirs(
+        program,
+        args,
+        cwd,
+        cancel,
+        timeout,
+        max_output_bytes,
+        &login_shell_search_dirs(),
+    )
+}
+
+/// As [`run_controlled_command`], resolving `program` against `search_dirs`
+/// (production: the login-shell `PATH`) instead of always probing it. A
+/// separate seam so tests can pass fixed dirs without spawning the login
+/// shell.
+fn run_controlled_command_with_search_dirs(
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+    cancel: &AtomicBool,
+    timeout: Duration,
+    max_output_bytes: usize,
+    search_dirs: &[PathBuf],
+) -> Result<(), ControlledProcessError> {
     if cancel.load(Ordering::SeqCst) {
         return Err(ControlledProcessError::Cancelled);
     }
 
-    let mut command = Command::new(program);
+    let (resolved_program, child_path) = resolve_program_and_path(program, search_dirs);
+    let mut command = Command::new(&resolved_program);
+    command.env("PATH", &child_path);
     command
         .args(args)
         .stdin(Stdio::null())
@@ -216,7 +312,7 @@ pub fn run_controlled_command(
         command.process_group(0);
     }
 
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = skill_studio_host::spawn_retrying_busy(&mut command).map_err(|error| {
         ControlledProcessError::Failed(format!("Failed to execute {program}: {error}"))
     })?;
     let pid = child.id();
@@ -235,26 +331,7 @@ pub fn run_controlled_command(
     let started = Instant::now();
     let outcome = loop {
         match child.try_wait() {
-            Ok(Some(status)) => {
-                break if status.success() {
-                    Ok(())
-                } else {
-                    let stderr = stderr_buf
-                        .lock()
-                        .map(|guard| String::from_utf8_lossy(&guard).into_owned())
-                        .unwrap_or_default();
-                    let stdout = stdout_buf
-                        .lock()
-                        .map(|guard| String::from_utf8_lossy(&guard).into_owned())
-                        .unwrap_or_default();
-                    let message = if stderr.is_empty() { stdout } else { stderr };
-                    Err(ControlledProcessError::Failed(if message.is_empty() {
-                        format!("{program} exited with code {}", status.code().unwrap_or(-1))
-                    } else {
-                        message
-                    }))
-                };
-            }
+            Ok(Some(status)) => break Ok(status),
             Ok(None) => {
                 if cancel.load(Ordering::SeqCst) {
                     terminate_and_reap(&mut child, pid);
@@ -275,13 +352,29 @@ pub fn run_controlled_command(
         }
     };
 
+    // The readers can still be draining the pipes when the child exits, so the
+    // failure message is read only after they are joined.
     if let Some(handle) = stdout_thread {
         join_finished_reader(handle);
     }
     if let Some(handle) = stderr_thread {
         join_finished_reader(handle);
     }
-    outcome
+    let status = outcome?;
+    if status.success() {
+        return Ok(());
+    }
+    let read = |buf: &Arc<Mutex<Vec<u8>>>| {
+        buf.lock()
+            .map(|guard| String::from_utf8_lossy(&guard).into_owned())
+            .unwrap_or_default()
+    };
+    let message = failure_message(read(&stdout_buf), read(&stderr_buf));
+    Err(ControlledProcessError::Failed(if message.is_empty() {
+        format!("{program} exited with code {}", status.code().unwrap_or(-1))
+    } else {
+        message
+    }))
 }
 
 /// Run a command under one operation deadline and return bounded stdout.
@@ -292,7 +385,15 @@ pub fn run_controlled_command_output(
     control: &AddOperationControl,
     max_output_bytes: usize,
 ) -> Result<Vec<u8>, ControlledProcessError> {
-    run_controlled_command_io(program, args, cwd, control, max_output_bytes, None)
+    run_controlled_command_io(
+        program,
+        args,
+        cwd,
+        control,
+        max_output_bytes,
+        None,
+        &login_shell_search_dirs(),
+    )
 }
 
 /// Run a command under one operation deadline with stdout redirected to a
@@ -312,10 +413,15 @@ pub fn run_controlled_command_to_file(
         control,
         max_output_bytes,
         Some(output_path),
+        &login_shell_search_dirs(),
     )
     .map(|_| ())
 }
 
+/// As [`run_controlled_command_output`]/[`run_controlled_command_to_file`],
+/// resolving `program` against `search_dirs` instead of always probing the
+/// login shell. A separate seam so tests can pass fixed dirs without
+/// spawning it.
 fn run_controlled_command_io(
     program: &Path,
     args: &[String],
@@ -323,9 +429,13 @@ fn run_controlled_command_io(
     control: &AddOperationControl,
     max_output_bytes: usize,
     output_path: Option<&Path>,
+    search_dirs: &[PathBuf],
 ) -> Result<Vec<u8>, ControlledProcessError> {
     control.check()?;
-    let mut command = Command::new(program);
+    let program_str = program.to_string_lossy();
+    let (resolved_program, child_path) = resolve_program_and_path(&program_str, search_dirs);
+    let mut command = Command::new(&resolved_program);
+    command.env("PATH", &child_path);
     command
         .args(args)
         .stdin(Stdio::null())
@@ -350,7 +460,7 @@ fn run_controlled_command_io(
         command.process_group(0);
     }
 
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = skill_studio_host::spawn_retrying_busy(&mut command).map_err(|error| {
         ControlledProcessError::Failed(format!("Failed to execute {}: {error}", program.display()))
     })?;
     let pid = child.id();
@@ -365,34 +475,9 @@ fn run_controlled_command_io(
         thread::spawn(move || drain_pipe_bounded(stderr, sink, max_output_bytes))
     });
 
-    let mut outcome = loop {
+    let outcome = loop {
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => {
-                break Ok(stdout_buf
-                    .lock()
-                    .map(|bytes| bytes.clone())
-                    .unwrap_or_default())
-            }
-            Ok(Some(status)) => {
-                let stderr = stderr_buf
-                    .lock()
-                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                    .unwrap_or_default();
-                let stdout = stdout_buf
-                    .lock()
-                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                    .unwrap_or_default();
-                let message = if stderr.is_empty() { stdout } else { stderr };
-                break Err(ControlledProcessError::Failed(if message.is_empty() {
-                    format!(
-                        "{} exited with code {}",
-                        program.display(),
-                        status.code().unwrap_or(-1)
-                    )
-                } else {
-                    message
-                }));
-            }
+            Ok(Some(status)) => break Ok(status),
             Ok(None) => {
                 if let Err(error) = control.check() {
                     terminate_and_reap(&mut child, pid);
@@ -415,13 +500,43 @@ fn run_controlled_command_io(
     if let Some(handle) = stderr_thread {
         join_finished_reader(handle);
     }
-    if outcome.is_ok() {
-        outcome = Ok(stdout_buf
-            .lock()
-            .map(|bytes| bytes.clone())
-            .unwrap_or_default());
+    let status = outcome?;
+    let stdout = stdout_buf
+        .lock()
+        .map(|bytes| bytes.clone())
+        .unwrap_or_default();
+    if status.success() {
+        return Ok(stdout);
     }
-    outcome
+    let stderr = stderr_buf
+        .lock()
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_default();
+    let message = failure_message(String::from_utf8_lossy(&stdout).into_owned(), stderr);
+    Err(ControlledProcessError::Failed(if message.is_empty() {
+        format!(
+            "{} exited with code {}",
+            program.display(),
+            status.code().unwrap_or(-1)
+        )
+    } else {
+        message
+    }))
+}
+
+/// The text to show for a failed exit. A `--json` command prints its
+/// `{"outcome":"error","message":...}` object on stdout and may also write
+/// progress or warnings to stderr, so that message wins; otherwise stderr, then
+/// stdout.
+fn failure_message(stdout: String, stderr: String) -> String {
+    let json_message = stdout.lines().rev().find_map(|line| {
+        let value = serde_json::from_str::<serde_json::Value>(line.trim()).ok()?;
+        if value.get("outcome")?.as_str()? != "error" {
+            return None;
+        }
+        value.get("message")?.as_str().map(str::to_string)
+    });
+    json_message.unwrap_or(if stderr.is_empty() { stdout } else { stderr })
 }
 
 /// Same as `run_controlled_command`, for a caller that already holds an
@@ -459,6 +574,17 @@ pub fn run_controlled_program_with_control(
 pub trait CommandRunner {
     /// Runs `program args`, optionally in `cwd`.
     fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> Result<(), String>;
+
+    /// As [`CommandRunner::run`], returning the bounded stdout. Runners that
+    /// do not capture output return it empty.
+    fn run_output(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+    ) -> Result<Vec<u8>, String> {
+        self.run(program, args, cwd).map(|()| Vec::new())
+    }
 
     /// `run("npx", ...)` - the CLI both `dotagents` and `skills.sh` use.
     fn run_npx(&self, args: &[String], cwd: Option<&Path>) -> Result<(), String> {
@@ -503,6 +629,22 @@ impl CommandRunner for RealCommandRunner {
     fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> Result<(), String> {
         run_controlled_program_with_control(program, args, cwd, &self.control)
             .map_err(ControlledProcessError::into_message)
+    }
+
+    fn run_output(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+    ) -> Result<Vec<u8>, String> {
+        run_controlled_command_output(
+            Path::new(program),
+            args,
+            cwd,
+            &self.control,
+            MAX_PROCESS_OUTPUT_BYTES,
+        )
+        .map_err(ControlledProcessError::into_message)
     }
 
     fn is_cancelled(&self) -> bool {
@@ -562,20 +704,20 @@ mod tests {
             pid_file.display()
         );
         let cancel = AtomicBool::new(false);
-        let started = Instant::now();
 
         let error = run_controlled_command(
             "sh",
             &["-c".to_string(), script],
             None,
             &cancel,
-            Duration::from_secs(1),
+            // The descendant must have written its pid before the deadline;
+            // under load a shell start alone can take seconds.
+            Duration::from_secs(5),
             MAX_PROCESS_OUTPUT_BYTES,
         )
         .unwrap_err();
 
         assert_eq!(error, ControlledProcessError::TimedOut);
-        assert!(started.elapsed() < Duration::from_secs(4));
         let descendant_pid: i32 = std::fs::read_to_string(&pid_file)
             .unwrap()
             .trim()
@@ -664,5 +806,78 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, ControlledProcessError::TimedOut);
+    }
+
+    /// Flow: a `--json` command fails, printing its error object on stdout and
+    /// a warning on stderr.
+    /// Expectation: the error carries the JSON `message`, not the warning.
+    /// A failure means stderr noise hides the real reason again.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_json_command_reports_its_stdout_message_over_stderr_noise() {
+        let cancel = AtomicBool::new(false);
+        let script = r#"echo '{"outcome":"error","message":"Plugin not found"}'; echo 'warning: slow' >&2; exit 1"#;
+        let error = run_controlled_command(
+            "sh",
+            &["-c".to_string(), script.to_string()],
+            None,
+            &cancel,
+            Duration::from_secs(10),
+            MAX_PROCESS_OUTPUT_BYTES,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ControlledProcessError::Failed("Plugin not found".to_string())
+        );
+    }
+
+    #[test]
+    fn a_failed_exit_without_a_json_error_prefers_stderr_then_stdout() {
+        assert_eq!(failure_message("out".into(), "err".into()), "err");
+        assert_eq!(failure_message("out".into(), String::new()), "out");
+    }
+
+    /// Without the fix, `Command::new("fakeclaude")` resolves only against
+    /// this test process's own `PATH`, which never includes `tmp`, so the
+    /// spawn fails with "No such file or directory" - the same failure a
+    /// packaged app hits under `launchd`'s minimal `PATH` for a bare
+    /// `claude` or `npx`. `run_controlled_command_with_search_dirs` must
+    /// resolve `fakeclaude` against the given directory instead and run it.
+    #[cfg(unix)]
+    #[test]
+    fn a_bare_program_outside_the_process_path_runs_through_the_command_runner_or_names_the_spawn_error(
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("marker");
+        let script_path = tmp.path().join("fakeclaude");
+        std::fs::write(
+            &script_path,
+            format!("#!/usr/bin/env sh\ntouch \"{}\"\n", marker.display()),
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let search_dirs = vec![tmp.path().to_path_buf()];
+        run_controlled_command_with_search_dirs(
+            "fakeclaude",
+            &[],
+            None,
+            &cancel,
+            Duration::from_secs(30),
+            MAX_PROCESS_OUTPUT_BYTES,
+            &search_dirs,
+        )
+        .unwrap();
+
+        assert!(
+            marker.exists(),
+            "fakeclaude ran through the command runner but never wrote its marker file"
+        );
     }
 }

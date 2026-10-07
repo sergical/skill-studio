@@ -49,6 +49,8 @@ fn runtime(fs: Arc<dyn ScopeFs>) -> Runtime {
         discovery: None,
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
+
+        telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
     };
     let scope = scope_for("doctor", Path::new(HOME));
     Runtime::new(&scope, ports).expect("runtime")
@@ -182,17 +184,16 @@ fn doctor_finds_a_lockfile_entry_with_no_folder_or_names_the_check_that_missed_i
     );
 }
 
-/// Invariant 4: the same skill exists both as a per-harness canonical copy
-/// and under the parked root - the shape `park_skill`'s own lifecycle row
-/// says never happens once a park lands cleanly.
+/// Invariant 4: the same skill exists both live at the Universal root and
+/// parked from it - the shape `park_skill`'s own lifecycle row says never
+/// happens once a park lands cleanly.
 #[test]
 fn doctor_finds_a_folder_in_two_states_at_once_or_names_the_check_that_missed_it() {
     let name = "double-state";
     let fs: Arc<dyn ScopeFs> = Arc::new(
         FixtureBuilder::new()
-            .dir(&format!("{HOME}/{UNIVERSAL_ROOT_RELATIVE}"))
             .file(
-                &format!("{HOME}/.claude/skills/{name}/SKILL.md"),
+                &format!("{HOME}/{UNIVERSAL_ROOT_RELATIVE}/{name}/SKILL.md"),
                 &skill_md(name),
             )
             .file(

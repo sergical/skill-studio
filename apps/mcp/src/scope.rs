@@ -33,7 +33,7 @@ pub fn resolve() -> (RuntimeScope, PathBuf) {
         let home = PathBuf::from(home);
         let data_root = home.join(".skill-studio");
         let history_root = data_root.join("history");
-        let codex_home = skill_studio_host::codex_home(&home);
+        let codex_home = home.join(".codex");
         let mut scope = RuntimeScope::live(home.clone(), history_root).with_codex_home(codex_home);
         if !projects.is_empty() {
             scope.projects = ProjectSelection::Explicit { paths: projects };
@@ -54,6 +54,19 @@ pub fn resolve() -> (RuntimeScope, PathBuf) {
     scope.opencode_config_root = Some(skill_studio_host::opencode_config_dir(&home));
     let lease_root = data_root.join("leases");
     (scope, lease_root)
+}
+
+/// The desktop app's use cache, for `skill_usage` to seed from, only when
+/// neither `SKILL_STUDIO_FIXTURE` nor `SKILL_STUDIO_HOME` is set: that cache
+/// indexes the real home's session history, and a refresh over another home
+/// would keep those real uses.
+pub fn desktop_usage_cache() -> Option<PathBuf> {
+    if std::env::var_os("SKILL_STUDIO_FIXTURE").is_some()
+        || std::env::var_os("SKILL_STUDIO_HOME").is_some()
+    {
+        return None;
+    }
+    dirs::data_dir().map(|dir| skill_studio_host::desktop_usage_cache_path(&dir))
 }
 
 /// `SKILL_STUDIO_PROJECT` is a `PATH`-style list of project directories,

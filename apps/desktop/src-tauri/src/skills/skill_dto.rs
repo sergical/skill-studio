@@ -19,6 +19,15 @@ use super::skill_fork_registry::{AddMethod, OriginTool};
 use super::skill_ownership::LifecycleOwnerKind;
 use super::SourceKind;
 
+/// One agent's config file that hides a skill. Skill Studio reads it and
+/// never writes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DisablingConfigFile {
+    /// Agent id as in `AgentId`: `"codex"`, `"open-code"` or `"claude-code"`.
+    pub agent: String,
+    pub path: String,
+}
+
 /// Which mechanism `Deployment.disabled` came from - see
 /// `skill_harness_disable`. The first three are native per-harness switches;
 /// `StudioMoved` is the universal fallback that renames the deployment's
@@ -29,8 +38,12 @@ use super::SourceKind;
 pub enum DisabledBy {
     CodexConfig,
     OpencodePermission,
+    /// An older build's Claude Code off switch: it removed the per-skill link.
+    /// The switch now writes `skillOverrides` instead.
     ClaudeLinkRemoved,
     StudioMoved,
+    /// Claude Code `settings.json` `skillOverrides["<name>"]` set to `"off"`.
+    ClaudeSkillOverrides,
     /// Claude Code `settings.json` `enabledPlugins["<plugin>@<marketplace>"]`
     /// set to `false`.
     ClaudePluginDisabled,
@@ -69,6 +82,23 @@ pub struct SkillDetails {
     pub hash: String,
     /// SKILL.md (or AGENTS.md fallback) contents, when the payload has one.
     pub skill_md: Option<String>,
+}
+
+/// One installed skills.sh skill to look up: the lock file's `source`
+/// (`owner/repo`) and the skill's name (its slug under that source).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InstallCountKey {
+    pub source: String,
+    pub name: String,
+}
+
+/// The skills.sh install count for one `InstallCountKey`; `installs` is
+/// `None` when the lookup failed or the skill is unknown to skills.sh.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InstallCount {
+    pub source: String,
+    pub name: String,
+    pub installs: Option<u32>,
 }
 
 /// How discovery requests reach skills.sh - see `api::resolve_skills_sh_access`.
@@ -198,6 +228,13 @@ pub struct Deployment {
     /// Always empty for other deployments.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled_readers: Vec<String>,
+    /// The agent config files that hide this skill, with the path Skill
+    /// Studio actually read (honours `CODEX_HOME`, `XDG_CONFIG_HOME`). One
+    /// entry per hiding agent: this deployment's own agent, or each reader
+    /// listed in `disabled_readers`. The files are global, so a project row
+    /// carries the global path. Empty when no setting hides the skill.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabling_config_files: Vec<DisablingConfigFile>,
     /// Codex's own `agents/openai.yaml` `policy.allow_implicit_invocation`
     /// value, read straight off disk - note-only, doesn't affect
     /// `InstalledSkill.invocation` (that's driven by SKILL.md frontmatter).
@@ -223,6 +260,23 @@ pub struct Deployment {
     /// field existed (fixtures, cached snapshots).
     #[serde(default = "default_invocation")]
     pub invocation: InvocationPolicy,
+    /// For a parked copy (`scope == "parked"`): the folder it was parked
+    /// from, so Unpark can say where it returns to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked_origin: Option<ParkedOrigin>,
+}
+
+/// Where a parked copy came from.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ParkedOrigin {
+    /// `"universal"` for the shared `.agents/skills` folder, or the agent id
+    /// (`"codex"`) whose own skills folder held the copy.
+    pub kind: String,
+    /// `"global"` | `"project"`.
+    pub scope: String,
+    /// The project directory, for a project copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
 }
 
 impl Default for Deployment {
@@ -248,10 +302,12 @@ impl Default for Deployment {
             disabled: false,
             disabled_by: None,
             disabled_readers: Vec::new(),
+            disabling_config_files: Vec::new(),
             codex_implicit_invocation: None,
             shared_via_whole_dir_link: false,
             spec_violations: Vec::new(),
             invocation: default_invocation(),
+            parked_origin: None,
         }
     }
 }
@@ -386,6 +442,14 @@ pub struct OwnerUpdateInfo {
     pub latest_commit: Option<String>,
     #[serde(default)]
     pub latest_commit_at: Option<String>,
+    /// For a `plugin:<plugin>@<marketplace>` owner: the install's scope
+    /// (`user`, `project`, `local`, `managed`) from Claude Code's
+    /// `installed_plugins.json`. `None` for every other owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_scope: Option<String>,
+    /// For a project or local plugin install: the project it belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_project_path: Option<String>,
 }
 
 // ============================================================================
@@ -424,13 +488,12 @@ pub struct AddSkillRequest {
     pub method: AddMethod,
     pub destination: SkillDestination,
     pub agents: Vec<super::agents::AgentId>,
-    /// Harnesses to switch off for this skill right after a successful
-    /// install: readers of the Universal folder the install itself cannot
-    /// avoid reaching. Unused for Per harness Copy.
-    #[serde(default)]
-    pub disabled_harnesses: Vec<super::agents::AgentId>,
     pub scope: InstallScope,
     pub project_path: Option<String>,
+    /// Link or copy into each chosen harness folder that is not the shared
+    /// folder. Ignored when the choice writes one folder only.
+    #[serde(default)]
+    pub link_mode: skill_studio_core::dto::InstallLinkMode,
 }
 
 /// `add_skills`' request: one source, and the skill folders picked out of it
@@ -443,13 +506,12 @@ pub struct AddSkillsRequest {
     pub method: AddMethod,
     pub destination: SkillDestination,
     pub agents: Vec<super::agents::AgentId>,
-    /// Harnesses to switch off for this skill right after a successful
-    /// install: readers of the Universal folder the install itself cannot
-    /// avoid reaching. Unused for Per harness Copy.
-    #[serde(default)]
-    pub disabled_harnesses: Vec<super::agents::AgentId>,
     pub scope: InstallScope,
     pub project_path: Option<String>,
+    /// Link or copy into each chosen harness folder that is not the shared
+    /// folder. Ignored when the choice writes one folder only.
+    #[serde(default)]
+    pub link_mode: skill_studio_core::dto::InstallLinkMode,
 }
 
 /// One skill's outcome in an `add_skills` batch. A failure never stops the
@@ -468,11 +530,9 @@ pub struct AddSkillResult {
     pub tool: String,
     pub command: String,
     pub deployments_created: Vec<String>,
-    /// Set when the install itself succeeded but a follow-up step (turning
-    /// the skill off for a `disabled_harnesses` entry) failed - the skill is
-    /// on disk and usable, it just isn't disabled where it was asked to be.
-    /// The sheet shows this as a warning toast rather than treating the
-    /// whole request as failed.
+    /// Set when the install itself succeeded but a link or copy step had a
+    /// problem - the skill is on disk and usable. The sheet shows this as a
+    /// warning toast rather than treating the whole request as failed.
     #[serde(default)]
     pub warning: Option<String>,
 }
@@ -498,12 +558,36 @@ pub struct LifecycleTarget {
     pub owner_id: Option<String>,
 }
 
-/// Exact deployment plus the harness whose visibility will change. Universal
-/// deployments are valid for readers that discover that scope directly.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct HarnessVisibilityTarget {
-    pub deployment_id: String,
-    pub reader_agent: super::agents::AgentId,
+/// Whether one update target's installed folder differs from what the
+/// install recorded, so the UI can warn before Update overwrites the edit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LocalEditsDto {
+    /// True only when the check ran and the folder differs from the lock hash.
+    pub edited: bool,
+    /// False when the check could not run (no lock hash, project scope, a
+    /// dotagents or other owner, an unreadable folder); `edited` is then false.
+    pub checked: bool,
+}
+
+/// One target's outcome inside a batch command. Results come back in the
+/// order the targets were sent, so the caller pairs them by index.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BulkTargetResult {
+    /// `None` when the target was written; otherwise why it was not.
+    pub error: Option<String>,
+}
+
+impl BulkTargetResult {
+    /// Runs `apply` on every target in order. A failure is recorded on its own
+    /// target and never stops the rest.
+    pub fn collect<T>(targets: &[T], mut apply: impl FnMut(&T) -> Result<(), String>) -> Vec<Self> {
+        targets
+            .iter()
+            .map(|target| Self {
+                error: apply(target).err(),
+            })
+            .collect()
+    }
 }
 
 /// Installation result

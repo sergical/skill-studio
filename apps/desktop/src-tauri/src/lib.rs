@@ -19,16 +19,29 @@
 pub mod skills;
 pub mod timing_log;
 
+use std::path::Path;
+
 use tauri::Manager;
 
 pub use skills::*;
 
-/// Opens the event store at `app`'s data dir (docs/spec-event-store.md) - not
-/// `~/.agents`, which stays reserved for `skill-studio.json`. Reconciliation
-/// is a separate step - see [`reconcile_event_store_at_startup`] - so `run()`
-/// can run it off the UI thread. A failure opening the store returns `None`
-/// rather than aborting startup; every event command surfaces that as an
-/// ordinary `Err`.
+/// Opens the event store against the core's shared history database
+/// (`core_runtime::history_db_path`, under `core_runtime::data_root()`) while
+/// still keeping backups and the journal under `app`'s own data dir
+/// (docs/spec-event-store.md) - not `~/.agents`, which stays reserved for
+/// `skill-studio.json`. Every desktop command that mutates through
+/// `skill-studio-core`'s `ops` (park, unpark, install, etc.) writes its
+/// history there too, so Activity and Undo see those events alongside the
+/// desktop's own direct writes.
+///
+/// Also imports the desktop's pre-migration event log (its own
+/// `events.sqlite3`, from before this shared file existed) once: a failed
+/// or corrupt import only logs, so a bad legacy file never blocks startup.
+///
+/// Reconciliation is a separate step - see
+/// [`reconcile_event_store_at_startup`] - so `run()` can run it off the UI
+/// thread. A failure opening the store returns `None` rather than aborting
+/// startup; every event command surfaces that as an ordinary `Err`.
 ///
 /// Never called when [`skills::data_folder_status::check_and_migrate`]
 /// (unit 6.3) already refused the folder as newer than this build - `run()`
@@ -40,9 +53,30 @@ fn open_event_store(app: &tauri::App) -> Option<skills::event_store::EventStore>
         .app_data_dir()
         .map_err(|e| eprintln!("[event_store] could not resolve app data dir: {e}"))
         .ok()?;
-    skills::event_store::EventStore::open(&app_data)
+    open_event_store_at(&app_data, &skills::core_runtime::data_root())
+}
+
+/// [`open_event_store`], but taking `app_data_dir`/`data_root` directly
+/// rather than reading them from a live `tauri::App` - the seam
+/// `tests/undo_activity_history.rs` opens its own `EventStore` through, so
+/// reverting this function to the desktop-only-file bug it fixed
+/// (`EventStore::open(&app_data)`, ignoring the core's shared history
+/// database entirely) turns that test red instead of only the production
+/// code path nothing exercises directly.
+pub fn open_event_store_at(
+    app_data_dir: &Path,
+    data_root: &Path,
+) -> Option<skills::event_store::EventStore> {
+    let db_path = skills::core_runtime::history_db_path(data_root);
+    let store = skills::event_store::EventStore::open_with_db(app_data_dir, &db_path)
         .map_err(|e| eprintln!("[event_store] failed to open: {e}"))
-        .ok()
+        .ok()?;
+    match store.import_legacy_events() {
+        Ok(0) => {}
+        Ok(imported) => eprintln!("[event_store] imported {imported} legacy event(s)"),
+        Err(e) => eprintln!("[event_store] failed to import legacy events: {e}"),
+    }
+    Some(store)
 }
 
 /// Reconciles any row `store` was left holding `pending` by a crash (unit
@@ -52,7 +86,27 @@ fn open_event_store(app: &tauri::App) -> Option<skills::event_store::EventStore>
 /// repairers over whatever that reconciliation left `interrupted`. Called
 /// from inside `tauri::async_runtime::spawn_blocking` in `run()`, so this
 /// filesystem work never runs on the UI thread.
+///
+/// The events table is now shared with any CLI or MCP process
+/// (`core_runtime::history_db_path`), so a `pending` row here might belong to
+/// a mutation a still-running sibling process owns, not a crash - flipping it
+/// to `interrupted` (or a recovery loop touching it) out from under that
+/// process would race it. Takes the same root write lease every mutating
+/// command takes; when another process already holds it, this whole pass is
+/// skipped rather than blocking startup, and retried on the next launch.
 fn reconcile_event_store_at_startup(store: &skills::event_store::EventStore) {
+    let Some(home) = dirs::home_dir() else {
+        eprintln!("[event_store] could not resolve home dir for startup reconcile");
+        return;
+    };
+    let write_lease = skills::write_lease::WriteLease::default();
+    let guard = match write_lease.try_acquire(&home) {
+        Ok(guard) => guard,
+        Err(e) => {
+            eprintln!("[event_store] skipped startup reconcile: {e}");
+            return;
+        }
+    };
     match store.reconcile_at_startup() {
         Ok(flipped) => {
             for row in &flipped {
@@ -76,11 +130,11 @@ fn reconcile_event_store_at_startup(store: &skills::event_store::EventStore) {
                     .and_then(|home| {
                         if row.kind == "make_independent_copy" {
                             skills::skill_independent_copy::reconcile_interrupted_independent_copy(
-                                store, &home, row,
+                                store, &home, row, Some(&guard),
                             )
                         } else {
                             skills::skill_independent_copy::reconcile_interrupted_independent_copy_restore(
-                                store, &home, row,
+                                store, &home, row, Some(&guard),
                             )
                         }
                     });
@@ -124,7 +178,10 @@ fn reconcile_event_store_at_startup(store: &skills::event_store::EventStore) {
                     .ok_or_else(|| "Could not find home directory".to_string())
                     .and_then(|home| {
                         skills::skill_frontmatter_repair::reconcile_interrupted_frontmatter_repair(
-                            store, &home, row,
+                            store,
+                            &home,
+                            row,
+                            Some(&guard),
                         )
                     })
                 {
@@ -212,6 +269,41 @@ fn apply_fixture_home_override() {
     }
 }
 
+/// Only web links may leave the app. `file:`, `javascript:` and custom
+/// schemes (`vscode:`, `x-apple.*:`) would let page content launch local
+/// handlers, so they are refused.
+fn is_openable_external_url(url: &tauri::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+}
+
+/// Every `target="_blank"` link and `window.open` call lands here. The
+/// webview never opens a window of its own: web links go to the system
+/// default browser and everything else is dropped.
+fn route_new_window<R: tauri::Runtime>(url: &tauri::Url) -> tauri::webview::NewWindowResponse<R> {
+    let (to_open, response) = plan_new_window(url);
+    if let Some(target) = to_open {
+        // A worker thread keeps the webview callback from blocking, and
+        // `status()` waits on the child so no zombie `open` is left behind.
+        std::thread::spawn(move || {
+            match std::process::Command::new("open").arg(&target).status() {
+                Ok(status) if status.success() => {}
+                Ok(status) => eprintln!("[external_link] open {target} exited with {status}"),
+                Err(error) => eprintln!("[external_link] could not open {target}: {error}"),
+            }
+        });
+    }
+    response
+}
+
+/// The decision without the side effect: the URL to hand to `open` (if any)
+/// and the response for the webview, which is always `Deny`.
+fn plan_new_window<R: tauri::Runtime>(
+    url: &tauri::Url,
+) -> (Option<String>, tauri::webview::NewWindowResponse<R>) {
+    let to_open = is_openable_external_url(url).then(|| url.to_string());
+    (to_open, tauri::webview::NewWindowResponse::Deny)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 // `run()` is the process entry point (called only from `main()`); a failure
 // building or running the Tauri event loop is fatal and unrecoverable, so
@@ -220,14 +312,46 @@ fn apply_fixture_home_override() {
 #[allow(clippy::expect_used)]
 pub fn run() {
     apply_fixture_home_override();
-    // Before Tauri's own setup, so a panic during setup itself is still
-    // caught once `set_global_state` below registers the state to report
-    // through.
-    skills::error_reporting::install_panic_hook();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            // The main window is declared in tauri.conf.json with
+            // `create: false` so it can be built here with the new-window
+            // handler attached.
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .first()
+                .ok_or("tauri.conf.json declares no main window")?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?
+                .on_new_window(|url, _features| route_new_window(&url))
+                .build()?;
+
+            // Reads `~/.agents/skill-studio.json`, not `app_data_dir` -
+            // independent of the data-folder migration below - so this runs
+            // first: a panic anywhere else in setup, including that
+            // migration and `skill_refresh::init`, is still caught by the
+            // hook `telemetry::init` installs.
+            let registry_telemetry_enabled = dirs::home_dir()
+                .and_then(|home| skills::skill_fork_registry::read_fork_registry(&home).ok())
+                .is_some_and(|registry| registry.telemetry_enabled);
+            let telemetry_enabled = skill_studio_host::telemetry::resolve_consent(
+                std::env::var("SKILL_STUDIO_TELEMETRY").ok(),
+                registry_telemetry_enabled,
+            );
+            let consent = skill_studio_host::telemetry::Consent::new(telemetry_enabled);
+            let telemetry_guard = skill_studio_host::telemetry::init(
+                skill_studio_host::telemetry::Surface::Desktop,
+                env!("CARGO_PKG_VERSION"),
+                consent.clone(),
+            );
+            app.manage(skills::telemetry_commands::TelemetryState {
+                consent,
+                guard: std::sync::Mutex::new(telemetry_guard),
+            });
+
             // Unit 6.3: check the data folder's schema_version before
             // anything else in setup - every branch below either spawns a
             // background thread or manages state a Tauri command can read,
@@ -259,14 +383,6 @@ pub fn run() {
             }
             app.manage(skills::skill_agent_runner::SkillAgentRunnerState::default());
             app.manage(skills::skill_run_target::SkillRunTargetState::default());
-            let error_reporting_enabled = dirs::home_dir()
-                .and_then(|home| skills::skill_fork_registry::read_fork_registry(&home).ok())
-                .is_some_and(|registry| registry.error_reporting_enabled);
-            let reporting_state = std::sync::Arc::new(
-                skills::error_reporting::ReportingState::new(error_reporting_enabled),
-            );
-            skills::error_reporting::set_global_state(reporting_state.clone());
-            app.manage(reporting_state);
             skills::skill_update_check::spawn_update_check_loop(app.handle().clone());
             // Unit 6.2: in-app update through tauri-plugin-updater. The
             // engine is managed state so the launch check below, the
@@ -323,6 +439,7 @@ pub fn run() {
             skills::commands::search_skills,
             skills::commands::get_popular_skills,
             skills::commands::get_skill_details,
+            skills::commands::get_install_counts,
             skills::commands::get_installed_skills,
             skills::commands::remove_skill,
             skills::commands::update_skill,
@@ -336,16 +453,15 @@ pub fn run() {
             skills::commands::open_skill_path,
             skills::commands::get_editor_choices,
             skills::commands::set_preferred_editor,
-            skills::commands::command_health,
-            skills::error_reporting::get_error_reporting_enabled,
-            skills::error_reporting::set_error_reporting_enabled,
+            skills::telemetry_commands::get_telemetry_enabled,
+            skills::telemetry_commands::set_telemetry_enabled,
+            skills::telemetry_commands::report_frontend_error,
             // Fork / Pull upstream / Un-fork
             skills::skill_fork::fork_skill,
             skills::skill_fork::pull_fork_upstream,
             skills::skill_fork::unfork_skill,
             // Add skill
             skills::skill_install::add_skill,
-            skills::skill_install::install_preferences,
             skills::skill_add_operation::start_add_skill_operation,
             skills::skill_add_operation::start_add_skills_operation,
             skills::skill_add_operation::get_add_skill_operation,
@@ -353,13 +469,23 @@ pub fn run() {
             skills::skill_add_operation::confirm_add_skill_trust,
             skills::github_skill_listing::list_github_skills,
             // Park (disable globally) / per-harness disable / invocation policy
+            skills::skill_local_edits::skill_local_edits,
             skills::skill_park::park_skill,
             skills::skill_park::unpark_skill,
-            skills::skill_harness_disable::set_harness_enabled,
+            skills::skill_park::park_check,
+            skills::skill_park::discard_skill_copy,
+            skills::skill_park::park_skills,
+            skills::skill_park::unpark_skills,
+            skills::skill_split::split_skill,
+            skills::skill_split::split_skill_targets,
+            skills::skill_split::turn_off_for_agent,
+            skills::skill_split::turn_off_check,
             skills::skill_harness_disable::restore_moved_deployment,
             skills::skill_invocation::set_skill_invocation,
+            skills::skill_invocation::set_skills_invocation,
             skills::commands::set_plugin_enabled,
             skills::commands::uninstall_plugin,
+            skills::commands::update_plugin,
             // Event store: History and per-harness materialize disable
             skills::event_commands::list_skill_events,
             skills::event_commands::restore_skill_event,
@@ -378,8 +504,6 @@ pub fn run() {
             skills::skill_refresh::get_discovery_sources,
             skills::skill_refresh::set_discovery_source,
             skills::skill_project_folders::list_project_folders,
-            // Doctor pass over every lifecycle invariant (unit 5.3)
-            skills::skill_doctor::doctor,
             // First-run harness detection (unit 3.2)
             skills::harness_first_run::detect_harnesses,
             skills::harness_first_run::get_harnesses_choice,
@@ -388,6 +512,86 @@ pub fn run() {
             // skill_run_target, skill_run_history, skill_pack, and skill_process still
             // compile and test, but none of their commands are registered here.
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(move |app, event| {
+            if let tauri::RunEvent::Exit = event {
+                let Some(state) = app.try_state::<skills::telemetry_commands::TelemetryState>()
+                else {
+                    return;
+                };
+                let taken_guard = state
+                    .guard
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(guard) = taken_guard {
+                    let flushed = skill_studio_host::telemetry::shutdown(guard);
+                    #[cfg(debug_assertions)]
+                    eprintln!("[telemetry] shutdown flush complete: {flushed}");
+                    #[cfg(not(debug_assertions))]
+                    let _ = flushed;
+                }
+            }
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_openable_external_url, plan_new_window};
+    use tauri::webview::NewWindowResponse;
+
+    fn parse(url: &str) -> tauri::Url {
+        url.parse().expect("test URL parses")
+    }
+
+    // Flow: a user clicks a target="_blank" link in a skill's markdown.
+    // Expectation: web links open in the system browser.
+    // Failure: a link silently does nothing, as before this fix.
+    #[test]
+    fn external_link_filter_allows_http_and_https() {
+        assert!(is_openable_external_url(&parse("https://skills.sh/a/b")));
+        assert!(is_openable_external_url(&parse("http://example.com/")));
+    }
+
+    // Flow: skill markdown, which is untrusted, contains a link with a
+    // local or custom scheme.
+    // Expectation: the click opens nothing.
+    // Failure: page content launches a local file or app handler.
+    #[test]
+    fn external_link_filter_refuses_file_javascript_and_custom_schemes() {
+        for url in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "vscode://file/etc/passwd",
+            "x-apple.systempreferences:com.apple.preference",
+            "data:text/html,hi",
+            "ftp://example.com/",
+        ] {
+            assert!(
+                !is_openable_external_url(&parse(url)),
+                "{url} must be refused"
+            );
+        }
+    }
+
+    // Flow: any new-window request (http, file:, javascript:) reaches the handler.
+    // Expectation: the webview is always told Deny; only the http URL is queued for `open`.
+    // Failure: Allow lets the webview open a window, or a local scheme reaches `open`.
+    #[test]
+    fn new_window_is_always_denied_and_only_web_urls_are_opened() {
+        let cases = [
+            ("https://skills.sh/a/b", Some("https://skills.sh/a/b")),
+            ("file:///etc/passwd", None),
+            ("javascript:alert(1)", None),
+        ];
+        for (url, expected) in cases {
+            let (to_open, response) = plan_new_window::<tauri::Wry>(&parse(url));
+            assert!(
+                matches!(response, NewWindowResponse::Deny),
+                "{url} must be denied"
+            );
+            assert_eq!(to_open.as_deref(), expected, "{url}");
+        }
+    }
 }

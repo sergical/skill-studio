@@ -1,7 +1,8 @@
 // ============================================================================
 // Skills Module - deterministic malformed frontmatter repair
-// Previews and applies the one safe first-version repair: an unquoted `: ` in
-// a top-level name or description scalar.
+// Previews and applies deterministic SKILL.md repairs: an unquoted `: ` in a
+// top-level name or description scalar, a name that differs from its folder,
+// and conflicting invocation keys.
 // ============================================================================
 
 use std::fmt::Write as _;
@@ -22,6 +23,8 @@ use super::skill_dto::{Deployment, LifecycleTarget};
 use super::skill_md_write::{begin_skill_md_write_transaction, SkillMdWriteTransaction};
 use super::skill_ownership::LifecycleOwnerKind;
 use super::skill_refresh::{self, SkillRefreshState};
+use skill_studio_core::frontmatter_repair::propose_repair;
+pub use skill_studio_core::frontmatter_repair::{FrontmatterRepairKind, InvocationConflictChoice};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -37,6 +40,9 @@ pub struct FrontmatterRepairPreview {
     pub path: String,
     pub scope: String,
     pub reason: String,
+    pub kind: FrontmatterRepairKind,
+    /// Set once the user picked a side of an invocation conflict.
+    pub choice: Option<InvocationConflictChoice>,
     pub expected_content_fingerprint: String,
     pub proposal_id: String,
     pub original_content: String,
@@ -50,6 +56,10 @@ pub struct ApplyFrontmatterRepairRequest {
     pub proposal_id: String,
     pub expected_content_fingerprint: String,
     pub mode: FrontmatterRepairApplyMode,
+    #[serde(default)]
+    pub kind: FrontmatterRepairKind,
+    #[serde(default)]
+    pub choice: Option<InvocationConflictChoice>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,19 +139,90 @@ fn apply_modes(deployment: &Deployment) -> Vec<FrontmatterRepairApplyMode> {
     }
 }
 
-fn preview_from_deployment(deployment: &Deployment) -> Result<FrontmatterRepairPreview, String> {
+/// The real folder name a name fix writes into `SKILL.md`. The scanner checks
+/// each deployment against its own folder name, so a link under another name
+/// must not write its own name into the shared file. Other deployments of the
+/// same file are guarded by `refuse_name_fix_with_differently_named_peer`.
+fn repair_folder_name(
+    deployment_path: &Path,
+    kind: FrontmatterRepairKind,
+) -> Result<String, String> {
+    let resolved = fs::canonicalize(deployment_path)
+        .map_err(|error| format!("Failed to resolve {}: {error}", deployment_path.display()))?;
+    let resolved_name = resolved
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("Skill folder name is not UTF-8")?;
+    let is_symlink = fs::symlink_metadata(deployment_path)
+        .map_err(|error| format!("Failed to inspect {}: {error}", deployment_path.display()))?
+        .file_type()
+        .is_symlink();
+    let link_name = deployment_path.file_name().and_then(|name| name.to_str());
+    let is_name_fix = matches!(
+        kind,
+        FrontmatterRepairKind::NameMismatch | FrontmatterRepairKind::NameFormat
+    );
+    if is_name_fix && is_symlink && link_name != Some(resolved_name) {
+        return Err(format!(
+            "This skill is linked under a different folder name than its real folder \"{resolved_name}\". Fix the name from the real folder instead."
+        ));
+    }
+    Ok(resolved_name.to_string())
+}
+
+/// A name fix on a real folder moves the mismatch to any other deployment
+/// that reaches the same `SKILL.md` under a different folder name, so it is
+/// refused while one exists.
+fn refuse_name_fix_with_differently_named_peer(
+    snapshot: &skill_refresh::SkillSnapshot,
+    deployment: &Deployment,
+    kind: FrontmatterRepairKind,
+) -> Result<(), String> {
+    if !matches!(
+        kind,
+        FrontmatterRepairKind::NameMismatch | FrontmatterRepairKind::NameFormat
+    ) {
+        return Ok(());
+    }
+    let Ok(real) = fs::canonicalize(&deployment.path) else {
+        return Ok(());
+    };
+    let real_name = real.file_name();
+    for other in snapshot.skills.iter().flat_map(|skill| &skill.deployments) {
+        if other.id == deployment.id {
+            continue;
+        }
+        let same_real = fs::canonicalize(&other.path).is_ok_and(|resolved| resolved == real);
+        if same_real && Path::new(&other.path).file_name() != real_name {
+            return Err(format!(
+                "Another copy at {} reaches this SKILL.md under a different folder name, so fixing the name here would break it. Rename or remove that link first.",
+                other.path
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn preview_from_deployment(
+    deployment: &Deployment,
+    kind: FrontmatterRepairKind,
+    choice: Option<InvocationConflictChoice>,
+) -> Result<FrontmatterRepairPreview, String> {
     let path = Path::new(&deployment.path).join("SKILL.md");
     let bytes =
         fs::read(&path).map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
     let original =
         String::from_utf8(bytes.clone()).map_err(|_| "SKILL.md is not UTF-8".to_string())?;
-    let (proposed, reason) = propose_colon_scalar_repair(&original)?;
+    let dir_name = repair_folder_name(Path::new(&deployment.path), kind)?;
+    let (proposed, reason) = propose_repair(kind, &original, &dir_name, choice)?;
     let fingerprint = content_fingerprint(&bytes);
     Ok(FrontmatterRepairPreview {
         deployment_id: deployment.id.clone(),
         path: deployment.path.clone(),
         scope: deployment.scope.clone(),
         reason,
+        kind,
+        choice,
         expected_content_fingerprint: fingerprint.clone(),
         proposal_id: proposal_id(deployment, &fingerprint, &proposed),
         original_content: original,
@@ -154,14 +235,17 @@ fn validate_bound_preview(
     deployment: &Deployment,
     expected_content_fingerprint: &str,
     expected_proposal_id: &str,
+    kind: FrontmatterRepairKind,
+    choice: Option<InvocationConflictChoice>,
 ) -> Result<FrontmatterRepairPreview, String> {
-    let preview = preview_from_deployment(deployment)?;
+    let preview = preview_from_deployment(deployment, kind, choice)?;
     if preview.expected_content_fingerprint != expected_content_fingerprint
         || preview.proposal_id != expected_proposal_id
     {
-        return Err(
-            "YAML repair refused: the deployment, ownership, or content changed".to_string(),
-        );
+        return Err("YAML repair refused: the copy, ownership, or content changed".to_string());
+    }
+    if preview.proposed_content == preview.original_content {
+        return Err("Choose an option before applying this fix".to_string());
     }
     Ok(preview)
 }
@@ -170,12 +254,16 @@ fn begin_bound_frontmatter_repair_transaction(
     deployment: &Deployment,
     expected_content_fingerprint: &str,
     expected_proposal_id: &str,
+    kind: FrontmatterRepairKind,
+    choice: Option<InvocationConflictChoice>,
 ) -> Result<(SkillMdWriteTransaction, FrontmatterRepairPreview), String> {
     let transaction = begin_skill_md_write_transaction()?;
     let preview = validate_bound_preview(
         deployment,
         expected_content_fingerprint,
         expected_proposal_id,
+        kind,
+        choice,
     )?;
     Ok((transaction, preview))
 }
@@ -187,7 +275,7 @@ fn exact_target<'a>(
     let id = target
         .deployment_id
         .as_deref()
-        .ok_or("YAML repair needs one exact deployment_id")?;
+        .ok_or("YAML repair needs one exact copy id")?;
     if target.owner_id.is_some() {
         return Err("YAML repair does not accept an owner target".to_string());
     }
@@ -196,9 +284,35 @@ fn exact_target<'a>(
     Ok(deployment)
 }
 
+/// Previews from the published snapshot, never a rescan: the apply step
+/// re-checks the file's fingerprint, so a stale snapshot cannot write a wrong
+/// file, and a full rebuild per call took minutes when the page re-asked.
+fn preview_from_cached_snapshot(
+    refresh_state: &SkillRefreshState,
+    target: &LifecycleTarget,
+    kind: FrontmatterRepairKind,
+    choice: Option<InvocationConflictChoice>,
+) -> Result<FrontmatterRepairPreview, String> {
+    let deployment = {
+        let guard = refresh_state
+            .snapshot
+            .read()
+            .map_err(|_| "Skill snapshot is unavailable".to_string())?;
+        let snapshot = guard
+            .as_ref()
+            .ok_or("Skills are still loading; no snapshot to preview from")?;
+        let deployment = exact_target(snapshot, target)?;
+        refuse_name_fix_with_differently_named_peer(snapshot, deployment, kind)?;
+        deployment.clone()
+    };
+    preview_from_deployment(&deployment, kind, choice)
+}
+
 #[tauri::command]
 pub async fn preview_skill_frontmatter_repair(
     target: LifecycleTarget,
+    kind: Option<FrontmatterRepairKind>,
+    choice: Option<InvocationConflictChoice>,
     app: tauri::AppHandle,
 ) -> Result<FrontmatterRepairPreview, String> {
     let timing_app = app.clone();
@@ -206,10 +320,12 @@ pub async fn preview_skill_frontmatter_repair(
         &timing_app,
         "preview_skill_frontmatter_repair",
         move || {
-            let refresh_state = app.state::<SkillRefreshState>();
-            let snapshot =
-                super::skill_lifecycle::rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
-            preview_from_deployment(exact_target(&snapshot, &target)?)
+            preview_from_cached_snapshot(
+                &app.state::<SkillRefreshState>(),
+                &target,
+                kind.unwrap_or_default(),
+                choice,
+            )
         },
     )
     .await
@@ -264,12 +380,13 @@ fn roll_back_incomplete_fork(
     home: &Path,
     row: &EventRow,
     intent: &FrontmatterRepairIntent,
+    guard: Option<&super::write_lease::WriteLeaseGuard>,
 ) -> Result<(), String> {
     let registry = intent
         .fork_registry_before
         .as_ref()
         .ok_or("Fork repair intent has no ownership rollback snapshot")?;
-    super::skill_fork_registry::write_fork_registry(home, registry)?;
+    super::skill_fork_registry::write_fork_registry_maybe_locked(guard, home, registry)?;
     let app_data = store.app_data.clone();
     let _ = fs::remove_dir_all(super::skill_fork_registry::fork_snapshot_dir(
         &app_data,
@@ -291,14 +408,16 @@ pub fn reconcile_interrupted_frontmatter_repair(
     store: &EventStore,
     home: &Path,
     row: &EventRow,
+    guard: Option<&super::write_lease::WriteLeaseGuard>,
 ) -> Result<(), String> {
-    reconcile_interrupted_frontmatter_repair_with(store, home, row, |_| {})
+    reconcile_interrupted_frontmatter_repair_with(store, home, row, guard, |_| {})
 }
 
 fn reconcile_interrupted_frontmatter_repair_with(
     store: &EventStore,
     home: &Path,
     row: &EventRow,
+    guard: Option<&super::write_lease::WriteLeaseGuard>,
     after_read: impl FnOnce(&SkillMdWriteTransaction),
 ) -> Result<(), String> {
     let transaction = begin_skill_md_write_transaction()?;
@@ -321,7 +440,7 @@ fn reconcile_interrupted_frontmatter_repair_with(
         return Ok(());
     }
     if managed_ledger_still_owns(home, &intent.name)? {
-        roll_back_incomplete_fork(store, home, row, &intent)?;
+        roll_back_incomplete_fork(store, home, row, &intent, guard)?;
         return Ok(());
     }
     if !fork_record_matches(home, &intent)? {
@@ -354,6 +473,8 @@ pub async fn apply_skill_frontmatter_repair(
                 proposal_id,
                 expected_content_fingerprint,
                 mode,
+                kind,
+                choice,
             } = request;
             let home = dirs::home_dir().ok_or("Could not find home directory")?;
             let write_lease = super::write_lease::WriteLease::default();
@@ -361,6 +482,7 @@ pub async fn apply_skill_frontmatter_repair(
             let snapshot =
                 super::skill_lifecycle::rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
             let deployment = exact_target(&snapshot, &target)?.clone();
+            refuse_name_fix_with_differently_named_peer(&snapshot, &deployment, kind)?;
             let skill_md = PathBuf::from(&deployment.path).join("SKILL.md");
             let name = super::skill_deployment::parse_deployment_id(&deployment.id)
                 .map(|id| id.name)
@@ -374,11 +496,11 @@ pub async fn apply_skill_frontmatter_repair(
                 &deployment,
                 &expected_content_fingerprint,
                 &proposal_id,
+                kind,
+                choice,
             )?;
             if !preview.allowed_apply_modes.contains(&mode) {
-                return Err(
-                    "This repair mode is not allowed for the selected deployment".to_string(),
-                );
+                return Err("This repair mode is not allowed for the selected copy".to_string());
             }
             let event_id = allocate_id();
             let pre_fingerprint = fingerprint_path(&skill_md);
@@ -527,13 +649,265 @@ mod tests {
         }
     }
 
+    fn snapshot_with(deployment: Deployment) -> skill_refresh::SkillSnapshot {
+        use super::super::frontmatter::InvocationPolicy;
+        use super::super::skill_dto::InstalledSkill;
+        use super::super::SourceKind;
+        skill_refresh::SkillSnapshot {
+            revision: 1,
+            skills: vec![InstalledSkill {
+                name: "sample".to_string(),
+                source: "manual".to_string(),
+                source_type: "manual".to_string(),
+                source_url: None,
+                skill_path: None,
+                installed_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: None,
+                has_update: false,
+                update_owner_ids: Vec::new(),
+                update_owners: Vec::new(),
+                update_commit: None,
+                update_commit_at: None,
+                source_kind: SourceKind::Manual,
+                deployments: vec![deployment],
+                has_spec: false,
+                description: None,
+                spec_violations: Vec::new(),
+                skill_md_tokens: 0,
+                description_tokens: 0,
+                folder_bytes: 0,
+                file_count: 0,
+                content_hash: String::new(),
+                content_hashes: Vec::new(),
+                modified_at: None,
+                frontmatter_fields: Default::default(),
+                folder_truncated: false,
+                fork: None,
+                parked: false,
+                parked_at: None,
+                invocation: InvocationPolicy::Both,
+            }],
+            projects: Vec::new(),
+            invocations: Vec::new(),
+            heatmap: skill_studio_core::skill_uses::InvocationHeatmap::default(),
+            scanned_at: "2024-01-01T00:00:00Z".to_string(),
+            last_test_by_skill: Default::default(),
+            update_check: Default::default(),
+            opencode_config_kind: None,
+            scan_partial: false,
+            scan_observations: Vec::new(),
+            unread_roots: Vec::new(),
+        }
+    }
+
+    fn target_for(deployment: &Deployment) -> LifecycleTarget {
+        LifecycleTarget {
+            deployment_id: Some(deployment.id.clone()),
+            owner_id: None,
+        }
+    }
+
+    /// Flow: the page asks for a preview while the refresh state holds a snapshot
+    /// whose content hash is stale. Expect: the preview is built from the bytes
+    /// now on disk, with no app handle and no rebuild. Failure: the preview
+    /// needs a full rescan again (minutes per call) or shows stale content.
+    #[test]
+    fn preview_reads_disk_bytes_through_the_cached_snapshot_without_a_rescan() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("sample");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), malformed()).unwrap();
+        let dep = deployment(&dir, LifecycleOwnerKind::Manual);
+        let state = SkillRefreshState::fixture(snapshot_with(dep.clone()));
+
+        let preview = preview_from_cached_snapshot(
+            &state,
+            &target_for(&dep),
+            FrontmatterRepairKind::ColonScalar,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(preview.original_content, malformed());
+        assert_eq!(
+            preview.expected_content_fingerprint,
+            content_fingerprint(malformed().as_bytes())
+        );
+        assert_eq!(
+            preview.allowed_apply_modes,
+            vec![FrontmatterRepairApplyMode::ApplyFix]
+        );
+    }
+
+    /// Flow: a link named `sample` points at the real folder `sample-real`.
+    /// Expect: the folder name used is the resolved `sample-real`. Failure: the
+    /// code takes the link's own basename and writes the wrong name.
+    #[cfg(unix)]
+    #[test]
+    fn repair_folder_name_uses_the_resolved_folder_not_the_link_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("sample-real");
+        fs::create_dir_all(&real).unwrap();
+        let link = temp.path().join("sample");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let name = repair_folder_name(&link, FrontmatterRepairKind::ColonScalar).unwrap();
+
+        assert_eq!(name, "sample-real");
+    }
+
+    fn real_folder_with_link(link_name: &str) -> (tempfile::TempDir, Deployment, Deployment) {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("foo");
+        fs::create_dir_all(&real).unwrap();
+        fs::write(
+            real.join("SKILL.md"),
+            "---\nname: bar\ndescription: d\n---\n",
+        )
+        .unwrap();
+        let links = temp.path().join("links");
+        fs::create_dir_all(&links).unwrap();
+        let link = links.join(link_name);
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let real_dep = deployment(&real, LifecycleOwnerKind::Manual);
+        let link_dep = deployment(&link, LifecycleOwnerKind::Manual);
+        (temp, real_dep, link_dep)
+    }
+
+    /// Flow: real folder `foo` is also linked as `bar`, and the user fixes the
+    /// name on `foo`. Expect: refused, naming the `bar` link. Failure: `foo`
+    /// is written and the mismatch moves to the `bar` link.
+    #[cfg(unix)]
+    #[test]
+    fn name_fix_is_refused_when_another_deployment_links_the_folder_under_a_different_name() {
+        let (_temp, real_dep, link_dep) = real_folder_with_link("bar");
+        let mut snapshot = snapshot_with(real_dep.clone());
+        snapshot.skills[0].deployments.push(link_dep.clone());
+
+        let error = refuse_name_fix_with_differently_named_peer(
+            &snapshot,
+            &real_dep,
+            FrontmatterRepairKind::NameMismatch,
+        )
+        .unwrap_err();
+
+        assert!(error.contains(&link_dep.path), "{error}");
+    }
+
+    /// Flow: real folder `foo` is also linked under the same name `foo`.
+    /// Expect: the name fix is allowed. Failure: harmless same-named links
+    /// block the fix.
+    #[cfg(unix)]
+    #[test]
+    fn name_fix_is_allowed_when_another_deployment_links_the_folder_under_the_same_name() {
+        let (_temp, real_dep, link_dep) = real_folder_with_link("foo");
+        let mut snapshot = snapshot_with(real_dep.clone());
+        snapshot.skills[0].deployments.push(link_dep);
+
+        refuse_name_fix_with_differently_named_peer(
+            &snapshot,
+            &real_dep,
+            FrontmatterRepairKind::NameMismatch,
+        )
+        .unwrap();
+    }
+
+    /// Flow: a link whose basename differs from its real folder gets a name
+    /// fix. Expect: refused with a message about the linked folder name.
+    /// Failure: the alias name is written into the shared SKILL.md.
+    #[cfg(unix)]
+    #[test]
+    fn name_fix_through_a_differently_named_symlink_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real/sample");
+        fs::create_dir_all(&real).unwrap();
+        fs::write(
+            real.join("SKILL.md"),
+            "---\nname: Other Name\ndescription: d\n---\n",
+        )
+        .unwrap();
+        let link = temp.path().join("alias");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let dep = deployment(&link, LifecycleOwnerKind::Manual);
+
+        for kind in [
+            FrontmatterRepairKind::NameMismatch,
+            FrontmatterRepairKind::NameFormat,
+        ] {
+            let error = preview_from_deployment(&dep, kind, None).unwrap_err();
+            assert!(
+                error.contains("linked under a different folder name"),
+                "{error}"
+            );
+        }
+    }
+
+    /// Flow: the snapshot is not published yet (app just started). Expect: an
+    /// error the page treats as "no repair". Failure: the call blocks on a
+    /// rebuild or panics on the empty slot.
+    #[test]
+    fn preview_errors_when_no_snapshot_is_published() {
+        let temp = tempfile::tempdir().unwrap();
+        let dep = deployment(temp.path(), LifecycleOwnerKind::Manual);
+        let state = SkillRefreshState::fixture(snapshot_with(dep.clone()));
+        *state.snapshot.write().unwrap() = None;
+
+        let error = preview_from_cached_snapshot(
+            &state,
+            &target_for(&dep),
+            FrontmatterRepairKind::ColonScalar,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("no snapshot"), "{error}");
+    }
+
+    /// Flow: the target id is not in the cached snapshot. Expect: an error, not
+    /// a fallback rescan. Failure: an unknown deployment triggers a rebuild.
+    #[test]
+    fn preview_errors_for_a_deployment_missing_from_the_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let dep = deployment(temp.path(), LifecycleOwnerKind::Manual);
+        let other = deployment(&temp.path().join("other"), LifecycleOwnerKind::Manual);
+        let state = SkillRefreshState::fixture(snapshot_with(dep));
+
+        let error = preview_from_cached_snapshot(
+            &state,
+            &target_for(&other),
+            FrontmatterRepairKind::ColonScalar,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("not in the current snapshot"), "{error}");
+    }
+
     fn record_repair_intent(
         store: &EventStore,
         event_id: &str,
         deployment: &Deployment,
         mode: FrontmatterRepairApplyMode,
     ) -> FrontmatterRepairIntent {
-        let preview = preview_from_deployment(deployment).unwrap();
+        record_repair_intent_for(
+            store,
+            event_id,
+            deployment,
+            mode,
+            FrontmatterRepairKind::ColonScalar,
+            None,
+        )
+    }
+
+    fn record_repair_intent_for(
+        store: &EventStore,
+        event_id: &str,
+        deployment: &Deployment,
+        mode: FrontmatterRepairApplyMode,
+        kind: FrontmatterRepairKind,
+        choice: Option<InvocationConflictChoice>,
+    ) -> FrontmatterRepairIntent {
+        let preview = preview_from_deployment(deployment, kind, choice).unwrap();
         let skill_md = Path::new(&deployment.path).join("SKILL.md");
         let intent = FrontmatterRepairIntent {
             deployment_id: deployment.id.clone(),
@@ -575,6 +949,174 @@ mod tests {
             )
             .unwrap();
         intent
+    }
+
+    const NAME_MISMATCH: &str = "---\r\nname: other\r\ndescription: d\r\n---\r\n# Body\r\n";
+    const NAME_FORMAT: &str = "---\nname: Sample Skill\ndescription: d\n---\n# Body\n";
+    const CONFLICT: &str = "---\nname: sample\ndescription: d\ndisable-model-invocation: true\nuser-invocable: false\n---\n# Body\n";
+
+    fn sample_kinds() -> [(
+        FrontmatterRepairKind,
+        Option<InvocationConflictChoice>,
+        &'static str,
+        &'static str,
+    ); 4] {
+        [
+            (
+                FrontmatterRepairKind::NameMismatch,
+                None,
+                NAME_MISMATCH,
+                "---\r\nname: sample\r\ndescription: d\r\n---\r\n# Body\r\n",
+            ),
+            (
+                FrontmatterRepairKind::NameFormat,
+                None,
+                NAME_FORMAT,
+                "---\nname: sample\ndescription: d\n---\n# Body\n",
+            ),
+            (
+                FrontmatterRepairKind::InvocationConflict,
+                Some(InvocationConflictChoice::UserOnly),
+                CONFLICT,
+                "---\nname: sample\ndescription: d\ndisable-model-invocation: true\n---\n# Body\n",
+            ),
+            (
+                FrontmatterRepairKind::InvocationConflict,
+                Some(InvocationConflictChoice::ModelOnly),
+                CONFLICT,
+                "---\nname: sample\ndescription: d\nuser-invocable: false\n---\n# Body\n",
+            ),
+        ]
+    }
+
+    /// Flow: apply each new repair kind through the bound transaction. Expect:
+    /// the file holds exactly the proposed bytes. Failure: a kind or choice is
+    /// dropped between preview and apply, so the wrong bytes are written.
+    #[test]
+    fn apply_writes_the_exact_proposal_for_each_new_kind() {
+        for (kind, choice, original, expected) in sample_kinds() {
+            let temp = tempfile::tempdir().unwrap();
+            let skill = temp.path().join("sample");
+            fs::create_dir_all(&skill).unwrap();
+            fs::write(skill.join("SKILL.md"), original).unwrap();
+            let deployment = deployment(&skill, LifecycleOwnerKind::Manual);
+            let preview = preview_from_deployment(&deployment, kind, choice).unwrap();
+
+            let (transaction, validated) = begin_bound_frontmatter_repair_transaction(
+                &deployment,
+                &preview.expected_content_fingerprint,
+                &preview.proposal_id,
+                kind,
+                choice,
+            )
+            .unwrap();
+            transaction
+                .replace_text(&skill.join("SKILL.md"), &validated.proposed_content)
+                .unwrap();
+            drop(transaction);
+
+            assert_eq!(
+                fs::read_to_string(skill.join("SKILL.md")).unwrap(),
+                expected,
+                "{kind:?} {choice:?}"
+            );
+        }
+    }
+
+    /// Flow: the user previews one side of the conflict, then applies with the
+    /// other. Expect: refused. Failure: the apply writes content the user never
+    /// previewed.
+    #[test]
+    fn apply_refuses_a_proposal_bound_to_a_different_choice() {
+        let temp = tempfile::tempdir().unwrap();
+        let skill = temp.path().join("sample");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), CONFLICT).unwrap();
+        let deployment = deployment(&skill, LifecycleOwnerKind::Manual);
+        let kind = FrontmatterRepairKind::InvocationConflict;
+        let preview =
+            preview_from_deployment(&deployment, kind, Some(InvocationConflictChoice::UserOnly))
+                .unwrap();
+
+        let error = validate_bound_preview(
+            &deployment,
+            &preview.expected_content_fingerprint,
+            &preview.proposal_id,
+            kind,
+            Some(InvocationConflictChoice::ModelOnly),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("refused"), "{error}");
+    }
+
+    /// Flow: apply is requested for a conflict before the user picked a side.
+    /// Expect: refused. Failure: the unchanged file is written and a "fixed"
+    /// event is journaled.
+    #[test]
+    fn apply_refuses_a_conflict_with_no_choice() {
+        let temp = tempfile::tempdir().unwrap();
+        let skill = temp.path().join("sample");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), CONFLICT).unwrap();
+        let deployment = deployment(&skill, LifecycleOwnerKind::Manual);
+        let kind = FrontmatterRepairKind::InvocationConflict;
+        let preview = preview_from_deployment(&deployment, kind, None).unwrap();
+        assert_eq!(preview.proposed_content, CONFLICT);
+
+        let error = validate_bound_preview(
+            &deployment,
+            &preview.expected_content_fingerprint,
+            &preview.proposal_id,
+            kind,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("Choose an option"), "{error}");
+    }
+
+    /// Flow: each new repair is applied and journaled, then undone. Expect: the
+    /// inverse restores the original bytes exactly (including CRLF). Failure:
+    /// Activity undo leaves the repaired file or normalises line endings.
+    #[test]
+    fn undo_restores_the_original_bytes_for_each_new_kind() {
+        for (kind, choice, original, expected) in sample_kinds() {
+            let temp = tempfile::tempdir().unwrap();
+            let skill = temp.path().join("sample");
+            fs::create_dir_all(&skill).unwrap();
+            fs::write(skill.join("SKILL.md"), original).unwrap();
+            let deployment = deployment(&skill, LifecycleOwnerKind::Manual);
+            let store = EventStore::open(&temp.path().join("app-data")).unwrap();
+            let intent = record_repair_intent_for(
+                &store,
+                "repair",
+                &deployment,
+                FrontmatterRepairApplyMode::ApplyFix,
+                kind,
+                choice,
+            );
+            finish_repair_write(
+                &store,
+                "repair",
+                &skill.join("SKILL.md"),
+                intent.proposed_content.as_bytes(),
+                write_skill_md_bytes,
+            )
+            .unwrap();
+            assert_eq!(
+                fs::read_to_string(skill.join("SKILL.md")).unwrap(),
+                expected
+            );
+
+            store.restore("repair", false).unwrap();
+
+            assert_eq!(
+                fs::read(skill.join("SKILL.md")).unwrap(),
+                original.as_bytes(),
+                "{kind:?} {choice:?}"
+            );
+        }
     }
 
     #[test]
@@ -666,13 +1208,16 @@ mod tests {
         fs::create_dir_all(&first).unwrap();
         fs::write(first.join("SKILL.md"), malformed()).unwrap();
         let deployment = deployment(&first, LifecycleOwnerKind::SkillsSh);
-        let preview = preview_from_deployment(&deployment).unwrap();
+        let preview =
+            preview_from_deployment(&deployment, FrontmatterRepairKind::ColonScalar, None).unwrap();
 
         fs::write(first.join("SKILL.md"), format!("{}drift", malformed())).unwrap();
         assert!(validate_bound_preview(
             &deployment,
             &preview.expected_content_fingerprint,
-            &preview.proposal_id
+            &preview.proposal_id,
+            FrontmatterRepairKind::ColonScalar,
+            None
         )
         .is_err());
         fs::write(first.join("SKILL.md"), malformed()).unwrap();
@@ -685,7 +1230,9 @@ mod tests {
         assert!(validate_bound_preview(
             &repointed,
             &preview.expected_content_fingerprint,
-            &preview.proposal_id
+            &preview.proposal_id,
+            FrontmatterRepairKind::ColonScalar,
+            None
         )
         .is_err());
 
@@ -695,7 +1242,9 @@ mod tests {
         assert!(validate_bound_preview(
             &changed_owner,
             &preview.expected_content_fingerprint,
-            &preview.proposal_id
+            &preview.proposal_id,
+            FrontmatterRepairKind::ColonScalar,
+            None
         )
         .is_err());
     }
@@ -707,12 +1256,15 @@ mod tests {
         fs::create_dir_all(&skill).unwrap();
         fs::write(skill.join("SKILL.md"), malformed()).unwrap();
         let deployment = deployment(&skill, LifecycleOwnerKind::Manual);
-        let preview = preview_from_deployment(&deployment).unwrap();
+        let preview =
+            preview_from_deployment(&deployment, FrontmatterRepairKind::ColonScalar, None).unwrap();
 
         let (transaction, validated) = begin_bound_frontmatter_repair_transaction(
             &deployment,
             &preview.expected_content_fingerprint,
             &preview.proposal_id,
+            FrontmatterRepairKind::ColonScalar,
+            None,
         )
         .unwrap();
         assert!(skill_md_write_transaction_is_held());
@@ -738,7 +1290,8 @@ mod tests {
         fs::write(other.join("SKILL.md"), malformed()).unwrap();
         let deployment = deployment(&selected, LifecycleOwnerKind::SkillsSh);
         let owner_before = deployment.owner_id.clone();
-        let preview = preview_from_deployment(&deployment).unwrap();
+        let preview =
+            preview_from_deployment(&deployment, FrontmatterRepairKind::ColonScalar, None).unwrap();
         write_skill_md_bytes(
             &selected.join("SKILL.md"),
             preview.proposed_content.as_bytes(),
@@ -839,7 +1392,7 @@ mod tests {
         );
         write_fork_registry(&home, &registry).unwrap();
         let rows = store.reconcile_at_startup().unwrap();
-        reconcile_interrupted_frontmatter_repair_with(&store, &home, &rows[0], |_| {
+        reconcile_interrupted_frontmatter_repair_with(&store, &home, &rows[0], None, |_| {
             assert!(skill_md_write_transaction_is_held());
         })
         .unwrap();
@@ -867,7 +1420,7 @@ mod tests {
         );
         write_fork_registry(&home, &ForkRegistry::default()).unwrap();
         let rows = store.reconcile_at_startup().unwrap();
-        assert!(reconcile_interrupted_frontmatter_repair(&store, &home, &rows[0]).is_err());
+        assert!(reconcile_interrupted_frontmatter_repair(&store, &home, &rows[0], None).is_err());
         assert_eq!(
             fs::read_to_string(skill.join("SKILL.md")).unwrap(),
             malformed()
@@ -913,7 +1466,74 @@ mod tests {
         );
         write_fork_registry(&home, &registry).unwrap();
         let rows = store.reconcile_at_startup().unwrap();
-        reconcile_interrupted_frontmatter_repair(&store, &home, &rows[0]).unwrap();
+        reconcile_interrupted_frontmatter_repair(&store, &home, &rows[0], None).unwrap();
+        assert!(super::super::skill_fork_registry::read_fork_registry(&home)
+            .unwrap()
+            .forks
+            .is_empty());
+        assert_eq!(
+            fs::read_to_string(skill.join("SKILL.md")).unwrap(),
+            malformed()
+        );
+    }
+
+    /// Regression for the second fix-round BLOCKER: `lib.rs`'s startup pass
+    /// holds `home`'s `WriteLease` across this whole recovery loop, then
+    /// calls this function - which used to call the unlocked
+    /// `write_fork_registry` from inside `roll_back_incomplete_fork`, taking
+    /// a second, conflicting lease on the same root. Passing the held guard
+    /// through (`Some(&guard)`) is the fix; this test holds the same lease
+    /// `reconcile_event_store_at_startup` would, so it is red without it.
+    #[test]
+    fn rolling_back_a_fork_while_the_startup_lease_is_held_does_not_self_deadlock() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let agents = home.join(".agents");
+        let skill = agents.join("skills/sample");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), malformed()).unwrap();
+        fs::write(
+            agents.join("agents.lock"),
+            "[skills.sample]\nsource = \"owner/repo\"\nresolved_path = \"skills/sample\"\n",
+        )
+        .unwrap();
+        let deployment = deployment(&skill, LifecycleOwnerKind::Dotagents);
+        let store = EventStore::open(&temp.path().join("app-data")).unwrap();
+        record_repair_intent(
+            &store,
+            "crashed",
+            &deployment,
+            FrontmatterRepairApplyMode::ForkAndFix,
+        );
+        let mut registry = ForkRegistry::default();
+        registry.forks.insert(
+            "sample".to_string(),
+            ForkRecord {
+                deployment_id: deployment.id.clone(),
+                skill_dir: skill.clone(),
+                forked_at: "now".to_string(),
+                origin_tool: OriginTool::Dotagents,
+                origin_source: "owner/repo".to_string(),
+                repo: "owner/repo".to_string(),
+                path: "skills/sample".to_string(),
+                declared_ref: None,
+                base_commit: "abc".to_string(),
+            },
+        );
+        write_fork_registry(&home, &registry).unwrap();
+        let rows = store.reconcile_at_startup().unwrap();
+
+        // The exact shape `reconcile_event_store_at_startup` takes: one
+        // lease over `home` held for the whole recovery pass. Must be the
+        // real `WriteLease::default()`, not a test-scoped lease root -
+        // `write_fork_registry`'s own internal lock (what the fix routes
+        // around via `write_fork_registry_locked`) always uses the real
+        // `core_runtime::data_root()/leases`, so only the real lease root
+        // can reproduce the two locks conflicting.
+        let write_lease = super::super::write_lease::WriteLease::default();
+        let guard = write_lease.try_acquire(&home).unwrap();
+        reconcile_interrupted_frontmatter_repair(&store, &home, &rows[0], Some(&guard)).unwrap();
+
         assert!(super::super::skill_fork_registry::read_fork_registry(&home)
             .unwrap()
             .forks

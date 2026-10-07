@@ -1,3 +1,5 @@
+> Historical snapshot. `set_harness_enabled` was removed in #387; Park is now the only way to turn a skill off.
+
 # Harness detection
 
 How the app should know that a harness is installed, which version, how it was installed, and whether it has ever run. Researched on 2026-09-16 against vendor docs and this machine. Folder presence alone is not detection; it is the weakest of four signals and the app today uses only that one (see each harness file).
@@ -88,7 +90,7 @@ Pitfalls: `~/.pi/agent/bin/` holds vendored helper binaries such as `fd`; they a
 
 Both are in the app's agent list for install targets but are not first-class Activity sources.
 
-- Cursor: the editor version is `CFBundleShortVersionString` in `/Applications/Cursor.app/Contents/Info.plist` (3.20.21 here); the separate Cursor CLI installs `agent` into `~/.local/bin` with `agent --version`. `~/.cursor/argv.json` and `~/.cursor/extensions/` prove the editor ran. Treat editor and CLI as two detections.
+- Cursor: the editor version is `CFBundleShortVersionString` in `/Applications/Cursor.app/Contents/Info.plist` (3.20.21 here); the separate Cursor CLI installs into `~/.local/bin` as `cursor-agent` (current) or the older `agent` name (`--version` on whichever resolves; `cursor-agent` is tried first since `agent` is generic enough that another tool could shadow it). `~/.cursor/argv.json` and `~/.cursor/extensions/` prove the editor ran. Treat editor and CLI as two detections.
 - Grok Build: documented install is the `x.ai/cli/install.sh` script only; binary name, version flag, and config folder are Unknown. `/Applications/Grok Bot.app` is the chat client, not Grok Build.
 
 ## What the core must handle

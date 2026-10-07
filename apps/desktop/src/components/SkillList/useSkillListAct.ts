@@ -1,14 +1,16 @@
 // ============================================================================
-// useSkillListAct - Row action dispatch for SkillListTable: Park/Unpark and
-// Fix act on the deployment target `HomeView` uses, every other fix (Fix
-// link, Compare, Convert, Keep, Pull latest) opens the skill's own detail,
+// useSkillListAct - Row action dispatch for SkillListTable: Park/Unpark,
+// Fix, and Pull latest act on the deployment target `HomeView` uses, every
+// other fix (Fix link, Compare, Convert, Keep) opens the skill's own detail,
 // since those flows live there. Fix now covers the repairable spec
 // violations too (invalid YAML frontmatter); any issue `fix_skill` leaves
 // unrepaired falls through to the detail page, which has its own card for
 // a link issue and shows the raw message otherwise.
 // ============================================================================
 
+import { useState } from "react";
 import { useAppStore } from "../../store/appStore";
+import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
 import { fixSkill, openConflictPaths, parkSkill, unparkSkill } from "../../lib/skill-api";
 import { lifecycleTargetForPark } from "../../lib/skill-lifecycle-target";
 import type { InstalledSkill, Toast } from "@skill-studio/lib";
@@ -64,13 +66,49 @@ export async function reportFixOutcome(
   });
 }
 
+/** The row's pending text for each menu verb that does work; other verbs only open the skill. */
+function busyLabelFor(label: string): string | null {
+  switch (label) {
+    case "Park":
+      return "Parking…";
+    case "Unpark":
+      return "Unparking…";
+    case "Fix":
+      return "Fixing…";
+    case "Pull latest":
+      return "Updating…";
+    default:
+      return null;
+  }
+}
+
 export function useSkillListAct(
   onSelectSkill: (name: string, deploymentPath?: string) => void,
   deploymentPathForSkill: ((skill: InstalledSkill) => string | undefined) | undefined,
-): (label: string, skill: InstalledSkill) => Promise<void> {
+) {
   const addToast = useAppStore((state) => state.addToast);
+  const guard = useGuardedSkillUpdate();
+  // Skill name -> what its row is doing now. The row shows a spinner until the action ends.
+  const [busy, setBusy] = useState<ReadonlyMap<string, string>>(new Map());
 
-  return async function handleAct(label: string, skill: InstalledSkill) {
+  function handleAct(label: string, skill: InstalledSkill): Promise<void> {
+    const busyLabel = busyLabelFor(label);
+    if (busyLabel === null) return runAct(label, skill);
+    setBusy((current) => new Map(current).set(skill.name, busyLabel));
+    return runAct(label, skill).finally(() =>
+      setBusy((current) => {
+        const next = new Map(current);
+        next.delete(skill.name);
+        return next;
+      }),
+    );
+  }
+
+  async function runAct(label: string, skill: InstalledSkill) {
+    if (label === "Pull latest") {
+      await guard.pullLatest(skill);
+      return;
+    }
     if (label === "Fix") {
       try {
         await reportFixOutcome(skill, addToast, () =>
@@ -104,5 +142,12 @@ export function useSkillListAct(
         message: err instanceof Error ? err.message : "Unknown error",
       });
     }
+  }
+
+  return {
+    handleAct,
+    pendingLabelFor: (skill: InstalledSkill) =>
+      busy.get(skill.name) ?? (guard.resolvingSkills.has(skill.name) ? "Updating…" : undefined),
+    dialog: guard.dialog,
   };
 }

@@ -10,6 +10,7 @@ import type { HealthIssueKind } from "./skill-health";
 import { agentsCoveredByDeployment, collectDashboardIssues } from "./skill-health";
 import { pluginDeployments } from "./skill-plugin-partition";
 import type { InstalledSkill, SkillInvocationStats, SkillSourceKind } from "./skill-types";
+import { hasUpdate } from "./skill-updates";
 
 /** Which own skills `applySkillListFilter` considers before the other fields narrow it further. */
 export type SkillListFilterScope = "all" | "global" | "parked" | { project: string };
@@ -26,6 +27,8 @@ export interface SkillListFilter {
   invocation?: InstalledSkill["invocation"];
   /** Whether the skill had any invocations in the last 30 days. */
   usage?: "used-30d" | "unused-30d";
+  /** Keeps only skills the background update check found a newer commit for. */
+  update?: "available";
   query: string;
 }
 
@@ -57,14 +60,29 @@ function matchesHarness(skill: InstalledSkill, harness: string): boolean {
   );
 }
 
-/** Whether `skill` matches `query` in its name, description, or source repo, case-insensitive. */
+/** Hyphens, underscores, slashes, dots, and spaces all count as one word break. */
+const WORD_BREAK = /[\s\-_/.]+/;
+
+function words(text: string): string[] {
+  return text.toLowerCase().split(WORD_BREAK).filter(Boolean);
+}
+
+/**
+ * Whether `skill` matches `query`, case-insensitive. The name matches when the query, breaks
+ * removed, is inside the name with its breaks removed ("ihave", "have adhd"), or when every query
+ * word starts a name word in any order ("adhd have"). The description and source match the query
+ * as one phrase, with every word break treated alike. Word-level matching stays on the name only:
+ * across descriptions, short words like "ask" hit inside "task" and flood the list.
+ */
 function matchesQuery(skill: InstalledSkill, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  return (
-    skill.name.toLowerCase().includes(q) ||
-    (skill.description ?? "").toLowerCase().includes(q) ||
-    skill.source.toLowerCase().includes(q)
+  const queryWords = words(query);
+  if (queryWords.length === 0) return true;
+  const nameWords = words(skill.name);
+  if (nameWords.join("").includes(queryWords.join(""))) return true;
+  if (queryWords.every((q) => nameWords.some((n) => n.startsWith(q)))) return true;
+  const phrase = queryWords.join(" ");
+  return [skill.description ?? "", skill.source].some((field) =>
+    words(field).join(" ").includes(phrase),
   );
 }
 
@@ -107,6 +125,7 @@ export function applySkillListFilter(
       return false;
     }
     if (skillsWithIssue && !skillsWithIssue.has(skill.name)) return false;
+    if (filter.update === "available" && !hasUpdate(skill)) return false;
     if (filter.invocation && skill.invocation !== filter.invocation) return false;
     if (usesIn30DaysBySkill) {
       const usedIn30Days = (usesIn30DaysBySkill.get(skill.name) ?? 0) > 0;

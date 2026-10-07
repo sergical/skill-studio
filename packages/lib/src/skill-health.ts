@@ -5,9 +5,10 @@
 // isolation (Vitest, once a runner is wired up).
 // ============================================================================
 
-import { agentIdFromDeploymentLabel } from "./skill-coverage";
-import { ownDeployments } from "./skill-plugin-partition";
+import { agentIdFromDeploymentLabel, isUnresolvedDeployment } from "./skill-coverage";
+import { editableDeployments, ownDeployments } from "./skill-plugin-partition";
 import { homeRelativePath, parentDirectory } from "./skill-path-format";
+import { describeSpecViolations } from "./skill-violation-text";
 import type { Deployment, InstalledSkill } from "./skill-types";
 
 /**
@@ -22,6 +23,7 @@ export type HealthIssueKind =
   | "linked-root"
   | "parked-but-reinstalled"
   | "spec-violation"
+  | "spec-warning"
   | "lock-only";
 
 /** One flagged condition for one skill, with a short human-readable reason. */
@@ -40,6 +42,9 @@ export interface HealthIssue {
   harness?: string;
   harnessLabel?: string;
   root?: string;
+  /** For `"parked-but-reinstalled"` only: the two copies at one origin the fixes act on. */
+  live?: Deployment;
+  parked?: Deployment;
 }
 
 /**
@@ -55,6 +60,7 @@ export const HEALTH_ISSUE_KIND_ORDER: HealthIssueKind[] = [
   "duplicate",
   "broken-symlink",
   "spec-violation",
+  "spec-warning",
   "lock-only",
 ];
 
@@ -70,14 +76,15 @@ export const HEALTH_ISSUE_SEVERITY = {
   "broken-symlink": "error",
   "linked-root": "warning",
   "spec-violation": "error",
+  "spec-warning": "warning",
   "lock-only": "warning",
 } as const satisfies Record<HealthIssueKind, "error" | "warning">;
 
 /** Singular/plural copy for one issue kind, for chip and row labels. */
 export const HEALTH_ISSUE_KIND_LABEL = {
   "parked-but-reinstalled": {
-    singular: "parked skill was reinstalled",
-    plural: "parked skills were reinstalled",
+    singular: "parked copy left behind",
+    plural: "parked copies left behind",
   },
   duplicate: { singular: "skill differs between copies", plural: "skills differ between copies" },
   "broken-symlink": { singular: "broken link", plural: "broken links" },
@@ -88,6 +95,10 @@ export const HEALTH_ISSUE_KIND_LABEL = {
   "spec-violation": {
     singular: "skill that fails to load",
     plural: "skills that fail to load",
+  },
+  "spec-warning": {
+    singular: "skill that loads differently per agent",
+    plural: "skills that load differently per agent",
   },
   "lock-only": { singular: "skill only in the lock file", plural: "skills only in the lock file" },
 } as const satisfies Record<HealthIssueKind, { singular: string; plural: string }>;
@@ -197,41 +208,101 @@ export function findBrokenSymlinks(skills: InstalledSkill[]): HealthIssue[] {
   return issues;
 }
 
-/**
- * Prefixes (from `frontmatter::validate_skill`, Rust side) of a
- * `spec_violations` entry that stops the skill from loading at all: a
- * missing or invalid `name`, a missing `description`, or a name/directory
- * mismatch. Every other violation (description/compatibility length, the
- * 500-line recommendation, conflicting invocation keys) is a spec note the
- * skill still loads with, shown on the skill page rather than as an issue.
- */
-const BLOCKING_SPEC_VIOLATION_PREFIXES = [
-  "missing required frontmatter field: name",
-  "missing required frontmatter field: description",
-  'name "', // covers both the invalid-name-format and name/dir-mismatch messages
-  "invalid YAML frontmatter", // repairable by ops::fix_skill - must route to Fix, not stay a warning
-] as const;
+export type SpecViolationSeverity = "error" | "warning" | "note";
 
-/** True when `violation` is one of `BLOCKING_SPEC_VIOLATION_PREFIXES` - see there for why. */
+/**
+ * How badly a `spec_violations` entry (from `frontmatter::validate_skill`, Rust side) hurts the
+ * skill, from what Claude Code, Codex, OpenCode, and pi actually do (docs/agent-skill-conventions.md).
+ * An error stops at least one agent from loading the skill: a missing description, a missing name
+ * (OpenCode skips it), or YAML that pi cannot parse. A warning loads everywhere but under a
+ * different name or with conflicting settings. A note loads everywhere unchanged. An
+ * unrecognised string is a warning, so a new Rust message is never silently ignored.
+ */
+export function specViolationSeverity(violation: string): SpecViolationSeverity {
+  if (
+    violation.startsWith("missing required frontmatter field: name") ||
+    violation.startsWith("missing required frontmatter field: description") ||
+    violation.startsWith("invalid YAML frontmatter")
+  ) {
+    return "error";
+  }
+  if (
+    (violation.startsWith('name "') &&
+      violation.includes("must be 1-64 lowercase a-z0-9 characters")) ||
+    violation === "description exceeds 1024 characters" ||
+    violation === "compatibility exceeds 500 characters" ||
+    violation === "SKILL.md exceeds recommended 500 lines"
+  ) {
+    return "note";
+  }
+  return "warning";
+}
+
+/** True when an agent skips the skill because of `violation` - see `specViolationSeverity`. */
 export function isBlockingSpecViolation(violation: string): boolean {
-  return BLOCKING_SPEC_VIOLATION_PREFIXES.some((prefix) => violation.startsWith(prefix));
+  return specViolationSeverity(violation) === "error";
+}
+
+/** True when `violation` makes agents disagree about the skill without stopping any from loading it. */
+export function isSpecWarning(violation: string): boolean {
+  return specViolationSeverity(violation) === "warning";
 }
 
 /**
- * Skills whose SKILL.md violates an agentskills.io spec rule that stops it
- * from loading - see `isBlockingSpecViolation`. A skill with only
- * non-blocking violations (e.g. "description exceeds 1024 characters")
- * isn't flagged here; those stay as spec notes on the skill page.
+ * The copy of `skill` to open so its spec violations are visible: the first readable copy with a
+ * blocking violation, else with a warning, else the first readable copy with any violation, else `undefined`. A skill
+ * with any own copy (readable or not) only considers its own copies (editable first), so a plugin copy's
+ * problems never pull the page onto a read-only file; a plugin-only skill (or the plugin view,
+ * which narrows to plugin copies) considers its plugin copies. A broken symlink has no readable
+ * SKILL.md to show, so it never wins on violations alone. With `severity: "warning"` (a spec-warning
+ * issue), a copy with a warning comes first, so the page opens the copy the issue is about.
+ */
+export function deploymentWithSpecViolations(
+  skill: InstalledSkill,
+  severity?: "warning",
+): Deployment | undefined {
+  const own = [...editableDeployments(skill), ...ownDeployments(skill)];
+  const pool = ownDeployments(skill).length > 0 ? own : skill.deployments;
+  const readable = pool.filter((d) => !isUnresolvedDeployment(d));
+  if (severity === "warning") {
+    return (
+      readable.find((d) => d.spec_violations.some(isSpecWarning)) ??
+      readable.find((d) => d.spec_violations.some(isBlockingSpecViolation)) ??
+      readable.find((d) => d.spec_violations.length > 0)
+    );
+  }
+  return (
+    readable.find((d) => d.spec_violations.some(isBlockingSpecViolation)) ??
+    readable.find((d) => d.spec_violations.some(isSpecWarning)) ??
+    readable.find((d) => d.spec_violations.length > 0)
+  );
+}
+
+/**
+ * Skills whose SKILL.md violates a spec rule that stops an agent from loading it - see
+ * `specViolationSeverity`. Skills with only warnings or notes aren't flagged here.
  */
 export function findSpecViolations(skills: InstalledSkill[]): HealthIssue[] {
+  return findSpecIssues(skills, "spec-violation", isBlockingSpecViolation);
+}
+
+/**
+ * Skills with a warning-severity violation: agents load them, but under different names or with
+ * conflicting settings.
+ */
+export function findSpecWarnings(skills: InstalledSkill[]): HealthIssue[] {
+  return findSpecIssues(skills, "spec-warning", isSpecWarning);
+}
+
+function findSpecIssues(
+  skills: InstalledSkill[],
+  kind: "spec-violation" | "spec-warning",
+  matches: (violation: string) => boolean,
+): HealthIssue[] {
   return skills
-    .map((skill) => ({ skill, blocking: skill.spec_violations.filter(isBlockingSpecViolation) }))
-    .filter(({ blocking }) => blocking.length > 0)
-    .map(({ skill, blocking }) => ({
-      kind: "spec-violation" as const,
-      skill,
-      detail: blocking.join("; "),
-    }));
+    .map((skill) => ({ skill, matched: skill.spec_violations.filter(matches) }))
+    .filter(({ matched }) => matched.length > 0)
+    .map(({ skill, matched }) => ({ kind, skill, detail: describeSpecViolations(matched) }));
 }
 
 /**
@@ -329,26 +400,66 @@ export function coverageGaps(skills: InstalledSkill[]): CoverageGap[] {
   return gaps;
 }
 
+/** A live copy and a parked copy of one skill at the same origin. */
+export interface LeftBehindPair {
+  live: Deployment;
+  parked: Deployment;
+}
+
+/** `kind|scope|project` - where a copy lives, in the shape `ParkedOrigin` records. */
+function originKey(kind: string | null, scope: string, projectPath: string | null | undefined) {
+  return `${kind}|${scope}|${projectPath ?? ""}`;
+}
+
+/** A real, enabled folder (not a link, plugin or parked copy), keyed by where it lives. */
+function liveCopyKey(deployment: Deployment): string | null {
+  if (deployment.scope !== "global" && deployment.scope !== "project") return null;
+  if (deployment.plugin || deployment.is_symlink || deployment.symlink_is_broken) return null;
+  if (deployment.shared_via_whole_dir_link || deployment.disabled) return null;
+  const id = agentIdFromDeploymentLabel(deployment.agent);
+  const kind = id === "shared" ? "universal" : id;
+  return originKey(kind, deployment.scope, deployment.project_path);
+}
+
 /**
- * Parked skills whose shared-folder deployment came back - see
- * `skill_park.rs`'s "parked-but-reinstalled" note: an install or sync run
- * while the skill was parked can recreate `~/.agents/skills/<name>` even
- * though the parked copy is still sitting in `~/.agents/skills-parked`.
- * Unparking reconciles the two; this issue just flags that it's needed.
+ * Parked copies whose origin has a live copy again - an install or sync, or a
+ * hand `mv`, put a folder back where the parked one came from. Each pair needs
+ * one decision: keep the live copy or keep the parked one.
  */
+export function findLeftBehindPairs(skill: Pick<InstalledSkill, "deployments">): LeftBehindPair[] {
+  const live = new Map<string, Deployment>();
+  for (const deployment of skill.deployments) {
+    const key = liveCopyKey(deployment);
+    if (key && !live.has(key)) live.set(key, deployment);
+  }
+  return skill.deployments.flatMap((parked) => {
+    const origin = parked.scope === "parked" ? parked.parked_origin : null;
+    if (!origin) return [];
+    const match = live.get(originKey(origin.kind, origin.scope, origin.project_path));
+    return match ? [{ live: match, parked }] : [];
+  });
+}
+
+/** One "parked-but-reinstalled" issue per skill that has a left-behind pair; the fixes act on its first pair. */
 export function findParkedButReinstalled(skills: InstalledSkill[]): HealthIssue[] {
-  return skills
-    .filter((skill) => skill.parked && skill.deployments.some((d) => d.scope !== "parked"))
-    .map((skill) => ({
-      kind: "parked-but-reinstalled" as const,
-      skill,
-      detail: "Parked, but an install or sync recreated the Universal copy",
-    }));
+  return skills.flatMap((skill) => {
+    const [pair] = findLeftBehindPairs(skill);
+    return pair
+      ? [
+          {
+            kind: "parked-but-reinstalled" as const,
+            skill,
+            detail: "A live copy and a parked copy of the same folder both exist",
+            ...pair,
+          },
+        ]
+      : [];
+  });
 }
 
 /**
  * Every dashboard-worthy issue across `skills`: parked-but-reinstalled,
- * duplicate, broken-symlink, spec-violation, and lock-only. Excludes
+ * duplicate, broken-symlink, spec-violation, spec-warning, and lock-only. Excludes
  * update-available (see `skill-updates.ts`) and coverage gaps (see
  * `coverageGaps` above) - neither is a problem, just something to act on or
  * a coverage-view column. Sorted by `HEALTH_ISSUE_KIND_ORDER` then skill
@@ -361,6 +472,7 @@ export function collectDashboardIssues(skills: InstalledSkill[]): HealthIssue[] 
     ...findBrokenSymlinks(skills),
     ...findLinkedRootIssues(skills),
     ...findSpecViolations(skills),
+    ...findSpecWarnings(skills),
     ...findLockOnlySkills(skills),
   ];
 

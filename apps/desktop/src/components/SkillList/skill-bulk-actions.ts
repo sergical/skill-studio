@@ -1,0 +1,455 @@
+// ============================================================================
+// Skill Studio - Bulk actions for the skill list's selection bar
+// Which selected skills each bulk action can run on (and why the rest are
+// skipped), a sequential runner, and the one toast a finished action reports.
+// Each action reuses the single-skill availability rules, so the bar never
+// disagrees with the skill page.
+// ============================================================================
+
+import type {
+  ForkRecord,
+  InstalledSkill,
+  InvocationPolicy,
+  LifecycleTarget,
+  PullResult,
+  Toast,
+  UpdateAllOutcome,
+} from "@skill-studio/lib";
+import {
+  conflictedSkillsNote,
+  ForkPullError,
+  forkThenPull,
+  excludeForkedOwner,
+  forkTargetForSkill,
+  skillMutableLifecycleScopes,
+  skillParkVerb,
+  skillRemovalAvailability,
+  skillUpdateAvailability,
+  isPluginOwnerId,
+  pluginTargetKey,
+  skillHasManagedUpdate,
+  skillPluginUpdateTargets,
+  skillUpdateOwnerTargets,
+  uniquePluginTargets,
+  updatePluginTargets,
+} from "../../lib/skill-lifecycle-target";
+import type { PluginInstallUpdater } from "../../lib/skill-lifecycle-target";
+import {
+  INVOCATION_POLICY_OPTIONS,
+  invocationFilesForSkill,
+} from "../SkillDetail/skill-location-status";
+
+export type BulkAction =
+  | { kind: "park" }
+  | { kind: "unpark" }
+  | { kind: "invocation"; policy: InvocationPolicy }
+  | { kind: "update" }
+  | { kind: "remove" };
+
+interface BulkSkipped {
+  skill: InstalledSkill;
+  /** A phrase that reads after a count: "2 already parked". */
+  reason: string;
+}
+
+export interface BulkPlan {
+  applicable: InstalledSkill[];
+  skipped: BulkSkipped[];
+}
+
+export interface BulkFailure {
+  skill: InstalledSkill;
+  error: string;
+}
+
+export interface BulkRunResult {
+  succeeded: InstalledSkill[];
+  failed: BulkFailure[];
+  /** Names of forked skills whose pull left conflict markers; set only for an update. */
+  conflicted?: string[];
+}
+
+/** Why `skill` cannot take `action`, or `null` when it can. */
+function skipReason(skill: InstalledSkill, action: BulkAction): string | null {
+  switch (action.kind) {
+    case "park":
+    case "unpark": {
+      const verb = skillParkVerb(skill);
+      if (verb === null) return "no Global Universal folder";
+      if (action.kind === "park") return verb === "Park" ? null : "already parked";
+      return verb === "Unpark" ? null : "not parked";
+    }
+    case "invocation": {
+      const files = invocationFilesForSkill(skill);
+      if (files.some((file) => file.editable)) return null;
+      return files.length === 0 ? "no SKILL.md to edit" : "no editable file";
+    }
+    case "update": {
+      const hasPlugins = skillPluginUpdateTargets(skill).length > 0;
+      if (!hasPlugins && skillMutableLifecycleScopes(skill).length === 0) return "no managed copy";
+      // An outdated copy that cannot be resolved is skipped, and its plugins wait with it.
+      if (managedUpdateBlocked(skill)) return "needs a specific location";
+      if (hasPlugins || skillUpdateOwnerTargets(skill).length > 0) return null;
+      return "no update available";
+    }
+    case "remove": {
+      const scopes = skillMutableLifecycleScopes(skill);
+      if (scopes.length === 0) return "no removable copy";
+      // Every location must be removable, or "removed" would leave a copy behind.
+      return bulkRemovalTargets(skill).length === scopes.length ? null : "needs a specific copy";
+    }
+  }
+}
+
+/** Splits `skills` into the ones `action` can run on and the ones it skips, each with a reason. */
+export function planBulkAction(skills: InstalledSkill[], action: BulkAction): BulkPlan {
+  const plan: BulkPlan = { applicable: [], skipped: [] };
+  for (const skill of skills) {
+    const reason = skipReason(skill, action);
+    if (reason === null) plan.applicable.push(skill);
+    else plan.skipped.push({ skill, reason });
+  }
+  return plan;
+}
+
+/** True when `skill` has an outdated managed copy that `bulkUpdateTargets` cannot resolve to one target. */
+function managedUpdateBlocked(skill: InstalledSkill): boolean {
+  return skillUpdateOwnerTargets(skill).length > 0 && bulkUpdateTargets(skill).length === 0;
+}
+
+/**
+ * The managed-copy update targets of a skill `planBulkAction` accepted for "update": one per
+ * location with an update. Plugin installs are left out so they do not make a location look
+ * ambiguous; the ambiguity check covers managed owners only.
+ */
+export function bulkUpdateTargets(skill: InstalledSkill): LifecycleTarget[] {
+  const managedOnly = {
+    ...skill,
+    update_owner_ids: skill.update_owner_ids.filter((ownerId) => !isPluginOwnerId(ownerId)),
+    update_owners: skill.update_owners?.filter((update) => !isPluginOwnerId(update.owner_id)),
+  };
+  return skillMutableLifecycleScopes(skill).flatMap((selection) => {
+    const availability = skillUpdateAvailability(managedOnly, selection);
+    return availability.available && "target" in availability ? [availability.target] : [];
+  });
+}
+
+/** The removal targets of a skill `planBulkAction` accepted for "remove": one per location. */
+export function bulkRemovalTargets(skill: InstalledSkill): LifecycleTarget[] {
+  return skillMutableLifecycleScopes(skill).flatMap((selection) => {
+    const availability = skillRemovalAvailability(skill, selection);
+    return availability.available ? [availability.preview.target] : [];
+  });
+}
+
+/**
+ * Runs `run` for each skill one after another - every core op takes an
+ * exclusive lease, so parallel calls would only queue or collide. A rejected
+ * call is recorded and the rest still run.
+ */
+export async function runBulkSequentially(
+  skills: InstalledSkill[],
+  run: (skill: InstalledSkill) => Promise<void>,
+  onProgress?: (current: number, total: number) => void,
+): Promise<BulkRunResult> {
+  const result: BulkRunResult = { succeeded: [], failed: [] };
+  for (const [index, skill] of skills.entries()) {
+    onProgress?.(index + 1, skills.length);
+    try {
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each core op takes an exclusive lease, so the calls must not overlap
+      await run(skill);
+      result.succeeded.push(skill);
+    } catch (error) {
+      result.failed.push({
+        skill,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
+  return result;
+}
+
+/**
+ * Turns an batched update outcome into a run result: an item without an
+ * outcome failed, and a skill with several location items fails if any one did.
+ */
+export function bulkUpdateResult(
+  skills: InstalledSkill[],
+  outcome: { items: { skill: string; outcome: unknown }[]; errors: Record<string, string> },
+): BulkRunResult {
+  const result: BulkRunResult = { succeeded: [], failed: [] };
+  for (const skill of skills) {
+    const items = outcome.items.filter((item) => item.skill === skill.name);
+    const error = outcome.errors[skill.name];
+    if (error !== undefined || items.some((item) => item.outcome === null)) {
+      result.failed.push({ skill, error: error ?? "Update failed without an error message." });
+    } else if (items.length > 0) {
+      result.succeeded.push(skill);
+    } else {
+      result.failed.push({ skill, error: "The update returned no result for this skill." });
+    }
+  }
+  return result;
+}
+
+/**
+ * The list's bulk Update: each skill in `forkNames` is forked and pulled
+ * (keeping the user's edits), the rest go through one batched update call.
+ * Plugin installs update last, once per plugin id, scope, and project, for each
+ * skill whose own copies updated. One result covers all of it, with the skills
+ * whose pull left conflict markers.
+ */
+export async function runBulkUpdate(
+  skills: InstalledSkill[],
+  forkNames: ReadonlySet<string>,
+  deps: {
+    fork: (target: LifecycleTarget) => Promise<ForkRecord>;
+    pullFork: (target: LifecycleTarget) => Promise<PullResult>;
+    updateAll: (
+      targets: LifecycleTarget[],
+      onProgress: (done: number, total: number) => void,
+    ) => Promise<UpdateAllOutcome>;
+    updatePluginInstall: PluginInstallUpdater;
+  },
+  onProgress: (done: number, total: number) => void,
+): Promise<BulkRunResult> {
+  // An edited skill is forked only when a copy of it is outdated; one whose only update is a
+  // plugin install takes the normal path.
+  const isForked = (skill: InstalledSkill) =>
+    forkNames.has(skill.name) && skillHasManagedUpdate(skill);
+  const forked = skills.filter(isForked);
+  const allRest = skills.filter((skill) => !isForked(skill));
+  const result: BulkRunResult = { succeeded: [], failed: [] };
+  const conflicted: string[] = [];
+  // A skill whose outdated managed copy is ambiguous is not updated at all, plugins included.
+  const rest = allRest.filter((skill) => !managedUpdateBlocked(skill));
+  for (const skill of allRest.filter((skill) => managedUpdateBlocked(skill))) {
+    result.failed.push({
+      skill,
+      error: `${skill.name} is installed from more than one source here. Update each copy in Locations.`,
+    });
+  }
+  // A forked skill's other owners still get the normal update.
+  const forkedOthers = new Map(
+    forked.map((skill) => [skill, excludeForkedOwner(skill, bulkUpdateTargets(skill))]),
+  );
+  const forkFailed = new Set<InstalledSkill>();
+  const forkPullFailed = new Set<InstalledSkill>();
+  // Plugins of a skill whose copy or fork failed are not run, nor are plugins it shares with
+  // another skill, so they are not counted. A pull that failed after a good fork does not
+  // hold its plugins back: the edits are already safe in the fork.
+  const copyFailed = (skill: InstalledSkill) =>
+    !forkPullFailed.has(skill) && result.failed.some((failure) => failure.skill === skill);
+  const pluginSkillsNow = () =>
+    [...rest, ...forked].filter(
+      (skill) => skillPluginUpdateTargets(skill).length > 0 && !copyFailed(skill),
+    );
+  const blockedPluginKeys = () =>
+    new Set(
+      [...rest, ...forked].flatMap((skill) =>
+        copyFailed(skill) ? skillPluginUpdateTargets(skill).map(pluginTargetKey) : [],
+      ),
+    );
+  const pluginTargetsNow = () => {
+    const blocked = blockedPluginKeys();
+    return uniquePluginTargets(pluginSkillsNow().flatMap(skillPluginUpdateTargets)).filter(
+      (target) => !blocked.has(pluginTargetKey(target)),
+    );
+  };
+  let total =
+    forked.length +
+    rest.flatMap(bulkUpdateTargets).length +
+    [...forkedOthers.values()].reduce((sum, targets) => sum + targets.length, 0) +
+    pluginTargetsNow().length;
+  for (const [index, skill] of forked.entries()) {
+    try {
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each fork and pull takes an exclusive lease, so the calls must not overlap
+      const pull = await forkThenPull(forkTargetForSkill(skill), deps.fork, deps.pullFork);
+      if (pull.conflicts.length > 0) conflicted.push(skill.name);
+      result.succeeded.push(skill);
+    } catch (error) {
+      forkFailed.add(skill);
+      if (error instanceof ForkPullError) forkPullFailed.add(skill);
+      result.failed.push({
+        skill,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+    onProgress(index + 1, total);
+  }
+  // A skill whose fork failed keeps all its owners untouched, so its other copies are not updated either.
+  const forkedToBatch = forked.filter(
+    (skill) => !forkFailed.has(skill) && (forkedOthers.get(skill) ?? []).length > 0,
+  );
+  const batched = [
+    ...rest.filter((skill) => bulkUpdateTargets(skill).length > 0),
+    ...forkedToBatch,
+  ];
+  const batchTargets = [
+    ...rest.flatMap(bulkUpdateTargets),
+    ...forkedToBatch.flatMap((skill) => forkedOthers.get(skill) ?? []),
+  ];
+  // A failed fork's other copies leave the total, so progress still reaches it.
+  const retotal = (done: number) => {
+    const plannedTotal = total;
+    total = forked.length + batchTargets.length + pluginTargetsNow().length;
+    if (total !== plannedTotal) onProgress(done, total);
+  };
+  retotal(forked.length);
+  if (batched.length > 0) {
+    const outcome = await deps.updateAll(batchTargets, (done) =>
+      onProgress(forked.length + done, total),
+    );
+    const batchResult = bulkUpdateResult(batched, outcome);
+    for (const skill of batchResult.succeeded) {
+      if (!forkedOthers.has(skill)) result.succeeded.push(skill);
+    }
+    for (const failure of batchResult.failed) {
+      if (!forkedOthers.has(failure.skill)) {
+        result.failed.push(failure);
+      } else {
+        // The fork and pull went through; only another copy failed. Count it as failed, once, with that reason.
+        result.succeeded = result.succeeded.filter((skill) => skill !== failure.skill);
+        result.failed.push({
+          skill: failure.skill,
+          error: `Forked and updated, but another copy failed: ${failure.error}`,
+        });
+      }
+    }
+  }
+  retotal(forked.length + batchTargets.length);
+  const pluginSkills = pluginSkillsNow();
+  if (pluginSkills.length > 0) {
+    let pluginsDone = 0;
+    const blocked = blockedPluginKeys();
+    const outcome = await updatePluginTargets(pluginTargetsNow(), (target) =>
+      deps.updatePluginInstall(target).finally(() => {
+        pluginsDone += 1;
+        onProgress(forked.length + batchTargets.length + pluginsDone, total);
+      }),
+    );
+    const failureByKey = new Map(
+      outcome.failures.map((failure) => [pluginTargetKey(failure.target), failure.message]),
+    );
+    const succeeded = new Set(result.succeeded);
+    for (const skill of pluginSkills) {
+      const targets = skillPluginUpdateTargets(skill);
+      const sharedTarget = targets.find((target) => blocked.has(pluginTargetKey(target)));
+      const error =
+        targets
+          .map((target) => failureByKey.get(pluginTargetKey(target)))
+          .find((message) => message !== undefined) ??
+        (sharedTarget
+          ? `Shares plugin ${sharedTarget.plugin_id} with a skill that failed.`
+          : undefined);
+      if (error === undefined) {
+        // A skill whose fork pull failed is already in `failed`.
+        if (!forkFailed.has(skill)) succeeded.add(skill);
+      } else if (!forkFailed.has(skill)) {
+        succeeded.delete(skill);
+        result.failed.push({ skill, error });
+      }
+    }
+    result.succeeded = [...succeeded];
+  }
+  if (conflicted.length > 0) result.conflicted = conflicted;
+  return result;
+}
+
+function policyLabel(policy: InvocationPolicy): string {
+  return (
+    INVOCATION_POLICY_OPTIONS.find((option) => option.value === policy)?.label ?? policy
+  ).toLowerCase();
+}
+
+function skillCount(count: number): string {
+  return `${count} skill${count === 1 ? "" : "s"}`;
+}
+
+/** "Parking 5 skills…" for a batched action; "Removing 2 of 5…" while removal runs one by one. */
+export function bulkProgressLabel(action: BulkAction, current: number, total: number): string {
+  const verb = {
+    park: "Parking",
+    unpark: "Unparking",
+    invocation: "Setting invocation on",
+    update: "Updating",
+    remove: "Removing",
+  }[action.kind];
+  return action.kind === "remove"
+    ? `${verb} ${current} of ${total}…`
+    : `${verb} ${skillCount(total)}…`;
+}
+
+/** "Updating 12 of 80…" as `update_all_skills` reports each finished location. */
+export function bulkUpdateProgressLabel(done: number, total: number): string {
+  return `Updating ${done} of ${total}…`;
+}
+
+/** "2 already parked, 1 no editable file" - the skipped skills grouped by reason. */
+export function describeSkipped(skipped: BulkSkipped[]): string {
+  const counts = new Map<string, number>();
+  for (const { reason } of skipped) counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  return [...counts].map(([reason, count]) => `${count} ${reason}`).join(", ");
+}
+
+/** The tooltip for a bar button whose action applies to none of the selection, or `null` when it can run. */
+export function bulkDisabledReason(action: BulkAction, plan: BulkPlan): string | null {
+  if (plan.applicable.length > 0) return null;
+  const verb = {
+    park: "park",
+    unpark: "unpark",
+    invocation: "change invocation on",
+    update: "update",
+    remove: "remove",
+  }[action.kind];
+  return plan.skipped.length === 0
+    ? `Select skills to ${verb}`
+    : `Nothing to ${verb}: ${describeSkipped(plan.skipped)}`;
+}
+
+function pastTitle(action: BulkAction): string {
+  switch (action.kind) {
+    case "park":
+      return "Parked";
+    case "unpark":
+      return "Unparked";
+    case "invocation":
+      return `Set ${policyLabel(action.policy)} on`;
+    case "update":
+      return "Updated";
+    case "remove":
+      return "Removed";
+  }
+}
+
+/**
+ * The one toast for a finished bulk action: how many skills changed, how many
+ * were skipped and why, and which ones failed with their errors.
+ */
+export function bulkActionToast(
+  action: BulkAction,
+  plan: BulkPlan,
+  result: BulkRunResult,
+): Omit<Toast, "id"> {
+  const total = plan.applicable.length + plan.skipped.length;
+  const changed = result.succeeded.length;
+  const parts: string[] = [];
+  if (plan.skipped.length > 0) parts.push(describeSkipped(plan.skipped));
+  if (result.failed.length > 0) parts.push(`${result.failed.length} failed`);
+  const subject = changed === total ? skillCount(total) : `${changed} of ${skillCount(total)}`;
+  const title = [`${pastTitle(action)} ${subject}`, ...parts].join(" · ");
+  const conflictNote = conflictedSkillsNote(result.conflicted ?? []);
+  if (result.failed.length === 0) {
+    return conflictNote
+      ? { type: "warning", title, message: conflictNote }
+      : { type: "success", title };
+  }
+  const failureMessage = result.failed
+    .map(({ skill, error }) => `${skill.name}: ${error}`)
+    .join("; ");
+  return {
+    type: changed === 0 ? "error" : "warning",
+    title,
+    message: conflictNote ? `${failureMessage}. ${conflictNote}` : failureMessage,
+  };
+}

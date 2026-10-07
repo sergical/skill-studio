@@ -7,7 +7,7 @@ import { formatBytes, formatTokens, pluginSourceLabel } from "@skill-studio/lib"
 import type { Deployment, InstalledSkill, LifecycleOwnerKind } from "@skill-studio/lib";
 
 /** Text rendered by the installed skill source ledger. */
-export interface InstalledSkillSourceLedgerModel {
+interface InstalledSkillSourceLedgerModel {
   source: string;
   lifecycleOwner: string;
   lifecycleManagement: "Managed" | "Read-only" | "Mixed" | "Unknown";
@@ -37,7 +37,7 @@ function displayLedgerDate(value: string | null | undefined): string | undefined
   return date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
-function sourceLedgerLabel(skill: InstalledSkill): string {
+export function sourceLedgerLabel(skill: InstalledSkill): string {
   if (skill.source_kind === "plugin") {
     return pluginSourceLabel(skill) ?? "Agent plugin";
   }

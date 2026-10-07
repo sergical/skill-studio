@@ -60,7 +60,7 @@ impl AgentId {
         } else {
             Err(CoreError::new(
                 ErrorCode::InvalidRequest,
-                format!("`{raw}` is not a kebab-case harness id"),
+                format!("`{raw}` is not a kebab-case agent id"),
             ))
         }
     }
@@ -75,7 +75,7 @@ impl AgentId {
     /// no-separator variants of every first-class harness's wire name,
     /// case-insensitively - `opencode`, `open_code`, and `Open-Code` all
     /// resolve to the same [`Self::OPEN_CODE`]. Every caller that turns a
-    /// harness spelling into an `AgentId` for [`crate::dto::SetHarnessEnabledRequest`]
+    /// harness spelling into an `AgentId` for a request
     /// must go through this, not [`Self::parse`], so `open-code` and
     /// `opencode` (the CLI binary name) never diverge again.
     pub fn parse_harness(raw: &str) -> Result<Self, CoreError> {
@@ -266,7 +266,7 @@ impl DeploymentId {
         } else {
             Err(CoreError::new(
                 ErrorCode::InvalidRequest,
-                format!("`{raw}` is not a deployment id"),
+                format!("`{raw}` is not a copy id"),
             ))
         }
     }
@@ -274,6 +274,16 @@ impl DeploymentId {
     /// Returns the wire string.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// The skill folder name the id was derived for, so a write can scan
+    /// that one skill instead of everything. `None` for an id whose layout
+    /// this build does not recognise; callers then fall back to a full scan.
+    pub fn skill_name(&self) -> Option<SkillName> {
+        // `{scope}/{slot}/{destination}/{name}/{project}/{entry}`; the name
+        // is never percent-encoded because a folder name holds no `/`.
+        let name = self.0.strip_prefix(Self::PREFIX)?.split('/').nth(3)?;
+        (!name.is_empty()).then(|| SkillName(name.to_string()))
     }
 
     /// Builds an id from a string `ops` already assembled with
@@ -358,10 +368,11 @@ pub enum DeploymentMutability {
 }
 
 /// Universal (`.agents/skills`) or per-harness destination.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillDestination {
     /// The shared root.
+    #[default]
     Universal,
     /// A harness's own root.
     PerHarness,

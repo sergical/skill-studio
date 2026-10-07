@@ -15,22 +15,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use skill_studio_core::doctor::check_link_resolves_in_root;
-use skill_studio_core::dto::{
-    Diagnosis, HarnessesRequest, Inventory, ScanRequest, SetHarnessEnabledRequest,
-};
+use skill_studio_core::dto::{Diagnosis, HarnessesRequest, Inventory, ScanRequest};
 use skill_studio_core::harness::{HarnessCatalog, HarnessState};
-use skill_studio_core::identity::{AgentId, ProjectRef, RootKind, RootRef, RootScope, SkillName};
+use skill_studio_core::identity::{AgentId, ProjectRef, RootKind, RootRef, RootScope};
 use skill_studio_core::lock_file::{read_lock_file, InstalledSkillEntry};
 use skill_studio_core::ops;
 use skill_studio_core::ports::{Ports, Runtime, ScopeFs};
 use skill_studio_core::scope::{ProjectSelection, RuntimeScope};
-use skill_studio_core::testing::golden::{ctx, unique_temp_dir};
+use skill_studio_core::testing::golden::ctx;
 use skill_studio_core::testing::{
     FakeClock, FakeIds, FakeLease, FakeToolLookup, FixtureBuilder, NoHistory, RecordingSink,
 };
 use skill_studio_core::testing_shapes as shapes;
-
-use skill_studio_host::{FileLease, RealFs, SqliteHistoryOpener};
 
 /// Absolute home every in-memory fixture is rooted at. `FixtureFs` has no
 /// directory of its own, and [`RuntimeScope`] needs an absolute home.
@@ -62,6 +58,8 @@ fn in_memory_runtime(
         discovery: None,
         tools: Some(Arc::new(tools)),
         catalog: Arc::new(HarnessCatalog::builtin()),
+
+        telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
     };
     let mut scope = RuntimeScope::fixture(Path::new(HOME));
     scope.read_timeout_ms = 10_000;
@@ -351,37 +349,79 @@ fn scan_never_descends_into_node_modules_inside_a_plugin_cache_or_names_the_path
     );
 }
 
-/// A cached plugin's enabled state is keyed `<plugin>@<marketplace>` with
-/// no version in the key (`docs/research/harness-primitives.md`), and an
-/// orphaned version is pruned about 14 days after it stops being used
-/// (`docs/action-map/harnesses/plugins.md`). Two version folders on disk
-/// are therefore one live plugin, so one skill row with one deployment -
-/// not the same skill counted once per stale copy.
-#[test]
-#[ignore = "follow-up #273 section 1: enumerate_plugin_skills reports every cached version \
-            folder, and no doc names which one is live (plugins.md leaves the Codex cache \
-            layout open and gives Claude only the ~14-day orphan prune), so the dedupe \
-            needs a liveness source rather than a version-string compare"]
-fn scan_picks_one_version_per_cached_plugin_or_names_the_duplicate() {
-    let inventory = scan_shape(shapes::with_plugin_cache_nesting(FixtureBuilder::new()));
-
+/// The Claude Code plugin rows `inventory` reports for
+/// [`shapes::PLUGIN_SKILL_NAME`], as deployment paths.
+fn claude_cached_plugin_paths(inventory: &Inventory) -> Vec<String> {
     let claude_cache = format!("{HOME}/.claude/plugins/cache/vendor-1/plugin-1");
-    let from_claude_cache: Vec<String> = inventory
-        .skills
-        .iter()
-        .filter(|skill| skill.name.0 == shapes::PLUGIN_SKILL_NAME)
-        .flat_map(|skill| &skill.deployments)
-        .map(|deployment| deployment.path.display().to_string())
+    deployment_paths(inventory)
+        .into_iter()
         .filter(|path| path.starts_with(&claude_cache))
-        .collect();
-    assert_eq!(
-        from_claude_cache.len(),
-        1,
-        "versions {:?} of plugin-1 are cached side by side but only one is live, so \
-         `{}` must be reported once: {from_claude_cache:?}",
-        shapes::PLUGIN_VERSIONS,
-        shapes::PLUGIN_SKILL_NAME
-    );
+        .filter(|path| path.ends_with(shapes::PLUGIN_SKILL_NAME))
+        .collect()
+}
+
+/// Claude Code keeps an updated plugin's old version folder in the cache
+/// until its ~14-day orphan prune (`docs/action-map/harnesses/plugins.md`),
+/// and its enabled state is keyed `<plugin>@<marketplace>` with no version
+/// (`docs/research/harness-primitives.md`). `installed_plugins.json`
+/// (version 2) names the `installPath` Claude Code loads, so one skill row
+/// comes from that folder only - whichever version string it carries, so
+/// the lower version is also tried as the live one.
+#[test]
+fn scan_picks_one_version_per_cached_plugin_or_names_the_duplicate() {
+    for live in shapes::PLUGIN_VERSIONS {
+        let inventory = scan_shape(shapes::with_claude_installed_plugin(
+            shapes::with_plugin_cache_nesting(FixtureBuilder::new()),
+            HOME,
+            live,
+        ));
+
+        let from_claude_cache = claude_cached_plugin_paths(&inventory);
+        assert_eq!(
+            from_claude_cache.len(),
+            1,
+            "versions {:?} of plugin-1 are cached side by side but installed_plugins.json \
+             names only {live}, so `{}` must be reported once: {from_claude_cache:?}",
+            shapes::PLUGIN_VERSIONS,
+            shapes::PLUGIN_SKILL_NAME
+        );
+        assert!(
+            from_claude_cache[0].contains(&format!("/plugin-1/{live}/")),
+            "the row must come from the installPath folder {live}, got {from_claude_cache:?}"
+        );
+    }
+}
+
+/// Without a usable `installed_plugins.json`, or when its `installPath` is
+/// not a cached folder, nothing says which version folder is live. Every
+/// cached version then stays, so the plugin is never hidden.
+#[test]
+fn scan_without_a_matching_installed_plugins_record_keeps_every_cached_version_or_names_the_hidden_plugin(
+) {
+    let cases = [
+        ("no installed_plugins.json", FixtureBuilder::new()),
+        (
+            "installPath names a version that is not cached",
+            shapes::with_claude_installed_plugin(FixtureBuilder::new(), HOME, "9.9.9"),
+        ),
+        (
+            "installed_plugins.json is version 1",
+            FixtureBuilder::new().file(
+                ".claude/plugins/installed_plugins.json",
+                br#"{"version":1,"plugins":{}}"#,
+            ),
+        ),
+    ];
+    for (case, builder) in cases {
+        let inventory = scan_shape(shapes::with_plugin_cache_nesting(builder));
+        let from_claude_cache = claude_cached_plugin_paths(&inventory);
+        assert_eq!(
+            from_claude_cache.len(),
+            shapes::PLUGIN_VERSIONS.len(),
+            "{case}: no record names a cached folder, so every cached version must stay \
+             listed: {from_claude_cache:?}"
+        );
+    }
 }
 
 /// The lock file belongs to `npx skills`, which writes keys this reader
@@ -492,80 +532,6 @@ fn scan_ignores_project_root_skills_dir_and_cursor_root_or_names_the_row() {
                 .collect::<Vec<_>>()
         );
     }
-}
-
-/// pi has no native per-skill switch, so this build keeps its own
-/// exclusion list under a `skill-studio` key in pi's `settings.json`
-/// (`docs/agent-skill-conventions.md`: "pi, Cursor, Grok Build: no
-/// per-skill disable"). Writing that key back must leave every other key in
-/// the file untouched - the file belongs to pi, not to Skill Studio.
-#[test]
-fn harness_toggle_preserves_unknown_settings_keys_or_names_the_lost_key() {
-    let home = unique_temp_dir("real_home_shapes_pi_settings");
-    std::fs::create_dir_all(&home).unwrap();
-    let home = home.canonicalize().unwrap();
-
-    let skill_dir = home.join(".agents/skills/toggle-me");
-    std::fs::create_dir_all(&skill_dir).unwrap();
-    std::fs::write(
-        skill_dir.join("SKILL.md"),
-        "---\nname: toggle-me\ndescription: A skill whose pi switch is flipped in this test.\n---\nBody.\n",
-    )
-    .unwrap();
-    let settings_path = home.join(".pi/agent/settings.json");
-    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-    let before = r#"{"theme":"dark","telemetry":false,"editor":{"tabWidth":2}}"#;
-    std::fs::write(&settings_path, before).unwrap();
-
-    let scope = RuntimeScope::fixture(&home);
-    let ports = Ports {
-        fs: Arc::new(RealFs::new()),
-        clock: Arc::new(FakeClock::at(0)),
-        ids: Arc::new(FakeIds::default()),
-        leases: Arc::new(FileLease::new(home.join(".leases"))),
-        history: Arc::new(SqliteHistoryOpener::new(
-            home.join(".history/events.sqlite3"),
-        )),
-        sink: Arc::new(RecordingSink::default()),
-        spawner: None,
-        discovery: None,
-        tools: None,
-        catalog: Arc::new(HarnessCatalog::builtin()),
-    };
-    let rt = Runtime::new(&scope, ports).expect("runtime");
-
-    ops::set_harness_enabled(
-        &rt,
-        &ctx(),
-        &SetHarnessEnabledRequest {
-            skill: SkillName("toggle-me".into()),
-            harness: AgentId::from(AgentId::PI),
-            enabled: false,
-            project_path: None,
-        },
-    )
-    .expect("pi switch");
-
-    let after: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
-    for (key, value) in [
-        ("theme", serde_json::json!("dark")),
-        ("telemetry", serde_json::json!(false)),
-        ("editor", serde_json::json!({"tabWidth": 2})),
-    ] {
-        assert_eq!(
-            after.get(key),
-            Some(&value),
-            "the pi switch rewrote {} and lost `{key}`; got {after}",
-            settings_path.display()
-        );
-    }
-    assert_eq!(
-        after["skill-studio"]["disabledSkills"][0], "toggle-me",
-        "the switch itself must still be written; got {after}"
-    );
-
-    std::fs::remove_dir_all(&home).ok();
 }
 
 /// The composed home: `scan` and `diagnose` must both complete on it, and

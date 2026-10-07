@@ -29,6 +29,7 @@ import {
 } from "./lib/skill-api";
 import { clearLegacyProjectPaths, readLegacyProjectPaths } from "./lib/legacy-project-paths";
 import type { ActiveView } from "./store/appStore";
+import { resolveSkillPageDeployment } from "./components/SkillDetail/skill-page-deployment";
 import { useAppStore } from "./store/appStore";
 import "./App.css";
 
@@ -67,12 +68,19 @@ function App() {
       .then((message) => setDataFolderStatusState({ kind: "ready", message }))
       .catch(() => setDataFolderStatusState({ kind: "ready", message: null }));
   }, []);
-  const { snapshot, emittedSnapshotRevision, isLoading, requestRescan } = useSkillSnapshot();
+  const {
+    snapshot,
+    emittedSnapshotRevision,
+    isLoading,
+    error: snapshotError,
+    requestRescan,
+  } = useSkillSnapshot();
   const resolvedTheme = useAppStore((state) => state.resolvedTheme);
   const activeView = useAppStore((state) => state.activeView);
   const openSkill = useAppStore((state) => state.openSkill);
   const closeSkill = useAppStore((state) => state.closeSkill);
   const setTrackedProjects = useAppStore((state) => state.setTrackedProjects);
+  const setKnownSkillNames = useAppStore((state) => state.setKnownSkillNames);
   const addToast = useAppStore((state) => state.addToast);
 
   const onSelectSkill = (name: string, deploymentPath?: string) => openSkill(name, deploymentPath);
@@ -105,12 +113,45 @@ function App() {
     })();
   }, [setTrackedProjects, addToast]);
 
+  useEffect(() => {
+    if (!snapshot) {
+      setKnownSkillNames(null);
+      return;
+    }
+    const defaultPaths = new Map<string, string>();
+    for (const skill of snapshot.skills) {
+      const path = resolveSkillPageDeployment(skill, undefined).deployment?.path;
+      if (path) defaultPaths.set(skill.name, path);
+    }
+    setKnownSkillNames(new Set(snapshot.skills.map((skill) => skill.name)), defaultPaths);
+  }, [snapshot, setKnownSkillNames]);
+
+  // This toast is the only place on screen that shows a failed load or refresh.
+  useEffect(() => {
+    if (snapshotError == null) return;
+    addToast({
+      type: "error",
+      title: "Couldn't load your skills",
+      message: snapshotError,
+      // Stays until the user acts; sonner removes it when "Try again" is clicked.
+      duration: Infinity,
+      action: {
+        label: "Try again",
+        onClick: () => {
+          // The hook stores a failed retry in `error`; this effect shows it.
+          requestRescan().catch(() => undefined);
+        },
+      },
+    });
+  }, [snapshotError, addToast, requestRescan]);
+
   /** One skill view - the page it opens, standalone (no kept-alive list underneath). */
   function renderSkillPage(view: Extract<ActiveView, { kind: "skill" }>): React.ReactNode {
     const skill = snapshot?.skills.find((s) => s.name === view.name) ?? null;
     return (
       <SkillPage
         skill={skill}
+        upstreamAhead={snapshot?.update_check.upstream_ahead}
         deploymentPath={view.deploymentPath}
         onBack={closeSkill}
         onRemoveComplete={closeSkill}
@@ -228,7 +269,7 @@ function App() {
           </main>
         </div>
 
-        <AddSkillSheet />
+        <AddSkillSheet skills={snapshot?.skills ?? []} />
         <CommandPalette snapshot={snapshot} requestRescan={requestRescan} />
         <Toaster
           position="bottom-right"

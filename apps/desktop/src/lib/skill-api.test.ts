@@ -21,13 +21,11 @@ import libRsSource from "../../src-tauri/src/lib.rs?raw";
  * - "none": not IPC at all (`invokeErrorMessage` is a pure string helper).
  *
  * `registeredInLibRs: false` marks a wrapper whose command is NOT in
- * `generate_handler!` today - a pre-existing gap from unit 4.3 (#200), which
- * unregistered every pack command while `AddSkillSheet`'s "Pack" add method
- * still calls `importSkillPack`/`confirmSkillPackTrust`/`abandonPackImportTrust`.
- * Fixing that is out of unit 4.4's scope (no Rust change beyond removing
- * `set_deployment_enabled`, no component change beyond the two Harnesses
- * rail callers); recorded here so the map stays honest either way - flip it
- * to `true` the day someone re-registers the three pack commands.
+ * `generate_handler!` today - a pre-existing gap from unit 4.3 (#200). The
+ * UI no longer offers the "Pack" add method (see `availableAddSkillMethods`
+ * in `add-skill-form.ts`), so `importSkillPack`/`confirmSkillPackTrust`/
+ * `abandonPackImportTrust` are unreachable, but the wrappers stay for when
+ * the three pack commands are re-registered; flip this to `true` then.
  */
 type WrapperEntry =
   | { kind: "command"; command: string; registeredInLibRs: boolean }
@@ -51,6 +49,7 @@ const EXPECTED_WRAPPER_COMMANDS = {
   searchSkills: { kind: "command", command: "search_skills", registeredInLibRs: true },
   getPopularSkills: { kind: "command", command: "get_popular_skills", registeredInLibRs: true },
   getSkillDetails: { kind: "command", command: "get_skill_details", registeredInLibRs: true },
+  getInstallCounts: { kind: "command", command: "get_install_counts", registeredInLibRs: true },
   getInstalledSkills: {
     kind: "command",
     command: "get_installed_skills",
@@ -97,8 +96,6 @@ const EXPECTED_WRAPPER_COMMANDS = {
     command: "save_harnesses_choice",
     registeredInLibRs: true,
   },
-  runDoctor: { kind: "command", command: "doctor", registeredInLibRs: true },
-  onDoctorReport: { kind: "event", event: "skills://doctor" },
   listProjectFolders: {
     kind: "command",
     command: "list_project_folders",
@@ -113,7 +110,7 @@ const EXPECTED_WRAPPER_COMMANDS = {
   },
   removeSkill: { kind: "command", command: "remove_skill", registeredInLibRs: true },
   updateSkill: { kind: "command", command: "update_skill", registeredInLibRs: true },
-  updateAllSkills: { kind: "command", command: "update_all_skills", registeredInLibRs: true },
+  updateAllSkillsWithProgress: { kind: "event", event: "skills://update-all-progress" },
   readInstalledSkillMd: {
     kind: "command",
     command: "read_installed_skill_md",
@@ -131,16 +128,15 @@ const EXPECTED_WRAPPER_COMMANDS = {
     command: "set_preferred_editor",
     registeredInLibRs: true,
   },
-  commandHealth: { kind: "command", command: "command_health", registeredInLibRs: true },
   dataFolderStatus: { kind: "command", command: "data_folder_status", registeredInLibRs: true },
-  getErrorReportingEnabled: {
+  getTelemetryEnabled: {
     kind: "command",
-    command: "get_error_reporting_enabled",
+    command: "get_telemetry_enabled",
     registeredInLibRs: true,
   },
-  setErrorReportingEnabled: {
+  setTelemetryEnabled: {
     kind: "command",
-    command: "set_error_reporting_enabled",
+    command: "set_telemetry_enabled",
     registeredInLibRs: true,
   },
   forkSkill: { kind: "command", command: "fork_skill", registeredInLibRs: true },
@@ -191,14 +187,22 @@ const EXPECTED_WRAPPER_COMMANDS = {
     command: "get_add_method_defaults",
     registeredInLibRs: true,
   },
-  installPreferences: {
-    kind: "command",
-    command: "install_preferences",
-    registeredInLibRs: true,
-  },
   parkSkill: { kind: "command", command: "park_skill", registeredInLibRs: true },
   unparkSkill: { kind: "command", command: "unpark_skill", registeredInLibRs: true },
-  setHarnessEnabled: { kind: "command", command: "set_harness_enabled", registeredInLibRs: true },
+  parkCheck: { kind: "command", command: "park_check", registeredInLibRs: true },
+  discardSkillCopy: { kind: "command", command: "discard_skill_copy", registeredInLibRs: true },
+  splitSkill: { kind: "command", command: "split_skill", registeredInLibRs: true },
+  splitSkillTargets: {
+    kind: "command",
+    command: "split_skill_targets",
+    registeredInLibRs: true,
+  },
+  turnOffForAgent: {
+    kind: "command",
+    command: "turn_off_for_agent",
+    registeredInLibRs: true,
+  },
+  turnOffCheck: { kind: "command", command: "turn_off_check", registeredInLibRs: true },
   restoreMovedDeployment: {
     kind: "command",
     command: "restore_moved_deployment",
@@ -209,8 +213,21 @@ const EXPECTED_WRAPPER_COMMANDS = {
     command: "set_skill_invocation",
     registeredInLibRs: true,
   },
+  setSkillsInvocation: {
+    kind: "command",
+    command: "set_skills_invocation",
+    registeredInLibRs: true,
+  },
+  parkSkills: { kind: "command", command: "park_skills", registeredInLibRs: true },
+  skillLocalEdits: {
+    kind: "command",
+    command: "skill_local_edits",
+    registeredInLibRs: true,
+  },
+  unparkSkills: { kind: "command", command: "unpark_skills", registeredInLibRs: true },
   setPluginEnabled: { kind: "command", command: "set_plugin_enabled", registeredInLibRs: true },
   uninstallPlugin: { kind: "command", command: "uninstall_plugin", registeredInLibRs: true },
+  updatePlugin: { kind: "command", command: "update_plugin", registeredInLibRs: true },
   listSkillEvents: { kind: "command", command: "list_skill_events", registeredInLibRs: true },
   restoreSkillEvent: {
     kind: "command",

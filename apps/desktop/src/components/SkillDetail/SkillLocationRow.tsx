@@ -1,8 +1,8 @@
 // ============================================================================
 // SkillLocationRow - one harness/reader row inside a scope's drawer: an
 // identity icon carrying the row's one status dot, its name and path, a
-// facts-only chip, a switch where the row has one of its own, and the ⋯
-// menu. Status never lives in the name or the chip - see status-spec.md §1.
+// facts-only chip, an on/off switch (off = parked; disabled for an always-on
+// reader), and the ⋯ menu. Status never lives in the name or the chip - see status-spec.md §1.
 // ============================================================================
 
 import { Link2, Puzzle } from "lucide-react";
@@ -12,7 +12,12 @@ import { SwitchControl } from "../ui/SwitchControl";
 import { TooltipControl } from "../ui/TooltipControl";
 import { homeRelativePath } from "@skill-studio/lib";
 import { SkillLocationMenu } from "./SkillLocationMenu";
-import { rowMenu, tipLines } from "./skill-location-status";
+import {
+  ROW_SWITCH_SLOT,
+  RowActionSwitch,
+  SkillLocationRowButtons,
+} from "./SkillLocationRowButtons";
+import { parkActionFor, rowMenu, tipLines } from "./skill-location-status";
 import type { LocationAction, LocationRow } from "./skill-location-status";
 
 /** The label tooltip: just the row's path, or the path plus its symlink target for a link row. */
@@ -27,39 +32,11 @@ function labelTipFor(row: LocationRow) {
 }
 
 /**
- * The switch slot: a live switch where the row has one of its own, a
- * disabled-but-explained switch for an always-on reader or a
- * plugin-disabled-by-Claude row, or an empty placeholder to keep columns
- * aligned.
+ * The switch slot: only a disabled, explained switch (an always-on reader, or a
+ * plugin Claude Code disabled), or an empty placeholder to keep columns aligned.
+ * An agent's own off setting is shown, not switched here.
  */
-function LocationRowSwitch({
-  row,
-  onAction,
-}: {
-  row: LocationRow;
-  onAction: (action: LocationAction) => void;
-}) {
-  if (row.hasSwitch) {
-    return (
-      <SwitchControl
-        checked={row.switchOn}
-        onCheckedChange={(next) =>
-          onAction(
-            row.kind === "reader"
-              ? {
-                  kind: "set-reader-enabled",
-                  target: row.lifecycleTarget,
-                  agent: row.harness,
-                  enabled: next,
-                }
-              : { kind: "set-enabled", deployment: row.deployment!, enabled: next },
-          )
-        }
-        ariaLabel={`Enabled for ${row.harnessLabel}`}
-      />
-    );
-  }
-
+function LocationRowSwitch({ row }: { row: LocationRow }) {
   const isAlwaysOnReader = row.kind === "reader";
   if (isAlwaysOnReader) {
     return (
@@ -67,10 +44,10 @@ function LocationRowSwitch({
         content={
           row.switchOn
             ? `Always on because ${row.harnessLabel} has no per-skill switch.`
-            : `Off because this skill is disabled in the Universal folder.`
+            : row.caption || `Off because this skill is disabled in the Universal folder.`
         }
       >
-        <span className="inline-flex">
+        <span className={ROW_SWITCH_SLOT}>
           <SwitchControl
             checked={row.switchOn}
             disabled
@@ -86,21 +63,6 @@ function LocationRowSwitch({
     );
   }
 
-  if (row.switchDisabledReason) {
-    return (
-      <TooltipControl content={row.switchDisabledReason}>
-        <span className="inline-flex">
-          <SwitchControl
-            checked={row.switchOn}
-            disabled
-            onCheckedChange={() => undefined}
-            ariaLabel={row.switchDisabledReason}
-          />
-        </span>
-      </TooltipControl>
-    );
-  }
-
   const pluginDisabledByClaudeLabel =
     row.kind === "plugin" && row.deployment?.disabled_by === "claude-plugin-disabled"
       ? `Off because the ${row.deployment.plugin?.name ?? "plugin"} plugin is disabled in Claude Code.`
@@ -108,7 +70,7 @@ function LocationRowSwitch({
   if (pluginDisabledByClaudeLabel) {
     return (
       <TooltipControl content={pluginDisabledByClaudeLabel}>
-        <span className="inline-flex">
+        <span className={ROW_SWITCH_SLOT}>
           <SwitchControl
             checked={false}
             disabled
@@ -120,19 +82,26 @@ function LocationRowSwitch({
     );
   }
 
-  return <span className="w-6" aria-hidden="true" />;
+  return <span className="w-10 shrink-0" aria-hidden="true" />;
 }
 
 export function SkillLocationRow({
   row,
   scopeLabel,
+  projectPath = null,
+  turnOff = null,
   onAction,
 }: {
   row: LocationRow;
   scopeLabel: string;
-  onAction: (action: LocationAction) => void;
+  /** The project this row's scope block is for, `null` for Global. */
+  projectPath?: string | null;
+  /** The "Turn off for <Agent>" action, set only on an agent row under a live shared folder. */
+  turnOff?: LocationAction | null;
+  onAction: (action: LocationAction) => Promise<boolean>;
 }) {
-  const menu = rowMenu(row, scopeLabel);
+  const menu = rowMenu(row, scopeLabel, projectPath);
+  const hasButton = row.kind === "parked" || parkActionFor(row, scopeLabel, projectPath) !== null;
   const tip = tipLines(row.conditions);
   const labelTip = labelTipFor(row);
 
@@ -141,7 +110,7 @@ export function SkillLocationRow({
       <span aria-hidden="true" />
       <span className="grid min-w-0 grid-cols-[16px_12.5rem_minmax(0,1fr)] items-center gap-2">
         <StatusIcon
-          icon={<HarnessIcon harness={row.harness} size={16} />}
+          icon={<HarnessIcon harness={row.harness} size={16} muted={row.kind === "parked"} />}
           level={row.level ?? undefined}
           tip={tip}
         />
@@ -167,7 +136,25 @@ export function SkillLocationRow({
         <span className="truncate text-caption text-text-tertiary">{row.caption}</span>
       </span>
       <span className="flex shrink-0 items-center gap-1">
-        <LocationRowSwitch row={row} onAction={onAction} />
+        {hasButton ? (
+          <SkillLocationRowButtons
+            row={row}
+            scopeLabel={scopeLabel}
+            projectPath={projectPath}
+            onAction={onAction}
+          />
+        ) : turnOff ? (
+          <RowActionSwitch
+            key={turnOff.kind === "turn-off-agent" ? turnOff.shared.id : row.path}
+            checked
+            ariaLabel={row.harnessLabel}
+            title={`On. Turn off to stop ${row.harnessLabel} only: every agent gets its own copy, then the ${row.harnessLabel} copy is parked.`}
+            action={turnOff}
+            onAction={onAction}
+          />
+        ) : (
+          <LocationRowSwitch row={row} />
+        )}
         <SkillLocationMenu
           entries={menu.entries}
           danger={menu.danger}

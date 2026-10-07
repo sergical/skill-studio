@@ -8,7 +8,7 @@
 //! `std::fs` so the core never touches a path outside its scope. See
 //! `docs/spec-core-primitives.md` section 13.4 for the precedence table.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -38,6 +38,10 @@ pub(crate) struct DotagentsEntry {
     /// --all`), which has an `agents.lock` row but no `[[skills]]` row in
     /// `agents.toml`.
     pub has_manifest_row: bool,
+    /// True when the ledger records a `path:` source - a folder `dotagents
+    /// sync` adopted, with no upstream. Such a row never claims a skill
+    /// another ledger also claims, see `classify_owner`.
+    pub is_local_path: bool,
 }
 
 /// The skills.sh lock file and the dotagents ledger for one `.agents`
@@ -46,18 +50,27 @@ pub(crate) struct DotagentsEntry {
 pub(crate) struct ScopeLedgers {
     pub lock: SkillLockFile,
     pub dotagents: Vec<DotagentsEntry>,
-    /// Whether `agents.toml` or `agents.lock` exists at all, regardless of
-    /// what it names. A dotagents install with no row for a given skill
-    /// still makes that skill's owner ambiguous - see `classify_owner`'s
-    /// shared-root carve-out - so presence is a separate fact from content.
-    pub has_dotagents_files: bool,
+    /// Skill names a project-scope `<project>/skills-lock.json` (schema
+    /// version 1) names - a second, project-root source for skills.sh
+    /// ownership alongside `lock` above, which only ever sees the shared
+    /// `.skill-lock.json`. Always empty for the home scope, which has no
+    /// such file.
+    pub project_lock_skills: HashSet<String>,
 }
 
-/// Reads both ledgers under `agents_dir` (normally `<scope root>/.agents`).
-/// A missing or unreadable file yields an empty ledger rather than an error:
-/// most scopes have no dotagents or skills.sh install at all, and a scan
-/// must still report every other deployment.
-pub(crate) fn read_scope_ledgers(fs: &dyn ScopeFs, agents_dir: &Path) -> ScopeLedgers {
+/// Reads the skills.sh lock under `agents_dir` (normally
+/// `<scope root>/.agents`) and the dotagents ledger under `dotagents_dir`
+/// (see [`crate::dotagents_ledger::dotagents_dir`]), plus `project_lock_path`'s skill names when the scope is a project (see
+/// [`ScopeLedgers::project_lock_skills`]). A missing or unreadable file
+/// yields an empty ledger rather than an error: most scopes have no
+/// dotagents or skills.sh install at all, and a scan must still report
+/// every other deployment.
+pub(crate) fn read_scope_ledgers(
+    fs: &dyn ScopeFs,
+    agents_dir: &Path,
+    dotagents_dir: &Path,
+    project_lock_path: Option<&Path>,
+) -> ScopeLedgers {
     let lock =
         lock_file::read_lock_file(fs, &agents_dir.join(".skill-lock.json")).unwrap_or_else(|_| {
             SkillLockFile {
@@ -65,11 +78,13 @@ pub(crate) fn read_scope_ledgers(fs: &dyn ScopeFs, agents_dir: &Path) -> ScopeLe
                 skills: std::collections::HashMap::new(),
             }
         });
+    let project_lock_skills = project_lock_path
+        .map(|path| lock_file::read_project_lock_skill_names(fs, path))
+        .unwrap_or_default();
     ScopeLedgers {
         lock,
-        dotagents: read_dotagents_ledger(fs, agents_dir),
-        has_dotagents_files: fs.symlink_metadata(&agents_dir.join("agents.toml")).is_ok()
-            || fs.symlink_metadata(&agents_dir.join("agents.lock")).is_ok(),
+        dotagents: read_dotagents_ledger(fs, dotagents_dir),
+        project_lock_skills,
     }
 }
 
@@ -79,13 +94,15 @@ pub(crate) fn read_scope_ledgers(fs: &dyn ScopeFs, agents_dir: &Path) -> ScopeLe
 /// `classify_owner` doesn't need (`source`, `installed_commit`, ...).
 fn read_dotagents_ledger(fs: &dyn ScopeFs, agents_dir: &Path) -> Vec<DotagentsEntry> {
     let manifest_names = dotagents_manifest_names(fs, agents_dir);
-    dotagents_lock_names(fs, agents_dir)
+    dotagents_lock_sources(fs, agents_dir)
         .into_iter()
-        .map(|name| {
+        .map(|(name, source)| {
             let has_manifest_row = manifest_names.contains(&name);
             DotagentsEntry {
                 name,
                 has_manifest_row,
+                is_local_path: source
+                    .is_some_and(|s| crate::dotagents_ledger::is_local_path_source(&s)),
             }
         })
         .collect()
@@ -100,15 +117,23 @@ fn read_toml_document(fs: &dyn ScopeFs, path: &Path) -> Option<toml::Table> {
 }
 
 /// `agents.lock`'s `[skills.<name>]` table keys - the set of skills
-/// dotagents has actually resolved on disk.
-fn dotagents_lock_names(fs: &dyn ScopeFs, agents_dir: &Path) -> Vec<String> {
+/// dotagents has actually resolved on disk - each with the `source` the row
+/// records.
+fn dotagents_lock_sources(fs: &dyn ScopeFs, agents_dir: &Path) -> Vec<(String, Option<String>)> {
     let Some(table) = read_toml_document(fs, &agents_dir.join("agents.lock")) else {
         return Vec::new();
     };
     table
         .get("skills")
         .and_then(toml::Value::as_table)
-        .map(|t| t.keys().cloned().collect())
+        .map(|t| {
+            t.iter()
+                .map(|(name, row)| {
+                    let source = row.get("source").and_then(toml::Value::as_str);
+                    (name.clone(), source.map(str::to_string))
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -164,6 +189,20 @@ pub(crate) struct ForkRecord {
     /// Empty means the default path, `<home>/.agents/skills/<name>`.
     #[serde(default)]
     pub skill_dir: PathBuf,
+    /// The upstream repo this fork was cut from, for
+    /// [`crate::skill_update_check::outdated`]'s currency check. Empty for a
+    /// legacy record with no recorded upstream - such a fork stays
+    /// `NotTracked` rather than being compared against nothing.
+    #[serde(default)]
+    pub repo: String,
+    /// The upstream path within `repo`, paired with `repo` above.
+    #[serde(default)]
+    pub path: String,
+    /// The commit the local copy was last synced from - the "installed"
+    /// side of the fork's currency compare, pinned independently of
+    /// whatever the dotagents/skills.sh ledger says for the same name.
+    #[serde(default)]
+    pub base_commit: String,
 }
 
 /// The `forks` and `copies` buckets of `~/.agents/skill-studio.json` -
@@ -191,15 +230,34 @@ struct RawHomeRegistry {
 /// read-only callers (`read_fork_registry_or_default`), which downgrade
 /// that same failure to "nothing recorded" rather than failing the scan.
 pub(crate) fn read_home_registry(fs: &dyn ScopeFs, home: &Path) -> HomeRegistry {
+    read_home_registry_result(fs, home).unwrap_or_default()
+}
+
+/// Like [`read_home_registry`], but a missing file is the only failure
+/// downgraded to an empty registry; an unreadable or malformed file is
+/// reported as `Err` instead of read as "no forks recorded" -
+/// `skill_update_check::outdated`'s fork rule needs that distinction so a
+/// broken registry surfaces as `Currency::Unknown` rather than the
+/// `NotTracked` a fork with no registry row at all gets.
+pub(crate) fn read_home_registry_result(
+    fs: &dyn ScopeFs,
+    home: &Path,
+) -> Result<HomeRegistry, crate::error::CoreError> {
     let path = skill_studio_json_path(home);
-    let Ok(bytes) = fs.read_capped(&path, OWNERSHIP_LEDGER_MAX_BYTES) else {
-        return HomeRegistry::default();
+    let bytes = match fs.read_capped(&path, OWNERSHIP_LEDGER_MAX_BYTES) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HomeRegistry::default()),
+        Err(e) => return Err(crate::error::CoreError::io(path.clone(), e)),
     };
-    let Ok(raw) = serde_json::from_slice::<RawHomeRegistry>(&bytes) else {
-        return HomeRegistry::default();
-    };
-    HomeRegistry {
+    let raw: RawHomeRegistry = serde_json::from_slice(&bytes).map_err(|e| {
+        crate::error::CoreError::new(
+            crate::error::ErrorCode::Io,
+            format!("failed to parse skill-studio.json: {e}"),
+        )
+        .at(path.clone())
+    })?;
+    Ok(HomeRegistry {
         forks: raw.forks,
         copies: raw.copies,
-    }
+    })
 }

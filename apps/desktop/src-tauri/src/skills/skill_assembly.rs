@@ -24,7 +24,7 @@ use super::frontmatter::invocation_policy_from;
 use super::skill_deployment::{
     BackingRelationship, DeploymentMutability, SkillDestination, UNIVERSAL_ROOT_LABEL,
 };
-use super::skill_dto::{Deployment, DisabledBy, InstalledSkill, PluginInfo};
+use super::skill_dto::{Deployment, DisabledBy, InstalledSkill, ParkedOrigin, PluginInfo};
 use super::skill_ownership::LifecycleOwnerKind;
 use skill_studio_core::lock_file::SkillLockFile;
 
@@ -117,6 +117,20 @@ fn project_path_from_core(root: &RootRef) -> Option<String> {
     }
 }
 
+fn parked_origin_from_core(origin: &RootRef) -> ParkedOrigin {
+    ParkedOrigin {
+        kind: match &origin.kind {
+            RootKind::Harness(id) => id.as_str().to_string(),
+            _ => "universal".to_string(),
+        },
+        scope: match &origin.scope {
+            RootScope::Global => "global".to_string(),
+            RootScope::Project(_) => "project".to_string(),
+        },
+        project_path: project_path_from_core(origin),
+    }
+}
+
 fn deployment_from_core(dto: &DeploymentDto) -> Deployment {
     let agent = agent_label_from_core(&dto.root, dto.harness.as_ref());
     // Typed frontmatter, not the stringified `frontmatter_fields`: the two
@@ -177,10 +191,12 @@ fn deployment_from_core(dto: &DeploymentDto) -> Deployment {
             None
         },
         disabled_readers: Vec::new(),
+        disabling_config_files: Vec::new(),
         codex_implicit_invocation: None,
         shared_via_whole_dir_link: dto.shared_via_whole_dir_link,
         spec_violations: dto.spec_violations.clone(),
         invocation: invocation_policy_from(disable_model, user_invocable).0,
+        parked_origin: dto.parked_origin.as_ref().map(parked_origin_from_core),
         agent,
     }
 }
@@ -468,6 +484,7 @@ mod tests {
             in_git_repo: false,
             studio_disabled: false,
             source_kind: SourceKind::Manual,
+            parked_origin: None,
         }
     }
 
@@ -577,6 +594,22 @@ mod tests {
         let deployment = &skills[0].deployments[0];
         assert!(!deployment.disabled);
         assert_eq!(deployment.disabled_by, None);
+    }
+
+    #[test]
+    fn a_dotagents_only_install_has_source_local_and_keeps_its_deployment_owner_id() {
+        let mut dto = deployment_dto("tdd", "Claude Code");
+        dto.source_kind = SourceKind::Dotagents;
+        dto.owner_kind = CoreLifecycleOwnerKind::Dotagents;
+        dto.owner_id =
+            Some(skill_studio_core::identity::OwnerId::parse("owner:v1/global/tdd").unwrap());
+
+        let skills = assemble_installed_skills(&skills_from(vec![("tdd", dto)]), &empty_lock());
+        assert_eq!(skills[0].source, "local");
+        assert_eq!(
+            skills[0].deployments[0].owner_id.as_deref(),
+            Some("owner:v1/global/tdd")
+        );
     }
 
     #[test]

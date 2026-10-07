@@ -69,6 +69,8 @@ fn runtime_for(home: &Path) -> Runtime {
         discovery: None,
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
+
+        telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
     };
     Runtime::new(&scope, ports).unwrap()
 }
@@ -498,6 +500,8 @@ fn a_restore_whose_write_fails_releases_the_claim_for_a_later_retry() {
             discovery: None,
             tools: None,
             catalog: Arc::new(HarnessCatalog::builtin()),
+
+            telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
         };
         Runtime::new(&scope, ports).unwrap()
     };
@@ -728,6 +732,268 @@ fn the_envelope_carries_the_event_id_a_mutating_call_recorded() {
     assert_eq!(envelope.event_id.as_ref(), Some(&outcome.restore_event_id));
     assert_eq!(outcome.reverted_event_id, repair_event_id);
     assert_ne!(outcome.restore_event_id, repair_event_id);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Builds a `Manual`-owned skill whose `SKILL.md` is a symlink to
+/// `target` (the #77 layout: one shared file behind one link per harness),
+/// writes the repairable body into `target`, and returns the link path.
+fn repairable_home_with_linked_skill_md(home: &Path, target: &Path) -> std::path::PathBuf {
+    let dir = home.join(MANUAL_SKILL_ROOT_RELATIVE).join("zeta-bad");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(
+        target,
+        b"---\nname: zeta-bad\ndescription: Use this: when needed\n---\nBody.\n",
+    )
+    .unwrap();
+    let link = dir.join("SKILL.md");
+    std::os::unix::fs::symlink(target, &link).unwrap();
+    link
+}
+
+fn preview_and_apply(
+    rt: &Runtime,
+) -> Result<skill_studio_core::dto::RepairOutcome, skill_studio_core::CoreError> {
+    let inventory = ops::scan(rt, &ctx(), &ScanRequest::default()).unwrap();
+    let deployment = &inventory.skills[0].deployments[0];
+    let preview = ops::preview_frontmatter_repair(
+        rt,
+        &ctx(),
+        &RepairPreviewRequest {
+            deployment_id: deployment.id.clone(),
+        },
+    )
+    .unwrap();
+    ops::apply_frontmatter_repair(
+        rt,
+        &ctx(),
+        &RepairApplyRequest {
+            preview,
+            mode: RepairApplyMode::ApplyFix,
+        },
+    )
+}
+
+/// `repair_of_a_symlinked_skill_md_writes_the_shared_target_and_keeps_the_link_or_names_the_split_copy`:
+/// #77 - a `SKILL.md` that is a symlink to a shared file inside the home.
+/// The repair must land in the shared file, and the `SKILL.md` must stay a
+/// link, so every harness that shares the file sees the fix.
+#[test]
+fn repair_of_a_symlinked_skill_md_writes_the_shared_target_and_keeps_the_link_or_names_the_split_copy(
+) {
+    let home = unique_temp_dir("repair_linked_skill_md");
+    let target = home.join("shared").join("zeta.md");
+    let link = repairable_home_with_linked_skill_md(&home, &target);
+    let rt = runtime_for(&home);
+
+    let outcome = preview_and_apply(&rt).unwrap();
+
+    assert!(
+        matches!(
+            outcome,
+            skill_studio_core::dto::RepairOutcome::Applied { .. }
+        ),
+        "expected Applied, got {outcome:?}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the repair replaced the SKILL.md link with a regular file, so the other harnesses \
+         sharing {target:?} no longer see the same content"
+    );
+    let repaired = std::fs::read_to_string(&target).unwrap();
+    assert!(
+        repaired.contains("description: |-"),
+        "the shared target was not repaired: {repaired}"
+    );
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `repair_of_a_skill_md_linked_outside_the_scope_refuses_and_leaves_both_files_or_names_the_write`:
+/// the same layout with the shared file outside every scanned folder. The
+/// core writes only inside its scope, so the repair must refuse with a
+/// message that names the target, and leave the link and the target as
+/// they were.
+#[test]
+fn repair_of_a_skill_md_linked_outside_the_scope_refuses_and_leaves_both_files_or_names_the_write()
+{
+    let home = unique_temp_dir("repair_linked_skill_md_outside_home");
+    let outside = unique_temp_dir("repair_linked_skill_md_outside_target");
+    let target = outside.join("zeta.md");
+    let link = repairable_home_with_linked_skill_md(&home, &target);
+    let original = std::fs::read(&target).unwrap();
+    let rt = runtime_for(&home);
+
+    let err = preview_and_apply(&rt).unwrap_err();
+
+    assert_eq!(err.code, skill_studio_core::ErrorCode::Unsupported, "{err}");
+    assert!(
+        err.message
+            .contains("outside the folders Skill Studio manages"),
+        "the refusal must say the link target is outside the scope, got: {}",
+        err.message
+    );
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "a refused repair replaced the SKILL.md link"
+    );
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        original,
+        "a refused repair changed the file outside the scope"
+    );
+
+    std::fs::remove_dir_all(&home).ok();
+    std::fs::remove_dir_all(&outside).ok();
+}
+
+/// Flow: an old build recorded a `harness_disable` event with a
+/// `restore_backup` inverse over `~/.codex/config.toml`, and the user has
+/// since edited that file. Expect undo of the event to refuse and the file
+/// to stay byte-identical. Fails when undo puts the whole config file back
+/// from the backup, which drops the user's later edits.
+#[test]
+fn undo_of_an_old_harness_disable_event_refuses_and_leaves_the_config_byte_identical_or_names_the_rewrite(
+) {
+    let home = unique_temp_dir("old_harness_disable_undo");
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    let config = home.join(".codex/config.toml");
+    std::fs::write(&config, b"model = \"o3\"\n").unwrap();
+    let rt = runtime_for(&home);
+
+    let id = {
+        let mut store = rt
+            .ports
+            .history
+            .open(
+                &rt.scope,
+                skill_studio_core::ports::HistoryAccess::ReadWrite,
+            )
+            .unwrap()
+            .unwrap();
+        let guard =
+            skill_studio_core::ports::acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)
+                .unwrap();
+        let id = rt.ports.ids.next_event_id();
+        let manifest = store
+            .backup_paths(&guard, &id, std::slice::from_ref(&config))
+            .unwrap();
+        let inverse = serde_json::json!({
+            "op": "restore_backup",
+            "path": config,
+            "pre_fingerprint": "absent",
+            "post_fingerprint": "absent",
+        });
+        store
+            .record(
+                &guard,
+                &id,
+                &skill_studio_core::events::EventDraft {
+                    kind: skill_studio_core::events::EventKind::HarnessDisable,
+                    skill: skill_studio_core::identity::SkillName("gamma".into()),
+                    harness: None,
+                    scope: None,
+                    project_path: None,
+                    payload: serde_json::json!({}),
+                    inverse: Some(inverse),
+                    backup_dir: Some(manifest.backup_dir),
+                },
+            )
+            .unwrap();
+        store
+            .finish(
+                &guard,
+                &id,
+                skill_studio_core::events::EventStatus::Done,
+                None,
+            )
+            .unwrap();
+        id
+    };
+    let restore_id = {
+        let mut store = rt
+            .ports
+            .history
+            .open(
+                &rt.scope,
+                skill_studio_core::ports::HistoryAccess::ReadWrite,
+            )
+            .unwrap()
+            .unwrap();
+        let guard =
+            skill_studio_core::ports::acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)
+                .unwrap();
+        let restore_id = rt.ports.ids.next_event_id();
+        let manifest = store
+            .backup_paths(&guard, &restore_id, std::slice::from_ref(&config))
+            .unwrap();
+        store
+            .record(
+                &guard,
+                &restore_id,
+                &skill_studio_core::events::EventDraft {
+                    kind: skill_studio_core::events::EventKind::Restore,
+                    skill: skill_studio_core::identity::SkillName("gamma".into()),
+                    harness: None,
+                    scope: None,
+                    project_path: None,
+                    payload: serde_json::json!({ "target_event": id.0 }),
+                    inverse: Some(serde_json::json!({
+                        "op": "restore_backup",
+                        "path": config,
+                        "pre_fingerprint": "absent",
+                        "post_fingerprint": "absent",
+                    })),
+                    backup_dir: Some(manifest.backup_dir),
+                },
+            )
+            .unwrap();
+        store
+            .finish(
+                &guard,
+                &restore_id,
+                skill_studio_core::events::EventStatus::Done,
+                None,
+            )
+            .unwrap();
+        restore_id
+    };
+    std::fs::write(&config, b"model = \"o3\"\n# edited later by the user\n").unwrap();
+    let before = std::fs::read(&config).unwrap();
+
+    let err = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: id,
+            force: true,
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, skill_studio_core::ErrorCode::Unsupported);
+    assert_eq!(std::fs::read(&config).unwrap(), before);
+
+    let err = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: restore_id,
+            force: true,
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, skill_studio_core::ErrorCode::Unsupported);
+    assert_eq!(std::fs::read(&config).unwrap(), before);
 
     std::fs::remove_dir_all(&home).ok();
 }

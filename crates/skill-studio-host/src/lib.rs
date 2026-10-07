@@ -44,7 +44,10 @@ mod lease;
 mod opencode_db;
 mod sink;
 mod skill_uses;
+#[cfg(feature = "telemetry")]
+pub mod telemetry;
 mod tools;
+mod usage_report;
 
 pub use builder::{default_ports, default_ports_with_discovery, default_ports_with_history};
 pub use clock::SystemClock;
@@ -58,17 +61,19 @@ pub use discovery::{
 };
 pub use fs::RealFs;
 pub use gh_currency::{GhCommitLookup, GhPluginManifestLookup, GhSourceTreeLookup};
-pub use harness_detect::RealProcessSpawner;
+pub use harness_detect::{spawn_retrying_busy, RealProcessSpawner};
 pub use history::{hash_entry, NoHistoryOpener, SqliteHistoryOpener};
 pub use ids::UlidIds;
 pub use lease::FileLease;
 pub use opencode_db::opencode_databases;
-#[cfg(feature = "error-reporting")]
-pub use sink::HttpReportTransport;
-pub use sink::{NoopSink, QueuedReportSink, ReportTransport, StderrSink, REPORT_ENDPOINT_ENV};
+pub use sink::{NoopSink, StderrSink};
 pub use skill_uses::{
     is_skill_use_change, is_skill_use_change_with_databases, skill_use_watch_paths,
     skill_use_watch_paths_with_databases, SkillInvocationIndex, SkillUseRefreshReport,
     SkillUseWatchPath,
 };
 pub use tools::{LoginShellToolLookup, PathToolLookup};
+pub use usage_report::{
+    desktop_usage_cache_path, usage_report, SkillUsage, SkillUsageRow, UsageReport,
+    DEFAULT_USAGE_DAYS,
+};

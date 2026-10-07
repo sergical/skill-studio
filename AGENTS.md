@@ -2,13 +2,13 @@
 
 ## Project Overview
 
-Skill Studio is a Tauri 2.x desktop application to manage, sync, and test agent skills across Claude Code, Codex, OpenCode, and pi, with skills.sh discovery built in.
+Skill Studio is a Tauri 2.x desktop application to manage, sync, and test agent skills across Claude Code, Codex, OpenCode, pi, Cursor, and Grok Build, with skills.sh discovery built in.
 
 ### Core Features
 
 1. **Skill Discovery** - Search 36,000+ skills from skills.sh
 2. **Skill Installation** - Install/remove/update via `npx skills` CLI to global or project scope
-3. **First-Class Agents** - Claude Code, Codex, OpenCode, pi, plus a shared `.agents/skills` root
+3. **First-Class Agents** - Claude Code, Codex, OpenCode, pi, Cursor, Grok Build, plus a shared `.agents/skills` root
 4. **Provenance** - Every installed skill is classified as `skills-sh`, `plugin`, `dotagents`, or `manual` (precedence: dotagents > plugin > skills-sh > manual)
 5. **Native Plugin Enumeration** - Discovers skills shipped inside Claude Code (`~/.claude/plugins/cache`) and Codex (`~/.codex/plugins/cache`) plugin caches, per the agent-plugins.org manifest convention
 6. **Spec Validation** - Flags agentskills.io SKILL.md spec violations (`spec_violations`) and detects the getsentry/skillet spec pattern (`has_spec`)
@@ -23,22 +23,22 @@ Skill Studio is a Tauri 2.x desktop application to manage, sync, and test agent 
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
 # Development mode (starts Vite + Tauri)
-npm run tauri dev
+pnpm run tauri dev
 
 # Build for production
-npm run tauri build
+pnpm run tauri build
 
 # Frontend only (Vite dev server)
-npm run dev
+pnpm run dev
 
 # Type check + build frontend
-npm run build
+pnpm run build
 
 # Preview built frontend
-npm run preview
+pnpm run preview
 ```
 
 ### Rust Commands
@@ -85,25 +85,51 @@ cargo mutants -p skill-studio-core --all-features --file crates/skill-studio-cor
 cat mutants.out/missed.txt
 ```
 
+### Worktrees and Disk Use
+
+A Rust `target/` folder takes 9 to 17 GB. In two weeks, 15 worktrees with their
+own `target/` filled 155 GB of the user's disk. These rules are firm:
+
+- **Share one build folder.** In any worktree under `.claude/worktrees/`, build
+  with the main checkout's `target/`. Never create a second one:
+
+  ```bash
+  export CARGO_TARGET_DIR="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/target"
+  ```
+
+  Cargo locks the folder, so two builds at the same time wait for each other.
+  That is the expected cost.
+
+- **Clean up when the work is done.** When a worktree's PR merges or closes, or
+  the session ends with its work pushed, run `git worktree remove <path>`. If
+  the worktree has uncommitted changes, keep it, delete its `target/` and
+  `node_modules/`, and tell the user it is still there.
+- **No stray copies.** Do not clone the repo or run `pnpm install` in `.scratch/`, the
+  scratchpad or `/tmp` unless the task needs it, and delete the copy in the same
+  session.
+- **Check before you report.** Before the final message of a session that
+  created worktrees or builds, run
+  `du -sh .claude/worktrees .scratch 2>/dev/null` and say what is left and why.
+
 ### Frontend Commands
 
 ```bash
 # Type check only (no emit)
-npm run typecheck
+pnpm run typecheck
 
 # Lint (oxlint)
-npm run lint
-npm run lint:fix
+pnpm run lint
+pnpm run lint:fix
 
 # Format (oxfmt)
-npm run format
-npm run format:check
+pnpm run format
+pnpm run format:check
 
 # React health check (react-doctor)
-npm run doctor
+pnpm run doctor
 
 # Full gate: typecheck + lint + format:check + doctor + knip + test + types:check + cargo fmt --all --check + clippy --workspace --all-targets -D warnings + cargo test --workspace (CI also runs cargo machete and cargo deny check)
-npm run check
+pnpm run check
 ```
 
 ## Tech Stack
@@ -141,6 +167,7 @@ removed; do not list individual source files here.
 ├── packages/
 │   ├── lib/                      # Shared TypeScript library
 │   ├── marketing/                # Marketing site (Vite + StyleX) and Remotion walkthroughs
+│   ├── npm/                      # npm packages for the CLI; not workspaces (packages/* stops one level up)
 │   └── ui/                       # Shared UI primitives (@skill-studio/ui)
 ├── docs/                         # Specs and reference docs
 ├── tools/
@@ -331,7 +358,7 @@ Enabled in `apps/desktop/tsconfig.json`:
 
 ## Reference docs
 
-- `docs/agent-skill-conventions.md` — agentskills.io spec rules, per-agent discovery paths, invocation control (explicit vs model-invocable), native disable mechanisms, and the local data sources Skill Studio reads. Check it before researching agent behavior again.
+- `docs/agent-skill-conventions.md` — agentskills.io spec rules, per-agent discovery paths, invocation control (explicit vs model-invocable), the agent settings that hide a skill (read only; Park is the only off), and the local data sources Skill Studio reads. Check it before researching agent behavior again.
 
 ## Skills.sh Integration
 
@@ -339,7 +366,7 @@ Skill Studio integrates with skills.sh for skill discovery and installation.
 
 ### API Endpoint
 
-- Default: requests route through the local Skill Studio server (`apps/server`, default `http://127.0.0.1:8787/api/v1`), which holds the real skills.sh key - no client key needed. Settings shows the resolved mode; see `apps/server/README.md`.
+- Default: requests route through the local Skill Studio server (`apps/server`, default `http://127.0.0.1:8787/api/v1`), which holds the real skills.sh key - no client key needed. Settings shows the resolved mode; see `apps/server/README.md`. Development builds use `http://127.0.0.1:8787`; release builds use the hosted proxy at `https://api.useskillstudio.com`.
 - Developer override: a non-empty `skills_sh_api_key` in `~/.agents/skill-studio.json` instead sends `Authorization: Bearer <key>` straight to `https://skills.sh/api/v1`, bypassing the server.
 - **List**: `GET /skills?view=all-time&page=<0-indexed>&per_page=<n>` - paginated, sorted by install count
 - **Search**: `GET /skills/search?q=<query>&limit=<n>` - no pagination, one shot up to `limit`
@@ -380,6 +407,8 @@ Tracks installed skills with their sources and hashes:
 | Codex       | `.codex/skills/`                    | `~/.codex/skills/`                           |
 | OpenCode    | `.opencode/skills/` (also `skill/`) | `~/.config/opencode/skills/` (also `skill/`) |
 | pi          | `.pi/skills/`                       | `~/.pi/agent/skills/`                        |
+| Cursor      | `.cursor/skills/`                   | `~/.cursor/skills/`                          |
+| Grok Build  | `.grok/skills/`                     | `~/.grok/skills/`                            |
 | shared      | `.agents/skills/`                   | `~/.agents/skills/`                          |
 
 `npx skills` can still target the full agent list; see `apps/desktop/src-tauri/src/skills/agents.rs` for `AgentId`.

@@ -5,14 +5,15 @@
   "version": "0.1.0",
   "identifier": "com.skillstudio.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "pnpm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "pnpm run build",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
+        "create": false,
         "title": "Skill Studio",
         "width": 1200,
         "height": 800,
@@ -43,13 +44,14 @@
     "shortDescription": "Manage coding assistant configurations",
     "longDescription": "A desktop app to manage configuration files for Claude Code, OpenCode, and other AI coding assistants.",
     "macOS": {
-      "hardenedRuntime": true
+      "hardenedRuntime": true,
+      "minimumSystemVersion": "13.0"
     }
   },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFEMjg3Njk0OTk0NDk0MUQKUldRZGxFU1psSFlvSFZNajRpRGdVcDUrY3hNTFFVK2pqMzFxeDVmZ1BxaTRRVjB0TDZvRS9SZ0MK",
-      "endpoints": ["https://github.com/sergical/agent-studio/releases/latest/download/latest.json"]
+      "endpoints": ["https://github.com/sergical/skill-studio/releases/latest/download/latest.json"]
     }
   }
 }

@@ -250,6 +250,30 @@ fn home_env_lock() -> &'static std::sync::Mutex<()> {
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
+/// `write_fork_registry`, for a test that is not already holding
+/// [`home_env_lock`].
+///
+/// `write_fork_registry` roots its advisory lease at `registry_lease_root()`
+/// (`core_runtime::data_root()`'s `leases` directory), and `data_root()`
+/// reads the *process-global* `HOME` rather than its `home` argument.
+/// `run_desktop` points `HOME` at the fixture it is scanning and the fixture
+/// is deleted once that lock is released, so a write that ran while a
+/// fixture was the ambient `HOME` would root its lease inside a directory
+/// another test then removes. `FileLease::acquire` creates that lease
+/// directory and then opens the lock file inside it, so the removal lands
+/// between the two and the write fails with
+/// `Io: No such file or directory (os error 2)`. Holding the lock keeps the
+/// ambient `HOME` at the real one for the whole write.
+fn write_fork_registry_under_home_lock(
+    home: &Path,
+    registry: &skill_studio_lib::skill_fork_registry::ForkRegistry,
+) -> Result<(), String> {
+    let _guard = home_env_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    write_fork_registry(home, registry)
+}
+
 /// Runs the desktop's assembly path. The caller must already hold
 /// [`home_env_lock`]: this swaps the process-global `HOME` var (see the
 /// lock's own doc), and the lock is not reentrant - a caller that also
@@ -324,6 +348,8 @@ fn core_scan(
         discovery: None,
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
+
+        telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
     };
     let mut scope = RuntimeScope::fixture(home);
     scope.read_timeout_ms = 10_000;
@@ -432,7 +458,7 @@ fn write_skills_sh_lock(home: &Path, name: &str) {
 }
 
 /// Writes a dotagents ledger pair (`agents.lock` + `agents.toml`) claiming
-/// `name` under `root` (`<home>/.agents` or `<project>/.agents`), matching
+/// `name` under `root` (`<home>/.agents` or the project root), matching
 /// the deleted tests' `write_dual_ledger`/inline literals.
 fn write_dotagents_ledger(root: &Path, name: &str) {
     std::fs::create_dir_all(root).unwrap();
@@ -612,9 +638,10 @@ fn registered_copy_record_owns_the_copy() {
             project_path: None,
             content_hash,
             disabled: false,
+            split_source: None,
         },
     );
-    skill_studio_lib::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+    write_fork_registry_under_home_lock(&home, &registry).unwrap();
 
     let core = run_core("copy-owner", &home);
 
@@ -663,7 +690,7 @@ fn fork_record_owns_the_fork() {
             base_commit: "deadbeef".to_string(),
         },
     );
-    skill_studio_lib::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+    write_fork_registry_under_home_lock(&home, &registry).unwrap();
 
     let core = run_core("fork-owner", &home);
 
@@ -761,17 +788,20 @@ fn opencode_config_dir_resolves_the_same_on_linux_and_macos_rules_or_names_the_d
     builder
         .materialize(&home)
         .unwrap_or_else(|e| panic!("materialize: {e}"));
-    // Move the fixture's own `opencode.json` out from under the default
-    // `home/.config/opencode` and into the `XDG_CONFIG_HOME` location, so a
-    // scan that ignores the override finds nothing there.
+    // Move the fixture's own `opencode.json` and `skills` folder out from
+    // under the default `home/.config/opencode` and into the
+    // `XDG_CONFIG_HOME` location, where OpenCode reads both, so a scan that
+    // ignores the override finds nothing there.
     let xdg_config_home = dir.join("xdg-config");
     let xdg_opencode_dir = xdg_config_home.join("opencode");
     std::fs::create_dir_all(&xdg_opencode_dir).unwrap();
-    std::fs::rename(
-        home.join(".config/opencode/opencode.json"),
-        xdg_opencode_dir.join("opencode.json"),
-    )
-    .unwrap();
+    for entry in ["opencode.json", "skills"] {
+        std::fs::rename(
+            home.join(".config/opencode").join(entry),
+            xdg_opencode_dir.join(entry),
+        )
+        .unwrap();
+    }
 
     let _guard = home_env_lock()
         .lock()
@@ -807,15 +837,16 @@ fn opencode_config_dir_resolves_the_same_on_linux_and_macos_rules_or_names_the_d
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// Proves the first of the desktop's two `Ambiguous` carve-outs: a universal
-/// root beside an `agents.toml`/`agents.lock` that names no row for this
-/// skill. The dotagents install owns the root, so the skill reads as
-/// dotagents-managed, but nothing says who owns it - and `Ambiguous` permits
-/// no repair where `Manual` permits a direct one, so a core that skipped the
-/// carve-out would widen what a repair may touch.
+/// Proves an unnamed folder beside dotagents files stays unmanaged: a
+/// universal root beside an `agents.toml`/`agents.lock` that names no row for
+/// this skill is `Manual`. dotagents prunes only folders `agents.lock` names
+/// (`cli/commands/install/skills.js:141-154`) and `sync` adopts every other
+/// folder without changing it (`cli/commands/sync.js:60-88`), so the folder
+/// has no owner tool. Reading it as `Ambiguous` made its invocation edit fork
+/// first and the fork refuse it.
 #[test]
-fn a_universal_root_beside_an_unnamed_dotagents_ledger_is_ambiguous() {
-    let dir = unique_temp_dir("shared-root-ambiguous");
+fn a_universal_root_beside_an_unnamed_dotagents_ledger_is_manual() {
+    let dir = unique_temp_dir("shared-root-unnamed");
     std::fs::create_dir_all(&dir).unwrap();
     let home = dir.canonicalize().unwrap();
 
@@ -830,17 +861,17 @@ fn a_universal_root_beside_an_unnamed_dotagents_ledger_is_ambiguous() {
     )
     .unwrap();
 
-    let core = run_core("shared-root-ambiguous", &home);
+    let core = run_core("shared-root-unnamed", &home);
 
     assert_eq!(
         owner_kind_at(&core, "orphan-skill", &home, &orphan),
-        "ambiguous"
+        "manual"
     );
 
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// Proves the second carve-out: a symlink that both lives in the universal
+/// Proves the remaining carve-out: a symlink that both lives in the universal
 /// root and points back into it. The bytes belong to the deployment it
 /// points at, whose own ledger entry may say otherwise, so this end of the
 /// link claims no owner.
@@ -933,6 +964,7 @@ fn copy_record(
         project_path: None,
         content_hash,
         disabled: false,
+        split_source: None,
     }
 }
 
@@ -981,7 +1013,7 @@ fn exact_project_dual_ledger_owner_is_ambiguous_and_read_only() {
     let project = home.join("project");
 
     let skill_dir = write_universal_skill(&project, "find-bugs");
-    write_dotagents_ledger(&project.join(".agents"), "find-bugs");
+    write_dotagents_ledger(&project, "find-bugs");
     write_skills_sh_lock(&project, "find-bugs");
 
     let inventory = core_scan(&home, std::slice::from_ref(&project), None);
@@ -1030,10 +1062,8 @@ fn frontmatter_name_cannot_claim_a_skills_sh_owner() {
 
 /// Ports `frontmatter_name_cannot_claim_a_dotagents_owner`: the same
 /// frontmatter/directory mismatch, but against a dotagents ledger (`agents.toml`
-/// row named `bar`) instead of the skills.sh lock. The universal root sits
-/// beside dotagents ledger files that name no row for `foo`, so the
-/// unnamed-root carve-out applies and the deployment is `Ambiguous`, not
-/// `Manual`.
+/// row named `bar`) instead of the skills.sh lock. The ledger names no row
+/// for the folder `foo`, so the deployment is `Manual`.
 #[test]
 fn frontmatter_name_cannot_claim_a_dotagents_owner() {
     let dir = unique_temp_dir("frontmatter-dotagents");
@@ -1052,7 +1082,7 @@ fn frontmatter_name_cannot_claim_a_dotagents_owner() {
     let inventory = core_scan(&home, &[], None);
     let row = deployment_at(&inventory, "foo", &home, &skill_dir);
 
-    assert_eq!(row.owner_kind, LifecycleOwnerKind::Ambiguous);
+    assert_eq!(row.owner_kind, LifecycleOwnerKind::Manual);
     assert!(row.owner_id.is_none());
 
     std::fs::remove_dir_all(&dir).ok();
@@ -1133,7 +1163,7 @@ fn copy_ownership_requires_an_exact_recorded_deployment_identity() {
             content_hash.clone(),
         ),
     );
-    skill_studio_lib::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+    write_fork_registry_under_home_lock(&home, &registry).unwrap();
 
     let matched = core_scan(&home, &[], None);
     assert_eq!(
@@ -1147,8 +1177,7 @@ fn copy_ownership_requires_an_exact_recorded_deployment_identity() {
         wrong_id.clone(),
         copy_record(&wrong_id, "find-bugs", &skill_dir, content_hash),
     );
-    skill_studio_lib::skill_fork_registry::write_fork_registry(&home, &mismatched_registry)
-        .unwrap();
+    write_fork_registry_under_home_lock(&home, &mismatched_registry).unwrap();
 
     let mismatched = core_scan(&home, &[], None);
     assert_eq!(
@@ -1187,7 +1216,7 @@ fn copy_ownership_rejects_edited_content() {
         deployment_id.clone(),
         copy_record(&deployment_id, "find-bugs", &skill_dir, content_hash),
     );
-    skill_studio_lib::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+    write_fork_registry_under_home_lock(&home, &registry).unwrap();
 
     write_skill_content(&skill_dir, "edited content");
 
@@ -1226,7 +1255,7 @@ fn copy_ownership_rejects_an_empty_legacy_content_hash() {
         deployment_id.clone(),
         copy_record(&deployment_id, "find-bugs", &skill_dir, String::new()),
     );
-    skill_studio_lib::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+    write_fork_registry_under_home_lock(&home, &registry).unwrap();
 
     let inventory = core_scan(&home, &[], None);
     let row = deployment_at(&inventory, "find-bugs", &home, &skill_dir);

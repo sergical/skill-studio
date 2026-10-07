@@ -6,6 +6,7 @@
 
 use std::fs::{self, File};
 use std::io::Write as _;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -16,6 +17,7 @@ use skill_studio_core::error::{CoreError, ErrorCode};
 use skill_studio_core::events::{
     BackupEntry, BackupManifest, EventDraft, EventFilter, EventRecord, EventStatus,
 };
+use skill_studio_core::fsops::StageFile;
 use skill_studio_core::identity::{sha256_hex, AgentId, EventId, Fingerprint, SkillName};
 use skill_studio_core::ports::{ExclusiveGuard, HistoryAccess, HistoryOpener, HistoryStore};
 use skill_studio_core::scope::NormalizedScope;
@@ -133,6 +135,16 @@ impl SqliteHistoryStore {
         let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent).map_err(|e| CoreError::io(parent, e))?;
         let conn = Connection::open(db_path).map_err(sql_err)?;
+        // The desktop's `EventStore` opens this same file from a second
+        // connection (`core_runtime::history_db_path`); WAL lets both read
+        // concurrently, but a `busy_timeout` keeps a losing writer waiting
+        // instead of failing immediately with `SQLITE_BUSY` - matches the
+        // desktop's `event_store::open`. Set before `journal_mode = WAL`
+        // itself, since that pragma is its own write that can hit a busy
+        // database - a desktop write in flight at CLI/MCP startup could
+        // otherwise fail this whole open instead of just waiting.
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(sql_err)?;
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(sql_err)?;
         // `reverted_by` is claimed before the restore row that references it
@@ -151,6 +163,55 @@ impl SqliteHistoryStore {
     fn backup_dir_for(&self, id: &EventId) -> PathBuf {
         self.backups_root.join(&id.0)
     }
+
+    /// Merges `patch`'s top-level keys into the JSON object stored in
+    /// `column` for event `id`. A missing or non-object value is left as-is.
+    fn patch_json_column(
+        &self,
+        column: JsonColumn,
+        id: &EventId,
+        patch: &serde_json::Value,
+    ) -> Result<(), CoreError> {
+        let Some(patch_obj) = patch.as_object() else {
+            return Ok(());
+        };
+        let (select, update) = match column {
+            JsonColumn::Payload => (
+                "SELECT payload FROM events WHERE id = ?1",
+                "UPDATE events SET payload = ?1 WHERE id = ?2",
+            ),
+            JsonColumn::Inverse => (
+                "SELECT inverse FROM events WHERE id = ?1",
+                "UPDATE events SET inverse = ?1 WHERE id = ?2",
+            ),
+        };
+        let stored: Option<String> = self
+            .conn
+            .query_row(select, params![id.0], |row| row.get(0))
+            .map_err(sql_err)?;
+        let Some(stored) = stored else {
+            return Ok(());
+        };
+        let mut value: serde_json::Value =
+            serde_json::from_str(&stored).unwrap_or(serde_json::Value::Null);
+        let Some(obj) = value.as_object_mut() else {
+            return Ok(());
+        };
+        for (key, patch_value) in patch_obj {
+            obj.insert(key.clone(), patch_value.clone());
+        }
+        let updated = serde_json::to_string(&value).map_err(json_err)?;
+        self.conn
+            .execute(update, params![updated, id.0])
+            .map_err(sql_err)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum JsonColumn {
+    Payload,
+    Inverse,
 }
 
 impl HistoryStore for SqliteHistoryStore {
@@ -167,7 +228,12 @@ impl HistoryStore for SqliteHistoryStore {
             sql.push_str(" WHERE ");
             sql.push_str(&clauses.join(" AND "));
         }
-        sql.push_str(" ORDER BY rowid DESC LIMIT ?");
+        // `ts DESC` first, `rowid DESC` only as a tiebreaker: legacy rows the
+        // desktop's `EventStore::import_legacy_events` imports get appended
+        // at the end of the table (highest `rowid`) regardless of their
+        // original `ts`, so `rowid` alone would sort an old imported row
+        // above events written just now.
+        sql.push_str(" ORDER BY ts DESC, rowid DESC LIMIT ?");
 
         let mut owned_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         if let Some(skill) = &filter.skill {
@@ -371,6 +437,24 @@ impl HistoryStore for SqliteHistoryStore {
         Ok(())
     }
 
+    fn patch_payload(
+        &mut self,
+        _guard: &ExclusiveGuard,
+        id: &EventId,
+        patch: serde_json::Value,
+    ) -> Result<(), CoreError> {
+        self.patch_json_column(JsonColumn::Payload, id, &patch)
+    }
+
+    fn patch_inverse(
+        &mut self,
+        _guard: &ExclusiveGuard,
+        id: &EventId,
+        patch: serde_json::Value,
+    ) -> Result<(), CoreError> {
+        self.patch_json_column(JsonColumn::Inverse, id, &patch)
+    }
+
     fn claim_revert(
         &mut self,
         _guard: &ExclusiveGuard,
@@ -461,7 +545,7 @@ impl HistoryStore for SqliteHistoryStore {
         &self,
         backup_dir: &str,
         relative: &str,
-    ) -> Result<Vec<(PathBuf, Vec<u8>)>, CoreError> {
+    ) -> Result<Vec<StageFile>, CoreError> {
         let root = self.root.join(backup_dir).join(relative);
         let mut out = Vec::new();
         read_backup_files_into(&root, &root, &mut out)?;
@@ -470,12 +554,13 @@ impl HistoryStore for SqliteHistoryStore {
 }
 
 /// Recursion for [`SqliteHistoryStore::read_backup_files`]: walks `dir`
-/// (under `root`) and appends `(path relative to root, bytes)` for every
-/// regular file. A symlink is an error - see the trait method's own doc.
+/// (under `root`) and appends every regular file with its path relative to
+/// `root`, its bytes, and its permission bits (the backup is an `fs::copy`,
+/// which keeps them). A symlink is an error - see the trait method's own doc.
 fn read_backup_files_into(
     root: &Path,
     dir: &Path,
-    out: &mut Vec<(PathBuf, Vec<u8>)>,
+    out: &mut Vec<StageFile>,
 ) -> Result<(), CoreError> {
     let mut entries: Vec<_> = fs::read_dir(dir)
         .map_err(|e| CoreError::io(dir, e))?
@@ -497,7 +582,11 @@ fn read_backup_files_into(
         } else {
             let bytes = fs::read(&path).map_err(|e| CoreError::io(&path, e))?;
             let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
-            out.push((relative, bytes));
+            out.push(StageFile {
+                relative,
+                bytes,
+                mode: Some(meta.permissions().mode() & 0o777),
+            });
         }
     }
     Ok(())
@@ -1081,5 +1170,166 @@ mod tests {
         assert_ne!(parsed.entries[&present_key].fingerprint, "absent");
         assert_eq!(parsed.entries[&absent_key].relative_path, "");
         assert_eq!(parsed.entries[&absent_key].fingerprint, "absent");
+    }
+
+    #[test]
+    fn pending_lists_only_rows_still_pending_or_drops_them_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scope = scope_for(tmp.path());
+        let guard = guard_for(tmp.path(), &scope);
+        let db_path = tmp.path().join("history").join("events.sqlite3");
+        let mut store = SqliteHistoryStore::open(&db_path).unwrap();
+
+        let finished = EventId::from_ulid(ulid::Ulid::new());
+        store
+            .record(
+                &guard,
+                &finished,
+                &draft(EventKind::Install, "alpha", serde_json::json!({}), None),
+            )
+            .unwrap();
+        store
+            .finish(&guard, &finished, EventStatus::Done, None)
+            .unwrap();
+
+        let still_pending = EventId::from_ulid(ulid::Ulid::new());
+        store
+            .record(
+                &guard,
+                &still_pending,
+                &draft(EventKind::Install, "beta", serde_json::json!({}), None),
+            )
+            .unwrap();
+
+        let rows = store.pending().unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+            vec![still_pending],
+            "pending() must list only the row still pending, not the finished one and not \
+             an empty list"
+        );
+    }
+
+    #[test]
+    fn read_manifest_marks_an_absent_path_with_no_fingerprint_and_a_backed_up_dir_as_a_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scope = scope_for(tmp.path());
+        let guard = guard_for(tmp.path(), &scope);
+        let db_path = tmp.path().join("history").join("events.sqlite3");
+        let mut store = SqliteHistoryStore::open(&db_path).unwrap();
+
+        let present_dir = tmp.path().join("skills").join("alpha");
+        fs::create_dir_all(&present_dir).unwrap();
+        fs::write(present_dir.join("SKILL.md"), b"hello").unwrap();
+        let absent = tmp.path().join("skills").join("gone");
+
+        let id = EventId::from_ulid(ulid::Ulid::new());
+        let written = store
+            .backup_paths(&guard, &id, &[present_dir.clone(), absent.clone()])
+            .unwrap();
+
+        let manifest = store.read_manifest(&written.backup_dir).unwrap();
+        let present_entry = manifest
+            .entries
+            .iter()
+            .find(|e| e.original == present_dir)
+            .expect("the backed-up directory must round-trip");
+        let absent_entry = manifest
+            .entries
+            .iter()
+            .find(|e| e.original == absent)
+            .expect("the absent path must round-trip");
+
+        assert!(
+            present_entry.fingerprint.is_some(),
+            "a path that existed at backup time must keep a fingerprint, or this test proves \
+             nothing about reading the on-disk `\"absent\"` marker as `None`"
+        );
+        assert!(
+            present_entry.is_dir,
+            "a backed-up directory's copy is itself a directory on disk, or this test proves \
+             nothing about reading that shape back as `is_dir`"
+        );
+        assert!(
+            absent_entry.fingerprint.is_none(),
+            "an absent path's on-disk `\"absent\"` marker must read back as no fingerprint, \
+             not as a real one"
+        );
+        assert!(
+            !absent_entry.is_dir,
+            "an absent path has no relative copy on disk and must never read as a directory"
+        );
+    }
+
+    #[test]
+    fn read_backup_bytes_returns_the_copys_real_bytes_or_an_empty_or_placeholder_buffer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scope = scope_for(tmp.path());
+        let guard = guard_for(tmp.path(), &scope);
+        let db_path = tmp.path().join("history").join("events.sqlite3");
+        let mut store = SqliteHistoryStore::open(&db_path).unwrap();
+
+        let present = tmp.path().join("skills").join("SKILL.md");
+        fs::create_dir_all(present.parent().unwrap()).unwrap();
+        fs::write(&present, b"the real backed-up bytes").unwrap();
+
+        let id = EventId::from_ulid(ulid::Ulid::new());
+        let written = store
+            .backup_paths(&guard, &id, std::slice::from_ref(&present))
+            .unwrap();
+        let entry = &written.entries[0];
+
+        let bytes = store
+            .read_backup_bytes(&written.backup_dir, &entry.relative)
+            .unwrap();
+        assert_eq!(
+            bytes, b"the real backed-up bytes",
+            "read_backup_bytes must return the copy's real bytes, not an empty or \
+             placeholder buffer"
+        );
+    }
+
+    #[test]
+    fn read_backup_files_walks_every_file_under_a_backed_up_dir_or_returns_none_of_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scope = scope_for(tmp.path());
+        let guard = guard_for(tmp.path(), &scope);
+        let db_path = tmp.path().join("history").join("events.sqlite3");
+        let mut store = SqliteHistoryStore::open(&db_path).unwrap();
+
+        let present_dir = tmp.path().join("skills").join("alpha");
+        fs::create_dir_all(present_dir.join("nested")).unwrap();
+        fs::write(present_dir.join("SKILL.md"), b"top").unwrap();
+        fs::write(present_dir.join("nested").join("more.md"), b"nested").unwrap();
+
+        let id = EventId::from_ulid(ulid::Ulid::new());
+        let written = store
+            .backup_paths(&guard, &id, std::slice::from_ref(&present_dir))
+            .unwrap();
+        let entry = &written.entries[0];
+
+        let mut files = store
+            .read_backup_files(&written.backup_dir, &entry.relative)
+            .unwrap();
+        files.sort_by(|a, b| a.relative.cmp(&b.relative));
+        let names: Vec<_> = files.iter().map(|f| f.relative.clone()).collect();
+        assert_eq!(
+            names,
+            vec![
+                PathBuf::from("SKILL.md"),
+                PathBuf::from("nested").join("more.md"),
+            ],
+            "read_backup_files must walk every file under the backed-up directory, not return \
+             none of them"
+        );
+        assert_eq!(
+            files
+                .iter()
+                .find(|f| f.relative == Path::new("SKILL.md"))
+                .unwrap()
+                .bytes,
+            b"top",
+            "each entry's bytes must be the real file contents, not a placeholder"
+        );
     }
 }

@@ -1,3 +1,5 @@
+> Historical snapshot. `set_harness_enabled` was removed in #387; Park is now the only way to turn a skill off.
+
 # Install
 
 This area adds a skill to disk, through the skills.sh CLI, the dotagents CLI, or a plain copy.
@@ -59,6 +61,7 @@ PR #104 fixed Add-by-source so a newly chosen Project registers with the backend
 It also added a shared guard that refuses missing or empty Project paths before any dispatch, root scan, trust check, or provider work.
 Both PRs are scoped to the desktop app and carry their own native-fixture verification.
 Neither is a wholesale redesign of add_skill's write order, but both close feedback and correctness gaps between the UI action and the write.
+`fix/project-install-runs-in-project-dir` ported PR #101's project-scope fix into `skill-studio-core`'s own `ops_install_cli.rs` (and the desktop's dormant `skill_fork.rs` builder): a project-scope skills.sh install now runs `npx` with the project path as the process cwd instead of a nonexistent `--cwd` flag.
 
 ## Desired state
 

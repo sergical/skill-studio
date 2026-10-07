@@ -1,0 +1,54 @@
+// ============================================================================
+// Skill Studio - skill-source-line
+// The "by owner/repo · 12.3k installs" line under an installed skill's title.
+// Numbers only: no "official" or "verified" claim.
+// ============================================================================
+
+import type { InstalledSkill } from "@skill-studio/lib";
+import { formatInstalls } from "../../lib/skill-installs-format";
+import { sourceLedgerLabel } from "./installed-skill-source-ledger-model";
+
+export interface SkillSourceLine {
+  /** Text before the source label, e.g. "by "; empty for non-skills.sh sources. */
+  prefix: string;
+  label: string;
+  /** Where the label links; null when the source has no page. */
+  href: string | null;
+  /** "12.3k installs", or null when the count is unknown. */
+  installs: string | null;
+}
+
+/** "1 install" / "12.3k installs". */
+function installsLabel(count: number): string {
+  return `${formatInstalls(count)} ${count === 1 ? "install" : "installs"}`;
+}
+
+/** A GitHub-installed skill whose source is a plain `owner/repo`; a git URL or local path is
+ * private and is neither shown as a maker nor sent to skills.sh. */
+export function hasSkillsShSource(skill: InstalledSkill): boolean {
+  return (
+    skill.source_kind === "skills-sh" &&
+    skill.source_type === "github" &&
+    /^[^/:\s]+\/[^/:\s]+$/.test(skill.source)
+  );
+}
+
+/**
+ * skills.sh skills show who made them and how many installs skills.sh counts;
+ * every other source (plugin, fork, in-repo, manual) shows its existing source
+ * label with no count. `installs` is the cached skills.sh count, if any.
+ */
+export function skillSourceLine(
+  skill: InstalledSkill,
+  installs: number | null | undefined,
+): SkillSourceLine {
+  if (!hasSkillsShSource(skill)) {
+    return { prefix: "", label: sourceLedgerLabel(skill), href: null, installs: null };
+  }
+  return {
+    prefix: "by ",
+    label: skill.source,
+    href: (skill.source_url ?? `https://github.com/${skill.source}`).replace(/\.git$/, ""),
+    installs: installs == null ? null : installsLabel(installs),
+  };
+}

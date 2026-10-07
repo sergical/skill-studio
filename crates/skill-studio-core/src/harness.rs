@@ -378,15 +378,7 @@ impl CapabilityReport {
             Support::Unknown => Some(format!("{name}: no primary source found")),
             _ => None,
         };
-        let native = facts
-            .native_disable
-            .as_ref()
-            .map_or(Support::Unknown, |d| d.writable.clone());
         let operations = vec![
-            OperationSupport {
-                operation: "set_harness_enabled".into(),
-                support: native,
-            },
             OperationSupport {
                 operation: "set_claude_link".into(),
                 support: facts.follows_per_skill_link.clone(),
@@ -460,7 +452,8 @@ const PI_SKILLS_DOC: &str =
     "https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md";
 const PI_PACKAGES_DOC: &str =
     "https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/packages.md";
-const PI_SETTINGS_DOC: &str = "https://pi.dev/docs/latest/settings";
+const CURSOR_SKILLS_DOC: &str = "https://cursor.com/docs/context/skills";
+const GROK_SKILLS_DOC: &str = "https://docs.x.ai/build/features/skills-plugins-marketplaces";
 const CODE_SURVEY: &str = "apps/desktop/src-tauri/src/skills/agents.rs";
 const CLAUDE_TRANSCRIPT_READER: &str = "crates/skill-studio-host/src/skill_uses.rs";
 const CODEX_TRANSCRIPT_READER: &str = "crates/skill-studio-core/src/skill_uses/codex.rs";
@@ -529,7 +522,7 @@ fn claude_code() -> HarnessFacts {
         native_disable: Some(NativeDisableSpec {
             mechanism: DisableMechanism::ClaudeSkillOverrides,
             scopes: vec![ScopeLevel::Global, ScopeLevel::Project],
-            writable: Support::Unknown,
+            writable: Support::Yes(ev()),
             disabled_by: DisabledBy::ClaudeSkillOverrides,
             evidence: ev(),
         }),
@@ -788,9 +781,10 @@ fn pi() -> HarnessFacts {
             mechanism: DisableMechanism::PiSettings,
             scopes: vec![ScopeLevel::Global, ScopeLevel::Project],
             // The `settings.json` `skills` array accepts `!pattern` and
-            // `-path` exclusions; the exact entry the interactive
-            // `pi config` writes is undocumented.
-            writable: Support::Partial(Evidence::verified(PI_SETTINGS_DOC)),
+            // `-path` exclusions, but the exact entry the interactive
+            // `pi config` writes is undocumented, so Skill Studio writes
+            // none: Park is the off path.
+            writable: Support::Unknown,
             disabled_by: DisabledBy::PiSettings,
             evidence: Evidence::verified(PI_PACKAGES_DOC),
         }),
@@ -819,30 +813,55 @@ fn pi() -> HarnessFacts {
 
 fn cursor() -> HarnessFacts {
     let ev = || Evidence::inferred(CODE_SURVEY);
+    let doc = || Evidence::verified(CURSOR_SKILLS_DOC);
+    let mut roots = vec![
+        root(
+            ScopeLevel::Global,
+            ".cursor/skills",
+            RootRole::Own,
+            false,
+            doc(),
+        ),
+        root(
+            ScopeLevel::Project,
+            ".cursor/skills",
+            RootRole::Own,
+            false,
+            doc(),
+        ),
+        root(
+            ScopeLevel::Global,
+            ".agents/skills",
+            RootRole::Universal,
+            false,
+            doc(),
+        ),
+        root(
+            ScopeLevel::Project,
+            ".agents/skills",
+            RootRole::Universal,
+            false,
+            doc(),
+        ),
+    ];
+    // "For compatibility, Cursor also loads skills from Claude and Codex
+    // directories", at both levels.
+    for level in [ScopeLevel::Global, ScopeLevel::Project] {
+        for path in [".claude/skills", ".codex/skills"] {
+            roots.push(root(level, path, RootRole::CrossHarness, false, doc()));
+        }
+    }
     HarnessFacts {
         id: AgentId::from(AgentId::CURSOR),
         display_name: "Cursor".into(),
-        roots: vec![
-            root(
-                ScopeLevel::Global,
-                ".cursor/skills",
-                RootRole::Own,
-                false,
-                ev(),
-            ),
-            root(
-                ScopeLevel::Project,
-                ".cursor/skills",
-                RootRole::Own,
-                false,
-                ev(),
-            ),
-        ],
-        reads_universal_root: Support::Unknown,
+        roots,
+        reads_universal_root: Support::Yes(doc()),
         follows_per_skill_link: Support::Unknown,
         follows_whole_dir_link: Support::Unknown,
         skips_hidden_entries: Support::Unknown,
         all_skills_disable: Support::Unknown,
+        // The docs name no per-skill off switch, only
+        // `disable-model-invocation`; Park is the off path.
         native_disable: None,
         invocation_control: InvocationControlSpec {
             model_invocation: Support::Unknown,
@@ -866,30 +885,60 @@ fn cursor() -> HarnessFacts {
 
 fn grok_build() -> HarnessFacts {
     let ev = || Evidence::inferred(CODE_SURVEY);
+    let doc = || Evidence::verified(GROK_SKILLS_DOC);
+    // `$GROK_HOME` moves `~/.grok` (https://docs.x.ai/build/settings); host root
+    // resolution does not honour it yet. The project `.grok/skills` is also
+    // found in every parent folder up to the repo root.
+    let mut roots = vec![
+        root(
+            ScopeLevel::Global,
+            ".grok/skills",
+            RootRole::Own,
+            false,
+            doc(),
+        ),
+        root(
+            ScopeLevel::Project,
+            ".grok/skills",
+            RootRole::Own,
+            false,
+            doc(),
+        ),
+        root(
+            ScopeLevel::Global,
+            ".agents/skills",
+            RootRole::Universal,
+            false,
+            doc(),
+        ),
+        root(
+            ScopeLevel::Project,
+            ".agents/skills",
+            RootRole::Universal,
+            false,
+            doc(),
+        ),
+    ];
+    for level in [ScopeLevel::Global, ScopeLevel::Project] {
+        roots.push(root(
+            level,
+            ".claude/skills",
+            RootRole::CrossHarness,
+            false,
+            doc(),
+        ));
+    }
     HarnessFacts {
         id: AgentId::from(AgentId::GROK_BUILD),
         display_name: "Grok Build".into(),
-        roots: vec![
-            root(
-                ScopeLevel::Global,
-                ".grok/skills",
-                RootRole::Own,
-                false,
-                ev(),
-            ),
-            root(
-                ScopeLevel::Project,
-                ".grok/skills",
-                RootRole::Own,
-                false,
-                ev(),
-            ),
-        ],
-        reads_universal_root: Support::Unknown,
+        roots,
+        reads_universal_root: Support::Yes(doc()),
         follows_per_skill_link: Support::Unknown,
         follows_whole_dir_link: Support::Unknown,
         skips_hidden_entries: Support::Unknown,
         all_skills_disable: Support::Unknown,
+        // The docs name no per-skill off switch, only the `user-invocable`
+        // frontmatter field; Park is the off path.
         native_disable: None,
         invocation_control: InvocationControlSpec {
             model_invocation: Support::Unknown,
@@ -1023,9 +1072,14 @@ pub trait HarnessAdapter: Send + Sync {
     fn id(&self) -> AgentId;
     /// Display name shown to a person.
     fn display_name(&self) -> &'static str;
-    /// Binary name to resolve on `PATH` and to probe with `--version`, when
-    /// the harness has one.
-    fn binary_name(&self) -> Option<&'static str>;
+    /// Every command name that counts as this harness's CLI, tried on
+    /// `PATH` in order; `detect` resolves the first one `find_binary`
+    /// finds and probes that one with `--version`. Most harnesses have one
+    /// name; an adapter with more than one known command name (for
+    /// example Cursor's `agent`/`cursor-agent` rename) lists the more
+    /// specific name first, so a generic name on another tool's `PATH`
+    /// entry cannot shadow it. A harness with no command returns `&[]`.
+    fn binary_names(&self) -> &'static [&'static str];
     /// Config file path relative to the home root, checked at global scope
     /// only, per `docs/action-map/harnesses/harness-detection.md`.
     fn config_relative_path(&self) -> Option<&'static str>;
@@ -1047,9 +1101,11 @@ pub trait HarnessAdapter: Send + Sync {
 
     /// Runs the shared detection recipe against one set of ports.
     fn detect(&self, ports: &DetectionPorts<'_>) -> HarnessDetection {
-        let executable = self
-            .binary_name()
-            .and_then(|bin| ports.tools.and_then(|lookup| lookup.find_binary(bin)));
+        let executable = ports.tools.and_then(|lookup| {
+            self.binary_names()
+                .iter()
+                .find_map(|bin| lookup.find_binary(bin))
+        });
         let (version, install_method) = probe_version(self, executable.as_ref(), ports);
         let configured = self
             .config_relative_path()
@@ -1147,7 +1203,7 @@ fn probe_version(
         Some(value) => DetectedString::known(value, Evidence::verified("--version stdout")),
         None => DetectedString::unknown("--version printed nothing usable"),
     };
-    (version, infer_install_method(path))
+    (version, infer_install_method(ports.fs, path))
 }
 
 /// Infers an install method from the resolved executable's path. No vendor
@@ -1155,8 +1211,11 @@ fn probe_version(
 /// field is a documented but unread signal, a follow-up - so every row uses
 /// the same "inferred from path" heuristic `harness-detection.md` describes
 /// for Codex, `OpenCode`, and pi.
-fn infer_install_method(path: &Path) -> DetectedString {
-    let text = path.to_string_lossy();
+fn infer_install_method(fs: &dyn ScopeFs, path: &Path) -> DetectedString {
+    // A shim link (`codex` -> `lib/node_modules/...`) names its install only
+    // through its target.
+    let resolved = fs.canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let text = resolved.to_string_lossy();
     let method = if text.contains("Cellar") || text.contains("homebrew") {
         "homebrew"
     } else if text.contains("node_modules") || text.contains(".npm") {
@@ -1187,8 +1246,8 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     fn display_name(&self) -> &'static str {
         "Claude Code"
     }
-    fn binary_name(&self) -> Option<&'static str> {
-        Some("claude")
+    fn binary_names(&self) -> &'static [&'static str] {
+        &["claude"]
     }
     fn config_relative_path(&self) -> Option<&'static str> {
         Some(".claude/settings.json")
@@ -1208,8 +1267,8 @@ impl HarnessAdapter for CodexAdapter {
     fn display_name(&self) -> &'static str {
         "Codex"
     }
-    fn binary_name(&self) -> Option<&'static str> {
-        Some("codex")
+    fn binary_names(&self) -> &'static [&'static str] {
+        &["codex"]
     }
     fn config_relative_path(&self) -> Option<&'static str> {
         Some(".codex/config.toml")
@@ -1229,8 +1288,8 @@ impl HarnessAdapter for OpenCodeAdapter {
     fn display_name(&self) -> &'static str {
         "OpenCode"
     }
-    fn binary_name(&self) -> Option<&'static str> {
-        Some("opencode")
+    fn binary_names(&self) -> &'static [&'static str] {
+        &["opencode"]
     }
     fn config_relative_path(&self) -> Option<&'static str> {
         Some(".config/opencode/opencode.json")
@@ -1250,8 +1309,8 @@ impl HarnessAdapter for PiAdapter {
     fn display_name(&self) -> &'static str {
         "pi"
     }
-    fn binary_name(&self) -> Option<&'static str> {
-        Some("pi")
+    fn binary_names(&self) -> &'static [&'static str] {
+        &["pi"]
     }
     fn config_relative_path(&self) -> Option<&'static str> {
         Some(".pi/agent/settings.json")
@@ -1261,9 +1320,10 @@ impl HarnessAdapter for PiAdapter {
     }
 }
 
-/// Cursor. Detected as the `agent` CLI, not the editor bundle; the two are
-/// two separate detections per `docs/action-map/harnesses/harness-detection.md`,
-/// and this row is the CLI one.
+/// Cursor. Detected as the CLI (`cursor-agent`, or the older `agent` name),
+/// not the editor bundle; the two are two separate detections per
+/// `docs/action-map/harnesses/harness-detection.md`, and this row is the
+/// CLI one.
 pub struct CursorAdapter;
 
 impl HarnessAdapter for CursorAdapter {
@@ -1273,8 +1333,11 @@ impl HarnessAdapter for CursorAdapter {
     fn display_name(&self) -> &'static str {
         "Cursor"
     }
-    fn binary_name(&self) -> Option<&'static str> {
-        Some("agent")
+    /// `cursor-agent` first: it is the specific, current name, so a generic
+    /// `agent` binary from another tool earlier on `PATH` cannot shadow a
+    /// real Cursor CLI install.
+    fn binary_names(&self) -> &'static [&'static str] {
+        &["cursor-agent", "agent"]
     }
     fn config_relative_path(&self) -> Option<&'static str> {
         Some(".cursor/argv.json")
@@ -1284,9 +1347,11 @@ impl HarnessAdapter for CursorAdapter {
     }
 }
 
-/// Grok Build. Binary name and config folder are undocumented
-/// (`docs/action-map/harnesses/harness-detection.md`, "Open items"); `grok`
-/// is a placeholder until one is confirmed.
+/// Grok Build. The binary is `grok` (`cd your-project` then `grok`,
+/// <https://docs.x.ai/build/overview>) and the config file is
+/// `~/.grok/config.toml` (<https://docs.x.ai/build/settings>). Sessions are stored under `~/.grok/sessions/`
+/// (<https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/17-sessions.md>).
+/// `$GROK_HOME` moves all three; detection does not honour it yet.
 pub struct GrokBuildAdapter;
 
 impl HarnessAdapter for GrokBuildAdapter {
@@ -1296,11 +1361,11 @@ impl HarnessAdapter for GrokBuildAdapter {
     fn display_name(&self) -> &'static str {
         "Grok Build"
     }
-    fn binary_name(&self) -> Option<&'static str> {
-        Some("grok")
+    fn binary_names(&self) -> &'static [&'static str] {
+        &["grok"]
     }
     fn config_relative_path(&self) -> Option<&'static str> {
-        None
+        Some(".grok/config.toml")
     }
     fn used_relative_path(&self) -> Option<&'static str> {
         Some(".grok/sessions")
@@ -1488,42 +1553,6 @@ pub fn read_claude_skill_overrides(
         .unwrap_or_default()
 }
 
-/// Writes `skillOverrides` into Claude Code's
-/// `<CLAUDE_CONFIG_DIR>/settings.json` (`~/.claude/settings.json` with no
-/// override), preserving every other top-level key byte-for-byte (only the
-/// `skillOverrides` value itself is replaced or inserted). Starts from an
-/// empty object when the file is missing or unparsable, so a first write
-/// still succeeds; a caller that needs to preserve a malformed file's
-/// content should read it before calling this.
-pub fn write_claude_skill_overrides(
-    fs: &dyn ScopeFs,
-    scope: &crate::scope::NormalizedScope,
-    guard: &crate::ports::ExclusiveGuard,
-    home: &Path,
-    config_dir_override: Option<&Path>,
-    overrides: serde_json::Map<String, serde_json::Value>,
-) -> Result<(), crate::error::CoreError> {
-    use crate::error::CoreError;
-    let path = claude_code_config_dir(home, config_dir_override).join("settings.json");
-    let mut map = match fs.read_capped(&path, 1024 * 1024) {
-        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
-            .ok()
-            .and_then(|v| v.as_object().cloned())
-            .unwrap_or_default(),
-        Err(_) => serde_json::Map::new(),
-    };
-    map.insert(
-        "skillOverrides".to_string(),
-        serde_json::Value::Object(overrides),
-    );
-    let doc = serde_json::Value::Object(map);
-    let bytes = serde_json::to_vec_pretty(&doc)
-        .map_err(|e| CoreError::new(crate::error::ErrorCode::Io, e.to_string()).at(&path))?;
-    let scoped = crate::ports::confine(scope, fs, &path)?;
-    fs.write_atomic(guard, &scoped, &bytes)
-        .map_err(|e| CoreError::io(&path, e))
-}
-
 /// One [`HarnessAdapter`] per first-class harness, in the same order as
 /// [`HarnessCatalog::builtin`].
 pub fn builtin_adapters() -> Vec<Box<dyn HarnessAdapter>> {
@@ -1542,7 +1571,21 @@ mod tests {
     use super::*;
     use crate::error::CoreError;
     use crate::ports::{CancelToken, ProcessOutput};
-    use crate::testing::FixtureBuilder;
+    use crate::testing::{FakeToolLookup, FixtureBuilder};
+
+    #[test]
+    fn a_symlink_into_node_modules_is_detected_as_an_npm_install_or_names_the_method_found() {
+        let fs = FixtureBuilder::default()
+            .file("/usr/local/lib/node_modules/codex/bin/codex.js", b"")
+            .alias(
+                "/usr/local/bin/codex",
+                "/usr/local/lib/node_modules/codex/bin/codex.js",
+            )
+            .build_fs();
+
+        let method = infer_install_method(&fs, Path::new("/usr/local/bin/codex"));
+        assert_eq!(method.value.as_deref(), Some("npm"), "got {method:?}");
+    }
 
     /// A spawner whose every probe outlives its deadline.
     struct TimedOutSpawner;
@@ -1588,6 +1631,98 @@ mod tests {
         );
     }
 
+    /// `a_path_with_only_cursor_agent_and_argv_json_reads_configured_or_names_the_wrongly_data_only_state`:
+    /// a machine that renamed the Cursor CLI to `cursor-agent` (no `agent`
+    /// on `PATH`), with `~/.cursor/argv.json` present the way a real
+    /// install leaves it, must resolve the executable and read
+    /// `Configured`, not `DataOnly`. Before the `binary_names` fix
+    /// `CursorAdapter` only ever asked `find_binary` for `agent`, so
+    /// `cursor-agent` never resolved and the row fell back to the config
+    /// file alone, reading `DataOnly` (issue #315).
+    #[test]
+    fn a_path_with_only_cursor_agent_and_argv_json_reads_configured_or_names_the_wrongly_data_only_state(
+    ) {
+        let fs = FixtureBuilder::default()
+            .file("/home/.cursor/argv.json", b"{}")
+            .build_fs();
+        let home = PathBuf::from("/home");
+        let cursor_agent_path = PathBuf::from("/home/.local/bin/cursor-agent");
+        let mut tools = FakeToolLookup::default();
+        tools
+            .binaries
+            .insert("cursor-agent".to_string(), cursor_agent_path.clone());
+        let ports = DetectionPorts {
+            fs: &fs,
+            home: &home,
+            tools: Some(&tools),
+            spawner: None,
+        };
+
+        let detection = CursorAdapter.detect(&ports);
+
+        assert_eq!(
+            detection.state,
+            HarnessState::Configured,
+            "a resolved cursor-agent plus argv.json must read as configured, not data-only"
+        );
+        assert_eq!(detection.executable, Some(cursor_agent_path));
+    }
+
+    /// `a_path_with_both_agent_and_cursor_agent_prefers_cursor_agent_or_names_the_wrong_binary_found`:
+    /// when both names resolve, `cursor-agent` wins because it is the
+    /// specific, current name; `agent` is generic enough that another tool
+    /// could put an unrelated binary of that name on `PATH` first, and
+    /// preferring it would misreport a real Cursor CLI install.
+    #[test]
+    fn a_path_with_both_agent_and_cursor_agent_prefers_cursor_agent_or_names_the_wrong_binary_found(
+    ) {
+        let fs = FixtureBuilder::default().build_fs();
+        let home = PathBuf::from("/home");
+        let cursor_agent_path = PathBuf::from("/home/.local/bin/cursor-agent");
+        let mut tools = FakeToolLookup::default();
+        tools
+            .binaries
+            .insert("agent".to_string(), PathBuf::from("/usr/local/bin/agent"));
+        tools
+            .binaries
+            .insert("cursor-agent".to_string(), cursor_agent_path.clone());
+        let ports = DetectionPorts {
+            fs: &fs,
+            home: &home,
+            tools: Some(&tools),
+            spawner: None,
+        };
+
+        let detection = CursorAdapter.detect(&ports);
+
+        assert_eq!(detection.executable, Some(cursor_agent_path));
+    }
+
+    /// `no_cursor_command_but_argv_json_present_still_reads_data_only_or_names_the_widened_state`:
+    /// with neither `cursor-agent` nor `agent` on `PATH`, the presence of
+    /// `.cursor/argv.json` alone must still read as `DataOnly`, so the
+    /// `binary_names` list does not accidentally widen what counts as
+    /// "installed".
+    #[test]
+    fn no_cursor_command_but_argv_json_present_still_reads_data_only_or_names_the_widened_state() {
+        let fs = FixtureBuilder::default()
+            .file("/home/.cursor/argv.json", b"{}")
+            .build_fs();
+        let home = PathBuf::from("/home");
+        let tools = FakeToolLookup::default();
+        let ports = DetectionPorts {
+            fs: &fs,
+            home: &home,
+            tools: Some(&tools),
+            spawner: None,
+        };
+
+        let detection = CursorAdapter.detect(&ports);
+
+        assert_eq!(detection.state, HarnessState::DataOnly);
+        assert_eq!(detection.executable, None);
+    }
+
     #[test]
     fn builtin_catalog_separates_discovery_from_operations() {
         let catalog = HarnessCatalog::builtin();
@@ -1598,7 +1733,10 @@ mod tests {
             .into_iter()
             .map(|f| f.id.as_str().to_string())
             .collect();
-        assert_eq!(readers, ["codex", "open-code", "pi"]);
+        assert_eq!(
+            readers,
+            ["codex", "open-code", "pi", "cursor", "grok-build"]
+        );
         let cursor = catalog.get(&AgentId::from(AgentId::CURSOR)).unwrap();
         let cursor_report = CapabilityReport::from_facts(cursor, None);
         assert!(cursor_report

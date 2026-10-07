@@ -133,7 +133,7 @@ impl ScopeFs for RealFs {
             .to_string_lossy();
         let counter = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let tmp_path = dir.join(format!(".{file_name}.tmp-{}-{counter}", std::process::id()));
-        let existing_mode = fs::symlink_metadata(path).ok().map(|m| m.mode());
+        let existing_mode = fs::metadata(path).ok().map(|m| m.mode());
         fs::write(&tmp_path, bytes)?;
         if let Some(mode) = existing_mode {
             fs::set_permissions(&tmp_path, fs::Permissions::from_mode(mode))?;
@@ -169,6 +169,18 @@ impl ScopeFs for RealFs {
         std::os::unix::fs::symlink(target.as_path(), link.as_path())
     }
 
+    fn symlink_relative(
+        &self,
+        _guard: &ExclusiveGuard,
+        _target: &ScopedPath,
+        relative_target: &Path,
+        link: &ScopedPath,
+    ) -> io::Result<()> {
+        // `relative_target` resolves from `link`'s parent to `_target`,
+        // which `confine` already proved lies inside the scope.
+        std::os::unix::fs::symlink(relative_target, link.as_path())
+    }
+
     fn fsops_device_inode(&self, path: &Path) -> io::Result<(u64, u64)> {
         let meta = fs::symlink_metadata(path)?;
         Ok((meta.dev(), meta.ino()))
@@ -197,6 +209,24 @@ impl ScopeFs for RealFs {
             .open(path)?;
         use std::io::Write;
         file.write_all(bytes)
+    }
+
+    fn fsops_write_new_file_with_mode(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        mode: u32,
+    ) -> io::Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(path)?;
+        file.write_all(bytes)?;
+        // The umask already masked the create mode above.
+        file.set_permissions(fs::Permissions::from_mode(mode))
     }
 
     fn fsops_rename(&self, from: &Path, to: &Path) -> io::Result<()> {
@@ -386,5 +416,118 @@ mod tests {
         assert_eq!(entries[0].kind, FileKind::File);
         assert_eq!(entries[1].name, "sub");
         assert_eq!(entries[1].kind, FileKind::Dir);
+    }
+
+    #[test]
+    fn canonicalize_resolves_a_real_path_or_returns_an_empty_default_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("skill.md");
+        fs::write(&file, b"x").unwrap();
+
+        let resolved = RealFs::new().canonicalize(&file).unwrap();
+        let expected = fs::canonicalize(&file).unwrap();
+        assert_eq!(
+            resolved, expected,
+            "canonicalize must resolve the real path, not a default (empty) one"
+        );
+        assert_ne!(resolved, PathBuf::default());
+    }
+
+    #[test]
+    fn rename_moves_the_file_on_disk_or_leaves_the_original_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let fs_adapter = RealFs::new();
+        let scope = scope_for(dir.path());
+        let from_path = dir.path().join("old.md");
+        let to_path = dir.path().join("new.md");
+        fs::write(&from_path, b"payload").unwrap();
+        let from = confine(&scope, &fs_adapter, &from_path).unwrap();
+        let to = confine(&scope, &fs_adapter, &to_path).unwrap();
+
+        let guard = crate::lease::FileLease::new(dir.path().join("leases"));
+        let held = skill_studio_core::ports::acquire_exclusive(&guard, &scope).unwrap();
+
+        fs_adapter.rename(&held, &from, &to).unwrap();
+
+        assert!(
+            !from_path.exists(),
+            "rename must move the file, not leave the original in place"
+        );
+        assert_eq!(
+            fs::read(&to_path).unwrap(),
+            b"payload",
+            "rename must move the file's real bytes to the new path, not return Ok without \
+             moving anything"
+        );
+    }
+
+    #[test]
+    fn create_dir_all_makes_every_missing_ancestor_or_creates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let fs_adapter = RealFs::new();
+        let scope = scope_for(dir.path());
+        // `confine` canonicalizes the target's immediate parent, so that one
+        // must already exist; `create_dir_all` is what creates the target
+        // itself (and would create further missing levels beneath an
+        // existing parent too - `fs::create_dir_all` handles that, this
+        // adapter only forwards to it).
+        fs::create_dir_all(dir.path().join("a")).unwrap();
+        let nested = dir.path().join("a").join("b");
+        let scoped = confine(&scope, &fs_adapter, &nested).unwrap();
+
+        let guard = crate::lease::FileLease::new(dir.path().join("leases"));
+        let held = skill_studio_core::ports::acquire_exclusive(&guard, &scope).unwrap();
+
+        fs_adapter.create_dir_all(&held, &scoped).unwrap();
+
+        assert!(
+            nested.is_dir(),
+            "create_dir_all must create every missing ancestor directory, not return Ok \
+             without creating anything"
+        );
+    }
+
+    #[test]
+    fn symlink_creates_a_real_link_pointing_at_the_target_or_creates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let fs_adapter = RealFs::new();
+        let scope = scope_for(dir.path());
+        let target_path = dir.path().join("target.md");
+        fs::write(&target_path, b"x").unwrap();
+        let link_path = dir.path().join("link.md");
+        let target = confine(&scope, &fs_adapter, &target_path).unwrap();
+        let link = confine(&scope, &fs_adapter, &link_path).unwrap();
+
+        let guard = crate::lease::FileLease::new(dir.path().join("leases"));
+        let held = skill_studio_core::ports::acquire_exclusive(&guard, &scope).unwrap();
+
+        fs_adapter.symlink(&held, &target, &link).unwrap();
+
+        let read_back = fs::read_link(&link_path).unwrap();
+        assert_eq!(
+            read_back, target_path,
+            "symlink must create a real link pointing at the target, not return Ok without \
+             creating anything"
+        );
+    }
+
+    /// `fsops_symlink` is the unguarded, journal-facing primitive used
+    /// internally by `fsops`, distinct from the guarded `symlink` above.
+    #[test]
+    fn fsops_symlink_creates_a_real_link_or_creates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let fs_adapter = RealFs::new();
+        let target_path = dir.path().join("target.md");
+        fs::write(&target_path, b"x").unwrap();
+        let link_path = dir.path().join("link.md");
+
+        fs_adapter.fsops_symlink(&target_path, &link_path).unwrap();
+
+        let read_back = fs::read_link(&link_path).unwrap();
+        assert_eq!(
+            read_back, target_path,
+            "fsops_symlink must create a real link pointing at the target, not return Ok \
+             without creating anything"
+        );
     }
 }

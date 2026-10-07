@@ -10,11 +10,13 @@
 //! core, stdio transport.
 //!
 //! One tool per [`Operation`]. Every call builds a fresh `RuntimeScope` and
-//! `Ports`, re-reads disk, runs one core operation, and drops everything —
-//! per MCP revision 2026-07-28, decision D13: no sessions, no
-//! subscriptions, no cache between calls. Restarting the process between
-//! two calls must give identical results. Input schemas are the core's
-//! request DTOs' `schemars` output directly, not redeclared types. A core
+//! `Ports`, re-reads disk, runs one core operation, and drops everything:
+//! no sessions, no subscriptions (decision D13). The one thing kept between
+//! calls is `skill_usage`'s in-memory use index, which only saves re-reading
+//! unchanged session history; it never changes an answer, so restarting the
+//! process between two calls must still give identical results. Input
+//! schemas are the core's request DTOs' `schemars` output directly, not
+//! redeclared types. A core
 //! error is never a panic and never a bare string: it comes back as a tool
 //! error whose payload is the same `ResultEnvelope` the CLI prints.
 //!
@@ -24,31 +26,101 @@
 
 pub mod scope;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
+use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ProgressNotificationParam, ServerCapabilities, ServerInfo};
+use rmcp::model::{
+    CallToolResult, Implementation, ProgressNotificationParam, ServerCapabilities, ServerInfo,
+};
 use rmcp::service::RequestContext;
-use rmcp::{tool, tool_handler, tool_router, RoleServer, ServerHandler};
+use rmcp::transport::stdio;
+use rmcp::{schemars, tool, tool_handler, tool_router, RoleServer, ServerHandler, ServiceExt};
+use serde::Deserialize;
 use skill_studio_core::dto::{
     CapabilitiesRequest, DiagnoseConflictRequest, DoctorRequest, FixSkillRequest, HarnessesRequest,
     InstallPreferencesRequest, InstallRequest, ListEventsRequest, ParkRequest, RemoveRequest,
-    RepairApplyRequest, RepairPreviewRequest, RestoreRequest, ScanRequest,
-    SetHarnessEnabledRequest, SweepQuarantineRequest, UnparkRequest, UpdateAllRequest,
-    UpdateRequest,
+    RepairApplyRequest, RepairPreviewRequest, RestoreRequest, ScanRequest, SweepQuarantineRequest,
+    UnparkRequest, UpdateAllRequest, UpdateRequest,
 };
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::CorrelationId;
 use skill_studio_core::ops::{self, Operation, Outcome, ResultEnvelope};
 use skill_studio_core::ports::{OpContext, Runtime};
 use skill_studio_core::CoreError;
+use skill_studio_host::SkillUsage;
 
-/// The server. Holds no fields: `#[tool_handler]`'s default router
-/// expression (`Self::tool_router()`) builds the tool dispatch table fresh
-/// per call, matching the "one `Runtime` per call, nothing cached between
-/// calls" rule the rest of this file follows.
-#[derive(Clone, Default)]
-pub struct SkillStudioServer;
+/// Tools left out of `tools/list` unless `SKILL_STUDIO_MCP_DEV_TOOLS=1`:
+/// each tool's description costs the client context on every turn, and an
+/// agent tidying skills never needs these.
+const DEV_TOOLS: &[&str] = &[
+    "capabilities",
+    "harnesses",
+    "doctor",
+    "sweep_quarantine",
+    "install_preferences",
+];
+
+fn dev_tools_enabled() -> bool {
+    std::env::var("SKILL_STUDIO_MCP_DEV_TOOLS").is_ok_and(|value| value == "1")
+}
+
+/// The server. Holds the tool table and the use index behind
+/// `skill_usage`, which every clone shares and which loads on its first
+/// call. No `Runtime` is kept: each call builds its own.
+#[derive(Clone)]
+pub struct SkillStudioServer {
+    tool_router: ToolRouter<Self>,
+    usage: Arc<Mutex<Option<SkillUsage>>>,
+}
+
+impl Default for SkillStudioServer {
+    fn default() -> Self {
+        Self {
+            tool_router: Self::published_tool_router(),
+            usage: Arc::default(),
+        }
+    }
+}
+
+/// Input for `skill_usage`.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct SkillUsageRequest {
+    /// How many days back to count uses. Default 30.
+    pub days: Option<u32>,
+}
+
+/// Runs the MCP server over stdin and stdout until the client disconnects,
+/// with crash reporting set up as the MCP surface. Blocks the calling thread
+/// on its own tokio runtime, so a synchronous caller (the `skill-studio mcp`
+/// subcommand) can run it without one. Writes nothing to stdout itself:
+/// stdout carries only JSON-RPC.
+pub fn run_stdio() -> anyhow::Result<()> {
+    // Consent lives on the real machine, same as the CLI's own startup
+    // resolution; there is no scope flag here to point it anywhere else.
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let registry_telemetry_enabled = skill_studio_host::telemetry::consent_from_registry(&home);
+    let consent =
+        skill_studio_host::telemetry::Consent::new(skill_studio_host::telemetry::resolve_consent(
+            std::env::var("SKILL_STUDIO_TELEMETRY").ok(),
+            registry_telemetry_enabled,
+        ));
+    let _telemetry_guard = skill_studio_host::telemetry::init(
+        skill_studio_host::telemetry::Surface::Mcp,
+        env!("CARGO_PKG_VERSION"),
+        consent,
+    );
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let service = SkillStudioServer::default().serve(stdio()).await?;
+        service.waiting().await?;
+        anyhow::Ok(())
+    })
+}
 
 /// Builds the `Runtime` for a read-only tool: no history store (a plain
 /// `NoHistoryOpener`), discovery enabled outside fixture mode. Matches
@@ -62,6 +134,10 @@ fn build_runtime(with_history: bool) -> Result<Runtime, CoreError> {
     } else {
         skill_studio_host::default_ports_with_discovery(lease_root, catalog)
     };
+    ports.telemetry = skill_studio_host::telemetry::port(
+        skill_studio_host::telemetry::Surface::Mcp,
+        env!("CARGO_PKG_VERSION"),
+    );
     if with_history {
         if runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture {
             ports.discovery = None;
@@ -196,7 +272,11 @@ impl skill_studio_core::skill_update_check::SourceTreeLookup for NoGhLookup {
 }
 
 impl skill_studio_core::skill_update_check::CommitLookup for NoGhLookup {
-    fn latest_commit(&self, _repo: &str, _path: &str) -> Result<Option<String>, CoreError> {
+    fn latest_commit(
+        &self,
+        _repo: &str,
+        _path: &str,
+    ) -> Result<Option<skill_studio_core::skill_update_check::CommitInfo>, CoreError> {
         Err(CoreError::new(
             skill_studio_core::ErrorCode::Unsupported,
             "gh is not on PATH",
@@ -216,7 +296,10 @@ impl skill_studio_core::skill_update_check::PluginManifestLookup for NoGhLookup 
 
 #[tool_router]
 impl SkillStudioServer {
-    #[tool(description = "Inventory every installed skill.")]
+    #[tool(
+        description = "List every installed skill with its id, location and the agents that see it. Call this first. Other tools take its ids.",
+        annotations(read_only_hint = true)
+    )]
     async fn scan(
         &self,
         Parameters(req): Parameters<ScanRequest>,
@@ -228,7 +311,10 @@ impl SkillStudioServer {
         .await
     }
 
-    #[tool(description = "Inventory every installed skill and derive issues.")]
+    #[tool(
+        description = "Find broken, duplicate, invalid, parked and turned-off skills. Use it to choose what to fix or clear out.",
+        annotations(read_only_hint = true)
+    )]
     async fn diagnose(
         &self,
         Parameters(req): Parameters<ScanRequest>,
@@ -240,7 +326,36 @@ impl SkillStudioServer {
         .await
     }
 
-    #[tool(description = "Report harness capability facts.")]
+    #[tool(
+        description = "Show how often each skill was used in the last N days, and which skills were not used. Use it to find skills to park.",
+        annotations(read_only_hint = true)
+    )]
+    async fn skill_usage(
+        &self,
+        Parameters(req): Parameters<SkillUsageRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        let days = req.days.unwrap_or(skill_studio_host::DEFAULT_USAGE_DAYS);
+        run_op(Operation::SkillUsage, false, &context, |rt, ctx| {
+            let inventory = ops::scan(rt, ctx, &ScanRequest::default())?;
+            let mut usage = self.usage.lock().unwrap_or_else(PoisonError::into_inner);
+            let usage = usage.get_or_insert_with(|| {
+                SkillUsage::load_read_only(scope::desktop_usage_cache().as_deref())
+            });
+            Ok(usage.report(
+                &rt.scope.home.canonical,
+                &inventory,
+                days,
+                chrono::Utc::now(),
+            ))
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Show which operations each agent supports.",
+        annotations(read_only_hint = true)
+    )]
     async fn capabilities(
         &self,
         Parameters(req): Parameters<CapabilitiesRequest>,
@@ -253,7 +368,8 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Detect first-class harnesses installed on this machine: PATH, version, install method, configured, and used evidence."
+        description = "Find the agents installed on this computer, with their version and install method.",
+        annotations(read_only_hint = true)
     )]
     async fn harnesses(
         &self,
@@ -266,7 +382,10 @@ impl SkillStudioServer {
         .await
     }
 
-    #[tool(description = "Preview a frontmatter repair for one deployment, without writing.")]
+    #[tool(
+        description = "Show a fix for the header of one copy's SKILL.md. This writes nothing. Give the result to apply_frontmatter_repair.",
+        annotations(read_only_hint = true)
+    )]
     async fn preview_frontmatter_repair(
         &self,
         Parameters(req): Parameters<RepairPreviewRequest>,
@@ -281,7 +400,10 @@ impl SkillStudioServer {
         .await
     }
 
-    #[tool(description = "Apply a previously-previewed frontmatter repair.")]
+    #[tool(
+        description = "Write a fix that preview_frontmatter_repair showed. Undo with restore_event and the event_id from the result.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
     async fn apply_frontmatter_repair(
         &self,
         Parameters(req): Parameters<RepairApplyRequest>,
@@ -296,7 +418,10 @@ impl SkillStudioServer {
         .await
     }
 
-    #[tool(description = "List history rows, newest first.")]
+    #[tool(
+        description = "List past changes, newest first, each with its event_id. Use it to find a change to undo.",
+        annotations(read_only_hint = true)
+    )]
     async fn list_events(
         &self,
         Parameters(req): Parameters<ListEventsRequest>,
@@ -308,7 +433,10 @@ impl SkillStudioServer {
         .await
     }
 
-    #[tool(description = "Revert one event.")]
+    #[tool(
+        description = "Undo one change. Give the event_id from the change's result or from list_events.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
     async fn restore_event(
         &self,
         Parameters(req): Parameters<RestoreRequest>,
@@ -321,7 +449,8 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Run the doctor invariants for one skill and repair whatever it can; anything it cannot repair is named with its path."
+        description = "Repair one skill. Fixes what it can and names each problem it cannot fix, with its path. Undo a repair with restore_event and the event_id in the result.",
+        annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn fix(
         &self,
@@ -334,7 +463,10 @@ impl SkillStudioServer {
         .await
     }
 
-    #[tool(description = "Find differing copies of a skill without merging them; writes nothing.")]
+    #[tool(
+        description = "Find skills that have copies with different content. This writes nothing.",
+        annotations(read_only_hint = true)
+    )]
     async fn diagnose_conflict(
         &self,
         Parameters(req): Parameters<DiagnoseConflictRequest>,
@@ -347,7 +479,8 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Run every lifecycle invariant over the whole scope; writes nothing. Empty violations means a healthy scope."
+        description = "Check all skills for broken state. This writes nothing. An empty list means all is well.",
+        annotations(read_only_hint = true)
     )]
     async fn doctor(
         &self,
@@ -360,7 +493,10 @@ impl SkillStudioServer {
         .await
     }
 
-    #[tool(description = "Refresh one already-installed skill in place.")]
+    #[tool(
+        description = "Update one installed skill from its source. Undo with restore_event and the event_id from the result.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
     async fn update(
         &self,
         Parameters(req): Parameters<UpdateRequest>,
@@ -373,7 +509,8 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Refresh a batch of already-installed skills in place, each its own journal entry."
+        description = "Update several installed skills from their sources. Each update has its own event_id. Undo one with restore_event.",
+        annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn update_all(
         &self,
@@ -387,7 +524,8 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Take a mutable deployment off disk. Copy/Fork land intact in quarantine; Dotagents/SkillsSh are removed by their own CLI."
+        description = "Delete one copy of a skill, such as a duplicate or a broken copy. Undo with restore_event and the event_id from the result.",
+        annotations(read_only_hint = false, destructive_hint = true)
     )]
     async fn remove(
         &self,
@@ -401,7 +539,8 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Install one skill by copy, dotagents, or skills.sh. Returns NeedsTrust, not an error, when an untrusted dotagents source needs trust_confirmed on a retry."
+        description = "Install one skill by copy, dotagents or skills.sh, for a set of agents: universal, claude-code, codex, open-code, cursor, pi, grok-build. An empty set means universal. link_mode copy writes a real folder for each agent instead of links. An untrusted dotagents source returns NeedsTrust: call again with trust_confirmed. Undo with restore_event and the event_id from the result.",
+        annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn add(
         &self,
@@ -409,34 +548,14 @@ impl SkillStudioServer {
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
         run_op(Operation::Install, true, &context, |rt, ctx| {
-            if let Some(unknown) = req
-                .harnesses
-                .iter()
-                .find(|h| rt.ports.catalog.get(h).is_none())
-            {
-                let accepted = rt
-                    .ports
-                    .catalog
-                    .facts
-                    .iter()
-                    .map(|f| f.id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(CoreError::new(
-                    skill_studio_core::ErrorCode::InvalidRequest,
-                    format!(
-                        "`{unknown}` is not a known harness; accepted values: {accepted}",
-                        unknown = unknown.as_str()
-                    ),
-                ));
-            }
             ops::install(rt, ctx, &req)
         })
         .await
     }
 
     #[tool(
-        description = "Report the install method and harnesses the next add pre-selects: the last install's saved preference for that scope, or the environment default when nothing has been saved yet."
+        description = "Show the install method and agents that add uses when the caller does not name them.",
+        annotations(read_only_hint = true)
     )]
     async fn install_preferences(
         &self,
@@ -449,19 +568,43 @@ impl SkillStudioServer {
         .await
     }
 
-    #[tool(description = "Move a universal deployment to the parked root.")]
+    #[tool(
+        description = "Turn a skill off for every agent by moving it aside. Use it for unused skills. Undo with unpark.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
     async fn park(
         &self,
         Parameters(req): Parameters<ParkRequest>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
         run_op(Operation::Park, true, &context, |rt, ctx| {
-            ops::park(rt, ctx, &req)
+            let warning = ops::park_git_warning(rt, ctx, &req.deployment_id);
+            let mut outcome = ops::park(rt, ctx, &req)?;
+            outcome.warnings.extend(warning);
+            Ok(outcome)
         })
         .await
     }
 
-    #[tool(description = "Move a parked deployment back to the universal root.")]
+    #[tool(
+        description = "Replace one shared skill folder with one real copy for each agent you name. Agents you do not name lose the skill. After this, npx skills update does not update these copies. Undo with restore_event and the event_id from the result.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn split(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::dto::SplitRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(Operation::Split, true, &context, |rt, ctx| {
+            ops::split(rt, ctx, &req)
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Turn a parked skill back on for every agent. This undoes park.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
     async fn unpark(
         &self,
         Parameters(req): Parameters<UnparkRequest>,
@@ -474,21 +617,8 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Enable or disable a skill for one harness, by whatever mechanism that harness supports natively."
-    )]
-    async fn set_harness_enabled(
-        &self,
-        Parameters(req): Parameters<SetHarnessEnabledRequest>,
-        context: RequestContext<RoleServer>,
-    ) -> CallToolResult {
-        run_op(Operation::SetHarnessEnabled, true, &context, |rt, ctx| {
-            ops::set_harness_enabled(rt, ctx, &req)
-        })
-        .await
-    }
-
-    #[tool(
-        description = "Report per-skill currency against each install method's source: skills.sh by lock hash, dotagents by pinned commit, plugin by cache version. Needs `gh` on PATH; without it every skill reports Unknown."
+        description = "Check which installed skills have a newer version at their source. Needs gh on PATH. Without it, each skill reports unknown. This writes nothing.",
+        annotations(read_only_hint = true)
     )]
     async fn outdated(
         &self,
@@ -512,7 +642,8 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Prune the global quarantine cap without a remove call. Global scope only."
+        description = "Delete the oldest removed copies kept for undo, past the limit. This cannot be undone.",
+        annotations(read_only_hint = false, destructive_hint = true)
     )]
     async fn sweep_quarantine(
         &self,
@@ -526,14 +657,107 @@ impl SkillStudioServer {
     }
 }
 
-#[tool_handler]
+impl SkillStudioServer {
+    /// Every `#[tool]` above, minus [`DEV_TOOLS`] unless they are turned on,
+    /// with each input schema made self-contained by [`inline_schema_refs`].
+    fn published_tool_router() -> ToolRouter<Self> {
+        let show_dev_tools = dev_tools_enabled();
+        Self::tool_router()
+            .into_iter()
+            .filter(|route| show_dev_tools || !DEV_TOOLS.contains(&route.name()))
+            .fold(ToolRouter::new(), |router, mut route| {
+                route.attr.input_schema = Arc::new(inline_schema_refs(&route.attr.input_schema));
+                router.with_route(route)
+            })
+    }
+}
+
+type JsonObject = serde_json::Map<String, serde_json::Value>;
+
+/// Replaces every `$ref` into `$defs` with the definition itself, drops
+/// `$defs`, and gives the root a `properties` object when it has none.
+/// Some clients (Codex, `OpenAI` function calling) reject a tool whose input
+/// schema has `$ref` or no `properties`, and schemars emits both for nested
+/// and empty request types.
+fn inline_schema_refs(schema: &JsonObject) -> JsonObject {
+    let mut root = schema.clone();
+    let defs = match root.remove("$defs") {
+        Some(serde_json::Value::Object(defs)) => defs,
+        _ => JsonObject::new(),
+    };
+    let mut inlined = inline_object(root, &defs, &mut Vec::new());
+    inlined
+        .entry("properties")
+        .or_insert_with(|| serde_json::Value::Object(JsonObject::new()));
+    inlined
+}
+
+/// `expanding` holds the definitions being inlined on the current path, so
+/// a recursive type becomes an unconstrained `{}` instead of looping.
+fn inline_object(
+    mut object: JsonObject,
+    defs: &JsonObject,
+    expanding: &mut Vec<String>,
+) -> JsonObject {
+    let def_name = object.remove("$ref").and_then(|reference| {
+        reference
+            .as_str()?
+            .strip_prefix("#/$defs/")
+            .map(str::to_string)
+    });
+    if let Some(name) = def_name {
+        if let (false, Some(serde_json::Value::Object(def))) =
+            (expanding.contains(&name), defs.get(&name))
+        {
+            expanding.push(name);
+            let def = inline_object(def.clone(), defs, expanding);
+            expanding.pop();
+            // Keys beside the `$ref` (a field's own description) win over
+            // the definition's.
+            for (key, def_value) in def {
+                object.entry(key).or_insert(def_value);
+            }
+        }
+    }
+    object
+        .into_iter()
+        .map(|(key, child)| (key, inline_value(child, defs, expanding)))
+        .collect()
+}
+
+fn inline_value(
+    value: serde_json::Value,
+    defs: &JsonObject,
+    expanding: &mut Vec<String>,
+) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(object) => {
+            serde_json::Value::Object(inline_object(object, defs, expanding))
+        }
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .into_iter()
+                .map(|item| inline_value(item, defs, expanding))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for SkillStudioServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "Stateless Skill Studio core, one tool per operation. Set \
-             SKILL_STUDIO_FIXTURE, SKILL_STUDIO_HOME, or neither (real \
-             machine) before starting; scope is fixed for the process \
-             lifetime the same way the CLI's flags are fixed per call.",
-        )
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new(
+                "skill-studio",
+                env!("CARGO_PKG_VERSION"),
+            ))
+            .with_instructions(
+                "Skill Studio manages the agent skills on this computer. To tidy up: \
+                 call diagnose to find broken and duplicate skills, and skill_usage to \
+                 find unused ones. Then park the skills you do not need, or remove a \
+                 duplicate copy. Each change returns an event_id. restore_event undoes \
+                 a change, and unpark undoes park.",
+            )
     }
 }
