@@ -14,10 +14,10 @@
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "@sentry/cloudflare": "^10.75.3",
-    "hono": "^4.13.5"
+    "hono": "^4.13.13"
   },
   "devDependencies": {
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.6.4",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
