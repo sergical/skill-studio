@@ -1543,6 +1543,40 @@ fn unlisting_a_parked_skill_refuses_when_dotagents_installed_a_live_copy_again()
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// Flow: `.agents/.gitignore` is a link into another folder, and
+/// `dotagents install` put a live copy with a local edit back before the
+/// repair runs. Expectation: the repair refuses, `dotagents remove` never
+/// runs, and the edited file is still there. Failure: the guard looks next
+/// to the linked file, misses the live copy, and `remove` deletes it.
+#[cfg(unix)]
+#[test]
+fn unlisting_refuses_over_a_live_copy_when_the_ignore_file_is_a_link() {
+    let (home, stub) = dotagents_home("park_dotagents_unlist_live_link", EXPLICIT_TOML);
+    write_gitignore(&home);
+    let store = home.join("dotfiles");
+    std::fs::create_dir_all(&store).unwrap();
+    let link = home.join(".agents/.gitignore");
+    std::fs::rename(&link, store.join("agents-ignore")).unwrap();
+    std::os::unix::fs::symlink(store.join("agents-ignore"), &link).unwrap();
+    let toml = read(&stub.toml_path());
+    let lock = read(&stub.lock_path());
+    let rt = runtime(&home, stub.clone(), true);
+    park_foo(&rt);
+    std::fs::write(stub.toml_path(), &toml).unwrap();
+    std::fs::write(stub.lock_path(), &lock).unwrap();
+    let parked = parked_copy(&rt, "foo");
+    write_skill(&stub.skill_dir("foo"), "foo");
+    std::fs::write(stub.skill_dir("foo").join("notes.txt"), "local edit").unwrap();
+    let removes_before = stub.removes();
+
+    let err = ops::unlist_parked_dotagents(&rt, &ctx(), &parked.id).unwrap_err();
+
+    assert!(err.message.contains("installed"), "{}", err.message);
+    assert_eq!(stub.removes(), removes_before, "remove ran");
+    assert_eq!(read(&stub.skill_dir("foo").join("notes.txt")), "local edit");
+    std::fs::remove_dir_all(&home).ok();
+}
+
 /// Flow: the repair runs `dotagents remove`, which rewrites `agents.toml`
 /// and `agents.lock` and then exits non-zero. Expectation: the repair fails
 /// and both files are back byte-for-byte as before. Failure: the half-done

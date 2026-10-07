@@ -1013,8 +1013,19 @@ fn drop_lock_entry(
 
 impl DotagentsPark {
     /// The folder `dotagents remove` deletes for `skill`, when one exists.
-    pub(crate) fn live_folder(&self, rt: &Runtime, skill: &SkillName) -> Option<PathBuf> {
-        let folder = self.gitignore.parent()?.join("skills").join(&skill.0);
+    /// Taken from the scope, not from `.gitignore`: that file may be a link
+    /// into another folder.
+    pub(crate) fn live_folder(
+        rt: &Runtime,
+        scope: &RootScope,
+        skill: &SkillName,
+    ) -> Option<PathBuf> {
+        let dir = manifest_dir(rt, scope);
+        let agents = match scope {
+            RootScope::Global => dir,
+            RootScope::Project(_) => dir.join(".agents"),
+        };
+        let folder = agents.join("skills").join(&skill.0);
         rt.ports.fs.symlink_metadata(&folder).ok().map(|_| folder)
     }
 }

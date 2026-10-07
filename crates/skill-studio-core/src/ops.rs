@@ -5103,7 +5103,11 @@ pub fn unlist_parked_dotagents(
                 .at(&deployment.path)
             },
         )?;
-        if let Some(live) = plan.live_folder(rt, &skill.name) {
+        if let Some(live) = crate::ops_park_dotagents::DotagentsPark::live_folder(
+            rt,
+            &deployment.root.scope,
+            &skill.name,
+        ) {
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
                 format!(
