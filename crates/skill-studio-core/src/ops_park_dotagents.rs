@@ -1011,6 +1011,14 @@ fn drop_lock_entry(
     Ok(())
 }
 
+impl DotagentsPark {
+    /// The folder `dotagents remove` deletes for `skill`, when one exists.
+    pub(crate) fn live_folder(&self, rt: &Runtime, skill: &SkillName) -> Option<PathBuf> {
+        let folder = self.gitignore.parent()?.join("skills").join(&skill.0);
+        rt.ports.fs.symlink_metadata(&folder).ok().map(|_| folder)
+    }
+}
+
 /// Writes `agents.toml` and `agents.lock` back as `plan_park` read them.
 pub(crate) fn restore_originals(
     rt: &Runtime,

@@ -5103,14 +5103,36 @@ pub fn unlist_parked_dotagents(
                 .at(&deployment.path)
             },
         )?;
-        crate::ops_park_dotagents::run_remove(
+        if let Some(live) = plan.live_folder(rt, &skill.name) {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                format!(
+                    "dotagents has installed {} again at {}; `dotagents remove` would delete it",
+                    skill.name.0,
+                    live.display()
+                ),
+            )
+            .at(&deployment.path));
+        }
+        if let Err(e) = crate::ops_park_dotagents::run_remove(
             rt,
             ctx,
             &session.guard,
             &plan,
             &skill.name,
             &deployment.root.scope,
-        )?;
+        ) {
+            let mut message = e.message.clone();
+            if let Err(files_error) =
+                crate::ops_park_dotagents::restore_originals(rt, &session.guard, &plan)
+            {
+                message = format!(
+                    "{message} agents.toml and agents.lock could not be written back: {}",
+                    files_error.message
+                );
+            }
+            return Err(CoreError::new(e.code, message).at(&deployment.path));
+        }
         session.finish(rt, ctx);
         Ok(())
     })

@@ -73,6 +73,8 @@ struct FakeDotagents {
     /// `remove` also writes an unrelated skill into `agents.toml`, as another
     /// tool editing the file at the same time would.
     add_unrelated_entry: AtomicBool,
+    /// `remove` rewrites the files, then exits non-zero.
+    fail_after_edit: AtomicBool,
 }
 
 impl FakeDotagents {
@@ -88,6 +90,7 @@ impl FakeDotagents {
             leave_toml: AtomicBool::new(false),
             block_move_back: AtomicBool::new(false),
             add_unrelated_entry: AtomicBool::new(false),
+            fail_after_edit: AtomicBool::new(false),
         })
     }
 
@@ -284,6 +287,10 @@ impl ProcessSpawner for FakeDotagents {
                     "the process died inside dotagents remove"
                 );
                 status = self.remove_exit.load(Ordering::SeqCst);
+                let failing_edit = self.fail_after_edit.load(Ordering::SeqCst);
+                if failing_edit {
+                    status = 0;
+                }
                 let confirmed = spec.args.iter().any(|arg| arg == "-y")
                     && !self.ignore_yes.load(Ordering::SeqCst);
                 if status == 0 && confirmed {
@@ -308,6 +315,9 @@ impl ProcessSpawner for FakeDotagents {
                             self.leave_toml.load(Ordering::SeqCst),
                         );
                     }
+                }
+                if failing_edit {
+                    status = 3;
                 }
             }
             None => self.install(),
@@ -1499,6 +1509,60 @@ fn unlisting_a_parked_skill_still_in_agents_toml_drops_the_entry_and_keeps_the_p
     assert_eq!(stub.removes(), removes_before + 1);
     assert!(!read(&stub.toml_path()).contains("name = \"foo\""));
     assert!(read(&stub.toml_path()).contains("name = \"bar\""));
+    assert!(parked.path.join("SKILL.md").exists(), "parked copy lost");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: the repair for a parked skill still in `agents.toml` runs after
+/// `dotagents install` put a live copy back at the skill's own path.
+/// Expectation: the repair refuses, `dotagents remove` never runs, and the
+/// live folder is byte-for-byte as it was. Failure: `dotagents remove`
+/// deletes the live folder with no backup.
+#[test]
+fn unlisting_a_parked_skill_refuses_when_dotagents_installed_a_live_copy_again() {
+    let (home, stub) = dotagents_home("park_dotagents_unlist_live", EXPLICIT_TOML);
+    let toml = read(&stub.toml_path());
+    let lock = read(&stub.lock_path());
+    let rt = runtime(&home, stub.clone(), true);
+    park_foo(&rt);
+    std::fs::write(stub.toml_path(), &toml).unwrap();
+    std::fs::write(stub.lock_path(), &lock).unwrap();
+    let parked = parked_copy(&rt, "foo");
+    write_skill(&stub.skill_dir("foo"), "foo");
+    std::fs::write(stub.skill_dir("foo").join("notes.txt"), "live edits").unwrap();
+    let live_skill = read(&stub.skill_dir("foo").join("SKILL.md"));
+    let removes_before = stub.removes();
+
+    let err = ops::unlist_parked_dotagents(&rt, &ctx(), &parked.id).unwrap_err();
+
+    assert!(err.message.contains("installed"), "{}", err.message);
+    assert_eq!(stub.removes(), removes_before, "remove ran");
+    assert_eq!(read(&stub.skill_dir("foo").join("SKILL.md")), live_skill);
+    assert_eq!(read(&stub.skill_dir("foo").join("notes.txt")), "live edits");
+    assert!(parked.path.join("SKILL.md").exists(), "parked copy lost");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: the repair runs `dotagents remove`, which rewrites `agents.toml`
+/// and `agents.lock` and then exits non-zero. Expectation: the repair fails
+/// and both files are back byte-for-byte as before. Failure: the half-done
+/// edit stays, so dotagents' files no longer match what the person had.
+#[test]
+fn a_failed_unlist_of_a_parked_skill_puts_agents_toml_and_agents_lock_back() {
+    let (home, stub) = dotagents_home("park_dotagents_unlist_fails", EXPLICIT_TOML);
+    let toml = read(&stub.toml_path());
+    let lock = read(&stub.lock_path());
+    let rt = runtime(&home, stub.clone(), true);
+    park_foo(&rt);
+    std::fs::write(stub.toml_path(), &toml).unwrap();
+    std::fs::write(stub.lock_path(), &lock).unwrap();
+    let parked = parked_copy(&rt, "foo");
+    stub.fail_after_edit.store(true, Ordering::SeqCst);
+
+    ops::unlist_parked_dotagents(&rt, &ctx(), &parked.id).unwrap_err();
+
+    assert_eq!(read(&stub.toml_path()), toml, "agents.toml");
+    assert_eq!(read(&stub.lock_path()), lock, "agents.lock");
     assert!(parked.path.join("SKILL.md").exists(), "parked copy lost");
     std::fs::remove_dir_all(&home).ok();
 }
