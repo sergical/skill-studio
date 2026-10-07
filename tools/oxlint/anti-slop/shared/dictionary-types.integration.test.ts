@@ -3677,6 +3677,63 @@ describe("anti-slop interface dictionary rules", () => {
 		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(0);
 	});
 
+	it("keeps an inherited unknown dictionary flagged when an ambient module imports a named Value that shadows the top-level alias", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`type Value = string;
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived<T> extends Base<unknown> {
+				[key: string]: T;
+			}
+			declare module "x" {
+				import { Value } from "y";
+				export type Out = Derived<Value>;
+			}`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("keeps an inherited unknown dictionary flagged when an ambient module default-imports a Value that shadows the top-level alias", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`type Value = string;
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived<T> extends Base<unknown> {
+				[key: string]: T;
+			}
+			declare module "x" {
+				import Value from "y";
+				export type Out = Derived<Value>;
+			}`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("keeps an inherited unknown dictionary flagged when an ambient module namespace-imports a Value that shadows the top-level alias", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`type Value = string;
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived<T> extends Base<unknown> {
+				[key: string]: T;
+			}
+			declare module "x" {
+				import * as Value from "y";
+				export type Out = Derived<Value>;
+			}`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
 	it("keeps an inherited unsafe symbol key when the override covers a different key union", () => {
 		const diagnostics = lintAntiSlopFixture(
 			`interface Base<V> {

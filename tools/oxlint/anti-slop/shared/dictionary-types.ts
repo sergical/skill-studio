@@ -59,6 +59,12 @@ function nestedDeclaredTypeName(node: ESTree.Node): string | null {
 		case "TSEnumDeclaration":
 		case "TSImportEqualsDeclaration":
 			return node.id.name;
+		case "ImportSpecifier":
+		case "ImportDefaultSpecifier":
+		case "ImportNamespaceSpecifier":
+			return node.local.name;
+		case "TSModuleDeclaration":
+			return node.id.type === "Identifier" ? node.id.name : null;
 		case "ClassDeclaration":
 		case "ClassExpression":
 			return node.id?.name ?? null;
