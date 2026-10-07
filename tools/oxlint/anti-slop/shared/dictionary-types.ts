@@ -9,8 +9,6 @@ const BUILT_INS = new Set([
 	"Omit",
 	"PropertyKey",
 	"NonNullable",
-	"Array",
-	"ReadonlyArray",
 ]);
 const TRANSPARENT_WRAPPERS = new Set(["Readonly", "Partial", "Required", "NonNullable"]);
 
@@ -157,27 +155,55 @@ const SAFE_VALUE_KINDS = new Set([
 ]);
 
 /**
- * Finished alias verdicts per environment. An alias body is read with no
- * substitutions, so its verdict never depends on the caller; without this,
- * aliases that each reference the previous one twice take exponential time.
+ * Verdicts per environment, type node, and substitution environment. One node
+ * can be read through many aliases or generic defaults; without this,
+ * `A1 = [A0, A0]`, `A2 = [A1, A1]`, ... takes exponential time. A node still
+ * being read holds `false`, so a cycle reads as not safe.
  */
-const aliasSafetyVerdicts = new WeakMap<TypeEnvironment, Map<string, boolean>>();
+const safetyVerdicts = new WeakMap<
+	TypeEnvironment,
+	WeakMap<ESTree.TSType, WeakMap<TypeSubstitutionEnvironment, boolean>>
+>();
+
+const NO_SUBSTITUTIONS: TypeSubstitutionEnvironment = new Map();
 
 /**
  * An override hides an inherited signature only when its value is provably
  * safe. A value the classifier cannot read (a conditional, an unresolved type
- * parameter, an imported or interface reference) must keep the inherited
- * evidence, or an unsafe contract slips by. `visitedAliases` makes a cyclic
- * local alias read as not safe.
+ * parameter, an imported or interface reference, a named `Array<T>` that a
+ * declaration could shadow) must keep the inherited evidence, or an unsafe
+ * contract slips by.
  */
 function isProvablySafeValue(
 	type: ESTree.TSType,
 	substitutions: TypeSubstitutionEnvironment,
 	environment: TypeEnvironment,
-	visitedAliases: ReadonlySet<string> = new Set(),
+): boolean {
+	let byNode = safetyVerdicts.get(environment);
+	if (byNode === undefined) {
+		byNode = new WeakMap();
+		safetyVerdicts.set(environment, byNode);
+	}
+	let bySubstitutions = byNode.get(type);
+	if (bySubstitutions === undefined) {
+		bySubstitutions = new WeakMap();
+		byNode.set(type, bySubstitutions);
+	}
+	const known = bySubstitutions.get(substitutions);
+	if (known !== undefined) return known;
+	bySubstitutions.set(substitutions, false);
+	const verdict = computeProvablySafeValue(type, substitutions, environment);
+	bySubstitutions.set(substitutions, verdict);
+	return verdict;
+}
+
+function computeProvablySafeValue(
+	type: ESTree.TSType,
+	substitutions: TypeSubstitutionEnvironment,
+	environment: TypeEnvironment,
 ): boolean {
 	const isSafe = (inner: ESTree.TSType): boolean =>
-		isProvablySafeValue(inner, substitutions, environment, visitedAliases);
+		isProvablySafeValue(inner, substitutions, environment);
 	const unwrapped = unwrapTransparentType(type);
 	if (SAFE_VALUE_KINDS.has(unwrapped.type)) return true;
 	if (unwrapped.type === "TSUnionType") return unwrapped.types.every(isSafe);
@@ -204,37 +230,13 @@ function isProvablySafeValue(
 	if (substitution !== undefined) {
 		return (
 			substitution !== UNRESOLVED_TYPE_PARAMETER &&
-			isProvablySafeValue(substitution.type, substitution.substitutions, environment, visitedAliases)
+			isProvablySafeValue(substitution.type, substitution.substitutions, environment)
 		);
 	}
 	const alias = environment.aliases.get(name);
-	if (alias === undefined) {
-		const [argument, ...rest] = unwrapped.typeArguments?.params ?? [];
-		return (
-			(name === "Array" || name === "ReadonlyArray") &&
-			isBuiltIn(name, environment) &&
-			argument !== undefined &&
-			rest.length === 0 &&
-			isSafe(argument)
-		);
-	}
-	if (visitedAliases.has(name)) return false;
+	if (alias === undefined) return false;
 	if (alias.typeParameters != null || unwrapped.typeArguments != null) return false;
-	let verdicts = aliasSafetyVerdicts.get(environment);
-	if (verdicts === undefined) {
-		verdicts = new Map();
-		aliasSafetyVerdicts.set(environment, verdicts);
-	}
-	const known = verdicts.get(name);
-	if (known !== undefined) return known;
-	const verdict = isProvablySafeValue(
-		alias.typeAnnotation,
-		new Map(),
-		environment,
-		new Set([...visitedAliases, name]),
-	);
-	verdicts.set(name, verdict);
-	return verdict;
+	return isProvablySafeValue(alias.typeAnnotation, NO_SUBSTITUTIONS, environment);
 }
 
 function isNeverType(type: ESTree.TSType): boolean {

@@ -775,7 +775,7 @@ describe("anti-slop interface dictionary rules", () => {
 				[key: string]: V;
 			}
 			interface Derived extends Base<unknown> {
-				[key: string]: string[] | readonly string[] | Array<string>;
+				[key: string]: string[] | readonly string[] | [string, number];
 			}
 			const derived: Derived = {};
 			void derived;`,
@@ -843,59 +843,6 @@ describe("anti-slop interface dictionary rules", () => {
 			}
 			interface Derived extends Base<unknown> {
 				[key: string]: { id; };
-			}
-			const derived: Derived = {};
-			void derived;`,
-			["no-unsafe-dictionary-type"],
-		);
-
-		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
-	});
-
-	it("keeps an inherited unknown dictionary flagged when the override value uses an imported Array", () => {
-		const diagnostics = lintAntiSlopFixture(
-			`import type { Array } from "./other";
-			interface Base<V> {
-				[key: string]: V;
-			}
-			interface Derived extends Base<unknown> {
-				[key: string]: Array<string>;
-			}
-			const derived: Derived = {};
-			void derived;`,
-			["no-unsafe-dictionary-type"],
-		);
-
-		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
-	});
-
-	it("keeps an inherited unknown dictionary flagged when the override value uses a default-imported ReadonlyArray", () => {
-		const diagnostics = lintAntiSlopFixture(
-			`import type ReadonlyArray from "./other";
-			interface Base<V> {
-				[key: string]: V;
-			}
-			interface Derived extends Base<unknown> {
-				[key: string]: ReadonlyArray<string>;
-			}
-			const derived: Derived = {};
-			void derived;`,
-			["no-unsafe-dictionary-type"],
-		);
-
-		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
-	});
-
-	it("keeps an inherited unknown dictionary flagged when the override value uses a local class named Array", () => {
-		const diagnostics = lintAntiSlopFixture(
-			`class Array<T> {
-				item?: T;
-			}
-			interface Base<V> {
-				[key: string]: V;
-			}
-			interface Derived extends Base<unknown> {
-				[key: string]: Array<string>;
 			}
 			const derived: Derived = {};
 			void derived;`,
@@ -988,6 +935,58 @@ describe("anti-slop interface dictionary rules", () => {
 				[key: string]: string;
 			}
 			interface Derived extends Base<unknown> {}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(0);
+	});
+
+	it("keeps an inherited unknown dictionary flagged when the override value is a named Array<string>, which a declaration could shadow", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: Array<string>;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("keeps an inherited unknown dictionary flagged when Array is an import-equals alias of an unsafe type", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`namespace N {
+				export type Unsafe = unknown;
+			}
+			import Array = N.Unsafe;
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: Array<string>;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("classifies an override through a 40-default doubling chain of generic defaults without re-reading shared defaults, so the fixture finishes inside the Oxlint timeout", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived<A0 = string, A1 = [A0, A0], A2 = [A1, A1], A3 = [A2, A2], A4 = [A3, A3], A5 = [A4, A4], A6 = [A5, A5], A7 = [A6, A6], A8 = [A7, A7], A9 = [A8, A8], A10 = [A9, A9], A11 = [A10, A10], A12 = [A11, A11], A13 = [A12, A12], A14 = [A13, A13], A15 = [A14, A14], A16 = [A15, A15], A17 = [A16, A16], A18 = [A17, A17], A19 = [A18, A18], A20 = [A19, A19], A21 = [A20, A20], A22 = [A21, A21], A23 = [A22, A22], A24 = [A23, A23], A25 = [A24, A24], A26 = [A25, A25], A27 = [A26, A26], A28 = [A27, A27], A29 = [A28, A28], A30 = [A29, A29], A31 = [A30, A30], A32 = [A31, A31], A33 = [A32, A32], A34 = [A33, A33], A35 = [A34, A34], A36 = [A35, A35], A37 = [A36, A36], A38 = [A37, A37], A39 = [A38, A38], A40 = [A39, A39]> extends Base<unknown> {
+				[key: string]: A40;
+			}
 			const derived: Derived = {};
 			void derived;`,
 			["no-unsafe-dictionary-type"],
