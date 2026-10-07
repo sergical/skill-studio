@@ -409,9 +409,7 @@ mod tests {
     use skill_studio_core::ports::NeverCancel;
 
     fn write_script(path: &Path, body: &str) {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_scripts::write_fake_executable(path, body);
     }
 
     /// `a_busy_executable_is_retried_until_free_or_the_busy_error_surfaces_after_the_cap`:
@@ -594,14 +592,6 @@ mod tests {
         assert_eq!(err.code, skill_studio_core::ErrorCode::Io);
     }
 
-    fn write_executable_script(path: &Path, script: &str) {
-        std::fs::write(path, script).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(path, perms).unwrap();
-    }
-
     /// `a_packaged_apps_minimal_process_path_still_resolves_a_bare_npx_and_the_node_its_shebang_needs_or_names_which_lookup_starved`:
     /// a fake `npx` (`#!/bin/sh` that `exec`s `/usr/bin/env node`) and a
     /// fake `node`, both only in a temp dir the *process's own* `PATH` does
@@ -616,11 +606,8 @@ mod tests {
     fn a_packaged_apps_minimal_process_path_still_resolves_a_bare_npx_and_the_node_its_shebang_needs_or_names_which_lookup_starved(
     ) {
         let tmp = tempfile::tempdir().unwrap();
-        write_executable_script(
-            &tmp.path().join("npx"),
-            "#!/bin/sh\nexec /usr/bin/env node\n",
-        );
-        write_executable_script(&tmp.path().join("node"), "#!/bin/sh\necho fake-node-ok\n");
+        write_script(&tmp.path().join("npx"), "exec /usr/bin/env node");
+        write_script(&tmp.path().join("node"), "echo fake-node-ok");
         let inherited_path = std::env::var_os("PATH").unwrap_or_default();
         assert!(
             !std::env::split_paths(&inherited_path).any(|dir| dir == tmp.path()),

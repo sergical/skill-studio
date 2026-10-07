@@ -46,6 +46,8 @@ mod sink;
 mod skill_uses;
 #[cfg(feature = "telemetry")]
 pub mod telemetry;
+#[cfg(all(test, unix))]
+mod test_scripts;
 mod tools;
 mod usage_report;
 
