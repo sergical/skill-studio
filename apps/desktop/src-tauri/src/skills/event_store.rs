@@ -23,6 +23,7 @@
 // recreating bytes cannot recreate the matching ownership metadata.
 // ============================================================================
 
+use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,19 @@ pub fn open(db_path: &Path) -> Result<Connection, String> {
     }
     let conn = Connection::open(db_path)
         .map_err(|e| format!("Failed to open {}: {e}", db_path.display()))?;
+    // The desktop's `EventStore` and the core's `SqliteHistoryStore`
+    // (`skill-studio-host/src/history.rs`) now open this same file from two
+    // separate connections (one per process' worth of core `ops` calls, one
+    // for the desktop's own direct writes). WAL lets both read concurrently,
+    // but a writer still briefly locks the file; without a `busy_timeout`
+    // the loser gets `SQLITE_BUSY` immediately instead of waiting its turn.
+    // Set before `journal_mode = WAL` itself, since switching journal modes
+    // is its own write that can hit a busy database - a CLI or MCP write in
+    // flight at app launch could otherwise fail this whole open instead of
+    // just waiting, leaving the app running its entire session with no
+    // event store.
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| format!("Failed to set WAL mode: {e}"))?;
     // `reverted_by` is claimed (set to the restore event's id) before that
@@ -114,21 +128,153 @@ pub fn open(db_path: &Path) -> Result<Connection, String> {
 
 /// Owns the event store connection plus the app data dir its backups live
 /// under (`<app_data>/backups/<event-id>/`).
+///
+/// `journal` is `skill-studio-core`'s reference [`Journal`] implementation
+/// (unit 1.2), rooted at `<app_data>/journal`: this struct is the host
+/// implementation of that port, in place of a separate desktop-only
+/// concept - see the `impl Journal for EventStore` below, which delegates
+/// every method straight to `self.journal` rather than reimplementing
+/// plan/step/backup storage on `SQLite`. `FsJournal` already gets the
+/// manifest-before-plan durability order right and is exercised by
+/// `skill-studio-core`'s own journal tests; a second, SQLite-backed
+/// implementation here would only duplicate that logic, untested. Nothing
+/// here reroutes the five-phase `events` table write path above through it
+/// yet - that adoption is a later slice (see
+/// `docs/action-map/events-and-history.md`) - but `lib.rs`'s startup
+/// reconciliation now calls `skill_studio_core::journal::reconcile`
+/// against this store directly.
 pub struct EventStore {
     pub conn: Connection,
     pub app_data: PathBuf,
+    journal: skill_studio_core::journal::FsJournal,
 }
 
 impl EventStore {
     /// Opens `<app_data>/events.sqlite3`, creating `app_data` if needed.
+    /// Kept for tests and anything that has never had a shared history
+    /// database to migrate onto; the real app calls [`Self::open_with_db`]
+    /// so its backups still live under `app_data` while the connection
+    /// itself points at the core's shared history file.
     pub fn open(app_data: &Path) -> Result<Self, String> {
+        Self::open_with_db(app_data, &app_data.join("events.sqlite3"))
+    }
+
+    /// Opens `db_path` as the event log, while still rooting backups and the
+    /// journal under `app_data` - the split that lets the desktop keep its
+    /// own backup/journal directories after its event *table* moved onto the
+    /// core's shared `<data_root>/history/events.sqlite3` (`core_runtime::
+    /// history_db_path`), so Activity and Undo see every core `ops` mutation
+    /// alongside the desktop's own.
+    pub fn open_with_db(app_data: &Path, db_path: &Path) -> Result<Self, String> {
         fs::create_dir_all(app_data)
             .map_err(|e| format!("Failed to create {}: {e}", app_data.display()))?;
-        let conn = open(&app_data.join("events.sqlite3"))?;
+        let conn = open(db_path)?;
+        let journal = skill_studio_core::journal::FsJournal::new(
+            app_data.join("journal"),
+            std::sync::Arc::new(skill_studio_host::RealFs::new()),
+        );
         Ok(Self {
             conn,
             app_data: app_data.to_path_buf(),
+            journal,
         })
+    }
+
+    /// One-time import of the desktop's pre-migration event log
+    /// (`<app_data>/events.sqlite3`, from before the desktop and core shared
+    /// one history file) into the database this store already has open.
+    /// Skips rows whose id already exists (so a second run imports nothing
+    /// new), runs as one transaction, and renames the legacy file to
+    /// `events.sqlite3.migrated` only once every row has copied over -
+    /// leaving it in place (for the next launch to retry) if anything
+    /// failed. A missing or corrupt legacy file is not an error: this
+    /// returns `Ok(0)` rather than block startup.
+    pub fn import_legacy_events(&self) -> Result<usize, String> {
+        let legacy_path = self.app_data.join("events.sqlite3");
+        if !legacy_path.exists() {
+            return Ok(0);
+        }
+        if let Some(current) = self.conn.path() {
+            if Path::new(current) == legacy_path {
+                // The connection this store already holds *is* the legacy
+                // file (no shared history database configured) - nothing to
+                // import from itself.
+                return Ok(0);
+            }
+        }
+        // Opening the legacy file first applies any pending schema
+        // migrations (e.g. the `restorable`/`backup_dir` ALTER TABLEs) to it,
+        // so the ATTACHed copy below has the same columns as the live table.
+        // A corrupt legacy file fails here, before anything is attached or
+        // touched, and is reported without blocking startup.
+        drop(open(&legacy_path)?);
+        let legacy_str = legacy_path.to_str().ok_or_else(|| {
+            format!(
+                "Non-UTF-8 legacy event store path: {}",
+                legacy_path.display()
+            )
+        })?;
+        self.conn
+            .execute("ATTACH DATABASE ?1 AS legacy", params![legacy_str])
+            .map_err(|e| format!("Failed to attach legacy event store: {e}"))?;
+        let import_result = (|| -> Result<usize, String> {
+            self.conn
+                .execute_batch("BEGIN IMMEDIATE")
+                .map_err(|e| format!("Failed to begin legacy import transaction: {e}"))?;
+            let imported = self
+                .conn
+                .execute(
+                    "INSERT OR IGNORE INTO events
+                        (id, ts, kind, skill, harness, scope, project_path, payload,
+                         inverse, backup_dir, status, reverted_by, restorable)
+                     SELECT id, ts, kind, skill, harness, scope, project_path, payload,
+                            inverse, backup_dir, status, reverted_by, restorable
+                     FROM legacy.events",
+                    [],
+                )
+                .map_err(|e| format!("Failed to import legacy events: {e}"))?;
+            self.conn
+                .execute(
+                    "INSERT OR IGNORE INTO materialized_roots
+                        (root_path, harness, shared_root, created_by)
+                     SELECT root_path, harness, shared_root, created_by
+                     FROM legacy.materialized_roots",
+                    [],
+                )
+                .map_err(|e| format!("Failed to import legacy converted-folder records: {e}"))?;
+            self.conn
+                .execute(
+                    "INSERT OR IGNORE INTO materialized_disabled (root_path, skill)
+                     SELECT root_path, skill FROM legacy.materialized_disabled",
+                    [],
+                )
+                .map_err(|e| format!("Failed to import legacy converted-folder switches: {e}"))?;
+            self.conn
+                .execute_batch("COMMIT")
+                .map_err(|e| format!("Failed to commit legacy import transaction: {e}"))?;
+            Ok(imported)
+        })();
+        if import_result.is_err() {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+        let _ = self.conn.execute_batch("DETACH DATABASE legacy");
+        let imported = import_result?;
+        let migrated_path = self.app_data.join("events.sqlite3.migrated");
+        fs::rename(&legacy_path, &migrated_path)
+            .map_err(|e| format!("Failed to rename legacy event store: {e}"))?;
+        // Best-effort: WAL/SHM sidecars only exist if the legacy connection
+        // was left open mid-checkpoint. Their absence is not an error.
+        for ext in ["-wal", "-shm"] {
+            let mut sidecar = legacy_path.clone().into_os_string();
+            sidecar.push(ext);
+            let sidecar = PathBuf::from(sidecar);
+            if sidecar.exists() {
+                let mut migrated_sidecar = migrated_path.clone().into_os_string();
+                migrated_sidecar.push(ext);
+                let _ = fs::rename(&sidecar, PathBuf::from(migrated_sidecar));
+            }
+        }
+        Ok(imported)
     }
 
     fn backup_dir_for(&self, id: &str) -> PathBuf {
@@ -160,8 +306,7 @@ impl EventStore {
             }
             let basename = path
                 .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| format!("path-{i}"));
+                .map_or_else(|| format!("path-{i}"), |n| n.to_string_lossy().into_owned());
             let relative_path = format!("{i}-{basename}");
             copy_recursive(path, &dir.join(&relative_path))?;
             manifest.entries.insert(
@@ -185,14 +330,14 @@ impl EventStore {
         Ok(manifest)
     }
 
-    fn read_manifest(&self, backup_dir: &Path) -> Result<BackupManifest, String> {
+    fn read_manifest(backup_dir: &Path) -> Result<BackupManifest, String> {
         let data = fs::read(backup_dir.join("manifest.json"))
             .map_err(|e| format!("Failed to read manifest in {}: {e}", backup_dir.display()))?;
         serde_json::from_slice(&data).map_err(|e| format!("Failed to parse manifest: {e}"))
     }
 
     /// Inserts a `pending` row for `id`.
-    pub fn record(&self, id: &str, draft: EventDraft) -> Result<(), String> {
+    pub fn record(&self, id: &str, draft: &EventDraft) -> Result<(), String> {
         let ts = Utc::now().to_rfc3339();
         let payload_json = serde_json::to_string(&draft.payload)
             .map_err(|e| format!("Failed to serialize payload: {e}"))?;
@@ -250,22 +395,31 @@ impl EventStore {
             .map_err(|e| format!("Failed to query event {id}: {e}"))
     }
 
-    /// Lists events newest-first (by insertion order - two ULIDs allocated
-    /// in the same millisecond don't reliably sort, so `rowid` is the order).
+    /// Lists events newest-first by `ts`, with `rowid` only as a tiebreaker
+    /// for two ULIDs allocated in the same millisecond (which don't reliably
+    /// sort). `rowid` alone is not enough: `import_legacy_events` appends
+    /// imported rows at the end of the table regardless of their original
+    /// `ts`, so a legacy row imported today would otherwise sort above
+    /// events the core wrote just now.
     pub fn list(&self, limit: usize, skill: Option<&str>) -> Result<Vec<EventRow>, String> {
         let mut stmt = if skill.is_some() {
-            self.conn
-                .prepare("SELECT * FROM events WHERE skill = ?1 ORDER BY rowid DESC LIMIT ?2")
+            self.conn.prepare(
+                "SELECT * FROM events WHERE skill = ?1 ORDER BY ts DESC, rowid DESC LIMIT ?2",
+            )
         } else {
             self.conn
-                .prepare("SELECT * FROM events ORDER BY rowid DESC LIMIT ?1")
+                .prepare("SELECT * FROM events ORDER BY ts DESC, rowid DESC LIMIT ?1")
         }
         .map_err(|e| format!("Failed to prepare event list query: {e}"))?;
 
+        // A caller-supplied event limit that overflows `i64` is a bug at the
+        // call site, not a corrupt row; cap it instead of wrapping so the
+        // query still runs with a saner (if too-generous) limit.
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let rows = if let Some(skill) = skill {
-            stmt.query_map(params![skill, limit as i64], row_from)
+            stmt.query_map(params![skill, limit], row_from)
         } else {
-            stmt.query_map(params![limit as i64], row_from)
+            stmt.query_map(params![limit], row_from)
         }
         .map_err(|e| format!("Failed to list events: {e}"))?;
 
@@ -329,13 +483,20 @@ impl EventStore {
     }
 
     /// Interrupted deterministic frontmatter repairs that startup can finish
-    /// from their backend-generated, fingerprint-bound intent.
+    /// from their backend-generated, fingerprint-bound intent. Both the
+    /// desktop's `apply_skill_frontmatter_repair` and the core's
+    /// `ops::fix_skill` write `kind = 'repair_skill_frontmatter'`, but only
+    /// the desktop's payload carries `proposed_content_fingerprint` - the
+    /// core's `fix_skill` payload shape is not something this recovery loop
+    /// (desktop-only, driven by `lib.rs`) knows how to parse, so a core row
+    /// here would fail rather than recover.
     pub fn interrupted_frontmatter_repair_events(&self) -> Result<Vec<EventRow>, String> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT * FROM events
                  WHERE status = 'interrupted' AND kind = 'repair_skill_frontmatter'
+                   AND json_extract(payload, '$.proposed_content_fingerprint') IS NOT NULL
                  ORDER BY rowid ASC",
             )
             .map_err(|e| format!("Failed to prepare frontmatter repair recovery query: {e}"))?;
@@ -497,7 +658,7 @@ impl EventStore {
         };
         self.record(
             restore_id,
-            EventDraft {
+            &EventDraft {
                 kind: "restore".to_string(),
                 skill: target.skill.clone(),
                 harness: target.harness.clone(),
@@ -544,7 +705,7 @@ impl EventStore {
     }
 
     /// Replaces an already-recorded inverse. Whole-root independent copies
-    /// record intent before the per-skill link exists, then fill RecreateSymlink.
+    /// record intent before the per-skill link exists, then fill `RecreateSymlink`.
     pub(crate) fn patch_event_inverse(&self, id: &str, inverse: &Value) -> Result<(), String> {
         let json = serde_json::to_string(inverse)
             .map_err(|e| format!("Failed to serialize inverse for {id}: {e}"))?;
@@ -679,7 +840,7 @@ impl EventStore {
     /// `apply_restore_distribute`'s shared-dir restore.
     fn restore_from_backup(&self, backup_dir_rel: &str, path: &Path) -> Result<(), String> {
         let backup_dir = self.app_data.join(backup_dir_rel);
-        let manifest = self.read_manifest(&backup_dir)?;
+        let manifest = Self::read_manifest(&backup_dir)?;
         let key = path.to_string_lossy().into_owned();
         let entry = manifest
             .entries
@@ -745,7 +906,7 @@ impl EventStore {
         };
         self.record(
             restore_id,
-            EventDraft {
+            &EventDraft {
                 kind: "restore".to_string(),
                 skill: target.skill.clone(),
                 harness: target.harness.clone(),
@@ -823,7 +984,7 @@ impl EventStore {
                     created_by,
                 ],
             )
-            .map_err(|e| format!("Failed to register materialized root: {e}"))?;
+            .map_err(|e| format!("Failed to register converted folder link: {e}"))?;
         Ok(())
     }
 
@@ -833,13 +994,13 @@ impl EventStore {
                 "DELETE FROM materialized_disabled WHERE root_path = ?1",
                 params![root.to_string_lossy()],
             )
-            .map_err(|e| format!("Failed to clear materialized_disabled: {e}"))?;
+            .map_err(|e| format!("Failed to clear converted-folder switches: {e}"))?;
         self.conn
             .execute(
                 "DELETE FROM materialized_roots WHERE root_path = ?1",
                 params![root.to_string_lossy()],
             )
-            .map_err(|e| format!("Failed to unregister materialized root: {e}"))?;
+            .map_err(|e| format!("Failed to unregister converted folder link: {e}"))?;
         Ok(())
     }
 
@@ -858,7 +1019,7 @@ impl EventStore {
                 },
             )
             .optional()
-            .map_err(|e| format!("Failed to query materialized root: {e}"))
+            .map_err(|e| format!("Failed to query converted folder link: {e}"))
     }
 
     pub fn set_materialized_disabled(
@@ -898,6 +1059,82 @@ impl EventStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Failed to read disabled row: {e}"))?;
         Ok(mapped)
+    }
+}
+
+/// `EventStore` is the host implementation of `skill-studio-core`'s
+/// `Journal` port; every method just forwards to the `FsJournal` it already
+/// owns (see the doc comment on the struct for why) and never touches
+/// `self.conn` - the `rusqlite::Connection` this struct also owns is
+/// untouched by this impl, which is why `Journal`'s `Send`-only bound (no
+/// `Sync`) costs this struct nothing despite `Connection` itself being
+/// `!Sync`.
+impl skill_studio_core::ports::Journal for EventStore {
+    fn begin(
+        &self,
+        guard: &skill_studio_core::ports::ExclusiveGuard,
+        plan: &skill_studio_core::ports::PlanRecord,
+    ) -> Result<(), skill_studio_core::error::CoreError> {
+        skill_studio_core::ports::Journal::begin(&self.journal, guard, plan)
+    }
+
+    fn record_step(
+        &self,
+        guard: &skill_studio_core::ports::ExclusiveGuard,
+        id: &skill_studio_core::identity::PlanId,
+        step: skill_studio_core::ports::PlanStep,
+    ) -> Result<(), skill_studio_core::error::CoreError> {
+        skill_studio_core::ports::Journal::record_step(&self.journal, guard, id, step)
+    }
+
+    fn finish(
+        &self,
+        guard: &skill_studio_core::ports::ExclusiveGuard,
+        id: &skill_studio_core::identity::PlanId,
+        status: skill_studio_core::ports::PlanStatus,
+    ) -> Result<(), skill_studio_core::error::CoreError> {
+        skill_studio_core::ports::Journal::finish(&self.journal, guard, id, status)
+    }
+
+    fn all(
+        &self,
+    ) -> Result<Vec<skill_studio_core::ports::PlanRecord>, skill_studio_core::error::CoreError>
+    {
+        skill_studio_core::ports::Journal::all(&self.journal)
+    }
+
+    fn pending(
+        &self,
+    ) -> Result<Vec<skill_studio_core::ports::PlanRecord>, skill_studio_core::error::CoreError>
+    {
+        skill_studio_core::ports::Journal::pending(&self.journal)
+    }
+
+    fn remove_backup(
+        &self,
+        guard: &skill_studio_core::ports::ExclusiveGuard,
+        id: &skill_studio_core::identity::PlanId,
+        relative: &str,
+    ) -> Result<(), skill_studio_core::error::CoreError> {
+        skill_studio_core::ports::Journal::remove_backup(&self.journal, guard, id, relative)
+    }
+
+    fn write_backup(
+        &self,
+        guard: &skill_studio_core::ports::ExclusiveGuard,
+        id: &skill_studio_core::identity::PlanId,
+        relative: &str,
+        bytes: &[u8],
+    ) -> Result<(), skill_studio_core::error::CoreError> {
+        skill_studio_core::ports::Journal::write_backup(&self.journal, guard, id, relative, bytes)
+    }
+
+    fn read_backup(
+        &self,
+        id: &skill_studio_core::identity::PlanId,
+        relative: &str,
+    ) -> Result<Vec<u8>, skill_studio_core::error::CoreError> {
+        skill_studio_core::ports::Journal::read_backup(&self.journal, id, relative)
     }
 }
 
@@ -958,7 +1195,7 @@ fn hash_entry(path: &Path) -> std::io::Result<String> {
     } else if file_type.is_dir() {
         hasher.update(b"D");
         let mut entries: Vec<_> = fs::read_dir(path)?.collect::<Result<_, _>>()?;
-        entries.sort_by_key(|e| e.file_name());
+        entries.sort_by_key(std::fs::DirEntry::file_name);
         for entry in entries {
             let name_bytes = entry
                 .file_name()
@@ -978,7 +1215,18 @@ fn hash_entry(path: &Path) -> std::io::Result<String> {
         hasher.update(&bytes);
     }
     let digest = hasher.finalize();
-    Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(to_hex(&digest))
+}
+
+/// Lower-case hex, one `write!` per byte into a single pre-sized `String`
+/// rather than collecting a `Vec<String>` of two-char fragments.
+fn to_hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut acc, b| {
+            let _ = write!(acc, "{b:02x}");
+            acc
+        })
 }
 
 /// Copies `src` into `dest`, preserving regular files as bytes, directories
@@ -1083,13 +1331,14 @@ pub struct EventDraft {
     pub restorable: bool,
 }
 
+#[derive(Clone, Copy)]
 pub enum EventStatus {
     Done,
     Failed,
 }
 
 impl EventStatus {
-    fn as_str(&self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             EventStatus::Done => "done",
             EventStatus::Failed => "failed",
@@ -1174,8 +1423,7 @@ pub enum InverseOp {
 impl InverseOp {
     fn destination(&self) -> &Path {
         match self {
-            InverseOp::RecreateSymlink { link, .. } => link,
-            InverseOp::RemoveSymlink { link, .. } => link,
+            InverseOp::RecreateSymlink { link, .. } | InverseOp::RemoveSymlink { link, .. } => link,
             InverseOp::MoveBack { to, .. } => to,
             InverseOp::RestoreBackup { path, .. } => path,
             InverseOp::UndistributeFromShared { shared_dir, .. } => shared_dir,
@@ -1243,6 +1491,72 @@ mod tests {
         }
     }
 
+    /// Given a plan recorded through `EventStore`'s `Journal` impl and left
+    /// `Pending` (a simulated crash - the plan writer is dropped without
+    /// `finish`), when `skill_studio_core::journal::reconcile` runs against
+    /// `&store`, then the plan's row is left `Reversed`, not deleted; on
+    /// failure the panic names the plan left open.
+    #[test]
+    fn desktop_event_store_reverses_a_pending_core_plan_at_startup_or_names_the_plan_left_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(tmp.path());
+
+        let root_path = tmp.path().join("skills_root");
+        fs::create_dir_all(&root_path).unwrap();
+        fs::write(root_path.join("target.txt"), b"hi").unwrap();
+        let fs_port: std::sync::Arc<dyn skill_studio_core::ports::ScopeFs> =
+            std::sync::Arc::new(skill_studio_host::RealFs::new());
+        let root = skill_studio_core::fsops::Root::open(fs_port.as_ref(), root_path.clone())
+            .expect("open root");
+
+        let lease_dir = tmp.path().join("lease");
+        fs::create_dir_all(&lease_dir).unwrap();
+        let lease = skill_studio_host::FileLease::new(lease_dir);
+        let handle = skill_studio_core::ports::LeaseProvider::acquire(
+            &lease,
+            &[],
+            skill_studio_core::ports::LeaseMode::Exclusive,
+            std::time::Duration::from_secs(5),
+        )
+        .expect("acquire exclusive lease");
+        let guard = skill_studio_core::ports::ExclusiveGuard::from_handle(handle);
+
+        let plan = skill_studio_core::journal::PlanWriter::begin(
+            &store,
+            &guard,
+            skill_studio_core::identity::PlanId("01PLANDESKTOPTEST000000001".into()),
+            Utc::now(),
+            "desktop reconcile test",
+            root_path.clone(),
+            Vec::new(),
+        )
+        .expect("begin plan");
+
+        skill_studio_core::fsops::link(&root, &plan, Path::new("link"), Path::new("target.txt"))
+            .expect("link");
+
+        let id = plan.id().clone();
+        drop(plan); // simulated crash: never call finish
+
+        let report = skill_studio_core::journal::reconcile(&store, &guard, fs_port.as_ref())
+            .expect("reconcile");
+        assert!(
+            report.reversed.contains(&id),
+            "plan {id:?} must be reversed by startup reconciliation; report was {report:?}"
+        );
+
+        let record = skill_studio_core::ports::Journal::all(&store)
+            .expect("read plans back")
+            .into_iter()
+            .find(|p| p.id == id)
+            .expect("the plan begun above must still exist as a row, never deleted");
+        assert_eq!(
+            record.status,
+            skill_studio_core::ports::PlanStatus::Reversed,
+            "row must be left Reversed, naming the plan otherwise left open"
+        );
+    }
+
     #[test]
     fn record_list_roundtrip_preserves_fields_and_order() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1252,7 +1566,7 @@ mod tests {
         store
             .record(
                 &id1,
-                draft("install", "alpha", serde_json::json!({"n": 1}), None, None),
+                &draft("install", "alpha", serde_json::json!({"n": 1}), None, None),
             )
             .unwrap();
         store.finish(&id1, EventStatus::Done).unwrap();
@@ -1261,7 +1575,7 @@ mod tests {
         store
             .record(
                 &id2,
-                draft("remove", "alpha", serde_json::json!({"n": 2}), None, None),
+                &draft("remove", "alpha", serde_json::json!({"n": 2}), None, None),
             )
             .unwrap();
         store.finish(&id2, EventStatus::Done).unwrap();
@@ -1334,7 +1648,7 @@ mod tests {
         store
             .record(
                 &id,
-                draft(
+                &draft(
                     "remove",
                     "new",
                     serde_json::json!({}),
@@ -1378,7 +1692,7 @@ mod tests {
         store
             .record(
                 &id,
-                draft(
+                &draft(
                     "remove",
                     "my-skill",
                     serde_json::json!({}),
@@ -1418,7 +1732,7 @@ mod tests {
         store
             .record(
                 &id,
-                draft(
+                &draft(
                     "remove",
                     "beta",
                     serde_json::json!({}),
@@ -1463,7 +1777,7 @@ mod tests {
         store
             .record(
                 &repair_id,
-                draft(
+                &draft(
                     "repair_skill_frontmatter",
                     "sample",
                     serde_json::json!({}),
@@ -1520,7 +1834,7 @@ mod tests {
         store
             .record(
                 &ordinary_id,
-                draft(
+                &draft(
                     "update_notes",
                     "sample",
                     serde_json::json!({}),
@@ -1555,7 +1869,7 @@ mod tests {
         store
             .record(
                 &failed_id,
-                draft(
+                &draft(
                     "remove",
                     "gamma",
                     serde_json::json!({}),
@@ -1579,7 +1893,7 @@ mod tests {
         store
             .record(
                 &pending_id,
-                draft("remove", "gamma", serde_json::json!({}), None, None),
+                &draft("remove", "gamma", serde_json::json!({}), None, None),
             )
             .unwrap();
 
@@ -1613,7 +1927,7 @@ mod tests {
         store
             .record(
                 &id,
-                draft(
+                &draft(
                     "update",
                     "delta",
                     serde_json::json!({}),

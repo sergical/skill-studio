@@ -15,12 +15,18 @@ import {
   Link2Off,
   Undo2,
 } from "lucide-react";
+import { Button } from "@skill-studio/ui";
 import { formatRelativeTime } from "@skill-studio/lib";
 import type { SkillEvent } from "@skill-studio/lib";
 import { listSkillEvents, openSkillPath, restoreSkillEvent } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 import { HARNESS_LABELS } from "../../lib/harness-labels";
-import { canRestoreSkillEvent, shouldOfferForceRestore } from "./skill-history-restore-policy";
+import {
+  canRestoreSkillEvent,
+  eventLabel,
+  kindLabel,
+  shouldOfferForceRestore,
+} from "./skill-history-restore-policy";
 
 const HARNESS_LABEL_BY_ID = new Map<string, string>(HARNESS_LABELS);
 
@@ -49,21 +55,16 @@ function iconForKind(kind: string, className: string) {
   }
 }
 
-/** "unlink harness" from "unlink_harness", for kinds with no friendlier label. */
-function kindLabel(kind: string): string {
-  return kind.replace(/_/g, " ");
-}
-
 /** What a restore's confirm dialog names as "what will be put back" - the inverse of the event's own kind. */
 function restoreDescription(event: SkillEvent): string {
   const skillPart = event.skill ? `${event.skill}` : (event.harness ?? "this item");
   switch (event.kind) {
     case "unlink_harness":
-      return `Restore ${skillPart}'s link for ${event.harness ?? "its harness"}`;
+      return `Restore ${skillPart}'s link for ${event.harness ?? "its agent"}`;
     case "explode_shared_dir":
-      return `Restore ${event.harness ?? "the harness"}'s whole-folder link`;
+      return `Restore ${event.harness ?? "the agent"}'s whole-folder link`;
     case "distribute_from_shared":
-      return `Move ${skillPart} back into the Universal folder and remove the per-harness copies`;
+      return `Move ${skillPart} back into the Universal folder and remove the per-agent copies`;
     case "make_independent_copy":
       return `Restore ${skillPart}'s exact Universal link`;
     case "move_aside_disable":
@@ -73,29 +74,10 @@ function restoreDescription(event: SkillEvent): string {
   }
 }
 
-function EventRow({ event, onRestored }: { event: SkillEvent; onRestored: () => void }) {
+/** Owns the confirm-restore / force-restore-on-conflict flow for one event row. */
+function useRestoreEvent(event: SkillEvent, onRestored: () => void) {
   const addToast = useAppStore((state) => state.addToast);
   const [isRestoring, setIsRestoring] = useState(false);
-  const isFailed = event.status === "failed";
-  const isInterrupted = event.status === "interrupted";
-  const icon = iconForKind(
-    event.kind,
-    isFailed ? "text-error" : isInterrupted ? "text-warning" : "text-text-tertiary",
-  );
-  const harnessLabel = event.harness
-    ? (HARNESS_LABEL_BY_ID.get(event.harness) ?? event.harness)
-    : null;
-
-  const handleReveal = () => {
-    if (!event.backup_path) return;
-    openSkillPath(event.backup_path, "reveal").catch((err) => {
-      addToast({
-        type: "error",
-        title: "Couldn't reveal in Finder",
-        message: err instanceof Error ? err.message : "Unknown error",
-      });
-    });
-  };
 
   const runRestore = async (force: boolean) => {
     setIsRestoring(true);
@@ -132,6 +114,87 @@ function EventRow({ event, onRestored }: { event: SkillEvent; onRestored: () => 
     await runRestore(false);
   };
 
+  return { isRestoring, handleRestoreClick };
+}
+
+/** Status text on the right of a row: "Interrupted…" is a friendlier spelling of that one status value. */
+function EventStatusBadge({
+  isFailed,
+  isInterrupted,
+  status,
+}: {
+  isFailed: boolean;
+  isInterrupted: boolean;
+  status: string;
+}) {
+  return (
+    <span
+      className={`shrink-0 text-caption font-semibold ${
+        isFailed ? "text-error" : isInterrupted ? "text-warning" : "text-text-tertiary"
+      }`}
+    >
+      {isInterrupted ? "Interrupted - the app was quit during this operation" : status}
+    </span>
+  );
+}
+
+/** Trailing action buttons: "Reveal in Finder" for backed-up events, and Restore where offered. */
+function EventActions({
+  event,
+  isRestoring,
+  onRestoreClick,
+}: {
+  event: SkillEvent;
+  isRestoring: boolean;
+  onRestoreClick: () => void;
+}) {
+  const addToast = useAppStore((state) => state.addToast);
+
+  const handleReveal = () => {
+    if (!event.backup_path) return;
+    openSkillPath(event.backup_path, "reveal").catch((err) => {
+      addToast({
+        type: "error",
+        title: "Couldn't reveal in Finder",
+        message: err instanceof Error ? err.message : "Unknown error",
+      });
+    });
+  };
+
+  return (
+    <>
+      {event.backup_path && (
+        <Button variant="link" className="h-auto shrink-0 p-0 text-small" onClick={handleReveal}>
+          Reveal in Finder
+        </Button>
+      )}
+      {canRestoreSkillEvent(event) && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-auto shrink-0 rounded-sm border-border-subtle px-2 py-1 text-small text-text-secondary"
+          onClick={onRestoreClick}
+          disabled={isRestoring}
+        >
+          Restore
+        </Button>
+      )}
+    </>
+  );
+}
+
+function EventRow({ event, onRestored }: { event: SkillEvent; onRestored: () => void }) {
+  const { isRestoring, handleRestoreClick } = useRestoreEvent(event, onRestored);
+  const isFailed = event.status === "failed";
+  const isInterrupted = event.status === "interrupted";
+  const icon = iconForKind(
+    event.kind,
+    isFailed ? "text-error" : isInterrupted ? "text-warning" : "text-text-tertiary",
+  );
+  const harnessLabel = event.harness
+    ? (HARNESS_LABEL_BY_ID.get(event.harness) ?? event.harness)
+    : null;
+
   return (
     <div
       className={`flex min-h-9 items-center gap-3 border-b border-border-subtle px-2 py-1.5 last:border-b-0 ${
@@ -142,39 +205,15 @@ function EventRow({ event, onRestored }: { event: SkillEvent; onRestored: () => 
       <span className="min-w-0 flex-1 truncate text-body text-text-primary" title={event.skill}>
         {event.skill || (event.harness ?? kindLabel(event.kind))}
       </span>
-      <span className="text-small text-text-tertiary">{kindLabel(event.kind)}</span>
-      {harnessLabel && (
+      <span className="text-small text-text-tertiary">{eventLabel(event, harnessLabel)}</span>
+      {harnessLabel && event.kind !== "split" && (
         <span className="shrink-0 text-small text-text-tertiary">{harnessLabel}</span>
       )}
       <span className="shrink-0 text-small text-text-tertiary tabular-nums">
         {formatRelativeTime(event.ts)}
       </span>
-      <span
-        className={`shrink-0 text-caption font-semibold ${
-          isFailed ? "text-error" : isInterrupted ? "text-warning" : "text-text-tertiary"
-        }`}
-      >
-        {isInterrupted ? "Interrupted - the app was quit during this operation" : event.status}
-      </span>
-      {event.backup_path && (
-        <button
-          type="button"
-          className="shrink-0 cursor-pointer border-0 bg-transparent p-0 text-small text-accent hover:underline"
-          onClick={handleReveal}
-        >
-          Reveal in Finder
-        </button>
-      )}
-      {canRestoreSkillEvent(event) && (
-        <button
-          type="button"
-          className="shrink-0 cursor-pointer rounded-sm border border-border-subtle bg-transparent px-2 py-1 text-small text-text-secondary transition-colors hover:bg-bg-hover disabled:opacity-50"
-          onClick={handleRestoreClick}
-          disabled={isRestoring}
-        >
-          Restore
-        </button>
-      )}
+      <EventStatusBadge isFailed={isFailed} isInterrupted={isInterrupted} status={event.status} />
+      <EventActions event={event} isRestoring={isRestoring} onRestoreClick={handleRestoreClick} />
     </div>
   );
 }
@@ -206,8 +245,7 @@ export function SkillHistorySection() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [addToast]);
 
   const refresh = () => {
     listSkillEvents()

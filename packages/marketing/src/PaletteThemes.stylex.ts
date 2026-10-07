@@ -1,13 +1,6 @@
 import * as stylex from "@stylexjs/stylex";
 
-export type PaletteId = "mono" | "cobalt" | "ember" | "violet";
-
-export const paletteOptions = [
-  { id: "mono", label: "Mono" },
-  { id: "cobalt", label: "Cobalt" },
-  { id: "ember", label: "Ember" },
-  { id: "violet", label: "Violet" },
-] satisfies ReadonlyArray<{ id: PaletteId; label: string }>;
+type PaletteId = "mono" | "cobalt" | "ember" | "violet";
 
 export const paletteVars = stylex.defineVars({
   darkBackground: "oklch(0.11 0 0)",
@@ -119,7 +112,7 @@ const violetTheme = stylex.createTheme(paletteVars, {
   darkRaised: "oklch(0.225 0.025 290)",
   darkText: "oklch(0.97 0.008 290)",
   darkMuted: "oklch(0.73 0.03 290)",
-  darkBorder: "oklch(0.271 0.009 286)",
+  darkBorder: "oklch(0.271 0.009 290)",
   darkAccent: "oklch(0.668 0.176 293)",
   darkAccentHover: "oklch(0.725 0.145 293)",
   darkAccentSoft: "oklch(0.668 0.176 293 / 0.16)",
@@ -138,10 +131,6 @@ const violetTheme = stylex.createTheme(paletteVars, {
   lightSecondary: "oklch(0.58 0.16 235)",
   logoFilter: "none",
 });
-
-export function isPaletteId(value: string | null): value is PaletteId {
-  return value === "mono" || value === "cobalt" || value === "ember" || value === "violet";
-}
 
 export function getPaletteTheme(palette: PaletteId) {
   switch (palette) {

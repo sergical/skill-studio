@@ -24,3 +24,15 @@ lerna-debug.log*
 *.sw?
 
 .env
+
+# Cargo workspace build output
+/target/
+
+# cargo-mutants scratch output (unit 5.2); CI uploads its own copy as an
+# artifact instead of committing it.
+/mutants.out/
+/mutants.out.old/
+
+# Native CLI binaries for the npm platform packages. The release workflow
+# fills these from its build; scripts/rehearse-npm.sh fills a temp copy.
+/packages/npm/cli-darwin-*/bin/

@@ -1,0 +1,464 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+//! Unit 4.2: every user-facing `ops` function must be reachable from both
+//! the CLI and the MCP server, so a skill fixed by one surface is fixed by
+//! all three (the desktop is covered separately by
+//! `apps/desktop/src-tauri/tests`). This file reads `ops.rs`, `main.rs`,
+//! and `lib.rs` as text rather than depending on the `cli`/`mcp` crates:
+//! `skill-studio-core` sits below both in the workspace graph, and a
+//! source-text scan is enough to prove "this function is called from that
+//! file" without introducing a reverse dependency.
+//!
+//! The scan reads each surface's own declaration - the `Command` enum's
+//! variants, the `#[tool]`-attributed methods - not the `ops::<name>(` call
+//! sites: a shared helper that calls an op (`apps/mcp`'s `run_op_envelope`,
+//! reached from every tool) is not itself a tool, and must not stand in for
+//! one.
+
+use std::path::PathBuf;
+
+/// A top-level `ops` function this unit deliberately does not surface on
+/// the CLI or MCP, with the one-line reason it stays an internal helper.
+struct Exclusion {
+    name: &'static str,
+    reason: &'static str,
+}
+
+const EXCLUSIONS: &[Exclusion] = &[
+    Exclusion {
+        name: "update_split_copies",
+        reason: "takes the new version's files from its caller, and no CLI or MCP surface \
+                  fetches a skill's files yet",
+    },
+    Exclusion {
+        name: "skill_content_hash",
+        reason: "a hashing helper `scan`/`diagnose` call internally, not a request/outcome op",
+    },
+    Exclusion {
+        name: "codex_disabled_skill_md_paths",
+        reason: "a read helper the desktop's scan overlay shares with the core scan, \
+                  not a request/outcome op",
+    },
+    Exclusion {
+        name: "codex_path_form",
+        reason: "the path normalization Codex applies before matching a row, shared with \
+                  the desktop's scan overlay, not a request/outcome op",
+    },
+    Exclusion {
+        name: "park_check",
+        reason: "a read-only question the desktop asks before its park/remove confirm; the CLI \
+                  and MCP park without a prompt, so they have nothing to warn before",
+    },
+    Exclusion {
+        name: "park_git_warning",
+        reason: "the git warning the CLI and MCP park commands attach to their own outcome, \
+                  not a request/outcome op",
+    },
+    Exclusion {
+        name: "discard",
+        reason: "the confirmed fix for a parked copy left behind, offered only in the desktop's \
+                  Locations card and Needs attention list; the CLI and MCP have no such issue",
+    },
+];
+
+/// An `ops` function whose surface spells it differently: the op's name,
+/// then the subcommand or tool that runs it. Every other op reaches its
+/// surface under its own name.
+struct SurfaceName {
+    op: &'static str,
+    surface: &'static str,
+}
+
+/// `Command` variants, in snake case, that do not repeat their op's name.
+const CLI_SUBCOMMANDS: &[SurfaceName] = &[
+    SurfaceName {
+        op: "preview_frontmatter_repair",
+        surface: "preview_repair",
+    },
+    SurfaceName {
+        op: "apply_frontmatter_repair",
+        surface: "apply_repair",
+    },
+    SurfaceName {
+        op: "list_events",
+        surface: "events",
+    },
+    SurfaceName {
+        op: "restore_event",
+        surface: "restore",
+    },
+    SurfaceName {
+        op: "fix_skill",
+        surface: "fix",
+    },
+    SurfaceName {
+        op: "diagnose_conflict",
+        surface: "conflicts",
+    },
+    SurfaceName {
+        op: "install",
+        surface: "add",
+    },
+    // One `update` subcommand covers both: a single `--skill` is still a
+    // one-item batch through `ops::update_all`.
+    SurfaceName {
+        op: "update_all",
+        surface: "update",
+    },
+];
+
+/// `#[tool]` method names that do not repeat their op's name.
+const MCP_TOOLS: &[SurfaceName] = &[
+    SurfaceName {
+        op: "fix_skill",
+        surface: "fix",
+    },
+    SurfaceName {
+        op: "install",
+        surface: "add",
+    },
+];
+
+fn workspace_root() -> PathBuf {
+    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    loop {
+        if dir.join("Cargo.lock").is_file() && dir.join("apps").is_dir() {
+            return dir;
+        }
+        assert!(dir.pop(), "could not find the workspace root above ops.rs");
+    }
+}
+
+/// Every `pub fn`, `pub async fn`, and `pub use` name declared at the top
+/// level of `ops.rs` (column 0 - nothing nested in an `impl` block, which
+/// this file never puts at column 0). `pub use` lines may name more than
+/// one item in a brace list.
+fn ops_rs_public_names(ops_rs: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in ops_rs.lines() {
+        if let Some(rest) = line.strip_prefix("pub fn ") {
+            names.push(fn_name(rest));
+        } else if let Some(rest) = line.strip_prefix("pub async fn ") {
+            names.push(fn_name(rest));
+        } else if let Some(rest) = line.strip_prefix("pub use ") {
+            names.extend(use_names(rest));
+        }
+    }
+    names
+}
+
+fn fn_name(rest: &str) -> String {
+    rest.split(['(', '<', ' ']).next().unwrap_or("").to_string()
+}
+
+/// Parses the item list out of `crate::ops_install::{install, install_preferences};`
+/// or `crate::ops_remove::remove;`.
+fn use_names(rest: &str) -> Vec<String> {
+    let rest = rest.trim_end_matches(';').trim();
+    if let Some(open) = rest.find('{') {
+        let close = rest.find('}').expect("pub use brace list is never closed");
+        rest[open + 1..close]
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    } else {
+        vec![rest
+            .rsplit("::")
+            .next()
+            .expect("pub use always has a path")
+            .to_string()]
+    }
+}
+
+/// Drops a `//` line comment and any `/* ... */` block comment - including
+/// one that opens on this line and closes on a later one, tracked via
+/// `in_block_comment` across the caller's line loop - so a doc comment
+/// naming an op (`ops::park`), a `/* Park { */` decoy, or a whole variant
+/// wrapped in `/* ... */` never counts as a declaration. Leading whitespace
+/// before any comment is preserved, since `cli_subcommand_names` reads
+/// indentation from the stripped line.
+fn strip_comments(line: &str, in_block_comment: &mut bool) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    loop {
+        if *in_block_comment {
+            match rest.find("*/") {
+                Some(end) => {
+                    *in_block_comment = false;
+                    rest = &rest[end + 2..];
+                }
+                None => return out,
+            }
+            continue;
+        }
+        let line_comment = rest.find("//");
+        let block_comment = rest.find("/*");
+        match (line_comment, block_comment) {
+            (Some(l), Some(b)) if l < b => {
+                out.push_str(&rest[..l]);
+                return out;
+            }
+            (Some(l), None) => {
+                out.push_str(&rest[..l]);
+                return out;
+            }
+            (_, Some(b)) => {
+                out.push_str(&rest[..b]);
+                if let Some(end) = rest[b + 2..].find("*/") {
+                    rest = &rest[b + 2 + end + 2..];
+                } else {
+                    *in_block_comment = true;
+                    return out;
+                }
+            }
+            (None, None) => {
+                out.push_str(rest);
+                return out;
+            }
+        }
+    }
+}
+
+/// `SweepQuarantine` -> `sweep_quarantine`, the way clap derives a
+/// subcommand's name from its variant.
+fn snake_case(variant: &str) -> String {
+    let mut out = String::new();
+    for (index, ch) in variant.char_indices() {
+        if ch.is_ascii_uppercase() {
+            if index > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Every variant of `apps/cli/src/main.rs`'s `Command` enum, in snake case.
+/// Variants sit at one level of indentation and start with an upper-case
+/// letter; their fields, attributes, and doc comments do not.
+fn cli_subcommand_names(cli_main: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_enum = false;
+    let mut in_block_comment = false;
+    for line in cli_main.lines() {
+        if line.starts_with("enum Command {") {
+            in_enum = true;
+            continue;
+        }
+        if !in_enum {
+            continue;
+        }
+        if line == "}" {
+            break;
+        }
+        let line = strip_comments(line, &mut in_block_comment);
+        let line = line.as_str();
+        if line.len() - line.trim_start().len() != 4 {
+            continue;
+        }
+        let variant: String = line
+            .trim_start()
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect();
+        if variant.starts_with(|c: char| c.is_ascii_uppercase()) {
+            names.push(snake_case(&variant));
+        }
+    }
+    names
+}
+
+/// Net change in paren nesting depth from every `(` and `)` on `line`.
+fn paren_delta(line: &str) -> i32 {
+    line.chars().fold(0, |depth, ch| match ch {
+        '(' => depth + 1,
+        ')' => depth - 1,
+        _ => depth,
+    })
+}
+
+/// Every `#[tool]`-attributed method name inside `apps/mcp/src/lib.rs`'s
+/// `#[tool_router] impl` - the tools the server actually publishes.
+fn mcp_tool_names(mcp_lib: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_router = false;
+    let mut under_tool_attribute = false;
+    // Depth of `#[tool(` 's parens while inside a multi-line attribute; a
+    // "fn " that shows up in the attribute's own argument list (e.g. its
+    // `description` string literal) must not be read as the method
+    // signature, so lines here are skipped until the attribute closes.
+    let mut attribute_paren_depth: i32 = 0;
+    let mut in_block_comment = false;
+    for raw_line in mcp_lib.lines() {
+        let line = strip_comments(raw_line, &mut in_block_comment);
+        let line = line.trim();
+        if line == "#[tool_router]" {
+            in_router = true;
+            continue;
+        }
+        if !in_router {
+            continue;
+        }
+        if !under_tool_attribute && (line == "#[tool]" || line.starts_with("#[tool(")) {
+            under_tool_attribute = true;
+            attribute_paren_depth = paren_delta(line);
+            continue;
+        }
+        if !under_tool_attribute {
+            continue;
+        }
+        if attribute_paren_depth > 0 {
+            attribute_paren_depth += paren_delta(line);
+            continue;
+        }
+        // The attribute has closed; the method's signature is the first
+        // `fn` on or after this line.
+        if let Some((_, rest)) = line.split_once("fn ") {
+            names.push(fn_name(rest));
+            under_tool_attribute = false;
+        }
+    }
+    names
+}
+
+/// The name a surface spells `op` with: its alias when the two differ, the
+/// op's own name otherwise.
+fn surface_name(op: &str, aliases: &[SurfaceName]) -> String {
+    aliases
+        .iter()
+        .find(|alias| alias.op == op)
+        .map_or(op, |alias| alias.surface)
+        .to_string()
+}
+
+#[test]
+fn ops_functions_have_a_cli_subcommand_and_an_mcp_tool_or_names_the_gap() {
+    let root = workspace_root();
+    let ops_rs = std::fs::read_to_string(root.join("crates/skill-studio-core/src/ops.rs"))
+        .expect("ops.rs must exist");
+    let cli_main = std::fs::read_to_string(root.join("apps/cli/src/main.rs"))
+        .expect("apps/cli/src/main.rs must exist");
+    let mcp_lib = std::fs::read_to_string(root.join("apps/mcp/src/lib.rs"))
+        .expect("apps/mcp/src/lib.rs must exist");
+
+    let subcommands = cli_subcommand_names(&cli_main);
+    let tools = mcp_tool_names(&mcp_lib);
+    // A parser that reads nothing would report every op as missing; say so
+    // in the surface's own terms first, so the failure names the scan and
+    // not twenty innocent ops.
+    assert!(
+        subcommands.contains(&"scan".to_string()),
+        "no `Command` enum variants were found in apps/cli/src/main.rs; this test's scan is broken, not the CLI"
+    );
+    assert!(
+        tools.contains(&"scan".to_string()),
+        "no `#[tool]` methods were found in apps/mcp/src/lib.rs; this test's scan is broken, not the MCP server"
+    );
+
+    let excluded: Vec<&str> = EXCLUSIONS.iter().map(|e| e.name).collect();
+    let all_names = ops_rs_public_names(&ops_rs);
+    let mut missing_cli = Vec::new();
+    let mut missing_mcp = Vec::new();
+
+    for name in &all_names {
+        if excluded.contains(&name.as_str()) {
+            continue;
+        }
+        if !subcommands.contains(&surface_name(name, CLI_SUBCOMMANDS)) {
+            missing_cli.push(name.clone());
+        }
+        if !tools.contains(&surface_name(name, MCP_TOOLS)) {
+            missing_mcp.push(name.clone());
+        }
+    }
+
+    assert!(
+        missing_cli.is_empty(),
+        "ops.rs functions with no variant in apps/cli/src/main.rs's `Command` enum: {missing_cli:?} \
+         (found: {subcommands:?})"
+    );
+    assert!(
+        missing_mcp.is_empty(),
+        "ops.rs functions with no `#[tool]` method in apps/mcp/src/lib.rs: {missing_mcp:?} \
+         (found: {tools:?})"
+    );
+
+    // Every exclusion and every alias must still resolve to a real ops.rs
+    // function: a typo or a rename here should fail loudly, not silently
+    // stop excluding - or stop redirecting - anything.
+    for exclusion in EXCLUSIONS {
+        assert!(
+            all_names.iter().any(|n| n == exclusion.name),
+            "excluded name `{}` ({}) is not a pub fn/pub use in ops.rs any more - \
+             drop the exclusion",
+            exclusion.name,
+            exclusion.reason,
+        );
+    }
+    for alias in CLI_SUBCOMMANDS.iter().chain(MCP_TOOLS) {
+        assert!(
+            all_names.iter().any(|n| n == alias.op),
+            "aliased name `{}` (surfaced as `{}`) is not a pub fn/pub use in ops.rs any more - \
+             drop the alias",
+            alias.op,
+            alias.surface,
+        );
+    }
+}
+
+/// A whole variant block-commented out with `/* ... */` must not count as a
+/// live subcommand: catches a regression to `//`-only comment stripping,
+/// which would read the interior `Park { ... }` lines as real declarations
+/// and report a removed subcommand as still present (a false green).
+#[test]
+fn cli_subcommand_names_skips_a_variant_wrapped_in_a_block_comment() {
+    let cli_main = "enum Command {\n    Scan,\n/*\n    Park {\n        deployment_id: String,\n    },\n*/\n    Real,\n}\n";
+    assert_eq!(
+        cli_subcommand_names(cli_main),
+        vec!["scan".to_string(), "real".to_string()],
+    );
+}
+
+/// A decoy "fn " inside a multi-line `#[tool(...)]` attribute's own
+/// `description` string must not be read as the method name: catches a
+/// regression where the first "fn " after the attribute opens is taken
+/// unconditionally, which would report a removed tool as still present (a
+/// false green) or a real tool's name as the decoy text (a false red for
+/// the actual tool).
+#[test]
+fn mcp_tool_names_ignores_a_decoy_fn_inside_a_multiline_tool_attributes_description() {
+    let mcp_lib = "#[tool_router]\nimpl Server {\n#[tool(\n    description = \"first run scan, then fn decoy() if needed\"\n)]\npub fn real_tool(&self, req: Req) -> Res {}\n}\n";
+    assert_eq!(mcp_tool_names(mcp_lib), vec!["real_tool".to_string()]);
+}
+
+/// `schema` (dumps every DTO's JSON schema to disk) and `watch` (a
+/// filesystem-change loop that re-runs `scan` and prints to a terminal)
+/// are CLI-only by design: neither wraps one `ops` function behind a
+/// request/outcome DTO an MCP client could call once and get a single
+/// envelope back. This test pins that as a decision, not an oversight the
+/// parity test above should flag: it fails if either ever disappears from
+/// the CLI (so nobody removes the affected doc comment without noticing)
+/// and it fails if either is ever named `ops::` (which would mean it grew
+/// into a real op that the parity test above should now cover).
+#[test]
+fn schema_and_watch_stay_cli_only_and_are_named_as_utilities_in_the_parity_test() {
+    let root = workspace_root();
+    let cli_main = std::fs::read_to_string(root.join("apps/cli/src/main.rs"))
+        .expect("apps/cli/src/main.rs must exist");
+    let mcp_lib = std::fs::read_to_string(root.join("apps/mcp/src/lib.rs"))
+        .expect("apps/mcp/src/lib.rs must exist");
+
+    for utility in ["schema", "watch"] {
+        assert!(
+            cli_subcommand_names(&cli_main).contains(&utility.to_string()),
+            "`{utility}` is no longer a CLI subcommand; update this test if that was deliberate"
+        );
+        assert!(
+            !mcp_tool_names(&mcp_lib).contains(&utility.to_string()),
+            "an MCP `{utility}` tool appeared; {utility} is a CLI-only utility by design"
+        );
+    }
+}

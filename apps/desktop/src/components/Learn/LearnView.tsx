@@ -7,7 +7,6 @@
 import { useEffect, useRef } from "react";
 import { HarnessIcon } from "../ui/HarnessIcon";
 import { PageShell } from "../Shell/PageShell";
-import { useAppStore } from "../../store/appStore";
 import type { LearnSection } from "../../store/appStore";
 
 interface LearnViewProps {
@@ -28,7 +27,6 @@ const SECTIONS: { key: LearnSection; title: string }[] = [
  * page top.
  */
 export function LearnView({ section }: LearnViewProps) {
-  const setActiveView = useAppStore((state) => state.setActiveView);
   const headingRefs = useRef(new Map<LearnSection, HTMLHeadingElement>());
 
   useEffect(() => {
@@ -39,17 +37,7 @@ export function LearnView({ section }: LearnViewProps) {
   }, [section]);
 
   return (
-    <PageShell
-      title="Learn"
-      actions={
-        <button
-          className="flex shrink-0 items-center gap-1.5 p-1 text-small text-text-tertiary transition-colors hover:text-text-primary"
-          onClick={() => setActiveView({ kind: "home" })}
-        >
-          ← Home
-        </button>
-      }
-    >
+    <PageShell title="Learn">
       <div className="grid grid-cols-[180px_minmax(0,1fr)] items-start gap-8">
         <nav className="sticky top-6 flex flex-col gap-0.5">
           {SECTIONS.map(({ key, title }) => (
@@ -65,7 +53,7 @@ export function LearnView({ section }: LearnViewProps) {
             </a>
           ))}
         </nav>
-        <div className="flex max-w-[65ch] flex-col gap-9 text-body leading-[1.55] text-text-secondary">
+        <div className="flex max-w-[65ch] select-text flex-col gap-9 text-body leading-[1.55] text-text-secondary">
           <section id="learn-broken" className="flex scroll-mt-6 flex-col gap-2">
             <h3
               className="m-0 mb-1 text-heading font-semibold text-text-primary"
@@ -101,7 +89,7 @@ export function LearnView({ section }: LearnViewProps) {
             <ul className="m-0 flex flex-col gap-1 pl-4.5">
               <li>
                 <b className="font-medium text-text-primary">Copies differ</b> — the same skill has
-                different content in two places, so two harnesses behave differently.
+                different content in two places, so two agents behave differently.
               </li>
               <li>
                 <b className="font-medium text-text-primary">Lock file only</b> —{" "}
@@ -124,9 +112,9 @@ export function LearnView({ section }: LearnViewProps) {
               Who can invoke a skill
             </h3>
             <p className="m-0">
-              Every harness auto-invokes a skill when its description matches the task, and lets you
+              Every agent auto-invokes a skill when its description matches the task, and lets you
               call it by name. The agentskills.io spec has no field to limit either side; the limits
-              below are harness extensions. Skill Studio reads the frontmatter ones, so the Home
+              below are agent extensions. Skill Studio reads the frontmatter ones, so the Home
               numbers reflect what Claude Code sees. <i>Model only</i> exists in Claude Code alone
               and is meant for background knowledge that makes no sense as a command.
             </p>
@@ -134,7 +122,7 @@ export function LearnView({ section }: LearnViewProps) {
               <thead>
                 <tr>
                   <th className="border-b border-border-subtle px-2 py-1.5 text-left align-top font-medium text-text-tertiary">
-                    Harness
+                    Agent
                   </th>
                   <th className="border-b border-border-subtle px-2 py-1.5 text-left align-top font-medium text-text-tertiary">
                     You invoke with
@@ -241,8 +229,8 @@ export function LearnView({ section }: LearnViewProps) {
               </tbody>
             </table>
             <p className="m-0">
-              Frontmatter edits the Universal file, so they apply to every harness that reads the
-              same folder or symlink. Codex and OpenCode settings apply to that harness only.
+              Frontmatter edits the Universal file, so they apply to every agent that reads the same
+              folder or symlink. Codex and OpenCode settings apply to that agent only.
             </p>
           </section>
 
@@ -257,7 +245,7 @@ export function LearnView({ section }: LearnViewProps) {
               Prompt cost
             </h3>
             <p className="m-0">
-              A harness puts the{" "}
+              An agent puts the{" "}
               <b className="font-medium text-text-primary">name and description</b> of every skill
               the model may invoke into the prompt, on every turn. The body of SKILL.md loads only
               when the skill runs.
@@ -284,12 +272,10 @@ export function LearnView({ section }: LearnViewProps) {
               Not used in the last 30 days
             </h3>
             <p className="m-0">
-              Use is read from Claude Code transcripts (
-              <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
-                ~/.claude/projects
-              </code>
-              ). Other harnesses do not record skill invocations yet, so a skill you run only from
-              Codex will show as unused.
+              Uses come from the history files of Claude Code, Codex, OpenCode, pi, Cursor, and Grok
+              Build. An agent you turn off under “Search history from” in Settings is left out of
+              every count. Each use also records how it started: you typed the skill’s name, the
+              model called the skill, or the model only opened its SKILL.md.
             </p>
           </section>
         </div>

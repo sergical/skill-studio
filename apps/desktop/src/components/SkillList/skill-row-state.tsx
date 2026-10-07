@@ -1,0 +1,380 @@
+// ============================================================================
+// skill-row-state - The single highest-ranked thing a row needs to say about
+// a skill, and `whereFacts`, the disk-location/harness-reach model every
+// row renders.
+// ============================================================================
+
+import {
+  AGENT_MATRIX_LABELS,
+  describeSpecViolations,
+  driftingCopies,
+  HEALTH_ISSUE_SEVERITY,
+  isBlockingSpecViolation,
+  locationSummary,
+  parentDirectory,
+} from "@skill-studio/lib";
+import type {
+  AgentId,
+  Deployment,
+  HealthIssue,
+  HealthIssueKind,
+  InstalledSkill,
+} from "@skill-studio/lib";
+import { buildScopeGroups, skillRollup } from "../SkillDetail/skill-location-status";
+import { harnessIdFromLabel } from "../ui/HarnessIcon";
+
+export type RowLevel = "error" | "warning" | "info" | "muted";
+/** Which ladder rung produced the state; picks the glyph in SkillRowCells. `"issue"` is a Home
+ * dashboard issue standing in for a group's severity - the shared Skills list never produces it. */
+type RowKind = "violation" | "rollup" | "update" | "parked" | "issue";
+
+/** Short row-glyph label per `HealthIssueKind` - `HEALTH_ISSUE_KIND_LABEL`'s phrases read as
+ * "N skills that fail to load", too long for a row's tooltip title. */
+const ISSUE_ROW_LABEL = {
+  "spec-violation": "Spec violation",
+  "spec-warning": "Spec warning",
+  "broken-symlink": "Broken link",
+  "parked-but-reinstalled": "Parked copy left behind",
+  duplicate: "Copies differ",
+  "linked-root": "Linked root",
+  "lock-only": "Lock entry only",
+} as const satisfies Record<HealthIssueKind, string>;
+
+export interface RowState {
+  kind: RowKind;
+  level: RowLevel;
+  label: string;
+  detail: string | null;
+  action: string | null;
+}
+
+/** "Parked · Aug 25, 2026" / "Parked" — copied from InstalledSkillHeader's chip. */
+function parkedChipLabel(parkedAt: string | null | undefined): string {
+  if (!parkedAt) return "Parked";
+  const date = new Date(parkedAt);
+  if (Number.isNaN(date.getTime())) return "Parked";
+  return `Parked · ${date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
+}
+
+/** The one thing this row most needs to say, in ladder order: blocking spec
+ * violation, then the folder rollup, then an update or parked.
+ * `null` when the skill is unremarkable. */
+export function rowState(skill: InstalledSkill): RowState | null {
+  const blocking = skill.spec_violations.filter(isBlockingSpecViolation);
+  if (blocking.length > 0) {
+    return {
+      kind: "violation",
+      level: "error",
+      label: "Blocking spec violation",
+      detail: describeSpecViolations(blocking),
+      action: "Fix",
+    };
+  }
+
+  const rollup = skillRollup(skill, buildScopeGroups(skill));
+  const [first, second] = rollup.tip.split("\n");
+  if (rollup.level === "error") {
+    return {
+      kind: "rollup",
+      level: "error",
+      label: first,
+      detail: second ?? null,
+      action: "Fix",
+    };
+  }
+  if (rollup.level === "warning") {
+    const hasDrift = driftingCopies(locationSummary(skill)).length > 0;
+    return {
+      kind: "rollup",
+      level: "warning",
+      label: first,
+      detail: second ?? null,
+      action: hasDrift ? "Compare" : null,
+    };
+  }
+
+  const update = updateRowState(skill);
+  if (update) return update;
+  if (skill.parked) {
+    return {
+      kind: "parked",
+      level: "muted",
+      label: parkedChipLabel(skill.parked_at),
+      detail: null,
+      action: "Unpark",
+    };
+  }
+  return null;
+}
+
+/** The "Update available" rung on its own, so the Updates group can show it without running the
+ * rest of `rowState`'s ladder (a spec violation or rollup issue would otherwise outrank it). */
+export function updateRowState(skill: InstalledSkill): RowState | null {
+  if (skill.update_owner_ids.length === 0) return null;
+  return {
+    kind: "update",
+    level: "info",
+    label: "Update available",
+    detail: null,
+    action: "Update",
+  };
+}
+
+/** One Home dashboard issue's row state, so a Broken/Warnings row's glyph matches the group it
+ * sits in instead of whatever `rowState` would rank the skill's own worst condition as. `detail`
+ * is null - Home's row already shows `issue.detail` in its own detail cell, so the glyph tooltip
+ * doesn't repeat it. */
+export function issueRowState(issue: HealthIssue): RowState {
+  return {
+    kind: "issue",
+    level: HEALTH_ISSUE_SEVERITY[issue.kind],
+    label: ISSUE_ROW_LABEL[issue.kind],
+    detail: null,
+    action: null,
+  };
+}
+
+type DiskLocationKind = "global" | "project";
+
+/** One deployment's fact sheet, for a `DiskLocation`'s or `HarnessReach`'s
+ * per-deployment line. `scope`/`resolvedPath` back a linked entry's
+ * "→ target" line and a Globe-vs-project icon. */
+interface LocationEntry {
+  harness: AgentId | "shared";
+  label: string;
+  path: string;
+  how: How;
+  readOnly: boolean;
+  disabled: boolean;
+  scope: DiskLocationKind;
+  resolvedPath: string | null;
+}
+
+/** How one deployment reaches the skill: the Universal folder's own copy, a
+ * symlink into it, an own copy elsewhere, or a symlink that no longer
+ * resolves. */
+type How = "universal" | "linked" | "own" | "broken";
+
+/** One place a skill lives on disk - the Universal folder's global scope, or
+ * a project root - and every deployment installed there. */
+export interface DiskLocation {
+  kind: DiskLocationKind;
+  name: string;
+  path: string;
+  entries: LocationEntry[];
+}
+
+/** One first-class harness, whether it reaches the skill at all, and how
+ * (worst deployment wins), for the Harnesses group. */
+export interface HarnessReach {
+  harness: AgentId;
+  label: string;
+  reached: boolean;
+  how: How | null;
+  disabled: boolean;
+  entries: LocationEntry[];
+}
+
+/** The Universal folder (`~/.agents/skills`) itself: whether the skill has a
+ * copy there. */
+export interface Universal {
+  present: boolean;
+  path: string | null;
+}
+
+interface WhereFacts {
+  locations: DiskLocation[];
+  universal: Universal;
+  harnesses: HarnessReach[];
+}
+
+/** One harness `whereFacts` can render, in the order the Harnesses group
+ * draws it. */
+export interface HarnessListEntry {
+  label: string;
+  harness: AgentId;
+}
+
+/** `AGENT_MATRIX_LABELS`'s six first-class agents, in order - `whereFacts`'
+ * default list. */
+export const DEFAULT_HARNESS_LIST: HarnessListEntry[] = AGENT_MATRIX_LABELS.flatMap((label) => {
+  const harness = harnessIdFromLabel(label);
+  return harness && harness !== "shared" ? [{ label, harness }] : [];
+});
+
+/** `shared` sorts first, then `harnessList` order - the Universal folder is
+ * the source every harness reaches through, so it leads a location's or
+ * harness list's entries. */
+function harnessRank(harness: AgentId | "shared", harnessList: HarnessListEntry[]): number {
+  if (harness === "shared") return -1;
+  return harnessList.findIndex((entry) => entry.harness === harness);
+}
+
+/** Resolves a deployment's `agent` display label to a harness id: the six
+ * first-class labels `harnessIdFromLabel` knows, or a label match against
+ * the harness list itself. */
+function resolveHarness(
+  agentLabel: string,
+  harnessList: HarnessListEntry[],
+): AgentId | "shared" | null {
+  return (
+    harnessIdFromLabel(agentLabel) ??
+    harnessList.find((entry) => entry.label === agentLabel)?.harness ??
+    null
+  );
+}
+
+/** How one deployment reaches the skill: a dangling symlink is "broken"
+ * first, else the Universal folder's own copy (or the shared root itself) is
+ * "universal", else a symlink into it is "linked", else it's its own
+ * independent copy. */
+function deploymentHow(d: Deployment, harness: AgentId | "shared"): How {
+  if (d.is_symlink && d.resolved_path === null) return "broken";
+  if (harness === "shared" || d.backing.kind === "canonical") return "universal";
+  if (
+    d.backing.kind === "linked-to" ||
+    (d.is_symlink && /\/\.agents\/skills\//.test(d.resolved_path ?? ""))
+  )
+    return "linked";
+  return "own";
+}
+
+function locationEntry(d: Deployment, harness: AgentId | "shared"): LocationEntry {
+  return {
+    harness,
+    label: harness === "shared" ? "Universal folder" : d.agent,
+    path: d.path,
+    how: deploymentHow(d, harness),
+    readOnly: d.mutability === "read-only",
+    disabled: d.disabled,
+    scope: d.scope === "project" && d.project_path ? "project" : "global",
+    resolvedPath: d.resolved_path ?? null,
+  };
+}
+
+/** Worst-wins ordering for a `HarnessReach`'s single `how`: a broken link is
+ * worse news than a healthy one anywhere else. */
+const HOW_SEVERITY = { broken: 3, linked: 2, own: 1, universal: 0 } satisfies Record<How, number>;
+
+/** Splits a skill's deployments into the disk locations they sit in and the
+ * harnesses that reach them, plus the Universal folder's own facts.
+ * `harnessList` defaults to `DEFAULT_HARNESS_LIST`'s six. */
+export function whereFacts(
+  skill: InstalledSkill,
+  harnessList: HarnessListEntry[] = DEFAULT_HARNESS_LIST,
+): WhereFacts {
+  const globalDeployments = skill.deployments.filter((d) => d.scope !== "project");
+
+  const locationsByKey = new Map<string, DiskLocation>();
+  if (globalDeployments.length > 0) {
+    locationsByKey.set("global", { kind: "global", name: "Global", path: "~", entries: [] });
+  }
+  for (const d of skill.deployments) {
+    if (d.scope !== "project" || !d.project_path) continue;
+    const key = `project:${d.project_path}`;
+    if (!locationsByKey.has(key)) {
+      locationsByKey.set(key, {
+        kind: "project",
+        name: d.project_path.split("/").filter(Boolean).pop() ?? d.project_path,
+        path: d.project_path,
+        entries: [],
+      });
+    }
+  }
+
+  let universalPresent = false;
+  let universalPath: string | null = null;
+
+  for (const d of skill.deployments) {
+    const harness = resolveHarness(d.agent, harnessList);
+    if (!harness) continue;
+    const entry = locationEntry(d, harness);
+    if (harness === "shared") {
+      universalPresent = true;
+      universalPath = parentDirectory(d.path);
+    }
+    const key = d.scope === "project" && d.project_path ? `project:${d.project_path}` : "global";
+    locationsByKey.get(key)?.entries.push(entry);
+  }
+
+  const locations = [...locationsByKey.values()]
+    .map((location) => ({
+      ...location,
+      entries: [...location.entries].sort(
+        (a, b) => harnessRank(a.harness, harnessList) - harnessRank(b.harness, harnessList),
+      ),
+    }))
+    .sort((a, b) => {
+      if (a.kind === "global") return -1;
+      if (b.kind === "global") return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+  const harnesses: HarnessReach[] = harnessList.map(({ harness, label }) => {
+    // Global first, then projects - the same order the harness's own tooltip lines read.
+    const entries = locations.flatMap((l) => l.entries.filter((e) => e.harness === harness));
+    const reached = entries.length > 0;
+    const how = reached
+      ? entries.reduce<How>(
+          (worst, e) => (HOW_SEVERITY[e.how] > HOW_SEVERITY[worst] ? e.how : worst),
+          entries[0].how,
+        )
+      : null;
+    return {
+      harness,
+      label,
+      reached,
+      how,
+      disabled: reached && entries.every((e) => e.disabled),
+      entries,
+    };
+  });
+
+  return {
+    locations,
+    universal: {
+      present: universalPresent,
+      path: universalPath,
+    },
+    harnesses,
+  };
+}
+
+/** The fix or fixes each ladder rung offers from the glyph, independent of
+ * `state.action`. */
+export function fixesFor(state: RowState): string[] {
+  switch (state.kind) {
+    case "violation":
+      return ["Fix"];
+    case "rollup":
+      return state.level === "error" ? ["Fix link"] : [state.action ?? "Compare", "Convert"];
+    case "update":
+      return ["Pull latest"];
+    case "parked":
+      return ["Unpark"];
+    case "issue":
+      return [];
+  }
+}
+
+/** Whether the row has a state worth surfacing a glyph or menu for - every
+ * kind except parked, which is a quiet fact rather than something to decide
+ * about. */
+export function isDecision(state: RowState | null): boolean {
+  return state !== null && state.kind !== "parked";
+}
+
+/** The list's three state groups, in display order. */
+export type RowGroup = "attention" | "healthy" | "parked";
+
+/** Which group a row sorts into: a decision-worthy state first, then a quiet
+ * "parked" fact, else healthy. Pass `state` when the caller already has it
+ * from `rowState(skill)` to avoid computing it twice. */
+export function rowGroup(
+  skill: InstalledSkill,
+  state: RowState | null = rowState(skill),
+): RowGroup {
+  if (isDecision(state)) return "attention";
+  if (skill.parked || state?.kind === "parked") return "parked";
+  return "healthy";
+}

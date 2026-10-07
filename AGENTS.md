@@ -2,13 +2,13 @@
 
 ## Project Overview
 
-Skill Studio is a Tauri 2.x desktop application to manage, sync, and test agent skills across Claude Code, Codex, OpenCode, and pi, with skills.sh discovery built in.
+Skill Studio is a Tauri 2.x desktop application to manage, sync, and test agent skills across Claude Code, Codex, OpenCode, pi, Cursor, and Grok Build, with skills.sh discovery built in.
 
 ### Core Features
 
 1. **Skill Discovery** - Search 36,000+ skills from skills.sh
 2. **Skill Installation** - Install/remove/update via `npx skills` CLI to global or project scope
-3. **First-Class Agents** - Claude Code, Codex, OpenCode, pi, plus a shared `.agents/skills` root
+3. **First-Class Agents** - Claude Code, Codex, OpenCode, pi, Cursor, Grok Build, plus a shared `.agents/skills` root
 4. **Provenance** - Every installed skill is classified as `skills-sh`, `plugin`, `dotagents`, or `manual` (precedence: dotagents > plugin > skills-sh > manual)
 5. **Native Plugin Enumeration** - Discovers skills shipped inside Claude Code (`~/.claude/plugins/cache`) and Codex (`~/.codex/plugins/cache`) plugin caches, per the agent-plugins.org manifest convention
 6. **Spec Validation** - Flags agentskills.io SKILL.md spec violations (`spec_violations`) and detects the getsentry/skillet spec pattern (`has_spec`)
@@ -23,22 +23,22 @@ Skill Studio is a Tauri 2.x desktop application to manage, sync, and test agent 
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
 # Development mode (starts Vite + Tauri)
-npm run tauri dev
+pnpm run tauri dev
 
 # Build for production
-npm run tauri build
+pnpm run tauri build
 
 # Frontend only (Vite dev server)
-npm run dev
+pnpm run dev
 
 # Type check + build frontend
-npm run build
+pnpm run build
 
 # Preview built frontend
-npm run preview
+pnpm run preview
 ```
 
 ### Rust Commands
@@ -63,25 +63,73 @@ cd apps/desktop/src-tauri && cargo fmt
 cd apps/desktop/src-tauri && cargo clippy
 ```
 
+### Mutation Testing (`cargo mutants`)
+
+CI runs `cargo mutants` on `crates/skill-studio-core` and `crates/skill-studio-host`
+only: `--in-diff` against the PR's changed lines on every pull request
+(report-only for now, `.github/workflows/rust.yml`'s `mutants-changed` job),
+and a full, sharded run of both crates weekly
+(`.github/workflows/mutants.yml`, `schedule` + `workflow_dispatch`).
+Excludes live in `.cargo/mutants.toml`.
+
+A full run is slow; do not run it locally. To check one file before pushing:
+
+```bash
+# Install once
+cargo install cargo-mutants --locked
+
+# Mutate a single module (swap the path and -p for the crate you touched)
+cargo mutants -p skill-studio-core --all-features --file crates/skill-studio-core/src/registry.rs
+
+# Read the survivors this run found
+cat mutants.out/missed.txt
+```
+
+### Worktrees and Disk Use
+
+A Rust `target/` folder takes 9 to 17 GB. In two weeks, 15 worktrees with their
+own `target/` filled 155 GB of the user's disk. These rules are firm:
+
+- **Share one build folder.** In any worktree under `.claude/worktrees/`, build
+  with the main checkout's `target/`. Never create a second one:
+
+  ```bash
+  export CARGO_TARGET_DIR="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/target"
+  ```
+
+  Cargo locks the folder, so two builds at the same time wait for each other.
+  That is the expected cost.
+
+- **Clean up when the work is done.** When a worktree's PR merges or closes, or
+  the session ends with its work pushed, run `git worktree remove <path>`. If
+  the worktree has uncommitted changes, keep it, delete its `target/` and
+  `node_modules/`, and tell the user it is still there.
+- **No stray copies.** Do not clone the repo or run `pnpm install` in `.scratch/`, the
+  scratchpad or `/tmp` unless the task needs it, and delete the copy in the same
+  session.
+- **Check before you report.** Before the final message of a session that
+  created worktrees or builds, run
+  `du -sh .claude/worktrees .scratch 2>/dev/null` and say what is left and why.
+
 ### Frontend Commands
 
 ```bash
 # Type check only (no emit)
-npm run typecheck
+pnpm run typecheck
 
 # Lint (oxlint)
-npm run lint
-npm run lint:fix
+pnpm run lint
+pnpm run lint:fix
 
 # Format (oxfmt)
-npm run format
-npm run format:check
+pnpm run format
+pnpm run format:check
 
 # React health check (react-doctor)
-npm run doctor
+pnpm run doctor
 
-# Full gate: typecheck + lint + format:check + doctor + cargo fmt --check + clippy -D warnings + cargo test
-npm run check
+# Full gate: typecheck + lint + format:check + doctor + knip + test + types:check + cargo fmt --all --check + clippy --workspace --all-targets -D warnings + cargo test --workspace (CI also runs cargo machete and cargo deny check)
+pnpm run check
 ```
 
 ## Tech Stack
@@ -100,41 +148,28 @@ npm run check
 
 ## Project Structure
 
+Top-level workspaces only. Update this tree when a workspace is added or
+removed; do not list individual source files here.
+
 ```
 /
 ├── apps/
-│   └── desktop/                  # The Tauri app (npm package "skill-studio")
-│       ├── src/                  # React frontend
-│       │   ├── components/
-│       │   │   ├── SkillStore/   # SkillStore, SkillBrowser, SkillDetailPanel,
-│       │   │   │                 # SkillDetailHeader, SkillContent, InstallControls,
-│       │   │   │                 # AgentTargetSelector, SkillSearchBar, InstallProgressModal
-│       │   │   └── ui/           # Toast, ToastContainer
-│       │   ├── lib/
-│       │   │   ├── skill-types.ts        # Type definitions
-│       │   │   └── skill-api.ts          # Tauri IPC wrappers
-│       │   ├── store/
-│       │   │   └── appStore.ts   # Zustand store
-│       │   ├── App.tsx           # Main app component
-│       │   └── main.tsx          # Entry point
-│       └── src-tauri/            # Rust backend
-│           ├── src/
-│           │   ├── skills/
-│           │   │   ├── mod.rs
-│           │   │   ├── agents.rs         # AgentId, agent paths
-│           │   │   ├── api.rs            # skills.sh HTTP client
-│           │   │   ├── commands.rs       # Tauri IPC commands
-│           │   │   ├── frontmatter.rs    # SKILL.md frontmatter parsing/validation
-│           │   │   ├── lock_file.rs      # ~/.agents/.skill-lock.json
-│           │   │   ├── plugins.rs        # Native plugin cache enumeration
-│           │   │   ├── provenance.rs     # Source-kind classification
-│           │   │   ├── scan.rs           # Installed-skill directory scanner
-│           │   │   └── skill_dto.rs      # Serde DTOs sent to the frontend
-│           │   ├── lib.rs                # Library entry
-│           │   └── main.rs               # Rust entry point
-│           └── Cargo.toml                # Rust dependencies
+│   ├── cli/                      # Rust CLI, thin adapter over skill-studio-core
+│   ├── desktop/                  # Tauri app (npm package "skill-studio")
+│   │   ├── src/                  # React frontend: components/, hooks/, lib/, store/
+│   │   └── src-tauri/src/skills/ # Rust backend: scan, lifecycle, Tauri commands
+│   ├── mcp/                      # Rust MCP server over skill-studio-core, stdio
+│   ├── server/                   # Node proxy for the skills.sh API (port 8787)
+│   └── tui/                      # Terminal UI (Node)
+├── crates/
+│   ├── skill-studio-core/        # Scope-confined core: scan, ops, events, DTOs, schema/
+│   └── skill-studio-host/        # Real-world port adapters for the core crate
 ├── packages/
-│   └── ui/                       # Shared UI package placeholder (@skill-studio/ui)
+│   ├── lib/                      # Shared TypeScript library
+│   ├── marketing/                # Marketing site (Vite + StyleX) and Remotion walkthroughs
+│   ├── npm/                      # npm packages for the CLI; not workspaces (packages/* stops one level up)
+│   └── ui/                       # Shared UI primitives (@skill-studio/ui)
+├── docs/                         # Specs and reference docs
 ├── tools/
 │   └── oxlint/anti-slop/         # Local oxlint JS plugin
 └── package.json                  # npm workspaces root
@@ -143,6 +178,12 @@ npm run check
 ## Code Style Guidelines
 
 ### TypeScript/React
+
+**UI primitives:** Form controls and buttons come from `@skill-studio/ui`
+(`Input`, `Textarea`, `Select`, `Button`, and the other exports in
+`packages/ui/src/index.ts`). Raw `<input>`, `<textarea>`, `<select>`, and
+`<button>` are allowed only inside `packages/ui`; the
+`anti-slop/no-raw-form-elements` lint rule enforces this.
 
 **Imports:** Group in order - React, external libs, internal modules, types
 
@@ -286,20 +327,20 @@ let home = get_home_dir().ok_or("Could not find home directory")?;
 
 ### Key Files
 
-| Purpose               | File                                              |
-| --------------------- | ------------------------------------------------- |
-| Main App              | `apps/desktop/src/App.tsx`                        |
-| State Store           | `apps/desktop/src/store/appStore.ts`              |
-| Skill types           | `apps/desktop/src/lib/skill-types.ts`             |
-| Tauri IPC wrappers    | `apps/desktop/src/lib/skill-api.ts`               |
-| Tauri commands        | `apps/desktop/src-tauri/src/skills/commands.rs`   |
-| Scanner               | `apps/desktop/src-tauri/src/skills/scan.rs`       |
-| Provenance            | `apps/desktop/src-tauri/src/skills/provenance.rs` |
-| Agent paths           | `apps/desktop/src-tauri/src/skills/agents.rs`     |
-| Lint config           | `.oxlintrc.json`                                  |
-| Format config         | `.oxfmtrc.json`                                   |
-| Tauri Config          | `apps/desktop/src-tauri/tauri.conf.json`          |
-| TS Config             | `apps/desktop/tsconfig.json`                      |
+| Purpose            | File                                              |
+| ------------------ | ------------------------------------------------- |
+| Main App           | `apps/desktop/src/App.tsx`                        |
+| State Store        | `apps/desktop/src/store/appStore.ts`              |
+| Skill types        | `apps/desktop/src/lib/skill-types.ts`             |
+| Tauri IPC wrappers | `apps/desktop/src/lib/skill-api.ts`               |
+| Tauri commands     | `apps/desktop/src-tauri/src/skills/commands.rs`   |
+| Scanner            | `apps/desktop/src-tauri/src/skills/scan.rs`       |
+| Provenance         | `apps/desktop/src-tauri/src/skills/provenance.rs` |
+| Agent paths        | `apps/desktop/src-tauri/src/skills/agents.rs`     |
+| Lint config        | `.oxlintrc.json`                                  |
+| Format config      | `.oxfmtrc.json`                                   |
+| Tauri Config       | `apps/desktop/src-tauri/tauri.conf.json`          |
+| TS Config          | `apps/desktop/tsconfig.json`                      |
 
 ### TypeScript Strictness
 
@@ -317,7 +358,7 @@ Enabled in `apps/desktop/tsconfig.json`:
 
 ## Reference docs
 
-- `docs/agent-skill-conventions.md` — agentskills.io spec rules, per-agent discovery paths, invocation control (explicit vs model-invocable), native disable mechanisms, and the local data sources Skill Studio reads. Check it before researching agent behavior again.
+- `docs/agent-skill-conventions.md` — agentskills.io spec rules, per-agent discovery paths, invocation control (explicit vs model-invocable), the agent settings that hide a skill (read only; Park is the only off), and the local data sources Skill Studio reads. Check it before researching agent behavior again.
 
 ## Skills.sh Integration
 
@@ -325,7 +366,7 @@ Skill Studio integrates with skills.sh for skill discovery and installation.
 
 ### API Endpoint
 
-- Default: requests route through the local Skill Studio server (`apps/server`, default `http://127.0.0.1:8787/api/v1`), which holds the real skills.sh key - no client key needed. Settings shows the resolved mode; see `apps/server/README.md`.
+- Default: requests route through the local Skill Studio server (`apps/server`, default `http://127.0.0.1:8787/api/v1`), which holds the real skills.sh key - no client key needed. Settings shows the resolved mode; see `apps/server/README.md`. Development builds use `http://127.0.0.1:8787`; release builds use the hosted proxy at `https://api.useskillstudio.com`.
 - Developer override: a non-empty `skills_sh_api_key` in `~/.agents/skill-studio.json` instead sends `Authorization: Bearer <key>` straight to `https://skills.sh/api/v1`, bypassing the server.
 - **List**: `GET /skills?view=all-time&page=<0-indexed>&per_page=<n>` - paginated, sorted by install count
 - **Search**: `GET /skills/search?q=<query>&limit=<n>` - no pagination, one shot up to `limit`
@@ -366,6 +407,8 @@ Tracks installed skills with their sources and hashes:
 | Codex       | `.codex/skills/`                    | `~/.codex/skills/`                           |
 | OpenCode    | `.opencode/skills/` (also `skill/`) | `~/.config/opencode/skills/` (also `skill/`) |
 | pi          | `.pi/skills/`                       | `~/.pi/agent/skills/`                        |
+| Cursor      | `.cursor/skills/`                   | `~/.cursor/skills/`                          |
+| Grok Build  | `.grok/skills/`                     | `~/.grok/skills/`                            |
 | shared      | `.agents/skills/`                   | `~/.agents/skills/`                          |
 
 `npx skills` can still target the full agent list; see `apps/desktop/src-tauri/src/skills/agents.rs` for `AgentId`.

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ParkRequest",
+  "description": "Request to park one real copy: remove its per-harness links and move its\ndirectory into the parked root, in the slot for where it came from.",
+  "type": "object",
+  "properties": {
+    "deployment_id": {
+      "description": "The copy to park: the Universal folder or an agent's own folder, at\nglobal or project scope. Never a link or a plugin copy.",
+      "$ref": "#/$defs/DeploymentId"
+    }
+  },
+  "required": [
+    "deployment_id"
+  ],
+  "$defs": {
+    "DeploymentId": {
+      "description": "Opaque deployment id.\n\nInvariant: the string starts with `dep:v1/`. Its internal layout is a core\ndetail; adapters and the UI compare it as a string and never split it.",
+      "type": "string"
+    }
+  }
+}

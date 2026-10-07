@@ -1,0 +1,128 @@
+name: Rust
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # The desktop crate links against GTK and WebKitGTK through Tauri.
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+      # Pinned to the toolchain developers run locally. `clippy -D warnings`
+      # with `pedantic = warn` turns every lint a newer release adds into a
+      # failure nobody can reproduce before pushing (and some originate in
+      # dependency macros, where no code edit can satisfy them). Bump this
+      # and the local toolchain together.
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
+        with:
+          toolchain: 1.92.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: cargo-machete,cargo-deny
+      # tauri-build refuses to compile when frontendDist is missing; the Rust
+      # tests do not read the bundle, so an empty folder is enough.
+      - run: mkdir -p apps/desktop/dist
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      # Unused dependencies (plan.md section 7): fails the build on any
+      # Cargo.toml entry nothing in the workspace actually imports.
+      - run: cargo machete
+      # Advisory/license/source policy (plan.md section 7), driven by the
+      # root deny.toml.
+      - run: cargo deny check
+      # The generated TypeScript wire types come from the `schema` Rust binary,
+      # so the drift check lives here, next to the toolchain that builds it.
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter skill-studio run types:check
+
+  # Report-only for now: uploads the survivor list as an artifact and writes
+  # a per-module score to the job summary, but never fails the PR. The
+  # weekly job (.github/workflows/mutants.yml) has not produced a clean
+  # baseline yet, so a blocking gate here would block every open PR on
+  # pre-existing gaps (unit 5.2). `continue-on-error: true` at the job level
+  # means no step in this job, including the toolchain setup, can turn the
+  # PR red.
+  mutants-changed:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      BASE_REF: ${{ github.base_ref }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
+        with:
+          toolchain: 1.92.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: mkdir -p apps/desktop/dist
+      - name: Diff the PR against its base, scoped to the two mutated crates
+        id: diff
+        run: |
+          git diff "origin/$BASE_REF...HEAD" -- crates/skill-studio-core crates/skill-studio-host > mutants-diff.txt
+          if [ -s mutants-diff.txt ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        if: steps.diff.outputs.has_changes == 'true'
+        with:
+          tool: cargo-mutants
+      # Non-zero exit means "found a missed mutant", not "job broke"; a
+      # report-only job records that instead of failing on it. The timeout
+      # sits on this step, not the job, so a diff too large to finish in
+      # time still gets a summary instead of hanging the job's other steps.
+      - name: Run cargo mutants on the changed lines
+        if: steps.diff.outputs.has_changes == 'true'
+        continue-on-error: true
+        timeout-minutes: 30
+        run: cargo mutants --in-diff mutants-diff.txt -p skill-studio-core -p skill-studio-host --all-features --no-shuffle
+      - name: Mutation score per file, or note nothing ran
+        if: always()
+        run: |
+          {
+            echo "### cargo-mutants (changed lines)"
+            if [ "${{ steps.diff.outputs.has_changes }}" != "true" ]; then
+              echo "Diff touches neither \`crates/skill-studio-core\` nor \`crates/skill-studio-host\`; nothing to run."
+            elif [ -f mutants.out/outcomes.json ]; then
+              echo "| module | caught | missed | unviable |"
+              echo "| --- | --- | --- | --- |"
+              while IFS= read -r f; do
+                c=$(grep -c "^$f:" mutants.out/caught.txt 2>/dev/null || true)
+                m=$(grep -c "^$f:" mutants.out/missed.txt 2>/dev/null || true)
+                u=$(grep -c "^$f:" mutants.out/unviable.txt 2>/dev/null || true)
+                echo "| $f | ${c:-0} | ${m:-0} | ${u:-0} |"
+              done < <(cat mutants.out/caught.txt mutants.out/missed.txt mutants.out/unviable.txt 2>/dev/null | cut -d: -f1 | sort -u)
+              echo ""
+              echo "Report-only: missed mutants above do not fail this job. See the \`mutants-changed-report\` artifact for the diffs cargo-mutants tried."
+            else
+              echo "The diff touched the mutated crates, but cargo-mutants produced no report (or timed out); see the run step's log for the missing wiring."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: mutants-changed-report
+          path: mutants.out
+          if-no-files-found: ignore

@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::gh_cli::run_gh;
@@ -27,7 +28,7 @@ const USER_AGENT: &str = "AgentStudio/0.1.0";
 
 /// One skill folder inside a repo: `path` is repo-relative and `""` for a
 /// `SKILL.md` at the repo root.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct GithubSkillEntry {
     pub name: String,
     pub path: String,
@@ -36,7 +37,7 @@ pub struct GithubSkillEntry {
 /// `list_github_skills`'s result. `commit` is the tree's own sha, which the
 /// copy install pins to; `truncated` is GitHub's own flag for a tree too
 /// large to return in one response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct GithubSkillListing {
     pub repo: String,
     pub git_ref: String,
@@ -164,7 +165,7 @@ fn build_listing(
     let filter = path
         .map(|p| p.trim_matches('/'))
         .filter(|p| !p.is_empty())
-        .map(|p| p.to_string());
+        .map(std::string::ToString::to_string);
 
     let mut skills: Vec<GithubSkillEntry> = tree
         .tree
@@ -197,7 +198,7 @@ fn skill_folder_of(blob_path: &str) -> Option<String> {
     }
     blob_path
         .strip_suffix("/SKILL.md")
-        .map(|folder| folder.to_string())
+        .map(std::string::ToString::to_string)
 }
 
 fn matches_filter(folder: &str, filter: Option<&str>) -> bool {
@@ -327,15 +328,19 @@ pub async fn list_github_skills(
     path: Option<String>,
     git_ref: Option<String>,
     refresh: Option<bool>,
+    app: tauri::AppHandle,
 ) -> Result<GithubSkillListing, String> {
-    let api = HttpGithubApi::new();
-    list_github_skills_cached(
-        &api,
-        &repo,
-        path.as_deref(),
-        git_ref.as_deref(),
-        refresh.unwrap_or(false),
-    )
+    crate::timing_log::time_command_async(&app, "list_github_skills", async move {
+        let api = HttpGithubApi::new();
+        list_github_skills_cached(
+            &api,
+            &repo,
+            path.as_deref(),
+            git_ref.as_deref(),
+            refresh.unwrap_or(false),
+        )
+        .await
+    })
     .await
 }
 

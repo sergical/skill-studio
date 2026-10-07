@@ -9,6 +9,7 @@
 // ============================================================================
 
 use std::path::Path;
+use std::time::Duration;
 
 use serde::Deserialize;
 
@@ -19,8 +20,27 @@ const SKILLS_API_BASE: &str = "https://skills.sh/api/v1";
 
 /// The local Skill Studio server's default base URL, used when
 /// `~/.agents/skill-studio.json` has no `skills_sh_api_key` and no
-/// `server_url` override - see `apps/server`.
-const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8787";
+/// `server_url` override - see `apps/server`. A release build bakes in the
+/// hosted Worker URL via the `SKILL_STUDIO_SERVER_URL` compile-time
+/// environment variable (set in `.github/workflows/release.yml`); a local
+/// dev build, where that variable is unset, falls back to the local server.
+fn default_server_url() -> String {
+    normalize_default_server_url(option_env!("SKILL_STUDIO_SERVER_URL"))
+}
+
+/// Trims a trailing `/` from a compile-time server URL override, falling
+/// back to the local dev server when the override is absent or blank -
+/// pulled out as a pure function so tests can pass values in directly,
+/// since `option_env!` itself is fixed at compile time for the whole crate.
+fn normalize_default_server_url(compile_time_value: Option<&str>) -> String {
+    match compile_time_value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => value.trim_end_matches('/').to_string(),
+        None => "http://127.0.0.1:8787".to_string(),
+    }
+}
 
 /// Which credentials and base URL a discovery request uses - resolved once
 /// per call by `resolve_skills_sh_access`. `Direct` is the developer override
@@ -59,7 +79,7 @@ impl SkillsShAccess {
 /// Resolves which access mode a discovery request should use: a non-empty
 /// `skills_sh_api_key` in `~/.agents/skill-studio.json` wins (`Direct`,
 /// straight to skills.sh); otherwise `Server`, routed through the local Skill
-/// Studio server at `server_url` (or `DEFAULT_SERVER_URL`).
+/// Studio server at `server_url` (or the compile-time `default_server_url`).
 pub fn resolve_skills_sh_access(home: &Path) -> Result<SkillsShAccess, String> {
     let registry = skill_fork_registry::read_fork_registry(home)?;
     if let Some(api_key) = registry
@@ -71,7 +91,7 @@ pub fn resolve_skills_sh_access(home: &Path) -> Result<SkillsShAccess, String> {
     let server_url = registry
         .server_url
         .filter(|url| !url.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_SERVER_URL.to_string());
+        .unwrap_or_else(default_server_url);
     Ok(SkillsShAccess::Server {
         base_url: format!("{}/api/v1", server_url.trim_end_matches('/')),
     })
@@ -167,7 +187,7 @@ fn status_error(status: reqwest::StatusCode) -> String {
     if status == reqwest::StatusCode::UNAUTHORIZED {
         "skills.sh API key is invalid or expired".to_string()
     } else {
-        format!("Skills API returned status: {}", status)
+        format!("Skills API returned status: {status}")
     }
 }
 
@@ -192,14 +212,41 @@ fn client_for(
 /// response that did come back but wasn't a success. `Server` mode names the
 /// local server explicitly, since "connection refused" otherwise reads like a
 /// skills.sh outage.
-fn connection_error(access: &SkillsShAccess, e: reqwest::Error) -> String {
+fn connection_error(access: &SkillsShAccess, e: &reqwest::Error) -> String {
     match access {
-        SkillsShAccess::Server { .. } => format!(
-            "Skill Studio server not reachable at {}. Start it with `npm run dev:server`.",
-            access.server_root()
-        ),
+        SkillsShAccess::Server { .. } => server_unreachable_message(access.server_root()),
         SkillsShAccess::Direct { .. } => format!("Failed to reach skills.sh: {e}"),
     }
+}
+
+/// The connection-failure message for `Server` mode, pulled out as a pure
+/// function so tests can cover both branches without a real transport
+/// failure. `pnpm run dev:server` is only right for the local dev server
+/// (loopback) - a release build's hosted default fails for reasons that
+/// advice can't fix, so it points at the network instead.
+fn server_unreachable_message(server_root: &str) -> String {
+    if is_loopback_server_root(server_root) {
+        format!("Skill Studio server not reachable at {server_root}. Start it with `pnpm run dev:server`.")
+    } else {
+        format!(
+            "Skill Studio server at {server_root} is not reachable. Check your network connection."
+        )
+    }
+}
+
+/// True when `server_root`'s host is `127.0.0.1` or `localhost` - a plain
+/// string check rather than a URL-parsing dependency, since `server_root` is
+/// always one of `normalize_default_server_url`'s own outputs or a
+/// user-configured `server_url` override, not arbitrary input.
+fn is_loopback_server_root(server_root: &str) -> bool {
+    let without_scheme = server_root
+        .split_once("://")
+        .map_or(server_root, |(_, rest)| rest);
+    let host = without_scheme
+        .split(['/', ':'])
+        .next()
+        .unwrap_or(without_scheme);
+    host == "127.0.0.1" || host == "localhost"
 }
 
 /// Search for skills on skills.sh. The v1 search endpoint has no pagination:
@@ -226,7 +273,7 @@ pub async fn search_skills(
         .header("User-Agent", "AgentStudio/0.1.0")
         .send()
         .await
-        .map_err(|e| connection_error(access, e))?;
+        .map_err(|e| connection_error(access, &e))?;
 
     if !response.status().is_success() {
         return Err(status_error(response.status()));
@@ -235,7 +282,7 @@ pub async fn search_skills(
     let data: SkillsSearchResponse = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse skills response: {}", e))?;
+        .map_err(|e| format!("Failed to parse skills response: {e}"))?;
 
     Ok(PaginatedSkillsResponse {
         skills: data.data.into_iter().map(SkillSearchResult::from).collect(),
@@ -265,7 +312,7 @@ pub async fn get_popular_skills(
         .header("User-Agent", "AgentStudio/0.1.0")
         .send()
         .await
-        .map_err(|e| connection_error(access, e))?;
+        .map_err(|e| connection_error(access, &e))?;
 
     if !response.status().is_success() {
         return Err(status_error(response.status()));
@@ -274,7 +321,7 @@ pub async fn get_popular_skills(
     let data: SkillsListResponse = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse skills response: {}", e))?;
+        .map_err(|e| format!("Failed to parse skills response: {e}"))?;
 
     Ok(PaginatedSkillsResponse {
         skills: data.data.into_iter().map(SkillSearchResult::from).collect(),
@@ -300,24 +347,125 @@ pub async fn get_skill_details(
     }
 
     let url = format!("{}/skills/{}", access.base(), skill_id);
+    let url = reqwest::Url::parse(&url).map_err(|e| format!("Invalid skill id: {e}"))?;
+    fetch_skill_details(access, url).await
+}
 
+/// Builds `<base>/skills/{owner}/{repo}/{skill}` one pushed segment at a
+/// time, so a segment can never add or remove path levels, and refuses any
+/// URL whose parsed path is not exactly the base plus those four segments.
+/// Callers validate the segments' characters first; this is the second wall.
+fn skill_details_url(
+    access: &SkillsShAccess,
+    owner: &str,
+    repo: &str,
+    skill: &str,
+) -> Result<reqwest::Url, String> {
+    let invalid = || format!("Invalid skill id: {owner}/{repo}/{skill}");
+    let mut url = reqwest::Url::parse(access.base()).map_err(|_| invalid())?;
+    let mut expected: Vec<String> = url
+        .path_segments()
+        .ok_or_else(invalid)?
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    url.path_segments_mut()
+        .map_err(|()| invalid())?
+        .pop_if_empty()
+        .extend(["skills", owner, repo, skill]);
+    expected.extend(["skills", owner, repo, skill].map(str::to_string));
+    let actual: Vec<&str> = url.path_segments().ok_or_else(invalid)?.collect();
+    if actual != expected {
+        return Err(invalid());
+    }
+    Ok(url)
+}
+
+/// `get_skill_details` for an id already split into owner, repo and slug,
+/// with the URL built per segment (see `skill_details_url`).
+pub async fn get_skill_details_by_segments(
+    access: &SkillsShAccess,
+    owner: &str,
+    repo: &str,
+    skill: &str,
+) -> Result<SkillDetails, DetailsFailure> {
+    let url = skill_details_url(access, owner, repo, skill)?;
+    send_skill_details(access, url).await
+}
+
+async fn fetch_skill_details(
+    access: &SkillsShAccess,
+    url: reqwest::Url,
+) -> Result<SkillDetails, String> {
+    send_skill_details(access, url)
+        .await
+        .map_err(|failure| failure.message)
+}
+
+/// Why a details request failed; `rate_limit_wait` is set for a 429 so the
+/// install-count scheduler can stop sending until it passes.
+pub struct DetailsFailure {
+    pub message: String,
+    pub rate_limit_wait: Option<Duration>,
+}
+
+impl From<String> for DetailsFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            rate_limit_wait: None,
+        }
+    }
+}
+
+/// How long to stop sending after a 403/429: `Retry-After` seconds, else
+/// `X-RateLimit-Reset` (epoch seconds) when `X-RateLimit-Remaining` is 0,
+/// else 15 minutes.
+pub fn rate_limit_wait(headers: &reqwest::header::HeaderMap) -> Duration {
+    let number =
+        |name: &str| -> Option<u64> { headers.get(name)?.to_str().ok()?.trim().parse().ok() };
+    if let Some(seconds) = number("retry-after") {
+        return Duration::from_secs(seconds);
+    }
+    if number("x-ratelimit-remaining") == Some(0) {
+        if let Some(reset) = number("x-ratelimit-reset") {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            return Duration::from_secs(reset.saturating_sub(now));
+        }
+    }
+    DEFAULT_RATE_LIMIT_WAIT
+}
+
+const DEFAULT_RATE_LIMIT_WAIT: Duration = Duration::from_secs(15 * 60);
+
+async fn send_skill_details(
+    access: &SkillsShAccess,
+    url: reqwest::Url,
+) -> Result<SkillDetails, DetailsFailure> {
     let (client, headers) = client_for(access)?;
     let response = client
-        .get(&url)
+        .get(url)
         .headers(headers)
         .header("User-Agent", "AgentStudio/0.1.0")
         .send()
         .await
-        .map_err(|e| connection_error(access, e))?;
+        .map_err(|e| connection_error(access, &e))?;
 
     if !response.status().is_success() {
-        return Err(status_error(response.status()));
+        let rate_limit_wait = (response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS)
+            .then(|| rate_limit_wait(response.headers()));
+        return Err(DetailsFailure {
+            message: status_error(response.status()),
+            rate_limit_wait,
+        });
     }
 
     let data: SkillDetailsResponse = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse skill details: {}", e))?;
+        .map_err(|e| format!("Failed to parse skill details: {e}"))?;
 
     Ok(SkillDetails {
         id: data.id,
@@ -338,6 +486,69 @@ mod tests {
             path: path.to_string(),
             contents: contents.to_string(),
         }
+    }
+
+    /// Flow: build the details URL for a normal skill and for names that try
+    /// to add path levels.
+    /// Expectation: the path is exactly base + skills + owner + repo + skill;
+    /// a segment carrying a slash or dot-dot is encoded or refused, never a
+    /// different path.
+    /// A failure here means a crafted skill name can reach another repo's page.
+    #[test]
+    fn skill_details_url_has_exactly_the_four_segments() {
+        let access = SkillsShAccess::Server {
+            base_url: "http://127.0.0.1:8787/api/v1".to_string(),
+        };
+
+        let url = skill_details_url(&access, "obra", "write-tests", "tdd").unwrap();
+        let segments: Vec<&str> = url.path_segments().unwrap().collect();
+        assert_eq!(
+            segments,
+            ["api", "v1", "skills", "obra", "write-tests", "tdd"]
+        );
+
+        for hostile in ["..", "a/b", "%2e%2e/%2e%2e/x/y/z"] {
+            if let Ok(url) = skill_details_url(&access, "obra", "write-tests", hostile) {
+                assert_eq!(url.path_segments().unwrap().count(), 6, "{url}");
+            }
+        }
+    }
+
+    /// Flow: a 403/429 carries Retry-After, only a rate-limit reset, or nothing.
+    /// Expectation: Retry-After wins; a reset counts only with remaining 0;
+    /// otherwise 15 minutes.
+    /// A failure here means a rate limit is retried too early or blocks for ever.
+    #[test]
+    fn rate_limit_wait_reads_retry_after_then_reset_then_defaults() {
+        let headers = |pairs: &[(&'static str, String)]| {
+            let mut map = reqwest::header::HeaderMap::new();
+            for (name, value) in pairs {
+                map.insert(*name, value.parse().unwrap());
+            }
+            map
+        };
+        assert_eq!(
+            rate_limit_wait(&headers(&[("retry-after", "30".into())])),
+            Duration::from_secs(30)
+        );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let reset = (now + 600).to_string();
+        let wait = rate_limit_wait(&headers(&[
+            ("x-ratelimit-remaining", "0".into()),
+            ("x-ratelimit-reset", reset.clone()),
+        ]));
+        assert!((598..=600).contains(&wait.as_secs()), "{wait:?}");
+        assert_eq!(
+            rate_limit_wait(&headers(&[
+                ("x-ratelimit-remaining", "5".into()),
+                ("x-ratelimit-reset", reset),
+            ])),
+            DEFAULT_RATE_LIMIT_WAIT
+        );
+        assert_eq!(rate_limit_wait(&headers(&[])), DEFAULT_RATE_LIMIT_WAIT);
     }
 
     #[test]
@@ -443,5 +654,54 @@ mod tests {
             base_url: "http://127.0.0.1:8787/api/v1".to_string(),
         };
         assert_eq!(access.server_root(), "http://127.0.0.1:8787");
+    }
+
+    #[test]
+    fn normalize_default_server_url_falls_back_to_localhost_when_unset() {
+        assert_eq!(normalize_default_server_url(None), "http://127.0.0.1:8787");
+    }
+
+    #[test]
+    fn normalize_default_server_url_falls_back_to_localhost_when_blank() {
+        assert_eq!(
+            normalize_default_server_url(Some("   ")),
+            "http://127.0.0.1:8787"
+        );
+    }
+
+    #[test]
+    fn normalize_default_server_url_trims_a_trailing_slash() {
+        assert_eq!(
+            normalize_default_server_url(Some("https://skill-studio-server.example.workers.dev/")),
+            "https://skill-studio-server.example.workers.dev"
+        );
+    }
+
+    #[test]
+    fn normalize_default_server_url_keeps_a_url_with_no_trailing_slash() {
+        assert_eq!(
+            normalize_default_server_url(Some("https://skill-studio-server.example.workers.dev")),
+            "https://skill-studio-server.example.workers.dev"
+        );
+    }
+
+    #[test]
+    fn server_unreachable_message_names_the_local_dev_server_for_loopback_hosts() {
+        assert_eq!(
+            server_unreachable_message("http://127.0.0.1:8787"),
+            "Skill Studio server not reachable at http://127.0.0.1:8787. Start it with `pnpm run dev:server`."
+        );
+        assert_eq!(
+            server_unreachable_message("http://localhost:8787"),
+            "Skill Studio server not reachable at http://localhost:8787. Start it with `pnpm run dev:server`."
+        );
+    }
+
+    #[test]
+    fn server_unreachable_message_points_at_the_network_for_a_hosted_url() {
+        assert_eq!(
+            server_unreachable_message("https://skill-studio-server.example.workers.dev"),
+            "Skill Studio server at https://skill-studio-server.example.workers.dev is not reachable. Check your network connection."
+        );
     }
 }

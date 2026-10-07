@@ -8,32 +8,46 @@
 // ============================================================================
 
 import { useState } from "react";
-import { agentIdFromDeploymentLabel, parseSkillSource } from "@skill-studio/lib";
-import type { AgentId, Deployment, InstalledSkill, LifecycleTarget } from "@skill-studio/lib";
+import { parseSkillSource, toWireParsedSkillSource } from "@skill-studio/lib";
+import type {
+  AgentId,
+  Deployment,
+  ForkRecord,
+  InstalledSkill,
+  InvocationPolicy,
+  LeftBehindPair,
+  LifecycleTarget,
+} from "@skill-studio/lib";
 import {
   addSkill,
+  forkSkill,
   openSkillPath,
   parkSkill,
   removeSkill,
   repairSkillLink,
-  setDeploymentEnabled,
-  setHarnessEnabled,
-  setSkillInvocation,
+  restoreMovedDeployment,
+  setPluginEnabled,
+  updatePlugin,
+  setSkillsInvocation,
   unparkSkill,
-  updateSkill,
 } from "../../lib/skill-api";
 import {
-  lifecycleTargetForPark,
+  lifecycleTargetForDeployment,
   lifecycleTargetForSkill,
-  updateSkillOwners,
+  pluginUpdatedToast,
 } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
-import { canToggleHarness } from "./skill-location-helpers";
-import type { LocationAction } from "./skill-location-status";
+import type { TurnOffAction } from "./skill-agent-off-model";
+import { hasUpstreamOwner } from "./skill-location-status";
+import type { InvocationFile, LocationAction } from "./skill-location-status";
+import type { LeftBehindChoice } from "./LeftBehindDialog";
 
 interface UseLocationActionsResult {
-  run: (action: LocationAction) => void;
+  /** Resolves `true` when the action succeeded or only opened a dialog, `false` after its error toast. */
+  run: (action: LocationAction) => Promise<boolean>;
   isBusy: boolean;
+  /** The kind of every action still running, for a control that shows its own pending state. */
+  busyKinds: LocationAction["kind"][];
   /** Set while a "Convert to per-skill links…" action is pending confirmation. */
   materializeRequest: MaterializeLocationRequest | null;
   closeMaterializeRequest: () => void;
@@ -46,14 +60,30 @@ interface UseLocationActionsResult {
     deployment?: Deployment;
   } | null;
   closeRemoveRequest: () => void;
+  /** Set while an "Uninstall the <name> plugin…" action is pending confirmation. */
+  pluginUninstallRequest: Deployment | null;
+  closePluginUninstallRequest: () => void;
+  /** Set while a project copy's Park is pending its confirm. */
+  parkRequest: { deployment: Deployment; scopeLabel: string } | null;
+  closeParkRequest: () => void;
+  /** Set while "Keep live" or "Keep parked" is pending its confirm. */
+  leftBehindRequest: { choice: LeftBehindChoice; pair: LeftBehindPair } | null;
+  closeLeftBehindRequest: () => void;
+  /** Set while a "Split into harness folders…" action is pending confirmation. */
+  splitRequest: SplitLocationRequest | null;
+  closeSplitRequest: () => void;
+  /** Set while a "Turn off for <Agent>" action is pending its confirm. */
+  turnOffRequest: TurnOffAction | null;
+  closeTurnOffRequest: () => void;
 }
 
-export interface MaterializeLocationRequest {
+type SplitLocationRequest = Omit<Extract<LocationAction, { kind: "split" }>, "kind">;
+
+interface MaterializeLocationRequest {
   target: LifecycleTarget;
   harness: string;
   harnessLabel: string;
   root: string;
-  intent: "convert-only" | "convert-then-disable";
 }
 
 /** Display label for a harness whose whole skills root can be materialized. */
@@ -76,33 +106,20 @@ function materializeHarnessLabel(harness: AgentId): string {
   }
 }
 
-/** Routes only explicit conversion and whole-root toggle-off actions to the conversion dialog. */
+/**
+ * Routes the explicit "Convert to per-skill links…" action to the conversion
+ * dialog. The Enabled switch never does: every harness switch writes its own
+ * setting and leaves a whole-folder link in place.
+ */
 export function materializeRequestForLocationAction(
   action: LocationAction,
 ): MaterializeLocationRequest | null {
-  if (action.kind === "convert-root") {
-    return {
-      target: action.target,
-      harness: action.harness,
-      harnessLabel: materializeHarnessLabel(action.harness),
-      root: action.root,
-      intent: "convert-only",
-    };
-  }
-  if (
-    action.kind !== "set-enabled" ||
-    action.enabled ||
-    !action.deployment.shared_via_whole_dir_link
-  ) {
-    return null;
-  }
-  const { deployment } = action;
+  if (action.kind !== "convert-root") return null;
   return {
-    target: { deployment_id: deployment.id },
-    harness: agentIdFromDeploymentLabel(deployment.agent) ?? deployment.agent,
-    harnessLabel: deployment.agent,
-    root: deployment.path.slice(0, deployment.path.lastIndexOf("/")),
-    intent: "convert-then-disable",
+    target: action.target,
+    harness: action.harness,
+    harnessLabel: materializeHarnessLabel(action.harness),
+    root: action.root,
   };
 }
 
@@ -112,7 +129,7 @@ export function useLocationActions(
   onCompareCopies?: () => void,
 ): UseLocationActionsResult {
   const addToast = useAppStore((state) => state.addToast);
-  const [isBusy, setIsBusy] = useState(false);
+  const [busyKinds, setBusyKinds] = useState<LocationAction["kind"][]>([]);
   const [materializeRequest, setMaterializeRequest] = useState<MaterializeLocationRequest | null>(
     null,
   );
@@ -125,86 +142,103 @@ export function useLocationActions(
     projectPath: string | null;
     deployment?: Deployment;
   } | null>(null);
+  const [parkRequest, setParkRequest] = useState<{
+    deployment: Deployment;
+    scopeLabel: string;
+  } | null>(null);
+  const [leftBehindRequest, setLeftBehindRequest] = useState<{
+    choice: LeftBehindChoice;
+    pair: LeftBehindPair;
+  } | null>(null);
+  const [pluginUninstallRequest, setPluginUninstallRequest] = useState<Deployment | null>(null);
+  const [splitRequest, setSplitRequest] = useState<SplitLocationRequest | null>(null);
+  const [turnOffRequest, setTurnOffRequest] = useState<TurnOffAction | null>(null);
 
-  const runWithErrorToast = (title: string, fn: () => Promise<void>) => {
-    setIsBusy(true);
-    fn()
-      .catch((err) => {
+  /** Resolves `true` when `fn` succeeded, `false` after showing its error toast. Never rejects. */
+  const runWithErrorToast = <T = void>(
+    title: string,
+    fn: () => Promise<T>,
+    onSuccess?: (result: T) => void,
+  ): Promise<boolean> =>
+    fn().then(
+      (result) => {
+        onSuccess?.(result);
+        return true;
+      },
+      (err) => {
         addToast({
           type: "error",
           title,
           message: err instanceof Error ? err.message : "Unknown error",
         });
-      })
-      .finally(() => setIsBusy(false));
-  };
+        return false;
+      },
+    );
 
-  const run = (action: LocationAction) => {
+  const dispatch = (action: LocationAction): Promise<boolean> => {
     switch (action.kind) {
       case "relink":
-        runWithErrorToast("Couldn't relink", () =>
+        return runWithErrorToast("Couldn't relink", () =>
           repairSkillLink(action.deployment.path, "relink"),
         );
-        return;
       case "remove-link":
-        runWithErrorToast("Couldn't remove link", () =>
+        return runWithErrorToast("Couldn't remove link", () =>
           repairSkillLink(action.deployment.path, "remove"),
         );
-        return;
       case "edit-skill-md":
       case "open-editor":
-        runWithErrorToast("Couldn't open in your editor", () =>
+        return runWithErrorToast("Couldn't open in your editor", () =>
           openSkillPath(action.path, "editor"),
         );
-        return;
       case "reveal":
-        runWithErrorToast("Couldn't reveal in Finder", () => openSkillPath(action.path, "reveal"));
-        return;
+        return runWithErrorToast("Couldn't reveal in Finder", () =>
+          openSkillPath(action.path, "reveal"),
+        );
       case "compare":
         onCompareCopies?.();
-        return;
+        return Promise.resolve(true);
       case "convert-root":
         setMaterializeRequest(materializeRequestForLocationAction(action));
-        return;
+        return Promise.resolve(true);
       case "make-independent-copy":
         setIndependentCopyRequest({
           deployment: action.deployment,
           scopeLabel: action.scopeLabel,
         });
-        return;
-      case "set-enabled": {
+        return Promise.resolve(true);
+      case "restore-moved":
+        return runWithErrorToast("Couldn't move back", () =>
+          restoreMovedDeployment({ deployment_id: action.deployment.id }),
+        );
+      case "set-plugin-enabled": {
         const { deployment, enabled } = action;
-        const readerAgent = agentIdFromDeploymentLabel(deployment.agent);
-        const conversion = materializeRequestForLocationAction(action);
-        if (conversion) {
-          setMaterializeRequest(conversion);
-          return;
-        }
-        runWithErrorToast(enabled ? "Couldn't enable" : "Couldn't disable", () =>
-          deployment.disabled_by === "studio-moved" || !canToggleHarness(deployment)
-            ? setDeploymentEnabled({ deployment_id: deployment.id }, enabled)
-            : readerAgent && readerAgent !== "shared"
-              ? setHarnessEnabled({ deployment_id: deployment.id }, readerAgent, enabled)
-              : Promise.reject(new Error(`${deployment.agent} is not a supported reader`)),
+        return runWithErrorToast(
+          enabled ? "Couldn't enable plugin" : "Couldn't disable plugin",
+          () => setPluginEnabled(deployment.plugin!.id, deployment.agent, enabled),
         );
-        return;
       }
-      case "set-reader-enabled":
-        runWithErrorToast(action.enabled ? "Couldn't enable" : "Couldn't disable", () =>
-          setHarnessEnabled(action.target, action.agent, action.enabled),
+      case "update-plugin": {
+        const { deployment, target } = action;
+        return runWithErrorToast(
+          "Couldn't update plugin",
+          () => updatePlugin(target.plugin_id, deployment.agent, target.scope, target.project_path),
+          (outcome) => addToast(pluginUpdatedToast(target.plugin_id, outcome)),
         );
-        return;
+      }
+      case "uninstall-plugin":
+        setPluginUninstallRequest(action.deployment);
+        return Promise.resolve(true);
       case "promote-global": {
         const { source, agents } = action;
-        runWithErrorToast("Couldn't promote to global", async () => {
+        return runWithErrorToast("Couldn't promote to global", async () => {
           await addSkill({
-            source: { kind: "local", localPath: source },
+            source: toWireParsedSkillSource({ kind: "local", localPath: source }),
             method: "copy",
             destination: "universal",
             agents,
-            disabled_harnesses: [],
+            link_mode: "link",
             scope: "global",
-            trial: false,
+            project_path: null,
           });
           addToast({
             type: "success",
@@ -212,74 +246,142 @@ export function useLocationActions(
             message: "Copied to ~/.agents/skills. Every project reads it from there.",
           });
         });
-        return;
       }
       case "park":
-        runWithErrorToast("Couldn't park skill", () => parkSkill(lifecycleTargetForPark(skill)));
-        return;
-      case "unpark":
-        runWithErrorToast("Couldn't unpark skill", () =>
-          unparkSkill(lifecycleTargetForPark(skill)),
+        // A project copy leaves a repository, so it confirms first; a global one parks at once.
+        if (action.projectPath !== null) {
+          setParkRequest({ deployment: action.deployment, scopeLabel: action.scopeLabel });
+          return Promise.resolve(true);
+        }
+        return runWithErrorToast("Couldn't park skill", () =>
+          parkSkill({ deployment_id: action.deployment.id }),
         );
-        return;
+      case "unpark":
+        return runWithErrorToast("Couldn't turn on skill", () =>
+          unparkSkill({ deployment_id: action.deployment.id }),
+        );
+      case "keep-live":
+      case "keep-parked":
+        setLeftBehindRequest({ choice: action.kind, pair: action.pair });
+        return Promise.resolve(true);
+      case "split":
+        setSplitRequest({
+          target: action.target,
+          projectPath: action.projectPath,
+          readers: action.readers,
+        });
+        return Promise.resolve(true);
+      case "turn-off-agent":
+        setTurnOffRequest(action);
+        return Promise.resolve(true);
       case "remove-scope":
         setRemoveRequest({ scopeLabel: action.scopeLabel, projectPath: action.projectPath });
-        return;
+        return Promise.resolve(true);
       case "remove-deployment":
         setRemoveRequest({
           scopeLabel: action.scopeLabel,
           projectPath: action.deployment.project_path ?? null,
           deployment: action.deployment,
         });
-        return;
-      case "update":
-        runWithErrorToast("Update failed", async () => {
-          const summary = await updateSkillOwners(skill, updateSkill);
-          if (summary.failures.length > 0) {
-            throw new Error(
-              `Updated ${summary.succeeded} of ${summary.attempted} deployments. ${summary.failures.map((failure) => failure.message).join("; ")}`,
-            );
-          }
-        });
-        return;
+        return Promise.resolve(true);
       case "install-again":
-        runWithErrorToast("Couldn't reinstall", async () => {
+        return runWithErrorToast("Couldn't reinstall", async () => {
           const source = parseSkillSource(skill.source);
           if ("error" in source || source.kind !== "github" || !source.repo) {
             throw new Error(`Cannot reinstall ${skill.name}: no GitHub repository is recorded.`);
           }
           await addSkill({
-            source: { ...source, path: source.path ?? skill.name, skillName: skill.name },
+            source: toWireParsedSkillSource({
+              ...source,
+              path: source.path ?? skill.name,
+              skillName: skill.name,
+            }),
             method: "skills-sh",
             scope: "global",
             destination: "universal",
             agents: [],
-            disabled_harnesses: [],
-            trial: false,
+            link_mode: "link",
+            project_path: null,
           });
         });
-        return;
       case "remove-lock-entry":
-        runWithErrorToast("Couldn't remove lock entry", async () => {
+        return runWithErrorToast("Couldn't remove lock entry", async () => {
           await removeSkill(lifecycleTargetForSkill(skill, "global"));
         });
-        return;
     }
+  };
+
+  const run = (action: LocationAction): Promise<boolean> => {
+    setBusyKinds((kinds) => [...kinds, action.kind]);
+    return dispatch(action).finally(() =>
+      setBusyKinds((kinds) => {
+        const index = kinds.indexOf(action.kind);
+        return kinds.filter((_, i) => i !== index);
+      }),
+    );
   };
 
   return {
     run,
-    isBusy,
+    isBusy: busyKinds.length > 0,
+    busyKinds,
     materializeRequest,
     closeMaterializeRequest: () => setMaterializeRequest(null),
     independentCopyRequest,
     closeIndependentCopyRequest: () => setIndependentCopyRequest(null),
     removeRequest,
     closeRemoveRequest: () => setRemoveRequest(null),
+    pluginUninstallRequest,
+    closePluginUninstallRequest: () => setPluginUninstallRequest(null),
+    parkRequest,
+    closeParkRequest: () => setParkRequest(null),
+    leftBehindRequest,
+    closeLeftBehindRequest: () => setLeftBehindRequest(null),
+    splitRequest,
+    closeSplitRequest: () => setSplitRequest(null),
+    turnOffRequest,
+    closeTurnOffRequest: () => setTurnOffRequest(null),
   };
 }
 
-// `setSkillInvocation` is used by the Invocation footer's segmented control,
-// re-exported here so `SkillLocationsCard` has one import site for every
-// Locations-card write call.
-export { setSkillInvocation };
+/**
+ * Sets every file in `files` to `policy`, forking first when needed - the same rule the SKILL.md
+ * editor uses: only the global Universal folder can need a fork before editing (`fileEditability`
+ * keeps managed Project folders and copies out of this branch). The forks run one at a time, then
+ * one backend call writes every file, so the skill list refreshes once and nothing is still
+ * writing when this returns. Throws with how many files changed and the first failure. Used by `SkillInvocationFooter`.
+ */
+export async function setInvocationForFiles(
+  skill: InstalledSkill,
+  files: InvocationFile[],
+  policy: InvocationPolicy,
+): Promise<void> {
+  for (const file of files) {
+    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each fork takes an exclusive lease, so the forks must not overlap
+    await forkBeforeInvocationEdit(file);
+  }
+  const results = await setSkillsInvocation(
+    files.map((file) => ({ name: skill.name, path: `${file.path}/SKILL.md` })),
+    policy,
+  );
+  // A missing result counts as a failure, the same as the list's bulk Invocation action.
+  const failures = files.flatMap((file, index) => {
+    const error = results[index] ? results[index].error : "The batch returned no result.";
+    return error === null ? [] : [{ path: file.path, error }];
+  });
+  if (failures.length === 0) return;
+  const [first] = failures;
+  if (files.length === 1) throw new Error(first.error);
+  const changed = files.length - failures.length;
+  throw new Error(`Changed ${changed} of ${files.length} files. ${first.path}: ${first.error}`);
+}
+
+/** Forks a shared folder an update would write over, so the edit stays. Ambiguous and manual folders have no upstream, so they are edited in place. */
+export async function forkBeforeInvocationEdit(
+  file: InvocationFile,
+  fork: (target: LifecycleTarget) => Promise<ForkRecord | void> = forkSkill,
+): Promise<void> {
+  if (file.kind === "shared" && hasUpstreamOwner(file.deployment)) {
+    await fork(lifecycleTargetForDeployment(file.deployment));
+  }
+}

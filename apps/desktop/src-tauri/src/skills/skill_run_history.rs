@@ -59,7 +59,7 @@ pub enum SkillRunAction {
 
 /// The cheap per-skill index `build_snapshot` reads for every skill's
 /// dashboard/list row, written alongside every full record.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SkillRunSummary {
     pub at: String,
     pub harness: HarnessId,
@@ -81,13 +81,17 @@ fn skill_dir(root: &Path, skill_name: &str) -> PathBuf {
 /// Records one run's summary and transcript, then trims the skill's run
 /// history down to `MAX_RUNS_PER_SKILL`.
 #[tauri::command]
-pub fn record_skill_run(
+pub async fn record_skill_run(
     app: AppHandle,
     record: SkillRunRecord,
     events: Vec<SkillAgentEvent>,
 ) -> Result<(), String> {
-    let root = runs_root(&app)?;
-    record_run_at(&root, &record, &events)
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "record_skill_run", move || {
+        let root = runs_root(&app)?;
+        record_run_at(&root, &record, &events)
+    })
+    .await
 }
 
 /// `record_skill_run`'s logic, taking the runs root directly so it's
@@ -165,18 +169,10 @@ fn trim_run_history(
     }
     let mut records: Vec<(std::time::SystemTime, PathBuf)> = fs::read_dir(dir)
         .map_err(|e| format!("Could not list run history: {e}"))?
-        .filter_map(|entry| entry.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .map(|ext| ext == "json")
-                .unwrap_or(false)
-                && entry
-                    .path()
-                    .file_stem()
-                    .map(|s| s != "last")
-                    .unwrap_or(true)
+            entry.path().extension().is_some_and(|ext| ext == "json")
+                && entry.path().file_stem().is_none_or(|s| s != "last")
         })
         .filter_map(|entry| {
             let modified = entry.metadata().ok()?.modified().ok()?;
@@ -192,11 +188,7 @@ fn trim_run_history(
     let remove_count = records.len().saturating_sub(keep);
     for (_, path) in records
         .iter()
-        .filter(|(_, path)| {
-            path.file_stem()
-                .map(|stem| stem != protected_run_id)
-                .unwrap_or(true)
-        })
+        .filter(|(_, path)| path.file_stem().is_none_or(|stem| stem != protected_run_id))
         .take(remove_count)
     {
         let _ = fs::remove_file(path);
@@ -211,9 +203,16 @@ fn trim_run_history(
 
 /// Every run recorded for `skill_name`, newest first, without transcripts.
 #[tauri::command]
-pub fn list_skill_runs(app: AppHandle, skill_name: String) -> Result<Vec<SkillRunRecord>, String> {
-    let root = runs_root(&app)?;
-    list_runs_at(&root, &skill_name)
+pub async fn list_skill_runs(
+    app: AppHandle,
+    skill_name: String,
+) -> Result<Vec<SkillRunRecord>, String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "list_skill_runs", move || {
+        let root = runs_root(&app)?;
+        list_runs_at(&root, &skill_name)
+    })
+    .await
 }
 
 /// `list_skill_runs`'s logic, taking the runs root directly so it's testable
@@ -226,18 +225,10 @@ fn list_runs_at(root: &Path, skill_name: &str) -> Result<Vec<SkillRunRecord>, St
     }
     let mut records: Vec<SkillRunRecord> = fs::read_dir(&dir)
         .map_err(|e| format!("Could not list run history: {e}"))?
-        .filter_map(|entry| entry.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .map(|ext| ext == "json")
-                .unwrap_or(false)
-                && entry
-                    .path()
-                    .file_stem()
-                    .map(|s| s != "last")
-                    .unwrap_or(true)
+            entry.path().extension().is_some_and(|ext| ext == "json")
+                && entry.path().file_stem().is_none_or(|s| s != "last")
         })
         .filter_map(|entry| fs::read(entry.path()).ok())
         .filter_map(|bytes| serde_json::from_slice::<SkillRunRecord>(&bytes).ok())
@@ -249,13 +240,17 @@ fn list_runs_at(root: &Path, skill_name: &str) -> Result<Vec<SkillRunRecord>, St
 /// The transcript events recorded for run `id`, across every skill (the id
 /// is a UUID, so a single directory scan first locates its skill folder).
 #[tauri::command]
-pub fn read_skill_run_events(
+pub async fn read_skill_run_events(
     app: AppHandle,
     skill_name: String,
     id: String,
 ) -> Result<Vec<SkillAgentEvent>, String> {
-    let root = runs_root(&app)?;
-    read_events_at(&root, &skill_name, &id)
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "read_skill_run_events", move || {
+        let root = runs_root(&app)?;
+        read_events_at(&root, &skill_name, &id)
+    })
+    .await
 }
 
 /// `read_skill_run_events`'s logic, taking the runs root directly so it's
@@ -335,8 +330,8 @@ mod tests {
 
         let remaining: Vec<_> = fs::read_dir(dir.path())
             .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
+            .filter_map(std::result::Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
             .collect();
         assert_eq!(remaining.len(), 2);
     }
@@ -381,7 +376,7 @@ mod tests {
         assert!(dir.path().join("eligible-newest.json").is_file());
         let remaining_records = fs::read_dir(dir.path())
             .unwrap()
-            .filter_map(|entry| entry.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
             .count();
         assert_eq!(remaining_records, 2);

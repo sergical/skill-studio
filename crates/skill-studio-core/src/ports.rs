@@ -1,0 +1,1481 @@
+//! Ports: the traits adapters implement so the core can run anywhere.
+//!
+//! A port never decides policy. It moves bytes, tells the time, hands out
+//! ids, holds leases, opens the history store, and reports notices.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::dto::{DeploymentDto, Inventory};
+pub use crate::error::LeaseBusy;
+use crate::error::{CoreError, ErrorCode};
+use crate::events::{EventDraft, EventFilter, EventRecord, EventStatus};
+use crate::harness::HarnessCatalog;
+use crate::identity::{CorrelationId, DeploymentId, EventId, Fingerprint, PlanId, SkillName};
+use crate::scope::{NormalizedScope, RuntimeScope};
+use crate::snapshot::Revision;
+
+/// Kind of a directory entry, without following links.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FileKind {
+    /// Regular file.
+    File,
+    /// Directory.
+    Dir,
+    /// Symbolic link (target may be missing).
+    Symlink,
+    /// Anything else (socket, device).
+    Other,
+}
+
+/// `lstat` facts about one path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FileFacts {
+    /// Kind without following links.
+    pub kind: FileKind,
+    /// Size in bytes for files; `0` otherwise.
+    pub len: u64,
+    /// Last modification time, when the platform reports one.
+    pub modified: Option<DateTime<Utc>>,
+    /// Unix mode bits, when the platform reports them.
+    pub mode: Option<u32>,
+}
+
+/// One entry of a directory listing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DirEntryFacts {
+    /// File name (last component only).
+    pub name: String,
+    /// Kind without following links.
+    pub kind: FileKind,
+}
+
+/// Whether a directory entry can be a skill folder: a directory or a
+/// symlink (never a plain file), and not dot-prefixed. Shared by every root
+/// reader (`ops::read_root_entries`, `harness::claude_code_skill_entries`)
+/// so "what counts as a skill-shaped entry" has one definition.
+pub(crate) fn is_skill_shaped_entry(entry: &DirEntryFacts) -> bool {
+    matches!(entry.kind, FileKind::Dir | FileKind::Symlink) && !entry.name.starts_with('.')
+}
+
+/// A path proven to lie inside the scope.
+///
+/// Invariant: only [`confine`] builds one. Every write helper takes a
+/// `ScopedPath`, so the core cannot write outside the home and the projects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedPath {
+    path: PathBuf,
+}
+
+impl ScopedPath {
+    /// The confined path.
+    pub fn as_path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Proves that `path` lies under the scope home or one of its projects.
+///
+/// The check is lexical on the given path and on its parent's canonical
+/// form, so a `..` segment or a link that escapes the scope is refused with
+/// [`ErrorCode::InvalidRequest`].
+pub fn confine(
+    scope: &NormalizedScope,
+    fs: &dyn ScopeFs,
+    path: &Path,
+) -> Result<ScopedPath, CoreError> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+    {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "path must be absolute without `..`",
+        )
+        .at(path));
+    }
+    let parent = path.parent().unwrap_or(path);
+    let parent_canonical = fs
+        .canonicalize(parent)
+        .map_err(|e| CoreError::io(parent, e))?;
+    if scope.contains(path) && scope.contains(&parent_canonical) {
+        Ok(ScopedPath {
+            path: path.to_path_buf(),
+        })
+    } else {
+        Err(CoreError::new(ErrorCode::InvalidRequest, "path lies outside the scope").at(path))
+    }
+}
+
+/// [`confine`] for a file about to be rewritten in place: when `path` is a
+/// link (a dotfiles repo linking `~/.claude/settings.json`), the link's
+/// resolved file is confined and returned instead, so the write goes
+/// through the link and the link survives. A dangling link is refused
+/// rather than replaced by a regular file.
+pub fn confine_write_through(
+    scope: &NormalizedScope,
+    fs: &dyn ScopeFs,
+    path: &Path,
+) -> Result<ScopedPath, CoreError> {
+    confine(scope, fs, &resolve_config_link(fs, path)?)
+}
+
+/// The file a config path really names: `path` itself, or the file its
+/// leaf link resolves to. An op that edits a config file reads, backs up,
+/// writes, and fingerprints this path, so its undo restores the real file
+/// rather than the link (whose backup would read back the edited bytes).
+/// A dangling link is an [`ErrorCode::InvalidRequest`] error.
+pub fn resolve_config_link(fs: &dyn ScopeFs, path: &Path) -> Result<PathBuf, CoreError> {
+    let is_link = fs
+        .symlink_metadata(path)
+        .is_ok_and(|facts| facts.kind == FileKind::Symlink);
+    if !is_link {
+        return Ok(path.to_path_buf());
+    }
+    fs.canonicalize(path).map_err(|_| {
+        CoreError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "{} is a link to a file that does not exist; fix or remove the link first",
+                path.display()
+            ),
+        )
+        .at(path)
+    })
+}
+
+/// Shared body for every [`ScopeFs::ancestor_holds`] implementation: walk
+/// `start` and its ancestors via `fs.symlink_metadata`, one directory at a
+/// time, stopping as soon as `dir.join(name)` resolves or the walk runs out
+/// of parents. Never propagates a read error - a missing or unreadable
+/// ancestor is the same as "does not hold `name`" - so the result is always
+/// `Ok`. Bounding the walk to a scope is the caller's job: wrap `fs` in
+/// [`ScopedReads`] first so a directory outside the scope reads as missing
+/// rather than reaching the real adapter.
+pub fn ancestor_holds(fs: &dyn ScopeFs, start: &Path, name: &str) -> std::io::Result<bool> {
+    let mut dir = start.to_path_buf();
+    loop {
+        if fs.symlink_metadata(&dir.join(name)).is_ok() {
+            return Ok(true);
+        }
+        match dir.parent() {
+            Some(parent) if parent != dir => dir = parent.to_path_buf(),
+            _ => return Ok(false),
+        }
+    }
+}
+
+/// A [`ScopeFs`] view over `inner` whose reads outside `scope` are reported
+/// as missing.
+///
+/// [`ScopeFs`]'s read methods otherwise take plain, unchecked paths - see the
+/// trait's own doc comment - so nothing stops a walk that climbs a path's
+/// ancestors, like [`ScopeFs::ancestor_holds`], from reading real directories
+/// above the scope's home or projects. Wrapping the adapter in `ScopedReads`
+/// before such a walk is what makes it stop at the scope root instead of the
+/// filesystem root.
+pub struct ScopedReads<'a> {
+    inner: &'a dyn ScopeFs,
+    scope: &'a NormalizedScope,
+}
+
+impl<'a> ScopedReads<'a> {
+    /// Wraps `inner`, confining every read to `scope`.
+    pub fn new(inner: &'a dyn ScopeFs, scope: &'a NormalizedScope) -> Self {
+        ScopedReads { inner, scope }
+    }
+
+    fn out_of_scope(_path: &Path) -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "path lies outside the scope")
+    }
+}
+
+impl ScopeFs for ScopedReads<'_> {
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        self.inner.canonicalize(path)
+    }
+    fn symlink_metadata(&self, path: &Path) -> std::io::Result<FileFacts> {
+        if !self.scope.contains(path) {
+            return Err(Self::out_of_scope(path));
+        }
+        self.inner.symlink_metadata(path)
+    }
+    fn read_link(&self, path: &Path) -> std::io::Result<PathBuf> {
+        self.inner.read_link(path)
+    }
+    fn read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntryFacts>> {
+        self.inner.read_dir(path)
+    }
+    fn ancestor_holds(&self, start: &Path, name: &str) -> std::io::Result<bool> {
+        ancestor_holds(self, start, name)
+    }
+    fn read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+        self.inner.read_capped(path, max_bytes)
+    }
+    fn read_prefix(&self, path: &Path, limit: u64) -> std::io::Result<(Vec<u8>, bool)> {
+        self.inner.read_prefix(path, limit)
+    }
+    fn write_atomic(
+        &self,
+        guard: &ExclusiveGuard,
+        path: &ScopedPath,
+        bytes: &[u8],
+    ) -> std::io::Result<()> {
+        self.inner.write_atomic(guard, path, bytes)
+    }
+    fn rename(
+        &self,
+        guard: &ExclusiveGuard,
+        from: &ScopedPath,
+        to: &ScopedPath,
+    ) -> std::io::Result<()> {
+        self.inner.rename(guard, from, to)
+    }
+    fn remove_file(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
+        self.inner.remove_file(guard, path)
+    }
+    fn create_dir_all(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
+        self.inner.create_dir_all(guard, path)
+    }
+    fn symlink(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        link: &ScopedPath,
+    ) -> std::io::Result<()> {
+        self.inner.symlink(guard, target, link)
+    }
+    fn symlink_relative(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        relative_target: &Path,
+        link: &ScopedPath,
+    ) -> std::io::Result<()> {
+        self.inner
+            .symlink_relative(guard, target, relative_target, link)
+    }
+    fn fsops_device_inode(&self, path: &Path) -> std::io::Result<(u64, u64)> {
+        self.inner.fsops_device_inode(path)
+    }
+    fn fsops_fsync_file(&self, path: &Path) -> std::io::Result<()> {
+        self.inner.fsops_fsync_file(path)
+    }
+    fn fsops_fsync_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.inner.fsops_fsync_dir(path)
+    }
+    fn fsops_create_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.inner.fsops_create_dir(path)
+    }
+    fn fsops_write_new_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        self.inner.fsops_write_new_file(path, bytes)
+    }
+    fn fsops_write_new_file_with_mode(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        mode: u32,
+    ) -> std::io::Result<()> {
+        self.inner.fsops_write_new_file_with_mode(path, bytes, mode)
+    }
+    fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        self.inner.fsops_rename(from, to)
+    }
+    fn fsops_symlink(&self, target: &Path, link: &Path) -> std::io::Result<()> {
+        self.inner.fsops_symlink(target, link)
+    }
+    fn fsops_remove_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.inner.fsops_remove_dir(path)
+    }
+    fn fsops_remove_file(&self, path: &Path) -> std::io::Result<()> {
+        self.inner.fsops_remove_file(path)
+    }
+    fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()> {
+        self.inner.fsops_exchange(a, b)
+    }
+}
+
+/// Filesystem access. Read calls take plain paths; write calls take a
+/// [`ScopedPath`] and an [`ExclusiveGuard`].
+pub trait ScopeFs: Send + Sync {
+    /// Resolves every symlink. Fails when the path does not exist.
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf>;
+    /// `lstat` facts. Fails when the path does not exist.
+    fn symlink_metadata(&self, path: &Path) -> std::io::Result<FileFacts>;
+    /// Reads a symlink target without resolving it.
+    fn read_link(&self, path: &Path) -> std::io::Result<PathBuf>;
+    /// Lists a directory. Order is unspecified; callers sort.
+    fn read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntryFacts>>;
+    /// True when `start` or any ancestor of it inside the scope holds an entry
+    /// named `name`. Walks up from `start` and stops at the scope root, so a
+    /// repository outside the scope is not visible.
+    fn ancestor_holds(&self, start: &Path, name: &str) -> std::io::Result<bool>;
+    /// Reads at most `max_bytes`. A larger file is an error, not a truncation.
+    fn read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>>;
+    /// Reads at most `limit` bytes and reports whether more bytes followed.
+    /// Unlike [`Self::read_capped`], a file over the limit is not an error:
+    /// the caller gets the first `limit` bytes and `true`.
+    fn read_prefix(&self, path: &Path, limit: u64) -> std::io::Result<(Vec<u8>, bool)>;
+    /// Writes `bytes` through a temp file and rename, keeping permissions.
+    fn write_atomic(
+        &self,
+        guard: &ExclusiveGuard,
+        path: &ScopedPath,
+        bytes: &[u8],
+    ) -> std::io::Result<()>;
+    /// Renames inside one filesystem.
+    fn rename(
+        &self,
+        guard: &ExclusiveGuard,
+        from: &ScopedPath,
+        to: &ScopedPath,
+    ) -> std::io::Result<()>;
+    /// Removes a file or a symlink, never a directory.
+    fn remove_file(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()>;
+    /// Creates a directory and its parents.
+    fn create_dir_all(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()>;
+    /// Creates a symlink at `link` pointing to `target`.
+    ///
+    /// `target` is confined too: a link that points outside the scope would
+    /// be a scope escape on the next scan, so the core never creates one.
+    fn symlink(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        link: &ScopedPath,
+    ) -> std::io::Result<()>;
+    /// Creates a symlink at `link` that stores `relative_target` (a path
+    /// relative to `link`'s parent that resolves to `target`), the way the
+    /// `skills` CLI writes its per-harness links. A relative link keeps
+    /// working when the scope folder is moved or mounted at another path.
+    /// The default stores `target` as is, for a fake filesystem that only
+    /// needs the link to resolve.
+    fn symlink_relative(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        relative_target: &Path,
+        link: &ScopedPath,
+    ) -> std::io::Result<()> {
+        let _ = relative_target;
+        self.symlink(guard, target, link)
+    }
+
+    /// Device and inode of the entry at `path`, without following a final
+    /// symlink. [`crate::fsops::Root`] rereads this before and after every
+    /// step to prove the root it opened was not swapped for something else.
+    fn fsops_device_inode(&self, path: &Path) -> std::io::Result<(u64, u64)>;
+    /// Flushes a file's contents to durable storage.
+    fn fsops_fsync_file(&self, path: &Path) -> std::io::Result<()>;
+    /// Flushes a directory's own entry (its listing), so a create, rename,
+    /// or removal inside it is durable, not only the thing it named.
+    fn fsops_fsync_dir(&self, path: &Path) -> std::io::Result<()>;
+    /// Creates one directory. Fails when the parent does not already exist,
+    /// unlike [`Self::create_dir_all`].
+    fn fsops_create_dir(&self, path: &Path) -> std::io::Result<()>;
+    /// Writes a brand-new file (fails if one already exists at `path`).
+    /// [`crate::fsops::stage`] uses this to populate a staged folder that
+    /// nothing else can see yet; the visible write path is
+    /// [`crate::fsops::write_file`], which goes through a temp name and a
+    /// rename instead.
+    fn fsops_write_new_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()>;
+    /// [`Self::fsops_write_new_file`] that leaves the file with exactly the
+    /// `mode` permission bits, whatever the process umask is.
+    fn fsops_write_new_file_with_mode(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        mode: u32,
+    ) -> std::io::Result<()>;
+    /// Renames within one filesystem, confined by the caller's own
+    /// [`crate::fsops::Root`] rather than a [`ScopedPath`].
+    fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+    /// Creates a symlink at `link` pointing at `target`, confined by the
+    /// caller's own [`crate::fsops::Root`] rather than a [`ScopedPath`].
+    fn fsops_symlink(&self, target: &Path, link: &Path) -> std::io::Result<()>;
+    /// Removes an empty directory.
+    fn fsops_remove_dir(&self, path: &Path) -> std::io::Result<()>;
+    /// Removes a file or a symlink, never a directory.
+    fn fsops_remove_file(&self, path: &Path) -> std::io::Result<()>;
+    /// Atomically exchanges the entries at `a` and `b`: after this call,
+    /// `a` holds what `b` held and `b` holds what `a` held. Both must
+    /// already exist. [`crate::fsops::swap`] uses this as its one
+    /// crash-critical step, so a process that dies mid-swap leaves the
+    /// filesystem showing either the pre-swap or the post-swap pairing,
+    /// never a folder that exists at neither or both names.
+    fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()>;
+}
+
+/// Finds the projects a scope covers under [`ProjectSelection::Discover`].
+///
+/// The desktop reads harness session stores (Claude Code `~/.claude/projects`
+/// transcripts) to find them; the CLI may read a preference file instead.
+/// The port returns candidate paths only. [`NormalizedScope::normalize_with_discovery`]
+/// canonicalizes them, drops the ones that no longer exist, removes the
+/// excluded ones, and refuses the home itself.
+///
+/// [`ProjectSelection::Discover`]: crate::scope::ProjectSelection::Discover
+pub trait ProjectDiscovery: Send + Sync {
+    /// Absolute candidate project paths for the home at `home_root`. Order
+    /// does not matter; the scope sorts them.
+    fn discover_projects(&self, home_root: &Path) -> Result<Vec<PathBuf>, CoreError>;
+}
+
+/// Resolves an executable name on the adapter's `PATH`.
+///
+/// The core never reads `PATH` itself. `capabilities` uses this port for
+/// harness runner binaries and for the tools an installer needs (`npx`,
+/// `dotagents`, `gh`).
+pub trait ToolLookup: Send + Sync {
+    /// Absolute path of `name`, or `None` when it is not on `PATH`.
+    fn find_binary(&self, name: &str) -> Option<PathBuf>;
+}
+
+/// Wall clock and monotonic time.
+pub trait Clock: Send + Sync {
+    /// Current UTC time.
+    fn now(&self) -> DateTime<Utc>;
+    /// Time since an arbitrary fixed point; used for timings and budgets.
+    fn monotonic(&self) -> Duration;
+}
+
+/// Source of fresh ids.
+pub trait IdSource: Send + Sync {
+    /// A new event id. Must sort after every id returned before.
+    fn next_event_id(&self) -> EventId;
+}
+
+/// One lease key: a canonical physical root.
+///
+/// Invariant: the lease file lives under the adapter-supplied lease root,
+/// never inside a user project. Keys are acquired in sorted order.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+pub struct LeaseKey {
+    /// Canonical path of the root.
+    pub canonical_root: PathBuf,
+}
+
+/// Lease mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaseMode {
+    /// Many readers.
+    Shared,
+    /// One writer.
+    Exclusive,
+}
+
+/// A held lease. Dropping it releases the lease.
+pub trait LeaseHandle: Send {
+    /// Keys this handle holds.
+    fn keys(&self) -> &[LeaseKey];
+    /// Mode this handle holds.
+    fn mode(&self) -> LeaseMode;
+}
+
+/// Proof that a shared lease is held for the whole scope.
+pub struct SharedGuard(Box<dyn LeaseHandle>);
+
+impl SharedGuard {
+    /// Keys the guard holds.
+    pub fn keys(&self) -> &[LeaseKey] {
+        self.0.keys()
+    }
+}
+
+/// Proof that an exclusive lease is held for the whole scope.
+///
+/// Invariant: every write helper and every history append takes a reference
+/// to one of these, so no write happens without the lease.
+pub struct ExclusiveGuard(Box<dyn LeaseHandle>);
+
+impl ExclusiveGuard {
+    /// Keys the guard holds.
+    pub fn keys(&self) -> &[LeaseKey] {
+        self.0.keys()
+    }
+
+    /// Wraps an already-held exclusive [`LeaseHandle`] as proof-of-lease,
+    /// without acquiring a new one. For a caller that took its own exclusive
+    /// lease over a root through a different entry point (e.g. the desktop's
+    /// `WriteLease`) and then needs to call a core write helper that expects
+    /// this type - advisory locks don't nest within one process, so a second
+    /// `acquire` on the same root would report the caller's own lease as
+    /// busy.
+    pub fn from_handle(handle: Box<dyn LeaseHandle>) -> Self {
+        ExclusiveGuard(handle)
+    }
+}
+
+/// Acquires and releases leases.
+pub trait LeaseProvider: Send + Sync {
+    /// Acquires `keys` in the given order, waiting at most `wait`.
+    /// Fails with [`ErrorCode::ScopeBusy`] when the budget runs out, with
+    /// [`LeaseBusy`] attached through [`CoreError::with_busy`] naming the
+    /// current holder's pid and how long it has held the lease.
+    fn acquire(
+        &self,
+        keys: &[LeaseKey],
+        mode: LeaseMode,
+        wait: Duration,
+    ) -> Result<Box<dyn LeaseHandle>, CoreError>;
+}
+
+/// Acquires a shared lease over every root of the scope.
+pub fn acquire_shared(
+    leases: &dyn LeaseProvider,
+    scope: &NormalizedScope,
+) -> Result<SharedGuard, CoreError> {
+    let keys = scope.lease_keys();
+    let handle = leases.acquire(&keys, LeaseMode::Shared, scope.raw.read_timeout())?;
+    Ok(SharedGuard(handle))
+}
+
+/// Acquires an exclusive lease over every root of the scope.
+pub fn acquire_exclusive(
+    leases: &dyn LeaseProvider,
+    scope: &NormalizedScope,
+) -> Result<ExclusiveGuard, CoreError> {
+    let keys = scope.lease_keys();
+    let handle = leases.acquire(&keys, LeaseMode::Exclusive, scope.raw.write_timeout())?;
+    Ok(ExclusiveGuard(handle))
+}
+
+/// How an operation wants the history store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HistoryAccess {
+    /// Open only when the database already exists. Never creates it.
+    ReadIfExists,
+    /// Open or create. Requires an exclusive guard at the call site.
+    ReadWrite,
+}
+
+/// Opens the history store for a scope.
+pub trait HistoryOpener: Send + Sync {
+    /// Returns `None` for [`HistoryAccess::ReadIfExists`] when no store exists.
+    fn open(
+        &self,
+        scope: &NormalizedScope,
+        access: HistoryAccess,
+    ) -> Result<Option<Box<dyn HistoryStore>>, CoreError>;
+}
+
+/// The append-only event log and its backups.
+///
+/// Invariant: the store does not decide recovery. Startup recovery lives in
+/// [`crate::events::recover_interrupted`] and takes the exclusive guard.
+pub trait HistoryStore: Send {
+    /// Lists events, newest first, honoring the filter.
+    fn list(&self, filter: &EventFilter) -> Result<Vec<EventRecord>, CoreError>;
+    /// Reads one event.
+    fn get(&self, id: &EventId) -> Result<Option<EventRecord>, CoreError>;
+    /// Copies `paths` into the backup directory for `id` and returns the
+    /// manifest. Runs before the row exists.
+    fn backup_paths(
+        &mut self,
+        guard: &ExclusiveGuard,
+        id: &EventId,
+        paths: &[PathBuf],
+    ) -> Result<crate::events::BackupManifest, CoreError>;
+    /// Inserts a `pending` row.
+    fn record(
+        &mut self,
+        guard: &ExclusiveGuard,
+        id: &EventId,
+        draft: &EventDraft,
+    ) -> Result<(), CoreError>;
+    /// Sets the final status and the post-mutation fingerprint.
+    fn finish(
+        &mut self,
+        guard: &ExclusiveGuard,
+        id: &EventId,
+        status: EventStatus,
+        post_fingerprint: Option<Fingerprint>,
+    ) -> Result<(), CoreError>;
+    /// Compare-and-set claim of `target.reverted_by`. Returns `false` when
+    /// another restore already claimed it.
+    fn claim_revert(
+        &mut self,
+        guard: &ExclusiveGuard,
+        target: &EventId,
+        by: &EventId,
+    ) -> Result<bool, CoreError>;
+    /// Compare-and-set release of `target.reverted_by`, clearing it only when
+    /// it still holds `restore`. Returns `false` when it holds anything else.
+    /// A restore that claims the target and then fails before mutating calls
+    /// this so the event stays revertible.
+    fn release_revert(
+        &mut self,
+        guard: &ExclusiveGuard,
+        target: &EventId,
+        restore: &EventId,
+    ) -> Result<bool, CoreError>;
+    /// Rows still `pending`; only a crash leaves one behind.
+    fn pending(&self) -> Result<Vec<EventRecord>, CoreError>;
+    /// Reads back the manifest a prior [`Self::backup_paths`] call wrote for
+    /// `backup_dir` (an [`EventRecord::backup_dir`] value). A restore uses
+    /// this to find, for the path it is putting back, whether the backup
+    /// holds bytes or recorded the path as absent, and the relative name to
+    /// pass to [`Self::read_backup_bytes`].
+    fn read_manifest(&self, backup_dir: &str) -> Result<crate::events::BackupManifest, CoreError>;
+    /// Reads the bytes stored at `relative` inside `backup_dir`, as named by
+    /// a present [`crate::events::BackupEntry::relative`] from
+    /// [`Self::read_manifest`]. Never called for an absent entry.
+    fn read_backup_bytes(&self, backup_dir: &str, relative: &str) -> Result<Vec<u8>, CoreError>;
+    /// Lists every regular file under `relative` inside `backup_dir`
+    /// (recursively, paths relative to `relative` itself) with its bytes and
+    /// permission bits. Used only when [`Self::read_manifest`] names a
+    /// directory entry: a restore of a directory reads the whole subtree
+    /// this way and replays it with [`crate::fsops::stage_files`]. A symlink
+    /// inside the backed-up tree is an
+    /// [`crate::error::ErrorCode::Unsupported`] error.
+    fn read_backup_files(
+        &self,
+        backup_dir: &str,
+        relative: &str,
+    ) -> Result<Vec<crate::fsops::StageFile>, CoreError>;
+    /// Merges `patch`'s top-level keys into an already-recorded event's
+    /// payload, leaving every other key as-is. For best-effort follow-up
+    /// work a mutation performs after its own row already exists (e.g.
+    /// `restore_event` recording that putting back a `.skill-lock.json` row
+    /// failed) that must not turn an otherwise-successful mutation into a
+    /// failure just to report it. The default no-op is fine for a host that
+    /// never calls it.
+    fn patch_payload(
+        &mut self,
+        _guard: &ExclusiveGuard,
+        _id: &EventId,
+        _patch: serde_json::Value,
+    ) -> Result<(), CoreError> {
+        Ok(())
+    }
+    /// [`Self::patch_payload`] for the event's inverse: an op records its
+    /// inverse before the first write (journal first) and fills in what only
+    /// the write can know, such as the fingerprint of each folder it wrote.
+    fn patch_inverse(
+        &mut self,
+        _guard: &ExclusiveGuard,
+        _id: &EventId,
+        _patch: serde_json::Value,
+    ) -> Result<(), CoreError> {
+        Ok(())
+    }
+}
+
+/// Lifecycle state of one journal plan.
+///
+/// Invariant: a row starts `Pending` (written before the plan's first step)
+/// and ends `Done`, `Failed`, or `Reversed`; `Interrupted` and `Reversed`
+/// are the only states [`crate::journal::reconcile`] ever writes, and only
+/// for a row it found still `Pending` at startup - `Reversed` when it
+/// could undo every recorded step, `Interrupted` when undoing one failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStatus {
+    /// The manifest and plan are durable; steps have not all run yet.
+    Pending,
+    /// Every step ran; the mutation is durable.
+    Done,
+    /// A step failed; earlier steps may have run.
+    Failed,
+    /// Found `Pending` at startup and every recorded step was undone, in
+    /// reverse order, through [`ScopeFs`].
+    Reversed,
+    /// Found `Pending` at startup - the process died mid-plan - and
+    /// undoing at least one recorded step hit an I/O error, so the plan's
+    /// on-disk state cannot be trusted as either the pre-plan or the
+    /// post-plan shape.
+    Interrupted,
+}
+
+/// One `fsops` primitive call recorded against a plan, in the order it ran,
+/// carrying whatever [`crate::journal::reconcile`] needs to undo it.
+///
+/// Every path here is absolute (already resolved by [`crate::fsops::Root`]),
+/// not relative to the plan's root, so reversal never has to re-derive it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "primitive", rename_all = "snake_case")]
+pub enum PlanStep {
+    /// [`crate::fsops::stage`] built a folder under a temp name that
+    /// nothing else can see yet. Reverse: remove it - nothing else has
+    /// touched it.
+    Stage {
+        /// The staged folder's temp path.
+        staged: PathBuf,
+    },
+    /// [`crate::fsops::swap`] is about to make `path` show the staged
+    /// folder. Recorded before the exchange runs, so every field here is
+    /// chosen up front rather than discovered after the fact.
+    Swap {
+        /// The path that is being swapped into place.
+        path: PathBuf,
+        /// The staged folder's temp path (the other side of the exchange).
+        /// Reversal compares `path`'s current device/inode against
+        /// `staged_binding` to tell whether the exchange itself landed,
+        /// since a rename/exchange preserves a directory's identity across
+        /// a name change.
+        staged: PathBuf,
+        /// `staged`'s device and inode, captured right before the exchange
+        /// - the identity `path` will carry once the exchange lands.
+        staged_binding: (u64, u64),
+        /// Where `swap` intends to move the folder that sits at `path`
+        /// before the exchange, when one is there - `swap` never deletes
+        /// it, only relocates it inside the root, so reversal restores from
+        /// here rather than a byte-level journal backup. `None` when `path`
+        /// does not exist yet (`swap` will create it fresh); reversal then
+        /// removes what is at `path` once the exchange has landed.
+        quarantined: Option<PathBuf>,
+    },
+    /// [`crate::fsops::link`] is about to create or replace a symlink at
+    /// `path`. Recorded before the rename that makes it visible.
+    Link {
+        /// The link's path.
+        path: PathBuf,
+        /// The target the new symlink will point at once the rename lands.
+        /// Reversal compares the live link against this to tell whether
+        /// the rename landed.
+        target: PathBuf,
+        /// What `path` pointed at before this step, when it already
+        /// existed as a symlink. `None` when nothing was there.
+        previous_target: Option<PathBuf>,
+    },
+    /// [`crate::fsops::write_file`] wrote `path`.
+    WriteFile {
+        /// The written path.
+        path: PathBuf,
+        /// The journal-held backup of `path`'s pre-write bytes, when
+        /// something was there before this step - written via
+        /// [`Journal::write_backup`], read back via [`Journal::read_backup`].
+        /// `None` when the file was newly created; reversal then removes
+        /// it.
+        backup: Option<PlanBackupEntry>,
+    },
+}
+
+impl PlanStep {
+    /// The `fsops` primitive's name, for logs and test assertions.
+    pub fn primitive_name(&self) -> &'static str {
+        match self {
+            PlanStep::Stage { .. } => "stage",
+            PlanStep::Swap { .. } => "swap",
+            PlanStep::Link { .. } => "link",
+            PlanStep::WriteFile { .. } => "write_file",
+        }
+    }
+}
+
+/// One path a plan backed up before mutating it, so trimming can reclaim
+/// the bytes without touching the plan row itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PlanBackupEntry {
+    /// Original absolute path the backup preserves.
+    pub original: PathBuf,
+    /// Path of the backed-up bytes, relative to the plan's backup directory.
+    pub relative: String,
+    /// Size of the backed-up bytes, for quota accounting.
+    pub bytes: u64,
+}
+
+/// A plan the journal tracks from before its first step to its last.
+///
+/// Invariant: `steps` only ever grows by append, in the order the steps
+/// ran; nothing removes an entry once recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PlanRecord {
+    /// Id, sorting in creation order.
+    pub id: PlanId,
+    /// When the plan was begun.
+    pub created_at: DateTime<Utc>,
+    /// Short label naming the operation the plan belongs to, for a person
+    /// reading the interrupted list.
+    pub label: String,
+    /// The `fsops` root the plan's steps run under.
+    pub root: PathBuf,
+    /// Paths backed up before the plan's mutation, oldest first.
+    pub backups: Vec<PlanBackupEntry>,
+    /// Steps recorded so far, in the order they ran.
+    pub steps: Vec<PlanStep>,
+    /// Current status.
+    pub status: PlanStatus,
+}
+
+/// The crash-safety journal every `fsops` primitive call records against.
+///
+/// Invariant: [`Self::begin`] writes the backup manifest, then the plan
+/// itself, both fsynced, before returning - nothing a caller does after a
+/// successful `begin` can be an unrecorded "first step". [`Self::all`]
+/// never filters or deletes a row; reconciliation and backup trimming both
+/// read every plan the journal has ever begun.
+///
+/// Only `Send`, not `Sync`: nothing in this workspace stores a `dyn Journal`
+/// behind an `Arc` or sends `&dyn Journal` across a thread boundary - a plan
+/// is always begun, stepped, and finished from the single thread that holds
+/// the `ExclusiveGuard` for its lease.
+pub trait Journal: Send {
+    /// Durably records `plan` (`status` must be [`PlanStatus::Pending`])
+    /// before the caller's first `fsops` step runs.
+    fn begin(&self, guard: &ExclusiveGuard, plan: &PlanRecord) -> Result<(), CoreError>;
+    /// Appends one step to a plan [`Self::begin`] already recorded.
+    fn record_step(
+        &self,
+        guard: &ExclusiveGuard,
+        id: &PlanId,
+        step: PlanStep,
+    ) -> Result<(), CoreError>;
+    /// Sets a plan's final status. Never called with [`PlanStatus::Pending`].
+    fn finish(
+        &self,
+        guard: &ExclusiveGuard,
+        id: &PlanId,
+        status: PlanStatus,
+    ) -> Result<(), CoreError>;
+    /// Every plan the journal holds, oldest first. Never filtered.
+    fn all(&self) -> Result<Vec<PlanRecord>, CoreError>;
+    /// Rows still [`PlanStatus::Pending`], oldest first.
+    fn pending(&self) -> Result<Vec<PlanRecord>, CoreError>;
+    /// Removes one backup's bytes from disk. Never touches the plan row;
+    /// used only by [`crate::journal::trim_backups`].
+    fn remove_backup(
+        &self,
+        guard: &ExclusiveGuard,
+        id: &PlanId,
+        relative: &str,
+    ) -> Result<(), CoreError>;
+    /// Durably stores `bytes` as plan `id`'s backup named `relative`, for a
+    /// [`PlanStep::WriteFile`] step to point [`PlanBackupEntry::relative`]
+    /// at. Written before the mutation it backs up.
+    fn write_backup(
+        &self,
+        guard: &ExclusiveGuard,
+        id: &PlanId,
+        relative: &str,
+        bytes: &[u8],
+    ) -> Result<(), CoreError>;
+    /// Reads back the bytes a prior [`Self::write_backup`] call stored for
+    /// plan `id`'s backup named `relative`. Used by
+    /// [`crate::journal::reconcile`] to undo a [`PlanStep::WriteFile`] step.
+    fn read_backup(&self, id: &PlanId, relative: &str) -> Result<Vec<u8>, CoreError>;
+}
+
+/// Lifecycle state of one operation, reported through the sink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OpState {
+    /// The request passed validation.
+    Accepted,
+    /// The lease is held and work started.
+    Running,
+    /// The mutation is durable.
+    Committed,
+    /// The operation failed; history holds a `failed` row when one was recorded.
+    Failed,
+    /// The caller cancelled before commit.
+    Cancelled,
+}
+
+/// A notice the core sends to the adapter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", tag = "notice")]
+pub enum CoreNotice {
+    /// An operation changed state.
+    OpState {
+        /// Request the notice belongs to.
+        correlation_id: CorrelationId,
+        /// New state.
+        state: OpState,
+    },
+    /// Progress inside one operation.
+    Progress {
+        /// Request the notice belongs to.
+        correlation_id: CorrelationId,
+        /// Short message for a person.
+        message: String,
+        /// Units done.
+        done: u32,
+        /// Units expected, when known.
+        total: Option<u32>,
+    },
+    /// These skills and projects changed on disk; re-read them.
+    Invalidated {
+        /// Skill names affected.
+        skills: Vec<SkillName>,
+        /// Projects affected.
+        projects: Vec<PathBuf>,
+    },
+    /// A new snapshot revision is available.
+    Revision(Revision),
+    /// Startup recovery marked these events interrupted.
+    Recovered {
+        /// Ids now marked `interrupted`.
+        events: Vec<EventId>,
+    },
+}
+
+/// Receives notices. Must not block.
+pub trait EventSink: Send + Sync {
+    /// Delivers one notice.
+    fn notify(&self, notice: CoreNotice);
+}
+
+/// Outcome of one op call, as [`OpRecord`] tags it. Never carries the
+/// message text of the error - only its stable [`ErrorCode`] - so a
+/// telemetry port can send this without redacting free text itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpOutcome {
+    /// The op returned `Ok`.
+    Ok,
+    /// The op returned `Err`; `code` is `CoreError::code`.
+    Err {
+        /// The error's stable code.
+        code: ErrorCode,
+    },
+}
+
+/// One nested `Operation` a top-level op's body called through the same
+/// [`OpContext`] (e.g. `doctor` calling `diagnose`, which itself calls
+/// `scan`) - reported as a child of the top-level [`OpRecord`] rather than
+/// a record of its own, so `doctor` sends one transaction, not three.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedOp {
+    /// Which operation ran.
+    pub operation: crate::ops::Operation,
+    /// Whether it succeeded, and the error code if not.
+    pub outcome: OpOutcome,
+    /// Elapsed time and step timings this nested call filed.
+    pub timing: crate::timing::OpTiming,
+    /// How many `run` calls this one is nested under: `1` for an op the
+    /// top-level op's own body called directly, `2` for one a depth-1 op's
+    /// body called, and so on.
+    pub depth: usize,
+    /// Milliseconds from the top-level run's start to this nested run's
+    /// start, from `ports.clock` - what an adapter needs to place this
+    /// [`NestedOp`]'s span at its real offset under its real parent instead
+    /// of laying every nested op end to end after the root's own steps.
+    pub offset_ms: u64,
+}
+
+/// What one operation run looked like. Built only from typed fields: no free
+/// text can carry a path or a skill name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpRecord {
+    /// Which operation ran.
+    pub operation: crate::ops::Operation,
+    /// The call's correlation id.
+    pub correlation_id: CorrelationId,
+    /// Whether it succeeded, and the error code if not.
+    pub outcome: OpOutcome,
+    /// Elapsed time and step timings, as filed through [`OpContext::record_timing`].
+    /// Empty `steps` when the op failed before recording them.
+    pub timing: crate::timing::OpTiming,
+    /// Operations this one called through the same `OpContext`, in call
+    /// order.
+    pub nested: Vec<NestedOp>,
+}
+
+/// Receives one [`OpRecord`] per op call. Must not block: a telemetry port
+/// runs on the same thread as the op it is recording.
+pub trait Telemetry: Send + Sync {
+    /// Records one op call.
+    fn record(&self, record: OpRecord);
+}
+
+/// A [`Telemetry`] that does nothing - the default until a host binds a real
+/// one.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopTelemetry;
+
+impl Telemetry for NoopTelemetry {
+    fn record(&self, _record: OpRecord) {}
+}
+
+/// A child process to run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProcessSpec {
+    /// Program name or path.
+    pub program: String,
+    /// Arguments.
+    pub args: Vec<String>,
+    /// Working directory.
+    pub cwd: Option<PathBuf>,
+    /// Extra environment; the adapter decides what else is inherited. An
+    /// entry with an empty value removes that variable from the child.
+    pub env: Vec<(String, String)>,
+    /// Hard deadline in milliseconds.
+    pub timeout_ms: u64,
+}
+
+/// What a child process produced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProcessOutput {
+    /// Exit status, `None` when killed by a signal.
+    pub status: Option<i32>,
+    /// Captured stdout, capped by the adapter.
+    pub stdout: String,
+    /// Captured stderr tail, capped by the adapter.
+    pub stderr: String,
+    /// True when the deadline killed the process.
+    pub timed_out: bool,
+}
+
+/// Runs child processes with cancellation.
+pub trait ProcessSpawner: Send + Sync {
+    /// Runs to completion, deadline, or cancellation.
+    fn run(&self, spec: &ProcessSpec, cancel: &dyn CancelToken)
+        -> Result<ProcessOutput, CoreError>;
+}
+
+/// Cooperative cancellation.
+pub trait CancelToken: Send + Sync {
+    /// True once the caller asked to stop.
+    fn is_cancelled(&self) -> bool;
+}
+
+/// A token that never cancels; the default for synchronous CLI calls.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NeverCancel;
+
+impl CancelToken for NeverCancel {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+}
+
+/// Everything the core needs from the outside world.
+///
+/// Invariant: `catalog` is the only source of harness facts. Adapters may
+/// swap it in fixture mode to test unknown-capability paths.
+#[derive(Clone)]
+pub struct Ports {
+    /// Filesystem.
+    pub fs: Arc<dyn ScopeFs>,
+    /// Time.
+    pub clock: Arc<dyn Clock>,
+    /// Ids.
+    pub ids: Arc<dyn IdSource>,
+    /// Leases.
+    pub leases: Arc<dyn LeaseProvider>,
+    /// History store opener.
+    pub history: Arc<dyn HistoryOpener>,
+    /// Notice sink.
+    pub sink: Arc<dyn EventSink>,
+    /// Process runner; `None` disables runner-backed operations.
+    pub spawner: Option<Arc<dyn ProcessSpawner>>,
+    /// Project discovery; `None` makes [`ProjectSelection::Discover`] an
+    /// [`ErrorCode::InvalidScope`].
+    ///
+    /// [`ProjectSelection::Discover`]: crate::scope::ProjectSelection::Discover
+    pub discovery: Option<Arc<dyn ProjectDiscovery>>,
+    /// `PATH` lookup; `None` disables tool and runner observation.
+    pub tools: Option<Arc<dyn ToolLookup>>,
+    /// Harness facts.
+    pub catalog: Arc<HarnessCatalog>,
+    /// Op-call telemetry sink.
+    pub telemetry: Arc<dyn Telemetry>,
+}
+
+/// Per-call context.
+pub struct OpContext {
+    /// Id the adapter uses to match notices to this request.
+    pub correlation_id: CorrelationId,
+    /// Cancellation for this request only.
+    pub cancel: Arc<dyn CancelToken>,
+    /// Where the op function in progress files its [`crate::timing::OpTiming`].
+    pub timing: std::sync::Mutex<Option<crate::timing::OpTiming>>,
+    /// How many [`Runtime::run`] calls are currently nested through this
+    /// context - `0` outside any call, `1` for a top-level op, `2+` for an
+    /// op called from inside another op's own body. Not `pub`: only
+    /// [`Runtime::run`] may raise or lower it, so nothing outside this
+    /// module can desync it from `nested`.
+    pub(crate) depth: std::sync::atomic::AtomicUsize,
+    /// [`NestedOp`]s a top-level [`Runtime::run`] call has collected so far
+    /// from ops its own body called through this same context. Not `pub`
+    /// for the same reason as `depth`.
+    pub(crate) nested: std::sync::Mutex<Vec<NestedOp>>,
+    /// The top-level run's `ports.clock.monotonic()` start, set when
+    /// `depth` goes `0` -> `1` and cleared when it returns to `0`. A nested
+    /// run reads this to compute its own [`NestedOp::offset_ms`].
+    pub(crate) root_start: std::sync::Mutex<Option<Duration>>,
+}
+
+impl OpContext {
+    /// A context that cannot be cancelled.
+    pub fn uncancellable(correlation_id: CorrelationId) -> Self {
+        OpContext::with_cancel(correlation_id, Arc::new(NeverCancel))
+    }
+
+    /// A context cancelled through `cancel`, for a caller that has its own
+    /// [`CancelToken`] to bridge (e.g. the desktop's `AddOperationControl`)
+    /// rather than [`NeverCancel`]. The struct's fields besides
+    /// `correlation_id` and `cancel` are `pub(crate)`, so this - not a
+    /// struct literal - is how code outside this crate builds one.
+    pub fn with_cancel(correlation_id: CorrelationId, cancel: Arc<dyn CancelToken>) -> Self {
+        OpContext {
+            correlation_id,
+            cancel,
+            timing: std::sync::Mutex::new(None),
+            depth: std::sync::atomic::AtomicUsize::new(0),
+            nested: std::sync::Mutex::new(Vec::new()),
+            root_start: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Appends one [`NestedOp`] a call nested through this context just
+    /// finished.
+    fn push_nested(&self, op: NestedOp) {
+        self.nested
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(op);
+    }
+
+    /// Takes every [`NestedOp`] collected so far, leaving the list empty.
+    fn take_nested(&self) -> Vec<NestedOp> {
+        std::mem::take(
+            &mut self
+                .nested
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// Fails with [`ErrorCode::Cancelled`] once the token is set.
+    pub fn checkpoint(&self) -> Result<(), CoreError> {
+        if self.cancel.is_cancelled() {
+            Err(CoreError::new(ErrorCode::Cancelled, "operation cancelled"))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Files this call's timing, replacing any timing an op it called
+    /// (e.g. `scan` inside `diagnose`) filed first.
+    pub fn record_timing(&self, timing: crate::timing::OpTiming) {
+        // A poisoned mutex still holds a usable `Option`; a timing record is
+        // best-effort telemetry, not worth propagating a panic for.
+        let mut guard = self
+            .timing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = Some(timing);
+    }
+
+    /// Takes the timing the last op function run through this context
+    /// filed, leaving `None` behind.
+    pub fn take_timing(&self) -> Option<crate::timing::OpTiming> {
+        self.timing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+}
+
+/// A normalized scope bound to its ports.
+#[derive(Clone)]
+pub struct Runtime {
+    /// The scope every operation uses.
+    pub scope: NormalizedScope,
+    /// The ports every operation uses.
+    pub ports: Ports,
+}
+
+impl Runtime {
+    /// Normalizes `scope` through `ports.fs` and `ports.discovery`, then
+    /// binds them. Discovered projects are part of the lease keys from here
+    /// on; a later `scan` never widens the scope.
+    pub fn new(scope: &RuntimeScope, ports: Ports) -> Result<Self, CoreError> {
+        let scope = NormalizedScope::normalize_with_discovery(
+            scope,
+            ports.fs.as_ref(),
+            ports.discovery.as_deref(),
+        )?;
+        Ok(Runtime { scope, ports })
+    }
+
+    /// Runs one operation body and records it. Elapsed time comes from
+    /// `ports.clock`; the steps come from what the body filed through
+    /// `ctx.record_timing`. Every `Operation` in [`crate::ops`] and its
+    /// sibling modules runs through this, so a call cannot bypass
+    /// telemetry - `set_codex_skill_disabled_with` and `skill_content_hash`
+    /// are public helpers, not ops, and call no `Operation` variant, so
+    /// they are exempt.
+    ///
+    /// A `body` may itself call another op through the same `ctx` (`doctor`
+    /// calling `diagnose`, which calls `scan`). `ctx.depth` tracks how many
+    /// `run` calls are nested right now: the outermost one (`depth` back to
+    /// `0` once `body` returns) is the one [`Telemetry::record`] sees, with
+    /// every op nested inside it attached as a [`NestedOp`]; an inner one
+    /// only appends to `ctx.nested` and records nothing of its own, so
+    /// `doctor` sends one transaction, not three.
+    pub fn run<T>(
+        &self,
+        operation: crate::ops::Operation,
+        ctx: &OpContext,
+        body: impl FnOnce() -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        let clock = self.ports.clock.as_ref();
+        let start = clock.monotonic();
+        let depth_before = ctx.depth.load(std::sync::atomic::Ordering::SeqCst);
+        if depth_before == 0 {
+            *ctx.root_start
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(start);
+            // Nested ops an earlier top-level body collected and then lost
+            // by panicking must not be attributed to this run.
+            ctx.take_nested();
+        }
+        // A timing filed through `ctx` before this call started - either a
+        // stale one left by an unrelated earlier op (`depth_before == 0`) or
+        // the enclosing body's own timing, filed before it called us
+        // (`depth_before > 0`) - must never be attributed to this call.
+        // `saved` restores the latter after we're done; the former is
+        // simply dropped.
+        let saved = ctx.take_timing();
+        let depth_guard = DepthGuard::enter(ctx);
+        let result = body();
+        // Ends `depth_guard`'s raise deterministically here (not at `run`'s
+        // natural scope end) so `depth_after` below reflects the drop that
+        // already ran - including on the panic path, where `body()` never
+        // returns and this line never executes, but the guard's `Drop` still
+        // fires while the stack unwinds through this frame.
+        drop(depth_guard);
+        let depth_after = ctx.depth.load(std::sync::atomic::Ordering::SeqCst);
+
+        let filed = ctx.take_timing();
+        let mut timing = filed.unwrap_or_else(|| crate::timing::OpTiming {
+            op: String::new(),
+            elapsed_ms: clock.monotonic().saturating_sub(start).as_millis() as u64,
+            steps: Vec::new(),
+        });
+        // The operation this `run` call was given decides the name, never
+        // whatever string a nested call (or the body itself) filed.
+        timing.op = op_snake_case_name(operation);
+
+        let outcome = match &result {
+            Ok(_) => OpOutcome::Ok,
+            Err(e) => OpOutcome::Err { code: e.code },
+        };
+
+        if depth_after == 0 {
+            self.ports.telemetry.record(OpRecord {
+                operation,
+                correlation_id: ctx.correlation_id.clone(),
+                outcome,
+                timing: timing.clone(),
+                nested: ctx.take_nested(),
+            });
+            // Leaves the final timing in `ctx` so a caller building a
+            // `ResultEnvelope` from this same `ctx` after `run` returns
+            // (every CLI/MCP surface) still finds it.
+            ctx.record_timing(timing);
+        } else {
+            let root_start = ctx
+                .root_start
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or(start);
+            ctx.push_nested(NestedOp {
+                operation,
+                outcome,
+                timing,
+                depth: depth_before,
+                offset_ms: start.saturating_sub(root_start).as_millis() as u64,
+            });
+            // Puts the enclosing body's own timing (filed before it called
+            // us) back, so it survives this nested call the way it would if
+            // the call had never happened.
+            if let Some(saved) = saved {
+                ctx.record_timing(saved);
+            }
+        }
+        result
+    }
+}
+
+/// Raises [`OpContext::depth`] by one for the lifetime of the guard, and
+/// lowers it again - clearing `root_start` too, once it returns to `0` -
+/// on drop, whether that drop is [`Runtime::run`] finishing normally or a
+/// panic in `body` unwinding through it. Without this, a panicking body
+/// would leave `depth` permanently raised, wrongly nesting every later call
+/// through the same `ctx`.
+struct DepthGuard<'a> {
+    ctx: &'a OpContext,
+}
+
+impl<'a> DepthGuard<'a> {
+    fn enter(ctx: &'a OpContext) -> Self {
+        ctx.depth.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        DepthGuard { ctx }
+    }
+}
+
+impl Drop for DepthGuard<'_> {
+    fn drop(&mut self) {
+        let depth_after = self
+            .ctx
+            .depth
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+            - 1;
+        if depth_after == 0 {
+            *self
+                .ctx
+                .root_start
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
+    }
+}
+
+/// `operation`'s serde `snake_case` wire name - used as [`crate::timing::OpTiming::op`]
+/// when a body files no timing of its own, so the fallback still matches the
+/// op it measured.
+fn op_snake_case_name(operation: crate::ops::Operation) -> String {
+    match serde_json::to_value(operation) {
+        Ok(serde_json::Value::String(name)) => name,
+        _ => unreachable!("Operation always serializes to a string"),
+    }
+}
+
+/// The state a mutation holds from lease to commit.
+///
+/// Invariant: `fresh` was built after the exclusive lease was taken, so a
+/// target resolved against it cannot be stale.
+pub struct MutationSession {
+    /// The exclusive lease.
+    pub guard: ExclusiveGuard,
+    /// The writable history store.
+    pub store: Box<dyn HistoryStore>,
+    /// Inventory scanned under the lease.
+    pub fresh: Inventory,
+}
+
+impl MutationSession {
+    /// Takes the exclusive lease, opens history, recovers interrupted rows,
+    /// and scans a fresh inventory of every skill.
+    ///
+    /// Use [`Self::begin_for`] when the op can name the skills it touches.
+    pub fn begin(rt: &Runtime, ctx: &OpContext) -> Result<Self, CoreError> {
+        Self::begin_for(rt, ctx, &[])
+    }
+
+    /// Like [`Self::begin`], but `fresh` holds only the named skills.
+    ///
+    /// A full scan walks every root, project, and plugin cache, which costs
+    /// seconds on a large machine; a write that resolves one skill needs
+    /// none of that. An empty `skills` slice, or a recovery or journal
+    /// reconcile that repaired anything, scans everything: the repair may
+    /// have touched skills the caller did not name.
+    pub fn begin_for(
+        rt: &Runtime,
+        ctx: &OpContext,
+        skills: &[crate::identity::SkillName],
+    ) -> Result<Self, CoreError> {
+        ctx.checkpoint()?;
+        let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)?;
+        let Some(mut store) = rt.ports.history.open(&rt.scope, HistoryAccess::ReadWrite)? else {
+            return Err(CoreError::new(
+                ErrorCode::Unsupported,
+                "this host build has no history store; mutations are not available",
+            ));
+        };
+        let recovery = crate::events::recover_interrupted(
+            &guard,
+            store.as_mut(),
+            rt.ports.fs.as_ref(),
+            rt.ports.sink.as_ref(),
+        )?;
+        // Sweeps `install`'s `Copy` staging journal for a plan an earlier
+        // crash left `Pending`, per `docs/action-map/plan.md`'s Correction
+        // for units 3.5/3.6/3.9: nothing wires a journal into `Ports` yet,
+        // so `begin` - the one seam every mutating op (and, once wired, the
+        // desktop startup pass) already runs through - opens and reconciles
+        // it directly instead. Always rooted under the scope home, not the
+        // op's own target scope: the root is only bookkeeping for the
+        // primitive, not where its writes land, so one root per home lets
+        // every op sweep it regardless of which project it targets.
+        let install_journal_root = crate::ops_install::journal_root(&rt.scope.home.lexical);
+        let install_journal =
+            crate::journal::FsJournal::new(install_journal_root, rt.ports.fs.clone());
+        let reconciliation =
+            crate::journal::reconcile(&install_journal, &guard, rt.ports.fs.as_ref())?;
+        let repaired = !recovery.interrupted.is_empty()
+            || !recovery.completed.is_empty()
+            || !reconciliation.reversed.is_empty()
+            || !reconciliation.interrupted.is_empty()
+            || !reconciliation.resolved_without_steps.is_empty();
+        let scanned_skills = if repaired {
+            Vec::new()
+        } else {
+            skills.to_vec()
+        };
+        // Scan under the exclusive lease already held: `crate::ops::scan`
+        // would try to acquire a second (shared) lease over the same keys,
+        // and an advisory file lock does not nest within one process.
+        let fresh = crate::ops::scan_inner(
+            rt,
+            ctx,
+            &crate::dto::ScanRequest {
+                skills: scanned_skills,
+                timings: false,
+            },
+        )?;
+        Ok(MutationSession {
+            guard,
+            store,
+            fresh,
+        })
+    }
+
+    /// [`Self::begin_for`] for the skill a deployment id names; a full scan
+    /// when the id does not name one.
+    pub(crate) fn begin_for_deployment(
+        rt: &Runtime,
+        ctx: &OpContext,
+        id: &DeploymentId,
+    ) -> Result<Self, CoreError> {
+        let skills: Vec<_> = id.skill_name().into_iter().collect();
+        Self::begin_for(rt, ctx, &skills)
+    }
+
+    /// Finds exactly one deployment by id in the fresh inventory.
+    ///
+    /// Fails with [`ErrorCode::AmbiguousTarget`] when zero or more than one
+    /// deployment carries the id.
+    pub fn resolve_exact(&self, id: &DeploymentId) -> Result<&DeploymentDto, CoreError> {
+        let mut found = self
+            .fresh
+            .skills
+            .iter()
+            .flat_map(|s| s.deployments.iter())
+            .filter(|d| &d.id == id);
+        match (found.next(), found.next()) {
+            (Some(one), None) => Ok(one),
+            (None, _) => Err(CoreError::new(
+                ErrorCode::AmbiguousTarget,
+                format!("no copy matches {}", id.as_str()),
+            )),
+            (Some(_), Some(_)) => Err(CoreError::new(
+                ErrorCode::AmbiguousTarget,
+                format!("more than one copy matches {}", id.as_str()),
+            )),
+        }
+    }
+
+    /// Releases the lease and reports `Committed`.
+    pub fn finish(self, rt: &Runtime, ctx: &OpContext) {
+        drop(self.store);
+        drop(self.guard);
+        rt.ports.sink.notify(CoreNotice::OpState {
+            correlation_id: ctx.correlation_id.clone(),
+            state: OpState::Committed,
+        });
+    }
+}

@@ -1,13 +1,14 @@
 // ============================================================================
 // Skills Module - skill_lifecycle
 // Resolves a deployment or owner id from a current snapshot, revalidates
-// path/owner, and previews owner-wide mutations. Commands acquire
-// ForkMutationLock before calling into this module.
+// path/owner, and previews owner-wide mutations. Commands acquire the
+// per-root write lease (write_lease.rs) before calling into this module.
 // ============================================================================
 
 use std::path::{Path, PathBuf};
 
-use super::dotagents_ledger::DotagentsSkill;
+use skill_studio_core::dotagents_ledger::DotagentsSkill;
+
 use super::skill_deployment::{
     parse_deployment_id, BackingRelationship, DeploymentMutability, SkillDestination,
 };
@@ -46,7 +47,7 @@ pub fn find_deployment<'a>(
         }
     }
     Err(format!(
-        "Deployment {deployment_id} is not in the current snapshot"
+        "Copy {deployment_id} is not in the current snapshot"
     ))
 }
 
@@ -54,29 +55,29 @@ pub fn find_deployment<'a>(
 pub fn revalidate_deployment(deployment: &Deployment, expected_id: &str) -> Result<(), String> {
     if deployment.id != expected_id {
         return Err(format!(
-            "Deployment id drifted: expected {expected_id}, found {}",
+            "Copy id drifted: expected {expected_id}, found {}",
             deployment.id
         ));
     }
-    let parsed = parse_deployment_id(expected_id)
-        .ok_or_else(|| format!("Not a deployment id: {expected_id}"))?;
+    let parsed =
+        parse_deployment_id(expected_id).ok_or_else(|| format!("Not a copy id: {expected_id}"))?;
     let path = Path::new(&deployment.path);
     let leaf = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     if leaf != parsed.name && !deployment.path.contains(&parsed.name) {
         return Err(format!(
-            "Deployment path {} no longer matches {}",
+            "Copy path {} no longer matches {}",
             deployment.path, parsed.name
         ));
     }
     if deployment.scope != parsed.scope {
         return Err(format!(
-            "Deployment scope drifted: id has {}, snapshot has {}",
+            "Copy scope drifted: id has {}, snapshot has {}",
             parsed.scope, deployment.scope
         ));
     }
     if deployment.destination != parsed.destination {
         return Err(format!(
-            "Deployment destination drifted: id has {}, snapshot has {}",
+            "Copy destination drifted: id has {}, snapshot has {}",
             parsed.destination.as_str(),
             deployment.destination.as_str()
         ));
@@ -91,7 +92,7 @@ fn revalidate_deployment_fingerprint(deployment: &Deployment, action: &str) -> R
             deployment.path
         ));
     }
-    let live_hash = super::skill_discovery::live_skill_content_hash(Path::new(&deployment.path))?;
+    let live_hash = super::core_content_hash::live_skill_content_hash(Path::new(&deployment.path))?;
     if live_hash != deployment.content_hash {
         return Err(format!(
             "{action} refused: {} changed during lifecycle resolution",
@@ -102,7 +103,7 @@ fn revalidate_deployment_fingerprint(deployment: &Deployment, action: &str) -> R
 }
 
 /// Resolve one deployment or owner group against a newly rebuilt snapshot.
-/// Callers must acquire `ForkMutationLock` first. The rebuild lock is only
+/// Callers must acquire the per-root write lease first. The rebuild lock is only
 /// held while reading filesystem state, so watcher refreshes cannot overlap
 /// assembly and no refresh lock remains held during the mutation.
 pub fn resolve_fresh_lifecycle_target(
@@ -152,7 +153,7 @@ pub fn resolve_lifecycle_target(
                 revalidate_deployment(deployment, &affected_deployment.id)?;
                 if deployment.owner_id.as_deref() != Some(owner_id) {
                     return Err(format!(
-                        "{action} refused: deployment {} changed owner",
+                        "{action} refused: copy {} changed owner",
                         deployment.id
                     ));
                 }
@@ -171,7 +172,7 @@ pub fn resolve_lifecycle_target(
             require_owner_adapter_deployment_mutable(deployment, action)?;
             Ok((skill.clone(), deployment.clone()))
         }
-        _ => Err("Lifecycle target must contain exactly one deployment_id or owner_id".to_string()),
+        _ => Err("Lifecycle target must contain exactly one skill copy or one source".to_string()),
     }
 }
 
@@ -192,7 +193,7 @@ pub fn require_global_universal_park_target(deployment: &Deployment) -> Result<(
         return Ok(());
     }
     Err(
-        "Park is only available for the Global Universal folder. Project and Per harness copies stay independent."
+        "Park is only available for the Global Universal folder. Project and Per agent copies stay independent."
             .to_string(),
     )
 }
@@ -211,6 +212,70 @@ pub fn require_direct_deployment_mutable(
         deployment.path,
         deployment.owner_kind.as_str()
     ))
+}
+
+/// The dotagents ledger entry an update of `deployment` would run against,
+/// or the reason there is none to update from: no matching ledger, no entry,
+/// a wildcard entry (no manifest row), or a local `path:` folder.
+pub fn dotagents_update_entry<'a>(
+    ledgers: &'a [OwnershipLedgers],
+    deployment: &Deployment,
+    skill_name: &str,
+) -> Result<&'a DotagentsSkill, String> {
+    let ledger = ledger_matching_deployment(ledgers, deployment)
+        .ok_or("Update is not available: the matching ownership ledger is missing")?;
+    let entry = ledger
+        .dotagents
+        .iter()
+        .find(|entry| entry.name == skill_name)
+        .ok_or_else(|| {
+            format!("Update is not available: {skill_name} is not in the matching agents.lock")
+        })?;
+    if !entry.has_manifest_row {
+        return Err(format!(
+            "Update is not available: {skill_name} is a wildcard dotagents entry"
+        ));
+    }
+    if entry.is_local_path() {
+        return Err(
+            "Update is not available: dotagents tracks this as a local folder; there is nothing upstream to update from"
+                .to_string(),
+        );
+    }
+    Ok(entry)
+}
+
+/// The deployment an owner-wide action runs its adapter against: the
+/// canonical one when the owner has it, else the first.
+pub fn owner_adapter_deployment<'a>(
+    deployments: impl Iterator<Item = &'a Deployment>,
+) -> Option<&'a Deployment> {
+    let mut first = None;
+    for deployment in deployments {
+        if matches!(deployment.backing, BackingRelationship::Canonical) {
+            return Some(deployment);
+        }
+        first.get_or_insert(deployment);
+    }
+    first
+}
+
+/// Why the update path refuses `deployment`, or `None` when it can run.
+/// The one rule behind both `build_update_request` and the overlay that
+/// decides which owners a skill lists as outdated, so the app never offers
+/// an update it cannot run.
+pub fn update_refusal(
+    deployment: &Deployment,
+    skill_name: &str,
+    ledgers: &[OwnershipLedgers],
+) -> Option<String> {
+    if let Err(reason) = require_direct_deployment_mutable(deployment, "Update") {
+        return Some(reason);
+    }
+    if deployment.owner_kind == LifecycleOwnerKind::Dotagents {
+        return dotagents_update_entry(ledgers, deployment, skill_name).err();
+    }
+    None
 }
 
 /// Require the deployment selected to represent an owner group to be mutable.
@@ -251,18 +316,10 @@ pub fn preview_owner_deployments(
     }
     if out.is_empty() {
         return Err(format!(
-            "Owner {owner_id} has no matching deployments in the current snapshot"
+            "Owner {owner_id} has no matching copies in the current snapshot"
         ));
     }
     Ok(out)
-}
-
-pub fn skills_sh_update_args(name: &str, scope: InstallScope) -> Vec<String> {
-    let mut args = vec!["skills".to_string(), "update".to_string(), name.to_string()];
-    if scope == InstallScope::Global {
-        args.push("--global".to_string());
-    }
-    args
 }
 
 pub fn skills_sh_remove_args_for_scope(name: &str, scope: InstallScope) -> Vec<String> {
@@ -276,48 +333,6 @@ pub fn skills_sh_remove_args_for_scope(name: &str, scope: InstallScope) -> Vec<S
         args.push("--global".to_string());
     }
     args
-}
-
-pub fn dotagents_update_args(
-    skill_name: &str,
-    entry: Option<&DotagentsSkill>,
-    latest_commit: Option<&str>,
-    scope: InstallScope,
-) -> Result<Vec<String>, String> {
-    let Some(entry) = entry else {
-        return Err(format!(
-            "Update is not available: {skill_name} is not in the matching agents.lock"
-        ));
-    };
-    if !entry.has_manifest_row {
-        return Err(format!(
-            "Update is not available: {skill_name} is a wildcard dotagents entry"
-        ));
-    }
-    let mut args = vec!["-y".to_string(), "@sentry/dotagents".to_string()];
-    if scope == InstallScope::Project {
-        args.push("--project".to_string());
-    }
-    args.extend([
-        "add".to_string(),
-        entry.source.clone(),
-        "--name".to_string(),
-        skill_name.to_string(),
-    ]);
-    if entry.declared_ref.is_some() {
-        match latest_commit {
-            Some(latest) => {
-                args.push("--ref".to_string());
-                args.push(latest.to_string());
-            }
-            None => {
-                return Err(format!(
-                    "Update is not available yet: run \"Check now\" to find {skill_name}'s latest commit first"
-                ));
-            }
-        }
-    }
-    Ok(args)
 }
 
 pub fn ledger_matching_deployment<'a>(
@@ -358,13 +373,39 @@ pub fn claude_skills_dir_for_scope(
 mod tests {
     use super::*;
     use crate::skills::frontmatter::InvocationPolicy;
-    use crate::skills::provenance::SourceKind;
     use crate::skills::skill_deployment::{
         deployment_id, BackingRelationship, DeploymentMutability,
     };
-    use crate::skills::skill_invocations::InvocationHeatmap;
+    use crate::skills::SourceKind;
     use chrono::Utc;
+    use skill_studio_core::skill_uses::InvocationHeatmap;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn skills_sh_remove_args_selects_global_flag() {
+        assert_eq!(
+            skills_sh_remove_args_for_scope("foo", InstallScope::Global),
+            vec!["skills", "remove", "foo", "--yes", "--global"]
+        );
+        assert_eq!(
+            skills_sh_remove_args_for_scope("foo", InstallScope::Project),
+            vec!["skills", "remove", "foo", "--yes"]
+        );
+    }
+
+    #[test]
+    fn dotagents_remove_args_selects_project_mode() {
+        use super::super::commands::dotagents_remove_args;
+
+        assert_eq!(
+            dotagents_remove_args("foo", InstallScope::Project),
+            vec!["-y", "@sentry/dotagents", "--project", "remove", "foo"]
+        );
+        assert_eq!(
+            dotagents_remove_args("foo", InstallScope::Global),
+            vec!["-y", "@sentry/dotagents", "remove", "foo"]
+        );
+    }
 
     fn dep(id: &str, name: &str, path: &str, scope: &str, dest: SkillDestination) -> Deployment {
         Deployment {
@@ -396,10 +437,12 @@ mod tests {
             disabled: false,
             disabled_by: None,
             disabled_readers: Vec::new(),
+            disabling_config_files: Vec::new(),
             codex_implicit_invocation: None,
             shared_via_whole_dir_link: false,
             spec_violations: Vec::new(),
             invocation: InvocationPolicy::Both,
+            parked_origin: None,
         }
     }
 
@@ -434,8 +477,6 @@ mod tests {
                 frontmatter_fields: BTreeMap::new(),
                 folder_truncated: false,
                 fork: None,
-                trial: None,
-                trials: Vec::new(),
                 parked: false,
                 parked_at: None,
                 invocation: InvocationPolicy::Both,
@@ -447,6 +488,9 @@ mod tests {
             last_test_by_skill: Default::default(),
             update_check: Default::default(),
             opencode_config_kind: None,
+            scan_partial: false,
+            scan_observations: Vec::new(),
+            unread_roots: Vec::new(),
         }
     }
 
@@ -532,16 +576,6 @@ mod tests {
     }
 
     #[test]
-    fn skills_sh_update_args_global_flag() {
-        assert!(
-            skills_sh_update_args("foo", InstallScope::Global).contains(&"--global".to_string())
-        );
-        assert!(
-            !skills_sh_update_args("foo", InstallScope::Project).contains(&"--global".to_string())
-        );
-    }
-
-    #[test]
     fn lifecycle_resolution_refuses_owner_changed_after_cached_snapshot() {
         let id = deployment_id(
             "find-bugs",
@@ -576,7 +610,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.contains("no matching deployments"));
+        assert!(error.contains("no matching copies"));
     }
 
     #[test]
@@ -645,7 +679,7 @@ mod tests {
             &linked_path,
         );
         let content_hash =
-            crate::skills::skill_discovery::live_skill_content_hash(&canonical_path).unwrap();
+            crate::skills::core_content_hash::live_skill_content_hash(&canonical_path).unwrap();
         let owner_id = "owner:v1/global/find-bugs";
         let mut canonical = dep(
             &canonical_id,
@@ -711,7 +745,7 @@ mod tests {
             SkillDestination::Universal,
         );
         canonical.content_hash =
-            crate::skills::skill_discovery::live_skill_content_hash(&canonical_path).unwrap();
+            crate::skills::core_content_hash::live_skill_content_hash(&canonical_path).unwrap();
         canonical.mutability = DeploymentMutability::ReadOnly;
         let snap = snapshot(vec![canonical]);
 

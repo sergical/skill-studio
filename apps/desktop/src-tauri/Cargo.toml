@@ -4,19 +4,76 @@ version = "0.1.0"
 description = "Manage coding assistant configurations"
 authors = ["you"]
 edition = "2021"
+license = "MIT"
+# `tauri dev` runs plain `cargo run`; with two bins (this one and `schema`)
+# cargo needs to be told which one is the app.
+default-run = "skill-studio-desktop"
+
+# The CLI at apps/cli also publishes a binary called `skill-studio`.
+# Both crates write into the one workspace target directory, so without
+# an explicit name here the two builds overwrite each other and
+# `target/debug/skill-studio` is whichever crate compiled last.
+[[bin]]
+name = "skill-studio-desktop"
+path = "src/main.rs"
 
 [lib]
 name = "skill_studio_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Exposes test_support (pin_opencode_env, OpencodeHomeGuard) to
+# tests/core_scan_parity.rs, an integration test crate that links this
+# package's lib as an ordinary dependency rather than with `cfg(test)`.
+testing = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+# This package's own source and its integration tests (tests/*.rs, each a
+# separate crate root Cargo builds with the same package-level lint config)
+# both hold a small number of genuine FFI unsafe blocks (POSIX process
+# signaling, an atomic rename, a pre-startup HOME override, and a liveness
+# probe in a test). Cargo won't let a package override a single lint while
+# also inheriting the rest via `workspace = true` (`cannot override
+# workspace.lints in lints`), so this table restates the workspace's
+# [workspace.lints.clippy]/[workspace.lints.rust] verbatim with only
+# `unsafe_code` downgraded from `forbid` (never locally overridable) to
+# `deny` (overridable call-site by call-site with a SAFETY comment). Keep
+# this in sync with the root Cargo.toml by hand.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+too_many_lines = "allow"
+struct_excessive_bools = "allow"
+similar_names = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+default_trait_access = "allow"
+items_after_statements = "allow"
 
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { workspace = true }
 serde_yaml = "0.9"
 dirs = "5"
 tokio = { version = "1", features = ["full"] }
@@ -25,18 +82,21 @@ urlencoding = "2"
 tiktoken-rs = "0.12.0"
 sha2 = "0.11.0"
 toml = "1.1.4"
-# Format-preserving TOML edits for ~/.codex/config.toml - pinned to the
-# version already resolved transitively (see Cargo.lock) so this doesn't
-# introduce a second copy of the crate.
-toml_edit = "0.23.10"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"] }
-notify = "6"
 notify-debouncer-mini = "0.4"
 libc = "0.2"
 # 0.37 does not exist on crates.io as of writing; 0.40.2 is the newest
 # available in the 0.3x/0.4x line, per spec's fallback instruction.
 rusqlite = { version = "0.40", features = ["bundled"] }
 ulid = "1"
+skill-studio-core = { path = "../../../crates/skill-studio-core" }
+skill-studio-host = { path = "../../../crates/skill-studio-host", features = ["telemetry"] }
+schemars = { version = "1", features = ["chrono04"] }
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
+skill-studio-core = { path = "../../../crates/skill-studio-core", features = ["testing"] }
+skill-studio = { path = ".", features = ["testing"] }
+skill-studio-mcp = { path = "../../mcp" }
+similar = "2"
+tokio = { version = "1", features = ["test-util"] }

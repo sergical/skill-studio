@@ -1,263 +1,262 @@
 // ============================================================================
-// InstalledSkillHeader - Controls above a responsive identity and source
-// ledger area, followed by any blocking violation for the rendered copy.
+// InstalledSkillHeader - Title, description, state chips, and any blocking
+// violation for the rendered copy. The actions cluster (primary action,
+// assistant toggle, ⋯ menu) lives in `PageShell`'s `actions` now; the source
+// ledger's facts moved into the properties rail.
 // ============================================================================
 
-import type { RefObject } from "react";
-import { ArrowLeft, AlertTriangle, MoreHorizontal, PanelRight } from "lucide-react";
+import { AlertTriangle, ExternalLink } from "lucide-react";
 import { Button } from "@skill-studio/ui";
-import { isBlockingSpecViolation } from "@skill-studio/lib";
-import { trialHoursLeft } from "@skill-studio/lib";
-import type { Deployment, FrontmatterRepairPreview, InstalledSkill } from "@skill-studio/lib";
-import { isFeatureEnabled } from "../../lib/feature-flags";
-import type { ActiveView } from "../../store/appStore";
-import { MenuControl, MenuItem, MenuSeparator } from "../ui/MenuControl";
+import {
+  describeFrontmatterErrorLine,
+  describeSpecViolations,
+  describeFrontmatterRepair,
+  isBlockingSpecViolation,
+  ownDeployments,
+  parseYamlFrontmatterError,
+  proposeFrontmatterQuoteRepair,
+  specViolationSeverity,
+} from "@skill-studio/lib";
+import type {
+  Deployment,
+  FrontmatterQuoteRepair,
+  FrontmatterRepairKind,
+  FrontmatterRepairPreview,
+  InstalledSkill,
+  UpstreamAhead,
+} from "@skill-studio/lib";
+import { useSkillInstalls } from "../../hooks/useSkillInstalls";
 import { TooltipControl } from "../ui/TooltipControl";
-import { SKILL_ASSISTANT_DRAWER_ID } from "./SkillAssistantDrawer";
-import { InstalledSkillSourceLedger } from "./InstalledSkillSourceLedger";
-import { useSkillPageActions } from "./skill-page-actions";
+import { skillSourceLine } from "./skill-source-line";
+import { skillUpstreamNote } from "./skill-upstream-note";
+import {
+  canOfferLocalQuote,
+  fixLineFor,
+  frontmatterRepairKindForViolation,
+  frontmatterRepairKindsFor,
+} from "./skill-frontmatter-repair-policy";
 
 interface InstalledSkillHeaderProps {
   skill: InstalledSkill;
+  /** Forks whose original repo is ahead; the header notes the one the rendered copy installs from. */
+  upstreamAhead?: UpstreamAhead[];
   /** The deployment whose SKILL.md the page renders - the header's violation line follows it. */
   deployment?: Deployment;
-  from: ActiveView;
-  onBack: () => void;
-  onRemoveComplete: () => void;
-  /** Whether the assistant drawer is open, for the trigger's `aria-expanded`. */
-  isAssistantOpen: boolean;
-  onOpenAssistant: () => void;
-  /** So the drawer can return focus here when it closes. */
-  assistantTriggerRef: RefObject<HTMLButtonElement | null>;
-  frontmatterRepair?: FrontmatterRepairPreview | null;
-  onFixYaml: () => void;
-  onEditManually: () => void;
-}
-
-/** The back button's label: the name of the view the page was opened from. */
-function backLabel(from: ActiveView): string {
-  switch (from.kind) {
-    case "home":
-      return "Home";
-    case "skills":
-      return "Skills";
-    case "activity":
-      return "Activity";
-    case "packs":
-      return "Packs";
-    default:
-      // `ActiveView`'s "skill" kind never nests as its own `from` (see `openSkill`).
-      return "Back";
-  }
+  /** The previews the backend accepted, one per repair kind. */
+  frontmatterRepairs?: FrontmatterRepairPreview[];
+  /** False while the backend preview is pending; the local quote repair waits for it. */
+  isFrontmatterPreviewSettled?: boolean;
+  /** The rendered copy's SKILL.md text; the quote repair and the line hint are derived from it. */
+  skillMdContent?: string | null;
+  /** Omitted when the rendered copy cannot be edited in place (plugin-managed). */
+  onQuoteRepair?: (repair: FrontmatterQuoteRepair) => void;
+  onFixRepair: (kind: FrontmatterRepairKind) => void;
+  /** Opens the editor; `line` is the YAML error's line in SKILL.md, when the message names one. */
+  onEditManually: (line?: number) => void;
 }
 
 /** "Parked · Aug 25, 2026" / "Parked" when the timestamp is missing or unparseable. */
-function parkedChipLabel(parkedAt: string | undefined): string {
+function parkedChipLabel(parkedAt: string | null | undefined): string {
   if (!parkedAt) return "Parked";
   const date = new Date(parkedAt);
   if (Number.isNaN(date.getTime())) return "Parked";
   return `Parked · ${date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
 }
 
-/** "Trial · 17 h" / "Trial · <1 h" / "Trial · expired". */
-function trialChipLabel(expiresAt: string): string {
-  const hours = trialHoursLeft(expiresAt);
-  if (hours < 0) return "Trial · expired";
-  if (hours < 1) return "Trial · <1 h";
-  return `Trial · ${hours} h`;
-}
-
 /**
- * The installed skill header keeps controls separate from identity and exact
- * lifecycle ownership facts. It shows no location or invocation details.
+ * The installed skill header is identity only: title, description, and state
+ * chips, followed by any blocking violation for the rendered copy. It shows
+ * no controls, location, or invocation details.
  */
 export function InstalledSkillHeader({
   skill,
+  upstreamAhead = [],
   deployment,
-  from,
-  onBack,
-  onRemoveComplete,
-  isAssistantOpen,
-  onOpenAssistant,
-  assistantTriggerRef,
-  frontmatterRepair,
-  onFixYaml,
+  frontmatterRepairs = [],
+  isFrontmatterPreviewSettled = false,
+  skillMdContent,
+  onQuoteRepair,
+  onFixRepair,
   onEditManually,
 }: InstalledSkillHeaderProps) {
-  const actions = useSkillPageActions(skill, onRemoveComplete);
-  const assistantEnabled = isFeatureEnabled("skill-assistant");
-  const nonBlockingCount =
-    skill.spec_violations.length - skill.spec_violations.filter(isBlockingSpecViolation).length;
+  // Notes from the skill's own copies only, as on list rows - a plugin copy's notes are not the
+  // user's to fix. A plugin-only skill has no own copy, so it counts every copy.
+  const sourceLine = skillSourceLine(skill, useSkillInstalls(skill));
+  const own = ownDeployments(skill);
+  const noteSources = own.length > 0 ? own : skill.deployments;
+  const nonBlockingNotes = [
+    ...new Set(
+      noteSources.flatMap((d) =>
+        d.spec_violations.filter((v) => specViolationSeverity(v) === "note"),
+      ),
+    ),
+  ];
+  const nonBlockingCount = nonBlockingNotes.length;
   // The red violation line names only the deployment whose SKILL.md the page
   // actually renders - other deployments' violations show on their own
-  // Locations rows instead (see `SkillLocationsCard`). The union in
-  // `skill.spec_violations` (and its "N spec notes" chip above) is unchanged:
-  // Home's spec-violation issue still relies on it covering every copy.
+  // Locations rows instead (see `SkillLocationsCard`). Home's spec-violation
+  // issue still relies on `skill.spec_violations` covering every copy.
   const renderedDeployment = deployment ?? skill.deployments.find((d) => d.content_hash);
+  // No fallback here: an opened copy that is gone must not borrow another copy's fork origin.
+  const upstreamNote = skillUpstreamNote(deployment, upstreamAhead);
   const blockingViolations = (renderedDeployment?.spec_violations ?? []).filter(
     isBlockingSpecViolation,
   );
-  const hasMalformedYaml = blockingViolations.some((violation) =>
+  const conflictRepair = frontmatterRepairs.find((repair) => repair.kind === "invocation-conflict");
+  // With a repair, the conflict has its own red line and Fix below; without one, it shows here.
+  const warningViolations = (renderedDeployment?.spec_violations ?? []).filter(
+    (v) =>
+      specViolationSeverity(v) === "warning" &&
+      !(v === "conflicting invocation keys" && conflictRepair),
+  );
+  const nameFormatNote = (renderedDeployment?.spec_violations ?? []).find(
+    (v) => specViolationSeverity(v) === "note" && v.startsWith('name "'),
+  );
+  const yamlViolation = blockingViolations.find((violation) =>
     violation.startsWith("invalid YAML frontmatter at line "),
   );
+  const hasMalformedYaml = yamlViolation !== undefined;
+  const yamlLocation = yamlViolation ? parseYamlFrontmatterError(yamlViolation) : null;
+  // Conflicting invocation keys are a non-blocking note with their own line and Fix;
+  // every other repair belongs to the red violation line.
+  const lineKind = frontmatterRepairKindsFor(renderedDeployment).find(
+    (kind) => kind !== "invocation-conflict",
+  );
+  const lineRepair = frontmatterRepairs.find((repair) => repair.kind === lineKind);
+  // A backend "Fix" preview wins; the local quote repair covers what it declines.
+  const canQuote = canOfferLocalQuote({
+    isPreviewSettled: isFrontmatterPreviewSettled,
+    hasPreview: Boolean(lineRepair),
+  });
+  const quoteRepair =
+    yamlLocation && skillMdContent && canQuote && onQuoteRepair
+      ? proposeFrontmatterQuoteRepair(skillMdContent, yamlLocation.line)
+      : null;
+  const lineHint =
+    yamlLocation && skillMdContent && canQuote
+      ? describeFrontmatterErrorLine(skillMdContent, yamlLocation.line)
+      : null;
+  const fixLine = fixLineFor({
+    lineKind,
+    hasMismatchLine: warningViolations.some(
+      (v) => frontmatterRepairKindForViolation(v) === "name-mismatch",
+    ),
+    hasNameFormatNote: Boolean(nameFormatNote),
+  });
+  const lineFixButton = lineRepair ? (
+    <Button size="sm" variant="outline" onClick={() => onFixRepair(lineRepair.kind)}>
+      Fix
+    </Button>
+  ) : null;
+  const violationText = quoteRepair
+    ? describeFrontmatterRepair(quoteRepair, yamlLocation?.column)
+    : (lineHint ?? describeSpecViolations(blockingViolations));
 
   return (
     <header className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-4">
-        <button
-          className="flex shrink-0 items-center gap-1.5 border-0 bg-transparent p-1 text-small text-text-tertiary transition-colors hover:text-text-primary"
-          onClick={onBack}
-          aria-label="Back"
-        >
-          <ArrowLeft size={16} />
-          <span>{backLabel(from)}</span>
-        </button>
-        <div className="flex shrink-0 items-center gap-2">
-          {actions.primaryAction && (
-            <Button onClick={actions.primaryAction.run} disabled={actions.primaryAction.busy}>
-              {actions.primaryAction.busy ? "Working…" : actions.primaryAction.label}
-            </Button>
-          )}
-          {assistantEnabled && (
-            <button
-              ref={assistantTriggerRef}
-              type="button"
-              className="flex h-(--control-height) items-center gap-1.5 rounded-sm border border-border px-3 text-body text-text-secondary transition-colors hover:bg-bg-tertiary hover:text-text-primary aria-expanded:border-border-focus aria-expanded:text-accent"
-              onClick={onOpenAssistant}
-              aria-expanded={isAssistantOpen}
-              aria-controls={isAssistantOpen ? SKILL_ASSISTANT_DRAWER_ID : undefined}
-              title="Assistant"
+      <div>
+        <h2 className="text-heading-lg font-semibold text-text-primary">{skill.name}</h2>
+        <p className="mt-1 select-text text-small text-text-tertiary">
+          {sourceLine.prefix}
+          {sourceLine.href ? (
+            <a
+              href={sourceLine.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-text-tertiary no-underline transition-colors hover:text-accent hover:underline"
             >
-              <PanelRight size={16} />
-              <span>Assistant</span>
-            </button>
+              {sourceLine.label}
+              <ExternalLink size={12} />
+            </a>
+          ) : (
+            sourceLine.label
           )}
-          <MenuControl
-            triggerClassName="flex h-(--control-height) w-(--control-height) cursor-pointer items-center justify-center rounded-sm border border-border text-text-secondary transition-colors hover:bg-bg-tertiary hover:text-text-primary"
-            triggerAriaLabel="More actions"
-            trigger={<MoreHorizontal size={16} />}
-            align="end"
-          >
-            <MenuItem closeOnClick onClick={actions.reveal} disabled={!actions.path}>
-              Reveal in Finder
-            </MenuItem>
-            <MenuItem closeOnClick onClick={actions.openEditor} disabled={!actions.path}>
-              Open in editor
-            </MenuItem>
-            <MenuItem closeOnClick onClick={actions.copyPath} disabled={!actions.path}>
-              Copy path
-            </MenuItem>
-            <MenuSeparator />
-            <MenuItem
-              closeOnClick
-              onClick={actions.parkAction.run}
-              disabled={actions.parkAction.busy}
+          {sourceLine.installs && ` · ${sourceLine.installs}`}
+        </p>
+        {upstreamNote && (
+          <p className="mt-1 select-text text-small text-text-tertiary">
+            {upstreamNote.text}{" "}
+            <a
+              href={upstreamNote.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-text-tertiary no-underline transition-colors hover:text-accent hover:underline"
             >
-              {actions.parkAction.label}
-            </MenuItem>
-            {actions.forkAction && (
-              <MenuItem
-                closeOnClick
-                onClick={actions.forkAction.run}
-                disabled={actions.forkAction.busy}
-              >
-                {actions.forkAction.label}
-              </MenuItem>
-            )}
-            {actions.removeAction && (
-              <>
-                <MenuSeparator />
-                <MenuItem
-                  closeOnClick
-                  variant="destructive"
-                  onClick={actions.removeAction.run}
-                  disabled={actions.removeAction.busy}
-                >
-                  Remove
-                </MenuItem>
-              </>
-            )}
-          </MenuControl>
-        </div>
+              See changes
+              <ExternalLink size={12} />
+            </a>
+          </p>
+        )}
+        {skill.description && (
+          <p className="mt-3 select-text text-pretty text-body leading-[1.5] text-text-secondary">
+            {skill.description}
+          </p>
+        )}
       </div>
 
-      <div className="grid w-full grid-cols-1 gap-6 min-[900px]:grid-cols-[minmax(0,1.35fr)_minmax(260px,1fr)] min-[900px]:gap-8">
-        <div className="flex min-w-0 flex-col gap-4">
-          <div>
-            <h1 className="text-title font-semibold text-text-primary">{skill.name}</h1>
-            {skill.description && (
-              <p className="mt-3 max-w-[65ch] text-pretty text-body leading-[1.5] text-text-secondary">
-                {skill.description}
-              </p>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-1.5">
-            {skill.parked && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-2 py-0.5 text-caption text-warning">
-                {parkedChipLabel(skill.parked_at)}
-              </span>
-            )}
-            {(skill.trials ?? (skill.trial ? [skill.trial] : [])).map((trial) => {
-              const keepAction = actions.keepTrial(trial);
-              const scope = trial.scope === "global" ? "Global" : "Project";
-              return (
-                <span
-                  key={trial.deployment_id || `${trial.scope}/${trial.project_path ?? ""}`}
-                  className="inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-2 py-0.5 text-caption text-accent"
-                >
-                  {scope}{" "}
-                  {trial.status === "recovery-required"
-                    ? "expiry needs review"
-                    : trial.status === "expiring"
-                      ? "expiry in progress"
-                      : trialChipLabel(trial.expires_at)}
-                  <button
-                    type="button"
-                    className="cursor-pointer rounded-sm border-0 bg-bg-primary px-1.5 py-px text-caption font-semibold text-inherit disabled:cursor-not-allowed disabled:opacity-50"
-                    onClick={keepAction.run}
-                    disabled={keepAction.busy}
-                  >
-                    Keep
-                  </button>
-                </span>
-              );
-            })}
-            {skill.update_owner_ids.length > 0 && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-2 py-0.5 text-caption text-accent">
-                Update available
-              </span>
-            )}
-            {nonBlockingCount > 0 && (
-              <TooltipControl
-                content={skill.spec_violations
-                  .filter((violation) => !isBlockingSpecViolation(violation))
-                  .join("; ")}
-              >
-                <span className="inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-2 py-0.5 text-caption text-text-tertiary">
-                  {nonBlockingCount} spec note{nonBlockingCount !== 1 ? "s" : ""}
-                </span>
-              </TooltipControl>
-            )}
-          </div>
-        </div>
-
-        <InstalledSkillSourceLedger skill={skill} />
+      <div className="flex flex-wrap items-center gap-1.5">
+        {skill.parked && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-2 py-0.5 text-caption text-warning">
+            {parkedChipLabel(skill.parked_at)}
+          </span>
+        )}
+        {skill.update_owner_ids.length > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-2 py-0.5 text-caption text-accent">
+            Update available
+          </span>
+        )}
+        {nonBlockingCount > 0 && (
+          <TooltipControl content={nonBlockingNotes.join("; ")}>
+            <span className="inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-2 py-0.5 text-caption text-text-tertiary">
+              {nonBlockingCount} spec note{nonBlockingCount !== 1 ? "s" : ""}
+            </span>
+          </TooltipControl>
+        )}
       </div>
 
       {blockingViolations.length > 0 && (
         <div className="flex items-center gap-2 text-small text-error">
           <AlertTriangle size={13} />
-          <span>{blockingViolations.join("; ")}</span>
-          {hasMalformedYaml && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={frontmatterRepair ? onFixYaml : onEditManually}
-            >
-              {frontmatterRepair ? "Fix YAML" : "Edit manually"}
+          <span>{violationText}</span>
+          {quoteRepair && (
+            <Button size="sm" onClick={() => onQuoteRepair?.(quoteRepair)}>
+              Quote the {quoteRepair.key}
             </Button>
           )}
+          {hasMalformedYaml &&
+            (fixLine === "error" && lineRepair ? (
+              lineFixButton
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onEditManually(yamlLocation?.line)}
+              >
+                Edit manually
+              </Button>
+            ))}
+        </div>
+      )}
+      {warningViolations.length > 0 && (
+        <div className="flex items-center gap-2 text-small text-warning">
+          <AlertTriangle size={13} />
+          <span>{describeSpecViolations(warningViolations)}</span>
+          {fixLine === "warning" && lineFixButton}
+        </div>
+      )}
+      {nameFormatNote && (
+        <div className="flex items-center gap-2 text-small text-text-tertiary">
+          <span>{describeSpecViolations([nameFormatNote])}</span>
+          {fixLine === "note" && lineFixButton}
+        </div>
+      )}
+      {conflictRepair && (
+        <div className="flex items-center gap-2 text-small text-error">
+          <AlertTriangle size={13} />
+          <span>Both invocation keys are set, so nothing can run this skill.</span>
+          <Button size="sm" variant="outline" onClick={() => onFixRepair("invocation-conflict")}>
+            Fix
+          </Button>
         </div>
       )}
     </header>

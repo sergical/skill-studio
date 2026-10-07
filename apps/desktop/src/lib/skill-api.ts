@@ -4,7 +4,9 @@
 // ============================================================================
 
 import { invoke } from "@tauri-apps/api/core";
+import type { InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { recordIpcCall } from "./perf-marks";
 import type {
   AddMethodDefaults,
   AddSkillOperationEvent,
@@ -12,33 +14,94 @@ import type {
   AddSkillResult,
   AddSkillsRequest,
   AgentId,
+  AppVersion,
+  BulkTargetResult,
+  DiscoverySourceSetting,
   ImportResult,
-  InstallResult,
+  FixSkillOutcome,
   ForkRecord,
   FrontmatterRepairApplyMode,
+  FrontmatterRepairKind,
   FrontmatterRepairPreview,
+  InvocationConflictChoice,
+  LocalEditsDto,
+  ParkCheck,
   GithubSkillListing,
   InstalledSkill,
-  HarnessVisibilityTarget,
+  HarnessReport,
+  HarnessesChoice,
   LifecycleTarget,
   InvocationPolicy,
-  PackInfo,
+  InvocationTarget,
   PackImportPreflightResult,
   PackImportRequest,
-  PackMember,
   PaginatedSkillsResponse,
+  ProjectFolder,
   PullResult,
+  RemoveOutcome,
   SkillDetails,
+  InstallCount,
+  InstallCountKey,
   SkillEvent,
-  SkillsShAccessInfo,
   SkillSnapshot,
-  UpdatePackResult,
+  SplitCopy,
+  SplitOutcome,
+  AgentOffCheck,
+  AgentOffOutcome,
+  TrackedProjects,
+  UpdateAllOutcome,
+  UpdateAllProgress,
+  UpdateOutcome,
+  UpdateStatus,
 } from "@skill-studio/lib";
+
+let ipcCallSeq = 0;
+
+/** Every wrapper below routes through this instead of calling `invoke` directly, so every IPC
+ * round trip gets one "ipc:<command>" `performance` measure - the overlay's source, and visible in
+ * devtools' Performance panel too. The mark name carries a counter so concurrent calls to the same
+ * command don't clobber each other's mark.
+ *
+ * Tauri rejects a failed command with the Rust `Result::Err` string directly, not an `Error` - a
+ * catch site's `err instanceof Error ? err.message : "Unknown error"` would discard it. Wrapping
+ * a non-`Error` rejection here, once, means every existing catch site across the app shows the
+ * real backend text without a per-site edit. */
+function callCommand<T>(command: string, args?: InvokeArgs): Promise<T> {
+  const startMark = `ipc:${command}:${ipcCallSeq++}`;
+  performance.mark(startMark);
+  const finish = (resolved: boolean) => {
+    const measure = performance.measure(`ipc:${command}`, startMark);
+    recordIpcCall(command, measure.duration, resolved);
+    performance.clearMarks(startMark);
+    performance.clearMeasures(`ipc:${command}`);
+  };
+  return invoke<T>(command, args).then(
+    (result) => {
+      finish(true);
+      return result;
+    },
+    (cause: unknown) => {
+      finish(false);
+      throw cause instanceof Error ? cause : new Error(String(cause));
+    },
+  );
+}
+
+/** Kept for call sites that already branch on `cause` themselves; `callCommand` now normalizes
+ * every rejection to an `Error` before it reaches a catch block, so this is equivalent to reading
+ * `cause.message` directly there. */
+export function invokeErrorMessage(cause: unknown): string {
+  if (cause instanceof Error) return cause.message;
+  if (cause == null) return "Unknown error";
+  return `${cause}`;
+}
 
 export async function previewSkillFrontmatterRepair(
   target: LifecycleTarget,
+  kind: FrontmatterRepairKind = "colon-scalar",
+  choice: InvocationConflictChoice | null = null,
 ): Promise<FrontmatterRepairPreview> {
-  return invoke("preview_skill_frontmatter_repair", { target });
+  return callCommand("preview_skill_frontmatter_repair", { target, kind, choice });
 }
 
 export async function applySkillFrontmatterRepair(
@@ -46,36 +109,35 @@ export async function applySkillFrontmatterRepair(
   preview: FrontmatterRepairPreview,
   mode: FrontmatterRepairApplyMode,
 ): Promise<void> {
-  return invoke("apply_skill_frontmatter_repair", {
+  return callCommand("apply_skill_frontmatter_repair", {
     request: {
       target,
       proposal_id: preview.proposal_id,
       expected_content_fingerprint: preview.expected_content_fingerprint,
       mode,
+      kind: preview.kind,
+      choice: preview.choice,
     },
   });
+}
+
+/** Runs the same doctor invariants the CLI's `fix` subcommand and the MCP
+ * server's `fix` tool run, for one skill by name, so all three surfaces
+ * leave the same disk state. A conflict is never merged: `outcome.conflicts`
+ * names both paths for the caller to open side by side. */
+export async function fixSkill(skill: string): Promise<FixSkillOutcome> {
+  return callCommand("fix_skill", { skill });
+}
+
+/** Opens a conflict's two differing paths side by side in the user's chosen
+ * editor. Writes nothing to either path. */
+export async function openConflictPaths(paths: string[]): Promise<void> {
+  return callCommand("open_conflict_paths", { paths });
 }
 
 // ============================================================================
 // Search API
 // ============================================================================
-
-/**
- * Whether discovery goes straight to skills.sh with a developer-override key
- * (`mode: "direct"`) or through the local Skill Studio server (`mode:
- * "server"`, with its URL). Never returns the key itself.
- */
-export async function getSkillsShAccess(): Promise<SkillsShAccessInfo> {
-  return invoke("get_skills_sh_access");
-}
-
-/**
- * Save `key` as the skills.sh API key. Trimmed and rejected server-side if
- * empty.
- */
-export async function setSkillsShApiKey(key: string): Promise<void> {
-  return invoke("set_skills_sh_api_key", { key });
-}
 
 /**
  * Search for skills on skills.sh. The v1 search endpoint has no pagination -
@@ -85,7 +147,7 @@ export async function searchSkills(
   query: string,
   limit?: number,
 ): Promise<PaginatedSkillsResponse> {
-  return invoke("search_skills", { query, limit });
+  return callCommand("search_skills", { query, limit });
 }
 
 /**
@@ -95,7 +157,7 @@ export async function getPopularSkills(
   page?: number,
   perPage?: number,
 ): Promise<PaginatedSkillsResponse> {
-  return invoke("get_popular_skills", { page, perPage });
+  return callCommand("get_popular_skills", { page, perPage });
 }
 
 /**
@@ -103,7 +165,16 @@ export async function getPopularSkills(
  * skills.sh. `skillId` is the full `owner/repo/slug` id.
  */
 export async function getSkillDetails(skillId: string): Promise<SkillDetails> {
-  return invoke("get_skill_details", { skillId });
+  return callCommand("get_skill_details", { skillId });
+}
+
+/**
+ * skills.sh install counts for installed skills-sh skills. The backend caches
+ * them for 24 h and fetches the misses at a throttled pace, so a long `keys`
+ * list is safe; `installs` is null when the count is unknown or offline.
+ */
+export async function getInstallCounts(keys: InstallCountKey[]): Promise<InstallCount[]> {
+  return callCommand("get_install_counts", { keys });
 }
 
 // ============================================================================
@@ -112,53 +183,193 @@ export async function getSkillDetails(skillId: string): Promise<SkillDetails> {
 
 /**
  * Get all installed skills, merged from a directory scan of the four
- * first-class agents (Claude Code, Codex, OpenCode, pi) and the lock file.
- * Pass known project directories so project-scoped skills are found too.
+ * first-class agents (Claude Code, Codex, OpenCode, pi) and the lock file,
+ * over the tracked project list already saved in
+ * `~/.agents/skill-studio.json` - the same list `getTrackedProjects` reads.
  */
-export async function getInstalledSkills(projectPaths?: string[]): Promise<InstalledSkill[]> {
-  return invoke("get_installed_skills", { projectPaths });
+export async function getInstalledSkills(): Promise<InstalledSkill[]> {
+  return callCommand("get_installed_skills");
 }
 
 /**
- * Register project paths the caller cares about (e.g. one the user just
- * opened) so future background rebuilds always include them. Returns
- * immediately; listen for `onSkillSnapshot` to see the result.
+ * The saved project list from `~/.agents/skill-studio.json`'s `projects`
+ * key - the same list the CLI and the MCP server scan against.
  */
-export async function registerSkillProjects(paths: string[]): Promise<void> {
-  return invoke("register_skill_projects", { paths });
+export async function getTrackedProjects(): Promise<TrackedProjects> {
+  return callCommand("get_tracked_projects");
 }
 
 /**
- * Un-register a project path (e.g. one the user closed) so future
- * background rebuilds stop including it. Returns immediately; listen for
- * `onSkillSnapshot` to see the result.
+ * Add project paths the caller cares about (e.g. one the user just opened)
+ * to the saved list, un-excluding any of them that were previously stopped.
+ * Returns the updated list, already persisted; listen for `onSkillSnapshot`
+ * to see the rebuilt skill scan that follows.
  */
-export async function unregisterSkillProject(path: string): Promise<void> {
-  return invoke("unregister_skill_project", { path });
+export async function registerSkillProjects(paths: string[]): Promise<TrackedProjects> {
+  return callCommand("register_skill_projects", { paths });
 }
 
 /**
- * Remove a skill using npx skills CLI. `projectPath` is `null` for a global
- * removal, or the project directory to remove from - validated on the Rust
- * side against the current snapshot and used as the CLI's working directory.
+ * Move a project path (e.g. one the user "Stop tracking"-ed) from added to
+ * excluded in the saved list, so future scans skip it even if discovery
+ * would otherwise find it again. Returns the updated list, already
+ * persisted; listen for `onSkillSnapshot` to see the rebuilt skill scan
+ * that follows.
  */
-export async function removeSkill(target: LifecycleTarget): Promise<InstallResult> {
-  return invoke("remove_skill", { target });
+export async function unregisterSkillProject(path: string): Promise<TrackedProjects> {
+  return callCommand("unregister_skill_project", { path });
 }
 
 /**
- * Update a skill through whichever CLI owns it (dotagents or skills.sh).
- * `result.tool`/`result.command` say what actually ran.
+ * Remove a folder the user added by hand from the saved list, recording no
+ * exclusion - unlike `unregisterSkillProject`, discovery can offer the
+ * folder again later. Returns the updated list, already persisted; listen
+ * for `onSkillSnapshot` to see the rebuilt skill scan that follows.
  */
-export async function updateSkill(target: LifecycleTarget): Promise<InstallResult> {
-  return invoke("update_skill", { target });
+export async function removeSkillProject(path: string): Promise<TrackedProjects> {
+  return callCommand("remove_skill_project", { path });
+}
+
+/**
+ * The saved per-harness discovery switches, in display order - see the
+ * Settings "Project folders" card.
+ */
+export async function getDiscoverySources(): Promise<DiscoverySourceSetting[]> {
+  return callCommand("get_discovery_sources");
+}
+
+/**
+ * Switch one discovery harness's history search on or off. Returns the
+ * updated switches, already persisted; listen for `onSkillSnapshot` to see
+ * the rebuilt skill scan that follows.
+ */
+export async function setDiscoverySource(
+  harness: string,
+  enabled: boolean,
+): Promise<DiscoverySourceSetting[]> {
+  return callCommand("set_discovery_source", { harness, enabled });
+}
+
+// ============================================================================
+// First-run harness detection (unit 3.2)
+// ============================================================================
+
+/**
+ * Detects, per first-class harness, whether it exists on this machine -
+ * executable, version, install method, configured, used. Runs off the UI
+ * thread (`spawn_blocking`, see `harness_first_run.rs`).
+ */
+export async function detectHarnesses(): Promise<HarnessReport> {
+  return callCommand("detect_harnesses");
+}
+
+/**
+ * The first-run screen's saved choice, or `null` when the screen has never
+ * been completed - the signal to show it on this launch.
+ */
+export async function getHarnessesChoice(): Promise<HarnessesChoice | null> {
+  return callCommand("get_harnesses_choice");
+}
+
+/**
+ * Saves the first-run screen's choice so the next launch skips it, along
+ * with the same screen's telemetry switch.
+ */
+export async function saveHarnessesChoice(
+  choice: HarnessesChoice,
+  telemetryEnabled: boolean,
+): Promise<void> {
+  return callCommand("save_harnesses_choice", { choice, telemetryEnabled });
+}
+
+/**
+ * Every project folder discovery found or the user added by hand, labelled
+ * by source, for the Settings "Project folders" card. A harness-history
+ * scan runs on every call, so this is not cheap - callers should refetch on
+ * a meaningful change, not on every render.
+ */
+export async function listProjectFolders(): Promise<ProjectFolder[]> {
+  return callCommand("list_project_folders");
+}
+
+/**
+ * One-shot migration of the desktop's old localStorage project lists into
+ * the saved `~/.agents/skill-studio.json` list: `added` is registered,
+ * `excluded` is un-registered. Callers should clear the localStorage
+ * entries only after this resolves.
+ */
+export async function importTrackedProjects(
+  added: string[],
+  excluded: string[],
+): Promise<TrackedProjects> {
+  return callCommand("import_tracked_projects", { added, excluded });
+}
+
+/**
+ * Remove one deployment through `skill_studio_core::ops::remove` (unit
+ * 3.9b): quarantines a Copy/Fork folder (see `quarantine_path`) or shells
+ * out for Dotagents/SkillsSh. Rejects on failure - unlike the old
+ * `InstallResult` shape, there is no `success`/`error` pair to check.
+ */
+export async function removeSkill(target: LifecycleTarget): Promise<RemoveOutcome> {
+  return callCommand("remove_skill", { target });
+}
+
+/**
+ * Update a skill through whichever method owns it (dotagents or skills.sh -
+ * `build_update_request` routes every other owner, including Copy, to
+ * "Update is not available") - `skill_studio_core::ops::update` under the
+ * hood, off the UI thread. `updateSkillOwners` (skill-lifecycle-target.ts)
+ * reads only
+ * `success`/`error`; a thrown rejection (an `Err` from the command) is
+ * caught there too, so a `success: true` literal on the happy path is
+ * enough - no caller reads `UpdateOutcome`'s own fields.
+ */
+export async function updateSkill(
+  target: LifecycleTarget,
+): Promise<{ success: boolean; error?: string | null }> {
+  await callCommand<UpdateOutcome>("update_skill", { target });
+  return { success: true };
+}
+
+/**
+ * Update every given owner in one backend call
+ * (`skill_studio_core::ops::update_all`, one `spawn_blocking` task for the
+ * whole batch) - one IPC round trip for the whole batch instead of one
+ * `updateSkill` call per owner. `HomeInboxGroups`'s "Update all" uses this
+ * for every non-fork owner target; forks still pull upstream one at a time
+ * through `pullForkUpstream`, since that CLI call has no batched form.
+ */
+async function updateAllSkills(targets: LifecycleTarget[]): Promise<UpdateAllOutcome> {
+  return callCommand("update_all_skills", { targets });
+}
+
+/** Event name each finished "Update all" target is reported on. */
+const UPDATE_ALL_PROGRESS_EVENT = "skills://update-all-progress";
+
+/**
+ * `updateAllSkills` that reports each finished target (updated or refused)
+ * to `onProgress` while the batch runs.
+ */
+export async function updateAllSkillsWithProgress(
+  targets: LifecycleTarget[],
+  onProgress: (progress: UpdateAllProgress) => void,
+): Promise<UpdateAllOutcome> {
+  const unlisten = await listen<UpdateAllProgress>(UPDATE_ALL_PROGRESS_EVENT, (event) => {
+    onProgress(event.payload);
+  });
+  try {
+    return await updateAllSkills(targets);
+  } finally {
+    unlisten();
+  }
 }
 
 /**
  * Read up to 2 MiB of an installed skill's SKILL.md straight off disk.
  */
 export async function readInstalledSkillMd(path: string): Promise<string> {
-  return invoke("read_installed_skill_md", { path });
+  return callCommand("read_installed_skill_md", { path });
 }
 
 /**
@@ -171,36 +382,49 @@ export async function writeInstalledSkillMdIfUnchanged(
   expectedContent: string,
   content: string,
 ): Promise<void> {
-  return invoke("write_installed_skill_md_if_unchanged", { path, expectedContent, content });
+  return callCommand("write_installed_skill_md_if_unchanged", { path, expectedContent, content });
 }
 
 /**
  * Reveal a skill's folder in Finder, or open it in the user's default editor.
  */
 export async function openSkillPath(path: string, mode: "reveal" | "editor"): Promise<void> {
-  return invoke("open_skill_path", { path, mode });
+  return callCommand("open_skill_path", { path, mode });
 }
 
-/** One editor offered by the Settings picker - see the Rust `skill_editor`. */
+/** One editor offered by the Settings card - see the Rust `skill_editor`. */
 export interface EditorOption {
-  /** The macOS application name `open -a` takes, without `.app`. */
+  /** The value to save: a macOS application name, an absolute `.app` path, or `"$EDITOR"`. */
   app_name: string;
   label: string;
 }
 
-/** The known code editors actually installed on this machine. */
-export async function listInstalledEditors(): Promise<EditorOption[]> {
-  return invoke("list_installed_editors");
+/** Everything the Settings "Open in editor" card shows - see the Rust `skill_editor::EditorChoices`. */
+export interface EditorChoices {
+  automatic_label: string;
+  apps: EditorOption[];
+  terminal: EditorOption | null;
+  selected: string | null;
 }
 
-/** The app "Open in editor" uses, or `null` for the system default. */
-export async function getPreferredEditor(): Promise<string | null> {
-  return invoke("get_preferred_editor");
+/** The editor card's state: installed/saved apps, the `$EDITOR` row, and the current choice. */
+export async function getEditorChoices(): Promise<EditorChoices> {
+  return callCommand("get_editor_choices");
 }
 
-/** `null` restores the system default. An editor that is not installed is refused. */
-export async function setPreferredEditor(appName: string | null): Promise<void> {
-  return invoke("set_preferred_editor", { appName });
+/** `null` restores the system default. A value that isn't usable is refused. */
+export async function setPreferredEditor(value: string | null): Promise<void> {
+  return callCommand("set_preferred_editor", { appName: value });
+}
+
+/** Reads the telemetry switch (crash reports, timings, WebView errors) from the registry. */
+export async function getTelemetryEnabled(): Promise<boolean> {
+  return callCommand("get_telemetry_enabled");
+}
+
+/** Saves the telemetry switch; takes effect without a restart - see the Rust `telemetry_commands`. */
+export async function setTelemetryEnabled(enabled: boolean): Promise<boolean> {
+  return callCommand("set_telemetry_enabled", { enabled });
 }
 
 // ============================================================================
@@ -214,16 +438,17 @@ export async function setPreferredEditor(appName: string | null): Promise<void> 
  * dotagents wildcard entry.
  */
 export async function forkSkill(target: LifecycleTarget): Promise<ForkRecord> {
-  return invoke("fork_skill", { target });
+  return callCommand("fork_skill", { target });
 }
 
 /**
- * Three-way merge a forked skill's snapshot against its current on-disk
- * copy and a freshly fetched upstream copy, then advance the snapshot to
- * the new upstream commit.
+ * Diff a forked skill's snapshot against its current on-disk copy and a
+ * freshly fetched upstream copy, writing conflict markers (never merging)
+ * into any file both sides changed and opening it in the editor, then
+ * advance the snapshot to the new upstream commit.
  */
 export async function pullForkUpstream(target: LifecycleTarget): Promise<PullResult> {
-  return invoke("pull_fork_upstream", { target });
+  return callCommand("pull_fork_upstream", { target });
 }
 
 /**
@@ -231,44 +456,12 @@ export async function pullForkUpstream(target: LifecycleTarget): Promise<PullRes
  * origin. Callers should confirm with the user first - this runs immediately.
  */
 export async function unforkSkill(target: LifecycleTarget): Promise<void> {
-  return invoke("unfork_skill", { target });
+  return callCommand("unfork_skill", { target });
 }
 
 // ============================================================================
 // Share Packs API
 // ============================================================================
-
-/** List every pack recorded in `~/.agents/skill-studio.json`. */
-export async function listSkillPacks(): Promise<PackInfo[]> {
-  return invoke("list_skill_packs");
-}
-
-/**
- * Build `~/.agents/packs/<name>` from `members` and commit it with git.
- * Refused if a pack of that name (or its directory) already exists.
- */
-export async function createSkillPack(name: string, members: PackMember[]): Promise<PackInfo> {
-  return invoke("create_skill_pack", { name, members });
-}
-
-/** Rebuild a pack's tree from its recorded skill list, committing only if it changed. */
-export async function updateSkillPack(name: string): Promise<UpdatePackResult> {
-  return invoke("update_skill_pack", { name });
-}
-
-/**
- * Push a pack to GitHub. Creates the repo (`gh repo create ... --push`) the
- * first time; pushes to the recorded `repo` on every call after that.
- * Callers must confirm with the user first - this runs immediately.
- */
-export async function publishSkillPack(name: string, visibility: string): Promise<PackInfo> {
-  return invoke("publish_skill_pack", { name, visibility });
-}
-
-/** Delete a pack locally: its registry entry and its directory. Never touches GitHub. */
-export async function deleteSkillPack(name: string): Promise<void> {
-  return invoke("delete_skill_pack", { name });
-}
 
 /**
  * Preflight and import a pack from a GitHub repo or local folder. Remote
@@ -277,7 +470,7 @@ export async function deleteSkillPack(name: string): Promise<void> {
 export async function importSkillPack(
   request: PackImportRequest,
 ): Promise<PackImportPreflightResult> {
-  return invoke("import_skill_pack", { request });
+  return callCommand("import_skill_pack", { request });
 }
 
 /** Confirm the exact repository list returned by pack import preflight. */
@@ -285,16 +478,16 @@ export async function confirmSkillPackTrust(
   confirmationToken: string,
   request: PackImportRequest,
 ): Promise<ImportResult> {
-  return invoke("confirm_skill_pack_trust", { confirmationToken, request });
+  return callCommand("confirm_skill_pack_trust", { confirmationToken, request });
 }
 
 /** Consume a pending pack trust prompt and remove its unchanged local snapshot. */
 export async function abandonPackImportTrust(confirmationToken: string): Promise<boolean> {
-  return invoke("abandon_pack_import_trust", { confirmationToken });
+  return callCommand("abandon_pack_import_trust", { confirmationToken });
 }
 
 // ============================================================================
-// Add Skill / Trials API
+// Add Skill API
 // ============================================================================
 
 /**
@@ -303,11 +496,11 @@ export async function abandonPackImportTrust(confirmationToken: string): Promise
  * Kept for Skill Store / repair callers; the Add-skill sheet uses operations.
  */
 export async function addSkill(request: AddSkillRequest): Promise<AddSkillResult> {
-  return invoke("add_skill", { request });
+  return callCommand("add_skill", { request });
 }
 
 /** Event name every background Add Skill status is emitted on. */
-export const ADD_SKILL_OPERATION_EVENT = "skills://add-skill-operation";
+const ADD_SKILL_OPERATION_EVENT = "skills://add-skill-operation";
 
 /**
  * Schedule a single-skill add. Returns the queued event before `npx` or
@@ -317,7 +510,7 @@ export async function startAddSkillOperation(
   operationId: string,
   request: AddSkillRequest,
 ): Promise<AddSkillOperationEvent> {
-  return invoke("start_add_skill_operation", { operationId, request });
+  return callCommand("start_add_skill_operation", { operationId, request });
 }
 
 /**
@@ -327,19 +520,19 @@ export async function startAddSkillsOperation(
   operationId: string,
   request: AddSkillsRequest,
 ): Promise<AddSkillOperationEvent> {
-  return invoke("start_add_skills_operation", { operationId, request });
+  return callCommand("start_add_skills_operation", { operationId, request });
 }
 
 /** Catch-up read after subscribe or remount. */
 export async function getAddSkillOperation(operationId: string): Promise<AddSkillOperationEvent> {
-  return invoke("get_add_skill_operation", { operationId });
+  return callCommand("get_add_skill_operation", { operationId });
 }
 
 /** Request cancel. The worker still reports completed if mutation finished. */
 export async function cancelAddSkillOperation(
   operationId: string,
 ): Promise<AddSkillOperationEvent> {
-  return invoke("cancel_add_skill_operation", { operationId });
+  return callCommand("cancel_add_skill_operation", { operationId });
 }
 
 /**
@@ -351,7 +544,7 @@ export async function confirmAddSkillTrust(
   retryOperationId: string,
   identity: string,
 ): Promise<AddSkillOperationEvent> {
-  return invoke("confirm_add_skill_trust", { operationId, retryOperationId, identity });
+  return callCommand("confirm_add_skill_trust", { operationId, retryOperationId, identity });
 }
 
 /** Subscribe to background Add Skill status events. */
@@ -374,58 +567,19 @@ export async function listGithubSkills(
   gitRef?: string,
   refresh?: boolean,
 ): Promise<GithubSkillListing> {
-  return invoke("list_github_skills", { repo, path, gitRef, refresh });
+  return callCommand("list_github_skills", { repo, path, gitRef, refresh });
 }
 
 /**
  * Whether dotagents can run, whether skills.sh has been used before, and
- * which first-class agents are installed - fetched once when the Add Skill
- * sheet opens to pick its Method and Harnesses defaults.
+ * which first-class agents are installed - fetched when an install form opens
+ * and again when its scope changes. `projectPath` picks the scope whose
+ * `.claude/skills` link `claude_reads_shared_folder` describes; `null` is global.
  */
-export async function getAddMethodDefaults(): Promise<AddMethodDefaults> {
-  return invoke("get_add_method_defaults");
-}
-
-/**
- * Drop the selected deployment's trial record so the expiry loop leaves it alone.
- */
-export async function keepSkillTrial(target: LifecycleTarget): Promise<void> {
-  return invoke("keep_skill_trial", { target });
-}
-
-/**
- * Copy a trashed skill (from a `skills://trial-expired` event's
- * `trash_path`) back into `~/.agents/skills/<name>` as an untracked skill.
- */
-export async function restoreTrashedSkill(trashPath: string): Promise<void> {
-  return invoke("restore_trashed_skill", { trashPath });
-}
-
-/**
- * Subscribe to `skills://trial-expired`, emitted once per skill the trial
- * expiry loop just moved to `~/.agents/skills-trash`. Returns an unlisten
- * function.
- */
-export function onTrialExpired(
-  cb: (payload: { name: string; trash_path: string }) => void,
-): () => void {
-  let unlisten: (() => void) | undefined;
-  let cancelled = false;
-
-  listen<{ name: string; trash_path: string }>("skills://trial-expired", (event) => {
-    cb(event.payload);
-  }).then((fn) => {
-    if (cancelled) {
-      fn();
-    } else {
-      unlisten = fn;
-    }
-  });
-
-  return () => {
-    cancelled = true;
-    unlisten?.();
-  };
+export async function getAddMethodDefaults(
+  projectPath: string | null = null,
+): Promise<AddMethodDefaults> {
+  return callCommand("get_add_method_defaults", { projectPath });
 }
 
 // ============================================================================
@@ -433,56 +587,124 @@ export function onTrialExpired(
 // ============================================================================
 
 /**
- * Park one Global Universal deployment: moves that folder to
- * `~/.agents/skills-parked/<name>`. Project and Per harness copies stay
- * independent. Refused when the target is not a Global Universal folder.
+ * Park one real copy: the Universal folder or an agent's own folder, global
+ * or in a project. The folder moves under `~/.agents/skills-parked/`, keyed by
+ * where it came from, and Unpark returns it there. Refused for a plugin copy,
+ * a link, or a copy that is already parked.
  */
 export async function parkSkill(target: LifecycleTarget): Promise<void> {
-  return invoke("park_skill", { target });
+  return callCommand("park_skill", { target });
 }
 
 /**
- * Reverse `parkSkill` for the selected parked or Global Universal target.
- * Project copies are not unparked as a side effect.
+ * Whether git tracks the copy `target` names, so a confirm can warn that
+ * parking or removing it shows as deleted files in the repository. Read-only;
+ * never a reason to refuse.
+ */
+export async function parkCheck(target: LifecycleTarget): Promise<ParkCheck> {
+  return callCommand("park_check", { target });
+}
+
+/**
+ * Reverse `parkSkill` for the selected parked copy: it returns to the folder
+ * it was parked from, and is refused when a copy already sits there.
  */
 export async function unparkSkill(target: LifecycleTarget): Promise<void> {
-  return invoke("unpark_skill", { target });
+  return callCommand("unpark_skill", { target });
 }
 
 /**
- * Enable or disable one harness's own view of the selected deployment, via that harness's own
- * mechanism (Codex `config.toml`, OpenCode `opencode.json`, or - for Claude
- * Code - removing/restoring its per-skill symlink). Refused for harnesses
- * with no per-skill disable (pi, Cursor, Grok Build) and for Claude Code when
- * the skill is deployed via the whole-directory symlink.
+ * Delete one copy for good (a quarantine backup keeps it undoable from
+ * Activity): the parked copy for "Keep live", the live copy for "Keep parked".
+ * `keep` is the copy that stays: the core checks it is still there before it
+ * deletes. Refused for a plugin copy, a link, or a live copy an installer owns.
  */
-export async function setHarnessEnabled(
+export async function discardSkillCopy(
+  target: LifecycleTarget,
+  keep: LifecycleTarget,
+): Promise<void> {
+  return callCommand("discard_skill_copy", { target, keep });
+}
+
+/**
+ * `parkSkill` for many targets in one call. One result per target, in order:
+ * `error` is `null` when it parked, so one refused folder never hides the rest.
+ */
+export async function parkSkills(targets: LifecycleTarget[]): Promise<BulkTargetResult[]> {
+  return callCommand("park_skills", { targets });
+}
+
+/**
+ * Whether each update target's installed folder differs from what the install
+ * recorded, in the order sent. `checked: false` means the check could not run;
+ * treat it as not edited.
+ */
+export async function skillLocalEdits(targets: LifecycleTarget[]): Promise<LocalEditsDto[]> {
+  return callCommand("skill_local_edits", { targets });
+}
+
+/** `unparkSkill` for many targets in one call; results as in `parkSkills`. */
+export async function unparkSkills(targets: LifecycleTarget[]): Promise<BulkTargetResult[]> {
+  return callCommand("unpark_skills", { targets });
+}
+
+/**
+ * Split one Universal deployment into a real copy per chosen harness, then
+ * remove the Universal folder and every per-skill link into it. Harnesses not
+ * in `harnesses` lose the skill. Refused for a whole-folder link or a name
+ * clash before anything is written; Activity holds the undo.
+ */
+export async function splitSkill(
+  target: LifecycleTarget,
+  harnesses: AgentId[],
+): Promise<SplitOutcome> {
+  return callCommand("split_skill", { target, harnesses });
+}
+
+/**
+ * The folders `splitSkill` would write for `harnesses` in one scope, with
+ * `CODEX_HOME` and the OpenCode config root already applied. Reads no files.
+ */
+export async function splitSkillTargets(
+  skillName: string,
+  projectPath: string | null,
+  harnesses: AgentId[],
+): Promise<SplitCopy[]> {
+  return callCommand("split_skill_targets", { skillName, projectPath, harnesses });
+}
+
+/**
+ * Turn the skill off for one agent that reads the shared folder: split the
+ * folder into a copy per agent, then park the chosen agent's copy. `target`
+ * names the shared (Universal) deployment. One Activity event holds the undo.
+ */
+export async function turnOffForAgent(
   target: LifecycleTarget,
   agent: AgentId,
-  enabled: boolean,
-): Promise<void> {
-  if (!target.deployment_id) {
-    throw new Error("Harness visibility needs one exact deployment");
-  }
-  const visibilityTarget: HarnessVisibilityTarget = {
-    deployment_id: target.deployment_id,
-    reader_agent: agent,
-  };
-  return invoke("set_harness_enabled", { target: visibilityTarget, enabled });
+): Promise<AgentOffOutcome> {
+  return callCommand("turn_off_for_agent", { target, agent });
 }
 
 /**
- * Enable or disable one deployment that has no native per-harness switch, by
- * renaming its directory into (or out of) a sibling `.skill-studio-disabled/`
- * holding directory in the same skills root - the universal fallback for
- * plain directory copies and project-scope symlinks. Refused for shared-root
- * and plugin-provided deployments.
+ * What the confirm shows before `turnOffForAgent`: the reason it would
+ * refuse (with whether "Off everywhere" is the way out), and the git warning.
+ * Writes nothing.
  */
-export async function setDeploymentEnabled(
+export async function turnOffCheck(
   target: LifecycleTarget,
-  enabled: boolean,
-): Promise<void> {
-  return invoke("set_deployment_enabled", { target, enabled });
+  agent: AgentId,
+): Promise<AgentOffCheck> {
+  return callCommand("turn_off_check", { target, agent });
+}
+
+/**
+ * Restore a deployment the old (unit-4.4-removed) move-aside disable left
+ * under `.skill-studio-disabled/` - the scanner still reports those rows as
+ * `disabled_by: "studio-moved"`. Refused for a target that was not moved
+ * aside by Skill Studio.
+ */
+export async function restoreMovedDeployment(target: LifecycleTarget): Promise<void> {
+  return callCommand("restore_moved_deployment", { target });
 }
 
 /**
@@ -496,7 +718,64 @@ export async function setSkillInvocation(
   path: string,
   policy: InvocationPolicy,
 ): Promise<void> {
-  return invoke("set_skill_invocation", { name, path, policy });
+  return callCommand("set_skill_invocation", { name, path, policy });
+}
+
+/**
+ * `setSkillInvocation` for many SKILL.md files in one call, with one snapshot
+ * reconcile at the end. One result per target, in order; a failing target
+ * does not stop the others.
+ */
+export async function setSkillsInvocation(
+  targets: InvocationTarget[],
+  policy: InvocationPolicy,
+): Promise<BulkTargetResult[]> {
+  return callCommand("set_skills_invocation", { targets, policy });
+}
+
+/**
+ * Enable or disable a Claude Code plugin (`claude plugin enable|disable
+ * <id> -s user`), which moves every skill the plugin ships together.
+ * Refused for any other harness.
+ */
+export async function setPluginEnabled(
+  pluginId: string,
+  harness: string,
+  enabled: boolean,
+): Promise<void> {
+  return callCommand("set_plugin_enabled", { pluginId, harness, enabled });
+}
+
+/** What `claude plugin update --json` reported for one install. */
+export interface PluginUpdateResult {
+  /** The CLI's `updateOutcome`: `updated`, `up_to_date`, or another value such as `skipped`. */
+  outcome: string;
+  /** The CLI's own message or reason for the outcome, when it gave one. */
+  message: string | null;
+}
+
+/**
+ * Update one install of a Claude Code plugin (`claude plugin update <id> -s
+ * <scope>`); `scope` and `projectPath` are the install's own. Claude Code
+ * applies it to new sessions only. Refused for any other harness. Resolves to the
+ * CLI's `updateOutcome` and message: only `updated` and `up_to_date` mean the
+ * plugin is current.
+ */
+export async function updatePlugin(
+  pluginId: string,
+  harness: string,
+  scope: string,
+  projectPath: string | null,
+): Promise<PluginUpdateResult> {
+  return callCommand("update_plugin", { pluginId, harness, scope, projectPath });
+}
+
+/**
+ * Uninstall a Claude Code plugin (`claude plugin uninstall <id> -s user -y`),
+ * removing every skill it ships. Refused for any other harness.
+ */
+export async function uninstallPlugin(pluginId: string, harness: string): Promise<void> {
+  return callCommand("uninstall_plugin", { pluginId, harness });
 }
 
 // ============================================================================
@@ -508,7 +787,7 @@ export async function setSkillInvocation(
  * Defaults to the last 200 events across every skill.
  */
 export async function listSkillEvents(limit?: number, skill?: string): Promise<SkillEvent[]> {
-  return invoke("list_skill_events", { limit, skill });
+  return callCommand("list_skill_events", { limit, skill });
 }
 
 /**
@@ -517,7 +796,7 @@ export async function listSkillEvents(limit?: number, skill?: string): Promise<S
  * itself backed up and restorable before the inverse is applied.
  */
 export async function restoreSkillEvent(eventId: string, force: boolean): Promise<void> {
-  return invoke("restore_skill_event", { eventId, force });
+  return callCommand("restore_skill_event", { eventId, force });
 }
 
 /**
@@ -531,7 +810,7 @@ export async function materializeHarnessRoot(
   harness: string,
   root: string,
 ): Promise<void> {
-  return invoke("materialize_harness_root", { target, harness, root });
+  return callCommand("materialize_harness_root", { target, harness, root });
 }
 
 /** Converts a whole harness root and disables the selected deployment under one durable intent. */
@@ -540,12 +819,12 @@ export async function materializeHarnessRootThenDisable(
   harness: string,
   root: string,
 ): Promise<void> {
-  return invoke("materialize_harness_root_then_disable", { target, harness, root });
+  return callCommand("materialize_harness_root_then_disable", { target, harness, root });
 }
 
 /** Replaces one healthy Universal-backed deployment link with a local Copy directory. */
 export async function makeSkillIndependentCopy(target: LifecycleTarget): Promise<void> {
-  return invoke("make_skill_independent_copy", { target });
+  return callCommand("make_skill_independent_copy", { target });
 }
 
 /**
@@ -559,7 +838,7 @@ export async function repairSkillLink(
   action: "remove" | "relink",
   target?: string,
 ): Promise<void> {
-  return invoke("repair_skill_link", { path, action, target });
+  return callCommand("repair_skill_link", { path, action, target });
 }
 
 // ============================================================================
@@ -571,7 +850,7 @@ export async function repairSkillLink(
  * `undefined` before the first snapshot has landed.
  */
 export async function getSkillSnapshot(): Promise<SkillSnapshot | undefined> {
-  return invoke("get_skill_snapshot");
+  return callCommand("get_skill_snapshot");
 }
 
 /**
@@ -579,7 +858,7 @@ export async function getSkillSnapshot(): Promise<SkillSnapshot | undefined> {
  * immediately; listen for `onSkillSnapshot` to see the result.
  */
 export async function requestSkillRescan(): Promise<void> {
-  return invoke("request_skill_rescan");
+  return callCommand("request_skill_rescan");
 }
 
 /**
@@ -590,4 +869,70 @@ export function onSkillSnapshot(cb: (snapshot: SkillSnapshot) => void): Promise<
   return listen<SkillSnapshot>("skills://snapshot", (event) => {
     cb(event.payload);
   });
+}
+
+// ============================================================================
+// App Version API
+// ============================================================================
+
+/**
+ * The running app's version, build commit, and the current version's
+ * changelog notes, for Settings' "Version" row and "What's new" panel.
+ */
+export async function appVersion(): Promise<AppVersion> {
+  return callCommand("app_version");
+}
+
+// ============================================================================
+// In-app Update API (unit 6.2)
+// ============================================================================
+
+/**
+ * Runs one check-download pass against the GitHub release manifest and
+ * returns the resulting state - used by the Settings "Check for updates"
+ * button. The launch check and the four-hour background loop run the same
+ * pass on the Rust side and report through `onUpdateStatus` instead, since
+ * nothing here is awaiting their response.
+ */
+export async function checkForUpdate(): Promise<UpdateStatus> {
+  return callCommand("check_for_update");
+}
+
+/** Catch-up read for the Settings "Version" card on mount or remount. */
+export async function getUpdateStatus(): Promise<UpdateStatus> {
+  return callCommand("get_update_status");
+}
+
+/**
+ * Installs the update a previous check already downloaded and restarts the
+ * app. Refused unless a download already reached `ready-to-install` - the
+ * "Restart to update" button is the only caller, so this is also the only
+ * path that ever installs an update.
+ */
+export async function installUpdate(): Promise<void> {
+  return callCommand("install_update");
+}
+
+/**
+ * Subscribe to `skills://update-status`, emitted on every state change from
+ * the launch check, the four-hour loop, and the manual check - not just the
+ * caller's own `checkForUpdate` call. Returns an unlisten function.
+ */
+export function onUpdateStatus(cb: (status: UpdateStatus) => void): Promise<() => void> {
+  return listen<UpdateStatus>("skills://update-status", (event) => {
+    cb(event.payload);
+  });
+}
+
+// ============================================================================
+// Data Folder Version API
+// ============================================================================
+
+/**
+ * The blocking message unit 6.3's startup check set, if the app data
+ * folder is newer than this build understands. `null` means the data
+ * layer opened normally.
+ */
+export async function dataFolderStatus(): Promise<string | null> {
+  return callCommand("data_folder_status");
 }

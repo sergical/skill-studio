@@ -3,7 +3,7 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { DrawerContent } from "@skill-studio/ui";
+import { Button, DrawerContent } from "@skill-studio/ui";
 import { SkillDetailHeader } from "./SkillDetailHeader";
 import { SkillContent } from "./SkillContent";
 import { InstallControls } from "./InstallControls";
@@ -15,12 +15,14 @@ interface SkillDetailPanelProps {
   skill: SkillWithStatus;
   onClose: () => void;
   onInstallStart: (skillName: string) => void;
+  onInstallPaused: () => void;
   onInstallComplete: (result: {
     success: boolean;
     error?: string;
     skillName?: string;
     warning?: string;
   }) => void;
+  onUpdateComplete: () => void;
   onRemoveComplete: () => void;
 }
 
@@ -28,7 +30,9 @@ export function SkillDetailPanel({
   skill,
   onClose,
   onInstallStart,
+  onInstallPaused,
   onInstallComplete,
+  onUpdateComplete,
   onRemoveComplete,
 }: SkillDetailPanelProps) {
   const [details, setDetails] = useState<SkillDetails | null>(null);
@@ -68,7 +72,7 @@ export function SkillDetailPanel({
   return (
     <DrawerContent
       side="right"
-      className="w-[min(640px,92vw)] overflow-y-auto bg-bg-secondary"
+      className="w-[min(640px,92vw)] overflow-y-scroll bg-bg-secondary"
       showCloseButton={false}
     >
       <SkillDetailHeader skill={skill} resolvedTopSource={resolvedTopSource} onClose={onClose} />
@@ -77,21 +81,23 @@ export function SkillDetailPanel({
         skillMd={details?.skill_md ?? null}
         isLoading={isLoadingDetails}
       />
-      <button
-        type="button"
-        className="mx-5 self-start border-0 bg-transparent p-0 text-small text-accent hover:underline"
+      <Button
+        variant="link"
+        className="mx-5 h-auto self-start p-0 text-small"
         onClick={() =>
           openAddSkillSheet(resolvedTopSource ? `${resolvedTopSource}/${skill.name}` : skill.name)
         }
       >
         Add with more options…
-      </button>
+      </Button>
       <div className="my-2 h-px bg-border" />
       <InstallControls
         skill={skill}
         resolvedTopSource={resolvedTopSource}
         onInstallStart={onInstallStart}
+        onInstallPaused={onInstallPaused}
         onInstallComplete={onInstallComplete}
+        onUpdateComplete={onUpdateComplete}
         onRemoveComplete={onRemoveComplete}
       />
     </DrawerContent>

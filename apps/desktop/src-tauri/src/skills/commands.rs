@@ -7,30 +7,24 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::agents::{AgentId, AgentTarget};
 use super::api;
-use super::lock_file;
-use super::project_discovery;
-use super::skill_add::{CommandRunner, RealCommandRunner};
-use super::skill_agent_runner::validate_skill_dir_name;
 use super::skill_dto::{
-    InstallResult, InstallScope, InstalledSkill, LifecycleTarget, PaginatedSkillsResponse,
-    SkillDetails, SkillsShAccessInfo,
+    InstallCount, InstallCountKey, InstallScope, InstalledSkill, LifecycleTarget,
+    PaginatedSkillsResponse, SkillDetails,
 };
 use super::skill_editor;
-use super::skill_fork;
-use super::skill_fork_registry;
-use super::skill_lifecycle::{
-    dotagents_update_args, ledger_matching_deployment, rebuild_fresh_lifecycle_snapshot,
-    resolve_lifecycle_target, skills_sh_remove_args_for_scope, skills_sh_update_args,
-};
-use super::skill_md_write::{write_skill_md, write_skill_md_compare_and_swap};
+use super::skill_lifecycle::{self, rebuild_fresh_lifecycle_snapshot, resolve_lifecycle_target};
+use super::skill_md_write::write_skill_md_compare_and_swap;
+use super::skill_process::RealCommandRunner;
 use super::skill_refresh::{self, SkillRefreshState};
-use super::skill_trial;
 use super::skill_update_check;
-use tauri::Manager;
+use serde::{Deserialize, Serialize};
+use skill_studio_core::dto::{RemoveOutcome, RemoveRequest};
+use skill_studio_core::identity::{CorrelationId, DeploymentId};
+use skill_studio_core::ops::{self, Operation, ResultEnvelope};
+use skill_studio_core::ports::OpContext;
+use tauri::{Emitter, Manager};
 
 /// The `npx -y @sentry/dotagents add <source> --name <name> [--ref <ref>]`
 /// argv - the plain (non-re-pinning) shape of what `dotagents_update_args`
@@ -74,61 +68,19 @@ fn with_authorized_lifecycle_command_target<T>(
     operation(skill, deployment)
 }
 
-/// `set_skills_sh_api_key`'s logic against an arbitrary home dir, so tests
-/// don't need to touch the real `~/.agents`.
-fn save_skills_sh_api_key(home: &std::path::Path, key: &str) -> Result<(), String> {
-    let trimmed = key.trim();
-    if trimmed.is_empty() {
-        return Err("The API key can't be empty".to_string());
-    }
-    let mut registry = skill_fork_registry::read_fork_registry(home)?;
-    registry.skills_sh_api_key = Some(trimmed.to_string());
-    skill_fork_registry::write_fork_registry(home, &registry)
-}
-
-/// `get_skills_sh_access`'s logic against an arbitrary home dir, so tests
-/// don't need to touch the real `~/.agents`.
-fn skills_sh_access_info(home: &std::path::Path) -> Result<SkillsShAccessInfo, String> {
-    Ok(match api::resolve_skills_sh_access(home)? {
-        api::SkillsShAccess::Direct { .. } => SkillsShAccessInfo {
-            mode: "direct".to_string(),
-            server_url: None,
-        },
-        api::SkillsShAccess::Server { base_url } => SkillsShAccessInfo {
-            mode: "server".to_string(),
-            server_url: Some(base_url.trim_end_matches("/api/v1").to_string()),
-        },
-    })
-}
-
-/// Whether discovery goes straight to skills.sh with a developer-override key
-/// (`"direct"`) or through the local Skill Studio server (`"server"`, with
-/// its URL) - the Settings page's status line and the Browse tab's error
-/// messaging both read this instead of the old key-only status.
-#[tauri::command]
-pub fn get_skills_sh_access() -> Result<SkillsShAccessInfo, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    skills_sh_access_info(&home)
-}
-
-/// Saves `key` as `skills_sh_api_key` in `~/.agents/skill-studio.json`,
-/// preserving every other field. Refuses an empty (or all-whitespace) key -
-/// the Settings page's Save button.
-#[tauri::command]
-pub fn set_skills_sh_api_key(key: String) -> Result<(), String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    save_skills_sh_api_key(&home, &key)
-}
-
 /// Search for skills on skills.sh
 #[tauri::command]
 pub async fn search_skills(
     query: String,
     limit: Option<u32>,
+    app: tauri::AppHandle,
 ) -> Result<PaginatedSkillsResponse, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let access = api::resolve_skills_sh_access(&home)?;
-    api::search_skills(&access, &query, limit).await
+    crate::timing_log::time_command_async(&app, "search_skills", async move {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let access = api::resolve_skills_sh_access(&home)?;
+        api::search_skills(&access, &query, limit).await
+    })
+    .await
 }
 
 /// Get popular skills (sorted by install count)
@@ -136,87 +88,245 @@ pub async fn search_skills(
 pub async fn get_popular_skills(
     page: Option<u32>,
     per_page: Option<u32>,
+    app: tauri::AppHandle,
 ) -> Result<PaginatedSkillsResponse, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let access = api::resolve_skills_sh_access(&home)?;
-    api::get_popular_skills(&access, page, per_page).await
+    crate::timing_log::time_command_async(&app, "get_popular_skills", async move {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let access = api::resolve_skills_sh_access(&home)?;
+        api::get_popular_skills(&access, page, per_page).await
+    })
+    .await
 }
 
 /// Get skill details from skills.sh
 #[tauri::command]
-pub async fn get_skill_details(skill_id: String) -> Result<SkillDetails, String> {
+pub async fn get_skill_details(
+    skill_id: String,
+    app: tauri::AppHandle,
+) -> Result<SkillDetails, String> {
+    crate::timing_log::time_command_async(&app, "get_skill_details", async move {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let access = api::resolve_skills_sh_access(&home)?;
+        api::get_skill_details(&access, &skill_id).await
+    })
+    .await
+}
+
+/// skills.sh install counts for installed skills-sh skills. Cached on disk
+/// for 24 h and fetched in the background at a throttled pace; offline or
+/// unknown skills come back with `installs: null`, never an error.
+#[tauri::command]
+pub async fn get_install_counts(
+    keys: Vec<InstallCountKey>,
+    app: tauri::AppHandle,
+) -> Result<Vec<InstallCount>, String> {
+    use super::skill_install_counts as counts;
+    let cache_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not find the app data folder: {e}"))?
+        .join("install-counts.json");
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     let access = api::resolve_skills_sh_access(&home)?;
-    api::get_skill_details(&access, &skill_id).await
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    Ok(counts::lookup_install_counts(
+        std::sync::Arc::new(counts::SkillsShInstallsApi { access }),
+        counts::shared_scheduler(),
+        &cache_path,
+        keys,
+        now,
+    )
+    .await)
 }
 
 /// Get all installed skills. Returns the background-refreshed snapshot's
-/// skills (see `skill_refresh`) when it already accounts for every path in
-/// `project_paths` and no mutation is pending (`skills_dirty`); otherwise
-/// registers the missing paths and rebuilds the snapshot synchronously (so
-/// this read-after-write sees fresh data), which also covers the case where
-/// the background snapshot hasn't landed yet or a mutation just landed and
-/// the background rebuild hasn't caught up.
+/// skills (see `skill_refresh`) when one exists and no mutation is pending
+/// (`skills_dirty`); otherwise rebuilds the snapshot synchronously (so a
+/// read right after a write, or the very first read before the background
+/// thread's initial build has landed, still sees fresh data). The project
+/// list comes from `~/.agents/skill-studio.json` (see
+/// `skill_refresh::effective_project_paths`), not from the caller.
 #[tauri::command]
-pub fn get_installed_skills(
-    project_paths: Option<Vec<String>>,
-    refresh_state: tauri::State<SkillRefreshState>,
-    app: tauri::AppHandle,
-) -> Result<Vec<InstalledSkill>, String> {
-    let requested = project_paths.unwrap_or_default();
-    let snapshot = refresh_state.snapshot.read().ok().and_then(|g| g.clone());
+pub async fn get_installed_skills(app: tauri::AppHandle) -> Result<Vec<InstalledSkill>, String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "get_installed_skills", move || {
+        let refresh_state = app.state::<SkillRefreshState>();
+        let snapshot = refresh_state.snapshot.read().ok().and_then(|g| g.clone());
 
-    if let Some(snapshot) = &snapshot {
-        if !refresh_state.is_skills_dirty()
-            && snapshot_covers_projects(&requested, &snapshot.projects)
-        {
-            return Ok(snapshot.skills.clone());
+        if let Some(snapshot) = &snapshot {
+            if !refresh_state.is_skills_dirty() {
+                return Ok(snapshot.skills.clone());
+            }
         }
-    }
 
-    refresh_state.add_extra_projects(requested);
-    let rebuilt = skill_refresh::rebuild_snapshot_now(&app, &refresh_state)?;
-    Ok(rebuilt.skills)
-}
-
-/// Whether the *published* snapshot already accounts for every path in
-/// `requested`. Pulled out into a pure function so it can be unit tested:
-/// this must only compare against `snapshot.projects`, never against
-/// caller-registered `extra_projects`, since a path registered but not yet
-/// rebuilt into the snapshot would otherwise look "covered" while the
-/// snapshot's `skills` still doesn't include it.
-fn snapshot_covers_projects(requested: &[String], snapshot_projects: &[String]) -> bool {
-    requested.iter().all(|p| snapshot_projects.contains(p))
+        let rebuilt = skill_refresh::rebuild_snapshot_now(&app, &refresh_state)?;
+        Ok(rebuilt.skills)
+    })
+    .await
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::skill_md_write::write_skill_md;
+    use super::super::skill_process::CommandRunner;
     use super::*;
+    use std::sync::atomic::Ordering;
+
+    /// Flow: an "Update all" batch holds one wildcard-dotagents (read-only)
+    /// target and one updatable target. Expectation: the updatable one is
+    /// still run, the read-only one comes back as a failed item carrying the
+    /// refusal message, the call itself returns Ok, and progress counts both.
+    /// A failure means one refused target aborts the batch (the "Updated 0 of
+    /// 80" bug) or hides why it failed.
+    #[test]
+    fn update_all_batch_runs_the_updatable_target_and_reports_the_read_only_one_as_failed() {
+        use skill_studio_core::dto::{
+            InstallMethod, UpdateAllItem, UpdateAllOutcome, UpdateOutcome, UpdateRequest,
+        };
+        use skill_studio_core::identity::{EventId, RootScope, SkillName};
+
+        let target = |owner: &str| LifecycleTarget {
+            deployment_id: None,
+            owner_id: Some(owner.to_string()),
+        };
+        let targets = [
+            target("owner:v1/global/read-only"),
+            target("owner:v1/global/updatable"),
+        ];
+        let resolve = |target: &LifecycleTarget| {
+            let owner_id = target.owner_id.clone().unwrap();
+            let name = owner_id.rsplit('/').next().unwrap().to_string();
+            let kind = if name == "read-only" {
+                super::super::skill_ownership::LifecycleOwnerKind::WildcardDotagents
+            } else {
+                super::super::skill_ownership::LifecycleOwnerKind::SkillsSh
+            };
+            let deployment = super::super::skill_dto::Deployment {
+                path: format!("/home/.agents/skills/{name}"),
+                owner_id: Some(owner_id),
+                owner_kind: kind,
+                mutability: if kind.is_mutable() {
+                    super::super::skill_deployment::DeploymentMutability::Mutable
+                } else {
+                    super::super::skill_deployment::DeploymentMutability::ReadOnly
+                },
+                ..Default::default()
+            };
+            super::super::skill_lifecycle::require_direct_deployment_mutable(&deployment, "Update")
+                .map_err(|message| UnresolvedUpdateTarget {
+                    skill: SkillName(name.clone()),
+                    message,
+                })?;
+            Ok((
+                UpdateRequest {
+                    skill: SkillName(name.clone()),
+                    method: InstallMethod::SkillsSh,
+                    scope: RootScope::Global,
+                    files: Vec::new(),
+                    source: None,
+                    ref_pin: None,
+                },
+                (
+                    name,
+                    deployment.owner_id.clone(),
+                    PathBuf::from(&deployment.path),
+                ),
+            ))
+        };
+        let mut ran = Vec::new();
+        let mut progress = Vec::new();
+
+        let (outcome, owners) = run_update_all_batch(
+            &targets,
+            resolve,
+            |requests, on_finished| {
+                ran = requests.iter().map(|r| r.skill.0.clone()).collect();
+                let mut items = Vec::new();
+                for request in requests {
+                    on_finished(&request.skill.0);
+                    items.push(UpdateAllItem {
+                        skill: request.skill.clone(),
+                        outcome: Some(UpdateOutcome {
+                            event_id: EventId("event".to_string()),
+                            skill: request.skill.clone(),
+                            deployment_path: PathBuf::from("/home/.agents/skills/updatable"),
+                            tree_hash_before: "a".to_string(),
+                            tree_hash_after: "b".to_string(),
+                        }),
+                    });
+                }
+                Ok(UpdateAllOutcome {
+                    items,
+                    errors: Default::default(),
+                })
+            },
+            |event| progress.push((event.done, event.total, event.skill_name)),
+        )
+        .expect("a refused target must not fail the whole batch");
+
+        assert_eq!(ran, vec!["updatable"]);
+        assert_eq!(outcome.items.len(), 2);
+        let failed: Vec<_> = outcome
+            .items
+            .iter()
+            .filter(|item| item.outcome.is_none())
+            .collect();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].skill.0, "read-only");
+        assert!(
+            outcome.errors["read-only"].contains("wildcard-dotagents (read-only)"),
+            "{:?}",
+            outcome.errors
+        );
+        assert_eq!(owners.len(), 1);
+        assert_eq!(
+            progress,
+            vec![
+                (1, 2, "read-only".to_string()),
+                (2, 2, "updatable".to_string())
+            ]
+        );
+    }
+
+    /// Flow: every target of an "Update all" batch is refused. Expectation:
+    /// Ok with every item failed, and `run` (which builds the runtime and
+    /// takes the write lease) is never called. A failure means an all-refused
+    /// batch errors out or touches the write path for nothing.
+    #[test]
+    fn update_all_batch_where_every_target_is_refused_returns_ok_with_all_items_failed() {
+        let targets = [LifecycleTarget {
+            deployment_id: None,
+            owner_id: Some("owner:v1/global/only".to_string()),
+        }];
+
+        let (outcome, owners) = run_update_all_batch(
+            &targets,
+            |_| {
+                Err(UnresolvedUpdateTarget {
+                    skill: skill_studio_core::identity::SkillName("only".to_string()),
+                    message: "Update is not available".to_string(),
+                })
+            },
+            |_, _| panic!("no request resolved, so nothing should run"),
+            |_| {},
+        )
+        .expect("all-refused batch still returns Ok");
+
+        assert_eq!(outcome.items.len(), 1);
+        assert!(outcome.items[0].outcome.is_none());
+        assert_eq!(outcome.errors["only"], "Update is not available");
+        assert!(owners.is_empty());
+    }
 
     struct CountingLifecycleRunner(std::sync::atomic::AtomicUsize);
 
     impl CommandRunner for CountingLifecycleRunner {
-        fn run_npx(&self, _args: &[String], _cwd: Option<&Path>) -> Result<(), String> {
+        fn run(&self, _program: &str, _args: &[String], _cwd: Option<&Path>) -> Result<(), String> {
             self.0.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
-    }
-
-    #[test]
-    fn snapshot_covers_projects_requires_published_membership() {
-        let snapshot_projects = vec!["/work/known".to_string()];
-
-        assert!(snapshot_covers_projects(
-            &["/work/known".to_string()],
-            &snapshot_projects
-        ));
-        // A caller-registered path that hasn't landed in the snapshot yet
-        // must NOT be treated as covered, even though it would be in
-        // `extra_projects`.
-        assert!(!snapshot_covers_projects(
-            &["/work/not-yet-rebuilt".to_string()],
-            &snapshot_projects
-        ));
     }
 
     /// A minimal `SkillSnapshot` with one skill deployed at `dep_dir`, with
@@ -225,10 +335,10 @@ mod tests {
         dep_dir: &std::path::Path,
         plugin: Option<super::super::skill_dto::PluginInfo>,
     ) -> skill_refresh::SkillSnapshot {
-        use super::super::provenance::SourceKind;
         use super::super::skill_dto::{Deployment, InstalledSkill};
-        use super::super::skill_invocations::InvocationHeatmap;
+        use super::super::SourceKind;
         use chrono::Utc;
+        use skill_studio_core::skill_uses::InvocationHeatmap;
         use std::collections::BTreeMap;
 
         skill_refresh::SkillSnapshot {
@@ -272,8 +382,6 @@ mod tests {
                 frontmatter_fields: BTreeMap::new(),
                 folder_truncated: false,
                 fork: None,
-                trial: None,
-                trials: Vec::new(),
                 parked: false,
                 parked_at: None,
                 invocation: super::super::frontmatter::InvocationPolicy::Both,
@@ -285,7 +393,88 @@ mod tests {
             last_test_by_skill: Default::default(),
             update_check: Default::default(),
             opencode_config_kind: None,
+            scan_partial: false,
+            scan_observations: Vec::new(),
+            unread_roots: Vec::new(),
         }
+    }
+
+    fn installed_skill_fixture(name: &str) -> super::super::skill_dto::InstalledSkill {
+        use super::super::SourceKind;
+        use chrono::Utc;
+
+        super::super::skill_dto::InstalledSkill {
+            name: name.to_string(),
+            source: "manual".to_string(),
+            source_type: "manual".to_string(),
+            source_url: None,
+            skill_path: None,
+            installed_at: Utc::now().to_rfc3339(),
+            updated_at: None,
+            has_update: true,
+            update_owner_ids: vec![
+                "skills-sh/global".to_string(),
+                "dotagents/global".to_string(),
+            ],
+            update_owners: vec![
+                super::super::skill_dto::OwnerUpdateInfo {
+                    owner_id: "skills-sh/global".to_string(),
+                    latest_commit: Some("aaa1111".to_string()),
+                    latest_commit_at: None,
+                    plugin_scope: None,
+                    plugin_project_path: None,
+                },
+                super::super::skill_dto::OwnerUpdateInfo {
+                    owner_id: "dotagents/global".to_string(),
+                    latest_commit: Some("bbb2222".to_string()),
+                    latest_commit_at: None,
+                    plugin_scope: None,
+                    plugin_project_path: None,
+                },
+            ],
+            update_commit: Some("aaa1111".to_string()),
+            update_commit_at: None,
+            source_kind: SourceKind::Manual,
+            deployments: Vec::new(),
+            has_spec: false,
+            description: None,
+            spec_violations: Vec::new(),
+            skill_md_tokens: 0,
+            description_tokens: 0,
+            folder_bytes: 0,
+            file_count: 0,
+            content_hash: String::new(),
+            content_hashes: Vec::new(),
+            modified_at: None,
+            frontmatter_fields: Default::default(),
+            folder_truncated: false,
+            fork: None,
+            parked: false,
+            parked_at: None,
+            invocation: super::super::frontmatter::InvocationPolicy::Both,
+        }
+    }
+
+    fn discovered_dotagents_snapshot(
+        home: &Path,
+        projects: &[PathBuf],
+    ) -> skill_refresh::SkillSnapshot {
+        let update_check_path = home.join("core-data/update-check.json");
+        let core_skills = super::super::skill_refresh::core_scan_installed_skills(
+            home,
+            projects,
+            &update_check_path,
+            &[],
+        );
+        let lock = skill_studio_core::lock_file::SkillLockFile {
+            version: 3,
+            skills: Default::default(),
+        };
+        let skills =
+            super::super::skill_assembly::assemble_installed_skills(&core_skills.skills, &lock);
+        let mut snapshot = fixture_snapshot(home, None);
+        snapshot.skills = skills;
+        snapshot
     }
 
     fn propagated_link_target_fixture(
@@ -330,6 +519,54 @@ mod tests {
         )
     }
 
+    /// A snapshot with one skill owned by a single mutable owner (no
+    /// direct-deployment target), matching what `lifecycleTargetForSkill`
+    /// sends for Fork, `SkillsSh` and Dotagents owners: `{ owner_id }` with
+    /// `deployment_id` absent.
+    fn single_owner_target_fixture(root: &Path) -> (skill_refresh::SkillSnapshot, LifecycleTarget) {
+        use super::super::skill_deployment::{
+            deployment_id, BackingRelationship, DeploymentMutability, SkillDestination,
+        };
+        use super::super::skill_ownership::LifecycleOwnerKind;
+
+        let dep_dir = root.join(".agents/skills/foo");
+        std::fs::create_dir_all(&dep_dir).unwrap();
+        std::fs::write(dep_dir.join("SKILL.md"), "---\nname: foo\n---\n").unwrap();
+        let content_hash =
+            crate::skills::core_content_hash::live_skill_content_hash(&dep_dir).unwrap();
+        let id = deployment_id(
+            "foo",
+            "global",
+            SkillDestination::Universal,
+            "universal",
+            None,
+            &dep_dir,
+        );
+        let owner_id = "owner:v1/global/foo".to_string();
+
+        let mut snapshot = fixture_snapshot(&dep_dir, None);
+        snapshot.skills[0].deployments[0] = super::super::skill_dto::Deployment {
+            id: id.clone(),
+            destination: SkillDestination::Universal,
+            owner_kind: LifecycleOwnerKind::SkillsSh,
+            owner_id: Some(owner_id.clone()),
+            mutability: DeploymentMutability::Mutable,
+            backing: BackingRelationship::Canonical,
+            agent: "shared".to_string(),
+            scope: "global".to_string(),
+            path: dep_dir.to_string_lossy().to_string(),
+            content_hash,
+            ..Default::default()
+        };
+        (
+            snapshot,
+            LifecycleTarget {
+                deployment_id: None,
+                owner_id: Some(owner_id),
+            },
+        )
+    }
+
     fn run_counted_lifecycle_command(
         snapshot: &skill_refresh::SkillSnapshot,
         target: &LifecycleTarget,
@@ -368,30 +605,6 @@ mod tests {
     }
 
     #[test]
-    fn skills_sh_remove_args_selects_global_flag() {
-        assert_eq!(
-            skills_sh_remove_args_for_scope("foo", InstallScope::Global),
-            vec!["skills", "remove", "foo", "--yes", "--global"]
-        );
-        assert_eq!(
-            skills_sh_remove_args_for_scope("foo", InstallScope::Project),
-            vec!["skills", "remove", "foo", "--yes"]
-        );
-    }
-
-    #[test]
-    fn dotagents_remove_args_selects_project_mode() {
-        assert_eq!(
-            dotagents_remove_args("foo", InstallScope::Project),
-            vec!["-y", "@sentry/dotagents", "--project", "remove", "foo"]
-        );
-        assert_eq!(
-            dotagents_remove_args("foo", InstallScope::Global),
-            vec!["-y", "@sentry/dotagents", "remove", "foo"]
-        );
-    }
-
-    #[test]
     fn write_refused_for_plugin_deployment() {
         let tmp = tempfile::tempdir().unwrap();
         let dep_dir = tmp.path().join("foo");
@@ -403,6 +616,8 @@ mod tests {
             name: "openai-templates".to_string(),
             version: Some("1.0.0".to_string()),
             harness: "Codex".to_string(),
+            marketplace: "some-marketplace".to_string(),
+            id: "openai-templates@some-marketplace".to_string(),
         };
         let snapshot = fixture_snapshot(&dep_dir, Some(plugin));
 
@@ -469,7 +684,7 @@ mod tests {
 
         let leftover_temp_files = std::fs::read_dir(tmp.path())
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| {
                 e.file_name()
                     .to_string_lossy()
@@ -543,1651 +758,1036 @@ mod tests {
         );
     }
 
-    fn dotagents_skill(
-        name: &str,
-        declared_ref: Option<&str>,
-        has_manifest_row: bool,
-    ) -> super::super::dotagents_ledger::DotagentsSkill {
-        super::super::dotagents_ledger::DotagentsSkill {
-            name: name.to_string(),
-            source: format!("getsentry/{name}"),
-            github_repo: Some(format!("getsentry/{name}")),
-            path: format!("skills/{name}"),
-            installed_commit: Some("a".repeat(40)),
-            declared_ref: declared_ref.map(str::to_string),
-            has_manifest_row,
-        }
-    }
-
     #[test]
-    fn dotagents_update_args_rejects_skill_with_no_matching_ledger_entry() {
-        let err = dotagents_update_args("manual-in-shared-root", None, None, InstallScope::Global)
-            .unwrap_err();
-        assert_eq!(
-            err,
-            "Update is not available: manual-in-shared-root is not in the matching agents.lock"
-        );
-    }
+    fn update_from_the_desktop_clears_the_outdated_flag_without_a_full_rescan_or_names_the_stale_row(
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let app_data = tmp.path().join("app-data");
+        std::fs::create_dir_all(&app_data).unwrap();
 
-    #[test]
-    fn dotagents_update_args_rejects_wildcard_read_only_entry() {
-        let entry = dotagents_skill("find-bugs", None, false);
-        let err = dotagents_update_args("find-bugs", Some(&entry), None, InstallScope::Global)
-            .unwrap_err();
-        assert_eq!(
-            err,
-            "Update is not available: find-bugs is a wildcard dotagents entry"
-        );
-    }
+        let mut skill = installed_skill_fixture("alpha");
+        skill.deployments = vec![
+            super::super::skill_dto::Deployment {
+                owner_id: Some("skills-sh/global".to_string()),
+                agent: "shared".to_string(),
+                scope: "global".to_string(),
+                path: tmp.path().join("alpha").to_string_lossy().to_string(),
+                ..Default::default()
+            },
+            super::super::skill_dto::Deployment {
+                owner_id: Some("dotagents/global".to_string()),
+                agent: "shared".to_string(),
+                scope: "global".to_string(),
+                path: tmp.path().join("alpha").to_string_lossy().to_string(),
+                ..Default::default()
+            },
+        ];
+        assert!(skill.has_update);
+        let snapshot = skill_refresh::SkillSnapshot {
+            revision: 0,
+            skills: vec![skill],
+            projects: Vec::new(),
+            invocations: Vec::new(),
+            heatmap: Default::default(),
+            scanned_at: chrono::Utc::now().to_rfc3339(),
+            last_test_by_skill: Default::default(),
+            update_check: Default::default(),
+            opencode_config_kind: None,
+            scan_partial: false,
+            scan_observations: Vec::new(),
+            unread_roots: Vec::new(),
+        };
+        let refresh_state = skill_refresh::SkillRefreshState::fixture(snapshot);
+        // Both owners, the way `update_skill`/`update_all_skills` pass the
+        // fresh snapshot's own owner ids rather than re-reading `refresh_state`.
+        let current_owner_ids = vec![
+            "skills-sh/global".to_string(),
+            "dotagents/global".to_string(),
+        ];
 
-    #[test]
-    fn dotagents_update_args_named_unpinned_entry_uses_add_without_ref() {
-        let entry = dotagents_skill("find-bugs", None, true);
-        let args =
-            dotagents_update_args("find-bugs", Some(&entry), None, InstallScope::Global).unwrap();
-        assert_eq!(
-            args,
-            vec![
-                "-y",
-                "@sentry/dotagents",
-                "add",
-                "getsentry/find-bugs",
-                "--name",
-                "find-bugs"
-            ]
-        );
-    }
-
-    #[test]
-    fn dotagents_update_args_selects_project_mode() {
-        let entry = dotagents_skill("find-bugs", None, true);
-        let args =
-            dotagents_update_args("find-bugs", Some(&entry), None, InstallScope::Project).unwrap();
-        assert_eq!(
-            args,
-            vec![
-                "-y",
-                "@sentry/dotagents",
-                "--project",
-                "add",
-                "getsentry/find-bugs",
-                "--name",
-                "find-bugs"
-            ]
-        );
-    }
-
-    struct DotagentsRemovalRunner {
-        fail: bool,
-    }
-
-    impl CommandRunner for DotagentsRemovalRunner {
-        fn run_npx(&self, _args: &[String], _cwd: Option<&Path>) -> Result<(), String> {
-            if self.fail {
-                Err("injected dotagents failure".to_string())
-            } else {
-                Ok(())
+        // Seed the on-disk store the way the background loop's last check
+        // would have left it before `update_skill` ran: both owners outdated.
+        let store_state = |installed: &str, latest: &str, error: Option<&str>| {
+            skill_update_check::SkillUpdateState {
+                repo: "obra/write-tests".to_string(),
+                path: "skills/alpha".to_string(),
+                installed_commit: Some(installed.to_string()),
+                latest_commit: Some(latest.to_string()),
+                latest_commit_at: None,
+                checked_at: chrono::Utc::now().to_rfc3339(),
+                error: error.map(str::to_string),
             }
-        }
+        };
+        let store = skill_update_check::UpdateCheckStore {
+            version: 2,
+            checked_at: Some(chrono::Utc::now().to_rfc3339()),
+            gh_status: skill_update_check::GhStatus::Ok,
+            owners: [
+                (
+                    "skills-sh/global".to_string(),
+                    // A stale error from a prior failed check, still on
+                    // this owner's record when the update that just
+                    // succeeded runs - N2 (review round 3) clears it.
+                    store_state("old-a", "new-a", Some("gh: rate limited")),
+                ),
+                (
+                    "dotagents/global".to_string(),
+                    store_state("old-b", "new-b", None),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            upstream_ahead: Default::default(),
+            legacy_skills: Default::default(),
+        };
+        let update_check_path = skill_update_check::update_check_path(&app_data);
+        std::fs::create_dir_all(update_check_path.parent().unwrap()).unwrap();
+        std::fs::write(&update_check_path, serde_json::to_string(&store).unwrap()).unwrap();
+
+        let built = clear_outdated_state(
+            &app_data,
+            &refresh_state,
+            "alpha",
+            Some("skills-sh/global"),
+            &current_owner_ids,
+        )
+        .unwrap()
+        .expect("a snapshot existed to patch");
+        assert_eq!(
+            built.skills[0].update_owner_ids,
+            vec!["dotagents/global".to_string()]
+        );
+        let refreshed = skill_update_check::read_update_check_store(&app_data);
+        assert_eq!(
+            refreshed
+                .owners
+                .get("skills-sh/global")
+                .and_then(|s| s.error.as_deref()),
+            None,
+            "a successful update must clear the stale error on the rewritten entry"
+        );
+        assert!(
+            built.skills[0].has_update,
+            "a second still-outdated owner must keep the badge on"
+        );
+
+        let built = clear_outdated_state(
+            &app_data,
+            &refresh_state,
+            "alpha",
+            Some("dotagents/global"),
+            &current_owner_ids,
+        )
+        .unwrap()
+        .expect("a snapshot existed to patch");
+        assert!(built.skills[0].update_owner_ids.is_empty());
+        assert!(
+            !built.skills[0].has_update,
+            "clearing the last outdated owner must drop the badge"
+        );
+
+        // Rebuild overlays straight from the store, the way the next full
+        // `get_installed_skills` would - this is the B1 assertion.
+        let refreshed_store = skill_update_check::read_update_check_store(&app_data);
+        let mut skills = built.skills.clone();
+        skill_refresh::apply_skill_snapshot_overlays(
+            tmp.path(),
+            &mut skills,
+            &super::super::skill_fork_registry::ForkRegistry::default(),
+            &refreshed_store,
+            &super::super::skill_plugin_update::PluginVersionCache::default(),
+            &[],
+        );
+        assert!(
+            !skills[0].has_update,
+            "the badge must not reappear on the next full rebuild after B1's store patch"
+        );
     }
 
-    fn write_dotagents_owner(agents_dir: &Path, name: &str) {
-        std::fs::create_dir_all(agents_dir.join("skills").join(name)).unwrap();
+    /// `update_on_a_migrated_v1_store_keeps_the_badge_off_or_names_the_resurrected_owner`
+    /// (B2, review round 2): round 1's `clear_owner_after_update` removed the
+    /// `owners` entry, which did nothing when a migrated v1 store's
+    /// background loop hadn't run against this owner yet - the only record
+    /// was `legacy_skills["alpha"]`, still holding the pre-update pair, and
+    /// `state_for_owner`'s sole-Global-owner fallback kept serving it. Seeds
+    /// exactly that: an empty `owners` map and a `legacy_skills` entry for
+    /// the sole Global owner. Without B2's fix (falling back to the legacy
+    /// record and writing it into `owners[owner_id]` with
+    /// `installed_commit = latest_commit`), the rebuilt overlay below
+    /// recomputes `has_update = true` from the untouched legacy pair and
+    /// this is the assertion that fails.
+    #[test]
+    fn update_on_a_migrated_v1_store_keeps_the_badge_off_or_names_the_resurrected_owner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app_data = tmp.path().join("app-data");
+        std::fs::create_dir_all(&app_data).unwrap();
+
+        // A real `owner:v1/...` id, not the shorthand the sibling test
+        // above uses - `state_for_owner`'s legacy fallback only fires for
+        // an id `parse_owner_id` can actually parse.
+        let owner_id = "owner:v1/global/alpha";
+        let mut skill = installed_skill_fixture("alpha");
+        skill.deployments = vec![super::super::skill_dto::Deployment {
+            owner_id: Some(owner_id.to_string()),
+            agent: "shared".to_string(),
+            scope: "global".to_string(),
+            path: tmp.path().join("alpha").to_string_lossy().to_string(),
+            ..Default::default()
+        }];
+        // Fixture's default is two owners - trim to the sole owner this
+        // test's single deployment actually has.
+        skill.update_owner_ids = vec![owner_id.to_string()];
+        skill
+            .update_owners
+            .retain(|update| update.owner_id == owner_id);
+        let snapshot = skill_refresh::SkillSnapshot {
+            revision: 0,
+            skills: vec![skill],
+            projects: Vec::new(),
+            invocations: Vec::new(),
+            heatmap: Default::default(),
+            scanned_at: chrono::Utc::now().to_rfc3339(),
+            last_test_by_skill: Default::default(),
+            update_check: Default::default(),
+            opencode_config_kind: None,
+            scan_partial: false,
+            scan_observations: Vec::new(),
+            unread_roots: Vec::new(),
+        };
+        let refresh_state = skill_refresh::SkillRefreshState::fixture(snapshot);
+        // The sole owner, the way `update_skill`/`update_all_skills` pass the
+        // fresh snapshot's own owner ids rather than re-reading `refresh_state`.
+        let current_owner_ids = vec![owner_id.to_string()];
+
+        // A genuine migrated v1 store on disk: no top-level `"owners"` key,
+        // only the legacy name-keyed pair - the same shape
+        // `read_update_check_store_at` detects and migrates into
+        // `legacy_skills`. Building this via `UpdateCheckStore` and
+        // `serde_json::to_string` would not do, since `legacy_skills` is
+        // `#[serde(skip)]` and would round-trip empty.
+        let update_check_path = skill_update_check::update_check_path(&app_data);
+        std::fs::create_dir_all(update_check_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &update_check_path,
+            serde_json::json!({
+                "checked_at": "2026-01-01T00:00:00Z",
+                "gh_status": {"kind": "ok"},
+                "skills": {
+                    "alpha": {
+                        "repo": "obra/write-tests",
+                        "path": "skills/alpha",
+                        "installed_commit": "old-a",
+                        "latest_commit": "new-a",
+                        "latest_commit_at": null,
+                        "checked_at": "2026-01-01T00:00:00Z",
+                        "error": null
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let built = clear_outdated_state(
+            &app_data,
+            &refresh_state,
+            "alpha",
+            Some(owner_id),
+            &current_owner_ids,
+        )
+        .unwrap()
+        .expect("a snapshot existed to patch");
+        assert!(!built.skills[0].has_update);
+
+        // Rebuild overlays straight from the store, the way the next full
+        // `get_installed_skills` would - the sole-Global-owner fallback
+        // `state_for_owner` runs needs the owner id present in
+        // `current_owner_ids` to count it as the only matching owner.
+        let refreshed_store = skill_update_check::read_update_check_store(&app_data);
+        let mut skills = built.skills.clone();
+        skill_refresh::apply_skill_snapshot_overlays(
+            tmp.path(),
+            &mut skills,
+            &super::super::skill_fork_registry::ForkRegistry::default(),
+            &refreshed_store,
+            &super::super::skill_plugin_update::PluginVersionCache::default(),
+            &[owner_id.to_string()],
+        );
+        assert!(
+            !skills[0].has_update,
+            "the pre-update legacy pair must not resurrect the badge on the next full rebuild"
+        );
+    }
+
+    /// `update_for_a_project_owner_does_not_write_a_global_legacy_record_or_names_the_borrowed_state`
+    /// (N2, review round 3): the round-2 `clear_owner_after_update` fell
+    /// back to `legacy_skills[skill_name]` for *any* owner with no `owners`
+    /// entry, wider than `state_for_owner`'s read-side fallback (sole
+    /// matching Global owner only). Seeds a Project owner with no `owners`
+    /// entry and a `legacy_skills["alpha"]` record a pre-3.6b Global-only
+    /// checker wrote - a real shape, since the legacy store never
+    /// distinguished scope. Without N2's fix this owner would get that
+    /// Global-scoped commit pair written into `owners[owner_id]`, in effect
+    /// reading a Global check result for a Project deployment. Asserts the
+    /// call is a no-op instead: `owners` gains no entry for the Project id.
+    #[test]
+    fn update_for_a_project_owner_does_not_write_a_global_legacy_record_or_names_the_borrowed_state(
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let app_data = tmp.path().join("app-data");
+        std::fs::create_dir_all(&app_data).unwrap();
+
+        let owner_id = "owner:v1/project/-/alpha";
+        let update_check_path = skill_update_check::update_check_path(&app_data);
+        std::fs::create_dir_all(update_check_path.parent().unwrap()).unwrap();
+        // A genuine migrated v1 store: no `owners` entry for this Project
+        // owner, only the legacy name-keyed pair a Global-only checker left
+        // behind.
+        std::fs::write(
+            &update_check_path,
+            serde_json::json!({
+                "checked_at": "2026-01-01T00:00:00Z",
+                "gh_status": {"kind": "ok"},
+                "skills": {
+                    "alpha": {
+                        "repo": "obra/write-tests",
+                        "path": "skills/alpha",
+                        "installed_commit": "old-a",
+                        "latest_commit": "new-a",
+                        "latest_commit_at": null,
+                        "checked_at": "2026-01-01T00:00:00Z",
+                        "error": null
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        skill_update_check::clear_owner_after_update(&app_data, owner_id, &[owner_id.to_string()])
+            .unwrap();
+
+        let store = skill_update_check::read_update_check_store(&app_data);
+        assert!(
+            !store.owners.contains_key(owner_id),
+            "a Project owner must not inherit a Global-scoped legacy record: {:?}",
+            store.owners
+        );
+    }
+
+    #[test]
+    fn build_update_request_refuses_the_three_desktop_preconditions_or_names_the_accepted_owner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_data = tmp.path().join("app-data");
+        std::fs::create_dir_all(&app_data).unwrap();
+        let _home_guard = super::super::test_support::HomeGuard::new(&home);
+
+        let agents_dir = home.join(".agents");
+        for name in ["declared", "wildcard", "pinned", "adopted"] {
+            std::fs::create_dir_all(agents_dir.join("skills").join(name)).unwrap();
+            std::fs::write(
+                agents_dir.join("skills").join(name).join("SKILL.md"),
+                "body",
+            )
+            .unwrap();
+        }
+        // "wildcard" has an agents.lock row but no `[[skills]]` manifest row
+        // (has_manifest_row == false). "pinned" is declared with a `ref`
+        // (needs a `latest_commit` from "Check now" before it can update).
         std::fs::write(
             agents_dir.join("agents.toml"),
-            format!("[[skills]]\nname = \"{name}\"\nsource = \"o/r\"\n"),
+            "[[skills]]\nname = \"declared\"\nsource = \"o/r\"\n\n[[skills]]\nname = \"pinned\"\nsource = \"o/r\"\nref = \"deadbeef\"\n\n[[skills]]\nname = \"adopted\"\nsource = \"path:skills/adopted\"\n",
         )
         .unwrap();
         std::fs::write(
             agents_dir.join("agents.lock"),
-            format!(
-                "[skills.{name}]\nsource = \"o/r\"\nresolved_path = \"skills/{name}\"\nresolved_commit = \"abc\"\n"
-            ),
+            "[skills.declared]\nsource = \"o/r\"\nresolved_path = \"skills/declared\"\nresolved_commit = \"aaa\"\n\
+             [skills.wildcard]\nsource = \"o/r\"\nresolved_path = \"skills/wildcard\"\nresolved_commit = \"bbb\"\n\
+             [skills.pinned]\nsource = \"o/r\"\nresolved_path = \"skills/pinned\"\nresolved_commit = \"ccc\"\n\
+             [skills.adopted]\nsource = \"path:skills/adopted\"\nresolved_path = \"skills/adopted\"\n",
+        )
+        .unwrap();
+
+        let snapshot = discovered_dotagents_snapshot(&home, &[]);
+        // `classify_owner` (core) already routes a real wildcard scan to
+        // `WildcardDotagents`, not `Dotagents` - so its `has_manifest_row`
+        // check never fires from a live scan. It is still a real desktop
+        // precondition (defends against a hand-built or stale `Dotagents`
+        // deployment pointing at a wildcard ledger row), so this test
+        // drives it directly with an explicit `owner_kind: Dotagents`
+        // deployment rather than one `discovered_dotagents_snapshot` scanned.
+        let declared_id = snapshot
+            .skills
+            .iter()
+            .find(|s| s.name == "declared")
+            .unwrap()
+            .deployments
+            .iter()
+            .find(|d| d.owner_kind == super::super::skill_ownership::LifecycleOwnerKind::Dotagents)
+            .unwrap()
+            .id
+            .clone();
+        let dotagents_deployment_for = |name: &str| -> super::super::skill_dto::Deployment {
+            super::super::skill_dto::Deployment {
+                id: declared_id.clone(),
+                owner_kind: super::super::skill_ownership::LifecycleOwnerKind::Dotagents,
+                owner_id: Some(format!("owner:v1/global/{name}")),
+                agent: "shared".to_string(),
+                scope: "global".to_string(),
+                path: agents_dir
+                    .join("skills")
+                    .join(name)
+                    .to_string_lossy()
+                    .to_string(),
+                ..Default::default()
+            }
+        };
+
+        // 1. Not in the matching agents.lock: a valid ledger match, but a
+        // skill name the ledger has no entry for.
+        let missing = installed_skill_fixture("missing");
+        let err = build_update_request(
+            &app_data,
+            &snapshot,
+            &missing,
+            &dotagents_deployment_for("missing"),
+        )
+        .unwrap_err();
+        assert!(err.contains("not in the matching agents.lock"), "{err}");
+
+        // 2. Wildcard dotagents entry (has_manifest_row == false).
+        let wildcard = installed_skill_fixture("wildcard");
+        let err = build_update_request(
+            &app_data,
+            &snapshot,
+            &wildcard,
+            &dotagents_deployment_for("wildcard"),
+        )
+        .unwrap_err();
+        assert!(err.contains("wildcard dotagents entry"), "{err}");
+
+        // 2b. A `path:` entry `dotagents sync` adopted: the folder is the
+        // only copy, so there is nothing upstream to update from.
+        let adopted = installed_skill_fixture("adopted");
+        let err = build_update_request(
+            &app_data,
+            &snapshot,
+            &adopted,
+            &dotagents_deployment_for("adopted"),
+        )
+        .unwrap_err();
+        assert!(err.contains("local folder"), "{err}");
+
+        // 3. Pinned entry needs "Check now": no update-check store entry
+        // yet, so there is no `latest_commit` to pin the update to.
+        let pinned = installed_skill_fixture("pinned");
+        let err = build_update_request(
+            &app_data,
+            &snapshot,
+            &pinned,
+            &dotagents_deployment_for("pinned"),
+        )
+        .unwrap_err();
+        assert!(err.contains("Check now"), "{err}");
+
+        // 4. Accepted: a `SkillsSh`-owned deployment never touches the
+        // ledger or the update-check store, so it always builds a request.
+        let accepted_skill = installed_skill_fixture("accepted");
+        let accepted_deployment = super::super::skill_dto::Deployment {
+            owner_kind: super::super::skill_ownership::LifecycleOwnerKind::SkillsSh,
+            owner_id: Some("owner:v1/global/accepted".to_string()),
+            agent: "shared".to_string(),
+            scope: "global".to_string(),
+            path: home.join("accepted").to_string_lossy().to_string(),
+            ..Default::default()
+        };
+        let req = build_update_request(&app_data, &snapshot, &accepted_skill, &accepted_deployment)
+            .unwrap_or_else(|e| panic!("SkillsSh owner must be accepted, got: {e}"));
+        assert_eq!(req.skill.0, "accepted");
+    }
+
+    #[test]
+    fn build_update_request_accepts_a_project_dotagents_skill_declared_in_the_project_root_or_names_the_refusal(
+    ) {
+        use skill_studio_core::dto::InstallMethod;
+        use skill_studio_core::identity::RootScope;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let project = tmp.path().join("proj");
+        let app_data = tmp.path().join("app-data");
+        std::fs::create_dir_all(&app_data).unwrap();
+        let _home_guard = super::super::test_support::HomeGuard::new(&home);
+
+        std::fs::create_dir_all(&home).unwrap();
+        let skill_dir = project.join(".agents/skills/alpha");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "body").unwrap();
+        // dotagents --project writes these in the project root, not `.agents/`.
+        std::fs::write(
+            project.join("agents.toml"),
+            "[[skills]]\nname = \"alpha\"\nsource = \"o/r\"\n",
         )
         .unwrap();
         std::fs::write(
-            agents_dir.join("skills").join(name).join("SKILL.md"),
-            "body",
-        )
-        .unwrap();
-    }
-
-    fn discovered_dotagents_snapshot(
-        home: &Path,
-        projects: &[PathBuf],
-    ) -> skill_refresh::SkillSnapshot {
-        let candidates = super::super::skill_discovery::discover_skill_candidates(home, projects);
-        let ledgers = super::super::skill_ownership::load_ownership_ledgers(home, projects);
-        let lock = super::super::lock_file::SkillLockFile {
-            version: 3,
-            skills: Default::default(),
-        };
-        let skills = super::super::skill_assembly::assemble_installed_skills(
-            candidates,
-            &lock,
-            &ledgers,
-            &Default::default(),
-        );
-        let mut snapshot = fixture_snapshot(home, None);
-        snapshot.skills = skills;
-        snapshot
-    }
-
-    fn dotagents_removal_snapshot(
-        canonical_path: &Path,
-        link_path: Option<&Path>,
-        scope: &str,
-        project_path: Option<&Path>,
-    ) -> skill_refresh::SkillSnapshot {
-        use super::super::skill_deployment::{
-            deployment_id, BackingRelationship, DeploymentMutability, SkillDestination,
-        };
-        use super::super::skill_ownership::LifecycleOwnerKind;
-
-        let mut snapshot = fixture_snapshot(canonical_path, None);
-        let owner_id = match project_path {
-            Some(project) => format!(
-                "owner:v1/project/{}/foo",
-                super::super::skill_deployment::encode_id_path(&project.to_string_lossy())
-            ),
-            None => "owner:v1/global/foo".to_string(),
-        };
-        let canonical_id = deployment_id(
-            "foo",
-            scope,
-            SkillDestination::Universal,
-            "universal",
-            project_path.and_then(Path::to_str),
-            canonical_path,
-        );
-        let canonical = &mut snapshot.skills[0].deployments[0];
-        canonical.id = canonical_id.clone();
-        canonical.path = canonical_path.to_string_lossy().into_owned();
-        canonical.scope = scope.to_string();
-        canonical.project_path = project_path.map(|path| path.to_string_lossy().into_owned());
-        canonical.destination = SkillDestination::Universal;
-        canonical.owner_kind = LifecycleOwnerKind::Dotagents;
-        canonical.owner_id = Some(owner_id.clone());
-        canonical.mutability = DeploymentMutability::Mutable;
-        canonical.backing = BackingRelationship::Canonical;
-        if let Some(link_path) = link_path {
-            let mut link = canonical.clone();
-            link.id = deployment_id(
-                "foo",
-                scope,
-                SkillDestination::Universal,
-                "claude-code",
-                project_path.and_then(Path::to_str),
-                link_path,
-            );
-            link.path = link_path.to_string_lossy().into_owned();
-            link.agent = "Claude Code".to_string();
-            link.is_symlink = true;
-            link.resolved_path = std::fs::canonicalize(link_path)
-                .ok()
-                .map(|path| path.to_string_lossy().into_owned());
-            link.backing = BackingRelationship::LinkedTo {
-                deployment_id: canonical_id,
-            };
-            link.owner_id = Some(owner_id);
-            snapshot.skills[0].deployments.push(link);
-        }
-        snapshot
-    }
-
-    #[test]
-    fn dotagents_global_removal_stages_only_exact_backed_claude_link() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let canonical = home.join(".agents/skills/foo");
-        let link = home.join(".claude/skills/foo");
-        let independent = home.join(".codex/skills/foo");
-        for path in [&canonical, &independent] {
-            std::fs::create_dir_all(path).unwrap();
-            std::fs::write(path.join("SKILL.md"), "body").unwrap();
-        }
-        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink("../../.agents/skills/foo", &link).unwrap();
-        let snapshot = dotagents_removal_snapshot(&canonical, Some(&link), "global", None);
-
-        remove_dotagents_deployment_with(
-            DotagentsRemovalContext {
-                home: &home,
-                snapshot: &snapshot,
-                skill_name: "foo",
-                deployment: &snapshot.skills[0].deployments[0],
-                scope: InstallScope::Global,
-                project_path: None,
-            },
-            &DotagentsRemovalRunner { fail: false },
-            |stage| std::fs::remove_dir_all(stage).map_err(|error| error.to_string()),
+            project.join("agents.lock"),
+            "[skills.alpha]\nsource = \"o/r\"\nresolved_path = \"skills/alpha\"\nresolved_commit = \"aaa\"\n",
         )
         .unwrap();
 
-        assert!(std::fs::symlink_metadata(link).is_err());
-        assert!(independent.join("SKILL.md").is_file());
-    }
-
-    #[test]
-    fn dotagents_project_removal_failure_restores_exact_claude_link() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let project = tmp.path().join("project");
-        let canonical = project.join(".agents/skills/foo");
-        let link = project.join(".claude/skills/foo");
-        std::fs::create_dir_all(&canonical).unwrap();
-        std::fs::write(canonical.join("SKILL.md"), "body").unwrap();
-        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink("../../.agents/skills/foo", &link).unwrap();
-        let snapshot =
-            dotagents_removal_snapshot(&canonical, Some(&link), "project", Some(&project));
-
-        let error = remove_dotagents_deployment_with(
-            DotagentsRemovalContext {
-                home: &home,
-                snapshot: &snapshot,
-                skill_name: "foo",
-                deployment: &snapshot.skills[0].deployments[0],
-                scope: InstallScope::Project,
-                project_path: Some(&project),
-            },
-            &DotagentsRemovalRunner { fail: true },
-            |_| Ok(()),
-        )
-        .unwrap_err();
-
-        assert_eq!(error, "injected dotagents failure");
-        assert_eq!(
-            std::fs::read_link(link).unwrap(),
-            PathBuf::from("../../.agents/skills/foo")
-        );
-    }
-
-    #[test]
-    fn dotagents_removal_does_not_touch_independent_claude_collision() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let canonical = home.join(".agents/skills/foo");
-        let collision = home.join(".claude/skills/foo");
-        for path in [&canonical, &collision] {
-            std::fs::create_dir_all(path).unwrap();
-            std::fs::write(path.join("SKILL.md"), path.to_string_lossy().as_bytes()).unwrap();
-        }
-        let snapshot = dotagents_removal_snapshot(&canonical, None, "global", None);
-
-        remove_dotagents_deployment_with(
-            DotagentsRemovalContext {
-                home: &home,
-                snapshot: &snapshot,
-                skill_name: "foo",
-                deployment: &snapshot.skills[0].deployments[0],
-                scope: InstallScope::Global,
-                project_path: None,
-            },
-            &DotagentsRemovalRunner { fail: false },
-            |_| Ok(()),
-        )
-        .unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(collision.join("SKILL.md")).unwrap(),
-            collision.to_string_lossy()
-        );
-    }
-
-    #[test]
-    fn discovered_dotagents_links_inherit_exact_owner_and_are_removed_in_both_scopes() {
-        use super::super::skill_deployment::{BackingRelationship, DeploymentMutability};
-
-        for project_scoped in [false, true] {
-            let tmp = tempfile::tempdir().unwrap();
-            let home = tmp.path().join("home");
-            let project = tmp.path().join("project");
-            let scope_root = if project_scoped { &project } else { &home };
-            let agents_dir = scope_root.join(".agents");
-            let canonical = agents_dir.join("skills/foo");
-            let link = scope_root.join(".claude/skills/foo");
-            write_dotagents_owner(&agents_dir, "foo");
-            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
-            std::os::unix::fs::symlink("../../.agents/skills/foo", &link).unwrap();
-            let projects = if project_scoped {
-                vec![project.clone()]
-            } else {
-                Vec::new()
-            };
-            let snapshot = discovered_dotagents_snapshot(&home, &projects);
-            let skill = snapshot
-                .skills
-                .iter()
-                .find(|skill| skill.name == "foo")
-                .unwrap();
-            let canonical_deployment = skill
-                .deployments
-                .iter()
-                .find(|deployment| deployment.path == canonical.to_string_lossy())
-                .unwrap();
-            let linked = skill
-                .deployments
-                .iter()
-                .find(|deployment| deployment.path == link.to_string_lossy())
-                .unwrap();
-            assert_eq!(
-                linked.owner_id, canonical_deployment.owner_id,
-                "deployments: {:#?}",
-                skill.deployments
-            );
-            assert_eq!(linked.owner_kind, canonical_deployment.owner_kind);
-            assert_eq!(linked.mutability, DeploymentMutability::ReadOnly);
-            assert!(matches!(
-                &linked.backing,
-                BackingRelationship::LinkedTo { deployment_id }
-                    if deployment_id == &canonical_deployment.id
-            ));
-
-            remove_dotagents_deployment_with(
-                DotagentsRemovalContext {
-                    home: &home,
-                    snapshot: &snapshot,
-                    skill_name: "foo",
-                    deployment: canonical_deployment,
-                    scope: if project_scoped {
-                        InstallScope::Project
-                    } else {
-                        InstallScope::Global
-                    },
-                    project_path: project_scoped.then_some(project.as_path()),
-                },
-                &DotagentsRemovalRunner { fail: false },
-                |stage| std::fs::remove_dir_all(stage).map_err(|error| error.to_string()),
-            )
-            .unwrap();
-            assert!(std::fs::symlink_metadata(link).is_err());
-        }
-    }
-
-    #[test]
-    fn dotagents_removal_ignores_wrong_target_link_and_same_name_independent_copy() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        write_dotagents_owner(&home.join(".agents"), "foo");
-        let other = home.join(".agents/skills/other");
-        std::fs::create_dir_all(&other).unwrap();
-        std::fs::write(other.join("SKILL.md"), "other").unwrap();
-        let wrong_link = home.join(".claude/skills/foo");
-        let independent = home.join(".codex/skills/foo");
-        std::fs::create_dir_all(wrong_link.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(&independent).unwrap();
-        std::fs::write(independent.join("SKILL.md"), "independent").unwrap();
-        std::os::unix::fs::symlink("../../.agents/skills/other", &wrong_link).unwrap();
-        let snapshot = discovered_dotagents_snapshot(&home, &[]);
+        let mut snapshot = discovered_dotagents_snapshot(&home, std::slice::from_ref(&project));
+        snapshot.projects = vec![project.to_string_lossy().to_string()];
         let skill = snapshot
             .skills
             .iter()
-            .find(|skill| skill.name == "foo")
-            .unwrap();
-        let canonical = skill
+            .find(|s| s.name == "alpha")
+            .expect("the scan lists the project skill");
+        let deployment = skill
             .deployments
             .iter()
-            .find(|deployment| deployment.path == home.join(".agents/skills/foo").to_string_lossy())
-            .unwrap();
-        let wrong = skill
-            .deployments
-            .iter()
-            .find(|deployment| deployment.path == wrong_link.to_string_lossy())
-            .unwrap();
-        assert_ne!(wrong.owner_id, canonical.owner_id);
+            .find(|d| d.owner_kind == super::super::skill_ownership::LifecycleOwnerKind::Dotagents)
+            .expect("the project skill is dotagents-owned");
+        assert_eq!(deployment.scope, "project");
 
-        remove_dotagents_deployment_with(
-            DotagentsRemovalContext {
-                home: &home,
-                snapshot: &snapshot,
-                skill_name: "foo",
-                deployment: canonical,
-                scope: InstallScope::Global,
-                project_path: None,
-            },
-            &DotagentsRemovalRunner { fail: false },
-            |_| Ok(()),
-        )
-        .unwrap();
+        let req = build_update_request(&app_data, &snapshot, skill, deployment)
+            .unwrap_or_else(|e| panic!("project dotagents skill must be accepted, got: {e}"));
+        assert_eq!(req.method, InstallMethod::Dotagents);
         assert_eq!(
-            std::fs::read_link(wrong_link).unwrap(),
-            PathBuf::from("../../.agents/skills/other")
+            req.scope,
+            RootScope::Project(skill_studio_core::identity::ProjectRef(project.clone()))
         );
-        assert_eq!(
-            std::fs::read_to_string(independent.join("SKILL.md")).unwrap(),
-            "independent"
-        );
+        assert_eq!(req.source.as_deref(), Some("o/r"));
     }
 
-    #[test]
-    fn removing_project_universal_copy_removes_only_exact_backed_links() {
-        use super::super::skill_deployment::{
-            deployment_id, BackingRelationship, SkillDestination,
-        };
-
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let project = tmp.path().join("project");
-        let global = home.join(".agents/skills/foo");
-        let selected = project.join(".agents/skills/foo");
-        let global_link = home.join(".claude/skills/foo");
-        let selected_link = project.join(".claude/skills/foo");
-        let independent = project.join(".codex/skills/foo");
-        for path in [&global, &selected, &independent] {
-            std::fs::create_dir_all(path).unwrap();
-            std::fs::write(path.join("SKILL.md"), path.to_string_lossy().as_bytes()).unwrap();
+    /// A `ProcessSpawner`/runtime-builder pair for the thread-recording
+    /// test below - mirrors `harness_first_run.rs`'s
+    /// `ThreadRecordingSpawner`/`detect_with_runtime` test, adapted to
+    /// `update_all_with_runtime`'s runtime-builder closure: `Copy` needs no
+    /// spawner, so the closure itself is what records the pool thread.
+    fn copy_update_request(
+        skill: &str,
+        scope: skill_studio_core::identity::RootScope,
+        body: &[u8],
+    ) -> skill_studio_core::dto::UpdateRequest {
+        skill_studio_core::dto::UpdateRequest {
+            skill: skill_studio_core::identity::SkillName(skill.to_string()),
+            method: skill_studio_core::dto::InstallMethod::Copy,
+            scope,
+            files: vec![skill_studio_core::dto::InstallFile {
+                relative_path: PathBuf::from("SKILL.md"),
+                contents: body.to_vec(),
+                mode: None,
+            }],
+            source: None,
+            ref_pin: None,
         }
-        std::fs::create_dir_all(global_link.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(selected_link.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink(&global, &global_link).unwrap();
-        std::os::unix::fs::symlink(&selected, &selected_link).unwrap();
-        let global_id = deployment_id(
-            "foo",
-            "global",
-            SkillDestination::Universal,
-            "universal",
-            None,
-            &global,
-        );
-        let selected_id = deployment_id(
-            "foo",
-            "project",
-            SkillDestination::Universal,
-            "universal",
-            project.to_str(),
-            &selected,
-        );
-        let mut snapshot = fixture_snapshot(&selected, None);
-        let canonical = &mut snapshot.skills[0].deployments[0];
-        canonical.id = selected_id.clone();
-        canonical.agent = "shared".to_string();
-        canonical.scope = "project".to_string();
-        canonical.project_path = Some(project.to_string_lossy().to_string());
-        canonical.destination = SkillDestination::Universal;
-        canonical.backing = BackingRelationship::Canonical;
-        canonical.content_hash =
-            super::super::skill_discovery::live_skill_content_hash(&selected).unwrap();
-        let mut project_link_deployment = canonical.clone();
-        project_link_deployment.id = deployment_id(
-            "foo",
-            "project",
-            SkillDestination::Universal,
-            "claude-code",
-            project.to_str(),
-            &selected_link,
-        );
-        project_link_deployment.agent = "Claude Code".to_string();
-        project_link_deployment.path = selected_link.to_string_lossy().to_string();
-        project_link_deployment.is_symlink = true;
-        project_link_deployment.backing = BackingRelationship::LinkedTo {
-            deployment_id: selected_id.clone(),
-        };
-        let mut global_link_deployment = project_link_deployment.clone();
-        global_link_deployment.id = deployment_id(
-            "foo",
-            "global",
-            SkillDestination::Universal,
-            "claude-code",
-            None,
-            &global_link,
-        );
-        global_link_deployment.scope = "global".to_string();
-        global_link_deployment.project_path = None;
-        global_link_deployment.path = global_link.to_string_lossy().to_string();
-        global_link_deployment.backing = BackingRelationship::LinkedTo {
-            deployment_id: global_id,
-        };
-        let mut independent_deployment = project_link_deployment.clone();
-        independent_deployment.id = "independent".to_string();
-        independent_deployment.agent = "Codex".to_string();
-        independent_deployment.path = independent.to_string_lossy().to_string();
-        independent_deployment.is_symlink = false;
-        independent_deployment.destination = SkillDestination::PerHarness;
-        independent_deployment.backing = BackingRelationship::Independent;
-        snapshot.skills[0].deployments.extend([
-            project_link_deployment,
-            global_link_deployment,
-            independent_deployment,
-        ]);
-
-        let expected_link_id = snapshot.skills[0].deployments[1].id.clone();
-        let ownership = skill_fork_registry::CopyDeploymentRecord {
-            deployment_id: selected_id.clone(),
-            name: "foo".to_string(),
-            path: selected.clone(),
-            scope: InstallScope::Project,
-            destination: SkillDestination::Universal,
-            slot: "universal".to_string(),
-            project_path: Some(project.to_string_lossy().to_string()),
-            content_hash: snapshot.skills[0].deployments[0].content_hash.clone(),
-            disabled: false,
-        };
-        let mut registry = skill_fork_registry::ForkRegistry::default();
-        registry
-            .copies
-            .insert(ownership.deployment_id.clone(), ownership.clone());
-        let removed_ids = remove_copy_deployment(
-            &home,
-            &snapshot,
-            &snapshot.skills[0].deployments[0],
-            &ownership,
-            &mut registry,
-            |_, _| Ok(()),
-        )
-        .unwrap();
-
-        assert_eq!(removed_ids, vec![selected_id, expected_link_id]);
-        assert!(registry.copies.is_empty());
-        assert!(!selected.exists());
-        assert!(std::fs::symlink_metadata(selected_link).is_err());
-        assert!(global.join("SKILL.md").is_file());
-        assert!(std::fs::symlink_metadata(global_link).is_ok());
-        assert!(independent.join("SKILL.md").is_file());
     }
 
-    #[test]
-    fn copy_remove_registry_failure_restores_canonical_and_dependent_link_ownership() {
-        use super::super::skill_deployment::{
-            deployment_id, BackingRelationship, DeploymentMutability, SkillDestination,
-        };
-        use super::super::skill_ownership::LifecycleOwnerKind;
-
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let canonical_path = home.join(".agents/skills/foo");
-        let link_path = home.join(".claude/skills/foo");
-        std::fs::create_dir_all(&canonical_path).unwrap();
-        std::fs::write(canonical_path.join("SKILL.md"), "original").unwrap();
-        std::fs::create_dir_all(link_path.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink("../../.agents/skills/foo", &link_path).unwrap();
-
-        let canonical_id = deployment_id(
-            "foo",
-            "global",
-            SkillDestination::Universal,
-            "universal",
-            None,
-            &canonical_path,
-        );
-        let link_id = deployment_id(
-            "foo",
-            "global",
-            SkillDestination::Universal,
-            "claude-code",
-            None,
-            &link_path,
-        );
-        let mut snapshot = fixture_snapshot(&canonical_path, None);
-        let canonical = &mut snapshot.skills[0].deployments[0];
-        canonical.id = canonical_id.clone();
-        canonical.agent = "shared".to_string();
-        canonical.destination = SkillDestination::Universal;
-        canonical.owner_kind = LifecycleOwnerKind::Copy;
-        canonical.mutability = DeploymentMutability::Mutable;
-        canonical.backing = BackingRelationship::Canonical;
-        canonical.scope = "global".to_string();
-        canonical.content_hash =
-            super::super::skill_discovery::live_skill_content_hash(&canonical_path).unwrap();
-        let mut link = canonical.clone();
-        link.id = link_id.clone();
-        link.agent = "Claude Code".to_string();
-        link.path = link_path.to_string_lossy().to_string();
-        link.is_symlink = true;
-        link.backing = BackingRelationship::LinkedTo {
-            deployment_id: canonical_id.clone(),
-        };
-        snapshot.skills[0].deployments.push(link);
-        let snapshot_before = serde_json::to_value(&snapshot.skills[0].deployments).unwrap();
-
-        let ownership = skill_fork_registry::CopyDeploymentRecord {
-            deployment_id: canonical_id.clone(),
-            name: "foo".to_string(),
-            path: canonical_path.clone(),
-            scope: InstallScope::Global,
-            destination: SkillDestination::Universal,
-            slot: "universal".to_string(),
-            project_path: None,
-            content_hash: snapshot.skills[0].deployments[0].content_hash.clone(),
-            disabled: false,
-        };
-        let link_ownership = skill_fork_registry::CopyDeploymentRecord {
-            deployment_id: link_id.clone(),
-            path: link_path.clone(),
-            slot: "claude-code".to_string(),
-            ..ownership.clone()
-        };
-        let mut registry = skill_fork_registry::ForkRegistry::default();
-        registry
-            .copies
-            .insert(canonical_id.clone(), ownership.clone());
-        registry.copies.insert(link_id.clone(), link_ownership);
-        skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
-
-        let error = remove_copy_deployment(
-            &home,
-            &snapshot,
-            &snapshot.skills[0].deployments[0],
-            &ownership,
-            &mut registry,
-            |_, _| Err("injected registry write failure".to_string()),
-        )
-        .unwrap_err();
-
-        assert!(error.contains("injected registry write failure"), "{error}");
-        assert_eq!(
-            serde_json::to_value(&snapshot.skills[0].deployments).unwrap(),
-            snapshot_before
-        );
-        assert!(canonical_path.join("SKILL.md").is_file());
-        assert_eq!(
-            std::fs::read_to_string(canonical_path.join("SKILL.md")).unwrap(),
-            "original"
-        );
-        assert!(std::fs::symlink_metadata(&link_path)
-            .unwrap()
-            .file_type()
-            .is_symlink());
-        assert_eq!(
-            std::fs::read_link(&link_path).unwrap(),
-            PathBuf::from("../../.agents/skills/foo")
-        );
-        assert!(registry.copies.contains_key(&canonical_id));
-        assert!(registry.copies.contains_key(&link_id));
-        let persisted_registry = skill_fork_registry::read_fork_registry(&home).unwrap();
-        assert!(persisted_registry.copies.contains_key(&canonical_id));
-        assert!(persisted_registry.copies.contains_key(&link_id));
-        assert_eq!(
-            super::super::skill_discovery::live_skill_content_hash(&canonical_path).unwrap(),
-            ownership.content_hash
-        );
-    }
-
-    #[test]
-    fn fork_remove_registry_failure_restores_directory_and_persisted_record() {
-        use super::super::skill_fork_registry::{ForkRecord, OriginTool};
-
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let app_data = tmp.path().join("app-data");
-        let skill_dir = home.join(".agents/skills/find-bugs");
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(skill_dir.join("SKILL.md"), "original fork").unwrap();
-        let deployment_id = super::super::skill_deployment::deployment_id(
-            "find-bugs",
-            "global",
-            super::super::skill_deployment::SkillDestination::Universal,
-            "universal",
-            None,
-            &skill_dir,
-        );
-        let content_hash =
-            super::super::skill_discovery::live_skill_content_hash(&skill_dir).unwrap();
-        let mut registry = skill_fork_registry::read_fork_registry(&home).unwrap();
-        registry.forks.insert(
-            "find-bugs".to_string(),
-            ForkRecord {
-                deployment_id: deployment_id.clone(),
-                skill_dir: skill_dir.clone(),
-                forked_at: "2026-01-01T00:00:00Z".to_string(),
-                origin_tool: OriginTool::SkillsSh,
-                origin_source: "owner/repo".to_string(),
-                repo: "owner/repo".to_string(),
-                path: "skills/find-bugs".to_string(),
-                declared_ref: None,
-                base_commit: "a".repeat(40),
-            },
-        );
-        skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
-
-        let error = remove_forked_skill_with(
-            &home,
-            &app_data,
-            "find-bugs",
-            &deployment_id,
-            &skill_dir,
-            &content_hash,
-            |_, _| Err("injected registry write failure".to_string()),
-        )
-        .unwrap_err();
-
-        assert!(error.contains("injected registry write failure"), "{error}");
-        assert_eq!(
-            std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap(),
-            "original fork"
-        );
-        assert!(skill_fork_registry::read_fork_registry(&home)
-            .unwrap()
-            .forks
-            .contains_key("find-bugs"));
-    }
-
-    fn removable_copy_fixture(
-        path: &Path,
-    ) -> (
-        skill_refresh::SkillSnapshot,
-        skill_fork_registry::CopyDeploymentRecord,
+    /// `update_all_on_ten_outdated_fixtures_ends_with_ten_journal_entries_and_zero_main_thread_calls_over_one_frame`:
+    /// installs ten `Copy` skills for real (so `update_all_with_runtime` has
+    /// an existing deployment per skill to swap over), then updates all ten
+    /// in the one `spawn_blocking` task `update_all_with_runtime` wraps its
+    /// `ops::update_all` call in. Under a `current_thread` runtime the test
+    /// task's own thread is the only async worker, so a recorded thread
+    /// differing from it proves the write ran off the UI/test task - a
+    /// deterministic fact, not a timing measurement. B3 (review round 1):
+    /// the runtime-builder closure alone survived moving `ops::update_all`
+    /// out of `spawn_blocking`, because it recorded its own thread inside
+    /// `build_runtime`, not inside the op call itself - so this now also
+    /// threads a recorder through `on_outcome`, which `ops::update_all`
+    /// calls once per request, and asserts all ten land off the test task
+    /// too. The ten resulting `update` journal rows are counted straight
+    /// from the events store, independent of the returned `UpdateAllOutcome`.
+    #[tokio::test(flavor = "current_thread")]
+    async fn update_all_on_ten_outdated_fixtures_ends_with_ten_journal_entries_and_zero_main_thread_calls_over_one_frame(
     ) {
-        use super::super::skill_deployment::{
-            deployment_id, BackingRelationship, DeploymentMutability, SkillDestination,
-        };
-        use super::super::skill_ownership::LifecycleOwnerKind;
+        use skill_studio_core::dto::{InstallFile, InstallMethod, InstallRequest};
+        use skill_studio_core::identity::{RootScope, SkillName};
+        use skill_studio_core::ops::{self, Operation, ResultEnvelope};
+        use skill_studio_core::ports::OpContext;
 
-        let mut snapshot = fixture_snapshot(path, None);
-        let deployment = &mut snapshot.skills[0].deployments[0];
-        deployment.id = deployment_id(
-            "foo",
-            "global",
-            SkillDestination::PerHarness,
-            "claude-code",
-            None,
-            path,
-        );
-        deployment.destination = SkillDestination::PerHarness;
-        deployment.owner_kind = LifecycleOwnerKind::Copy;
-        deployment.mutability = DeploymentMutability::Mutable;
-        deployment.backing = BackingRelationship::Independent;
-        deployment.scope = "global".to_string();
-        deployment.project_path = None;
-        deployment.content_hash =
-            super::super::skill_discovery::live_skill_content_hash(path).unwrap();
-        let ownership = skill_fork_registry::CopyDeploymentRecord {
-            deployment_id: deployment.id.clone(),
-            name: "foo".to_string(),
-            path: path.to_path_buf(),
-            scope: InstallScope::Global,
-            destination: SkillDestination::PerHarness,
-            slot: "claude-code".to_string(),
-            project_path: None,
-            content_hash: deployment.content_hash.clone(),
-            disabled: false,
-        };
-        (snapshot, ownership)
-    }
-
-    #[test]
-    fn copy_remove_refuses_content_edited_after_snapshot() {
         let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("foo");
-        std::fs::create_dir_all(&path).unwrap();
-        std::fs::write(path.join("SKILL.md"), "original").unwrap();
-        let (snapshot, ownership) = removable_copy_fixture(&path);
-        std::fs::write(path.join("SKILL.md"), "edited after discovery").unwrap();
-        let mut registry = skill_fork_registry::ForkRegistry::default();
-        registry
-            .copies
-            .insert(ownership.deployment_id.clone(), ownership.clone());
+        let home = tmp.path().join("home");
+        let data_root = tmp.path().join("data");
+        std::fs::create_dir_all(&home).unwrap();
 
-        let error = remove_copy_deployment(
-            tmp.path(),
-            &snapshot,
-            &snapshot.skills[0].deployments[0],
-            &ownership,
-            &mut registry,
-            |_, _| Ok(()),
-        )
-        .unwrap_err();
-
-        assert!(error.contains("content changed after discovery"), "{error}");
-        assert_eq!(
-            std::fs::read_to_string(path.join("SKILL.md")).unwrap(),
-            "edited after discovery"
-        );
-    }
-
-    #[test]
-    fn copy_remove_refuses_a_replaced_path_without_deleting_replacement() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("foo");
-        let replacement = tmp.path().join("replacement");
-        std::fs::create_dir_all(&path).unwrap();
-        std::fs::write(path.join("SKILL.md"), "original").unwrap();
-        let (snapshot, ownership) = removable_copy_fixture(&path);
-        std::fs::remove_dir_all(&path).unwrap();
-        std::fs::create_dir_all(&replacement).unwrap();
-        std::fs::write(replacement.join("SKILL.md"), "replacement").unwrap();
-        std::os::unix::fs::symlink(&replacement, &path).unwrap();
-        let mut registry = skill_fork_registry::ForkRegistry::default();
-        registry
-            .copies
-            .insert(ownership.deployment_id.clone(), ownership.clone());
-
-        let error = remove_copy_deployment(
-            tmp.path(),
-            &snapshot,
-            &snapshot.skills[0].deployments[0],
-            &ownership,
-            &mut registry,
-            |_, _| Ok(()),
-        )
-        .unwrap_err();
-
-        assert!(
-            error.contains("no longer the selected Copy directory"),
-            "{error}"
-        );
-        assert!(std::fs::symlink_metadata(&path)
-            .unwrap()
-            .file_type()
-            .is_symlink());
-        assert_eq!(
-            std::fs::read_to_string(replacement.join("SKILL.md")).unwrap(),
-            "replacement"
-        );
-    }
-
-    #[test]
-    fn dotagents_update_args_pinned_entry_needs_latest_commit() {
-        let entry = dotagents_skill("find-bugs", Some("aaaa"), true);
-        let err = dotagents_update_args("find-bugs", Some(&entry), None, InstallScope::Global)
-            .unwrap_err();
-        assert!(err.contains("Check now"));
-    }
-
-    #[test]
-    fn dotagents_update_args_pinned_entry_re_pins_to_latest_commit() {
-        let entry = dotagents_skill("find-bugs", Some("aaaa"), true);
-        let latest = "b".repeat(40);
-        let args = dotagents_update_args(
-            "find-bugs",
-            Some(&entry),
-            Some(&latest),
-            InstallScope::Global,
+        // The process's own PATH, not a real login-shell probe: this
+        // fixture never spawns `npx`, so it shouldn't pay for (or risk
+        // hanging on, once per skill below) a real `$SHELL -lic` spawn.
+        let rt = super::super::core_runtime::build_runtime_write_at_with_search_dirs(
+            &home,
+            &data_root,
+            super::super::core_runtime::process_path_search_dirs(),
         )
         .unwrap();
-        assert_eq!(
-            args,
-            vec![
-                "-y",
-                "@sentry/dotagents",
-                "add",
-                "getsentry/find-bugs",
-                "--name",
-                "find-bugs",
-                "--ref",
-                &latest,
-            ]
-        );
-    }
-
-    #[test]
-    fn skills_sh_access_info_is_server_mode_before_a_key_is_set() {
-        let tmp = tempfile::tempdir().unwrap();
-        let info = skills_sh_access_info(tmp.path()).unwrap();
-        assert_eq!(info.mode, "server");
-        assert_eq!(info.server_url, Some("http://127.0.0.1:8787".to_string()));
-    }
-
-    #[test]
-    fn save_skills_sh_api_key_then_access_info_is_direct() {
-        let tmp = tempfile::tempdir().unwrap();
-        save_skills_sh_api_key(tmp.path(), "sk-test-key").unwrap();
-        let info = skills_sh_access_info(tmp.path()).unwrap();
-        assert_eq!(info.mode, "direct");
-        assert_eq!(info.server_url, None);
-    }
-
-    #[test]
-    fn save_skills_sh_api_key_rejects_a_blank_key() {
-        let tmp = tempfile::tempdir().unwrap();
-        let err = save_skills_sh_api_key(tmp.path(), "   ").unwrap_err();
-        assert!(err.contains("can't be empty"));
-    }
-
-    #[test]
-    fn save_skills_sh_api_key_preserves_other_registry_fields() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut registry = skill_fork_registry::read_fork_registry(tmp.path()).unwrap();
-        registry.preferred_editor = Some("Visual Studio Code".to_string());
-        skill_fork_registry::write_fork_registry(tmp.path(), &registry).unwrap();
-
-        save_skills_sh_api_key(tmp.path(), "sk-test-key").unwrap();
-
-        let round_tripped = skill_fork_registry::read_fork_registry(tmp.path()).unwrap();
-        assert_eq!(
-            round_tripped.preferred_editor,
-            Some("Visual Studio Code".to_string())
-        );
-        assert_eq!(
-            round_tripped.skills_sh_api_key,
-            Some("sk-test-key".to_string())
-        );
-    }
-}
-
-/// List project directories discovered from Codex config and Claude Code
-/// transcripts that have a first-class agent's skill directory. Returns the
-/// background snapshot's project list when one exists.
-#[tauri::command]
-pub fn list_skill_projects(
-    refresh_state: tauri::State<SkillRefreshState>,
-) -> Result<Vec<String>, String> {
-    if let Ok(guard) = refresh_state.snapshot.read() {
-        if let Some(snapshot) = guard.as_ref() {
-            return Ok(snapshot.projects.clone());
+        let ctx = OpContext::uncancellable(skill_studio_core::identity::CorrelationId(
+            ulid::Ulid::new().to_string(),
+        ));
+        for i in 0..10 {
+            let req = InstallRequest {
+                skill: SkillName(format!("fixture-{i}")),
+                method: InstallMethod::Copy,
+                scope: RootScope::Global,
+                harnesses: Vec::new(),
+                files: vec![InstallFile {
+                    relative_path: PathBuf::from("SKILL.md"),
+                    contents: b"original".to_vec(),
+                    mode: None,
+                }],
+                source: None,
+                trust_identity: None,
+                trust_confirmed: false,
+                save_as_preference: false,
+                link_mode: skill_studio_core::dto::InstallLinkMode::Link,
+                destination: skill_studio_core::identity::SkillDestination::Universal,
+            };
+            let result = ops::install(&rt, &ctx, &req);
+            let envelope = ResultEnvelope::from_result(Operation::Install, &rt.scope, &ctx, result);
+            super::super::core_runtime::to_command_result(envelope)
+                .unwrap_or_else(|e| panic!("fixture install {i} failed: {e}"));
         }
-    }
 
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    Ok(project_discovery::discover_skill_projects(&home)
-        .into_iter()
-        .map(|p| p.to_string_lossy().to_string())
-        .collect())
-}
+        let requests: Vec<_> = (0..10)
+            .map(|i| copy_update_request(&format!("fixture-{i}"), RootScope::Global, b"updated"))
+            .collect();
 
-/// Check if a skill is installed
-#[tauri::command]
-pub fn is_skill_installed(skill_name: String) -> Result<bool, String> {
-    lock_file::is_skill_installed(&skill_name)
-}
+        let test_task_thread = std::thread::current().id();
+        let runtime_built_on = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let record_build_thread = runtime_built_on.clone();
+        let home_for_closure = home.clone();
+        let data_root_for_closure = data_root.clone();
+        let outcome_threads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record_outcome_thread = outcome_threads.clone();
 
-/// Get all supported agent targets
-#[tauri::command]
-pub fn get_agent_targets() -> Vec<AgentTarget> {
-    let home = dirs::home_dir().unwrap_or_default();
-    let home_str = home.to_string_lossy();
-
-    AgentId::all()
-        .into_iter()
-        .map(|id| AgentTarget {
-            name: id.display_name().to_string(),
-            project_path: id.project_path().to_string(),
-            global_path: format!("{}/{}", home_str, id.global_path()),
-            id,
-        })
-        .collect()
-}
-
-fn remove_copy_deployment(
-    home: &Path,
-    snapshot: &skill_refresh::SkillSnapshot,
-    deployment: &super::skill_dto::Deployment,
-    ownership: &skill_fork_registry::CopyDeploymentRecord,
-    registry: &mut skill_fork_registry::ForkRegistry,
-    write_registry: impl FnOnce(&Path, &skill_fork_registry::ForkRegistry) -> Result<(), String>,
-) -> Result<Vec<String>, String> {
-    use super::skill_deployment::BackingRelationship;
-
-    let deployment_path = Path::new(&deployment.path);
-    let parsed = super::skill_deployment::parse_deployment_id(&deployment.id)
-        .ok_or_else(|| format!("Remove refused: invalid deployment id {}", deployment.id))?;
-    let expected_scope = match ownership.scope {
-        super::skill_dto::InstallScope::Global => "global",
-        super::skill_dto::InstallScope::Project => "project",
-    };
-    if ownership.deployment_id != deployment.id
-        || ownership.path != deployment_path
-        || ownership.destination != deployment.destination
-        || ownership.project_path != deployment.project_path
-        || ownership.disabled != deployment.disabled
-        || parsed.scope != expected_scope
-        || parsed.destination != ownership.destination
-        || parsed.slot != ownership.slot
-        || parsed.project_path != ownership.project_path
-        || parsed.lexical_path != ownership.path
-    {
-        return Err(
-            "Remove refused: Copy ownership identity no longer matches the selected deployment"
-                .to_string(),
-        );
-    }
-    let metadata = std::fs::symlink_metadata(deployment_path).map_err(|error| {
-        format!(
-            "Remove refused: failed to inspect {}: {error}",
-            deployment.path
-        )
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(format!(
-            "Remove refused: {} is no longer the selected Copy directory",
-            deployment.path
-        ));
-    }
-    let live_hash = super::skill_discovery::live_skill_content_hash(deployment_path)?;
-    if deployment.content_hash.is_empty()
-        || ownership.content_hash.is_empty()
-        || live_hash != deployment.content_hash
-        || live_hash != ownership.content_hash
-    {
-        return Err(format!(
-            "Remove refused: {} content changed after discovery",
-            deployment.path
-        ));
-    }
-    let mut removals = vec![(deployment.id.clone(), deployment_path.to_path_buf())];
-    if deployment.destination == super::skill_deployment::SkillDestination::Universal
-        && matches!(deployment.backing, BackingRelationship::Canonical)
-    {
-        let expected_target = std::fs::canonicalize(deployment_path)
-            .map_err(|error| format!("Failed to resolve {}: {error}", deployment.path))?;
-        for candidate in snapshot
-            .skills
-            .iter()
-            .flat_map(|skill| skill.deployments.iter())
-        {
-            if candidate.scope != deployment.scope
-                || candidate.project_path != deployment.project_path
-                || !matches!(
-                    &candidate.backing,
-                    BackingRelationship::LinkedTo { deployment_id }
-                        if deployment_id == &deployment.id
+        let outcome = update_all_with_runtime(
+            requests,
+            move || {
+                *record_build_thread.lock().unwrap() = Some(std::thread::current().id());
+                super::super::core_runtime::build_runtime_write_at_with_search_dirs(
+                    &home_for_closure,
+                    &data_root_for_closure,
+                    super::super::core_runtime::process_path_search_dirs(),
                 )
-            {
-                continue;
-            }
-            let link = PathBuf::from(&candidate.path);
-            let metadata = std::fs::symlink_metadata(&link)
-                .map_err(|error| format!("Failed to verify {}: {error}", link.display()))?;
-            if !metadata.file_type().is_symlink() {
-                return Err(format!(
-                    "Remove refused: {} is no longer a dependent symlink",
-                    link.display()
-                ));
-            }
-            let actual_target = std::fs::canonicalize(&link)
-                .map_err(|error| format!("Failed to resolve {}: {error}", link.display()))?;
-            if actual_target != expected_target {
-                return Err(format!(
-                    "{} no longer points to the selected Universal deployment",
-                    link.display()
-                ));
-            }
-            removals.push((candidate.id.clone(), link));
-        }
-    }
+            },
+            move |_, _| {
+                record_outcome_thread
+                    .lock()
+                    .unwrap()
+                    .push(std::thread::current().id());
+            },
+        )
+        .await
+        .unwrap();
 
-    let stage_id = COPY_REMOVAL_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let stage_root = home
-        .join(".agents")
-        .join("skills-trash")
-        .join(format!(".copy-remove-{}-{stage_id}", std::process::id()));
-    std::fs::create_dir_all(&stage_root)
-        .map_err(|error| format!("Failed to create {}: {error}", stage_root.display()))?;
-    let staged: Vec<_> = removals
-        .iter()
-        .enumerate()
-        .map(|(index, (_, path))| {
-            let backup = stage_root.join(index.to_string());
-            super::event_store::copy_recursive(path, &backup)?;
-            let original_fingerprint = super::event_store::fingerprint_path(path);
-            let backup_fingerprint = super::event_store::fingerprint_path(&backup);
-            if original_fingerprint != backup_fingerprint {
-                return Err(format!(
-                    "Copy removal backup verification failed for {}",
-                    path.display()
-                ));
-            }
-            Ok((path.clone(), backup))
-        })
-        .collect::<Result<_, String>>()?;
+        assert_eq!(outcome.items.len(), 10);
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
 
-    for (path, _) in &staged {
-        if let Err(error) = remove_copy_path(path) {
-            let rollback = restore_copy_removal_paths(&staged);
-            return Err(match rollback {
-                Ok(()) => error,
-                Err(rollback_error) => {
-                    format!("{error}; failed to restore Copy removal backup: {rollback_error}")
-                }
-            });
-        }
-    }
+        let built_on = runtime_built_on.lock().unwrap().expect("runtime was built");
+        assert_ne!(
+            built_on, test_task_thread,
+            "update_all_with_runtime must build the runtime and run ops::update_all \
+             on a spawn_blocking pool thread, not the calling task"
+        );
 
-    let original_registry = registry.clone();
-    let removed_ids: Vec<String> = removals.iter().map(|(id, _)| id.clone()).collect();
-    for removed_id in &removed_ids {
-        registry.copies.remove(removed_id);
-    }
-    registry.trials.retain(|_, trial| {
-        trial.deployment_id != deployment.id
-            && !removals.iter().any(|(_, path)| {
-                trial.skill_dir == *path || trial.claude_link.as_ref() == Some(path)
+        let outcome_threads = outcome_threads.lock().unwrap();
+        assert_eq!(outcome_threads.len(), 10, "{outcome_threads:?}");
+        assert!(
+            outcome_threads.iter().all(|id| *id != test_task_thread),
+            "every on_outcome call must land on the spawn_blocking pool thread, \
+             not the calling task: {outcome_threads:?}"
+        );
+
+        let history = rt
+            .ports
+            .history
+            .open(
+                &rt.scope,
+                skill_studio_core::ports::HistoryAccess::ReadIfExists,
+            )
+            .unwrap()
+            .expect("history store exists after the fixture installs");
+        let rows = history
+            .list(&skill_studio_core::events::EventFilter {
+                skill: None,
+                limit: 100,
+                after: None,
             })
-    });
-
-    if let Err(write_error) = write_registry(home, registry) {
-        *registry = original_registry;
-        let rollback = restore_copy_removal_paths(&staged);
-        return Err(match rollback {
-            Ok(()) => format!(
-                "Failed to persist Copy ownership removal; restored every deployment: {write_error}"
-            ),
-            Err(rollback_error) => format!(
-                "Failed to persist Copy ownership removal ({write_error}) and failed to restore every deployment from {}: {rollback_error}",
-                stage_root.display()
-            ),
-        });
-    }
-
-    if let Err(error) = std::fs::remove_dir_all(&stage_root) {
-        eprintln!(
-            "[remove_skill] Copy removal succeeded, but backup cleanup failed at {}: {error}",
-            stage_root.display()
+            .unwrap();
+        let update_rows = rows
+            .iter()
+            .filter(|row| row.kind == skill_studio_core::events::EventKind::Update.as_str())
+            .count();
+        assert_eq!(
+            update_rows,
+            10,
+            "{:?}",
+            rows.iter().map(|r| &r.kind).collect::<Vec<_>>()
         );
     }
-    Ok(removed_ids)
-}
 
-static COPY_REMOVAL_COUNTER: AtomicU64 = AtomicU64::new(0);
-static DOTAGENTS_LINK_REMOVAL_COUNTER: AtomicU64 = AtomicU64::new(0);
+    #[test]
+    fn update_all_leaves_the_badge_on_a_failed_item_or_names_the_cleared_row() {
+        use skill_studio_core::dto::{UpdateAllItem, UpdateAllOutcome, UpdateOutcome};
+        use skill_studio_core::identity::SkillName;
 
-fn remove_copy_path(path: &Path) -> Result<(), String> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|error| format!("Failed to inspect {}: {error}", path.display()))?;
-    if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
-        std::fs::remove_dir_all(path)
-    } else {
-        std::fs::remove_file(path)
-    }
-    .map_err(|error| format!("Failed to remove {}: {error}", path.display()))
-}
+        let succeeded = UpdateOutcome {
+            event_id: skill_studio_core::identity::EventId("evt-alpha".to_string()),
+            skill: SkillName("alpha".to_string()),
+            deployment_path: PathBuf::from("/home/.agents/skills/alpha"),
+            tree_hash_before: "aaa".to_string(),
+            tree_hash_after: "bbb".to_string(),
+        };
+        let outcome = UpdateAllOutcome {
+            items: vec![
+                UpdateAllItem {
+                    skill: SkillName("alpha".to_string()),
+                    outcome: Some(succeeded),
+                },
+                UpdateAllItem {
+                    skill: SkillName("beta".to_string()),
+                    outcome: None,
+                },
+            ],
+            errors: std::collections::BTreeMap::from([(
+                "beta".to_string(),
+                "update failed".to_string(),
+            )]),
+        };
+        let owners = vec![
+            (
+                "alpha".to_string(),
+                Some("owner:v1/global/alpha".to_string()),
+                PathBuf::from("/home/.agents/skills/alpha"),
+            ),
+            (
+                "beta".to_string(),
+                Some("owner:v1/global/beta".to_string()),
+                PathBuf::from("/home/.agents/skills/beta"),
+            ),
+        ];
 
-fn restore_copy_removal_paths(staged: &[(PathBuf, PathBuf)]) -> Result<(), String> {
-    for (path, backup) in staged {
-        if std::fs::symlink_metadata(path).is_ok() {
-            remove_copy_path(path)?;
-        }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| format!("Failed to create {}: {error}", parent.display()))?;
-        }
-        super::event_store::copy_recursive(backup, path)?;
-        if super::event_store::fingerprint_path(path)
-            != super::event_store::fingerprint_path(backup)
-        {
-            return Err(format!("Restored Copy does not match {}", backup.display()));
-        }
-    }
-    Ok(())
-}
+        let cleared = owners_to_clear(&outcome, &owners);
 
-fn restore_staged_dotagents_links(staged: &[(PathBuf, PathBuf)]) -> Result<(), String> {
-    for (original, backup) in staged.iter().rev() {
-        if std::fs::symlink_metadata(original).is_ok() {
-            return Err(format!(
-                "Refusing to replace {} while restoring its staged Claude link",
-                original.display()
-            ));
-        }
-        if let Some(parent) = original.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| format!("Failed to create {}: {error}", parent.display()))?;
-        }
-        std::fs::rename(backup, original).map_err(|error| {
-            format!(
-                "Failed to restore staged Claude link {}: {error}",
-                original.display()
-            )
-        })?;
-    }
-    Ok(())
-}
-
-struct DotagentsRemovalContext<'a> {
-    home: &'a Path,
-    snapshot: &'a skill_refresh::SkillSnapshot,
-    skill_name: &'a str,
-    deployment: &'a super::skill_dto::Deployment,
-    scope: InstallScope,
-    project_path: Option<&'a Path>,
-}
-
-fn remove_dotagents_deployment_with(
-    context: DotagentsRemovalContext<'_>,
-    runner: &dyn CommandRunner,
-    cleanup_stage: impl FnOnce(&Path) -> Result<(), String>,
-) -> Result<(), String> {
-    use super::skill_deployment::{parse_deployment_id, BackingRelationship, SkillDestination};
-
-    let DotagentsRemovalContext {
-        home,
-        snapshot,
-        skill_name,
-        deployment,
-        scope,
-        project_path,
-    } = context;
-
-    if deployment.destination != SkillDestination::Universal
-        || !matches!(deployment.backing, BackingRelationship::Canonical)
-    {
-        return Err(
-            "Cannot remove with dotagents: the selected target is not its canonical Universal deployment"
-                .to_string(),
+        assert_eq!(
+            cleared,
+            vec![(
+                "alpha".to_string(),
+                Some("owner:v1/global/alpha".to_string())
+            )],
+            "beta's failed item must not clear its badge: {cleared:?}"
         );
     }
-    let canonical_path = std::fs::canonicalize(&deployment.path)
-        .map_err(|error| format!("Failed to resolve {}: {error}", deployment.path))?;
-    let mut links = Vec::new();
-    for candidate in snapshot
-        .skills
-        .iter()
-        .flat_map(|skill| skill.deployments.iter())
-    {
-        let parsed_candidate = parse_deployment_id(&candidate.id);
-        let is_exact_dependent_link = candidate.scope == deployment.scope
-            && candidate.project_path == deployment.project_path
-            && candidate.owner_id == deployment.owner_id
-            && candidate.destination == SkillDestination::Universal
-            && parsed_candidate.as_ref().is_some_and(|parsed| {
-                parsed.name == skill_name
-                    && parsed.scope == deployment.scope
-                    && parsed.project_path == deployment.project_path
-                    && parsed.lexical_path == Path::new(&candidate.path)
-            })
-            && matches!(
-                &candidate.backing,
-                BackingRelationship::LinkedTo { deployment_id }
-                    if deployment_id == &deployment.id
-            );
-        if !is_exact_dependent_link {
-            continue;
-        }
-        if candidate.resolved_path.as_deref().map(Path::new) != Some(canonical_path.as_path()) {
-            return Err(format!(
-                "dotagents removal refused: {} no longer resolves to the selected Universal deployment",
-                candidate.path
-            ));
-        }
-        let link = PathBuf::from(&candidate.path);
-        let metadata = std::fs::symlink_metadata(&link).map_err(|error| {
-            format!(
-                "dotagents removal refused: failed to inspect dependent link {}: {error}",
-                link.display()
-            )
-        })?;
-        if candidate.shared_via_whole_dir_link && !candidate.is_symlink {
-            if !metadata.is_dir()
-                || std::fs::canonicalize(&link).ok().as_ref() != Some(&canonical_path)
-            {
-                return Err(format!(
-                    "dotagents removal refused: {} is no longer a verified whole-root child",
-                    link.display()
-                ));
-            }
-            continue;
-        }
-        if !candidate.is_symlink
-            || !metadata.file_type().is_symlink()
-            || std::fs::canonicalize(&link).ok().as_ref() != Some(&canonical_path)
-        {
-            return Err(format!(
-                "dotagents removal refused: {} no longer points to the selected Universal deployment",
-                link.display()
-            ));
-        }
-        links.push(link);
-    }
 
-    let stage_id = DOTAGENTS_LINK_REMOVAL_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let stage_root = home.join(".agents").join("skills-trash").join(format!(
-        ".dotagents-link-remove-{}-{stage_id}",
-        std::process::id()
-    ));
-    let mut staged = Vec::new();
-    if !links.is_empty() {
-        std::fs::create_dir_all(&stage_root)
-            .map_err(|error| format!("Failed to create {}: {error}", stage_root.display()))?;
-        for (index, link) in links.iter().enumerate() {
-            let backup = stage_root.join(index.to_string());
-            if let Err(error) = std::fs::rename(link, &backup) {
-                let rollback = restore_staged_dotagents_links(&staged);
-                return Err(match rollback {
-                    Ok(()) => format!("Failed to stage Claude link {}: {error}", link.display()),
-                    Err(rollback_error) => format!(
-                        "Failed to stage Claude link {}: {error}; recovery links remain at {}: {rollback_error}",
-                        link.display(),
-                        stage_root.display()
-                    ),
-                });
-            }
-            staged.push((link.clone(), backup));
-        }
-    }
+    /// `update_all_clears_both_owners_of_a_skill_installed_twice_or_names_the_owner_left_outdated`
+    /// (B1, review round 2): `skillUpdateOwnerTargets` sends one target per
+    /// outdated owner, so a skill outdated for two owners (e.g. a
+    /// Global copy and a Project copy of the same name) produces two
+    /// requests sharing one `SkillName`, and `ops::update_all` returns two
+    /// `UpdateAllItem`s with that same shared name. A name-keyed lookup map
+    /// collapses those two owners to one entry, so the first owner's badge
+    /// never clears; matching each item to its owner by `deployment_path`
+    /// (B1, review round 3) keeps them apart since each owner's deployment
+    /// lives at its own path. The two owners are a Global one and a Project
+    /// one, each with its own `.agents/skills` root - real owner ids
+    /// (`owner:v1/<scope>/[project/]<name>`, round 4 post-verdict fix) can't
+    /// express two *Global* owners of one name, since scope plus name is
+    /// the whole id there.
+    #[test]
+    fn update_all_clears_both_owners_of_a_skill_installed_twice_or_names_the_owner_left_outdated() {
+        use skill_studio_core::dto::{UpdateAllItem, UpdateAllOutcome, UpdateOutcome};
+        use skill_studio_core::identity::SkillName;
 
-    let args = dotagents_remove_args(skill_name, scope);
-    if let Err(cli_error) = runner.run_npx(&args, project_path) {
-        return Err(match restore_staged_dotagents_links(&staged) {
-            Ok(()) => cli_error,
-            Err(restore_error) => format!(
-                "dotagents removal failed: {cli_error}; Claude link recovery remains at {}: {restore_error}",
-                stage_root.display()
+        let project_path = "/home/project-two";
+        let project_owner_id = format!(
+            "owner:v1/project/{}/alpha",
+            super::super::skill_deployment::encode_id_path(project_path)
+        );
+
+        let outcome_for = |suffix: &str, deployment_path: &str| UpdateOutcome {
+            event_id: skill_studio_core::identity::EventId(format!("evt-{suffix}")),
+            skill: SkillName("alpha".to_string()),
+            deployment_path: PathBuf::from(deployment_path),
+            tree_hash_before: "aaa".to_string(),
+            tree_hash_after: "bbb".to_string(),
+        };
+        let outcome = UpdateAllOutcome {
+            items: vec![
+                UpdateAllItem {
+                    skill: SkillName("alpha".to_string()),
+                    outcome: Some(outcome_for("global", "/home/.agents/skills/alpha")),
+                },
+                UpdateAllItem {
+                    skill: SkillName("alpha".to_string()),
+                    outcome: Some(outcome_for(
+                        "project",
+                        "/home/project-two/.agents/skills/alpha",
+                    )),
+                },
+            ],
+            errors: std::collections::BTreeMap::new(),
+        };
+        let owners = vec![
+            (
+                "alpha".to_string(),
+                Some("owner:v1/global/alpha".to_string()),
+                PathBuf::from("/home/.agents/skills/alpha"),
             ),
-        });
+            (
+                "alpha".to_string(),
+                Some(project_owner_id.clone()),
+                PathBuf::from("/home/project-two/.agents/skills/alpha"),
+            ),
+        ];
+
+        let cleared = owners_to_clear(&outcome, &owners);
+
+        assert_eq!(
+            cleared,
+            vec![
+                (
+                    "alpha".to_string(),
+                    Some("owner:v1/global/alpha".to_string())
+                ),
+                ("alpha".to_string(), Some(project_owner_id)),
+            ],
+            "both owners of the twice-installed skill must clear: {cleared:?}"
+        );
     }
 
-    if !staged.is_empty() {
-        cleanup_stage(&stage_root).map_err(|cleanup_error| {
-            format!(
-                "dotagents removed {skill_name}, but staged Claude link cleanup failed at {}: {cleanup_error}. The staged links remain there for recovery.",
-                stage_root.display()
-            )
-        })?;
+    /// `update_all_clears_the_right_owner_when_items_finish_out_of_request_order_or_names_the_owner_left_outdated`
+    /// (B1, review round 3): `dto.rs` documents `UpdateAllOutcome.items` as
+    /// "in the order each one finished (not the order requested)". This
+    /// hand-builds an outcome whose items are reversed relative to the
+    /// request order to prove `owners_to_clear` still names the right owner
+    /// - matching by `deployment_path` rather than zipping by index.
+    #[test]
+    fn update_all_clears_the_right_owner_when_items_finish_out_of_request_order_or_names_the_owner_left_outdated(
+    ) {
+        use skill_studio_core::dto::{UpdateAllItem, UpdateAllOutcome, UpdateOutcome};
+        use skill_studio_core::identity::SkillName;
+
+        let outcome_for = |name: &str, path: &str| UpdateOutcome {
+            event_id: skill_studio_core::identity::EventId(format!("evt-{name}")),
+            skill: SkillName(name.to_string()),
+            deployment_path: PathBuf::from(path),
+            tree_hash_before: "aaa".to_string(),
+            tree_hash_after: "bbb".to_string(),
+        };
+        // Requested in order alpha, beta - `beta`'s update fails and
+        // `alpha`'s succeeds, but `beta`'s (failed) item finishes first, so
+        // `outcome.items` arrives reversed relative to the request. An
+        // index zip would pair `beta`'s failed item with `alpha`'s request
+        // (dropping it) and `alpha`'s succeeded item with `beta`'s request
+        // (wrongly clearing `beta`'s badge instead of `alpha`'s).
+        let outcome = UpdateAllOutcome {
+            items: vec![
+                UpdateAllItem {
+                    skill: SkillName("beta".to_string()),
+                    outcome: None,
+                },
+                UpdateAllItem {
+                    skill: SkillName("alpha".to_string()),
+                    outcome: Some(outcome_for("alpha", "/home/.agents/skills/alpha")),
+                },
+            ],
+            errors: std::collections::BTreeMap::from([(
+                "beta".to_string(),
+                "update failed".to_string(),
+            )]),
+        };
+        let owners = vec![
+            (
+                "alpha".to_string(),
+                Some("owner:v1/global/alpha".to_string()),
+                PathBuf::from("/home/.agents/skills/alpha"),
+            ),
+            (
+                "beta".to_string(),
+                Some("owner:v1/global/beta".to_string()),
+                PathBuf::from("/home/.agents/skills/beta"),
+            ),
+        ];
+
+        let cleared = owners_to_clear(&outcome, &owners);
+
+        assert_eq!(
+            cleared,
+            vec![(
+                "alpha".to_string(),
+                Some("owner:v1/global/alpha".to_string())
+            )],
+            "beta's badge must stay on (its update failed); an index zip \
+             clears beta's badge instead of alpha's: {cleared:?}"
+        );
     }
-    Ok(())
+
+    /// `remove_from_the_desktop_runs_the_op_on_a_blocking_thread_or_names_the_thread`:
+    /// mirrors `harness_first_run.rs`'s
+    /// `detect_runs_the_probes_on_a_blocking_thread_not_the_ui_task_or_names_the_task_it_blocks`.
+    /// Under a `current_thread` runtime the test task's own thread is the
+    /// only async worker, so the runtime builder must run somewhere else -
+    /// `spawn_blocking`'s pool - for `remove_with_runtime` to be off the UI
+    /// task. Fails if `remove_with_runtime` builds the runtime, or calls
+    /// `ops::remove`, on the calling task instead of through
+    /// `spawn_blocking`.
+    #[tokio::test(flavor = "current_thread")]
+    async fn remove_from_the_desktop_runs_the_op_on_a_blocking_thread_or_names_the_thread() {
+        use skill_studio_core::harness::HarnessCatalog;
+        use skill_studio_core::ports::{Ports, Runtime};
+        use skill_studio_core::RuntimeScope;
+        use std::sync::Arc;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let lease_root = tmp.path().join("leases");
+        let catalog = Arc::new(HarnessCatalog::builtin());
+        let scope = RuntimeScope::fixture(home.clone());
+        let db_path = scope.history_root.join("events.sqlite3");
+        let ports: Ports =
+            skill_studio_host::default_ports_with_history(lease_root, catalog, db_path);
+        let rt = Runtime::new(&scope, ports).unwrap();
+
+        let target = LifecycleTarget {
+            deployment_id: Some("dep:v1/does-not-exist".to_string()),
+            owner_id: None,
+        };
+        let test_task_thread = std::thread::current().id();
+        let runtime_built_on: Arc<std::sync::Mutex<Option<std::thread::ThreadId>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let record_build_thread = runtime_built_on.clone();
+
+        let _ = remove_with_runtime(
+            target,
+            || panic!("resolve_snapshot must not run for a direct deployment_id target"),
+            move |_deployment_id| {
+                *record_build_thread.lock().unwrap() = Some(std::thread::current().id());
+                Ok(rt)
+            },
+        )
+        .await;
+
+        let build_thread = runtime_built_on
+            .lock()
+            .unwrap()
+            .expect("the runtime builder never ran");
+        assert_ne!(
+            build_thread, test_task_thread,
+            "remove_with_runtime built the runtime (and ran ops::remove) on the test task's own \
+             thread ({test_task_thread:?}) instead of a spawn_blocking pool thread"
+        );
+    }
+
+    /// Every UI remove path builds its target through
+    /// `lifecycleTargetForSkill`, which sends `{ owner_id }` (no
+    /// `deployment_id`) whenever the scope has one mutable owner - Fork,
+    /// `SkillsSh` and Dotagents. `remove_with_runtime` must resolve that
+    /// owner target against a fresh snapshot and hand the runtime builder
+    /// the resolved deployment's id, not reject it for lacking one.
+    #[tokio::test(flavor = "current_thread")]
+    async fn remove_of_an_owner_target_resolves_the_canonical_deployment_or_names_the_missing_id() {
+        use std::sync::Arc;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (snapshot, target) = single_owner_target_fixture(tmp.path());
+        let expected_id = snapshot.skills[0].deployments[0].id.clone();
+
+        let built_with_id: Arc<std::sync::Mutex<Option<String>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let record_id = built_with_id.clone();
+
+        let _ = remove_with_runtime(
+            target,
+            move || Ok(snapshot),
+            move |deployment_id| {
+                *record_id.lock().unwrap() = Some(deployment_id.as_str().to_string());
+                Err("stop before a real runtime is needed".to_string())
+            },
+        )
+        .await;
+
+        let resolved_id = built_with_id
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the runtime builder never ran, so the owner target was never resolved");
+        assert_eq!(
+            resolved_id, expected_id,
+            "remove_with_runtime did not resolve the owner target to its deployment id"
+        );
+    }
 }
 
-/// Remove a skill using npx skills CLI. `project_path` is `None` for a
-/// global removal, or the project directory to remove from - validated
-/// against the snapshot and passed as the CLI's `current_dir` so the removal
-/// can't land on the desktop process's own cwd.
+/// Removes one deployment through `skill_studio_core::ops::remove` - the
+/// desktop no longer walks its own Copy/Fork/Dotagents/SkillsSh branches;
+/// `ops::remove` already knows how to quarantine (Copy, Fork) or shell out
+/// (Dotagents, `SkillsSh`) for every owner kind, and prunes quarantine as a
+/// side effect of the removal (unit 3.9b, mirroring `skill_park.rs`'s
+/// adapters over `ops::park`/`ops::unpark`).
 #[tauri::command]
 pub async fn remove_skill(
     target: LifecycleTarget,
     app: tauri::AppHandle,
-    refresh_state: tauri::State<'_, SkillRefreshState>,
-    fork_lock: tauri::State<'_, skill_fork::ForkMutationLock>,
-) -> Result<InstallResult, String> {
-    // Held for the whole removal (ownership check, CLI removal or direct
-    // delete, registry update, rebuild) so a concurrent fork/pull/unfork
-    // can't race a removal - `ForkMutationLock` isn't reentrant, so
-    // `remove_forked_skill` must not acquire it again itself.
-    let _guard = fork_lock.try_acquire()?;
-
-    let snapshot = rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
-    let (skill, deployment) = resolve_lifecycle_target(&snapshot, &target, "Remove")?;
-    let skill_name = skill.name;
-    let scope = if deployment.scope == "global" {
-        super::skill_dto::InstallScope::Global
-    } else if deployment.scope == "project" {
-        super::skill_dto::InstallScope::Project
-    } else {
-        return Err(format!(
-            "Remove is not available for {} scope",
-            deployment.scope
-        ));
-    };
-    let project_path = deployment.project_path.clone();
-    let global = scope == super::skill_dto::InstallScope::Global;
-
-    // A forked skill is a plain directory under `.agents/skills`, in no
-    // ledger the CLI could remove from - delete it directly and drop its
-    // fork-registry record and snapshot instead of shelling out. Forks only
-    // ever live in the shared global folder, so this only applies globally.
-    let is_fork =
-        global && deployment.owner_kind == super::skill_ownership::LifecycleOwnerKind::Fork;
-    if is_fork {
-        return remove_forked_skill(
-            skill_name,
-            deployment.id,
-            deployment.path,
-            deployment.content_hash,
-            app,
-        );
-    }
-
-    let trial_scope = if global {
-        skill_fork_registry::TrialScope::Global
-    } else {
-        skill_fork_registry::TrialScope::Project
-    };
-    if deployment.owner_kind == super::skill_ownership::LifecycleOwnerKind::Dotagents {
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        remove_dotagents_deployment_with(
-            DotagentsRemovalContext {
-                home: &home,
-                snapshot: &snapshot,
-                skill_name: &skill_name,
-                deployment: &deployment,
-                scope,
-                project_path: project_path.as_deref().map(Path::new),
+) -> Result<RemoveOutcome, String> {
+    let snapshot_app = app.clone();
+    crate::timing_log::time_command_async(
+        &app,
+        "remove_skill",
+        remove_with_runtime(
+            target,
+            move || {
+                let refresh_state = snapshot_app.state::<SkillRefreshState>();
+                rebuild_fresh_lifecycle_snapshot(&snapshot_app, &refresh_state)
             },
-            &RealCommandRunner::new(),
-            |stage_root| std::fs::remove_dir_all(stage_root).map_err(|error| error.to_string()),
-        )?;
-        skill_trial::drop_trial_record(
-            &home,
-            &deployment.id,
-            &skill_name,
-            trial_scope,
-            Path::new(&deployment.path),
-        )
-        .map_err(|error| {
-            format!(
-                "dotagents removed {skill_name}, but Skill Studio could not clear its trial record: {error}"
-            )
-        })?;
-        skill_refresh::request_snapshot_rebuild(&app);
-        return Ok(InstallResult {
-            success: true,
-            skill_name,
-            installed_path: None,
-            error: None,
-            tool: Some("dotagents".to_string()),
-            command: None,
-        });
-    }
-    let args = match deployment.owner_kind {
-        super::skill_ownership::LifecycleOwnerKind::SkillsSh => {
-            skills_sh_remove_args_for_scope(&skill_name, scope.clone())
-        }
-        super::skill_ownership::LifecycleOwnerKind::Dotagents => unreachable!(),
-        super::skill_ownership::LifecycleOwnerKind::Copy => {
-            let home = dirs::home_dir().ok_or("Could not find home directory")?;
-            let mut registry = skill_fork_registry::read_fork_registry(&home)?;
-            let copy_record = registry
-                .copies
-                .get(&deployment.id)
-                .cloned()
-                .ok_or("Remove is not available: Copy ownership record is missing")?;
-            if copy_record.deployment_id != deployment.id
-                || copy_record.name != skill_name
-                || copy_record.path.as_path() != Path::new(&deployment.path)
-                || copy_record.scope != scope
-                || copy_record.destination != deployment.destination
-                || copy_record.project_path != deployment.project_path
-                || copy_record.disabled != deployment.disabled
-            {
-                return Err(
-                    "Remove is not available: Copy ownership record does not match the selected deployment"
-                        .to_string(),
-                );
-            }
-            remove_copy_deployment(
-                &home,
-                &snapshot,
-                &deployment,
-                &copy_record,
-                &mut registry,
-                skill_fork_registry::write_fork_registry,
-            )?;
-            skill_refresh::request_snapshot_rebuild(&app);
-            return Ok(InstallResult {
-                success: true,
-                skill_name,
-                installed_path: None,
-                error: None,
-                tool: Some("copy".to_string()),
-                command: None,
-            });
-        }
-        _ => return Err("Remove is not available for this deployment owner".to_string()),
-    };
-
-    // Log the command for debugging
-    eprintln!("[remove_skill] Running: npx {}", args.join(" "));
-
-    let mut command = Command::new("npx");
-    command.args(&args);
-    if let Some(path) = &project_path {
-        command.current_dir(path);
-    }
-    let output = command
-        .output()
-        .map_err(|e| format!("Failed to execute npx skills: {}", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    eprintln!("[remove_skill] Exit code: {:?}", output.status.code());
-    eprintln!("[remove_skill] stdout: {}", stdout);
-    eprintln!("[remove_skill] stderr: {}", stderr);
-
-    if output.status.success() {
-        if let Some(home) = dirs::home_dir() {
-            if let Err(e) = skill_trial::drop_trial_record(
-                &home,
-                &deployment.id,
-                &skill_name,
-                trial_scope,
-                Path::new(&deployment.path),
-            ) {
-                eprintln!("[remove_skill] failed to drop trial record: {e}");
-            }
-        }
-        skill_refresh::request_snapshot_rebuild(&app);
-        Ok(InstallResult {
-            success: true,
-            skill_name,
-            installed_path: None,
-            error: None,
-            tool: None,
-            command: None,
-        })
-    } else {
-        Ok(InstallResult {
-            success: false,
-            skill_name,
-            installed_path: None,
-            error: Some(if stderr.is_empty() { stdout } else { stderr }),
-            tool: None,
-            command: None,
-        })
-    }
+            |_deployment_id| super::core_runtime::build_runtime_write(),
+        ),
+    )
+    .await
 }
 
-/// `remove_skill`'s path for a forked skill: it's not in any ledger, so
-/// there's nothing for a CLI to remove - delete the directory directly and
-/// drop the fork-registry record and snapshot.
-fn remove_forked_skill(
-    skill_name: String,
-    deployment_id: String,
-    deployment_path: String,
-    deployment_content_hash: String,
-    app: tauri::AppHandle,
-) -> Result<InstallResult, String> {
-    // Callers hold `ForkMutationLock` for the whole `remove_skill` call - the
-    // mutex isn't reentrant, so this function must not acquire it again.
-    validate_skill_dir_name(&skill_name)?;
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    remove_forked_skill_with(
-        &home,
-        &app_data,
-        &skill_name,
-        &deployment_id,
-        Path::new(&deployment_path),
-        &deployment_content_hash,
-        skill_fork_registry::write_fork_registry,
-    )?;
-
-    skill_refresh::request_snapshot_rebuild(&app);
-    Ok(InstallResult {
-        success: true,
-        skill_name,
-        installed_path: None,
-        error: None,
-        tool: None,
-        command: None,
+/// The command body, kept apart so the test that pins `ops::remove` to
+/// `spawn_blocking` can run it without a `tauri::AppHandle` - same split
+/// `harness_first_run.rs`'s `detect_with_runtime` uses. The runtime is
+/// built inside the blocking closure too, so `Runtime::new` never runs on
+/// the async task.
+///
+/// `resolve_snapshot` is only called for an owner-only target
+/// (`{ owner_id }`, no `deployment_id`) - every UI remove path builds its
+/// target that way whenever the scope has one mutable owner
+/// (`lifecycleTargetForSkill`), so `remove_with_runtime` resolves it to a
+/// deployment id the same way `update_skill` does, against a freshly
+/// rebuilt snapshot. Deferred to a closure so the direct-`deployment_id`
+/// path (the common case) never pays for a snapshot rebuild, and so the
+/// rebuild - which walks the filesystem - runs inside `spawn_blocking`
+/// alongside `build_runtime`, not on the async task.
+pub(crate) async fn remove_with_runtime(
+    target: LifecycleTarget,
+    resolve_snapshot: impl FnOnce() -> Result<skill_refresh::SkillSnapshot, String> + Send + 'static,
+    build_runtime: impl FnOnce(&DeploymentId) -> Result<skill_studio_core::ports::Runtime, String>
+        + Send
+        + 'static,
+) -> Result<RemoveOutcome, String> {
+    if target.deployment_id.is_none() && target.owner_id.is_none() {
+        return Err("Remove requires a deployment id".to_string());
+    }
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        let deployment_id = if let Some(raw) = target.deployment_id.as_deref() {
+            DeploymentId::parse(raw).map_err(|e| e.message)?
+        } else {
+            let snapshot = resolve_snapshot()?;
+            let (_, deployment) = resolve_lifecycle_target(&snapshot, &target, "Remove")?;
+            DeploymentId::parse(&deployment.id).map_err(|e| e.message)?
+        };
+        let rt = build_runtime(&deployment_id)?;
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let result = ops::remove(&rt, &ctx, &RemoveRequest { deployment_id });
+        let envelope = ResultEnvelope::from_result(Operation::Remove, &rt.scope, &ctx, result);
+        super::core_runtime::to_command_result(envelope)
     })
+    .await;
+    crate::timing_log::join_result_to_err("remove_skill", joined)
 }
-
-fn remove_forked_skill_with(
-    home: &Path,
-    app_data: &Path,
-    skill_name: &str,
-    deployment_id: &str,
-    skill_dir: &Path,
-    deployment_content_hash: &str,
-    write_registry: impl FnOnce(&Path, &skill_fork_registry::ForkRegistry) -> Result<(), String>,
-) -> Result<(), String> {
-    let registry = skill_fork_registry::read_fork_registry(home)?;
-    let record = registry
-        .forks
-        .get(skill_name)
-        .cloned()
-        .ok_or_else(|| format!("`{skill_name}` is not forked"))?;
-    if (!record.deployment_id.is_empty() && record.deployment_id != deployment_id)
-        || (!record.skill_dir.as_os_str().is_empty() && record.skill_dir != skill_dir)
-    {
-        return Err("The fork record does not belong to the selected deployment".to_string());
-    }
-    let metadata = std::fs::symlink_metadata(skill_dir)
-        .map_err(|error| format!("Failed to inspect {}: {error}", skill_dir.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(format!(
-            "Fork removal refused: {} is no longer the selected directory",
-            skill_dir.display()
-        ));
-    }
-    let live_hash = super::skill_discovery::live_skill_content_hash(skill_dir)?;
-    if deployment_content_hash.is_empty() || live_hash != deployment_content_hash {
-        return Err(format!(
-            "Fork removal refused: {} content changed after discovery",
-            skill_dir.display()
-        ));
-    }
-
-    let original_fingerprint = super::event_store::fingerprint_path(skill_dir);
-    let stage_id = FORK_REMOVAL_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let backup = home
-        .join(".agents")
-        .join("skills-trash")
-        .join(format!(".fork-remove-{}-{stage_id}", std::process::id()));
-    std::fs::create_dir_all(backup.parent().expect("backup has a parent"))
-        .map_err(|error| format!("Failed to create fork removal trash: {error}"))?;
-    std::fs::rename(skill_dir, &backup).map_err(|error| {
-        format!(
-            "Failed to stage {} for removal at {}: {error}",
-            skill_dir.display(),
-            backup.display()
-        )
-    })?;
-    if super::event_store::fingerprint_path(&backup) != original_fingerprint {
-        let _ = std::fs::rename(&backup, skill_dir);
-        return Err("Fork removal backup verification failed".to_string());
-    }
-
-    let mut updated_registry = registry.clone();
-    updated_registry.forks.remove(skill_name);
-    // Forking only ever applies to the global scope (see `skill_fork`), so
-    // a forked skill's trial, if any, is always keyed as global.
-    updated_registry
-        .trials
-        .remove(&skill_fork_registry::trial_key(
-            skill_fork_registry::TrialScope::Global,
-            skill_name,
-        ));
-    updated_registry
-        .trials
-        .remove(&skill_fork_registry::deployment_trial_key(deployment_id));
-    if let Err(write_error) = write_registry(home, &updated_registry) {
-        let restore_result = std::fs::rename(&backup, skill_dir);
-        return Err(match restore_result {
-            Ok(()) => format!(
-                "Failed to persist fork removal; restored {skill_name}: {write_error}"
-            ),
-            Err(restore_error) => format!(
-                "Failed to persist fork removal ({write_error}) and failed to restore {} from {}: {restore_error}",
-                skill_dir.display(),
-                backup.display()
-            ),
-        });
-    }
-    if let Err(error) = std::fs::remove_dir_all(&backup) {
-        eprintln!(
-            "[remove_skill] fork removal succeeded, but backup cleanup failed at {}: {error}",
-            backup.display()
-        );
-    }
-    let _ = std::fs::remove_dir_all(skill_fork_registry::fork_snapshot_dir(app_data, skill_name));
-    Ok(())
-}
-
-static FORK_REMOVAL_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Maximum number of bytes read from an installed skill's SKILL.md, to keep
 /// a runaway file from blocking the UI thread on a slow disk.
@@ -2221,10 +1821,8 @@ pub(crate) fn canonicalize_skill_md(
         return Err(format!("Path is not an installed skill: {path}"));
     }
     let canonical =
-        std::fs::canonicalize(path_buf).map_err(|e| format!("Failed to open {}: {}", path, e))?;
-    let is_file = std::fs::symlink_metadata(&canonical)
-        .map(|m| m.is_file())
-        .unwrap_or(false);
+        std::fs::canonicalize(path_buf).map_err(|e| format!("Failed to open {path}: {e}"))?;
+    let is_file = std::fs::symlink_metadata(&canonical).is_ok_and(|m| m.is_file());
     if !is_file {
         return Err(format!("Path is not an installed skill: {path}"));
     }
@@ -2238,21 +1836,26 @@ pub(crate) fn canonicalize_skill_md(
 /// belonging to a deployment in the current snapshot, to keep this from
 /// becoming an arbitrary-file read.
 #[tauri::command]
-pub fn read_installed_skill_md(
+pub async fn read_installed_skill_md(
     path: String,
-    refresh_state: tauri::State<SkillRefreshState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let path_buf = std::path::PathBuf::from(&path);
-    require_snapshot_owns_path(&refresh_state, &path_buf)?;
-    canonicalize_skill_md(&path_buf, &path)?;
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "read_installed_skill_md", move || {
+        let refresh_state = app.state::<SkillRefreshState>();
+        let path_buf = std::path::PathBuf::from(&path);
+        require_snapshot_owns_path(&refresh_state, &path_buf)?;
+        canonicalize_skill_md(&path_buf, &path)?;
 
-    let mut file = File::open(&path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
-    let mut buf = vec![0u8; MAX_SKILL_MD_BYTES];
-    let n = file
-        .read(&mut buf)
-        .map_err(|e| format!("Failed to read {}: {}", path, e))?;
-    buf.truncate(n);
-    Ok(String::from_utf8_lossy(&buf).into_owned())
+        let mut file = File::open(&path).map_err(|e| format!("Failed to open {path}: {e}"))?;
+        let mut buf = vec![0u8; MAX_SKILL_MD_BYTES];
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("Failed to read {path}: {e}"))?;
+        buf.truncate(n);
+        Ok(String::from_utf8_lossy(&buf).into_owned())
+    })
+    .await
 }
 
 /// Refuses a `write_installed_skill_md` request that targets a path outside
@@ -2303,46 +1906,45 @@ fn validate_skill_md_write(
 }
 
 /// Write `content` to an installed skill's `SKILL.md`, for the detail
-/// drawer's inline editor. Same ownership check as `read_installed_skill_md`,
-/// plus a refusal when the owning deployment is plugin-managed. Marks the
-/// snapshot dirty afterward so the background loop picks up the new content
-/// and token/byte counts, rather than rescanning every skill on this thread.
+/// drawer's inline editor and Audit proposal Apply. Same ownership check as
+/// `read_installed_skill_md`, plus a refusal when the owning deployment is
+/// plugin-managed. Refuses the write (rather than silently overwriting) when
+/// the file's current content doesn't match `expected_content` - the copy the
+/// caller last loaded, so an ordinary stale baseline is detected before
+/// writing. Marks the snapshot dirty afterward so the background loop picks
+/// up the new content and token/byte counts, rather than rescanning every
+/// skill on this thread.
 #[tauri::command]
-pub fn write_installed_skill_md(
-    path: String,
-    content: String,
-    app: tauri::AppHandle,
-    refresh_state: tauri::State<SkillRefreshState>,
-) -> Result<(), String> {
-    let canonical = validate_skill_md_write(&path, &content, &refresh_state)?;
-    write_skill_md(&canonical, &content)?;
-    skill_refresh::request_snapshot_rebuild(&app);
-    Ok(())
-}
-
-/// Like `write_installed_skill_md`, but refuses the write (rather than
-/// silently overwriting) when the file's current content doesn't match
-/// `expected_content` - the copy the caller last loaded. Used by Audit
-/// proposal Apply and the inline editor to detect an ordinary stale baseline
-/// before writing.
-#[tauri::command]
-pub fn write_installed_skill_md_if_unchanged(
+pub async fn write_installed_skill_md_if_unchanged(
     path: String,
     expected_content: String,
     content: String,
     app: tauri::AppHandle,
-    refresh_state: tauri::State<SkillRefreshState>,
 ) -> Result<(), String> {
-    let canonical = validate_skill_md_write(&path, &content, &refresh_state)?;
-    write_skill_md_compare_and_swap(&canonical, &expected_content, &content)?;
-    skill_refresh::request_snapshot_rebuild(&app);
-    Ok(())
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        "write_installed_skill_md_if_unchanged",
+        move || {
+            let refresh_state = app.state::<SkillRefreshState>();
+            let canonical = validate_skill_md_write(&path, &content, &refresh_state)?;
+            write_skill_md_compare_and_swap(&canonical, &expected_content, &content)?;
+            skill_refresh::request_snapshot_rebuild(&app);
+            Ok(())
+        },
+    )
+    .await
 }
 
 /// Reveal a skill's folder in Finder, or open it in the user's default
 /// editor, via macOS's `open` CLI. Restricted to paths belonging to a
-/// deployment in the current snapshot.
-#[tauri::command]
+/// deployment in the current snapshot. `async` so a cold `editor` mode - which
+/// can start the login shell to read `$EDITOR` - never runs on the main
+/// thread.
+#[tauri::command(async)]
+// Tauri commands deserialize their arguments fresh per invocation, so `path`
+// and `mode` can't be borrowed from the caller - they must be owned.
+#[allow(clippy::needless_pass_by_value)]
 pub fn open_skill_path(
     path: String,
     mode: String,
@@ -2350,161 +1952,765 @@ pub fn open_skill_path(
 ) -> Result<(), String> {
     require_snapshot_owns_path(&refresh_state, std::path::Path::new(&path))?;
 
-    let args = match mode.as_str() {
-        "reveal" => vec!["-R".to_string()],
+    let mut script_to_clean_up: Option<PathBuf> = None;
+    let args: Vec<String> = match mode.as_str() {
+        "reveal" => vec!["-R".to_string(), path.clone()],
         // `-t` would mean the system default *text* editor, which is TextEdit
         // on a stock machine - see `skill_editor` for the setting behind this.
         "editor" => {
             let home = dirs::home_dir().ok_or("Could not find home directory")?;
-            skill_editor::open_editor_args(
-                skill_editor::preferred_editor(&home).as_deref(),
-                &skill_editor::installed_editors(&home),
-            )
+            match skill_editor::editor_launch(&home) {
+                skill_editor::EditorLaunch::Open(mut args) => {
+                    args.push(path.clone());
+                    args
+                }
+                skill_editor::EditorLaunch::Terminal { command } => {
+                    let script =
+                        skill_editor::write_terminal_launch_script(Path::new(&path), &command)?;
+                    let script_arg = script.to_string_lossy().to_string();
+                    script_to_clean_up = Some(script);
+                    vec![script_arg]
+                }
+            }
         }
         other => return Err(format!("Unknown open mode: {other}")),
     };
 
-    Command::new("open")
+    let output = Command::new("open")
         .args(&args)
-        .arg(&path)
         .output()
-        .map_err(|e| format!("Failed to open {}: {}", path, e))?;
+        .map_err(|e| format!("Failed to open {path}: {e}"))?;
+
+    if !output.status.success() {
+        if let Some(script) = &script_to_clean_up {
+            let _ = std::fs::remove_file(script);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!("Failed to open {path}: {stderr}"));
+    }
     Ok(())
 }
 
-/// The editors installed on this machine, for the Settings picker.
+/// Everything the Settings "Open in editor" card shows: the automatic-row
+/// label, the installed/saved apps, the `$EDITOR` row (if any), and the
+/// still-usable saved choice. Reads the login shell for `$VISUAL`/`$EDITOR`,
+/// so it runs off the main thread.
 #[tauri::command]
-pub fn list_installed_editors() -> Result<Vec<skill_editor::EditorOption>, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    Ok(skill_editor::installed_editors(&home))
+pub async fn get_editor_choices(
+    app: tauri::AppHandle,
+) -> Result<skill_editor::EditorChoices, String> {
+    crate::timing_log::time_command_async(&app, "get_editor_choices", async move {
+        tauri::async_runtime::spawn_blocking(|| {
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            Ok(skill_editor::editor_choices(&home))
+        })
+        .await
+        .map_err(|e| format!("Failed to read editor choices: {e}"))?
+    })
+    .await
 }
 
-/// The application "Open in editor" currently uses, or `None` for the system
-/// default.
-#[tauri::command]
-pub fn get_preferred_editor() -> Result<Option<String>, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    Ok(skill_editor::preferred_editor(&home))
-}
-
-#[tauri::command]
+/// `async` because saving `"$EDITOR"` can start the login shell to check that
+/// a terminal editor is actually set - see `skill_editor::set_preferred_editor`.
+#[tauri::command(async)]
 pub fn set_preferred_editor(app_name: Option<String>) -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     skill_editor::set_preferred_editor(&home, app_name)
 }
 
-/// Update a skill, using whichever CLI owns it: `dotagents` for a
-/// named dotagents-managed skill (`add` re-pins it to the latest commit), `npx
-/// skills update` for a skills.sh skill. Manual/plugin skills have no owning
-/// CLI to update through, and wildcard dotagents entries are read-only, so
-/// they are rejected up front.
+/// Resolves one target's deployment into the `UpdateRequest`
+/// `skill_studio_core::ops::update` needs: `method`/`scope` from the
+/// deployment, and - `Dotagents` only - `source`/`ref_pin` from the
+/// matching ownership ledger entry. `ops::update`'s own argv builder
+/// (`ops_update::update_cli_args_and_cwd`) takes an already-resolved
+/// `ref_pin`; resolving a `declared_ref` ledger entry to a commit stays the
+/// caller's job (see `ops_update`'s module doc), the same lookup the old
+/// `update_skill` body ran before shelling out itself. Takes a bare
+/// `app_data` path rather than a `tauri::AppHandle` (N3, review round 1) -
+/// the only thing it ever needed off the handle - so a table test over the
+/// three desktop-owned preconditions below can call it without a running
+/// Tauri app.
+fn build_update_request(
+    app_data: &Path,
+    snapshot: &skill_refresh::SkillSnapshot,
+    skill: &InstalledSkill,
+    deployment: &super::skill_dto::Deployment,
+) -> Result<skill_studio_core::dto::UpdateRequest, String> {
+    use skill_studio_core::dto::{InstallMethod, UpdateRequest};
+    use skill_studio_core::identity::{ProjectRef, RootScope, SkillName};
+
+    let scope = match (deployment.scope.as_str(), &deployment.project_path) {
+        ("global", _) => RootScope::Global,
+        ("project", Some(project_path)) => {
+            RootScope::Project(ProjectRef(PathBuf::from(project_path)))
+        }
+        _ => {
+            return Err(format!(
+                "Update is not available for {} scope",
+                deployment.scope
+            ))
+        }
+    };
+    let skill_name = SkillName(skill.name.clone());
+
+    match deployment.owner_kind {
+        super::skill_ownership::LifecycleOwnerKind::Dotagents => {
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            let project_paths: Vec<PathBuf> = snapshot.projects.iter().map(Into::into).collect();
+            let ledgers = super::skill_ownership::load_ownership_ledgers(&home, &project_paths);
+            let entry = skill_lifecycle::dotagents_update_entry(&ledgers, deployment, &skill.name)?;
+            let ref_pin = if entry.declared_ref.is_some() {
+                let store = skill_update_check::read_update_check_store(app_data);
+                let owner_id = deployment.owner_id.as_deref().ok_or(
+                    "Update is not available: the selected deployment has no owner identity",
+                )?;
+                let current_owner_ids = skill_refresh::snapshot_owner_ids(&snapshot.skills);
+                let latest =
+                    skill_update_check::state_for_owner(&store, owner_id, &current_owner_ids)
+                        .and_then(|state| state.latest_commit.clone());
+                Some(latest.ok_or_else(|| {
+                    format!(
+                        "Update is not available yet: run \"Check now\" to find {}'s latest commit first",
+                        skill.name
+                    )
+                })?)
+            } else {
+                None
+            };
+            Ok(UpdateRequest {
+                skill: skill_name,
+                method: InstallMethod::Dotagents,
+                scope,
+                files: Vec::new(),
+                source: Some(entry.source.clone()),
+                ref_pin,
+            })
+        }
+        super::skill_ownership::LifecycleOwnerKind::SkillsSh => Ok(UpdateRequest {
+            skill: skill_name,
+            method: InstallMethod::SkillsSh,
+            scope,
+            files: Vec::new(),
+            source: None,
+            ref_pin: None,
+        }),
+        super::skill_ownership::LifecycleOwnerKind::Fork => {
+            Err("Forked skills update with Pull upstream".to_string())
+        }
+        _ => Err("Update is not available for this deployment owner".to_string()),
+    }
+}
+
+/// Clears `skill`'s outdated badge for one owner right away, instead of the
+/// old `check_now_for_owner` full rescan (`gh api` calls plus a snapshot
+/// rebuild) the pre-3.6b `update_skill` body ran after every successful
+/// update - the background loop's own 6h currency check (unit 3.4)
+/// reconciles the rest. `owner_id: None` (an owner-less deployment, which
+/// `Update`'s own preconditions never actually allow through) leaves the
+/// badge alone rather than guessing which entry to drop.
+fn clear_update_flag(skill: &mut InstalledSkill, owner_id: Option<&str>) {
+    let Some(owner_id) = owner_id else { return };
+    skill.update_owner_ids.retain(|id| id != owner_id);
+    skill
+        .update_owners
+        .retain(|update| update.owner_id != owner_id);
+    skill.has_update = !skill.update_owner_ids.is_empty();
+    if skill.update_owner_ids.is_empty() {
+        skill.update_commit = None;
+        skill.update_commit_at = None;
+    }
+}
+
+/// The post-`ops::update` housekeeping one successfully updated owner needs:
+/// write the just-updated commit into its persisted update-check state
+/// (`skill_update_check::clear_owner_after_update` - review round 1's B1
+/// fix, sharpened in round 2's B2 to write the commit rather than remove
+/// the entry, so the next full rebuild's `apply_skill_snapshot_overlays`
+/// doesn't recompute `has_update` from a stale pair and bring the badge
+/// back), then patch the same owner's badge off the in-memory snapshot.
+/// Takes a bare `app_data` path and `SkillRefreshState` rather than an
+/// `AppHandle` so a test can drive it without a running Tauri app; returns
+/// the snapshot `patch_snapshot` built (`None` when there was no snapshot
+/// yet to patch) so a caller with an `AppHandle` can still emit it.
+///
+/// `current_owner_ids` is the caller's already-in-hand set (both
+/// `update_skill` and `update_all_skills` hold the fresh snapshot
+/// `rebuild_fresh_lifecycle_snapshot` just returned) rather than a second
+/// `refresh_state.snapshot` lock acquisition here - re-locking would also
+/// silently fall back to an empty set (disabling the legacy fallback below)
+/// whenever the fresh snapshot hadn't been published to `refresh_state` yet.
+fn clear_outdated_state(
+    app_data: &Path,
+    refresh_state: &SkillRefreshState,
+    skill_name: &str,
+    owner_id: Option<&str>,
+    current_owner_ids: &[String],
+) -> Result<Option<skill_refresh::SkillSnapshot>, String> {
+    if let Some(owner_id) = owner_id {
+        // `legacy_fallback_name` (inside `clear_owner_after_update`) needs
+        // every currently-known owner id to tell a sole Global owner from
+        // a name shared by more than one - the same set `state_for_owner`
+        // checks against on the read side.
+        skill_update_check::clear_owner_after_update(app_data, owner_id, current_owner_ids)?;
+    }
+    skill_refresh::patch_snapshot(refresh_state, |snapshot| {
+        if let Some(entry) = snapshot.skills.iter_mut().find(|s| s.name == skill_name) {
+            clear_update_flag(entry, owner_id);
+        }
+    })
+}
+
+/// Runs `clear_outdated_state` for one owner and, when it produced a fresh
+/// snapshot, emits it - the `AppHandle`-holding half production commands use;
+/// tests call `clear_outdated_state` directly instead.
+fn clear_outdated_state_and_emit(
+    app: &tauri::AppHandle,
+    refresh_state: &SkillRefreshState,
+    skill_name: &str,
+    owner_id: Option<&str>,
+    current_owner_ids: &[String],
+) {
+    let app_data = match app.path().app_data_dir() {
+        Ok(app_data) => app_data,
+        Err(e) => {
+            eprintln!("[update] could not resolve app data dir: {e}");
+            return;
+        }
+    };
+    match clear_outdated_state(
+        &app_data,
+        refresh_state,
+        skill_name,
+        owner_id,
+        current_owner_ids,
+    ) {
+        Ok(Some(built)) => {
+            if let Err(e) = tauri::Emitter::emit(app, skill_refresh::SNAPSHOT_EVENT, &built) {
+                eprintln!("[update] snapshot emit failed: {e}");
+            }
+        }
+        Ok(None) => {}
+        Err(e) => eprintln!("[update] outdated-state patch failed: {e}"),
+    }
+}
+
+/// Thin adapter over `skill_studio_core::ops::update`: resolves the target
+/// deployment, then hands its `Dotagents`/`SkillsSh` write to the core op
+/// (Lease, journal row with a backup and inverse, `npx` through the
+/// spawner port) - the same function the CLI's `update` subcommand and the
+/// MCP server's `update` tool call. Old path deleted: `update_skill` no
+/// longer shells out to `npx` itself, and `skill_lifecycle.rs`'s
+/// `skills_sh_update_args`/`dotagents_update_args` argv builders are gone -
+/// `ops_update::update_cli_args_and_cwd` owns that argv now.
 #[tauri::command]
 pub async fn update_skill(
     target: LifecycleTarget,
     app: tauri::AppHandle,
-    refresh_state: tauri::State<'_, SkillRefreshState>,
-    update_check_state: tauri::State<'_, skill_update_check::UpdateCheckState>,
-    fork_lock: tauri::State<'_, skill_fork::ForkMutationLock>,
-) -> Result<InstallResult, String> {
-    let _guard = fork_lock.try_acquire()?;
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let snapshot = rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
-    let (skill, deployment) = resolve_lifecycle_target(&snapshot, &target, "Update")?;
-    let skill_name = skill.name;
-    let scope = if deployment.scope == "global" {
-        super::skill_dto::InstallScope::Global
-    } else if deployment.scope == "project" {
-        super::skill_dto::InstallScope::Project
-    } else {
-        return Err(format!(
-            "Update is not available for {} scope",
-            deployment.scope
-        ));
-    };
-    let project_paths: Vec<std::path::PathBuf> = snapshot.projects.iter().map(Into::into).collect();
-    let ledgers = super::skill_ownership::load_ownership_ledgers(&home, &project_paths);
-
-    let (tool, args): (&str, Vec<String>) = match deployment.owner_kind {
-        super::skill_ownership::LifecycleOwnerKind::Dotagents => {
-            let ledger = ledger_matching_deployment(&ledgers, &deployment)
-                .ok_or("Update is not available: the matching ownership ledger is missing")?;
-            let entry = ledger
-                .dotagents
-                .iter()
-                .find(|entry| entry.name == skill_name);
-            let latest_commit = if entry.is_some_and(|e| e.declared_ref.is_some()) {
-                let app_data = app
-                    .path()
-                    .app_data_dir()
-                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let store = skill_update_check::read_update_check_store(&app_data);
-                let owner_id = deployment.owner_id.as_deref().ok_or(
-                    "Update is not available: the selected deployment has no owner identity",
-                )?;
-                let current_owner_ids: Vec<String> = snapshot
-                    .skills
-                    .iter()
-                    .flat_map(|skill| skill.deployments.iter())
-                    .filter_map(|deployment| deployment.owner_id.clone())
-                    .collect();
-                skill_update_check::state_for_owner(&store, owner_id, &current_owner_ids)
-                    .and_then(|state| state.latest_commit.clone())
-            } else {
-                None
-            };
-            let args =
-                dotagents_update_args(&skill_name, entry, latest_commit.as_deref(), scope.clone())?;
-            ("dotagents", args)
-        }
-        super::skill_ownership::LifecycleOwnerKind::SkillsSh => {
-            ("skills-sh", skills_sh_update_args(&skill_name, scope))
-        }
-        super::skill_ownership::LifecycleOwnerKind::Fork => {
-            return Err("Forked skills update with Pull upstream".to_string())
-        }
-        _ => return Err("Update is not available for this deployment owner".to_string()),
-    };
-
-    let npx_command = format!("npx {}", args.join(" "));
-    let mut command = Command::new("npx");
-    command.args(&args);
-    if let Some(project_path) = &deployment.project_path {
-        command.current_dir(project_path);
-    }
-    let output = command
-        .output()
-        .map_err(|e| format!("Failed to execute npx: {}", e))?;
-
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if output.status.success() {
-        let owner_id = deployment
-            .owner_id
-            .as_deref()
-            .ok_or("Update is not available: the selected deployment has no owner identity")?;
-        skill_update_check::check_now_for_owner(
-            &app,
-            &update_check_state,
-            owner_id,
-            &project_paths,
+) -> Result<serde_json::Value, String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "update_skill", move || {
+        let refresh_state = app.state::<SkillRefreshState>();
+        let snapshot = rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
+        let (skill, deployment) = resolve_lifecycle_target(&snapshot, &target, "Update")?;
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("."));
+        let rt = super::core_runtime::build_runtime_write()?;
+        let ctx = skill_studio_core::ports::OpContext::uncancellable(
+            skill_studio_core::identity::CorrelationId(ulid::Ulid::new().to_string()),
         );
-        skill_refresh::request_snapshot_rebuild(&app);
-        Ok(InstallResult {
-            success: true,
-            skill_name,
-            installed_path: None,
-            error: None,
-            tool: Some(tool.to_string()),
-            command: Some(npx_command),
-        })
-    } else {
-        Ok(InstallResult {
-            success: false,
-            skill_name,
-            installed_path: None,
-            error: Some(stderr),
-            tool: Some(tool.to_string()),
-            command: Some(npx_command),
-        })
+        if deployment.owner_kind == super::skill_ownership::LifecycleOwnerKind::Copy {
+            super::skill_split_update::check_split_deployment(
+                &deployment.scope,
+                deployment.destination,
+            )?;
+            return update_split_copies_command(
+                &app,
+                &refresh_state,
+                &snapshot,
+                &rt,
+                &ctx,
+                &skill,
+                &deployment,
+            );
+        }
+        let req = build_update_request(&app_data, &snapshot, &skill, &deployment)?;
+        let result = skill_studio_core::ops::update(&rt, &ctx, &req);
+        let envelope = skill_studio_core::ops::ResultEnvelope::from_result(
+            skill_studio_core::ops::Operation::Update,
+            &rt.scope,
+            &ctx,
+            result,
+        );
+        let outcome = super::core_runtime::to_command_result(envelope)?;
+
+        clear_outdated_state_and_emit(
+            &app,
+            &refresh_state,
+            &skill.name,
+            deployment.owner_id.as_deref(),
+            &skill_refresh::snapshot_owner_ids(&snapshot.skills),
+        );
+        serde_json::to_value(outcome).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// `update_skill` for a skill that was split into per-agent copies: one
+/// fetch, every live copy written (see `skill_split_update`). The outdated
+/// badge clears only when no copy was left behind, so a refused copy keeps
+/// offering the update.
+fn update_split_copies_command(
+    app: &tauri::AppHandle,
+    refresh_state: &SkillRefreshState,
+    snapshot: &skill_refresh::SkillSnapshot,
+    rt: &skill_studio_core::ports::Runtime,
+    ctx: &skill_studio_core::ports::OpContext,
+    skill: &InstalledSkill,
+    deployment: &super::skill_dto::Deployment,
+) -> Result<serde_json::Value, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let (fetch, lookup) = super::skill_install::resolve_fetch_and_lookup(app)?;
+    let gh_bin = super::skill_update_check::resolve_gh_binary()
+        .ok_or("Install the GitHub CLI (gh) to update split copies.")?;
+    let outcome = super::skill_split_update::update_split_skill(
+        rt,
+        ctx,
+        &home,
+        &skill.name,
+        fetch.as_ref(),
+        lookup.as_ref(),
+        &super::skill_update_check::GhTreeLookup { gh_bin },
+    )?;
+    let result = super::skill_split_update::split_update_result(&skill.name, &outcome);
+    if result.is_ok() {
+        clear_outdated_state_and_emit(
+            app,
+            refresh_state,
+            &skill.name,
+            deployment.owner_id.as_deref(),
+            &skill_refresh::snapshot_owner_ids(&snapshot.skills),
+        );
     }
+    result?;
+    Ok(serde_json::json!({ "updated": outcome.updated }))
+}
+
+/// Test-only: the batch write itself, isolated from target resolution and
+/// `app.state()` so the thread-recording test below can pin it to
+/// `spawn_blocking` without a real `tauri::AppHandle` - the same split
+/// `harness_first_run.rs`'s `detect_with_runtime` uses. The sync body
+/// (`build_runtime` then `ops::update_all`) is [`run_update_all_sync`],
+/// shared with production `update_all_skills` (N1, review round 2) so the
+/// ten-fixture thread-recording test below still proves something about the
+/// exact call production makes, not a parallel copy of it - the earlier
+/// split (production called `ops::update_all` directly inside its own
+/// `time_command_blocking` closure) let that closure's body drift from this
+/// one with nothing to notice. `on_outcome` is threaded straight through to
+/// `ops::update_all` (B3: the review round 1 fix) rather than hardcoded to
+/// a no-op here, so the thread-recording test can observe every one of the
+/// batch's per-skill calls landing on this `spawn_blocking` closure's own
+/// pool thread, not just the closure that builds the `Runtime`.
+#[cfg(test)]
+async fn update_all_with_runtime(
+    requests: Vec<skill_studio_core::dto::UpdateRequest>,
+    build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String> + Send + 'static,
+    on_outcome: impl FnMut(
+            &skill_studio_core::identity::SkillName,
+            &Result<skill_studio_core::dto::UpdateOutcome, skill_studio_core::error::CoreError>,
+        ) + Send
+        + 'static,
+) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        run_update_all_sync(&requests, build_runtime, on_outcome)
+    })
+    .await;
+    crate::timing_log::join_result_to_err("update_all_skills", joined)
+}
+
+/// The sync body a `spawn_blocking` closure runs for one update-all batch:
+/// build the `Runtime`, then run every request through `ops::update_all`.
+/// Shared by `update_all_with_runtime` (test-only, wraps this in its own
+/// `spawn_blocking` since a unit test builds a bare `Runtime` fixture
+/// without an `AppHandle`) and production `update_all_skills` (already
+/// inside the `spawn_blocking` closure `time_command_blocking` provides, so
+/// it calls this directly rather than nesting a second one) - one body, so
+/// a change to either caller's shape can't drift the two apart (N1, review
+/// round 2).
+fn run_update_all_sync(
+    requests: &[skill_studio_core::dto::UpdateRequest],
+    build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
+    mut on_outcome: impl FnMut(
+        &skill_studio_core::identity::SkillName,
+        &Result<skill_studio_core::dto::UpdateOutcome, skill_studio_core::error::CoreError>,
+    ),
+) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
+    let rt = build_runtime()?;
+    let ctx = skill_studio_core::ports::OpContext::uncancellable(
+        skill_studio_core::identity::CorrelationId(ulid::Ulid::new().to_string()),
+    );
+    Ok(skill_studio_core::ops::update_all(
+        &rt,
+        &ctx,
+        requests,
+        &mut on_outcome,
+    ))
+}
+
+/// Which owners a batch's succeeded items should clear (N1: the review
+/// round 1 fix) - a failed item (`item.outcome` is `None`) keeps its badge
+/// on so the row still reads as outdated, so this drops it rather than
+/// clearing it alongside the succeeded ones. Split out of `update_all_skills`
+/// so a test can drive the filter without a real `tauri::AppHandle`.
+///
+/// Takes `owners` as a `Vec<(name, owner, deployment_path)>` and matches
+/// each succeeded item to its owner by `deployment_path` (B1, review round
+/// 3) rather than by request-order index: `dto.rs` documents
+/// `UpdateAllOutcome.items` as "in the order each one finished (not the
+/// order requested)", so zipping by index clears the wrong owner's badge
+/// the moment `update_all` stops finishing requests strictly in order.
+/// Matching by name alone doesn't work either - `skillUpdateOwnerTargets`
+/// sends one target per outdated owner, so a skill outdated for two owners
+/// produces two requests sharing one name - but each owner's deployment
+/// lives at its own path, so the path is unique per request even when the
+/// name is not.
+fn owners_to_clear(
+    outcome: &skill_studio_core::dto::UpdateAllOutcome,
+    owners: &[(String, Option<String>, PathBuf)],
+) -> Vec<(String, Option<String>)> {
+    let by_path: std::collections::HashMap<&Path, (&str, Option<&str>)> = owners
+        .iter()
+        .map(|(name, owner, path)| (path.as_path(), (name.as_str(), owner.as_deref())))
+        .collect();
+    outcome
+        .items
+        .iter()
+        .filter_map(|item| item.outcome.as_ref())
+        .filter_map(|update_outcome| by_path.get(update_outcome.deployment_path.as_path()))
+        .map(|(name, owner)| ((*name).to_string(), owner.map(str::to_string)))
+        .collect()
+}
+
+/// Event name "Update all" reports each finished target on.
+pub const UPDATE_ALL_PROGRESS_EVENT: &str = "skills://update-all-progress";
+
+/// One finished target of an "Update all" batch, succeeded or failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateAllProgress {
+    pub done: usize,
+    pub total: usize,
+    pub skill_name: String,
+}
+
+/// A target the update path refused before it could run.
+struct UnresolvedUpdateTarget {
+    skill: skill_studio_core::identity::SkillName,
+    message: String,
+}
+
+/// One target resolved to its request plus the row `owners_to_clear` needs.
+type ResolvedUpdateTarget = (
+    skill_studio_core::dto::UpdateRequest,
+    (String, Option<String>, PathBuf),
+);
+
+/// A batch's outcome plus the owner rows `owners_to_clear` matches against.
+type UpdateAllBatchResult = (
+    skill_studio_core::dto::UpdateAllOutcome,
+    Vec<(String, Option<String>, PathBuf)>,
+);
+
+/// The per-target loop of "Update all". A target that fails to resolve
+/// becomes one failed item in the returned outcome, so one refused target
+/// never aborts the batch; every resolvable target still goes through
+/// `run`. `on_progress` sees each refused target first, then each finished
+/// one, with `done` counting both. Split out of `update_all_skills` so a
+/// test can drive it without a `tauri::AppHandle`.
+fn run_update_all_batch(
+    targets: &[LifecycleTarget],
+    mut resolve: impl FnMut(&LifecycleTarget) -> Result<ResolvedUpdateTarget, UnresolvedUpdateTarget>,
+    run: impl FnOnce(
+        &[skill_studio_core::dto::UpdateRequest],
+        &mut dyn FnMut(&str),
+    ) -> Result<skill_studio_core::dto::UpdateAllOutcome, String>,
+    mut on_progress: impl FnMut(UpdateAllProgress),
+) -> Result<UpdateAllBatchResult, String> {
+    let total = targets.len();
+    let mut requests = Vec::with_capacity(total);
+    let mut owners = Vec::with_capacity(total);
+    let mut refused_items = Vec::new();
+    let mut refused_errors = std::collections::BTreeMap::new();
+    for target in targets {
+        match resolve(target) {
+            Ok((request, owner)) => {
+                requests.push(request);
+                owners.push(owner);
+            }
+            Err(UnresolvedUpdateTarget { skill, message }) => {
+                on_progress(UpdateAllProgress {
+                    done: refused_items.len() + 1,
+                    total,
+                    skill_name: skill.0.clone(),
+                });
+                refused_errors.insert(skill.0.clone(), message);
+                refused_items.push(skill_studio_core::dto::UpdateAllItem {
+                    skill,
+                    outcome: None,
+                });
+            }
+        }
+    }
+
+    let already_done = refused_items.len();
+    let mut finished = 0;
+    let mut outcome = if requests.is_empty() {
+        skill_studio_core::dto::UpdateAllOutcome {
+            items: Vec::new(),
+            errors: std::collections::BTreeMap::new(),
+        }
+    } else {
+        run(&requests, &mut |skill_name| {
+            finished += 1;
+            on_progress(UpdateAllProgress {
+                done: already_done + finished,
+                total,
+                skill_name: skill_name.to_string(),
+            });
+        })?
+    };
+    outcome.items.splice(0..0, refused_items);
+    for (skill, message) in refused_errors {
+        outcome.errors.entry(skill).or_insert(message);
+    }
+    Ok((outcome, owners))
+}
+
+/// The skill name a target the update path refused belongs to, for its
+/// failed item: the owner id encodes it, a deployment id is looked up in the
+/// snapshot, and the raw id is the last resort.
+fn unresolved_target_skill(
+    snapshot: &skill_refresh::SkillSnapshot,
+    target: &LifecycleTarget,
+) -> skill_studio_core::identity::SkillName {
+    let name = match (&target.owner_id, &target.deployment_id) {
+        (Some(owner_id), _) => super::skill_ownership::parse_owner_id(owner_id)
+            .map_or_else(|| owner_id.clone(), |parsed| parsed.name),
+        (None, Some(id)) => snapshot
+            .skills
+            .iter()
+            .find(|skill| skill.deployments.iter().any(|d| &d.id == id))
+            .map_or_else(|| id.clone(), |skill| skill.name.clone()),
+        (None, None) => "unknown".to_string(),
+    };
+    skill_studio_core::identity::SkillName(name)
+}
+
+/// "Update all": resolves every target, then runs `ops::update_all` over the
+/// resolvable ones via `run_update_all_sync` (shared with the test-only
+/// `update_all_with_runtime`, N1 review round 2) in the one `spawn_blocking`
+/// task `time_command_blocking` wraps the whole body in (N2: the review
+/// round 1 fix - resolving targets reads ledgers off disk, which no longer
+/// runs untimed on the Tokio worker) - each skill gets its own
+/// journal row (`ops::update_all`'s own per-request loop), except a dotagents
+/// skill an earlier install in the same scope covered, which shares that
+/// install's row. No part of resolving targets, reading ledgers, or writing
+/// skills touches the UI task. A refused target is one failed item, not a failed call
+/// (`run_update_all_batch`). Each finished target emits
+/// `UPDATE_ALL_PROGRESS_EVENT`. Only a succeeded item's owner has its badge
+/// cleared (N1, via `owners_to_clear`); a failed item's badge stays on so
+/// the row still reads as outdated.
+#[tauri::command]
+pub async fn update_all_skills(
+    targets: Vec<LifecycleTarget>,
+    app: tauri::AppHandle,
+) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "update_all_skills", move || {
+        let refresh_state = app.state::<SkillRefreshState>();
+        let snapshot = rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("."));
+
+        let (outcome, owners) = run_update_all_batch(
+            &targets,
+            |target| {
+                let (skill, deployment) = resolve_lifecycle_target(&snapshot, target, "Update")
+                    .map_err(|message| UnresolvedUpdateTarget {
+                        skill: unresolved_target_skill(&snapshot, target),
+                        message,
+                    })?;
+                let request = build_update_request(&app_data, &snapshot, &skill, &deployment)
+                    .map_err(|message| UnresolvedUpdateTarget {
+                        skill: unresolved_target_skill(&snapshot, target),
+                        message,
+                    })?;
+                Ok((
+                    request,
+                    (
+                        skill.name.clone(),
+                        deployment.owner_id.clone(),
+                        PathBuf::from(&deployment.path),
+                    ),
+                ))
+            },
+            |requests, on_finished| {
+                run_update_all_sync(
+                    requests,
+                    super::core_runtime::build_runtime_write,
+                    |skill, _| on_finished(&skill.0),
+                )
+            },
+            |progress| {
+                let _ = app.emit(UPDATE_ALL_PROGRESS_EVENT, progress);
+            },
+        )?;
+
+        let current_owner_ids = skill_refresh::snapshot_owner_ids(&snapshot.skills);
+        for (skill_name, owner_id) in owners_to_clear(&outcome, &owners) {
+            clear_outdated_state_and_emit(
+                &app,
+                &refresh_state,
+                &skill_name,
+                owner_id.as_deref(),
+                &current_owner_ids,
+            );
+        }
+        Ok(outcome)
+    })
+    .await
+}
+
+/// Runs one Claude-Code-only plugin lifecycle action: checks `harness`,
+/// holds the write lease for the CLI call, then requests a snapshot rebuild.
+/// Shared by [`set_plugin_enabled`], [`update_plugin`] and
+/// [`uninstall_plugin`], which differ only in which `claude plugin`
+/// subcommand `action` runs.
+fn run_plugin_lifecycle_action<T>(
+    harness: &str,
+    app: &tauri::AppHandle,
+    home: &Path,
+    action: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    super::skill_plugin_lifecycle::require_claude_code_harness(harness)?;
+    let write_lease = super::write_lease::WriteLease::default();
+    let _guard = write_lease.try_acquire(home)?;
+    let result = action()?;
+    skill_refresh::request_snapshot_rebuild(app);
+    Ok(result)
+}
+
+/// Disable or re-enable one Claude Code plugin (`claude plugin
+/// disable|enable <plugin_id> -s user`). Applies to every skill the plugin
+/// ships - Claude Code tracks `enabledPlugins` per plugin, not per skill.
+#[tauri::command]
+pub async fn set_plugin_enabled(
+    plugin_id: String,
+    harness: String,
+    enabled: bool,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "set_plugin_enabled", move || {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        run_plugin_lifecycle_action(&harness, &app, &home, || {
+            super::skill_plugin_lifecycle::set_plugin_enabled_with(
+                &RealCommandRunner::new(),
+                &plugin_id,
+                enabled,
+            )
+        })
+    })
+    .await
+}
+
+/// Update one install of a Claude Code plugin (`claude plugin update
+/// <plugin_id> -s <scope>`). `scope` and `project_path` are the install's own,
+/// as the snapshot's plugin update owner reports them, and must match an
+/// entry of `installed_plugins.json`. Returns the CLI's `updateOutcome`
+/// (`updated`, `up_to_date`, `skipped`, ...) with its message. After a
+/// run that updated the plugin the versions are re-checked (within a short
+/// deadline), so the badge reflects the
+/// new install even when an unpinned ref moved meanwhile. Claude Code applies
+/// the update to new sessions only.
+#[tauri::command]
+pub async fn update_plugin(
+    plugin_id: String,
+    harness: String,
+    scope: String,
+    project_path: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<super::skill_plugin_lifecycle::PluginUpdateResult, String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "update_plugin", move || {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let result = run_plugin_lifecycle_action(&harness, &app, &home, || {
+            super::skill_plugin_update::require_plugin_install(
+                &home,
+                &plugin_id,
+                &scope,
+                project_path.as_deref(),
+            )?;
+            super::skill_plugin_lifecycle::update_plugin_with(
+                &RealCommandRunner::new(),
+                &plugin_id,
+                &scope,
+                project_path.as_deref().map(Path::new),
+            )
+        })?;
+        // An up-to-date result can still follow a stale cached version, whose
+        // badge would otherwise outlive the click until the next background check.
+        if matches!(result.outcome.as_str(), "updated" | "up_to_date") {
+            recheck_plugin_versions(&app, &home);
+        }
+        Ok(result)
+    })
+    .await
+}
+
+/// Re-runs the plugin version lookups after an update and asks for a snapshot
+/// rebuild, so the badge reflects the new install. Skipped without `gh`, a
+/// writable data folder, or while a background check already refreshes;
+/// lookups still running after the deadline fail, and the next background
+/// check catches up.
+fn recheck_plugin_versions(app: &tauri::AppHandle, home: &Path) {
+    let Ok(app_data) = app.path().app_data_dir() else {
+        return;
+    };
+    if !crate::skills::data_folder_status::data_folder_writable(app) {
+        return;
+    }
+    if let Some(gh_bin) = super::skill_update_check::resolve_gh_binary() {
+        super::skill_plugin_update::try_refresh_plugin_versions(
+            home,
+            &app_data,
+            &gh_bin,
+            std::time::Duration::from_secs(20),
+        );
+        skill_refresh::request_snapshot_rebuild(app);
+    }
+}
+
+/// Uninstall one Claude Code plugin (`claude plugin uninstall <plugin_id>
+/// -s user -y`). Removes the `enabledPlugins` entry; Claude Code sweeps the
+/// cache directory later.
+#[tauri::command]
+pub async fn uninstall_plugin(
+    plugin_id: String,
+    harness: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "uninstall_plugin", move || {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        run_plugin_lifecycle_action(&harness, &app, &home, || {
+            super::skill_plugin_lifecycle::uninstall_plugin_with(
+                &RealCommandRunner::new(),
+                &plugin_id,
+            )
+        })
+    })
+    .await
 }

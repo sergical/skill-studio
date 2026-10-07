@@ -1,7 +1,7 @@
 // ============================================================================
 // SwitchControl - Kit Switch wrapper, sized "sm" (24x14 track, 12 px thumb)
 // to match the app's compact control scale, accent fill when checked. Used
-// for the Skills filter bar's "Show coverage" toggle.
+// for the Skills filter bar's "Show coverage" toggle and the Locations rows.
 // ============================================================================
 
 import { Switch } from "@skill-studio/ui";
@@ -11,14 +11,18 @@ interface SwitchControlProps {
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
   ariaLabel?: string;
+  /** Shown as a native tooltip, and read as the switch's description: say what turning it off or on does. */
+  title?: string;
 }
 
 export function SwitchControl({
   checked,
   onCheckedChange,
-  disabled = false,
+  disabled: disabledProp,
   ariaLabel,
+  title,
 }: SwitchControlProps) {
+  const disabled = disabledProp ?? false;
   return (
     <Switch
       size="sm"
@@ -26,7 +30,8 @@ export function SwitchControl({
       onCheckedChange={onCheckedChange}
       disabled={disabled}
       aria-label={ariaLabel}
-      className="data-checked:bg-accent data-unchecked:border-border-strong data-unchecked:bg-bg-active"
+      title={title}
+      className="data-checked:bg-accent-solid data-unchecked:border-text-tertiary data-unchecked:bg-bg-active"
     />
   );
 }

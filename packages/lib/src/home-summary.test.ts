@@ -68,6 +68,8 @@ function fixtureStats(overrides: Partial<SkillInvocationStats> = {}): SkillInvoc
     last_30_days: 0,
     by_project_30_days: {},
     by_day: {},
+    by_harness_30_days: {},
+    by_trigger_30_days: { user: 0, agent: 0, file_read: 0 },
     ...overrides,
   };
 }
@@ -80,7 +82,13 @@ function fixtureSnapshot(overrides: Partial<SkillSnapshot> = {}): SkillSnapshot 
     heatmap: { days: {} },
     scanned_at: "2026-01-01T00:00:00Z",
     last_test_by_skill: {},
-    update_check: { checked_at: null, gh_status: "ok", message: null, updates_available: 0 },
+    update_check: {
+      checked_at: null,
+      gh_status: "ok",
+      message: null,
+      updates_available: 0,
+      upstream_ahead: [],
+    },
     ...overrides,
   };
 }

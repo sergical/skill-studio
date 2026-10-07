@@ -1,0 +1,742 @@
+//! [`ToolLookup`] over the real `PATH`.
+
+use std::io::{BufRead, BufReader};
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{mpsc, OnceLock};
+use std::time::Duration;
+
+use skill_studio_core::ports::ToolLookup;
+
+/// `ToolLookup` backed by the process `PATH`.
+///
+/// Unix semantics only: a name resolves when a directory on the search path
+/// holds a regular file with any executable bit set. There is no `PATHEXT`
+/// step and no extension guessing.
+pub struct PathToolLookup {
+    /// Directories searched in order, most preferred first.
+    search_dirs: Vec<PathBuf>,
+}
+
+impl PathToolLookup {
+    /// Builds a lookup over the current process's `PATH` environment
+    /// variable. An unset or empty `PATH` searches nothing.
+    pub fn new() -> Self {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        PathToolLookup {
+            search_dirs: std::env::split_paths(&path).collect(),
+        }
+    }
+
+    /// Builds a lookup over an explicit list of directories, most preferred
+    /// first. Intended for tests, which do not want to depend on the real
+    /// `PATH`.
+    pub fn with_search_dirs(search_dirs: Vec<PathBuf>) -> Self {
+        PathToolLookup { search_dirs }
+    }
+}
+
+impl Default for PathToolLookup {
+    fn default() -> Self {
+        PathToolLookup::new()
+    }
+}
+
+/// True when `path` names a regular file with an executable bit set for the
+/// owner, group, or others. `pub(crate)` so `harness_detect.rs` can use the
+/// same check to resolve a bare program name against its own search dirs.
+pub(crate) fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+}
+
+impl ToolLookup for PathToolLookup {
+    fn find_binary(&self, name: &str) -> Option<PathBuf> {
+        self.search_dirs.iter().find_map(|dir| {
+            // Absolute but not canonical: a shim keeps its own name (argv[0]),
+            // and a relative PATH entry must not follow the spawn cwd.
+            let candidate = std::path::absolute(dir.join(name)).ok()?;
+            is_executable_file(&candidate).then_some(candidate)
+        })
+    }
+}
+
+/// Markers the login-shell probe script prints around `PATH`, mirroring
+/// `skill_editor.rs`'s `MARKER_START`/`MARKER_END`: a login shell's rc files
+/// can print a banner (`echo Welcome`, nvm's "Now using node ...") before
+/// the value the script asked for, so the parser must find the line between
+/// these markers rather than assume `PATH` is the first line printed. The
+/// end marker also lets the reader thread stop without waiting for the
+/// shell to exit; see `run_with_timeout`'s doc comment for why a plain
+/// `read_to_string` would hang on some machines (an rc file that leaves a
+/// background process holding the pipe open).
+const PATH_MARKER_START: &str = "__skill_studio_path_start__";
+const PATH_MARKER_END: &str = "__skill_studio_path_end__";
+
+/// Deadline for the login-shell `PATH` probe. Longer than the two seconds
+/// `docs/action-map/harnesses/harness-detection.md` gives other processes:
+/// a `.zshrc` that loads nvm or mise routinely needs more, and a timeout
+/// drops the user onto the fallback directories.
+const SHELL_PROBE_TIMEOUT: Duration = Duration::from_millis(5000);
+
+/// Reads stdout on a helper thread so a login shell's rc files can't hang
+/// this forever; see `PATH_MARKER_END`'s doc comment. Mirrors
+/// `skill_editor.rs`'s `run_with_timeout`.
+fn run_with_timeout(mut command: Command, end_marker: &str, timeout: Duration) -> Option<String> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = crate::harness_detect::spawn_retrying_busy(&mut command).ok()?;
+
+    let stdout = child.stdout.take()?;
+    let (tx, rx) = mpsc::channel();
+    let end_marker = end_marker.to_string();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut collected = String::new();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let is_end_line = line.contains(&end_marker);
+                    collected.push_str(&line);
+                    if is_end_line {
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = tx.send(collected);
+    });
+
+    let result = rx.recv_timeout(timeout).ok();
+    let _ = child.kill();
+    let _ = child.wait();
+    result
+}
+
+/// The login shell command that prints `$PATH`, per
+/// `docs/action-map/harnesses/harness-detection.md`'s "PATH resolution":
+/// macOS launches a desktop app with the minimal `launchd` PATH, so this
+/// asks the user's own login shell instead.
+fn login_shell_path_probe(shell: &str) -> Command {
+    let mut command = Command::new(shell);
+    command.arg("-lic").arg(format!(
+        "{}echo {PATH_MARKER_START}; echo \"$PATH\"; echo {PATH_MARKER_END}",
+        mise_hook_snippet(shell)
+    ));
+    command
+}
+
+/// Script prefix that runs mise's prompt hook. `mise activate` puts the
+/// managed Node on `PATH` from a precmd/chpwd hook, which never fires in a
+/// `-c` shell, so the probe would otherwise print a `PATH` without it. Empty
+/// for shells mise has no hook for. Guarded and silent: no mise, or a mise
+/// that errors, must leave the probe unchanged.
+fn mise_hook_snippet(shell: &str) -> &'static str {
+    let name = Path::new(shell)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    match name {
+        "zsh" => {
+            "command -v mise >/dev/null 2>&1 && eval \"$(mise hook-env -s zsh 2>/dev/null)\"; "
+        }
+        "bash" => {
+            "command -v mise >/dev/null 2>&1 && eval \"$(mise hook-env -s bash 2>/dev/null)\"; "
+        }
+        "fish" => "command -v mise >/dev/null 2>&1 && mise hook-env -s fish 2>/dev/null | source; ",
+        _ => "",
+    }
+}
+
+/// Parses the `$PATH` line between the start and end markers, tolerating
+/// any banner text a login shell's rc files print before or after them (an
+/// `echo Welcome`, nvm's "Now using node ..."). Mirrors `skill_editor.rs`'s
+/// `parse_terminal_editor`. Returns `None` when the start marker never
+/// appears (spawn failure, timeout, or a marker the shell mangled).
+fn parse_path_probe_output(stdout: &str) -> Option<String> {
+    let start = stdout.find(PATH_MARKER_START)?;
+    let after_start = &stdout[start + PATH_MARKER_START.len()..];
+    let end = after_start
+        .find(PATH_MARKER_END)
+        .unwrap_or(after_start.len());
+    let body = &after_start[..end];
+    body.lines()
+        .find(|line| !line.trim().is_empty())
+        .map(str::to_string)
+}
+
+/// Runs the login shell once to read `$PATH`. Returns the fallback
+/// directories from harness-detection.md's "PATH resolution" when the probe
+/// fails or times out, rather than an empty path, so detection still finds
+/// binaries a version-manager shim installs outside the process's own
+/// minimal `PATH`.
+fn read_login_shell_path(fallback_dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    probe_login_shell_path(&shell, SHELL_PROBE_TIMEOUT, fallback_dirs)
+}
+
+/// [`read_login_shell_path`] with the shell and deadline chosen by the
+/// caller, so tests can use a fake shell script.
+fn probe_login_shell_path(
+    shell: &str,
+    timeout: Duration,
+    fallback_dirs: &[PathBuf],
+) -> Vec<PathBuf> {
+    let output = run_with_timeout(login_shell_path_probe(shell), PATH_MARKER_END, timeout);
+    let probed = output
+        .as_deref()
+        .and_then(parse_path_probe_output)
+        .map(|line| std::env::split_paths(&line).collect::<Vec<_>>())
+        .filter(|dirs| !dirs.is_empty());
+    if let Some(dirs) = probed {
+        return dirs;
+    }
+    #[allow(clippy::print_stderr)]
+    {
+        eprintln!(
+            "login shell {shell} did not print PATH within {}s; using fallback directories",
+            timeout.as_secs()
+        );
+    }
+    fallback_dirs.to_vec()
+}
+
+/// Fallback directories checked when the login-shell `PATH` probe fails,
+/// per harness-detection.md's "PATH resolution".
+fn default_fallback_dirs() -> Vec<PathBuf> {
+    fallback_dirs(
+        std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+        std::env::var_os("MISE_DATA_DIR").map(PathBuf::from),
+        std::env::var_os("FNM_DIR").map(PathBuf::from),
+    )
+}
+
+/// Order: mise shims, Homebrew and `/usr/local`, then version-manager
+/// installs. A shim with no version set falls through to the next `node` on
+/// `PATH`, so it is safe first. Real installs come after Homebrew so that a
+/// stale nvm Node does not beat a working system Node; the login-shell probe,
+/// not this list, handles users whose Homebrew `node` is broken. fnm's
+/// `fnm_multishells` symlinks are per shell session, so only its installed
+/// versions are listed.
+fn fallback_dirs(
+    home: Option<&Path>,
+    mise_data_dir: Option<PathBuf>,
+    fnm_dir: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mise = mise_data_dir.or_else(|| home.map(|h| h.join(".local/share/mise")));
+    if let Some(mise) = &mise {
+        dirs.push(mise.join("shims"));
+    }
+    dirs.push(PathBuf::from("/opt/homebrew/bin"));
+    dirs.push(PathBuf::from("/usr/local/bin"));
+    if let Some(home) = home {
+        dirs.push(home.join(".volta/bin"));
+    }
+    let fnm_roots = match (fnm_dir, home) {
+        (Some(fnm), _) => vec![fnm],
+        (None, Some(home)) => vec![
+            home.join(".local/share/fnm"),
+            home.join("Library/Application Support/fnm"),
+        ],
+        (None, None) => Vec::new(),
+    };
+    for root in fnm_roots {
+        dirs.extend(versioned_bin_dirs(
+            &root.join("node-versions"),
+            "installation/bin",
+        ));
+    }
+    if let Some(home) = home {
+        dirs.extend(nvm_node_bin_dirs(&home.join(".nvm/versions/node")));
+    }
+    if let Some(mise) = &mise {
+        dirs.extend(versioned_bin_dirs(&mise.join("installs/node"), "bin"));
+    }
+    if let Some(home) = home {
+        dirs.push(home.join(".local/bin"));
+        dirs.push(home.join(".npm-global/bin"));
+        dirs.push(home.join(".bun/bin"));
+    }
+    dirs
+}
+
+/// `<nvm_node_versions>/*/bin` for every version directory that exists,
+/// newest first, per harness-detection.md's fallback list: nvm has no single
+/// "current" symlink guaranteed to exist, so every installed version's `bin`
+/// is a candidate. Returns nothing when `nvm_node_versions` itself doesn't
+/// exist (no nvm installed).
+fn nvm_node_bin_dirs(nvm_node_versions: &Path) -> Vec<PathBuf> {
+    versioned_bin_dirs(nvm_node_versions, "bin")
+}
+
+/// `<root>/<version>/<bin_subpath>` for every version directory under
+/// `root`, newest version first, so the first Node found on the fallback
+/// list is the latest the manager installed.
+fn versioned_bin_dirs(root: &Path, bin_subpath: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut versions: Vec<(Vec<u64>, PathBuf)> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| {
+            let key = version_key(&entry.file_name().to_string_lossy());
+            (key, entry.path().join(bin_subpath))
+        })
+        .collect();
+    // Names with no numeric part (mise's `lts` alias) key to an empty list
+    // and sort last.
+    versions.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    versions.into_iter().map(|(_, dir)| dir).collect()
+}
+
+/// Numeric components of a version directory name: `v20.11.0` -> `[20, 11, 0]`.
+fn version_key(name: &str) -> Vec<u64> {
+    name.trim_start_matches('v')
+        .split('.')
+        .map_while(|part| part.parse().ok())
+        .collect()
+}
+
+/// The one real login-shell `PATH` probe result for this process's whole
+/// lifetime. `core_runtime::build_runtime_write_at` builds a fresh `Runtime`
+/// (and so a fresh `LoginShellToolLookup`) per command - park, unpark,
+/// update (once per skill in Update All), remove, doctor, fix, undo, and
+/// twice at startup - and `skill_fork::run_npx` probes again for the
+/// un-fork flow; without this cache each of those would spawn its own
+/// `$SHELL -lic` (100-800ms, up to `SHELL_PROBE_TIMEOUT`). Scoped to the
+/// *production* probe only: [`LoginShellToolLookup::with_probe`] (tests,
+/// and any future fake) never reads or writes this `static`, so a test
+/// supplying its own probe can neither leak into nor be starved by another
+/// test's real one.
+static LOGIN_SHELL_PATH: OnceLock<Vec<PathBuf>> = OnceLock::new();
+
+fn cached_login_shell_path() -> Vec<PathBuf> {
+    LOGIN_SHELL_PATH
+        .get_or_init(|| read_login_shell_path(&default_fallback_dirs()))
+        .clone()
+}
+
+/// `ToolLookup` that resolves against the user's login-shell `PATH`
+/// instead of the process's own (minimal, under `launchd`) `PATH`. Intended
+/// for the desktop app; the CLI and MCP server keep using
+/// [`PathToolLookup`], whose process `PATH` already comes from a shell.
+///
+/// [`LoginShellToolLookup::new`] reads [`LOGIN_SHELL_PATH`], a process-wide
+/// cache: the shell spawns at most once per launch no matter how many
+/// `Runtime`s (and so `LoginShellToolLookup` instances) the app builds
+/// (`harness-detection.md`: "one shell spawn per app start, cached").
+/// [`LoginShellToolLookup::with_probe`] bypasses that cache entirely, so a
+/// test that constructs its own fake probe can neither leak into another
+/// test's real probe nor be forced to spawn a real shell.
+pub struct LoginShellToolLookup {
+    search_dirs: OnceLock<Vec<PathBuf>>,
+    probe: Box<dyn Fn() -> Vec<PathBuf> + Send + Sync>,
+}
+
+impl LoginShellToolLookup {
+    /// Builds a lookup that reads the process-wide login-shell `PATH`
+    /// cache, probing the real login shell only on this process's first
+    /// call to it.
+    pub fn new() -> Self {
+        Self::with_probe(cached_login_shell_path)
+    }
+
+    /// As [`LoginShellToolLookup::new`], with `probe` standing in for the
+    /// real login-shell spawn. Not `pub`: only `new` and this module's
+    /// tests construct a lookup with a chosen probe.
+    fn with_probe(probe: impl Fn() -> Vec<PathBuf> + Send + Sync + 'static) -> Self {
+        LoginShellToolLookup {
+            search_dirs: OnceLock::new(),
+            probe: Box::new(probe),
+        }
+    }
+
+    fn search_dirs(&self) -> &[PathBuf] {
+        self.search_dirs.get_or_init(|| (self.probe)())
+    }
+
+    /// The probed login-shell `PATH` directories, running the probe on first
+    /// call and reusing the cached result after. `pub` so a caller that also
+    /// needs to spawn a child (`RealProcessSpawner::with_search_path`) can
+    /// give that spawner the same directories this lookup resolved `npx`
+    /// against, instead of probing the login shell a second time.
+    pub fn dirs(&self) -> &[PathBuf] {
+        self.search_dirs()
+    }
+}
+
+impl Default for LoginShellToolLookup {
+    fn default() -> Self {
+        LoginShellToolLookup::new()
+    }
+}
+
+impl ToolLookup for LoginShellToolLookup {
+    fn find_binary(&self, name: &str) -> Option<PathBuf> {
+        PathToolLookup::with_search_dirs(self.search_dirs().to_vec()).find_binary(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_executable(path: &Path) {
+        fs::write(path, b"#!/bin/sh\nexit 0\n").unwrap();
+        let mut perms = fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).unwrap();
+    }
+
+    #[test]
+    fn finds_an_executable_on_the_search_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("my-tool");
+        write_executable(&bin);
+
+        let lookup = PathToolLookup::with_search_dirs(vec![tmp.path().to_path_buf()]);
+        let found = lookup.find_binary("my-tool").unwrap();
+        assert_eq!(found, bin);
+    }
+
+    #[test]
+    fn a_shim_found_through_a_symlink_keeps_its_own_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("vp");
+        write_executable(&real);
+        let bin = tmp.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        std::os::unix::fs::symlink(&real, bin.join("npx")).unwrap();
+
+        let lookup = PathToolLookup::with_search_dirs(vec![bin.clone()]);
+        let found = lookup.find_binary("npx").unwrap();
+        assert_eq!(
+            found,
+            bin.join("npx"),
+            "the link path must come back, not its target `vp`: tools read argv[0]"
+        );
+    }
+
+    #[test]
+    fn a_relative_search_dir_gives_an_absolute_path_that_survives_a_cwd_change() {
+        let cwd = std::env::current_dir().unwrap();
+        let tmp = tempfile::tempdir_in(&cwd).unwrap();
+        let tool = tmp.path().join("rel-tool");
+        write_executable(&tool);
+        let relative_dir = tmp.path().strip_prefix(&cwd).unwrap().to_path_buf();
+
+        let lookup = PathToolLookup::with_search_dirs(vec![relative_dir]);
+        let found = lookup.find_binary("rel-tool").unwrap();
+        assert!(
+            found.is_absolute(),
+            "a relative PATH entry must become absolute at lookup time, got {found:?}"
+        );
+        assert_eq!(found, tool);
+    }
+
+    #[test]
+    fn ignores_a_non_executable_file_with_the_same_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let not_a_tool = tmp.path().join("not-a-tool");
+        fs::write(&not_a_tool, b"plain text").unwrap();
+        let mut perms = fs::metadata(&not_a_tool).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&not_a_tool, perms).unwrap();
+
+        let lookup = PathToolLookup::with_search_dirs(vec![tmp.path().to_path_buf()]);
+        assert!(lookup.find_binary("not-a-tool").is_none());
+    }
+
+    #[test]
+    fn returns_none_when_no_search_dir_has_the_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lookup = PathToolLookup::with_search_dirs(vec![tmp.path().to_path_buf()]);
+        assert!(lookup.find_binary("does-not-exist").is_none());
+    }
+
+    #[test]
+    fn stops_at_the_first_match_in_search_order() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        write_executable(&first.path().join("tool"));
+        write_executable(&second.path().join("tool"));
+
+        let lookup = PathToolLookup::with_search_dirs(vec![
+            first.path().to_path_buf(),
+            second.path().to_path_buf(),
+        ]);
+        let found = lookup.find_binary("tool").unwrap();
+        assert_eq!(found, first.path().join("tool"));
+    }
+
+    /// `a_shell_banner_printed_before_the_marker_never_becomes_the_path_or_names_the_banner_it_kept`:
+    /// rc-file banner text (`Welcome to zsh`, nvm's "Now using node ...")
+    /// printed before `PATH_MARKER_START` must never be read as the `PATH`
+    /// value. Fails if the parser takes the stdout's first line instead of
+    /// the first non-empty line after the start marker.
+    #[test]
+    fn a_shell_banner_printed_before_the_marker_never_becomes_the_path_or_names_the_banner_it_kept()
+    {
+        let stdout = format!(
+            "Welcome to zsh\nNow using node v20.11.0 (npm v10.2.4)\n{PATH_MARKER_START}\n/usr/bin:/bin:/opt/homebrew/bin\n{PATH_MARKER_END}\n"
+        );
+
+        let path = parse_path_probe_output(&stdout);
+
+        assert_eq!(
+            path.as_deref(),
+            Some("/usr/bin:/bin:/opt/homebrew/bin"),
+            "a banner line before the marker was read as PATH instead of the real value: {path:?}"
+        );
+    }
+
+    /// `the_shell_probe_for_path_runs_once_per_launch_not_once_per_harness`:
+    /// one `LoginShellToolLookup` resolving three different binaries (one
+    /// per fictional harness) must run its probe exactly once, since
+    /// `core_runtime::build_runtime_detect` builds exactly one instance and
+    /// shares it across every harness. Fails if `find_binary` re-probes
+    /// instead of reading the instance's cached `search_dirs`.
+    #[test]
+    fn the_shell_probe_for_path_runs_once_per_launch_not_once_per_harness() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_in_probe = calls.clone();
+        let lookup = LoginShellToolLookup::with_probe(move || {
+            calls_in_probe.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Vec::new()
+        });
+
+        lookup.find_binary("claude");
+        lookup.find_binary("codex");
+        lookup.find_binary("pi");
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "expected exactly one probe run across three find_binary calls on the same lookup"
+        );
+    }
+
+    /// `two_login_shell_lookups_share_one_process_wide_probe_or_names_the_second_spawn`:
+    /// `core_runtime::build_runtime_write_at` builds a fresh `Runtime` (and
+    /// so a fresh `LoginShellToolLookup`) per command - park, unpark,
+    /// update, remove, doctor, fix, undo, twice at startup. Two separate
+    /// `new()` instances must read the same process-wide `LOGIN_SHELL_PATH`
+    /// cache rather than each probing their own login shell. Fails if
+    /// `LoginShellToolLookup::new()` goes back to a fresh per-instance probe
+    /// instead of the shared cache: the two instances could then disagree
+    /// if the login shell's `PATH` output ever varied between spawns.
+    #[test]
+    fn two_login_shell_lookups_share_one_process_wide_probe_or_names_the_second_spawn() {
+        let first = LoginShellToolLookup::new();
+        let second = LoginShellToolLookup::new();
+
+        assert_eq!(
+            first.dirs(),
+            second.dirs(),
+            "two LoginShellToolLookup instances disagreed on the probed PATH - each must read the same process-wide cache, not probe independently"
+        );
+    }
+
+    /// `every_installed_nvm_node_version_gets_its_own_fallback_bin_dir_or_names_the_version_missed`:
+    /// nvm has no single "current" symlink guaranteed to exist, so every
+    /// installed version's `bin` directory must be a fallback candidate,
+    /// not just one. Fails if only the first or last version directory is
+    /// returned.
+    #[test]
+    fn every_installed_nvm_node_version_gets_its_own_fallback_bin_dir_or_names_the_version_missed()
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let versions = tmp.path().join("versions/node");
+        fs::create_dir_all(versions.join("v18.20.4/bin")).unwrap();
+        fs::create_dir_all(versions.join("v20.11.0/bin")).unwrap();
+        fs::write(versions.join("not-a-version-dir"), "").unwrap();
+
+        let mut dirs = nvm_node_bin_dirs(&versions);
+        dirs.sort();
+
+        assert_eq!(
+            dirs,
+            vec![versions.join("v18.20.4/bin"), versions.join("v20.11.0/bin")],
+            "expected one bin dir per installed version, got {dirs:?}"
+        );
+    }
+
+    /// `a_login_shell_whose_init_only_defines_the_mise_hook_still_probes_the_mise_node_dir_or_names_the_missing_dir`:
+    /// `mise activate` sets `PATH` from a prompt hook that a `-c` shell never
+    /// runs. The fake shell's init adds no node dir itself; only a fake `mise`
+    /// on its `PATH` can print one. Fails if the probe does not run
+    /// `mise hook-env` before printing `PATH`.
+    #[test]
+    fn a_login_shell_whose_init_only_defines_the_mise_hook_still_probes_the_mise_node_dir_or_names_the_missing_dir(
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let mise_node = tmp.path().join("mise-node/bin");
+        let tools = tmp.path().join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        let mise = tools.join("mise");
+        fs::write(
+            &mise,
+            format!(
+                "#!/bin/sh\necho 'export PATH=\"{}:$PATH\"'\n",
+                mise_node.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&mise, fs::Permissions::from_mode(0o755)).unwrap();
+        let shell = tmp.path().join("zsh");
+        fs::write(
+            &shell,
+            format!(
+                "#!/bin/sh\nPATH=\"{}:/usr/bin:/bin\"\nexport PATH\nexec /bin/sh -c \"$2\"\n",
+                tools.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let dirs = probe_login_shell_path(
+            shell.to_str().unwrap(),
+            Duration::from_secs(10),
+            &[PathBuf::from("/fallback")],
+        );
+
+        assert!(
+            dirs.contains(&mise_node),
+            "the probed PATH lacks the mise node dir {mise_node:?}: {dirs:?}"
+        );
+    }
+
+    /// `a_shell_that_cannot_be_started_falls_back_or_names_the_dirs_it_returned`:
+    /// a shell binary that does not exist must yield the fallback list, not
+    /// an empty `PATH`.
+    #[test]
+    fn a_shell_that_cannot_be_started_falls_back_or_names_the_dirs_it_returned() {
+        let dirs = probe_login_shell_path(
+            "/definitely/not/a/shell",
+            Duration::from_secs(1),
+            &[PathBuf::from("/fallback")],
+        );
+
+        assert_eq!(dirs, vec![PathBuf::from("/fallback")]);
+    }
+
+    /// `a_shell_that_exits_without_printing_path_falls_back_or_returns_an_empty_path`:
+    /// a shell that starts, exits 0 and prints nothing must also yield the
+    /// fallback list.
+    #[cfg(unix)]
+    #[test]
+    fn a_shell_that_exits_without_printing_path_falls_back_or_returns_an_empty_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let shell = dir.path().join("silent-shell");
+        fs::write(&shell, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let dirs = probe_login_shell_path(
+            shell.to_str().unwrap(),
+            Duration::from_secs(5),
+            &[PathBuf::from("/fallback")],
+        );
+
+        assert_eq!(dirs, vec![PathBuf::from("/fallback")]);
+    }
+
+    /// `fallback_puts_mise_shims_then_homebrew_before_version_installs_or_an_old_nvm_node_wins`:
+    /// with the probe failed, an old nvm Node must not beat a working
+    /// Homebrew Node. Fails on the order that listed manager installs first.
+    #[test]
+    fn fallback_puts_mise_shims_then_homebrew_before_version_installs_or_an_old_nvm_node_wins() {
+        let home = tempfile::tempdir().unwrap();
+        let mise_bin = home
+            .path()
+            .join(".local/share/mise/installs/node/22.1.0/bin");
+        let fnm_bin = home
+            .path()
+            .join(".local/share/fnm/node-versions/v22.1.0/installation/bin");
+        let nvm_bin = home.path().join(".nvm/versions/node/v16.0.0/bin");
+        for dir in [&mise_bin, &fnm_bin, &nvm_bin] {
+            fs::create_dir_all(dir).unwrap();
+        }
+
+        let dirs = fallback_dirs(Some(home.path()), None, None);
+        let position = |dir: &Path| dirs.iter().position(|d| d == dir).unwrap();
+        let shims = position(&home.path().join(".local/share/mise/shims"));
+        let homebrew = position(Path::new("/opt/homebrew/bin"));
+        let usr_local = position(Path::new("/usr/local/bin"));
+
+        assert!(
+            shims < homebrew,
+            "mise shims must come before Homebrew: {dirs:?}"
+        );
+        for (name, dir) in [
+            ("volta", home.path().join(".volta/bin")),
+            ("mise install", mise_bin),
+            ("fnm", fnm_bin),
+            ("nvm", nvm_bin),
+        ] {
+            assert!(
+                position(&dir) > homebrew.max(usr_local),
+                "{name} dir must be listed after Homebrew and /usr/local/bin: {dirs:?}"
+            );
+        }
+    }
+
+    /// `the_newest_installed_node_wins_within_mise_and_nvm_or_names_the_order`:
+    /// `v9` must sort before `v10` numerically, and the newest version comes
+    /// first. Fails on a plain path sort, which puts `10.0.0` before `9.0.0`.
+    #[test]
+    fn the_newest_installed_node_wins_within_mise_and_nvm_or_names_the_order() {
+        let home = tempfile::tempdir().unwrap();
+        let mise = home.path().join(".local/share/mise/installs/node");
+        let nvm = home.path().join(".nvm/versions/node");
+        for version in ["9.0.0", "22.1.0", "10.0.0"] {
+            fs::create_dir_all(mise.join(version).join("bin")).unwrap();
+            fs::create_dir_all(nvm.join(format!("v{version}")).join("bin")).unwrap();
+        }
+
+        assert_eq!(
+            versioned_bin_dirs(&mise, "bin"),
+            vec![
+                mise.join("22.1.0/bin"),
+                mise.join("10.0.0/bin"),
+                mise.join("9.0.0/bin")
+            ]
+        );
+        assert_eq!(
+            nvm_node_bin_dirs(&nvm),
+            vec![
+                nvm.join("v22.1.0/bin"),
+                nvm.join("v10.0.0/bin"),
+                nvm.join("v9.0.0/bin")
+            ]
+        );
+    }
+
+    /// `no_nvm_install_yields_no_fallback_dirs_or_names_the_dirs_it_invented`:
+    /// a missing `~/.nvm/versions/node` (no nvm installed) must yield no
+    /// fallback dirs. Fails if the lookup manufactures candidate dirs for a
+    /// tree that does not exist.
+    #[test]
+    fn no_nvm_install_yields_no_fallback_dirs_or_names_the_dirs_it_invented() {
+        let tmp = tempfile::tempdir().unwrap();
+        let versions = tmp.path().join("versions/node");
+
+        let dirs = nvm_node_bin_dirs(&versions);
+
+        assert!(
+            dirs.is_empty(),
+            "no nvm tree exists, yet the lookup returned {dirs:?}"
+        );
+    }
+}

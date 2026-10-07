@@ -3,39 +3,41 @@
 // Fork / Pull upstream / Un-fork for a dotagents- or skills.sh-managed skill:
 // "Fork" detaches it from its owning ledger (so `sync`/`update` can't
 // overwrite local edits) while keeping a snapshot of the last-synced copy;
-// "Pull upstream" three-way merges that snapshot against the skill's current
-// on-disk copy and a freshly fetched upstream copy; "Un-fork" discards local
-// edits and reinstalls from the recorded origin. The CLI-shelling and
-// GitHub-fetching bits are behind small traits so the merge/refusal logic is
+// "Pull upstream" compares that snapshot against the skill's current on-disk
+// copy and a freshly fetched upstream copy, never merging automatically: a
+// file that differs on all three sides gets conflict markers written into it
+// and is opened in the user's editor; "Un-fork" discards local edits and
+// reinstalls from the recorded origin. The CLI-shelling and GitHub-fetching
+// bits are behind small traits so the conflict-marker/refusal logic is
 // testable with fakes.
 // ============================================================================
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
+use super::agents::AgentId;
 use super::commands::{dotagents_add_args, dotagents_remove_args};
-use super::dotagents_ledger;
-use super::lock_file;
 use super::skill_deployment::SkillDestination;
 use super::skill_dto::InstallScope;
 use super::skill_fork_registry::{
-    deployment_trial_key, fork_snapshot_dir, read_fork_registry, trial_key, write_fork_registry,
-    ForkRecord, ForkRegistry, OriginTool, TrialScope,
+    fork_snapshot_dir, read_fork_registry, write_fork_registry_locked, ForkRecord, ForkRegistry,
+    OriginTool,
 };
 use super::skill_fs::copy_dir_all;
-use super::skill_install_plan::{skills_sh_universal_add_args, SkillInstallSpec};
 use super::skill_lifecycle::skills_sh_remove_args_for_scope;
 use super::skill_process::{
     run_controlled_command_to_file, AddOperationControl, ControlledProcessError,
     MAX_PROCESS_OUTPUT_BYTES,
 };
 use super::skill_refresh::{self, SkillRefreshState};
-use super::skill_update_check::{self, CommitLookup, GhCommitLookup, UpdateCheckState};
+use super::skill_update_check::{self, CommitLookup, GhCommitLookup};
+use skill_studio_core::dotagents_ledger;
+use skill_studio_core::lock_file;
 
 // ============================================================================
 // Traits - real implementations shell out / hit the network; tests use fakes.
@@ -43,8 +45,9 @@ use super::skill_update_check::{self, CommitLookup, GhCommitLookup, UpdateCheckS
 
 /// Removes a skill from its owning ledger, or reinstalls it from its
 /// recorded origin. The real implementation shells out to the same argv
-/// `remove_skill` / `add_skill` / `dotagents_update_args` already build
-/// (see the command and install-plan arg builders).
+/// `remove_skill` / `add_skill` build (see the command and install-plan arg
+/// builders) - `ops::update`'s own dotagents argv now lives in
+/// `ops_update::update_cli_args_and_cwd` instead.
 pub trait LedgerTool {
     fn remove(&self, tool: OriginTool, name: &str) -> Result<(), String>;
     fn reinstall(&self, rec: &ForkRecord, name: &str) -> Result<(), String>;
@@ -127,7 +130,79 @@ pub trait RepoSnapshot {
 /// Real `LedgerTool`, shelling out to `npx`.
 pub struct RealLedgerTool;
 
-fn skills_sh_unfork_add_args(rec: &ForkRecord, name: &str) -> Result<Vec<String>, String> {
+// ============================================================================
+// skills.sh Universal argv - moved from `skill_install_plan.rs` (unit 3.5c):
+// `skill_add.rs`'s own install path is gone, and `ops_install_cli.rs` builds
+// this argv for every new install, so this stays only for `skills_sh_unfork_add_args`
+// below, an unrelated reinstall-from-origin call `ops::install` doesn't cover.
+// ============================================================================
+
+/// One install request used by `skills_sh_unfork_add_args`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SkillInstallSpec {
+    pub scope: InstallScope,
+    pub destination: SkillDestination,
+    pub project_path: Option<String>,
+    /// Harnesses that receive a Claude Code link (Universal). Empty
+    /// Universal still writes `.agents/skills`.
+    pub harnesses: Vec<AgentId>,
+}
+
+/// Universal skills.sh argv, and the process cwd to run it in. Never
+/// includes Codex as a proxy for Universal. `skills@1.7.0` has no `--cwd`
+/// flag (PR #101 / `fix/project-install-runs-in-project-dir`), so a project
+/// scope returns the project path as the process cwd instead of an argv
+/// token - the same fix as `ops_install_cli.rs`'s `cli_args_and_cwd`.
+pub fn skills_sh_universal_add_args(
+    repo_source: &str,
+    skill_name: Option<&str>,
+    spec: &SkillInstallSpec,
+) -> Result<(Vec<String>, Option<PathBuf>), String> {
+    if spec.destination != SkillDestination::Universal {
+        return Err("That install option is only for the shared Universal folder".to_string());
+    }
+    let mut args = vec![
+        "skills".to_string(),
+        "add".to_string(),
+        repo_source.to_string(),
+        "--yes".to_string(),
+    ];
+    let cwd = match spec.scope {
+        InstallScope::Global => {
+            args.push("--global".to_string());
+            None
+        }
+        InstallScope::Project => {
+            let path = spec
+                .project_path
+                .as_deref()
+                .ok_or("Project scope needs a project path")?;
+            Some(PathBuf::from(path))
+        }
+    };
+    if let Some(name) = skill_name {
+        args.push("--skill".to_string());
+        args.push(name.to_string());
+    }
+    args.push("--agent".to_string());
+    args.push("universal".to_string());
+    if spec.harnesses.contains(&AgentId::ClaudeCode) {
+        args.push("--agent".to_string());
+        args.push("claude-code".to_string());
+    }
+    Ok((args, cwd))
+}
+
+fn skills_sh_unfork_add_args(
+    rec: &ForkRecord,
+    name: &str,
+) -> Result<(Vec<String>, Option<PathBuf>), String> {
+    // Fork only ever applies to a global-scope skill (see
+    // `skill_refresh::build_snapshot`), so this reinstall is always global
+    // and the cwd `skills_sh_universal_add_args` returns is always `None` -
+    // still threaded through `run_npx` rather than discarded, so a future
+    // caller that reinstalls a project-scope fork gets the right cwd for
+    // free instead of a silently dropped one.
     let spec = SkillInstallSpec {
         scope: InstallScope::Global,
         destination: SkillDestination::Universal,
@@ -137,17 +212,58 @@ fn skills_sh_unfork_add_args(rec: &ForkRecord, name: &str) -> Result<Vec<String>
     skills_sh_universal_add_args(&rec.origin_source, Some(name), &spec)
 }
 
-fn run_npx(args: &[String]) -> Result<(), String> {
-    let output = Command::new("npx")
-        .args(args)
-        .output()
-        .map_err(|e| format!("Failed to execute npx: {e}"))?;
-    if output.status.success() {
+/// Timeout for the un-fork `npx` remove/reinstall, matching
+/// `ops_install_cli`/`ops_update`/`ops_remove`'s own `npx` deadline in
+/// `skill-studio-core` so this desktop-only spawn isn't a special case.
+const NPX_TIMEOUT_MS: u64 = 120_000;
+
+fn run_npx(args: &[String], cwd: Option<&Path>) -> Result<(), String> {
+    // Un-fork runs outside `core_runtime`'s `Runtime`/`Ports`, so it needs
+    // its own search dirs: launched from Finder, this process only has
+    // `launchd`'s minimal `PATH`, which has neither `npx` nor the `node` its
+    // shebang needs (see `core_runtime::build_runtime_write_at`).
+    // `LoginShellToolLookup::new()` reads the same process-wide login-shell
+    // `PATH` cache `core_runtime` does, so this doesn't spawn a second real
+    // shell when a `Runtime` has already probed one this launch.
+    let search_dirs = skill_studio_host::LoginShellToolLookup::new()
+        .dirs()
+        .to_vec();
+    let spawner = skill_studio_host::RealProcessSpawner::with_search_path(search_dirs);
+    run_npx_with_spawner(&spawner, args, cwd)
+}
+
+/// [`run_npx`], but taking `spawner` directly - a testable seam so a test
+/// can give it a `RealProcessSpawner::with_search_path` over a fake `npx`
+/// script instead of paying for a real login-shell spawn or mutating the
+/// process's own `PATH`.
+fn run_npx_with_spawner(
+    spawner: &dyn skill_studio_core::ports::ProcessSpawner,
+    args: &[String],
+    cwd: Option<&Path>,
+) -> Result<(), String> {
+    use skill_studio_core::ports::{NeverCancel, ProcessSpec};
+
+    let spec = ProcessSpec {
+        program: "npx".to_string(),
+        args: args.to_vec(),
+        cwd: cwd.map(Path::to_path_buf),
+        env: Vec::new(),
+        timeout_ms: NPX_TIMEOUT_MS,
+    };
+    let output = spawner
+        .run(&spec, &NeverCancel)
+        .map_err(|e| format!("Failed to execute npx: {}", e.message))?;
+    if output.timed_out {
+        return Err("npx timed out".to_string());
+    }
+    if output.status == Some(0) {
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        Err(if stderr.is_empty() { stdout } else { stderr })
+        Err(if output.stderr.is_empty() {
+            output.stdout
+        } else {
+            output.stderr
+        })
     }
 }
 
@@ -160,17 +276,18 @@ impl LedgerTool for RealLedgerTool {
             // target the global scope.
             OriginTool::SkillsSh => skills_sh_remove_args_for_scope(name, InstallScope::Global),
         };
-        run_npx(&args)
+        run_npx(&args, None)
     }
 
     fn reinstall(&self, rec: &ForkRecord, name: &str) -> Result<(), String> {
-        let args = match rec.origin_tool {
-            OriginTool::Dotagents => {
-                dotagents_add_args(&rec.origin_source, name, rec.declared_ref.as_deref())
-            }
+        let (args, cwd) = match rec.origin_tool {
+            OriginTool::Dotagents => (
+                dotagents_add_args(&rec.origin_source, name, rec.declared_ref.as_deref()),
+                None,
+            ),
             OriginTool::SkillsSh => skills_sh_unfork_add_args(rec, name)?,
         };
-        run_npx(&args)
+        run_npx(&args, cwd.as_deref())
     }
 }
 
@@ -204,6 +321,7 @@ fn resolve_lookup() -> Box<dyn CommitLookup> {
 /// Runs the same fork transaction as `fork_skill` after another command has
 /// already resolved and locked the exact Global Universal deployment.
 pub(crate) fn fork_resolved_deployment_with_real_services(
+    guard: &super::write_lease::WriteLeaseGuard,
     home: &Path,
     app_data: &Path,
     name: &str,
@@ -217,6 +335,7 @@ pub(crate) fn fork_resolved_deployment_with_real_services(
         cache_dir: app_data.join("skill-studio").join("cache"),
     };
     fork_skill_with(
+        guard,
         home,
         app_data,
         name,
@@ -383,7 +502,7 @@ impl Drop for TempCleanup {
 fn locate_extracted_skill_dir(extract_dir: &Path, path: &str) -> Result<PathBuf, String> {
     let top = fs::read_dir(extract_dir)
         .map_err(|e| format!("Failed to read {}: {e}", extract_dir.display()))?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .find(|e| e.path().is_dir())
         .ok_or_else(|| "Tarball had no top-level directory".to_string())?
         .path();
@@ -391,12 +510,112 @@ fn locate_extracted_skill_dir(extract_dir: &Path, path: &str) -> Result<PathBuf,
     let candidate = top.join(path);
     let canonical_extract = fs::canonicalize(extract_dir)
         .map_err(|e| format!("Failed to resolve {}: {e}", extract_dir.display()))?;
-    let canonical_candidate = fs::canonicalize(&candidate)
-        .map_err(|_| format!("{path} was not found in the fetched tarball"))?;
+    let Ok(canonical_candidate) = fs::canonicalize(&candidate) else {
+        return find_skill_dir_by_name(&top, path, &canonical_extract);
+    };
     if !canonical_candidate.starts_with(&canonical_extract) {
         return Err("Refusing to extract a path outside the tarball".to_string());
     }
     Ok(canonical_candidate)
+}
+
+/// Deepest folder level below the tarball's top directory that the by-name
+/// search visits.
+const SKILL_SEARCH_MAX_DEPTH: usize = 6;
+/// Most folders the by-name search reads, so a huge repo cannot stall an install.
+const SKILL_SEARCH_MAX_DIRS: usize = 5_000;
+
+/// Fallback for a `path` that is only a skill name (the store sends one) when
+/// the repo keeps its skills under a subfolder such as `skills/<name>`. Like
+/// the `npx skills` CLI, it accepts a folder holding `SKILL.md` whose own name
+/// or whose frontmatter `name` equals the skill. Exactly one match is used;
+/// several are an error that lists them. Never follows symlinks and skips
+/// `node_modules` and `.git`.
+fn find_skill_dir_by_name(
+    top: &Path,
+    path: &str,
+    canonical_extract: &Path,
+) -> Result<PathBuf, String> {
+    let not_found = || format!("{path} was not found in the fetched tarball");
+    let Some(name) = Path::new(path).file_name().and_then(|n| n.to_str()) else {
+        return Err(not_found());
+    };
+    let mut matches: Vec<PathBuf> = Vec::new();
+    let mut pending = vec![(top.to_path_buf(), 0usize)];
+    let mut visited = 0usize;
+    while let Some((dir, depth)) = pending.pop() {
+        visited += 1;
+        if visited > SKILL_SEARCH_MAX_DIRS {
+            break;
+        }
+        if dir != top && skill_dir_matches(&dir, name) {
+            matches.push(dir.clone());
+        }
+        if depth >= SKILL_SEARCH_MAX_DEPTH {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let file_name = entry.file_name();
+            if file_name == ".git" || file_name == "node_modules" {
+                continue;
+            }
+            // `DirEntry::file_type` does not follow a symlink.
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                pending.push((entry.path(), depth + 1));
+            }
+        }
+    }
+    matches.sort();
+    match matches.as_slice() {
+        [] => Err(not_found()),
+        [only] => {
+            let canonical = fs::canonicalize(only).map_err(|_| not_found())?;
+            if canonical.starts_with(canonical_extract) {
+                Ok(canonical)
+            } else {
+                Err("Refusing to extract a path outside the tarball".to_string())
+            }
+        }
+        several => {
+            let listed: Vec<String> = several
+                .iter()
+                .map(|dir| {
+                    dir.strip_prefix(top)
+                        .unwrap_or(dir)
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            Err(format!(
+                "{name} matches several folders in the fetched tarball: {}",
+                listed.join(", ")
+            ))
+        }
+    }
+}
+
+/// True when `dir` holds a regular `SKILL.md` and either `dir`'s folder name
+/// or the file's frontmatter `name` equals `name`.
+fn skill_dir_matches(dir: &Path, name: &str) -> bool {
+    use std::io::Read;
+
+    let skill_md = dir.join("SKILL.md");
+    if !fs::symlink_metadata(&skill_md).is_ok_and(|meta| meta.is_file()) {
+        return false;
+    }
+    if dir.file_name().and_then(|n| n.to_str()) == Some(name) {
+        return true;
+    }
+    let mut head = String::new();
+    let read =
+        fs::File::open(&skill_md).and_then(|file| file.take(64 * 1024).read_to_string(&mut head));
+    read.is_ok()
+        && super::frontmatter::frontmatter_fields(&head)
+            .get("name")
+            .is_some_and(|declared| declared == name)
 }
 
 /// Every relative file path (`/`-separated) under `dir`, skipping `.git` and
@@ -406,7 +625,7 @@ fn collect_relative_files(dir: &Path, out: &mut BTreeSet<String>) {
         let Ok(entries) = fs::read_dir(dir) else {
             return;
         };
-        for entry in entries.filter_map(|e| e.ok()) {
+        for entry in entries.filter_map(std::result::Result::ok) {
             if entry.file_name() == ".git" {
                 continue;
             }
@@ -450,7 +669,9 @@ fn resolve_fork_origin(
     name: &str,
     lookup: &dyn CommitLookup,
 ) -> Result<ForkOrigin, String> {
-    let dotagents_skills = dotagents_ledger::read_dotagents_ledger(agents_dir)?;
+    let fs = skill_studio_host::RealFs::new();
+    let dotagents_skills =
+        dotagents_ledger::read_dotagents_ledger(&fs, agents_dir).map_err(|e| e.to_string())?;
     if let Some(entry) = dotagents_skills.into_iter().find(|s| s.name == name) {
         if !entry.has_manifest_row {
             return Err(format!(
@@ -477,7 +698,8 @@ fn resolve_fork_origin(
         });
     }
 
-    let lock = lock_file::read_lock_file_at(&agents_dir.join(".skill-lock.json"))?;
+    let lock = lock_file::read_lock_file(&fs, &lock_file::lock_file_path_in(agents_dir))
+        .map_err(|e| e.to_string())?;
     if let Some(entry) = lock.skills.get(name) {
         if entry.source_type != "github" {
             return Err(format!(
@@ -494,22 +716,21 @@ fn resolve_fork_origin(
 
         let store = skill_update_check::read_update_check_store(app_data);
         let owner_id = format!("owner:v1/global/{name}");
-        let base_commit = match store
+        let base_commit = if let Some(commit) = store
             .owners
             .get(&owner_id)
             .and_then(|s| s.installed_commit.clone())
         {
-            Some(commit) => commit,
-            None => {
-                let until = if entry.updated_at.is_empty() {
-                    None
-                } else {
-                    Some(entry.updated_at.as_str())
-                };
-                match lookup.latest_commit(&repo, &path, until)? {
-                    Some((sha, _)) => sha,
-                    None => return Err(format!("Could not determine {name}'s installed commit")),
-                }
+            commit
+        } else {
+            let until = if entry.updated_at.is_empty() {
+                None
+            } else {
+                Some(entry.updated_at.as_str())
+            };
+            match lookup.latest_commit(&repo, &path, until)? {
+                Some((sha, _)) => sha,
+                None => return Err(format!("Could not determine {name}'s installed commit")),
             }
         };
 
@@ -555,7 +776,12 @@ trait ForkTransactionStorage {
     fn remove_dir_all(&self, path: &Path) -> std::io::Result<()>;
     fn snapshot_live_skill(&self, skill_dir: &Path, recovery_dir: &Path) -> Result<(), String>;
     fn read_registry(&self, home: &Path) -> Result<ForkRegistry, String>;
-    fn write_registry(&self, home: &Path, registry: &ForkRegistry) -> Result<(), String>;
+    fn write_registry(
+        &self,
+        guard: &super::write_lease::WriteLeaseGuard,
+        home: &Path,
+        registry: &ForkRegistry,
+    ) -> Result<(), String>;
 }
 
 struct FileForkTransactionStorage;
@@ -577,8 +803,13 @@ impl ForkTransactionStorage for FileForkTransactionStorage {
         read_fork_registry(home)
     }
 
-    fn write_registry(&self, home: &Path, registry: &ForkRegistry) -> Result<(), String> {
-        write_fork_registry(home, registry)
+    fn write_registry(
+        &self,
+        guard: &super::write_lease::WriteLeaseGuard,
+        home: &Path,
+        registry: &ForkRegistry,
+    ) -> Result<(), String> {
+        write_fork_registry_locked(guard, home, registry)
     }
 }
 
@@ -675,6 +906,7 @@ struct ForkPreDetachPaths<'a> {
     quarantine_dir: Option<&'a Path>,
 }
 
+#[derive(Clone, Copy)]
 enum ForkRecoveryRollback {
     RestorePrevious,
     KeepComplete,
@@ -682,6 +914,7 @@ enum ForkRecoveryRollback {
 
 fn rollback_fork_before_detach(
     storage: &dyn ForkTransactionStorage,
+    guard: &super::write_lease::WriteLeaseGuard,
     primary_error: String,
     paths: &ForkPreDetachPaths<'_>,
     registry_before: Option<&ForkRegistry>,
@@ -689,7 +922,7 @@ fn rollback_fork_before_detach(
 ) -> String {
     let mut rollback_errors = Vec::new();
     if let Some(registry_before) = registry_before {
-        if let Err(error) = storage.write_registry(paths.home, registry_before) {
+        if let Err(error) = storage.write_registry(guard, paths.home, registry_before) {
             rollback_errors.push(format!("Failed to restore the fork registry: {error}"));
         }
     }
@@ -755,7 +988,9 @@ fn validate_fork_path(home: &Path, name: &str, path: &Path) -> Result<(), String
 /// before the ledger is touched, so a pre-detach failure keeps the skill
 /// attached and restores the earlier recovery. The replacement recovery stays
 /// available while ledger removal and live-tree restoration run.
+#[allow(clippy::too_many_arguments)]
 pub fn fork_skill_with(
+    guard: &super::write_lease::WriteLeaseGuard,
     home: &Path,
     app_data: &Path,
     name: &str,
@@ -765,6 +1000,7 @@ pub fn fork_skill_with(
     lookup: &dyn CommitLookup,
 ) -> Result<ForkRecord, String> {
     fork_skill_with_storage(
+        guard,
         home,
         app_data,
         name,
@@ -778,6 +1014,7 @@ pub fn fork_skill_with(
 
 #[allow(clippy::too_many_arguments)]
 fn fork_skill_with_storage(
+    guard: &super::write_lease::WriteLeaseGuard,
     home: &Path,
     app_data: &Path,
     name: &str,
@@ -810,6 +1047,7 @@ fn fork_skill_with_storage(
     if let Err(error) = clear_fork_transaction_dir(storage, &base_dir) {
         return Err(rollback_fork_before_detach(
             storage,
+            guard,
             format!("Failed to clear the stale snapshot for {name}: {error}"),
             &rollback_paths,
             None,
@@ -821,6 +1059,7 @@ fn fork_skill_with_storage(
     {
         return Err(rollback_fork_before_detach(
             storage,
+            guard,
             format!(
                 "Could not fetch {name}'s upstream copy at {}: {error}. Nothing was changed.",
                 origin.base_commit
@@ -856,6 +1095,7 @@ fn fork_skill_with_storage(
         Err(error) => {
             return Err(rollback_fork_before_detach(
                 storage,
+                guard,
                 error,
                 &rollback_paths,
                 None,
@@ -865,17 +1105,10 @@ fn fork_skill_with_storage(
     };
     let mut registry = registry_before.clone();
     registry.forks.insert(name.to_string(), record.clone());
-    // A forked skill is no longer the same "add" that started a trial - drop
-    // any trial record for it so forking doesn't leave a stale one behind.
-    // Forking only ever applies to the shared (global) `.agents/skills`
-    // root, so only the global-scoped key needs clearing.
-    registry.trials.remove(&trial_key(TrialScope::Global, name));
-    registry
-        .trials
-        .remove(&deployment_trial_key(&record.deployment_id));
-    if let Err(error) = storage.write_registry(home, &registry) {
+    if let Err(error) = storage.write_registry(guard, home, &registry) {
         return Err(rollback_fork_before_detach(
             storage,
+            guard,
             error,
             &rollback_paths,
             None,
@@ -888,6 +1121,7 @@ fn fork_skill_with_storage(
     if let Err(error) = storage.snapshot_live_skill(&skill_dir, &recovery_dir) {
         return Err(rollback_fork_before_detach(
             storage,
+            guard,
             format!("Failed to snapshot {name} before forking: {error}"),
             &rollback_paths,
             Some(&registry_before),
@@ -899,6 +1133,7 @@ fn fork_skill_with_storage(
         if let Err(error) = storage.remove_dir_all(quarantine_dir) {
             return Err(rollback_fork_before_detach(
                 storage,
+                guard,
                 format!(
                     "Failed to clear the previous recovery quarantine at {}: {error}",
                     quarantine_dir.display()
@@ -918,6 +1153,7 @@ fn fork_skill_with_storage(
     if let Err(error) = ledger.remove(origin.tool, name) {
         return Err(rollback_fork_before_detach(
             storage,
+            guard,
             error,
             &detached_rollback_paths,
             Some(&registry_before),
@@ -941,76 +1177,65 @@ fn fork_skill_with_storage(
     Ok(record)
 }
 
-/// Serializes fork/pull/unfork/remove-forked so two concurrent calls can't
-/// race on the registry, the snapshot, or the CLI. A single global lock (as
-/// opposed to per-skill) is fine: forking is a rare, user-initiated action.
-#[derive(Default)]
-pub struct ForkMutationLock(std::sync::Mutex<()>);
-
-impl ForkMutationLock {
-    /// `Err` when another fork operation already holds the lock.
-    pub fn try_acquire(&self) -> Result<std::sync::MutexGuard<'_, ()>, String> {
-        self.0
-            .try_lock()
-            .map_err(|_| "Another fork operation is in progress".to_string())
-    }
-}
-
 #[tauri::command]
-pub fn fork_skill(
+pub async fn fork_skill(
     target: super::skill_dto::LifecycleTarget,
     app: tauri::AppHandle,
-    refresh_state: tauri::State<SkillRefreshState>,
-    update_check_state: tauri::State<UpdateCheckState>,
-    fork_lock: tauri::State<ForkMutationLock>,
 ) -> Result<ForkRecord, String> {
-    let _guard = fork_lock.try_acquire()?;
-    let _ = &update_check_state; // shares the same guard-free lookup path as pull/unfork
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not resolve app data dir: {e}"))?;
-    let lookup = resolve_lookup();
-    let gh_bin =
-        skill_update_check::resolve_gh_binary().ok_or_else(|| "Run Check now first".to_string())?;
-    let fetch = RealUpstreamFetch {
-        gh_bin,
-        cache_dir: app_data.join("skill-studio").join("cache"),
-    };
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "fork_skill", move || {
+        let refresh_state = app.state::<SkillRefreshState>();
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let write_lease = super::write_lease::WriteLease::default();
+        let guard = write_lease.try_acquire(&home)?;
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Could not resolve app data dir: {e}"))?;
+        let lookup = resolve_lookup();
+        let gh_bin = skill_update_check::resolve_gh_binary()
+            .ok_or_else(|| "Run Check now first".to_string())?;
+        let fetch = RealUpstreamFetch {
+            gh_bin,
+            cache_dir: app_data.join("skill-studio").join("cache"),
+        };
 
-    let resolved = super::skill_lifecycle::resolve_fresh_lifecycle_target(
-        &app,
-        &refresh_state,
-        &target,
-        "Fork",
-    )?;
-    let snapshot = resolved.snapshot;
-    let id = target
-        .deployment_id
-        .as_deref()
-        .ok_or("Fork needs one Global Universal deployment_id")?;
-    if target.owner_id.is_some() {
-        return Err("Fork targets one Global Universal deployment, not an owner group".to_string());
-    }
-    let (skill, deployment) = super::skill_lifecycle::find_deployment(&snapshot, id)?;
-    super::skill_lifecycle::revalidate_deployment(deployment, id)?;
-    super::skill_lifecycle::require_direct_deployment_mutable(deployment, "Fork")?;
-    super::skill_lifecycle::require_global_universal_park_target(deployment)
-        .map_err(|_| "Fork is only available for the Global Universal folder.".to_string())?;
+        let resolved = super::skill_lifecycle::resolve_fresh_lifecycle_target(
+            &app,
+            &refresh_state,
+            &target,
+            "Fork",
+        )?;
+        let snapshot = resolved.snapshot;
+        let id = target
+            .deployment_id
+            .as_deref()
+            .ok_or("Fork needs one Global Universal folder copy")?;
+        if target.owner_id.is_some() {
+            return Err(
+                "Fork targets one Global Universal folder, not a group of copies".to_string(),
+            );
+        }
+        let (skill, deployment) = super::skill_lifecycle::find_deployment(&snapshot, id)?;
+        super::skill_lifecycle::revalidate_deployment(deployment, id)?;
+        super::skill_lifecycle::require_direct_deployment_mutable(deployment, "Fork")?;
+        super::skill_lifecycle::require_global_universal_park_target(deployment)
+            .map_err(|_| "Fork is only available for the Global Universal folder.".to_string())?;
 
-    let result = fork_skill_with(
-        &home,
-        &app_data,
-        &skill.name,
-        Path::new(&deployment.path),
-        &RealLedgerTool,
-        &fetch,
-        lookup.as_ref(),
-    );
-    skill_refresh::request_snapshot_rebuild(&app);
-    let _ = &refresh_state;
-    result
+        let result = fork_skill_with(
+            &guard,
+            &home,
+            &app_data,
+            &skill.name,
+            Path::new(&deployment.path),
+            &RealLedgerTool,
+            &fetch,
+            lookup.as_ref(),
+        );
+        skill_refresh::request_snapshot_rebuild(&app);
+        result
+    })
+    .await
 }
 
 // ============================================================================
@@ -1018,7 +1243,7 @@ pub fn fork_skill(
 // ============================================================================
 
 /// What one `pull_fork_upstream` call did.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct PullResult {
     pub from_commit: String,
     pub to_commit: String,
@@ -1032,97 +1257,50 @@ pub struct PullResult {
     pub message: Option<String>,
 }
 
-/// True when `bytes` contains a NUL byte - `git merge-file` operates on
-/// text, so a file with a NUL is treated as binary regardless of whether the
-/// rest of it happens to be valid UTF-8.
+/// True when `bytes` contains a NUL byte - a binary file never gets
+/// git-style text markers written into it.
 fn is_binary(bytes: &[u8]) -> bool {
     bytes.contains(&0)
 }
 
-/// What a finished `git merge-file -p mine base theirs` run means, decided
-/// from its exit status alone. Pulled out of `three_way_merge_text` so it's
-/// unit-testable without spawning a process. Per `git merge-file`'s
-/// documented contract: exit 0 is a clean merge; a positive exit up to 127
-/// is that many conflicted hunks, with stdout holding the marked-up merge to
-/// keep either way; anything else - a signal, a status `>= 128`, or empty
-/// stdout despite non-empty inputs (the merge silently produced nothing) -
-/// means the result can't be trusted, and the caller must abort rather than
-/// write it anywhere.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MergeExitClass {
-    Clean,
-    Conflicts(usize),
-    Error,
+/// Opens one or more paths in the user's editor. Real callers hand the user
+/// something to look at; tests hand a recorder so a conflict's editor-open
+/// can be asserted without actually launching an application.
+pub trait EditorOpener {
+    fn open_paths(&self, paths: &[PathBuf]) -> Result<(), String>;
 }
 
-fn classify_merge_exit(
-    code: Option<i32>,
-    stdout_len: usize,
-    inputs_nonempty: bool,
-) -> MergeExitClass {
-    if inputs_nonempty && stdout_len == 0 {
-        return MergeExitClass::Error;
-    }
-    match code {
-        Some(0) => MergeExitClass::Clean,
-        Some(n) if (1..=127).contains(&n) => MergeExitClass::Conflicts(n as usize),
-        _ => MergeExitClass::Error,
+/// The real opener: `pull_fork_upstream`'s only caller in production,
+/// delegating to `skill_editor`'s "Open in editor" choice.
+pub struct RealEditorOpener;
+
+impl EditorOpener for RealEditorOpener {
+    fn open_paths(&self, paths: &[PathBuf]) -> Result<(), String> {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        super::skill_editor::open_paths_in_editor(&home, paths)
     }
 }
 
-/// A resolved `three_way_merge_text` run: the merged bytes plus whether it
-/// was clean or left conflict markers behind.
-enum MergeOutcome {
-    Clean(Vec<u8>),
-    Conflicts(Vec<u8>),
-}
-
-/// Runs `git merge-file -p mine base theirs` in a scratch dir. Returns
-/// `Err` (never writing `stdout` anywhere) when `classify_merge_exit` can't
-/// trust the result - see its doc comment - so a `pull_fork_upstream` that
-/// hits this aborts the whole pull instead of writing a bogus merge.
-fn three_way_merge_text(
-    mine: &[u8],
-    base: &[u8],
-    theirs: &[u8],
-    rel: &str,
-) -> Result<MergeOutcome, String> {
-    // `tempfile` is a dev-only dependency, so production code builds its own
-    // scratch dir under the system temp dir instead.
-    let scratch = std::env::temp_dir().join(format!(
-        "skill-studio-merge-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    fs::create_dir_all(&scratch).map_err(|e| format!("Failed to create scratch dir: {e}"))?;
-    let _cleanup = TempCleanup {
-        paths: vec![scratch.clone()],
-    };
-    fs::write(scratch.join("mine"), mine)
-        .map_err(|e| format!("Failed to write scratch file: {e}"))?;
-    fs::write(scratch.join("base"), base)
-        .map_err(|e| format!("Failed to write scratch file: {e}"))?;
-    fs::write(scratch.join("theirs"), theirs)
-        .map_err(|e| format!("Failed to write scratch file: {e}"))?;
-
-    let output = Command::new("git")
-        .args(["merge-file", "-p", "mine", "base", "theirs"])
-        .current_dir(&scratch)
-        .output()
-        .map_err(|e| format!("Failed to run git merge-file on {rel}: {e}"))?;
-
-    let inputs_nonempty = !mine.is_empty() || !base.is_empty() || !theirs.is_empty();
-    match classify_merge_exit(output.status.code(), output.stdout.len(), inputs_nonempty) {
-        MergeExitClass::Clean => Ok(MergeOutcome::Clean(output.stdout)),
-        MergeExitClass::Conflicts(_) => Ok(MergeOutcome::Conflicts(output.stdout)),
-        MergeExitClass::Error => Err(format!(
-            "git merge-file on {rel} exited unexpectedly (status {:?}); aborting the pull",
-            output.status.code()
-        )),
+/// Writes `mine` and `theirs` side by side in one file with git-style
+/// conflict markers, the way `git merge-file` would report a conflicted
+/// hunk - but built in-process rather than shelled out to `git`, since a
+/// pull never merges automatically: any three-way divergence this deep
+/// (base, mine, and theirs all differ) always needs the user, so there is
+/// no "clean" case left to detect once we get here.
+fn write_conflict_markers(mine: &[u8], theirs: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(mine.len() + theirs.len() + 32);
+    out.extend_from_slice(b"<<<<<<< mine\n");
+    out.extend_from_slice(mine);
+    if !mine.is_empty() && !mine.ends_with(b"\n") {
+        out.push(b'\n');
     }
+    out.extend_from_slice(b"=======\n");
+    out.extend_from_slice(theirs);
+    if !theirs.is_empty() && !theirs.ends_with(b"\n") {
+        out.push(b'\n');
+    }
+    out.extend_from_slice(b">>>>>>> theirs\n");
+    out
 }
 
 /// Writes `bytes` at `root/rel`, creating parent directories as needed - the
@@ -1155,6 +1333,7 @@ fn rename_or_copy(src: &Path, dst: &Path) -> Result<(), String> {
 /// beyond what's undone here.
 #[allow(clippy::too_many_arguments)]
 fn swap_in_pull_result(
+    guard: &super::write_lease::WriteLeaseGuard,
     home: &Path,
     app_data: &Path,
     name: &str,
@@ -1208,7 +1387,7 @@ fn swap_in_pull_result(
     if let Some(rec) = registry.forks.get_mut(name) {
         rec.base_commit = to_commit.to_string();
     }
-    if let Err(e) = write_fork_registry(home, registry) {
+    if let Err(e) = write_fork_registry_locked(guard, home, registry) {
         let _ = fs::remove_dir_all(base_dir);
         let _ = rename_or_copy(&old_base_backup, base_dir);
         let _ = fs::remove_dir_all(mine_dir);
@@ -1234,11 +1413,13 @@ fn swap_in_pull_result(
 /// that mutates them, and it does so as close to atomically as the
 /// filesystem allows.
 pub fn pull_fork_upstream_with(
+    guard: &super::write_lease::WriteLeaseGuard,
     home: &Path,
     app_data: &Path,
     name: &str,
     fetch: &dyn UpstreamFetch,
     lookup: &dyn CommitLookup,
+    editor: &dyn EditorOpener,
 ) -> Result<PullResult, String> {
     let mut registry = read_fork_registry(home)?;
     let record = registry
@@ -1361,30 +1542,27 @@ pub fn pull_fork_upstream_with(
                     let base_bytes = base.as_deref().unwrap_or(&[]);
                     if is_binary(&mine) || is_binary(base_bytes) || is_binary(&theirs) {
                         // Binary and all three differ: keep mine, flag it,
-                        // never hand it to `git merge-file`.
+                        // never try to write text markers into it.
                         write_staged(&staging_live, rel, &mine)?;
                         result.conflicts.push(rel.clone());
                     } else {
-                        match three_way_merge_text(&mine, base_bytes, &theirs, rel)? {
-                            MergeOutcome::Clean(merged) => {
-                                write_staged(&staging_live, rel, &merged)?;
-                                result.merged.push(rel.clone());
-                            }
-                            MergeOutcome::Conflicts(merged) => {
-                                write_staged(&staging_live, rel, &merged)?;
-                                result.conflicts.push(rel.clone());
-                            }
-                        }
+                        // Text, and base, mine, and theirs all differ from
+                        // each other: never merges - write git-style
+                        // conflict markers and let the caller open the
+                        // editor on it once it's swapped into place.
+                        write_staged(&staging_live, rel, &write_conflict_markers(&mine, &theirs))?;
+                        result.conflicts.push(rel.clone());
                     }
                 }
             }
             // Deleted on both sides, or nothing anywhere: nothing to carry
             // into the merged tree.
-            (Some(_), None, None) | (None, None, None) => {}
+            (Some(_) | None, None, None) => {}
         }
     }
 
     swap_in_pull_result(
+        guard,
         home,
         app_data,
         name,
@@ -1397,42 +1575,72 @@ pub fn pull_fork_upstream_with(
     )?;
     drop(cleanup_staging);
 
+    if !result.conflicts.is_empty() {
+        // The markers are already on disk under `mine_dir`, and
+        // `swap_in_pull_result` above already committed the registry and
+        // swapped the marker file in - the pull itself is done. A failed
+        // editor launch must not turn a completed pull into an `Err` (that
+        // would discard `result.conflicts`, the only place the caller
+        // learns markers are in SKILL.md); it's reported as a message on
+        // the still-`Ok` result instead.
+        let conflict_paths: Vec<PathBuf> = result
+            .conflicts
+            .iter()
+            .map(|rel| mine_dir.join(rel))
+            .collect();
+        if let Err(e) = editor.open_paths(&conflict_paths) {
+            let rel = &result.conflicts[0];
+            result.message = Some(format!(
+                "Conflict markers written to {rel}; could not open editor: {e}"
+            ));
+        }
+    }
+
     Ok(result)
 }
 
 #[tauri::command]
-pub fn pull_fork_upstream(
+pub async fn pull_fork_upstream(
     target: super::skill_dto::LifecycleTarget,
     app: tauri::AppHandle,
-    refresh_state: tauri::State<SkillRefreshState>,
-    update_check_state: tauri::State<UpdateCheckState>,
-    fork_lock: tauri::State<ForkMutationLock>,
 ) -> Result<PullResult, String> {
-    let _guard = fork_lock.try_acquire()?;
-    let _ = &update_check_state;
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not resolve app data dir: {e}"))?;
-    let lookup = resolve_lookup();
-    let fetch = RealUpstreamFetch {
-        gh_bin: skill_update_check::resolve_gh_binary()
-            .ok_or_else(|| "Run Check now first".to_string())?,
-        cache_dir: app_data.join("skill-studio").join("cache"),
-    };
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "pull_fork_upstream", move || {
+        let refresh_state = app.state::<SkillRefreshState>();
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let write_lease = super::write_lease::WriteLease::default();
+        let guard = write_lease.try_acquire(&home)?;
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Could not resolve app data dir: {e}"))?;
+        let lookup = resolve_lookup();
+        let fetch = RealUpstreamFetch {
+            gh_bin: skill_update_check::resolve_gh_binary()
+                .ok_or_else(|| "Run Check now first".to_string())?,
+            cache_dir: app_data.join("skill-studio").join("cache"),
+        };
 
-    let resolved = super::skill_lifecycle::resolve_fresh_lifecycle_target(
-        &app,
-        &refresh_state,
-        &target,
-        "Pull upstream",
-    )?;
-    let (name, _) = resolve_recorded_fork_target(&resolved.snapshot, &target, &home)?;
-    let result = pull_fork_upstream_with(&home, &app_data, &name, &fetch, lookup.as_ref());
-    skill_refresh::request_snapshot_rebuild(&app);
-    let _ = &refresh_state;
-    result
+        let resolved = super::skill_lifecycle::resolve_fresh_lifecycle_target(
+            &app,
+            &refresh_state,
+            &target,
+            "Pull upstream",
+        )?;
+        let (name, _) = resolve_recorded_fork_target(&resolved.snapshot, &target, &home)?;
+        let result = pull_fork_upstream_with(
+            &guard,
+            &home,
+            &app_data,
+            &name,
+            &fetch,
+            lookup.as_ref(),
+            &RealEditorOpener,
+        );
+        skill_refresh::request_snapshot_rebuild(&app);
+        result
+    })
+    .await
 }
 
 // ============================================================================
@@ -1441,6 +1649,7 @@ pub fn pull_fork_upstream(
 
 /// `unfork_skill`'s logic, taking `home`/`app_data` and the trait directly.
 pub fn unfork_skill_with(
+    guard: &super::write_lease::WriteLeaseGuard,
     home: &Path,
     app_data: &Path,
     name: &str,
@@ -1456,44 +1665,39 @@ pub fn unfork_skill_with(
     ledger.reinstall(&record, name)?;
 
     registry.forks.remove(name);
-    registry.trials.remove(&trial_key(TrialScope::Global, name));
-    if !record.deployment_id.is_empty() {
-        registry
-            .trials
-            .remove(&deployment_trial_key(&record.deployment_id));
-    }
-    write_fork_registry(home, &registry)?;
+    write_fork_registry_locked(guard, home, &registry)?;
     let _ = fs::remove_dir_all(fork_snapshot_dir(app_data, name));
     Ok(())
 }
 
 #[tauri::command]
-pub fn unfork_skill(
+pub async fn unfork_skill(
     target: super::skill_dto::LifecycleTarget,
     app: tauri::AppHandle,
-    refresh_state: tauri::State<SkillRefreshState>,
-    update_check_state: tauri::State<UpdateCheckState>,
-    fork_lock: tauri::State<ForkMutationLock>,
 ) -> Result<(), String> {
-    let _guard = fork_lock.try_acquire()?;
-    let _ = &update_check_state;
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not resolve app data dir: {e}"))?;
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "unfork_skill", move || {
+        let refresh_state = app.state::<SkillRefreshState>();
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let write_lease = super::write_lease::WriteLease::default();
+        let guard = write_lease.try_acquire(&home)?;
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Could not resolve app data dir: {e}"))?;
 
-    let resolved = super::skill_lifecycle::resolve_fresh_lifecycle_target(
-        &app,
-        &refresh_state,
-        &target,
-        "Unfork",
-    )?;
-    let (name, _) = resolve_recorded_fork_target(&resolved.snapshot, &target, &home)?;
-    let result = unfork_skill_with(&home, &app_data, &name, &RealLedgerTool);
-    skill_refresh::request_snapshot_rebuild(&app);
-    let _ = &refresh_state;
-    result
+        let resolved = super::skill_lifecycle::resolve_fresh_lifecycle_target(
+            &app,
+            &refresh_state,
+            &target,
+            "Unfork",
+        )?;
+        let (name, _) = resolve_recorded_fork_target(&resolved.snapshot, &target, &home)?;
+        let result = unfork_skill_with(&guard, &home, &app_data, &name, &RealLedgerTool);
+        skill_refresh::request_snapshot_rebuild(&app);
+        result
+    })
+    .await
 }
 
 fn resolve_recorded_fork_target(
@@ -1504,11 +1708,10 @@ fn resolve_recorded_fork_target(
     let id = target
         .deployment_id
         .as_deref()
-        .ok_or("Fork lifecycle needs one Global Universal deployment_id")?;
+        .ok_or("Fork lifecycle needs one Global Universal folder copy")?;
     if target.owner_id.is_some() {
         return Err(
-            "Fork lifecycle targets one Global Universal deployment, not an owner group"
-                .to_string(),
+            "Fork lifecycle targets one Global Universal folder, not a group of copies".to_string(),
         );
     }
     let (skill, deployment) = super::skill_lifecycle::find_deployment(snapshot, id)?;
@@ -1531,8 +1734,7 @@ fn resolve_recorded_fork_target(
         || Path::new(&deployment.path) != expected_path
     {
         return Err(
-            "The fork record does not belong to the selected Global Universal deployment"
-                .to_string(),
+            "The fork record does not belong to the selected Global Universal folder".to_string(),
         );
     }
     Ok((skill.name.clone(), record))
@@ -1544,11 +1746,88 @@ fn resolve_recorded_fork_target(
 
 #[cfg(test)]
 mod tests {
+    use super::super::skill_fork_registry::write_fork_registry;
     use super::*;
+    use std::process::Command;
     use std::sync::Mutex;
 
+    fn test_guard(home: &Path) -> super::super::write_lease::WriteLeaseGuard {
+        super::super::write_lease::WriteLease::default()
+            .try_acquire(home)
+            .unwrap()
+    }
+
+    // Moved from `skill_install_plan.rs` (unit 3.5c) alongside
+    // `skills_sh_universal_add_args` itself.
+    fn universal_global() -> SkillInstallSpec {
+        SkillInstallSpec {
+            scope: InstallScope::Global,
+            destination: SkillDestination::Universal,
+            project_path: None,
+            harnesses: vec![],
+        }
+    }
+
+    #[test]
+    fn universal_skills_sh_uses_agent_universal_and_global_or_names_the_wrong_argv() {
+        let (argv, cwd) =
+            skills_sh_universal_add_args("o/r", Some("find-bugs"), &universal_global()).unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "skills",
+                "add",
+                "o/r",
+                "--yes",
+                "--global",
+                "--skill",
+                "find-bugs",
+                "--agent",
+                "universal",
+            ]
+        );
+        assert!(!argv.iter().any(|a| a == "codex"));
+        assert_eq!(cwd, None);
+    }
+
+    #[test]
+    fn universal_skills_sh_may_add_claude_code_not_codex_or_names_the_missing_agent() {
+        let mut spec = universal_global();
+        spec.harnesses = vec![AgentId::ClaudeCode];
+        let (argv, _cwd) = skills_sh_universal_add_args("o/r", None, &spec).unwrap();
+        assert!(argv.windows(2).any(|w| w == ["--agent", "universal"]));
+        assert!(argv.windows(2).any(|w| w == ["--agent", "claude-code"]));
+        assert!(!argv.iter().any(|a| a == "codex"));
+    }
+
+    #[test]
+    fn universal_skills_sh_ignores_direct_readers_or_names_the_leaked_agent() {
+        let mut spec = universal_global();
+        spec.harnesses = vec![AgentId::Codex];
+        let (argv, _cwd) = skills_sh_universal_add_args("o/r", None, &spec).unwrap();
+        assert!(!argv.iter().any(|arg| arg == "codex"));
+    }
+
+    /// `skills@1.7.0` has no `--cwd` flag: a project scope must carry the
+    /// project path as the process cwd, not as an argv token, or the CLI
+    /// writes into whatever directory the process happened to start in.
+    #[test]
+    fn project_universal_runs_in_project_dir_not_via_cwd_flag_or_names_the_wrong_scope() {
+        let spec = SkillInstallSpec {
+            scope: InstallScope::Project,
+            destination: SkillDestination::Universal,
+            project_path: Some("/work/app".to_string()),
+            harnesses: vec![],
+        };
+        let (argv, cwd) = skills_sh_universal_add_args("o/r", None, &spec).unwrap();
+        assert!(!argv.contains(&"--cwd".to_string()));
+        assert!(!argv.contains(&"/work/app".to_string()));
+        assert!(!argv.contains(&"--global".to_string()));
+        assert_eq!(cwd, Some(PathBuf::from("/work/app")));
+    }
+
     /// Records every `remove`/`reinstall` call so tests can assert "called
-    /// once with the right OriginTool" without shelling out to `npx`.
+    /// once with the right `OriginTool`" without shelling out to `npx`.
     #[derive(Default)]
     struct FakeLedger {
         remove_calls: Mutex<Vec<(OriginTool, String)>>,
@@ -1594,6 +1873,39 @@ mod tests {
             _: Option<&str>,
         ) -> Result<Option<(String, String)>, String> {
             panic!("lookup should not have been called");
+        }
+    }
+
+    /// An `EditorOpener` for tests that don't exercise a conflict: asserts
+    /// it is never asked to open anything, the same guarantee
+    /// `NeverCalledLookup` gives the commit lookup port.
+    struct NoopEditorOpener;
+    impl EditorOpener for NoopEditorOpener {
+        fn open_paths(&self, paths: &[PathBuf]) -> Result<(), String> {
+            assert!(paths.is_empty(), "unexpected editor open: {paths:?}");
+            Ok(())
+        }
+    }
+
+    /// Records every call so a conflict test can assert the editor opened
+    /// on exactly the merged file's live path.
+    #[derive(Default)]
+    struct RecordingEditorOpener {
+        opened: std::sync::Mutex<Vec<Vec<PathBuf>>>,
+    }
+    impl EditorOpener for RecordingEditorOpener {
+        fn open_paths(&self, paths: &[PathBuf]) -> Result<(), String> {
+            self.opened.lock().unwrap().push(paths.to_vec());
+            Ok(())
+        }
+    }
+
+    /// An `EditorOpener` that always fails, for the F2 regression: a
+    /// failed editor launch must not turn a completed pull into an `Err`.
+    struct FailingEditorOpener;
+    impl EditorOpener for FailingEditorOpener {
+        fn open_paths(&self, _paths: &[PathBuf]) -> Result<(), String> {
+            Err("no editor configured".to_string())
         }
     }
 
@@ -1685,14 +1997,32 @@ mod tests {
             read_fork_registry(home)
         }
 
-        fn write_registry(&self, home: &Path, registry: &ForkRegistry) -> Result<(), String> {
+        fn write_registry(
+            &self,
+            guard: &super::super::write_lease::WriteLeaseGuard,
+            home: &Path,
+            registry: &ForkRegistry,
+        ) -> Result<(), String> {
             let mut calls = self.registry_write_calls.lock().unwrap();
             *calls += 1;
             if self.fail_registry_write_call == Some(*calls) {
                 return Err("injected registry write failure".to_string());
             }
-            write_fork_registry(home, registry)
+            write_fork_registry_locked(guard, home, registry)
         }
+    }
+
+    /// Compares two serialized `ForkRegistry` files ignoring `write_version`,
+    /// which `write_fork_registry` bumps on every write - including a
+    /// rollback that restores otherwise-identical content, per
+    /// `skill_studio_core::registry::write_registry_document`.
+    fn assert_registry_content_unchanged(after: &[u8], before: &[u8]) {
+        let strip_write_version = |bytes: &[u8]| {
+            let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+            value.as_object_mut().unwrap().remove("write_version");
+            value
+        };
+        assert_eq!(strip_write_version(after), strip_write_version(before));
     }
 
     fn write_file(path: &Path, content: &str) {
@@ -1753,6 +2083,7 @@ mod tests {
             files: vec![("SKILL.md", "---\nname: find-bugs\n---\nupstream body")],
         };
         let record = fork_skill_with(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -1779,63 +2110,6 @@ mod tests {
 
         let registry = read_fork_registry(&home).unwrap();
         assert!(registry.forks.contains_key("find-bugs"));
-    }
-
-    #[test]
-    fn fork_drops_a_stale_trial_record() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let app_data = tmp.path().join("data");
-        seed_dotagents_ledger(
-            &home,
-            "find-bugs",
-            "getsentry/find-bugs",
-            "skills/find-bugs",
-            &"a".repeat(40),
-        );
-        write_file(
-            &home.join(".agents/skills/find-bugs/SKILL.md"),
-            "---\nname: find-bugs\n---\nbody",
-        );
-        let now = chrono::Utc::now();
-        let mut registry = read_fork_registry(&home).unwrap();
-        registry.trials.insert(
-            trial_key(TrialScope::Global, "find-bugs"),
-            super::super::skill_fork_registry::TrialRecord {
-                deployment_id: String::new(),
-                started_at: now.to_rfc3339(),
-                expires_at: (now + chrono::Duration::hours(24)).to_rfc3339(),
-                status: super::super::skill_fork_registry::TrialStatus::Active,
-                method: super::super::skill_fork_registry::AddMethod::Dotagents,
-                scope: super::super::skill_fork_registry::TrialScope::Global,
-                project_path: None,
-                skill_dir: home.join(".agents/skills/find-bugs"),
-                deployment_fingerprint: String::new(),
-                claude_link: None,
-                claude_link_target: None,
-            },
-        );
-        write_fork_registry(&home, &registry).unwrap();
-
-        let ledger = FakeLedger::default();
-        let fetch = FakeFetch {
-            files: vec![("SKILL.md", "---\nname: find-bugs\n---\nupstream body")],
-        };
-        fork_skill_with(
-            &home,
-            &app_data,
-            "find-bugs",
-            &home.join(".agents/skills/find-bugs"),
-            &ledger,
-            &fetch,
-            &NeverCalledLookup,
-        )
-        .unwrap();
-
-        assert!(!read_fork_registry(&home)
-            .unwrap()
-            .trials
-            .contains_key(&trial_key(TrialScope::Global, "find-bugs")));
     }
 
     /// Finding 1: the base snapshot must be the upstream tree fetched at
@@ -1867,6 +2141,7 @@ mod tests {
             files: vec![("SKILL.md", "line one\nbase line\n")],
         };
         fork_skill_with(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -1892,15 +2167,85 @@ mod tests {
         let fetch_at_pull = FakeFetch {
             files: vec![("SKILL.md", "line one\ntheirs edit\n")],
         };
+        let editor = RecordingEditorOpener::default();
         let result = pull_fork_upstream_with(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
             &fetch_at_pull,
             &NeverCalledLookup,
+            &editor,
         )
         .unwrap();
         assert_eq!(result.conflicts, vec!["SKILL.md".to_string()]);
+        assert!(
+            !editor.opened.lock().unwrap().is_empty(),
+            "expected the conflict to open the editor"
+        );
+    }
+
+    /// F2 (unit 3.7b review round 1): `swap_in_pull_result` already
+    /// committed the registry and swapped the marker file in by the time
+    /// the editor is asked to open - a failing opener must keep that
+    /// result and name it in `message`, not discard it as an `Err`.
+    #[test]
+    fn fork_pull_conflict_with_a_failing_editor_keeps_the_markers_and_names_them_or_names_the_lost_result(
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_data = tmp.path().join("data");
+        let base_commit = "a".repeat(40);
+        seed_dotagents_ledger(
+            &home,
+            "find-bugs",
+            "getsentry/find-bugs",
+            "skills/find-bugs",
+            &base_commit,
+        );
+        write_file(
+            &home.join(".agents/skills/find-bugs/SKILL.md"),
+            "line one\nmine edit\n",
+        );
+
+        let ledger = FakeLedger::default();
+        let fetch_at_fork = FakeFetch {
+            files: vec![("SKILL.md", "line one\nbase line\n")],
+        };
+        fork_skill_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "find-bugs",
+            &home.join(".agents/skills/find-bugs"),
+            &ledger,
+            &fetch_at_fork,
+            &NeverCalledLookup,
+        )
+        .unwrap();
+
+        seed_update_check_latest(&app_data, "find-bugs", &"b".repeat(40));
+        let fetch_at_pull = FakeFetch {
+            files: vec![("SKILL.md", "line one\ntheirs edit\n")],
+        };
+        let result = pull_fork_upstream_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "find-bugs",
+            &fetch_at_pull,
+            &NeverCalledLookup,
+            &FailingEditorOpener,
+        )
+        .expect("a failed editor open must not turn a completed pull into an Err");
+
+        assert_eq!(result.conflicts, vec!["SKILL.md".to_string()]);
+        let message = result.message.expect("failed editor open must be named");
+        assert!(message.contains("SKILL.md"), "{message}");
+        assert!(message.contains("no editor configured"), "{message}");
+        // The markers are on disk regardless of whether the editor opened.
+        let on_disk = fs::read_to_string(home.join(".agents/skills/find-bugs/SKILL.md")).unwrap();
+        assert!(on_disk.contains("<<<<<<<"), "{on_disk}");
     }
 
     /// Finding 7: forking a same-named copy that isn't the shared folder
@@ -1926,6 +2271,7 @@ mod tests {
 
         let ledger = FakeLedger::default();
         let err = fork_skill_with(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -1964,6 +2310,7 @@ mod tests {
             files: vec![("SKILL.md", "body")],
         };
         let record = fork_skill_with(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -2013,6 +2360,7 @@ mod tests {
             files: vec![("SKILL.md", "upstream body")],
         };
         fork_skill_with(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -2036,6 +2384,7 @@ mod tests {
 
         let ledger = FakeLedger::default();
         let err = fork_skill_with(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -2058,6 +2407,7 @@ mod tests {
 
         let ledger = FakeLedger::default();
         let err = fork_skill_with(
+            &test_guard(&home),
             &home,
             &app_data,
             "my-notes",
@@ -2091,6 +2441,7 @@ mod tests {
             files: vec![("SKILL.md", "upstream body")],
         };
         let err = fork_skill_with(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -2155,6 +2506,7 @@ mod tests {
             ..Default::default()
         };
         let error = fork_skill_with_storage(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -2216,6 +2568,7 @@ mod tests {
 
         let ledger = FakeLedger::default();
         let error = fork_skill_with(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -2274,6 +2627,7 @@ mod tests {
         let ledger = FakeLedger::default();
 
         let error = fork_skill_with_storage(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -2323,6 +2677,7 @@ mod tests {
         let ledger = FakeLedger::default();
 
         let error = fork_skill_with_storage(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -2378,6 +2733,7 @@ mod tests {
         let ledger = FakeLedger::default();
 
         let error = fork_skill_with_storage(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -2390,7 +2746,7 @@ mod tests {
         .unwrap_err();
 
         assert!(error.contains("injected live snapshot failure"), "{error}");
-        assert_eq!(fs::read(&registry_path).unwrap(), registry_before);
+        assert_registry_content_unchanged(&fs::read(&registry_path).unwrap(), &registry_before);
         assert_eq!(fs::read_to_string(skill_md).unwrap(), "live body");
         assert_eq!(ledger.remove_calls.lock().unwrap().len(), 0);
         assert_eq!(
@@ -2435,6 +2791,7 @@ mod tests {
         let ledger = FakeLedger::default();
 
         let error = fork_skill_with_storage(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -2458,7 +2815,7 @@ mod tests {
             error.contains(&quarantine_dir.display().to_string()),
             "{error}"
         );
-        assert_eq!(fs::read(&registry_path).unwrap(), registry_before);
+        assert_registry_content_unchanged(&fs::read(&registry_path).unwrap(), &registry_before);
         assert_eq!(fs::read_to_string(skill_md).unwrap(), "live body");
         assert_eq!(ledger.remove_calls.lock().unwrap().len(), 0);
         assert_eq!(
@@ -2495,6 +2852,7 @@ mod tests {
         let ledger = FakeLedger::default();
 
         let error = fork_skill_with_storage(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -2542,6 +2900,7 @@ mod tests {
         let ledger = FakeLedger::default();
 
         let error = fork_skill_with(
+            &test_guard(&home),
             &home,
             &app_data,
             "find-bugs",
@@ -2622,9 +2981,9 @@ mod tests {
                     latest_commit_at: None,
                     checked_at: "2026-01-01T00:00:00Z".to_string(),
                     error: None,
-                    lock_updated_at: None,
                 },
             )]),
+            upstream_ahead: BTreeMap::new(),
             legacy_skills: BTreeMap::new(),
         };
         fs::write(
@@ -2644,9 +3003,16 @@ mod tests {
         seed_update_check_latest(&app_data, "find-bugs", &commit);
 
         let fetch = FakeFetch { files: vec![] };
-        let result =
-            pull_fork_upstream_with(&home, &app_data, "find-bugs", &fetch, &NeverCalledLookup)
-                .unwrap();
+        let result = pull_fork_upstream_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "find-bugs",
+            &fetch,
+            &NeverCalledLookup,
+            &NoopEditorOpener,
+        )
+        .unwrap();
         assert_eq!(result.message.as_deref(), Some("Already up to date"));
         assert!(result.merged.is_empty() && result.conflicts.is_empty());
     }
@@ -2668,9 +3034,16 @@ mod tests {
         let fetch = FakeFetch {
             files: vec![("SKILL.md", "updated upstream body")],
         };
-        let result =
-            pull_fork_upstream_with(&home, &app_data, "find-bugs", &fetch, &NeverCalledLookup)
-                .unwrap();
+        let result = pull_fork_upstream_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "find-bugs",
+            &fetch,
+            &NeverCalledLookup,
+            &NoopEditorOpener,
+        )
+        .unwrap();
 
         assert_eq!(result.merged, vec!["SKILL.md".to_string()]);
         assert!(result.conflicts.is_empty());
@@ -2683,49 +3056,60 @@ mod tests {
         );
     }
 
+    /// A conflicting pull writes git-style markers directly into the file -
+    /// no subprocess, never an automatic merge - and hands the caller's
+    /// editor opener the exact live path the markers landed at; a failure
+    /// here names the file that would have been merged silently under the
+    /// deleted `git merge-file` path instead.
     #[test]
-    fn fork_mutation_lock_refuses_a_concurrent_second_acquire() {
-        let lock = ForkMutationLock::default();
-        let first = lock.try_acquire().unwrap();
-        let second = lock.try_acquire();
-        assert_eq!(second.unwrap_err(), "Another fork operation is in progress");
-        drop(first);
-        // Released - a later call succeeds.
-        assert!(lock.try_acquire().is_ok());
-    }
+    fn fork_pull_conflict_writes_markers_and_opens_the_editor_or_names_the_merged_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_data = tmp.path().join("data");
+        seed_registry(
+            &home,
+            &app_data,
+            "find-bugs",
+            &"a".repeat(40),
+            "line one\nbase line\n",
+        );
+        write_file(
+            &home.join(".agents/skills/find-bugs/SKILL.md"),
+            "line one\nmine line\n",
+        );
+        seed_update_check_latest(&app_data, "find-bugs", &"b".repeat(40));
 
-    #[test]
-    fn classify_merge_exit_covers_clean_conflicts_and_untrustworthy_results() {
-        // Clean merge.
-        assert_eq!(
-            classify_merge_exit(Some(0), 10, true),
-            MergeExitClass::Clean
+        let fetch = FakeFetch {
+            files: vec![("SKILL.md", "line one\ntheirs line\n")],
+        };
+        let editor = RecordingEditorOpener::default();
+        let result = pull_fork_upstream_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "find-bugs",
+            &fetch,
+            &NeverCalledLookup,
+            &editor,
+        )
+        .unwrap();
+
+        assert_eq!(result.conflicts, vec!["SKILL.md".to_string()]);
+        let merged_path = home.join(".agents/skills/find-bugs/SKILL.md");
+        let mine = fs::read_to_string(&merged_path).unwrap();
+        assert!(
+            mine.contains("<<<<<<< mine")
+                && mine.contains("=======")
+                && mine.contains(">>>>>>> theirs"),
+            "expected conflict markers in {}: {mine}",
+            merged_path.display()
         );
-        // 1..=127 conflicted hunks, with a non-empty merge on stdout.
+        let opened = editor.opened.lock().unwrap();
         assert_eq!(
-            classify_merge_exit(Some(1), 10, true),
-            MergeExitClass::Conflicts(1)
-        );
-        assert_eq!(
-            classify_merge_exit(Some(127), 10, true),
-            MergeExitClass::Conflicts(127)
-        );
-        // Signal-terminated / spawn-failure caller convention: no exit code.
-        assert_eq!(classify_merge_exit(None, 10, true), MergeExitClass::Error);
-        // Status >= 128 is untrustworthy, not "128 conflicts".
-        assert_eq!(
-            classify_merge_exit(Some(128), 10, true),
-            MergeExitClass::Error
-        );
-        // Empty stdout despite non-empty inputs means the merge produced
-        // nothing worth trusting, even for an exit code that would otherwise
-        // read as clean or conflicted.
-        assert_eq!(classify_merge_exit(Some(0), 0, true), MergeExitClass::Error);
-        assert_eq!(classify_merge_exit(Some(1), 0, true), MergeExitClass::Error);
-        // All-empty inputs legitimately produce empty stdout - not an error.
-        assert_eq!(
-            classify_merge_exit(Some(0), 0, false),
-            MergeExitClass::Clean
+            opened.as_slice(),
+            [vec![merged_path.clone()]],
+            "expected the editor to be opened once on {}: opened {opened:?}",
+            merged_path.display()
         );
     }
 
@@ -2751,13 +3135,25 @@ mod tests {
         let fetch = FakeFetch {
             files: vec![("SKILL.md", "line one\ntheirs line\n")],
         };
-        let result =
-            pull_fork_upstream_with(&home, &app_data, "find-bugs", &fetch, &NeverCalledLookup)
-                .unwrap();
+        let editor = RecordingEditorOpener::default();
+        let result = pull_fork_upstream_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "find-bugs",
+            &fetch,
+            &NeverCalledLookup,
+            &editor,
+        )
+        .unwrap();
 
         assert_eq!(result.conflicts, vec!["SKILL.md".to_string()]);
         let mine = fs::read_to_string(home.join(".agents/skills/find-bugs/SKILL.md")).unwrap();
         assert!(mine.contains("<<<<<<<"));
+        assert!(
+            !editor.opened.lock().unwrap().is_empty(),
+            "expected the conflict to open the editor"
+        );
     }
 
     /// Restores a directory's permissions on drop, so a fault-injection test
@@ -2784,7 +3180,7 @@ mod tests {
         // rename (mine -> live-backup) fails with a permission error.
         let skills_root = home.join(".agents").join("skills");
         let original_perms = std::fs::metadata(&skills_root).unwrap().permissions();
-        let _restore = RestorePerms(skills_root.clone(), original_perms.clone());
+        let restore = RestorePerms(skills_root.clone(), original_perms.clone());
         let mut locked = original_perms;
         locked.set_mode(0o555);
         std::fs::set_permissions(&skills_root, locked).unwrap();
@@ -2792,12 +3188,19 @@ mod tests {
         let fetch = FakeFetch {
             files: vec![("SKILL.md", "upstream changed it")],
         };
-        let err =
-            pull_fork_upstream_with(&home, &app_data, "find-bugs", &fetch, &NeverCalledLookup)
-                .unwrap_err();
+        let err = pull_fork_upstream_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "find-bugs",
+            &fetch,
+            &NeverCalledLookup,
+            &NoopEditorOpener,
+        )
+        .unwrap_err();
         assert!(err.contains("Failed to back up the live tree"));
 
-        drop(_restore); // restore write access before reading back through it
+        drop(restore); // restore write access before reading back through it
 
         assert_eq!(
             fs::read_to_string(skills_root.join("find-bugs/SKILL.md")).unwrap(),
@@ -2824,9 +3227,16 @@ mod tests {
         let fetch = FakeFetch {
             files: vec![("SKILL.md", "body"), ("NEW.md", "new upstream file")],
         };
-        let result =
-            pull_fork_upstream_with(&home, &app_data, "find-bugs", &fetch, &NeverCalledLookup)
-                .unwrap();
+        let result = pull_fork_upstream_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "find-bugs",
+            &fetch,
+            &NeverCalledLookup,
+            &NoopEditorOpener,
+        )
+        .unwrap();
 
         assert_eq!(result.added, vec!["NEW.md".to_string()]);
         assert!(home.join(".agents/skills/find-bugs/NEW.md").exists());
@@ -2848,9 +3258,16 @@ mod tests {
         let fetch = FakeFetch {
             files: vec![("SKILL.md", "body")], // OLD.md gone upstream
         };
-        let result =
-            pull_fork_upstream_with(&home, &app_data, "find-bugs", &fetch, &NeverCalledLookup)
-                .unwrap();
+        let result = pull_fork_upstream_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "find-bugs",
+            &fetch,
+            &NeverCalledLookup,
+            &NoopEditorOpener,
+        )
+        .unwrap();
 
         assert_eq!(result.removed, vec!["OLD.md".to_string()]);
         assert!(!home.join(".agents/skills/find-bugs/OLD.md").exists());
@@ -2872,14 +3289,26 @@ mod tests {
         let fetch = FakeFetch {
             files: vec![("SKILL.md", "body"), ("SHARED.md", "upstream changed it")],
         };
-        let result =
-            pull_fork_upstream_with(&home, &app_data, "find-bugs", &fetch, &NeverCalledLookup)
-                .unwrap();
+        let editor = RecordingEditorOpener::default();
+        let result = pull_fork_upstream_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "find-bugs",
+            &fetch,
+            &NeverCalledLookup,
+            &editor,
+        )
+        .unwrap();
 
         assert_eq!(result.conflicts, vec!["SHARED.md".to_string()]);
         assert_eq!(
             fs::read_to_string(home.join(".agents/skills/find-bugs/SHARED.md")).unwrap(),
             "upstream changed it"
+        );
+        assert!(
+            !editor.opened.lock().unwrap().is_empty(),
+            "expected the conflict to open the editor"
         );
     }
 
@@ -2902,14 +3331,26 @@ mod tests {
         let fetch = FakeFetch {
             files: vec![("SKILL.md", "body")], // SHARED.md removed upstream
         };
-        let result =
-            pull_fork_upstream_with(&home, &app_data, "find-bugs", &fetch, &NeverCalledLookup)
-                .unwrap();
+        let editor = RecordingEditorOpener::default();
+        let result = pull_fork_upstream_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "find-bugs",
+            &fetch,
+            &NeverCalledLookup,
+            &editor,
+        )
+        .unwrap();
 
         assert_eq!(result.conflicts, vec!["SHARED.md".to_string()]);
         assert_eq!(
             fs::read_to_string(home.join(".agents/skills/find-bugs/SHARED.md")).unwrap(),
             "my local edit"
+        );
+        assert!(
+            !editor.opened.lock().unwrap().is_empty(),
+            "expected the conflict to open the editor"
         );
     }
 
@@ -2928,9 +3369,16 @@ mod tests {
         let fetch = FakeFetch {
             files: vec![("SKILL.md", "body")],
         };
-        let result =
-            pull_fork_upstream_with(&home, &app_data, "find-bugs", &fetch, &NeverCalledLookup)
-                .unwrap();
+        let result = pull_fork_upstream_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "find-bugs",
+            &fetch,
+            &NeverCalledLookup,
+            &NoopEditorOpener,
+        )
+        .unwrap();
 
         assert!(!result.added.contains(&"NOTES.md".to_string()));
         assert!(!result.removed.contains(&"NOTES.md".to_string()));
@@ -2955,8 +3403,9 @@ mod tests {
             base_commit: "a".repeat(40),
         };
 
+        let (args, cwd) = skills_sh_unfork_add_args(&record, "find-bugs").unwrap();
         assert_eq!(
-            skills_sh_unfork_add_args(&record, "find-bugs").unwrap(),
+            args,
             vec![
                 "skills",
                 "add",
@@ -2968,6 +3417,56 @@ mod tests {
                 "--agent",
                 "universal",
             ]
+        );
+        assert_eq!(
+            cwd, None,
+            "a fork is always global-scope, so unfork never sets a process cwd"
+        );
+    }
+
+    /// `run_npx(args, Some(cwd))` must run the child process itself in
+    /// `cwd`, not just log it - a fake `npx` script records its own working
+    /// directory (via `pwd`) so this asserts the real
+    /// `Command::current_dir` call, not the argv this function builds.
+    /// Goes through `run_npx_with_spawner`, over a `RealProcessSpawner`
+    /// scoped to the fake `npx`'s own dir: `run_npx` itself now resolves
+    /// `npx` off a real login-shell probe, which a fake on this process's
+    /// `PATH` can no longer intercept.
+    #[test]
+    fn run_npx_with_a_cwd_runs_the_process_there_or_names_the_ignored_cwd() {
+        let bin_dir = tempfile::tempdir().expect("fake bin dir");
+        let recording = bin_dir.path().join("pwd.log");
+        let fake_npx = bin_dir.path().join("npx");
+        std::fs::write(
+            &fake_npx,
+            format!("#!/bin/sh\npwd > '{}'\nexit 0\n", recording.display()),
+        )
+        .expect("write fake npx");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake_npx, std::fs::Permissions::from_mode(0o700))
+                .expect("chmod fake npx");
+        }
+
+        let target_dir = tempfile::tempdir().expect("target cwd");
+        let spawner =
+            skill_studio_host::RealProcessSpawner::with_search_path(vec![bin_dir.path().into()]);
+        let result = run_npx_with_spawner(
+            &spawner,
+            &["--version".to_string()],
+            Some(target_dir.path()),
+        );
+
+        assert!(result.is_ok(), "{result:?}");
+        let recorded_cwd = std::fs::read_to_string(&recording)
+            .expect("read recording")
+            .trim()
+            .to_string();
+        assert_eq!(
+            std::fs::canonicalize(&recorded_cwd).expect("canonicalize recorded cwd"),
+            std::fs::canonicalize(target_dir.path()).expect("canonicalize target cwd"),
+            "run_npx must launch the process in the given cwd, not wherever the test process runs"
         );
     }
 
@@ -2998,7 +3497,7 @@ mod tests {
         );
 
         let ledger = FakeLedger::default();
-        unfork_skill_with(&home, &app_data, "find-bugs", &ledger).unwrap();
+        unfork_skill_with(&test_guard(&home), &home, &app_data, "find-bugs", &ledger).unwrap();
 
         assert!(!read_fork_registry(&home)
             .unwrap()
@@ -3008,54 +3507,6 @@ mod tests {
         let calls = ledger.reinstall_calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0.declared_ref.as_deref(), Some("v1.2.3"));
-    }
-
-    #[test]
-    fn unfork_drops_a_stale_trial_record() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let app_data = tmp.path().join("data");
-        let mut registry = read_fork_registry(&home).unwrap();
-        registry.forks.insert(
-            "find-bugs".to_string(),
-            ForkRecord {
-                deployment_id: String::new(),
-                skill_dir: PathBuf::new(),
-                forked_at: "2026-01-01T00:00:00Z".to_string(),
-                origin_tool: OriginTool::Dotagents,
-                origin_source: "getsentry/find-bugs".to_string(),
-                repo: "getsentry/find-bugs".to_string(),
-                path: "skills/find-bugs".to_string(),
-                declared_ref: None,
-                base_commit: "a".repeat(40),
-            },
-        );
-        let now = chrono::Utc::now();
-        registry.trials.insert(
-            trial_key(TrialScope::Global, "find-bugs"),
-            super::super::skill_fork_registry::TrialRecord {
-                deployment_id: String::new(),
-                started_at: now.to_rfc3339(),
-                expires_at: (now + chrono::Duration::hours(24)).to_rfc3339(),
-                status: super::super::skill_fork_registry::TrialStatus::Active,
-                method: super::super::skill_fork_registry::AddMethod::Copy,
-                scope: super::super::skill_fork_registry::TrialScope::Global,
-                project_path: None,
-                skill_dir: home.join(".agents/skills/find-bugs"),
-                deployment_fingerprint: String::new(),
-                claude_link: None,
-                claude_link_target: None,
-            },
-        );
-        write_fork_registry(&home, &registry).unwrap();
-
-        let ledger = FakeLedger::default();
-        unfork_skill_with(&home, &app_data, "find-bugs", &ledger).unwrap();
-
-        assert!(!read_fork_registry(&home)
-            .unwrap()
-            .trials
-            .contains_key(&trial_key(TrialScope::Global, "find-bugs")));
     }
 
     #[test]
@@ -3081,7 +3532,7 @@ mod tests {
         write_fork_registry(&home, &registry).unwrap();
 
         let ledger = FakeLedger::default();
-        unfork_skill_with(&home, &app_data, "find-bugs", &ledger).unwrap();
+        unfork_skill_with(&test_guard(&home), &home, &app_data, "find-bugs", &ledger).unwrap();
         let calls = ledger.reinstall_calls.lock().unwrap();
         assert_eq!(calls[0].0.declared_ref, None);
     }
@@ -3135,5 +3586,83 @@ mod tests {
 
         let err = locate_extracted_skill_dir(&extract_dir, "../../etc").unwrap_err();
         assert!(err.contains("outside") || err.contains("not found"));
+    }
+
+    fn extraction_with(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        for (relative, body) in files {
+            write_file(&tmp.path().join("owner-repo-abc1234").join(relative), body);
+        }
+        tmp
+    }
+
+    /// Flow: a Copy install sends the bare skill name as the path, and the repo
+    /// keeps the skill under `skills/<name>`. Expectation: the folder is found
+    /// by name. Failure means the install stops with "<name> was not found in
+    /// the fetched tarball" for every repo that nests its skills.
+    #[test]
+    fn locate_extracted_skill_dir_falls_back_to_a_nested_folder_named_like_the_skill_or_reports_not_found(
+    ) {
+        let tmp = extraction_with(&[
+            ("skills/find-bugs/SKILL.md", "body"),
+            ("skills/other/SKILL.md", "body"),
+        ]);
+
+        let found = locate_extracted_skill_dir(tmp.path(), "find-bugs").unwrap();
+        assert!(found.ends_with("skills/find-bugs"), "{found:?}");
+    }
+
+    #[test]
+    fn locate_extracted_skill_dir_matches_a_skill_by_frontmatter_name_when_no_folder_carries_it() {
+        let tmp = extraction_with(&[
+            (
+                "skills/renamed-folder/SKILL.md",
+                "---\nname: find-bugs\ndescription: d\n---\nbody",
+            ),
+            ("skills/other/SKILL.md", "---\nname: other\n---\nbody"),
+        ]);
+
+        let found = locate_extracted_skill_dir(tmp.path(), "find-bugs").unwrap();
+        assert!(found.ends_with("skills/renamed-folder"), "{found:?}");
+    }
+
+    #[test]
+    fn locate_extracted_skill_dir_prefers_the_exact_path_over_a_nested_match() {
+        let tmp = extraction_with(&[
+            ("find-bugs/SKILL.md", "exact"),
+            ("skills/find-bugs/SKILL.md", "nested"),
+        ]);
+
+        let found = locate_extracted_skill_dir(tmp.path(), "find-bugs").unwrap();
+        assert_eq!(fs::read_to_string(found.join("SKILL.md")).unwrap(), "exact");
+    }
+
+    #[test]
+    fn locate_extracted_skill_dir_names_every_candidate_when_several_folders_match() {
+        let tmp = extraction_with(&[
+            ("skills/find-bugs/SKILL.md", "a"),
+            ("plugins/x/skills/find-bugs/SKILL.md", "b"),
+        ]);
+
+        let err = locate_extracted_skill_dir(tmp.path(), "find-bugs").unwrap_err();
+        assert!(err.contains("skills/find-bugs"), "{err}");
+        assert!(err.contains("plugins/x/skills/find-bugs"), "{err}");
+    }
+
+    #[test]
+    fn locate_extracted_skill_dir_keeps_the_not_found_error_and_skips_node_modules_and_symlinks() {
+        let tmp = extraction_with(&[
+            ("node_modules/pkg/find-bugs/SKILL.md", "vendored"),
+            ("skills/other/SKILL.md", "body"),
+        ]);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            tmp.path().join("owner-repo-abc1234/skills/other"),
+            tmp.path().join("owner-repo-abc1234/skills/find-bugs"),
+        )
+        .unwrap();
+
+        let err = locate_extracted_skill_dir(tmp.path(), "find-bugs").unwrap_err();
+        assert_eq!(err, "find-bugs was not found in the fetched tarball");
     }
 }

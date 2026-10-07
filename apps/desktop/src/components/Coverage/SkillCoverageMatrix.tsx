@@ -11,7 +11,9 @@ import { TooltipControl } from "../ui/TooltipControl";
 
 interface SkillCoverageMatrixProps {
   skills: InstalledSkill[];
-  onSelectSkill: (name: string) => void;
+  onSelectSkill: (name: string, deploymentPath?: string) => void;
+  /** The copy a row opens on, so a scoped view never opens a copy from another scope. */
+  deploymentPathForSkill?: (skill: InstalledSkill) => string | undefined;
 }
 
 /** Tooltip / cell title text, shared by the header-adjacent legend and each cell. */
@@ -60,7 +62,11 @@ const HEADER_CELL_CLASS =
   "sticky top-0 z-10 h-9 border-b border-border-subtle bg-bg-secondary px-2.5 text-center text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase";
 const CELL_CLASS = "h-9 border-b border-border-subtle px-2.5 group-hover:bg-bg-hover";
 
-export function SkillCoverageMatrix({ skills, onSelectSkill }: SkillCoverageMatrixProps) {
+export function SkillCoverageMatrix({
+  skills,
+  onSelectSkill,
+  deploymentPathForSkill,
+}: SkillCoverageMatrixProps) {
   const sorted = [...skills].sort((a, b) => a.name.localeCompare(b.name));
   const rows = agentMatrix(sorted);
 
@@ -73,6 +79,7 @@ export function SkillCoverageMatrix({ skills, onSelectSkill }: SkillCoverageMatr
             <th className={HEADER_CELL_CLASS}>
               <TooltipControl content="Universal folder (.agents/skills)">
                 <span
+                  role="img"
                   aria-label="Universal folder"
                   className="inline-flex items-center justify-center"
                 >
@@ -85,7 +92,11 @@ export function SkillCoverageMatrix({ skills, onSelectSkill }: SkillCoverageMatr
               return (
                 <th key={label} className={HEADER_CELL_CLASS}>
                   <TooltipControl content={label}>
-                    <span aria-label={label} className="inline-flex items-center justify-center">
+                    <span
+                      role="img"
+                      aria-label={label}
+                      className="inline-flex items-center justify-center"
+                    >
                       {harnessId ? <HarnessIcon harness={harnessId} size={15} /> : label}
                     </span>
                   </TooltipControl>
@@ -101,11 +112,11 @@ export function SkillCoverageMatrix({ skills, onSelectSkill }: SkillCoverageMatr
               className="group cursor-pointer"
               tabIndex={0}
               role="button"
-              onClick={() => onSelectSkill(skill.name)}
+              onClick={() => onSelectSkill(skill.name, deploymentPathForSkill?.(skill))}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  onSelectSkill(skill.name);
+                  onSelectSkill(skill.name, deploymentPathForSkill?.(skill));
                 }
               }}
             >

@@ -6,7 +6,7 @@
 // `[[skills]]` row for provenance on the ones dotagents, skills.sh, or a
 // fork manages (fork = both a row for the origin and a bundled copy of the
 // edits), plus a generated `README.md`. `create`/`update`/`publish`/`delete`
-// all take `ForkMutationLock` and write the registry
+// all take a per-root write lease and write the registry
 // (`~/.agents/skill-studio.json`) last, temp+rename via
 // `skill_fork_registry::write_fork_registry`. `import_skill_pack` is the
 // read side: given "owner/repo", it resolves one commit, reads that commit's
@@ -22,33 +22,36 @@
 // ============================================================================
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use ulid::Ulid;
 
+use skill_studio_core::dotagents_ledger;
+use skill_studio_core::lock_file;
+
 use super::agents::AgentId;
 use super::commands::dotagents_add_args;
-use super::dotagents_ledger;
 use super::gh_cli::{run_gh, GhError};
-use super::lock_file;
-use super::skill_add::{maybe_claude_code_symlink, CommandRunner, RealCommandRunner};
 use super::skill_agent_runner::validate_skill_dir_name;
 use super::skill_deployment::SkillDestination;
 use super::skill_dto::InstallScope;
-use super::skill_fork::ForkMutationLock;
 use super::skill_fork_registry::{self, PackMember, PackRecord};
+use super::skill_fs::maybe_claude_code_symlink;
 use super::skill_fs::{copy_dir_all, copy_dir_preserving_symlinks};
+use super::skill_process::{CommandRunner, RealCommandRunner};
 use super::skill_refresh;
 use super::skill_trust_policy::{
-    normalize_confirmation_identity, record_trusted_dotagents_sources,
+    normalize_confirmation_identity, record_trusted_dotagents_sources_locked,
     require_trusted_dotagents_identity,
 };
 use super::skill_update_check;
@@ -58,7 +61,7 @@ use super::skill_update_check;
 // ============================================================================
 
 /// One skill pack, as sent to the frontend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PackInfo {
     pub name: String,
     pub created_at: String,
@@ -93,7 +96,7 @@ pub struct PackMemberInput {
 
 /// Result of `update_skill_pack`: whether the rebuilt tree actually differed
 /// from the pack's last commit.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct UpdatePackResult {
     pub changed: bool,
     pub pack: PackInfo,
@@ -102,7 +105,7 @@ pub struct UpdatePackResult {
 /// Result of `import_skill_pack`: which names came from the repo's own
 /// `skills/` tree (`--all`) versus a `[[skills]]` row pointing elsewhere,
 /// and any per-row failures (a partial import still reports what worked).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct ImportResult {
     pub bundled: Vec<String>,
     pub referenced: Vec<String>,
@@ -111,7 +114,7 @@ pub struct ImportResult {
 
 /// The complete pack import request. Trust confirmation must repeat this
 /// value so a token cannot authorize a changed target or source.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PackImportRequest {
     pub source: String,
     pub agents: Vec<AgentId>,
@@ -123,7 +126,7 @@ pub struct PackImportRequest {
 }
 
 /// Pack import either completes immediately or pauses for explicit trust.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub enum PackImportPreflightResult {
     Imported {
@@ -190,7 +193,10 @@ pub(crate) fn validate_pack_name(name: &str) -> Result<&str, String> {
     if name.is_empty() || name.len() > 64 {
         return Err(format!("Invalid pack name: {name:?}"));
     }
-    let first = name.chars().next().unwrap();
+    // `name.is_empty()` already returned above, so a first char exists.
+    let Some(first) = name.chars().next() else {
+        return Err(format!("Invalid pack name: {name:?}"));
+    };
     if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
         return Err(format!(
             "Pack name must start with a lowercase letter or digit, got {name:?}"
@@ -351,9 +357,7 @@ fn classify_member(home: &Path, app_data: &Path, member: &PackMember) -> MemberK
     // symlinked `$TMPDIR` (common in tests, and on macOS's `/tmp` ->
     // `/private/tmp`) makes every shared member look like a project one.
     let shared_path = shared_skills_dir(home).join(&member.name);
-    let is_shared = fs::canonicalize(&shared_path)
-        .map(|canonical| canonical == member.path)
-        .unwrap_or(false);
+    let is_shared = fs::canonicalize(&shared_path).is_ok_and(|canonical| canonical == member.path);
     if !is_shared {
         return MemberKind::Manual;
     }
@@ -371,7 +375,9 @@ fn classify_shared_member(home: &Path, app_data: &Path, name: &str) -> MemberKin
     }
 
     let agents_dir = home.join(".agents");
-    let dotagents_skills = dotagents_ledger::read_dotagents_ledger(&agents_dir).unwrap_or_default();
+    let fs = skill_studio_host::RealFs::new();
+    let dotagents_skills =
+        dotagents_ledger::read_dotagents_ledger(&fs, &agents_dir).unwrap_or_default();
     if let Some(skill) = dotagents_skills.into_iter().find(|s| s.name == name) {
         // A resolved commit pins the pack to exactly what's installed;
         // `declared_ref` (a branch, or nothing at all) is only a fallback.
@@ -383,9 +389,9 @@ fn classify_shared_member(home: &Path, app_data: &Path, name: &str) -> MemberKin
         };
     }
 
-    let lock_path = agents_dir.join(".skill-lock.json");
+    let lock_path = lock_file::lock_file_path_in(&agents_dir);
     let lock =
-        lock_file::read_lock_file_at(&lock_path).unwrap_or_else(|_| lock_file::SkillLockFile {
+        lock_file::read_lock_file(&fs, &lock_path).unwrap_or_else(|_| lock_file::SkillLockFile {
             version: 3,
             skills: std::collections::HashMap::new(),
         });
@@ -680,6 +686,7 @@ impl PublishConfirm for RealPublishConfirm<'_> {
 /// `publish_skill_pack` adds one later), then records the pack in the
 /// registry last.
 pub(crate) fn create_skill_pack_with(
+    guard: &super::write_lease::WriteLeaseGuard,
     home: &Path,
     app_data: &Path,
     name: &str,
@@ -713,7 +720,7 @@ pub(crate) fn create_skill_pack_with(
         skills: Vec::new(),
     };
     registry.packs.insert(name.to_string(), record.clone());
-    skill_fork_registry::write_fork_registry(home, &registry)?;
+    skill_fork_registry::write_fork_registry_locked(guard, home, &registry)?;
 
     Ok(PackInfo::from_record(home, name, &record))
 }
@@ -758,7 +765,9 @@ pub(crate) fn update_skill_pack_with(
 /// `gh`/`git` call. Creates the GitHub repo (and pushes) the first time,
 /// records `repo` only once `gh repo create` actually succeeds; a later call
 /// just pushes.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn publish_skill_pack_with(
+    guard: &super::write_lease::WriteLeaseGuard,
     home: &Path,
     name: &str,
     visibility: &str,
@@ -800,14 +809,18 @@ pub(crate) fn publish_skill_pack_with(
     let mut updated = record;
     updated.repo = Some(owner_repo);
     registry.packs.insert(name.to_string(), updated.clone());
-    skill_fork_registry::write_fork_registry(home, &registry)?;
+    skill_fork_registry::write_fork_registry_locked(guard, home, &registry)?;
 
     Ok(PackInfo::from_record(home, name, &updated))
 }
 
 /// `delete_skill_pack`'s core - local only, never touches GitHub even when
 /// `repo` is set.
-pub(crate) fn delete_skill_pack_with(home: &Path, name: &str) -> Result<(), String> {
+pub(crate) fn delete_skill_pack_with(
+    guard: &super::write_lease::WriteLeaseGuard,
+    home: &Path,
+    name: &str,
+) -> Result<(), String> {
     validate_pack_name(name)?;
     let mut registry = skill_fork_registry::read_fork_registry(home)?;
     let record = registry
@@ -823,7 +836,7 @@ pub(crate) fn delete_skill_pack_with(home: &Path, name: &str) -> Result<(), Stri
             .map_err(|e| format!("Failed to remove {}: {e}", record.dir.display()))?;
     }
     registry.packs.remove(name);
-    skill_fork_registry::write_fork_registry(home, &registry)
+    skill_fork_registry::write_fork_registry_locked(guard, home, &registry)
 }
 
 /// One `agents.toml` `[[skills]]` row, as read back from an imported repo -
@@ -925,7 +938,7 @@ fn dir_entry_names(dir: &Path) -> BTreeSet<String> {
     fs::read_dir(dir)
         .into_iter()
         .flatten()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter_map(|e| e.file_name().into_string().ok())
         .collect()
 }
@@ -968,11 +981,15 @@ fn manifest_text_hash(text: Option<&str>) -> String {
         }
         None => digest.update([0]),
     }
+    let digest = digest.finalize();
+    // One `write!` per byte into a pre-sized `String`, rather than collecting
+    // a `Vec<String>` of two-char fragments.
     digest
-        .finalize()
         .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+        .fold(String::with_capacity(digest.len() * 2), |mut acc, byte| {
+            let _ = write!(acc, "{byte:02x}");
+            acc
+        })
 }
 
 fn validate_pack_commit_sha(commit: &str) -> Result<String, String> {
@@ -1265,11 +1282,11 @@ fn execute_prepared_pack_import(
 
 fn execute_and_cleanup_pack_import(
     home: &Path,
-    prepared: PreparedPackImport,
+    prepared: &PreparedPackImport,
     agents: &[AgentId],
     runner: &dyn CommandRunner,
 ) -> Result<ImportResult, String> {
-    let result = execute_prepared_pack_import(home, &prepared, agents, runner);
+    let result = execute_prepared_pack_import(home, prepared, agents, runner);
     if let Some(snapshot) = &prepared.local_snapshot {
         cleanup_local_pack_snapshot(home, snapshot);
     }
@@ -1358,7 +1375,7 @@ pub(crate) fn import_skill_pack_with(
         cleanup_prepared_pack_import(home, &prepared);
         return Err(error);
     }
-    execute_and_cleanup_pack_import(home, prepared, agents, runner)
+    execute_and_cleanup_pack_import(home, &prepared, agents, runner)
 }
 
 fn prune_pack_trust_tokens(
@@ -1400,7 +1417,7 @@ fn preflight_pack_import_with(
     gh: &dyn GhContentsFetch,
     runner: &dyn CommandRunner,
     state: &PackImportTrustState,
-    fork_lock: &ForkMutationLock,
+    write_lease: &super::write_lease::WriteLease,
 ) -> Result<PackImportPreflightResult, String> {
     validate_pack_import_request(&request)?;
     let mut prepared = prepare_pack_import(home, &request.source, gh, None)?;
@@ -1412,7 +1429,7 @@ fn preflight_pack_import_with(
         }
     };
     if all_trusted {
-        let _guard = match fork_lock.try_acquire() {
+        let _guard = match write_lease.try_acquire(home) {
             Ok(guard) => guard,
             Err(error) => {
                 cleanup_prepared_pack_import(home, &prepared);
@@ -1434,7 +1451,7 @@ fn preflight_pack_import_with(
             cleanup_prepared_pack_import(home, &prepared);
             return Err("Pack repository trust changed before import".to_string());
         }
-        return execute_and_cleanup_pack_import(home, prepared, &request.agents, runner)
+        return execute_and_cleanup_pack_import(home, &prepared, &request.agents, runner)
             .map(|result| PackImportPreflightResult::Imported { result });
     }
 
@@ -1446,12 +1463,9 @@ fn preflight_pack_import_with(
             return Err(error);
         }
     }
-    let mut tokens = match state.0.lock() {
-        Ok(tokens) => tokens,
-        Err(_) => {
-            cleanup_prepared_pack_import(home, &prepared);
-            return Err("Pack trust token state is unavailable".to_string());
-        }
+    let Ok(mut tokens) = state.0.lock() else {
+        cleanup_prepared_pack_import(home, &prepared);
+        return Err("Pack trust token state is unavailable".to_string());
     };
     prune_pack_trust_tokens(home, &mut tokens, Instant::now());
     tokens.insert(
@@ -1549,13 +1563,13 @@ pub fn reconcile_pack_import_staging_at_startup(home: &Path) -> Result<usize, St
 fn confirm_pack_import_trust_with(
     home: &Path,
     confirmation_token: &str,
-    request: PackImportRequest,
+    request: &PackImportRequest,
     gh: &dyn GhContentsFetch,
     runner: &dyn CommandRunner,
     state: &PackImportTrustState,
-    fork_lock: &ForkMutationLock,
+    write_lease: &super::write_lease::WriteLease,
 ) -> Result<ImportResult, String> {
-    validate_pack_import_request(&request)?;
+    validate_pack_import_request(request)?;
     let pending = {
         let mut tokens = state
             .0
@@ -1566,15 +1580,16 @@ fn confirm_pack_import_trust_with(
         let pending = tokens.get(confirmation_token).ok_or_else(|| {
             "Pack trust confirmation is invalid, expired, or already used".to_string()
         })?;
-        if pending.request != request {
+        if pending.request != *request {
             return Err("Pack trust confirmation does not match this import request".to_string());
         }
-        tokens
-            .remove(confirmation_token)
-            .expect("matching pack trust token remains while token state is locked")
+        tokens.remove(confirmation_token).ok_or_else(|| {
+            "Pack trust token vanished while its state was locked; request a new confirmation"
+                .to_string()
+        })?
     };
 
-    let _guard = match fork_lock.try_acquire() {
+    let guard = match write_lease.try_acquire(home) {
         Ok(guard) => guard,
         Err(error) => {
             cleanup_prepared_pack_import(home, &pending.prepared);
@@ -1587,7 +1602,9 @@ fn confirm_pack_import_trust_with(
         cleanup_prepared_pack_import(home, &pending.prepared);
         return Err(error);
     }
-    if let Err(error) = record_trusted_dotagents_sources(home, &pending.prepared.identities) {
+    if let Err(error) =
+        record_trusted_dotagents_sources_locked(&guard, home, &pending.prepared.identities)
+    {
         cleanup_prepared_pack_import(home, &pending.prepared);
         return Err(error);
     }
@@ -1597,7 +1614,7 @@ fn confirm_pack_import_trust_with(
             return Err(error.to_string());
         }
     }
-    execute_and_cleanup_pack_import(home, pending.prepared, &request.agents, runner)
+    execute_and_cleanup_pack_import(home, &pending.prepared, &request.agents, runner)
 }
 
 // ============================================================================
@@ -1605,144 +1622,177 @@ fn confirm_pack_import_trust_with(
 // ============================================================================
 
 #[tauri::command]
-pub fn create_skill_pack(
+pub async fn create_skill_pack(
     name: String,
     members: Vec<PackMemberInput>,
     app: tauri::AppHandle,
-    fork_lock: tauri::State<ForkMutationLock>,
 ) -> Result<PackInfo, String> {
-    let _guard = fork_lock.try_acquire()?;
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not resolve app data dir: {e}"))?;
-    create_skill_pack_with(&home, &app_data, &name, &members, &RealGitRunner)
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "create_skill_pack", move || {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let write_lease = super::write_lease::WriteLease::default();
+        let guard = write_lease.try_acquire(&home)?;
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Could not resolve app data dir: {e}"))?;
+        create_skill_pack_with(&guard, &home, &app_data, &name, &members, &RealGitRunner)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_skill_pack(
+pub async fn update_skill_pack(
     name: String,
     app: tauri::AppHandle,
-    fork_lock: tauri::State<ForkMutationLock>,
 ) -> Result<UpdatePackResult, String> {
-    let _guard = fork_lock.try_acquire()?;
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not resolve app data dir: {e}"))?;
-    update_skill_pack_with(&home, &app_data, &name, &RealGitRunner)
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "update_skill_pack", move || {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let write_lease = super::write_lease::WriteLease::default();
+        let _guard = write_lease.try_acquire(&home)?;
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Could not resolve app data dir: {e}"))?;
+        update_skill_pack_with(&home, &app_data, &name, &RealGitRunner)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn publish_skill_pack(
+pub async fn publish_skill_pack(
     name: String,
     visibility: String,
     app: tauri::AppHandle,
-    fork_lock: tauri::State<ForkMutationLock>,
 ) -> Result<PackInfo, String> {
-    let _guard = fork_lock.try_acquire()?;
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let gh_bin =
-        skill_update_check::resolve_gh_binary().ok_or_else(|| "gh is not installed".to_string())?;
-    publish_skill_pack_with(
-        &home,
-        &name,
-        &visibility,
-        &RealGitRunner,
-        &RealGhRepoCreate { gh_bin },
-        &RealPublishConfirm { app: &app },
-    )
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "publish_skill_pack", move || {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let write_lease = super::write_lease::WriteLease::default();
+        let guard = write_lease.try_acquire(&home)?;
+        let gh_bin = skill_update_check::resolve_gh_binary()
+            .ok_or_else(|| "gh is not installed".to_string())?;
+        publish_skill_pack_with(
+            &guard,
+            &home,
+            &name,
+            &visibility,
+            &RealGitRunner,
+            &RealGhRepoCreate { gh_bin },
+            &RealPublishConfirm { app: &app },
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_skill_pack(
-    name: String,
-    fork_lock: tauri::State<ForkMutationLock>,
-) -> Result<(), String> {
-    let _guard = fork_lock.try_acquire()?;
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    delete_skill_pack_with(&home, &name)
+pub async fn delete_skill_pack(name: String, app: tauri::AppHandle) -> Result<(), String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "delete_skill_pack", move || {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let write_lease = super::write_lease::WriteLease::default();
+        let guard = write_lease.try_acquire(&home)?;
+        delete_skill_pack_with(&guard, &home, &name)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn import_skill_pack(
+pub async fn import_skill_pack(
     request: PackImportRequest,
     app: tauri::AppHandle,
-    trust_state: tauri::State<PackImportTrustState>,
-    fork_lock: tauri::State<ForkMutationLock>,
 ) -> Result<PackImportPreflightResult, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let gh_bin = if validate_pack_manifest_source(&request.source).is_ok() {
-        skill_update_check::resolve_gh_binary().ok_or_else(|| "gh is not installed".to_string())?
-    } else {
-        PathBuf::new()
-    };
-    let result = preflight_pack_import_with(
-        &home,
-        request,
-        &RealGhContentsFetch { gh_bin },
-        &RealCommandRunner::new(),
-        &trust_state,
-        &fork_lock,
-    )?;
-    if matches!(result, PackImportPreflightResult::Imported { .. }) {
-        skill_refresh::request_snapshot_rebuild(&app);
-    }
-    Ok(result)
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "import_skill_pack", move || {
+        let trust_state = app.state::<PackImportTrustState>();
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let write_lease = super::write_lease::WriteLease::default();
+        let gh_bin = if validate_pack_manifest_source(&request.source).is_ok() {
+            skill_update_check::resolve_gh_binary()
+                .ok_or_else(|| "gh is not installed".to_string())?
+        } else {
+            PathBuf::new()
+        };
+        let result = preflight_pack_import_with(
+            &home,
+            request,
+            &RealGhContentsFetch { gh_bin },
+            &RealCommandRunner::new(),
+            &trust_state,
+            &write_lease,
+        )?;
+        if matches!(result, PackImportPreflightResult::Imported { .. }) {
+            skill_refresh::request_snapshot_rebuild(&app);
+        }
+        Ok(result)
+    })
+    .await
 }
 
 /// Consume one pack trust token, revalidate the request and manifest, record
 /// every displayed identity, then import while the mutation lock is held.
 #[tauri::command]
-pub fn confirm_skill_pack_trust(
+pub async fn confirm_skill_pack_trust(
     confirmation_token: String,
     request: PackImportRequest,
     app: tauri::AppHandle,
-    trust_state: tauri::State<PackImportTrustState>,
-    fork_lock: tauri::State<ForkMutationLock>,
 ) -> Result<ImportResult, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let gh_bin = if validate_pack_manifest_source(&request.source).is_ok() {
-        skill_update_check::resolve_gh_binary().ok_or_else(|| "gh is not installed".to_string())?
-    } else {
-        PathBuf::new()
-    };
-    let result = confirm_pack_import_trust_with(
-        &home,
-        &confirmation_token,
-        request,
-        &RealGhContentsFetch { gh_bin },
-        &RealCommandRunner::new(),
-        &trust_state,
-        &fork_lock,
-    )?;
-    skill_refresh::request_snapshot_rebuild(&app);
-    Ok(result)
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "confirm_skill_pack_trust", move || {
+        let trust_state = app.state::<PackImportTrustState>();
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let write_lease = super::write_lease::WriteLease::default();
+        let gh_bin = if validate_pack_manifest_source(&request.source).is_ok() {
+            skill_update_check::resolve_gh_binary()
+                .ok_or_else(|| "gh is not installed".to_string())?
+        } else {
+            PathBuf::new()
+        };
+        let result = confirm_pack_import_trust_with(
+            &home,
+            &confirmation_token,
+            &request,
+            &RealGhContentsFetch { gh_bin },
+            &RealCommandRunner::new(),
+            &trust_state,
+            &write_lease,
+        )?;
+        skill_refresh::request_snapshot_rebuild(&app);
+        Ok(result)
+    })
+    .await
 }
 
 /// Consume one pending pack trust token without trusting or importing it.
 #[tauri::command]
-pub fn abandon_pack_import_trust(
+pub async fn abandon_pack_import_trust(
     confirmation_token: String,
-    trust_state: tauri::State<PackImportTrustState>,
+    app: tauri::AppHandle,
 ) -> Result<bool, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    abandon_pack_import_trust_with(&home, &confirmation_token, &trust_state)
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "abandon_pack_import_trust", move || {
+        let trust_state = app.state::<PackImportTrustState>();
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        abandon_pack_import_trust_with(&home, &confirmation_token, &trust_state)
+    })
+    .await
 }
 
 /// Read-only: the Packs view's list, straight off the registry - not part of
 /// `SkillSnapshot` since packs aren't installed skills.
 #[tauri::command]
-pub fn list_skill_packs() -> Result<Vec<PackInfo>, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let registry = skill_fork_registry::read_fork_registry_or_default(&home);
-    Ok(registry
-        .packs
-        .iter()
-        .map(|(name, record)| PackInfo::from_record(&home, name, record))
-        .collect())
+pub async fn list_skill_packs(app: tauri::AppHandle) -> Result<Vec<PackInfo>, String> {
+    crate::timing_log::time_command_blocking(&app, "list_skill_packs", move || {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let registry = skill_fork_registry::read_fork_registry_or_default(&home);
+        Ok(registry
+            .packs
+            .iter()
+            .map(|(name, record)| PackInfo::from_record(&home, name, record))
+            .collect())
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -1754,6 +1804,12 @@ mod tests {
         let dir = shared_skills_dir(home).join(name);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("SKILL.md"), format!("# {name}\n")).unwrap();
+    }
+
+    fn test_guard(home: &Path) -> super::super::write_lease::WriteLeaseGuard {
+        super::super::write_lease::WriteLease::default()
+            .try_acquire(home)
+            .unwrap()
     }
 
     /// A member pointing at that name's own copy under the shared skills
@@ -1804,7 +1860,7 @@ mod tests {
             self.calls
                 .lock()
                 .unwrap()
-                .push(args.iter().map(|s| s.to_string()).collect());
+                .push(args.iter().map(std::string::ToString::to_string).collect());
             if args == ["status", "--porcelain"] {
                 Ok(self.porcelain_output.clone())
             } else {
@@ -1945,7 +2001,7 @@ mod tests {
     }
 
     impl CommandRunner for LocalSnapshotRunner {
-        fn run_npx(&self, args: &[String], _cwd: Option<&Path>) -> Result<(), String> {
+        fn run(&self, _program: &str, args: &[String], _cwd: Option<&Path>) -> Result<(), String> {
             if args.contains(&"--all".to_string()) {
                 let source = Path::new(&args[3]);
                 *self.installed_skill.lock().unwrap() =
@@ -1964,7 +2020,7 @@ mod tests {
     }
 
     impl CommandRunner for FakeRunner {
-        fn run_npx(&self, args: &[String], _cwd: Option<&Path>) -> Result<(), String> {
+        fn run(&self, _program: &str, args: &[String], _cwd: Option<&Path>) -> Result<(), String> {
             self.calls.lock().unwrap().push(args.to_vec());
             if args.contains(&"--all".to_string()) {
                 for name in &self.all_creates {
@@ -2055,6 +2111,7 @@ ref = "1111111111111111111111111111111111aaaa"
 
         let git = FakeGit::new("");
         let info = create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -2100,6 +2157,7 @@ path = "skills/find-bugs"
 
         let git = FakeGit::new("");
         let info = create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -2131,6 +2189,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
 
         let git = FakeGit::new("");
         let info = create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -2200,6 +2259,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
 
         let git = FakeGit::new("");
         let info = create_skill_pack_with(
+            &test_guard(home),
             home,
             &app_data,
             "my-skills",
@@ -2240,6 +2300,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
 
         let git = FakeGit::new("");
         let info = create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -2277,6 +2338,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
 
         let git = FakeGit::new("");
         let info = create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -2300,6 +2362,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
 
         let git = FakeGit::new("");
         let info = create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -2324,6 +2387,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
 
         let git = FakeGit::new("");
         let err = create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -2345,6 +2409,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
         write_shared_skill(home, "some-skill");
         let app_data = tmp.path().join("app-data");
         create_skill_pack_with(
+            &test_guard(home),
             home,
             &app_data,
             "my-skills",
@@ -2365,6 +2430,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
         write_shared_skill(home, "some-skill");
         let app_data = tmp.path().join("app-data");
         create_skill_pack_with(
+            &test_guard(home),
             home,
             &app_data,
             "my-skills",
@@ -2388,6 +2454,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
         let home = tmp.path();
         write_shared_skill(home, "some-skill");
         create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -2399,6 +2466,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
         let gh = FakeGhRepoCreate::new(Err(GhError::NotLoggedIn));
         let confirm = FakeConfirm { result: true };
         let err = publish_skill_pack_with(
+            &test_guard(home),
             home,
             "my-skills",
             "private",
@@ -2419,6 +2487,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
         let home = tmp.path();
         write_shared_skill(home, "some-skill");
         create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -2430,6 +2499,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
         let gh = FakeGhRepoCreate::new(Ok("someone/my-skills".to_string()));
         let confirm = FakeConfirm { result: true };
         let info = publish_skill_pack_with(
+            &test_guard(home),
             home,
             "my-skills",
             "private",
@@ -2448,7 +2518,16 @@ resolved_commit = "3333333333333333333333333333333333cccc"
 
         // A second publish, now that `repo` is set, only pushes.
         let git = FakeGit::new("");
-        publish_skill_pack_with(home, "my-skills", "private", &git, &gh, &confirm).unwrap();
+        publish_skill_pack_with(
+            &test_guard(home),
+            home,
+            "my-skills",
+            "private",
+            &git,
+            &gh,
+            &confirm,
+        )
+        .unwrap();
         assert!(git
             .calls
             .lock()
@@ -2467,6 +2546,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
         let home = tmp.path();
         write_shared_skill(home, "some-skill");
         let info = create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -2475,7 +2555,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
         )
         .unwrap();
 
-        delete_skill_pack_with(home, "my-skills").unwrap();
+        delete_skill_pack_with(&test_guard(home), home, "my-skills").unwrap();
 
         assert!(!Path::new(&info.dir).exists());
         let registry = skill_fork_registry::read_fork_registry(home).unwrap();
@@ -2517,7 +2597,7 @@ source = "someone/repo"
                 &gh,
                 &runner,
                 &state,
-                &ForkMutationLock::default(),
+                &super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases")),
             )
             .unwrap(),
         );
@@ -2539,14 +2619,15 @@ source = "someone/repo"
             toml: Some("[[skills]]\nname = \"child\"\nsource = \"someone/child\"\n".to_string()),
         };
         let state = PackImportTrustState::default();
-        let lock = ForkMutationLock::default();
+        let lock =
+            super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases"));
         let request = pack_import_request("someone/repo");
         let (_, token) = trust_token(
             preflight_pack_import_with(tmp.path(), request.clone(), &gh, &runner, &state, &lock)
                 .unwrap(),
         );
 
-        confirm_pack_import_trust_with(tmp.path(), &token, request, &gh, &runner, &state, &lock)
+        confirm_pack_import_trust_with(tmp.path(), &token, &request, &gh, &runner, &state, &lock)
             .unwrap();
 
         assert_eq!(runner.calls.lock().unwrap().len(), 2);
@@ -2574,14 +2655,15 @@ source = "someone/repo"
             fail_sources: vec![],
         };
         let state = PackImportTrustState::default();
-        let lock = ForkMutationLock::default();
+        let lock =
+            super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases"));
         let request = pack_import_request("someone/repo");
         let (_, token) = trust_token(
             preflight_pack_import_with(tmp.path(), request.clone(), &gh, &runner, &state, &lock)
                 .unwrap(),
         );
 
-        confirm_pack_import_trust_with(tmp.path(), &token, request, &gh, &runner, &state, &lock)
+        confirm_pack_import_trust_with(tmp.path(), &token, &request, &gh, &runner, &state, &lock)
             .unwrap();
 
         assert_eq!(*gh.heads.lock().unwrap(), vec!["2".repeat(40)]);
@@ -2611,7 +2693,8 @@ source = "someone/repo"
             fail_sources: vec![],
         };
         let state = PackImportTrustState::default();
-        let lock = ForkMutationLock::default();
+        let lock =
+            super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases"));
         let request = pack_import_request("someone/repo");
         let (_, token) = trust_token(
             preflight_pack_import_with(tmp.path(), request.clone(), &gh, &runner, &state, &lock)
@@ -2621,7 +2704,7 @@ source = "someone/repo"
         let error = confirm_pack_import_trust_with(
             tmp.path(),
             &token,
-            request,
+            &request,
             &gh,
             &runner,
             &state,
@@ -2648,7 +2731,8 @@ source = "someone/repo"
             installed_skill: Mutex::new(None),
         };
         let state = PackImportTrustState::default();
-        let lock = ForkMutationLock::default();
+        let lock =
+            super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases"));
         let request = pack_import_request(&local_pack.to_string_lossy());
         let (_, token) = trust_token(
             preflight_pack_import_with(
@@ -2666,7 +2750,7 @@ source = "someone/repo"
         confirm_pack_import_trust_with(
             tmp.path(),
             &token,
-            request,
+            &request,
             &FakeGhContents { toml: None },
             &runner,
             &state,
@@ -2743,9 +2827,8 @@ source = "someone/repo"
         fs::create_dir_all(&local_pack).unwrap();
         let _listener = UnixListener::bind(local_pack.join("special.socket")).unwrap();
 
-        let error = match snapshot_local_pack(tmp.path(), &local_pack.to_string_lossy()) {
-            Ok(_) => panic!("special file snapshot unexpectedly succeeded"),
-            Err(error) => error,
+        let Err(error) = snapshot_local_pack(tmp.path(), &local_pack.to_string_lossy()) else {
+            panic!("special file snapshot unexpectedly succeeded")
         };
 
         assert!(error.contains("Refused to copy unsupported special file"));
@@ -2764,7 +2847,8 @@ source = "someone/repo"
         )
         .unwrap();
         let state = PackImportTrustState::default();
-        let lock = ForkMutationLock::default();
+        let lock =
+            super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases"));
         let request = pack_import_request(&local_pack.to_string_lossy());
         let runner = FakeRunner {
             calls: Mutex::new(Vec::new()),
@@ -2799,7 +2883,7 @@ source = "someone/repo"
         assert!(confirm_pack_import_trust_with(
             tmp.path(),
             &token,
-            request,
+            &request,
             &FakeGhContents { toml: None },
             &runner,
             &state,
@@ -2852,7 +2936,7 @@ source = "someone/repo"
                 &FakeGhContents { toml: None },
                 &runner,
                 &state,
-                &ForkMutationLock::default(),
+                &super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases")),
             )
             .unwrap(),
         );
@@ -2893,7 +2977,8 @@ source = "someone/repo"
         )
         .unwrap();
         let state = PackImportTrustState::default();
-        let lock = ForkMutationLock::default();
+        let lock =
+            super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases"));
         let runner = FakeRunner {
             calls: Mutex::new(Vec::new()),
             home: tmp.path().to_path_buf(),
@@ -2920,7 +3005,7 @@ source = "someone/repo"
                 confirm_pack_import_trust_with(
                     tmp.path(),
                     &token,
-                    request,
+                    &request,
                     &FakeGhContents { toml: None },
                     &runner,
                     &state,
@@ -2963,7 +3048,7 @@ source = "someone/repo"
                 &FakeGhContents { toml: None },
                 &runner,
                 &state,
-                &ForkMutationLock::default(),
+                &super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases")),
             )
             .unwrap(),
         );
@@ -3035,7 +3120,7 @@ source = "someone/repo"
                 &FakeGhContents { toml: None },
                 &runner,
                 &state,
-                &ForkMutationLock::default(),
+                &super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases")),
             )
             .unwrap(),
         );
@@ -3090,7 +3175,8 @@ source = "someone/repo"
             toml: Mutex::new(vec![Some(original.to_string()), Some(changed.to_string())]),
         };
         let state = PackImportTrustState::default();
-        let lock = ForkMutationLock::default();
+        let lock =
+            super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases"));
         let request = pack_import_request("someone/repo");
         let (_, token) = trust_token(
             preflight_pack_import_with(tmp.path(), request.clone(), &gh, &runner, &state, &lock)
@@ -3101,7 +3187,7 @@ source = "someone/repo"
         assert!(confirm_pack_import_trust_with(
             tmp.path(),
             &token,
-            mismatched,
+            &mismatched,
             &gh,
             &runner,
             &state,
@@ -3112,7 +3198,7 @@ source = "someone/repo"
         assert!(confirm_pack_import_trust_with(
             tmp.path(),
             &token,
-            request.clone(),
+            &request,
             &gh,
             &runner,
             &state,
@@ -3123,7 +3209,7 @@ source = "someone/repo"
         assert!(confirm_pack_import_trust_with(
             tmp.path(),
             &token,
-            request,
+            &request,
             &gh,
             &runner,
             &state,
@@ -3145,7 +3231,8 @@ source = "someone/repo"
         };
         let gh = FakeGhContents { toml: None };
         let state = PackImportTrustState::default();
-        let lock = ForkMutationLock::default();
+        let lock =
+            super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases"));
         let request = pack_import_request("someone/repo");
         let (_, token) = trust_token(
             preflight_pack_import_with(tmp.path(), request.clone(), &gh, &runner, &state, &lock)
@@ -3157,7 +3244,7 @@ source = "someone/repo"
         )
         .unwrap();
 
-        confirm_pack_import_trust_with(tmp.path(), &token, request, &gh, &runner, &state, &lock)
+        confirm_pack_import_trust_with(tmp.path(), &token, &request, &gh, &runner, &state, &lock)
             .unwrap();
 
         assert!(require_trusted_dotagents_identity(tmp.path(), "concurrent/repo").is_ok());
@@ -3175,7 +3262,8 @@ source = "someone/repo"
         };
         let gh = FakeGhContents { toml: None };
         let state = PackImportTrustState::default();
-        let lock = ForkMutationLock::default();
+        let lock =
+            super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases"));
         let request = pack_import_request("someone/repo");
         let (_, token) = trust_token(
             preflight_pack_import_with(tmp.path(), request.clone(), &gh, &runner, &state, &lock)
@@ -3187,7 +3275,7 @@ source = "someone/repo"
             assert!(confirm_pack_import_trust_with(
                 tmp.path(),
                 invalid_token,
-                request.clone(),
+                &request,
                 &gh,
                 &runner,
                 &state,
@@ -3223,7 +3311,9 @@ source = "someone/repo"
                     &gh,
                     &runner,
                     &PackImportTrustState::default(),
-                    &ForkMutationLock::default(),
+                    &super::super::write_lease::WriteLease::with_lease_root(
+                        tmp.path().join("leases")
+                    ),
                 )
                 .unwrap(),
                 PackImportPreflightResult::Imported { .. }
@@ -3484,9 +3574,11 @@ path = "../escape"
         };
         let mut toml_text = String::new();
         for i in 0..201 {
-            toml_text.push_str(&format!(
+            // Writing to a `String` never fails.
+            let _ = write!(
+                toml_text,
                 "\n[[skills]]\nname = \"skill-{i}\"\nsource = \"someone/skill-{i}\"\n"
-            ));
+            );
         }
         let gh = FakeGhContents {
             toml: Some(toml_text),
@@ -3535,7 +3627,7 @@ path = "../escape"
         fs::write(outside.path().join("marker.txt"), "x").unwrap();
         write_pack_record_outside_packs_root(home, outside.path());
 
-        let err = delete_skill_pack_with(home, "my-skills").unwrap_err();
+        let err = delete_skill_pack_with(&test_guard(home), home, "my-skills").unwrap_err();
         assert!(err.contains("points outside"));
         assert!(outside.path().join("marker.txt").exists());
     }
@@ -3570,6 +3662,7 @@ path = "../escape"
         let gh = FakeGhRepoCreate::new(Ok("someone/my-skills".to_string()));
         let confirm = FakeConfirm { result: true };
         let err = publish_skill_pack_with(
+            &test_guard(home),
             home,
             "my-skills",
             "private",
@@ -3592,6 +3685,7 @@ path = "../escape"
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -3603,6 +3697,7 @@ path = "../escape"
         let gh = FakeGhRepoCreate::new(Ok("someone/my-skills".to_string()));
         let confirm = FakeConfirm { result: false };
         let err = publish_skill_pack_with(
+            &test_guard(home),
             home,
             "my-skills",
             "private",
@@ -3636,6 +3731,7 @@ path = "../escape"
             path: project_skill_dir.to_string_lossy().to_string(),
         };
         let info = create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -3667,6 +3763,7 @@ path = "../escape"
                 .to_string(),
         };
         let err = create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -3695,6 +3792,7 @@ path = "../escape"
             },
         ];
         let err = create_skill_pack_with(
+            &test_guard(home),
             home,
             &tmp.path().join("app-data"),
             "my-skills",
@@ -3760,9 +3858,15 @@ ref = "1111111111111111111111111111111111aaaa"
             shared_member(home, "find-bugs"),
             shared_member(home, "cool-skill"),
         ];
-        let info =
-            create_skill_pack_with(home, &app_data, "my-skills", &members, &FakeGit::new(""))
-                .unwrap();
+        let info = create_skill_pack_with(
+            &test_guard(home),
+            home,
+            &app_data,
+            "my-skills",
+            &members,
+            &FakeGit::new(""),
+        )
+        .unwrap();
 
         assert!(Path::new(&info.dir)
             .join("skills/find-bugs/SKILL.md")

@@ -1,0 +1,7735 @@
+//! Operations and the result envelope.
+//!
+//! Each operation is a plain function over a [`Runtime`] and an
+//! [`OpContext`]. Adapters wrap the result in a [`ResultEnvelope`] with
+//! [`ResultEnvelope::from_result`]; the exit status is derived, never chosen.
+
+use std::cell::Cell;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tiktoken_rs::CoreBPE;
+
+use crate::dto::{
+    CapabilitiesRequest, Completeness, DeploymentDto, Diagnosis, DriftState, EventDto,
+    FrontmatterRepairPreview, HarnessesRequest, InstalledSkillDto, Inventory, Issue, IssueKind,
+    ListEventsRequest, NextAction, Observation, ParkCheck, ParkCheckRequest, ParkOutcome,
+    ParkRequest, PluginSourceDto, RepairApplyMode, RepairApplyRequest, RepairOutcome,
+    RepairPreviewRequest, RestoreOutcome, RestoreRequest, ScanRequest, Severity, Timing,
+    UnparkOutcome, UnparkRequest,
+};
+use crate::error::{CoreError, ErrorCode, ErrorEntry};
+use crate::events::EventFilter;
+use crate::frontmatter;
+use crate::frontmatter_repair::propose_colon_scalar_repair;
+use crate::fsops;
+use crate::harness::{
+    builtin_adapters, Capabilities, CapabilityReport, DetectionPorts, DisabledBy, HarnessFacts,
+    HarnessObserved, HarnessReport, RootRole, ScopeLevel, Support, ToolAvailability,
+};
+use crate::identity::{
+    AgentId, BackingRelationship, CorrelationId, DeploymentId, DeploymentMutability, EventId,
+    Fingerprint, LifecycleOwnerKind, OwnerId, PlanId, ProjectRef, RootKind, RootRef, RootScope,
+    SkillDestination, SkillName, SourceKind, MOVE_ASIDE_DIR_NAME, PARKED_ROOT_RELATIVE,
+    UNIVERSAL_ROOT_RELATIVE,
+};
+use crate::journal::{FsJournal, PlanWriter};
+use crate::lock_file;
+use crate::ops_install;
+use crate::ownership;
+use crate::ports::{
+    acquire_shared, Clock, DirEntryFacts, ExclusiveGuard, FileKind, HistoryAccess, OpContext,
+    PlanStatus, ProcessSpec, Runtime, ScopeFs, ScopedReads,
+};
+use crate::scope::{EffectiveScope, NormalizedScope};
+use crate::SCHEMA_VERSION;
+
+/// Default number of history rows returned by `list_events`.
+pub const DEFAULT_EVENT_LIMIT: u32 = 200;
+
+/// Largest `SKILL.md` `scan` will read. A file over this size is reported as
+/// an unreadable root entry rather than truncated.
+pub const SKILL_MD_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Largest number of files `content_fingerprint` will hash per deployment.
+const MAX_FOLDER_FILES: usize = 2_000;
+/// Largest total bytes `content_fingerprint` will read per deployment.
+const MAX_FOLDER_BYTES: u64 = 64 * 1024 * 1024;
+/// Manifest filenames a plugin cache walk looks for, in priority order,
+/// per the agent-plugins.org manifest convention.
+const PLUGIN_MANIFEST_CANDIDATES: &[&str] = &[
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    ".cursor-plugin/plugin.json",
+    "plugin.json",
+];
+/// Depth `find_plugin_roots` walks below a plugin cache root before giving
+/// up on finding a manifest.
+const PLUGIN_CACHE_MAX_DEPTH: u8 = 3;
+
+/// Name of an operation, as it appears in the envelope and in MCP tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Operation {
+    /// Phase 1: inventory.
+    Scan,
+    /// Phase 1: inventory plus issues.
+    Diagnose,
+    /// Phase 1: harness facts.
+    Capabilities,
+    /// Phase 1: runtime harness detection.
+    Harnesses,
+    /// Phase 2: propose a frontmatter fix.
+    PreviewFrontmatterRepair,
+    /// Phase 2: apply a proposed fix.
+    ApplyFrontmatterRepair,
+    /// Phase 2: read history.
+    ListEvents,
+    /// Phase 2: revert one event.
+    RestoreEvent,
+    /// Phase 3: move a universal deployment to the parked root.
+    Park,
+    /// Phase 3: move a parked deployment back to the universal root.
+    Unpark,
+    /// Group 3: run the doctor invariants for one skill and repair whatever
+    /// it can.
+    FixSkill,
+    /// Group 3: find differing copies of a skill without merging them.
+    DiagnoseConflict,
+    /// Unit 3.9: take a mutable deployment off disk.
+    Remove,
+    /// Group 3: refresh one already-installed skill in place.
+    Update,
+    /// Group 3: refresh a batch of already-installed skills in place.
+    UpdateAll,
+    /// Group 3: put one skill on disk by `Copy`, `Dotagents`, or `SkillsSh`.
+    Install,
+    /// Group 3: read the saved or defaulted install method/harnesses.
+    InstallPreferences,
+    /// Unit 5.3: run all six lifecycle invariants over the whole scope.
+    Doctor,
+    /// Unit 3.4: per-install-method currency ("update available").
+    Outdated,
+    /// Unit 3.9b: prune the quarantine cap without a `remove` call.
+    SweepQuarantine,
+    /// Replace a Universal folder with one real copy per chosen harness.
+    Split,
+    /// Split a shared skill into per-agent copies, then park one agent's.
+    TurnOffForAgent,
+    /// Per-skill use counts over a rolling window. No `ops` function backs
+    /// it: the host crate's `usage_report` reads agent session history,
+    /// which the core never touches.
+    SkillUsage,
+}
+
+/// Outcome status of one call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OpStatus {
+    /// Full result.
+    Ok,
+    /// Result with gaps; `errors` explains them.
+    Partial,
+    /// No result.
+    Error,
+}
+
+/// A result type that knows whether it is complete.
+///
+/// Invariant: a `Partial` outcome maps to exit status 4 even though no
+/// error was raised.
+pub trait Outcome {
+    /// Status of this value.
+    fn status(&self) -> OpStatus {
+        OpStatus::Ok
+    }
+
+    /// True when a complete result still reports problems the user must
+    /// look at (`diagnose` with issues). Maps to exit status `1`.
+    fn found_issues(&self) -> bool {
+        false
+    }
+
+    /// The history event this outcome created, when it created one.
+    ///
+    /// Every surface builds its envelope through `from_result`, so an
+    /// outcome that answers here fills the envelope's `event_id` the same
+    /// way for the CLI, the MCP server and the desktop. An outcome that
+    /// writes nothing keeps the default.
+    fn event_id(&self) -> Option<EventId> {
+        None
+    }
+}
+
+impl Outcome for Inventory {
+    fn status(&self) -> OpStatus {
+        match self.completeness {
+            Completeness::Complete => OpStatus::Ok,
+            Completeness::Partial => OpStatus::Partial,
+        }
+    }
+}
+
+impl Outcome for Diagnosis {
+    fn status(&self) -> OpStatus {
+        self.inventory.status()
+    }
+
+    fn found_issues(&self) -> bool {
+        self.issues
+            .iter()
+            .any(|i| i.severity >= crate::dto::Severity::Warning)
+    }
+}
+
+impl Outcome for Capabilities {}
+impl Outcome for HarnessReport {}
+impl Outcome for FrontmatterRepairPreview {}
+impl Outcome for RepairOutcome {
+    fn event_id(&self) -> Option<EventId> {
+        match self {
+            // `AlreadyApplied` wrote nothing, so it records no event.
+            RepairOutcome::Applied { event_id, .. } => Some(event_id.clone()),
+            RepairOutcome::AlreadyApplied { .. } => None,
+        }
+    }
+}
+impl Outcome for Vec<EventDto> {}
+impl Outcome for RestoreOutcome {
+    fn event_id(&self) -> Option<EventId> {
+        // The restore event, not the event it reverted: `event_id` names
+        // what this call created.
+        Some(self.restore_event_id.clone())
+    }
+}
+impl Outcome for ParkOutcome {
+    fn event_id(&self) -> Option<EventId> {
+        Some(self.event_id.clone())
+    }
+}
+impl Outcome for crate::dto::DiscardOutcome {
+    fn event_id(&self) -> Option<EventId> {
+        Some(self.event_id.clone())
+    }
+}
+impl Outcome for crate::dto::SplitOutcome {
+    fn event_id(&self) -> Option<EventId> {
+        Some(self.event_id.clone())
+    }
+}
+impl Outcome for UnparkOutcome {
+    fn event_id(&self) -> Option<EventId> {
+        Some(self.event_id.clone())
+    }
+}
+impl Outcome for crate::dto::FixSkillOutcome {
+    fn found_issues(&self) -> bool {
+        !self.unrepaired.is_empty() || !self.conflicts.is_empty()
+    }
+
+    fn event_id(&self) -> Option<EventId> {
+        // A fix can apply several repairs, each its own event; the envelope
+        // names only the last one it wrote, matching the "what this call
+        // itself created" convention every other outcome follows.
+        self.applied.last().map(|applied| {
+            let crate::dto::FixApplied::FrontmatterRepair { event_id, .. } = applied;
+            event_id.clone()
+        })
+    }
+}
+impl Outcome for crate::dto::ConflictReport {
+    fn found_issues(&self) -> bool {
+        !self.conflicts.is_empty()
+    }
+}
+impl Outcome for crate::dto::DoctorReport {
+    fn found_issues(&self) -> bool {
+        !self.violations.is_empty()
+    }
+}
+impl Outcome for crate::dto::RemoveOutcome {
+    fn event_id(&self) -> Option<EventId> {
+        Some(self.event_id.clone())
+    }
+}
+impl Outcome for crate::dto::UpdateOutcome {
+    fn event_id(&self) -> Option<EventId> {
+        Some(self.event_id.clone())
+    }
+}
+impl Outcome for crate::dto::UpdateAllOutcome {
+    fn status(&self) -> OpStatus {
+        if self.errors.is_empty() {
+            OpStatus::Ok
+        } else if self.items.iter().any(|i| i.outcome.is_some()) {
+            OpStatus::Partial
+        } else {
+            OpStatus::Error
+        }
+    }
+
+    fn found_issues(&self) -> bool {
+        !self.errors.is_empty()
+    }
+}
+impl Outcome for crate::dto::InstallOutcome {
+    fn event_id(&self) -> Option<EventId> {
+        match self {
+            // `NeedsTrust` wrote nothing, so it records no event.
+            crate::dto::InstallOutcome::Installed { event_id, .. } => Some(event_id.clone()),
+            crate::dto::InstallOutcome::NeedsTrust { .. } => None,
+        }
+    }
+}
+impl Outcome for crate::dto::InstallPreferences {}
+/// `outdated`'s per-skill currency map carries no event and is never
+/// partial - a lookup failure resolves the affected skill to `Unknown`
+/// rather than raising.
+impl Outcome for std::collections::BTreeMap<String, crate::skill_update_check::OutdatedRecord> {}
+/// `sweep_quarantine` has no outcome payload of its own - it either prunes
+/// the cap or returns an error - so it wraps in an envelope over `()`,
+/// taking every `Outcome` default (always `Ok`, no event).
+impl Outcome for () {}
+
+/// The envelope every surface returns.
+///
+/// Invariant: `exit_status` is a pure function of `status` and `errors`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ResultEnvelope<T> {
+    /// Wire contract version.
+    pub schema_version: u32,
+    /// Operation name.
+    pub operation: Operation,
+    /// Scope the call ran in.
+    pub scope: EffectiveScope,
+    /// Outcome.
+    pub status: OpStatus,
+    /// Result data, `None` on error.
+    pub data: Option<T>,
+    /// Errors, empty on `Ok`.
+    pub errors: Vec<ErrorEntry>,
+    /// Request correlation id.
+    pub correlation_id: CorrelationId,
+    /// History event created by the call, when one was.
+    pub event_id: Option<EventId>,
+    /// This call's timing, taken from `ctx` at envelope-building time.
+    /// `None` only when the call failed before an op function ran at all (a
+    /// scope that failed to normalize), since every op that runs records its
+    /// own timing before returning.
+    pub timings: Option<crate::timing::OpTiming>,
+}
+
+impl<T: Outcome> ResultEnvelope<T> {
+    /// Wraps an operation result, taking `ctx`'s filed timing along with it.
+    pub fn from_result(
+        operation: Operation,
+        scope: &NormalizedScope,
+        ctx: &OpContext,
+        result: Result<T, CoreError>,
+    ) -> Self {
+        let (status, data, errors) = match result {
+            Ok(value) => {
+                let status = value.status();
+                let errors = if status == OpStatus::Partial {
+                    vec![ErrorEntry {
+                        code: ErrorCode::Incomplete,
+                        message: "some roots were not read; see observations".into(),
+                        path: None,
+                    }]
+                } else {
+                    Vec::new()
+                };
+                (status, Some(value), errors)
+            }
+            Err(err) => (OpStatus::Error, None, vec![err.sanitized(scope)]),
+        };
+        let event_id = data.as_ref().and_then(Outcome::event_id);
+        ResultEnvelope {
+            schema_version: SCHEMA_VERSION,
+            operation,
+            scope: scope.effective(),
+            status,
+            data,
+            errors,
+            correlation_id: ctx.correlation_id.clone(),
+            event_id,
+            timings: ctx.take_timing(),
+        }
+    }
+}
+
+impl<T: Outcome> ResultEnvelope<T> {
+    /// Process exit status: `0` ok, `1` ok with issues, `4` partial, else
+    /// the first error's code. Partial wins over issues.
+    pub fn exit_status(&self) -> i32 {
+        match self.status {
+            OpStatus::Ok if self.data.as_ref().is_some_and(Outcome::found_issues) => 1,
+            OpStatus::Ok => 0,
+            OpStatus::Partial => ErrorCode::Incomplete.exit_status(),
+            OpStatus::Error => self.errors.first().map_or(1, |e| e.code.exit_status()),
+        }
+    }
+}
+
+/// Reads every root in scope and returns the inventory.
+///
+/// Preconditions: shared lease within `read_timeout`. Never creates the
+/// history database, caches, or watchers. Roots that cannot be read inside
+/// the budget are reported in `observations` and make the result `Partial`.
+///
+/// Walks the catalog's [`RootRole::Own`], [`RootRole::Universal`], and
+/// [`RootRole::Legacy`] roots, plus the parked root
+/// ([`crate::identity::RootKind::Parked`]) and, inside every one of those, a
+/// [`MOVE_ASIDE_DIR_NAME`] holding directory whose children are reported
+/// disabled ([`DisabledBy::StudioMoved`]). [`RootRole::PluginCache`] roots
+/// are walked separately by [`plugin_scan_targets`]. `RootRole::CrossHarness`
+/// stays unwalked: it names a root another harness owns that this harness
+/// also reads, and walking it again under this harness would double-report
+/// the same directory.
+pub fn scan(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Inventory, CoreError> {
+    rt.run(Operation::Scan, ctx, || scan_body(rt, ctx, req))
+}
+
+fn scan_body(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Inventory, CoreError> {
+    ctx.checkpoint()?;
+    let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
+    scan_inner(rt, ctx, req)
+}
+
+/// The scan walk itself, without acquiring a lease.
+///
+/// [`scan`] takes the shared lease and calls this. [`crate::ports::MutationSession::begin`]
+/// already holds the exclusive lease when it needs a fresh inventory, and an
+/// advisory file lock does not nest within one process, so it calls this
+/// directly instead of `scan`.
+pub(crate) fn scan_inner(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &ScanRequest,
+) -> Result<Inventory, CoreError> {
+    let start = rt.ports.clock.monotonic();
+    let clock = rt.ports.clock.as_ref();
+    let mut op_steps = Vec::new();
+    let budget = rt.scope.raw.read_timeout();
+    let fs = rt.ports.fs.as_ref();
+    let home = &rt.scope.home.lexical;
+
+    let step_start = clock.monotonic();
+    let disable_sources = DisableSources::read(
+        fs,
+        home,
+        rt.scope.opencode_config_root.as_deref(),
+        &rt.scope.codex_home,
+    );
+
+    // Full ownership classification needs the dotagents and skills.sh
+    // ledgers for every scope this scan covers (the home's `.agents` plus
+    // each tracked project's), and the Skill-Studio-owned copy/fork
+    // registry, which lives at the home only. Matches the desktop's
+    // `load_ownership_ledgers`/`read_fork_registry_or_default`
+    // (`skill_ownership.rs`/`skill_fork_registry.rs`).
+    let mut scope_ledgers: HashMap<RootScope, ownership::ScopeLedgers> = HashMap::new();
+    scope_ledgers.insert(
+        RootScope::Global,
+        ownership::read_scope_ledgers(
+            fs,
+            &home.join(".agents"),
+            &crate::dotagents_ledger::dotagents_dir(home, None),
+            None,
+        ),
+    );
+    for project in &rt.scope.projects {
+        let project_lock_path = lock_file::project_lock_file_path(&project.lexical);
+        scope_ledgers.insert(
+            RootScope::Project(ProjectRef(project.lexical.clone())),
+            ownership::read_scope_ledgers(
+                fs,
+                &project.lexical.join(".agents"),
+                &crate::dotagents_ledger::dotagents_dir(home, Some(&project.lexical)),
+                Some(&project_lock_path),
+            ),
+        );
+    }
+    let home_registry = ownership::read_home_registry(fs, home);
+    op_steps.push(crate::timing::step(clock, "ledgers_read", step_start));
+
+    let timings = ScanTimings::default();
+    let sc = ScanCtx {
+        rt,
+        ctx,
+        req,
+        fs,
+        home,
+        disable_sources: &disable_sources,
+        scope_ledgers: &scope_ledgers,
+        home_registry: &home_registry,
+        start,
+        budget,
+        timings: &timings,
+    };
+    let mut accum = ScanAccum {
+        skills: BTreeMap::new(),
+        observations: Vec::new(),
+        unread_roots: Vec::new(),
+        completeness: Completeness::Complete,
+        // Deployment id -> canonical directory, filled in by
+        // `process_entries` and consumed by
+        // `propagate_verified_linked_owners` once every root has been
+        // walked.
+        resolved_paths: HashMap::new(),
+        content_cache: HashMap::new(),
+    };
+
+    // Global roots (and their plugin caches) go first so a scan that runs
+    // out of read budget on a home with many projects still reaches every
+    // home-scoped root before spending the budget on project roots. See
+    // the module doc for the exact order.
+    let (global_targets, project_targets): (Vec<_>, Vec<_>) = scan_targets(rt)
+        .into_iter()
+        .partition(|target| matches!(target.scope, RootScope::Global));
+    let (global_plugin_targets, project_plugin_targets): (Vec<_>, Vec<_>) = plugin_scan_targets(rt)
+        .into_iter()
+        .partition(|target| matches!(target.scope, RootScope::Global));
+
+    // Global before project, in all four loops, is the read-budget invariant
+    // the module doc promises.
+    let step_start = clock.monotonic();
+    for target in &global_targets {
+        scan_one_target(&sc, target, &mut accum)?;
+    }
+    for target in &global_plugin_targets {
+        scan_one_plugin_target(&sc, target, &mut accum)?;
+    }
+    for target in &project_targets {
+        scan_one_target(&sc, target, &mut accum)?;
+    }
+    for target in &project_plugin_targets {
+        scan_one_plugin_target(&sc, target, &mut accum)?;
+    }
+    op_steps.push(crate::timing::step(clock, "roots_walk", step_start));
+    // These four are cumulative sub-times already counted inside
+    // `roots_walk`, not additional wall-clock time - `parent` says so.
+    op_steps.push(crate::timing::StepTiming {
+        name: "dir_walk".to_string(),
+        elapsed_ms: timings.dir_walk.get().as_millis() as u64,
+        parent: Some("roots_walk".to_string()),
+    });
+    op_steps.push(crate::timing::StepTiming {
+        name: "skill_md_read".to_string(),
+        elapsed_ms: timings.skill_md_read.get().as_millis() as u64,
+        parent: Some("roots_walk".to_string()),
+    });
+    op_steps.push(crate::timing::StepTiming {
+        name: "frontmatter_parse".to_string(),
+        elapsed_ms: timings.frontmatter_parse.get().as_millis() as u64,
+        parent: Some("roots_walk".to_string()),
+    });
+    op_steps.push(crate::timing::StepTiming {
+        name: "plugin_cache_walk".to_string(),
+        elapsed_ms: timings.plugin_cache_walk.get().as_millis() as u64,
+        parent: Some("roots_walk".to_string()),
+    });
+
+    let ScanAccum {
+        mut skills,
+        observations,
+        unread_roots,
+        completeness,
+        resolved_paths,
+        content_cache: _,
+    } = accum;
+
+    // Every root has been walked, so every canonical universal deployment
+    // any link could point to now has a `resolved_paths` entry: assign
+    // verified links their canonical owner.
+    let step_start = clock.monotonic();
+    for skill in skills.values_mut() {
+        propagate_verified_linked_owners(skill, &resolved_paths);
+    }
+    op_steps.push(crate::timing::step(
+        clock,
+        "link_owner_propagation",
+        step_start,
+    ));
+
+    // A universal skill Claude Code has no per-skill link for is one that
+    // reader has disabled: Claude Code only ever reads a universal skill
+    // through an explicit `~/.claude/skills/<name>` link, never the shared
+    // root directly (`reads_universal_root: Support::No` in `harness.rs`).
+    let step_start = clock.monotonic();
+    let claude_skills_dir = home.join(".claude").join("skills");
+    for skill in skills.values_mut() {
+        for deployment in &mut skill.deployments {
+            let is_global_universal = matches!(deployment.root.kind, RootKind::Universal)
+                && matches!(deployment.root.scope, RootScope::Global);
+            if is_global_universal
+                && fs
+                    .symlink_metadata(&claude_skills_dir.join(&skill.name.0))
+                    .is_err()
+            {
+                deployment
+                    .disabled_readers
+                    .push(AgentId::from(AgentId::CLAUDE_CODE));
+            }
+        }
+    }
+    op_steps.push(crate::timing::step(
+        clock,
+        "claude_universal_reader_check",
+        step_start,
+    ));
+
+    let skills: Vec<InstalledSkillDto> = skills.into_values().collect();
+
+    ctx.record_timing(crate::timing::op_timing(clock, "scan", start, op_steps));
+
+    let mut timings = Vec::new();
+    if req.timings {
+        let elapsed = rt.ports.clock.monotonic().saturating_sub(start);
+        timings.push(Timing {
+            phase: "scan".to_string(),
+            elapsed_ms: elapsed.as_millis() as u64,
+        });
+    }
+
+    Ok(Inventory {
+        skills,
+        projects: rt
+            .scope
+            .projects
+            .iter()
+            .map(|p| p.lexical.clone())
+            .collect(),
+        completeness,
+        observations,
+        unread_roots,
+        timings,
+    })
+}
+
+/// Everything [`scan_one_target`] and [`scan_one_plugin_target`] need that
+/// stays the same across every target in one [`scan_inner`] call.
+struct ScanCtx<'a> {
+    rt: &'a Runtime,
+    ctx: &'a OpContext,
+    req: &'a ScanRequest,
+    fs: &'a dyn ScopeFs,
+    home: &'a Path,
+    disable_sources: &'a DisableSources,
+    scope_ledgers: &'a HashMap<RootScope, ownership::ScopeLedgers>,
+    home_registry: &'a ownership::HomeRegistry,
+    start: Duration,
+    budget: Duration,
+    timings: &'a ScanTimings,
+}
+
+/// Per-section durations accumulated across every [`scan_one_target`] and
+/// [`scan_one_plugin_target`] call in one [`scan_inner`] run, filed as
+/// `scan`'s steps alongside `roots_walk` (the one step spanning all four
+/// loops these are measured inside of).
+#[derive(Default)]
+struct ScanTimings {
+    dir_walk: Cell<Duration>,
+    skill_md_read: Cell<Duration>,
+    frontmatter_parse: Cell<Duration>,
+    plugin_cache_walk: Cell<Duration>,
+}
+
+impl ScanTimings {
+    fn add(cell: &Cell<Duration>, elapsed: Duration) {
+        cell.set(cell.get() + elapsed);
+    }
+}
+
+/// The `scan_inner` accumulators every target folds into, in target order.
+struct ScanAccum {
+    skills: BTreeMap<String, InstalledSkillDto>,
+    observations: Vec<Observation>,
+    /// Root paths this run could not read at all - see [`Inventory::unread_roots`].
+    unread_roots: Vec<PathBuf>,
+    completeness: Completeness,
+    /// Deployment id -> canonical directory, filled in by `process_entries`
+    /// and consumed by `propagate_verified_linked_owners` once every root
+    /// has been walked.
+    resolved_paths: HashMap<DeploymentId, PathBuf>,
+    /// Canonical skill directory -> its already-read `SKILL.md` facts,
+    /// filled in and consumed by `process_entries` across every target: a
+    /// universal skill is listed once under the shared root (its canonical
+    /// entry) and once more under the one harness root it's linked from,
+    /// and both listings resolve to the same canonical directory. Without
+    /// this, the second listing would read the same `SKILL.md` again.
+    content_cache: HashMap<PathBuf, CachedSkillRead>,
+}
+
+/// One canonical skill directory's already-computed `SKILL.md` read,
+/// cached by [`process_entries`] so a second directory entry resolving to
+/// the same canonical path (a per-skill symlink into the universal root)
+/// reuses it instead of reading and walking the folder again.
+#[derive(Clone)]
+struct CachedSkillRead {
+    description: Option<String>,
+    violations: Vec<String>,
+    truncated: bool,
+    facts: ContentFacts,
+}
+
+/// Reads one [`ScanTarget`] (and its [`MOVE_ASIDE_DIR_NAME`] holding
+/// directory) into `accum`, or records a budget/read-error observation.
+/// The body of `scan_inner`'s former `for target in scan_targets(rt)` loop.
+fn scan_one_target(
+    sc: &ScanCtx,
+    target: &ScanTarget,
+    accum: &mut ScanAccum,
+) -> Result<(), CoreError> {
+    sc.ctx.checkpoint()?;
+    if sc.rt.ports.clock.monotonic().saturating_sub(sc.start) > sc.budget {
+        accum.completeness = Completeness::Partial;
+        accum.observations.push(Observation {
+            root: RootRef::new(target.scope.clone(), target.kind.clone()).ok(),
+            message: "read budget exceeded before this root could be scanned".to_string(),
+        });
+        accum.unread_roots.push(target.path.clone());
+        return Ok(());
+    }
+
+    // A root whose lexical path is itself a symlink (e.g. `~/.claude/
+    // skills -> ../.agents/skills`) shares every deployment under it
+    // through that one link, not per skill.
+    let whole_dir_link = matches!(
+        sc.fs.symlink_metadata(&target.path).map(|m| m.kind),
+        Ok(FileKind::Symlink)
+    );
+
+    // A cheap existence check before `read_dir`: the catalog names far more
+    // roots (every harness's global and project root, fanned across every
+    // tracked project) than a given home actually has on disk, so most
+    // targets - and almost every `MOVE_ASIDE_DIR_NAME` holding directory -
+    // don't exist. `symlink_metadata` isn't bounded by the scan's
+    // `read_dir`-per-directory budget the way `read_dir` itself is, so
+    // ruling out a missing root this way, rather than by calling `read_dir`
+    // and matching its `NotFound`, is a real directory listing saved, not
+    // just the same cost moved elsewhere.
+    if !root_dir_missing(sc.fs, &target.path) {
+        let reserved = crate::harness::reserved_skills_root_entry(target.harness.as_ref());
+        match timed_read_root_entries(sc, &target.path, reserved) {
+            Ok(names) => process_entries(
+                &EntryContext {
+                    fs: sc.fs,
+                    ctx: sc.ctx,
+                    clock: sc.rt.ports.clock.as_ref(),
+                    scope: &sc.rt.scope,
+                    home: sc.home,
+                    disable_sources: sc.disable_sources,
+                    scope_ledgers: sc.scope_ledgers,
+                    home_registry: sc.home_registry,
+                    target,
+                    base_dir: &target.path,
+                    whole_dir_link,
+                    forced_disabled_by: None,
+                    timings: sc.timings,
+                },
+                &names,
+                sc.req,
+                accum,
+            )?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                accum.completeness = Completeness::Partial;
+                accum.observations.push(Observation {
+                    root: RootRef::new(target.scope.clone(), target.kind.clone()).ok(),
+                    message: format!("could not read root: {e}"),
+                });
+                accum.unread_roots.push(target.path.clone());
+            }
+        }
+    }
+
+    scan_move_aside_dir(sc, target, whole_dir_link, accum)
+}
+
+/// True when `path` cannot be listed because nothing is there:
+/// [`ScopeFs::symlink_metadata`] reports [`std::io::ErrorKind::NotFound`].
+/// Any other outcome (it exists, or some other error) defers to the real
+/// `read_dir` call so that call's own error handling still applies.
+fn root_dir_missing(fs: &dyn ScopeFs, path: &Path) -> bool {
+    matches!(
+        fs.symlink_metadata(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
+/// Reads `target.path`'s [`MOVE_ASIDE_DIR_NAME`] holding directory into
+/// `accum`, when it exists. Skills Skill Studio moved aside stay
+/// deployments (so the UI can still show and un-park them), just disabled.
+/// Split out of [`scan_one_target`] so the caller can skip it too, via the
+/// same [`root_dir_missing`] check, when the target root itself doesn't
+/// exist - a root that isn't there never holds a move-aside directory
+/// either.
+fn scan_move_aside_dir(
+    sc: &ScanCtx,
+    target: &ScanTarget,
+    whole_dir_link: bool,
+    accum: &mut ScanAccum,
+) -> Result<(), CoreError> {
+    let move_aside_dir = target.path.join(MOVE_ASIDE_DIR_NAME);
+    if root_dir_missing(sc.fs, &move_aside_dir) {
+        return Ok(());
+    }
+    // No reserved name applies here: the holding directory is Skill
+    // Studio's own, not the harness's root.
+    if let Ok(names) = timed_read_root_entries(sc, &move_aside_dir, None) {
+        process_entries(
+            &EntryContext {
+                fs: sc.fs,
+                ctx: sc.ctx,
+                clock: sc.rt.ports.clock.as_ref(),
+                scope: &sc.rt.scope,
+                home: sc.home,
+                disable_sources: sc.disable_sources,
+                scope_ledgers: sc.scope_ledgers,
+                home_registry: sc.home_registry,
+                target,
+                base_dir: &move_aside_dir,
+                whole_dir_link,
+                forced_disabled_by: Some(DisabledBy::StudioMoved),
+                timings: sc.timings,
+            },
+            &names,
+            sc.req,
+            accum,
+        )?;
+    }
+    Ok(())
+}
+
+/// Reads one [`PluginCacheTarget`] into `accum`, or records a budget
+/// observation. The body of `scan_inner`'s former
+/// `for target in plugin_scan_targets(rt)` loop.
+fn scan_one_plugin_target(
+    sc: &ScanCtx,
+    target: &PluginCacheTarget,
+    accum: &mut ScanAccum,
+) -> Result<(), CoreError> {
+    sc.ctx.checkpoint()?;
+    if sc.rt.ports.clock.monotonic().saturating_sub(sc.start) > sc.budget {
+        accum.completeness = Completeness::Partial;
+        accum.observations.push(Observation {
+            root: RootRef::new(
+                target.scope.clone(),
+                RootKind::PluginCache(target.harness.clone()),
+            )
+            .ok(),
+            message: "read budget exceeded before this root could be scanned".to_string(),
+        });
+        accum.unread_roots.push(target.path.clone());
+        return Ok(());
+    }
+    // Same existence pre-check as `scan_one_target`: most plugin cache
+    // roots the catalog names don't exist on a given home, and skipping
+    // straight to `enumerate_plugin_skills`'s `read_dir` would otherwise
+    // spend it on a directory nothing is in.
+    if root_dir_missing(sc.fs, &target.path) {
+        return Ok(());
+    }
+    let walk_start = sc.rt.ports.clock.monotonic();
+    let plugin_skills = enumerate_plugin_skills(sc.fs, target);
+    ScanTimings::add(
+        &sc.timings.plugin_cache_walk,
+        sc.rt.ports.clock.monotonic().saturating_sub(walk_start),
+    );
+    for plugin_skill in plugin_skills {
+        if !sc.req.skills.is_empty() && !sc.req.skills.iter().any(|s| s.0 == plugin_skill.name) {
+            continue;
+        }
+        match read_skill_md(
+            sc.fs,
+            sc.ctx,
+            sc.rt.ports.clock.as_ref(),
+            &plugin_skill.skill_dir,
+            &plugin_skill.name,
+            sc.timings,
+        )? {
+            SkillMdRead::Found {
+                description,
+                violations,
+                truncated,
+                facts,
+            } => {
+                if truncated {
+                    if let Some(observation) = truncated_skill_md_observation(
+                        target.scope.clone(),
+                        RootKind::PluginCache(target.harness.clone()),
+                        &plugin_skill.name,
+                    ) {
+                        accum.observations.push(observation);
+                    }
+                }
+                let content_fingerprint = Some(facts.content_fingerprint.clone());
+                // Matches the desktop's plugin-cache loop: `is_symlink`
+                // is checked, but a plugin skill is never resolved
+                // through it, so the link facts otherwise stay at their
+                // defaults.
+                let is_symlink = matches!(
+                    sc.fs
+                        .symlink_metadata(&plugin_skill.skill_dir)
+                        .map(|f| f.kind),
+                    Ok(FileKind::Symlink)
+                );
+                let scope_label = scope_label(&target.scope);
+                let project_label = project_label(&target.scope);
+                let plugin_source = PluginSourceDto {
+                    enabled: claude_plugin_enabled(
+                        sc.disable_sources,
+                        &target.harness,
+                        &plugin_skill.source,
+                    ),
+                    ..plugin_skill.source.clone()
+                };
+                let deployment = DeploymentDto {
+                    id: deployment_id(
+                        &plugin_skill.name,
+                        scope_label,
+                        SkillDestination::PerHarness,
+                        &harness_slot(&target.harness),
+                        project_label.as_deref(),
+                        &plugin_skill.skill_dir,
+                    ),
+                    root: RootRef::new(
+                        target.scope.clone(),
+                        RootKind::PluginCache(target.harness.clone()),
+                    )?,
+                    harness: Some(target.harness.clone()),
+                    path: plugin_skill.skill_dir.clone(),
+                    destination: SkillDestination::PerHarness,
+                    // Matches `id_for_candidate`: a plugin cache entry
+                    // is never the universal root and is never linked,
+                    // so it falls to the same `Independent` branch as
+                    // any other plain per-harness directory.
+                    backing: BackingRelationship::Independent,
+                    mutability: DeploymentMutability::ReadOnly,
+                    link_target: None,
+                    shared_via_whole_dir_link: false,
+                    is_symlink,
+                    resolved_path: None,
+                    symlink_is_broken: false,
+                    symlink_error: None,
+                    owner_kind: LifecycleOwnerKind::Plugin,
+                    owner_id: None,
+                    content_fingerprint,
+                    disabled_by: None,
+                    disabled_readers: Vec::new(),
+                    spec_violations: violations,
+                    plugin: Some(plugin_source),
+                    frontmatter: facts.frontmatter,
+                    frontmatter_fields: facts.frontmatter_fields,
+                    has_spec: facts.has_spec,
+                    folder_bytes: facts.folder_bytes,
+                    file_count: facts.file_count,
+                    skill_md_tokens: facts.skill_md_tokens,
+                    description_tokens: facts.description_tokens,
+                    content_hash: facts.content_hash,
+                    modified_at: facts.modified_at,
+                    folder_truncated: facts.folder_truncated,
+                    // A plugin cache root is never walked through the
+                    // `.skill-studio-disabled/` move-aside directory.
+                    in_git_repo: in_git_repo(sc.fs, &sc.rt.scope, &plugin_skill.skill_dir),
+                    studio_disabled: false,
+                    source_kind: SourceKind::Plugin,
+                    parked_origin: None,
+                };
+                insert_deployment(
+                    &mut accum.skills,
+                    &plugin_skill.name,
+                    description,
+                    deployment,
+                );
+            }
+            SkillMdRead::Unreadable(message) => {
+                accum.completeness = Completeness::Partial;
+                accum.observations.push(Observation {
+                    root: RootRef::new(
+                        target.scope.clone(),
+                        RootKind::PluginCache(target.harness.clone()),
+                    )
+                    .ok(),
+                    message,
+                });
+                // The root itself was read fine; only this one skill
+                // directory was unreadable, so scope the carry-over to it
+                // rather than the whole plugin cache root.
+                accum.unread_roots.push(plugin_skill.skill_dir.clone());
+            }
+            SkillMdRead::NotASkill => {}
+        }
+    }
+    Ok(())
+}
+
+/// Lists a root directory's visible skill-shaped entries (dirs and
+/// symlinks), sorted for a deterministic scan order. Dot-prefixed entries
+/// (including [`MOVE_ASIDE_DIR_NAME`] itself) are never a skill; the caller
+/// walks that holding directory separately. `reserved` is the entry name
+/// the root's own harness owns, from
+/// [`crate::harness::reserved_skills_root_entry`]: Claude Code's `synced`
+/// folder is the vendor's, so it is skipped even when it holds a
+/// `SKILL.md` (`docs/action-map/harnesses/claude-code.md`: "`synced` under
+/// `~/.claude/skills` is reserved; the scanner must skip it").
+/// As [`read_root_entries`], accumulating the read's duration onto
+/// `sc.timings.dir_walk` (the scan step this call is part of).
+fn timed_read_root_entries(
+    sc: &ScanCtx,
+    dir: &Path,
+    reserved: Option<&str>,
+) -> std::io::Result<Vec<DirEntryFacts>> {
+    let start = sc.rt.ports.clock.monotonic();
+    let result = read_root_entries(sc.fs, dir, reserved);
+    ScanTimings::add(
+        &sc.timings.dir_walk,
+        sc.rt.ports.clock.monotonic().saturating_sub(start),
+    );
+    result
+}
+
+fn read_root_entries(
+    fs: &dyn ScopeFs,
+    dir: &Path,
+    reserved: Option<&str>,
+) -> std::io::Result<Vec<DirEntryFacts>> {
+    let entries = fs.read_dir(dir)?;
+    let mut names: Vec<_> = entries
+        .into_iter()
+        .filter(crate::ports::is_skill_shaped_entry)
+        .filter(|entry| reserved != Some(entry.name.as_str()))
+        .collect();
+    names.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(names)
+}
+
+/// Everything [`process_entries`] needs that stays the same across every
+/// entry in one call: which root, which reader, which sources of truth.
+struct EntryContext<'a> {
+    fs: &'a dyn ScopeFs,
+    ctx: &'a OpContext,
+    clock: &'a dyn Clock,
+    scope: &'a NormalizedScope,
+    home: &'a Path,
+    disable_sources: &'a DisableSources,
+    /// Dotagents and skills.sh ledgers, one entry per scope this scan
+    /// covers. Read once in [`scan_inner`]; [`classify_owner`] looks up the
+    /// entry matching `target.scope`.
+    scope_ledgers: &'a HashMap<RootScope, ownership::ScopeLedgers>,
+    /// The copy/fork buckets of `~/.agents/skill-studio.json`, read once at
+    /// the scope home.
+    home_registry: &'a ownership::HomeRegistry,
+    target: &'a ScanTarget,
+    /// Where the entries physically live: `target.path` normally, or its
+    /// [`MOVE_ASIDE_DIR_NAME`] child when walking moved-aside skills.
+    base_dir: &'a Path,
+    whole_dir_link: bool,
+    /// `Some(StudioMoved)` while walking a move-aside directory; every
+    /// deployment found there is disabled regardless of any other switch.
+    forced_disabled_by: Option<DisabledBy>,
+    /// The same accumulator [`ScanCtx::timings`] points at, so
+    /// [`read_skill_md`] can file `skill_md_read`/`frontmatter_parse` time
+    /// here too.
+    timings: &'a ScanTimings,
+}
+
+/// Builds one deployment per entry and files it under its skill name, or
+/// records a partial-scan observation for one that could not be read.
+///
+/// `resolved_paths` collects each built deployment's canonical directory
+/// (its own path for a plain canonical entry, or the symlink/whole-dir-link
+/// target's canonical path for a linked one), keyed by the deployment's id.
+/// [`propagate_verified_linked_owners`] uses it after every root has been
+/// walked to match a linked deployment back to its canonical counterpart,
+/// mirroring the desktop's `resolved_path`-keyed match in
+/// `skill_assembly.rs`.
+fn process_entries(
+    cx: &EntryContext,
+    names: &[DirEntryFacts],
+    req: &ScanRequest,
+    accum: &mut ScanAccum,
+) -> Result<(), CoreError> {
+    for entry in names {
+        cx.ctx.checkpoint()?;
+        if !req.skills.is_empty() && !req.skills.iter().any(|s| s.0 == entry.name) {
+            continue;
+        }
+
+        let skill_dir = cx.base_dir.join(&entry.name);
+        let is_link = matches!(entry.kind, FileKind::Symlink);
+        // Three states: a target that resolves; a target that is missing,
+        // which is a broken link; and a target that fails to resolve for
+        // any other reason - a permission denial, a symlink loop - which
+        // is NOT broken and carries the reason instead. Collapsing the
+        // last two would label a link the user cannot read as one they
+        // must repair.
+        let (canonical, broken_link, symlink_error) =
+            match is_link.then(|| cx.fs.canonicalize(&skill_dir)) {
+                None => (None, false, None),
+                Some(Ok(target)) => (Some(target), false, None),
+                Some(Err(err)) if err.kind() == std::io::ErrorKind::NotFound => (None, true, None),
+                Some(Err(err)) => (None, false, Some(err.to_string())),
+            };
+        // A per-skill symlink whose target does not resolve still names a
+        // deployment (so a broken link is visible and repairable), just one
+        // with no bytes to fingerprint. Both unresolved states qualify: an
+        // unreadable link has no bytes either.
+        let unresolved_link = is_link && canonical.is_none();
+        // The canonicalized target when the link resolves, or the raw
+        // `read_link` value joined onto the link's own parent (not
+        // filesystem-canonicalized) when it doesn't, so a broken link's
+        // target is still comparable and still recognizable as pointing
+        // into the universal root.
+        let link_target = if is_link {
+            match &canonical {
+                Some(target) => Some(target.clone()),
+                None => cx.fs.read_link(&skill_dir).ok().map(|raw| {
+                    if raw.is_absolute() {
+                        raw
+                    } else {
+                        skill_dir.parent().unwrap_or(Path::new("")).join(raw)
+                    }
+                }),
+            }
+        } else {
+            None
+        };
+
+        // A non-link entry's own canonicalized path, computed once and
+        // reused below for `canonical_key`, `resolved_path`, and
+        // `dto_resolved_path` instead of canonicalizing `skill_dir` again
+        // for each.
+        let own_canonical = (!is_link)
+            .then(|| cx.fs.canonicalize(&skill_dir).ok())
+            .flatten();
+        // A per-skill symlink into the universal root and its canonical
+        // universal entry are two directory listings of the one real
+        // folder: keyed by canonical path so the second listing reuses the
+        // first's `SKILL.md` read and folder walk instead of repeating
+        // them.
+        let canonical_key = if is_link {
+            canonical.clone()
+        } else {
+            own_canonical.clone()
+        };
+
+        let (description, violations, content_fingerprint, facts) = if unresolved_link {
+            (None, Vec::new(), None, Box::new(ContentFacts::default()))
+        } else if let Some(cached) = canonical_key
+            .as_ref()
+            .and_then(|key| accum.content_cache.get(key))
+        {
+            if cached.truncated {
+                if let Some(observation) = truncated_skill_md_observation(
+                    cx.target.scope.clone(),
+                    cx.target.kind.clone(),
+                    &entry.name,
+                ) {
+                    accum.observations.push(observation);
+                }
+            }
+            (
+                cached.description.clone(),
+                cached.violations.clone(),
+                Some(cached.facts.content_fingerprint.clone()),
+                Box::new(cached.facts.clone()),
+            )
+        } else {
+            match read_skill_md(cx.fs, cx.ctx, cx.clock, &skill_dir, &entry.name, cx.timings)? {
+                SkillMdRead::Found {
+                    description,
+                    violations,
+                    truncated,
+                    facts,
+                } => {
+                    if truncated {
+                        if let Some(observation) = truncated_skill_md_observation(
+                            cx.target.scope.clone(),
+                            cx.target.kind.clone(),
+                            &entry.name,
+                        ) {
+                            accum.observations.push(observation);
+                        }
+                    }
+                    if let Some(key) = canonical_key.clone() {
+                        accum.content_cache.insert(
+                            key,
+                            CachedSkillRead {
+                                description: description.clone(),
+                                violations: violations.clone(),
+                                truncated,
+                                facts: (*facts).clone(),
+                            },
+                        );
+                    }
+                    (
+                        description,
+                        violations,
+                        Some(facts.content_fingerprint.clone()),
+                        facts,
+                    )
+                }
+                SkillMdRead::NotASkill => continue,
+                SkillMdRead::Unreadable(message) => {
+                    accum.completeness = Completeness::Partial;
+                    accum.observations.push(Observation {
+                        root: RootRef::new(cx.target.scope.clone(), cx.target.kind.clone()).ok(),
+                        message,
+                    });
+                    // The root itself was read fine; only this one skill
+                    // directory was unreadable, so scope the carry-over to
+                    // it rather than the whole root.
+                    accum.unread_roots.push(skill_dir.clone());
+                    continue;
+                }
+            }
+        };
+
+        // Matches the desktop's `id_for_candidate` (`skill_deployment.rs`):
+        // a root that is itself universal is always Canonical; otherwise a
+        // per-skill symlink into the universal root, or a whole-directory
+        // link (the root itself is a symlink), promotes the deployment to
+        // the Universal destination as a link back to that canonical entry;
+        // everything else is an Independent per-harness deployment.
+        let root_is_universal = matches!(cx.target.kind, RootKind::Universal | RootKind::Parked);
+        let linked = !root_is_universal
+            && (cx.whole_dir_link
+                || (is_link
+                    && link_target
+                        .as_deref()
+                        .is_some_and(path_is_under_universal_skills)));
+        let (destination, backing) = if root_is_universal {
+            (SkillDestination::Universal, BackingRelationship::Canonical)
+        } else if linked {
+            (SkillDestination::Universal, BackingRelationship::LinkedTo)
+        } else {
+            (
+                SkillDestination::PerHarness,
+                BackingRelationship::Independent,
+            )
+        };
+
+        let scope_label = scope_label(&cx.target.scope);
+        let project_label = project_label(&cx.target.scope);
+        let id = deployment_id(
+            &entry.name,
+            scope_label,
+            destination,
+            &harness_slot_for_kind(&cx.target.kind),
+            project_label.as_deref(),
+            &skill_dir,
+        );
+        // A canonical entry's own directory is its resolved path; a linked
+        // one resolves to wherever it points (`None` for a broken link,
+        // which never has anything to propagate from or to).
+        let resolved_path = if is_link {
+            canonical.clone()
+        } else {
+            Some(own_canonical.clone().unwrap_or_else(|| skill_dir.clone()))
+        };
+        if let Some(resolved_path) = resolved_path {
+            accum.resolved_paths.insert(id.clone(), resolved_path);
+        }
+        // The DTO's `resolved_path` (not the internal `resolved_path` above,
+        // which serves owner propagation and differs on purpose): for a
+        // link it's the canonicalized target; otherwise it's the entry's
+        // own canonicalized path, but only when that differs from the entry
+        // itself, and with no fallback to the un-canonicalized path on
+        // error.
+        let dto_resolved_path = if is_link {
+            canonical.clone()
+        } else {
+            own_canonical.clone().filter(|c| c != &skill_dir)
+        };
+        let in_git_repo = in_git_repo(cx.fs, cx.scope, &skill_dir);
+        // Matches the variant, not merely "forced": the field means the
+        // deployment sits in a `.skill-studio-disabled/` holding directory,
+        // and a future forced reason must not claim that.
+        let studio_disabled = cx.forced_disabled_by == Some(DisabledBy::StudioMoved);
+
+        let (owner_kind, owner_id) = classify_owner(&OwnerClassifyContext {
+            home: cx.home,
+            kind: &cx.target.kind,
+            scope: &cx.target.scope,
+            scope_ledgers: cx.scope_ledgers,
+            home_registry: cx.home_registry,
+            skill_name: &entry.name,
+            skill_dir: &skill_dir,
+            destination,
+            is_link,
+            link_target: link_target.as_deref(),
+            id: &id,
+            content_fingerprint: content_fingerprint.as_ref(),
+            disabled: studio_disabled,
+            in_git_repo,
+            parked_origin: cx.target.parked_origin.as_ref(),
+        });
+        let mutability = if owner_kind.is_mutable() {
+            DeploymentMutability::Mutable
+        } else {
+            DeploymentMutability::ReadOnly
+        };
+
+        let disabled_by = cx.forced_disabled_by.or_else(|| {
+            native_disabled_by(
+                cx.fs,
+                cx.disable_sources,
+                &cx.target.kind,
+                &skill_dir,
+                &entry.name,
+            )
+        });
+
+        // A link end has no source of its own: the universal deployment it
+        // points to supplies the skill's real source. `Manual` is the lowest
+        // kind, so it never outvotes that deployment in the skill-level
+        // minimum.
+        let source_kind = if is_link && owner_kind == LifecycleOwnerKind::Ambiguous {
+            SourceKind::Manual
+        } else {
+            source_kind_from_owner(owner_kind)
+        };
+        let deployment = DeploymentDto {
+            id,
+            root: match RootRef::new(cx.target.scope.clone(), cx.target.kind.clone()) {
+                Ok(root) => root,
+                Err(_) => continue,
+            },
+            harness: cx.target.harness.clone(),
+            path: skill_dir.clone(),
+            destination,
+            backing,
+            mutability,
+            link_target,
+            shared_via_whole_dir_link: cx.whole_dir_link,
+            is_symlink: is_link,
+            resolved_path: dto_resolved_path,
+            symlink_is_broken: broken_link,
+            symlink_error,
+            owner_kind,
+            owner_id,
+            content_fingerprint,
+            disabled_by,
+            disabled_readers: Vec::new(),
+            spec_violations: violations,
+            plugin: None,
+            frontmatter: facts.frontmatter,
+            frontmatter_fields: facts.frontmatter_fields,
+            has_spec: facts.has_spec,
+            folder_bytes: facts.folder_bytes,
+            file_count: facts.file_count,
+            skill_md_tokens: facts.skill_md_tokens,
+            description_tokens: facts.description_tokens,
+            content_hash: facts.content_hash,
+            modified_at: facts.modified_at,
+            folder_truncated: facts.folder_truncated,
+            in_git_repo,
+            studio_disabled,
+            source_kind,
+            parked_origin: cx.target.parked_origin.clone(),
+        };
+
+        insert_deployment(&mut accum.skills, &entry.name, description, deployment);
+    }
+    Ok(())
+}
+
+/// Assigns a verified linked deployment (a per-skill symlink or
+/// whole-directory link into the universal root) the same owner as the
+/// canonical universal deployment it points to, and forces it read-only:
+/// lifecycle actions must target the canonical deployment, not one of its
+/// links. Scoped to one skill's deployments at a time since
+/// [`Inventory::skills`] already groups them by name.
+///
+/// A link matches its canonical counterpart when they share a root scope
+/// and the link's resolved directory (from `resolved_paths`) equals the
+/// canonical entry's own directory; a link with no unambiguous match (none,
+/// or more than one) is left as classified.
+fn propagate_verified_linked_owners(
+    skill: &mut InstalledSkillDto,
+    resolved_paths: &HashMap<DeploymentId, PathBuf>,
+) {
+    let canonical_owners: Vec<(RootScope, PathBuf, LifecycleOwnerKind, Option<OwnerId>)> = skill
+        .deployments
+        .iter()
+        .filter(|d| {
+            d.destination == SkillDestination::Universal
+                && matches!(d.backing, BackingRelationship::Canonical)
+                && d.owner_kind.is_mutable()
+        })
+        .filter_map(|d| {
+            resolved_paths.get(&d.id).map(|rp| {
+                (
+                    d.root.scope.clone(),
+                    rp.clone(),
+                    d.owner_kind,
+                    d.owner_id.clone(),
+                )
+            })
+        })
+        .collect();
+
+    for deployment in &mut skill.deployments {
+        if !matches!(deployment.backing, BackingRelationship::LinkedTo)
+            || deployment.destination != SkillDestination::Universal
+        {
+            continue;
+        }
+        let link_shape_is_verified =
+            deployment.link_target.is_some() || deployment.shared_via_whole_dir_link;
+        if !link_shape_is_verified {
+            continue;
+        }
+        let Some(resolved_path) = resolved_paths.get(&deployment.id) else {
+            continue;
+        };
+        let mut matches = canonical_owners
+            .iter()
+            .filter(|(scope, rp, _, _)| *scope == deployment.root.scope && rp == resolved_path);
+        let Some((_, _, owner_kind, owner_id)) = matches.next() else {
+            continue;
+        };
+        if matches.next().is_some() {
+            continue;
+        }
+        deployment.owner_kind = *owner_kind;
+        deployment.owner_id = owner_id.clone();
+        deployment.mutability = DeploymentMutability::ReadOnly;
+    }
+}
+
+fn insert_deployment(
+    skills: &mut BTreeMap<String, InstalledSkillDto>,
+    name: &str,
+    description: Option<String>,
+    deployment: DeploymentDto,
+) {
+    let skill = skills
+        .entry(name.to_string())
+        .or_insert_with(|| InstalledSkillDto {
+            name: SkillName(name.to_string()),
+            description: None,
+            deployments: Vec::new(),
+        });
+    if skill.description.is_none() {
+        skill.description = description;
+    }
+    skill.deployments.push(deployment);
+}
+
+/// Outcome of reading and validating `<skill_dir>/SKILL.md`.
+///
+/// The [`Result`] `read_skill_md` returns this in is cancellation only: `Err`
+/// means [`compute_content_facts`]'s folder walk was cancelled mid-walk, and
+/// must abort the whole scan rather than be folded into a partial-scan
+/// observation (a cancelled walk's facts are not a real, if incomplete,
+/// read - they are no read at all).
+enum SkillMdRead {
+    /// A real skill. `truncated` is `true` when `SKILL.md` was over
+    /// [`SKILL_MD_MAX_BYTES`] and read only up to the cap rather than
+    /// dropped; the caller notes that as an [`Observation`] (it never makes
+    /// the scan `Partial`, since the skill and its bytes up to the cap were
+    /// still read successfully).
+    Found {
+        description: Option<String>,
+        violations: Vec<String>,
+        truncated: bool,
+        facts: Box<ContentFacts>,
+    },
+    /// No `SKILL.md`: not a skill directory. The caller skips the entry
+    /// silently.
+    NotASkill,
+    /// `SKILL.md` exists but could not be read; the message is a
+    /// partial-scan observation for the caller to report.
+    Unreadable(String),
+}
+
+/// Reads and validates `<skill_dir>/SKILL.md`. See [`SkillMdRead`] for what
+/// each outcome means to the caller.
+fn read_skill_md(
+    fs: &dyn ScopeFs,
+    ctx: &OpContext,
+    clock: &dyn Clock,
+    skill_dir: &Path,
+    name: &str,
+    timings: &ScanTimings,
+) -> Result<SkillMdRead, CoreError> {
+    let skill_md = skill_dir.join("SKILL.md");
+    let read_start = clock.monotonic();
+    let read_result = fs.read_prefix(&skill_md, SKILL_MD_MAX_BYTES);
+    ScanTimings::add(
+        &timings.skill_md_read,
+        clock.monotonic().saturating_sub(read_start),
+    );
+    let (bytes, truncated) = match read_result {
+        Ok(result) => result,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(SkillMdRead::NotASkill),
+        Err(e) => {
+            return Ok(SkillMdRead::Unreadable(format!(
+                "could not read {}: {e}",
+                skill_md.display()
+            )))
+        }
+    };
+    let content = String::from_utf8_lossy(&bytes);
+    let parse_start = clock.monotonic();
+    let parsed = frontmatter::parse_frontmatter(&content);
+    ScanTimings::add(
+        &timings.frontmatter_parse,
+        clock.monotonic().saturating_sub(parse_start),
+    );
+    let violations = frontmatter::validate_skill(name, &parsed, content.lines().count());
+    let description = parsed.as_frontmatter().and_then(|f| f.description.clone());
+    let facts = compute_content_facts(fs, ctx, skill_dir, &bytes, truncated, &parsed)?;
+    Ok(SkillMdRead::Found {
+        description,
+        violations,
+        truncated,
+        facts: Box::new(facts),
+    })
+}
+
+/// Message prefix a truncated-`SKILL.md` observation always carries.
+///
+/// The observation still names a root ([`Observation::root`]) so a caller
+/// can locate it, but it reports a file that was read successfully up to
+/// the cap, not a root `diagnose` should call [`crate::dto::IssueKind::RootUnreadable`]:
+/// [`derive_issues`] recognizes this prefix and skips it there.
+const TRUNCATED_SKILL_MD_PREFIX: &str = "skill_md_truncated:";
+
+/// Builds the observation noting a `SKILL.md` read that hit
+/// [`SKILL_MD_MAX_BYTES`] and was truncated rather than dropped.
+fn truncated_skill_md_observation(
+    scope: RootScope,
+    kind: RootKind,
+    name: &str,
+) -> Option<Observation> {
+    RootRef::new(scope, kind).ok().map(|root| Observation {
+        root: Some(root),
+        message: format!(
+            "{TRUNCATED_SKILL_MD_PREFIX} {name}'s SKILL.md is over the {SKILL_MD_MAX_BYTES} \
+             byte read cap; only the first {SKILL_MD_MAX_BYTES} bytes were read"
+        ),
+    })
+}
+
+/// One root, resolved to a concrete filesystem path, that `scan` walks with
+/// [`process_entries`]. Built from the catalog's [`RootRole::Own`],
+/// [`RootRole::Universal`], and [`RootRole::Legacy`] roots, plus the parked
+/// root, which the catalog does not carry since it belongs to Skill Studio
+/// rather than to any one harness.
+struct ScanTarget {
+    scope: RootScope,
+    kind: RootKind,
+    path: PathBuf,
+    harness: Option<AgentId>,
+    /// For a parked slot directory, the root its copies came from.
+    parked_origin: Option<RootRef>,
+}
+
+/// Every harness's own skills directory in `scope`, resolved to a concrete
+/// path (the same paths [`scan_targets`] walks for `RootRole::Own`).
+pub(crate) fn harness_own_skill_roots(rt: &Runtime, scope: &RootScope) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for root_spec in rt
+        .ports
+        .catalog
+        .facts
+        .iter()
+        .flat_map(|facts| &facts.roots)
+        .filter(|root_spec| root_spec.role == RootRole::Own)
+    {
+        let path = match (root_spec.level, scope) {
+            (ScopeLevel::Global, RootScope::Global) => rt
+                .scope
+                .global_root_path(Path::new(&root_spec.relative_path)),
+            (ScopeLevel::Project, RootScope::Project(project)) => {
+                project.0.join(&root_spec.relative_path)
+            }
+            _ => continue,
+        };
+        if !roots.contains(&path) {
+            roots.push(path);
+        }
+    }
+    roots
+}
+
+fn scan_targets(rt: &Runtime) -> Vec<ScanTarget> {
+    let mut seen: HashSet<(RootScope, RootKind, PathBuf)> = HashSet::new();
+    let mut targets = Vec::new();
+    for facts in &rt.ports.catalog.facts {
+        for root_spec in &facts.roots {
+            let (kind, harness) = match root_spec.role {
+                RootRole::Own => (RootKind::Harness(facts.id.clone()), Some(facts.id.clone())),
+                RootRole::Universal => (RootKind::Universal, None),
+                RootRole::Legacy => (RootKind::Legacy(facts.id.clone()), Some(facts.id.clone())),
+                RootRole::PluginCache | RootRole::CrossHarness => continue,
+            };
+            let mut push_target = |scope: RootScope, path: PathBuf| {
+                let key = (scope.clone(), kind.clone(), path.clone());
+                if seen.insert(key) {
+                    targets.push(ScanTarget {
+                        scope,
+                        kind: kind.clone(),
+                        path,
+                        harness: harness.clone(),
+                        parked_origin: None,
+                    });
+                }
+            };
+            match root_spec.level {
+                ScopeLevel::Global => {
+                    push_target(
+                        RootScope::Global,
+                        rt.scope
+                            .global_root_path(Path::new(&root_spec.relative_path)),
+                    );
+                }
+                ScopeLevel::Project => {
+                    for project in &rt.scope.projects {
+                        push_target(
+                            RootScope::Project(ProjectRef(project.lexical.clone())),
+                            project.lexical.join(&root_spec.relative_path),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    targets.extend(parked_scan_targets(rt));
+    targets
+}
+
+/// One target per parked slot directory (see [`crate::park_layout`]), each
+/// carrying the origin its copies return to, plus the old flat root, whose
+/// copies all came from the global Universal root.
+fn parked_scan_targets(rt: &Runtime) -> Vec<ScanTarget> {
+    let fs = rt.ports.fs.as_ref();
+    let parked_root = rt.scope.home.lexical.join(PARKED_ROOT_RELATIVE);
+    let target = |path: PathBuf, origin: RootRef| ScanTarget {
+        scope: RootScope::Global,
+        kind: RootKind::Parked,
+        path,
+        harness: None,
+        parked_origin: Some(origin),
+    };
+    // Probes the fixed slot names instead of listing `dir`: the legacy flat
+    // scan already lists the parked root, and a folder is listed once.
+    let slot_targets = |dir: &Path, scope: &RootScope, out: &mut Vec<ScanTarget>| {
+        let slots = std::iter::once(RootKind::Universal).chain(
+            rt.ports
+                .catalog
+                .facts
+                .iter()
+                .map(|facts| RootKind::Harness(facts.id.clone())),
+        );
+        for kind in slots {
+            let Some(slot) = crate::park_layout::slot_for(&kind) else {
+                continue;
+            };
+            let path = dir.join(slot);
+            // A folder that holds a `SKILL.md` is an old flat copy of a skill
+            // named like the slot, not a slot.
+            if fs.symlink_metadata(&path).is_err()
+                || fs.symlink_metadata(&path.join("SKILL.md")).is_ok()
+            {
+                continue;
+            }
+            if let Ok(origin) = RootRef::new(scope.clone(), kind) {
+                out.push(target(path, origin));
+            }
+        }
+    };
+
+    let mut targets = vec![target(
+        parked_root.clone(),
+        RootRef {
+            scope: RootScope::Global,
+            kind: RootKind::Universal,
+        },
+    )];
+    slot_targets(&parked_root, &RootScope::Global, &mut targets);
+    let projects_dir = parked_root.join(crate::park_layout::PARKED_PROJECTS_DIR);
+    let project_entries = if fs.symlink_metadata(&projects_dir).is_ok() {
+        fs.read_dir(&projects_dir).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    for entry in project_entries {
+        let key_dir = projects_dir.join(&entry.name);
+        let marker = key_dir.join(crate::park_layout::PROJECT_ORIGIN_MARKER);
+        let Some(project) = fs
+            .read_capped(&marker, 4096)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .map(|text| PathBuf::from(text.trim()))
+            .filter(|path| path.is_absolute())
+        else {
+            continue;
+        };
+        slot_targets(
+            &key_dir,
+            &RootScope::Project(ProjectRef(project)),
+            &mut targets,
+        );
+    }
+    targets
+}
+
+/// One harness's plugin cache root, resolved to a concrete filesystem path.
+struct PluginCacheTarget {
+    scope: RootScope,
+    harness: AgentId,
+    path: PathBuf,
+}
+
+fn plugin_scan_targets(rt: &Runtime) -> Vec<PluginCacheTarget> {
+    let mut targets = Vec::new();
+    for facts in &rt.ports.catalog.facts {
+        for root_spec in &facts.roots {
+            if root_spec.role != RootRole::PluginCache {
+                continue;
+            }
+            match root_spec.level {
+                ScopeLevel::Global => targets.push(PluginCacheTarget {
+                    scope: RootScope::Global,
+                    harness: facts.id.clone(),
+                    path: rt.scope.home.lexical.join(&root_spec.relative_path),
+                }),
+                ScopeLevel::Project => {
+                    for project in &rt.scope.projects {
+                        targets.push(PluginCacheTarget {
+                            scope: RootScope::Project(ProjectRef(project.lexical.clone())),
+                            harness: facts.id.clone(),
+                            path: project.lexical.join(&root_spec.relative_path),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    targets
+}
+
+/// One skill directory found inside a plugin's `skills/` subdirectory.
+struct PluginSkillDir {
+    name: String,
+    skill_dir: PathBuf,
+    source: PluginSourceDto,
+}
+
+/// Reports whether `plugin_dir` holds one of [`PLUGIN_MANIFEST_CANDIDATES`],
+/// leniently: a manifest that exists but fails to parse as JSON, or parses
+/// without a `name`, still counts as "a plugin is here" rather than failing
+/// the walk. Only presence matters to the caller; the manifest's own fields
+/// (`name`, `version`) come from the path components in
+/// [`enumerate_plugin_skills`] instead.
+fn plugin_manifest_present(fs: &dyn ScopeFs, plugin_dir: &Path) -> bool {
+    PLUGIN_MANIFEST_CANDIDATES.iter().any(|candidate| {
+        fs.read_capped(&plugin_dir.join(candidate), SKILL_MD_MAX_BYTES)
+            .is_ok()
+    })
+}
+
+/// Walks a plugin cache tree up to [`PLUGIN_CACHE_MAX_DEPTH`] levels for
+/// plugin roots (a directory holding one of [`PLUGIN_MANIFEST_CANDIDATES`]
+/// directly), then lists each plugin's `skills/<name>` directories.
+/// `marketplace`/`plugin`/`version` come from the plugin root's path
+/// relative to `target.path`, per the agent-plugins.org
+/// `<cache>/<marketplace>/<plugin>/<version>/` layout.
+fn enumerate_plugin_skills(fs: &dyn ScopeFs, target: &PluginCacheTarget) -> Vec<PluginSkillDir> {
+    let mut plugin_roots = Vec::new();
+    walk_for_plugin_roots(fs, &target.path, PLUGIN_CACHE_MAX_DEPTH, &mut plugin_roots);
+    if target.harness.as_str() == AgentId::CLAUDE_CODE {
+        retain_installed_claude_plugin_versions(fs, &target.path, &mut plugin_roots);
+    }
+
+    let mut out = Vec::new();
+    for plugin_root in plugin_roots {
+        let source = plugin_source_from_root(&target.path, &plugin_root);
+        let skills_dir = plugin_root.join("skills");
+        let Ok(entries) = fs.read_dir(&skills_dir) else {
+            continue;
+        };
+        for entry in entries {
+            if !matches!(entry.kind, FileKind::Dir) {
+                continue;
+            }
+            let skill_dir = skills_dir.join(&entry.name);
+            if fs.read_capped(&skill_dir.join("SKILL.md"), 1).is_err()
+                && fs
+                    .read_capped(&skill_dir.join("SKILL.md"), SKILL_MD_MAX_BYTES)
+                    .is_err()
+            {
+                continue;
+            }
+            out.push(PluginSkillDir {
+                name: entry.name.clone(),
+                skill_dir,
+                source: source.clone(),
+            });
+        }
+    }
+    out
+}
+
+fn plugin_source_from_root(cache: &Path, plugin_root: &Path) -> PluginSourceDto {
+    let rel = plugin_root.strip_prefix(cache).unwrap_or(plugin_root);
+    let components: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    PluginSourceDto {
+        marketplace: components.first().cloned().unwrap_or_default(),
+        plugin: components.get(1).cloned().unwrap_or_default(),
+        version: components.get(2).cloned(),
+        // Filled in by `scan_one_plugin_target` from `DisableSources`
+        // once the target's harness is known.
+        enabled: None,
+    }
+}
+
+/// Claude Code keeps an updated plugin's old version folder in the cache
+/// until it prunes orphans (about 14 days), so one plugin can have several
+/// version folders. `installed_plugins.json` (version 2), next to the
+/// cache, records the `installPath` Claude Code loads for each
+/// `<plugin>@<marketplace>`. This keeps only those version folders.
+///
+/// A plugin stays unfiltered when the file is missing, unreadable, or not
+/// version 2, when the file does not name the plugin, or when none of its
+/// `installPath`s is a cached folder: without a match the file cannot say
+/// which folder is live, and dropping every row would hide the plugin.
+fn retain_installed_claude_plugin_versions(
+    fs: &dyn ScopeFs,
+    cache: &Path,
+    plugin_roots: &mut Vec<PathBuf>,
+) {
+    let Some(installed) = read_claude_installed_plugin_paths(fs, cache) else {
+        return;
+    };
+    let plugin_id = |root: &Path| {
+        let source = plugin_source_from_root(cache, root);
+        format!("{}@{}", source.plugin, source.marketplace)
+    };
+    let is_install_path = |root: &Path| {
+        installed
+            .get(&plugin_id(root))
+            .is_some_and(|paths| paths.iter().any(|path| same_plugin_root(fs, path, root)))
+    };
+    let live_ids: HashSet<String> = plugin_roots
+        .iter()
+        .filter(|root| is_install_path(root))
+        .map(|root| plugin_id(root))
+        .collect();
+    plugin_roots.retain(|root| !live_ids.contains(&plugin_id(root)) || is_install_path(root));
+}
+
+/// `plugins.<plugin>@<marketplace>[].installPath` from Claude Code's
+/// `installed_plugins.json`, or `None` when the file is missing, malformed,
+/// or not version 2.
+fn read_claude_installed_plugin_paths(
+    fs: &dyn ScopeFs,
+    cache: &Path,
+) -> Option<HashMap<String, Vec<PathBuf>>> {
+    let path = cache.parent()?.join("installed_plugins.json");
+    let bytes = fs
+        .read_capped(&path, crate::harness_switch::HARNESS_CONFIG_MAX_BYTES)
+        .ok()?;
+    let value = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
+    if value.get("version").and_then(serde_json::Value::as_u64) != Some(2) {
+        return None;
+    }
+    let plugins = value.get("plugins")?.as_object()?;
+    Some(
+        plugins
+            .iter()
+            .map(|(id, installs)| {
+                let paths = installs
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|install| install.get("installPath")?.as_str())
+                    .map(PathBuf::from)
+                    .collect();
+                (id.clone(), paths)
+            })
+            .collect(),
+    )
+}
+
+fn same_plugin_root(fs: &dyn ScopeFs, install_path: &Path, plugin_root: &Path) -> bool {
+    if fsops::join_lexical(Path::new("/"), install_path)
+        == fsops::join_lexical(Path::new("/"), plugin_root)
+    {
+        return true;
+    }
+    matches!(
+        (fs.canonicalize(install_path), fs.canonicalize(plugin_root)),
+        (Ok(a), Ok(b)) if a == b
+    )
+}
+
+fn walk_for_plugin_roots(
+    fs: &dyn ScopeFs,
+    dir: &Path,
+    depth_remaining: u8,
+    found: &mut Vec<PathBuf>,
+) {
+    let Ok(entries) = fs.read_dir(dir) else {
+        return;
+    };
+    for entry in entries {
+        if !matches!(entry.kind, FileKind::Dir) {
+            continue;
+        }
+        let path = dir.join(&entry.name);
+        if plugin_manifest_present(fs, &path) {
+            found.push(path);
+            continue;
+        }
+        if depth_remaining > 0 {
+            walk_for_plugin_roots(fs, &path, depth_remaining - 1, found);
+        }
+    }
+}
+
+/// Codex and `OpenCode`'s own per-skill disable switches, read once per
+/// `scan` call (they are global config files, not per-root).
+struct DisableSources {
+    /// [`codex_disabled_skill_md_paths`]: the `SKILL.md` paths Codex treats
+    /// as off, in [`codex_path_form`].
+    codex_disabled_skill_md: std::collections::BTreeSet<PathBuf>,
+    /// `permission.skill` (v1) and `permissions[]` (v2) skill rules
+    /// `opencode.json` holds, from [`crate::opencode_config::read_skill_rules`]
+    /// - the same read the write path and every adapter use, so a scan and
+    ///   a deny write always agree on what "denied" means.
+    opencode_skill_rules: crate::opencode_config::OpencodeSkillRules,
+    /// Claude Code `settings.json` `enabledPlugins["<plugin>@<marketplace>"]`,
+    /// keyed by that same `<plugin>@<marketplace>` id.
+    claude_enabled_plugins: HashMap<String, bool>,
+    /// Skill names whose Claude Code `settings.json` `skillOverrides` value
+    /// is `"off"`.
+    claude_skill_overrides_off: HashSet<String>,
+}
+
+impl DisableSources {
+    fn read(
+        fs: &dyn ScopeFs,
+        home: &Path,
+        opencode_config_root: Option<&Path>,
+        codex_home: &Path,
+    ) -> Self {
+        let opencode_config_dir = opencode_config_root
+            .map_or_else(|| home.join(".config").join("opencode"), Path::to_path_buf);
+        DisableSources {
+            codex_disabled_skill_md: codex_disabled_skill_md_paths(fs, codex_home),
+            opencode_skill_rules: crate::opencode_config::read_skill_rules(
+                fs,
+                &opencode_config_dir,
+            ),
+            claude_enabled_plugins: read_claude_enabled_plugins(fs, home),
+            claude_skill_overrides_off: crate::harness::read_claude_skill_overrides(fs, home, None)
+                .into_iter()
+                .filter(|(_, v)| {
+                    v.as_str() == Some(crate::harness_switch::CLAUDE_SKILL_OVERRIDE_OFF)
+                })
+                .map(|(name, _)| name)
+                .collect(),
+        }
+    }
+}
+
+/// Every `SKILL.md` path `<codex_home>/config.toml` turns off, in
+/// [`codex_path_form`]. Follows Codex's own rule (`codex-rs/config`
+/// `resolve_disabled_paths`): rows apply in order, `enabled = false` turns a
+/// path off, and a later `enabled = true` (also the default when the key is
+/// missing) turns it back on. A missing or unparsable file yields an empty
+/// set. The scan and the desktop overlay both read through here, so they
+/// agree with the switch writer on what "off" means.
+pub fn codex_disabled_skill_md_paths(
+    fs: &dyn ScopeFs,
+    codex_home: &Path,
+) -> std::collections::BTreeSet<PathBuf> {
+    let Ok(bytes) = fs.read_capped(&codex_config_path(codex_home), SKILL_MD_MAX_BYTES) else {
+        return Default::default();
+    };
+    let Ok(text) = String::from_utf8(bytes) else {
+        return Default::default();
+    };
+    let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
+        return Default::default();
+    };
+    codex_disabled_forms(fs, &doc)
+}
+
+fn codex_disabled_forms(
+    fs: &dyn ScopeFs,
+    doc: &toml_edit::DocumentMut,
+) -> std::collections::BTreeSet<PathBuf> {
+    let mut disabled = std::collections::BTreeSet::new();
+    for row in codex_skills_config_rows(doc) {
+        let Some(path) = row.get("path").and_then(toml_edit::Item::as_str) else {
+            continue;
+        };
+        let form = codex_path_form(fs, Path::new(path));
+        if row.get("enabled").and_then(toml_edit::Item::as_bool) == Some(false) {
+            disabled.insert(form);
+        } else {
+            disabled.remove(&form);
+        }
+    }
+    disabled
+}
+
+/// The form Codex compares `[[skills.config]]` paths in: it canonicalizes
+/// both the row's path and the skill's `SKILL.md` before it matches them. A
+/// path that no longer exists (a park's old path, after the move) takes the
+/// canonical form of its nearest existing ancestor, so a row written
+/// through a symlinked parent still matches it.
+pub fn codex_path_form(fs: &dyn ScopeFs, path: &Path) -> PathBuf {
+    let mut missing_tail = Vec::new();
+    let mut current = path;
+    loop {
+        if let Ok(canonical) = fs.canonicalize(current) {
+            return missing_tail
+                .iter()
+                .rev()
+                .fold(canonical, |acc, part| acc.join(part));
+        }
+        match (current.parent(), current.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing_tail.push(name.to_os_string());
+                current = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
+/// `<codex_home>/config.toml`.
+fn codex_config_path(codex_home: &Path) -> PathBuf {
+    codex_home.join("config.toml")
+}
+
+/// Iterates `[[skills.config]]` rows in a `toml_edit` document, tolerating a
+/// document with no `skills` table, no `config` array, or a `config` that
+/// isn't an array of tables.
+fn codex_skills_config_rows(
+    doc: &toml_edit::DocumentMut,
+) -> impl Iterator<Item = &toml_edit::Table> {
+    doc.get("skills")
+        .and_then(toml_edit::Item::as_table)
+        .and_then(|t| t.get("config"))
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .into_iter()
+        .flatten()
+}
+
+/// Reads Claude Code's global `enabledPlugins` map, keyed
+/// `<plugin>@<marketplace>`. A missing or malformed `settings.json` yields
+/// an empty map, so every lookup falls back to `None`.
+fn read_claude_enabled_plugins(fs: &dyn ScopeFs, home: &Path) -> HashMap<String, bool> {
+    let path = home.join(".claude").join("settings.json");
+    let Ok(bytes) = fs.read_capped(&path, SKILL_MD_MAX_BYTES) else {
+        return HashMap::new();
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return HashMap::new();
+    };
+    let Some(enabled_plugins) = value.get("enabledPlugins").and_then(|v| v.as_object()) else {
+        return HashMap::new();
+    };
+    enabled_plugins
+        .iter()
+        .filter_map(|(id, v)| v.as_bool().map(|b| (id.clone(), b)))
+        .collect()
+}
+
+/// Claude Code's `enabledPlugins` state for one plugin deployment, or `None`
+/// for any other harness (Codex has no such record).
+fn claude_plugin_enabled(
+    sources: &DisableSources,
+    harness: &AgentId,
+    source: &PluginSourceDto,
+) -> Option<bool> {
+    if harness.as_str() != AgentId::CLAUDE_CODE {
+        return None;
+    }
+    let id = format!("{}@{}", source.plugin, source.marketplace);
+    sources.claude_enabled_plugins.get(&id).copied()
+}
+
+fn native_disabled_by(
+    fs: &dyn ScopeFs,
+    sources: &DisableSources,
+    kind: &RootKind,
+    skill_dir: &Path,
+    name: &str,
+) -> Option<DisabledBy> {
+    match kind {
+        RootKind::Harness(id) if id.as_str() == AgentId::CODEX => sources
+            .codex_disabled_skill_md
+            .contains(&codex_path_form(fs, &skill_dir.join("SKILL.md")))
+            .then_some(DisabledBy::CodexConfig),
+        RootKind::Harness(id) | RootKind::Legacy(id) if id.as_str() == AgentId::OPEN_CODE => {
+            sources
+                .opencode_skill_rules
+                .is_denied(name)
+                .then_some(DisabledBy::OpencodePermission)
+        }
+        RootKind::Harness(id) if id.as_str() == AgentId::CLAUDE_CODE => sources
+            .claude_skill_overrides_off
+            .contains(name)
+            .then_some(DisabledBy::ClaudeSkillOverrides),
+        _ => None,
+    }
+}
+
+/// True when `path`'s components contain a contiguous `[".agents",
+/// "skills"]` window, i.e. it names something inside the universal root.
+/// Mirrors the desktop's `path_is_under_universal_skills`
+/// (`skill_deployment.rs`); works on a raw (unresolved) symlink target the
+/// same way the desktop does, since a link written as `../../.agents/
+/// skills/<name>` carries the window regardless of the leading `..`s.
+fn path_is_under_universal_skills(path: &Path) -> bool {
+    let components: Vec<String> = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    components
+        .windows(2)
+        .any(|w| w[0] == ".agents" && w[1] == "skills")
+}
+
+/// Everything [`classify_owner`] needs to decide one deployment's owner.
+/// Grouped into one struct because the four-ledger precedence needs facts
+/// from three different points in [`process_entries`] (the entry itself,
+/// its freshly derived id, and its freshly computed content fingerprint),
+/// not just the root it was found in.
+struct OwnerClassifyContext<'a> {
+    /// Scope home, for the fork registry's default path
+    /// (`<home>/.agents/skills/<name>`).
+    home: &'a Path,
+    kind: &'a RootKind,
+    scope: &'a RootScope,
+    scope_ledgers: &'a HashMap<RootScope, ownership::ScopeLedgers>,
+    home_registry: &'a ownership::HomeRegistry,
+    skill_name: &'a str,
+    skill_dir: &'a Path,
+    destination: SkillDestination,
+    /// True for a per-skill symlink; false for a canonical directory or a
+    /// whole-directory link (whose entries are canonical directories one
+    /// level down).
+    is_link: bool,
+    /// Where a per-skill symlink points, when it is one. A link into the
+    /// universal root makes the owner ambiguous - see `classify_owner`.
+    link_target: Option<&'a Path>,
+    id: &'a DeploymentId,
+    content_fingerprint: Option<&'a Fingerprint>,
+    /// True when this entry sits in a `.skill-studio-disabled/` holding
+    /// directory (`studio_disabled`).
+    disabled: bool,
+    in_git_repo: bool,
+    /// For a parked copy, the root it came from. Only a copy from the
+    /// global Universal root answers to the Universal ledgers.
+    parked_origin: Option<&'a RootRef>,
+}
+
+/// Classifies which ledger owns a deployment's lifecycle, per the precedence
+/// in `docs/spec-core-primitives.md` section 13.4: `Plugin` (root
+/// is a plugin cache) > `Fork` (detached from its ledger via "Fork", so it
+/// must win even over a matching ledger entry) > `Copy` (an exact,
+/// content-matched deployment the Copy installer recorded) > `Ambiguous`
+/// (both the dotagents ledger and the skills.sh lock file claim the same
+/// name) > `Dotagents` / `WildcardDotagents` (named vs. wildcard
+/// `agents.toml` row) > `SkillsSh` > `InRepo` (a `.git` ancestor) >
+/// `Manual`.
+///
+/// The dotagents and skills.sh ledgers only ever apply to a deployment
+/// rooted directly in the universal or parked root: a per-harness
+/// deployment, or a linked one whose root isn't itself universal, falls
+/// straight to `InRepo`/`Manual` here and is corrected afterward by
+/// [`propagate_verified_linked_owners`] once its canonical counterpart's
+/// owner is known.
+fn classify_owner(cx: &OwnerClassifyContext) -> (LifecycleOwnerKind, Option<OwnerId>) {
+    if matches!(cx.kind, RootKind::PluginCache(_)) {
+        return (LifecycleOwnerKind::Plugin, None);
+    }
+
+    // Fork: only ever the global scope's canonical Universal deployment
+    // (`apply_skill_snapshot_overlays`, `skill_refresh.rs`), and it wins
+    // over everything below since forking detaches a skill from whatever
+    // ledger it came from.
+    if matches!(cx.scope, RootScope::Global)
+        && cx.destination == SkillDestination::Universal
+        && !cx.is_link
+    {
+        if let Some(record) = cx.home_registry.forks.get(cx.skill_name) {
+            let expected_dir = if record.skill_dir.as_os_str().is_empty() {
+                cx.home.join(".agents").join("skills").join(cx.skill_name)
+            } else {
+                record.skill_dir.clone()
+            };
+            let id_matches =
+                record.deployment_id.is_empty() || record.deployment_id == cx.id.as_str();
+            if cx.skill_dir == expected_dir && id_matches {
+                let owner = owner_id("global", None, cx.skill_name);
+                return (LifecycleOwnerKind::Fork, Some(owner));
+            }
+        }
+    }
+
+    if let Some(record) = cx.home_registry.copies.get(cx.id.as_str()) {
+        let scope_matches = matches!(
+            (cx.scope, record.scope.as_str()),
+            (RootScope::Global, "global") | (RootScope::Project(_), "project")
+        );
+        // `install` and `split` write `per_harness` (the enum's serde form);
+        // older registries and the desktop wrote `per-harness`.
+        let destination_matches = match cx.destination {
+            SkillDestination::Universal => record.destination == "universal",
+            SkillDestination::PerHarness => {
+                matches!(record.destination.as_str(), "per_harness" | "per-harness")
+            }
+        };
+        let project_matches = match cx.scope {
+            RootScope::Global => record.project_path.is_none(),
+            RootScope::Project(project) => {
+                record.project_path.as_deref() == Some(project.0.to_string_lossy().as_ref())
+            }
+        };
+        let content_matches = !record.content_hash.is_empty()
+            && cx
+                .content_fingerprint
+                .is_some_and(|fp| fp.bare_hex() == record.content_hash);
+        if scope_matches
+            && destination_matches
+            && project_matches
+            && content_matches
+            && record.name == cx.skill_name
+            && record.path == cx.skill_dir
+            && record.disabled == cx.disabled
+        {
+            return (LifecycleOwnerKind::Copy, None);
+        }
+    }
+
+    let root_is_universal = match cx.kind {
+        RootKind::Universal => true,
+        RootKind::Parked => cx
+            .parked_origin
+            .is_none_or(|o| o.kind == RootKind::Universal && o.scope == RootScope::Global),
+        _ => false,
+    };
+    if !root_is_universal {
+        return if cx.in_git_repo {
+            (LifecycleOwnerKind::InRepo, None)
+        } else {
+            (LifecycleOwnerKind::Manual, None)
+        };
+    }
+
+    // `scope_ledgers` always has an entry for both the home scope and every
+    // tracked project (`scan_inner`), even when neither ledger file exists,
+    // so an empty ledger and a missing one behave the same: no dotagents or
+    // skills.sh entry, fall through to the checks below. A missing entry is
+    // therefore a caller bug, not a "no ledger" case: silently skipping the
+    // symlink carve-out would misclassify the skill.
+    let Some(ledger) = cx.scope_ledgers.get(cx.scope) else {
+        unreachable!("scan_inner populates a ledger for every scope it classifies")
+    };
+
+    let skills_sh_entry = lock_file::is_skill_installed(&ledger.lock, cx.skill_name)
+        || ledger.project_lock_skills.contains(cx.skill_name);
+    // `dotagents sync` adopts any undeclared folder in the universal root as
+    // a `path:` row - a local folder with no upstream. That row must not
+    // outrank (or make ambiguous) a ledger that does have an upstream for
+    // the same name; it only owns the skill when nothing else claims it.
+    let dotagents_entry = ledger
+        .dotagents
+        .iter()
+        .find(|d| d.name == cx.skill_name)
+        .filter(|d| !(d.is_local_path && skills_sh_entry));
+
+    if dotagents_entry.is_some() && skills_sh_entry {
+        return (LifecycleOwnerKind::Ambiguous, None);
+    }
+
+    if let Some(entry) = dotagents_entry {
+        let owner = owner_id(
+            scope_label(cx.scope),
+            project_label(cx.scope).as_deref(),
+            cx.skill_name,
+        );
+        return if entry.has_manifest_row {
+            (LifecycleOwnerKind::Dotagents, Some(owner))
+        } else {
+            (LifecycleOwnerKind::WildcardDotagents, Some(owner))
+        };
+    }
+
+    if skills_sh_entry {
+        let owner = owner_id(
+            scope_label(cx.scope),
+            project_label(cx.scope).as_deref(),
+            cx.skill_name,
+        );
+        return (LifecycleOwnerKind::SkillsSh, Some(owner));
+    }
+
+    // A universal folder that no ledger names stays `Manual`: dotagents
+    // prunes only folders `agents.lock` names, and `sync` adopts the rest
+    // without changing them.
+    //
+    // A per-skill symlink into the universal root: the bytes belong to the
+    // universal deployment, whose own ledger entry may say otherwise, so
+    // this end of the link claims no owner. Owner kind gates repair, so
+    // skipping this would permit owner-wide actions the ambiguity should not
+    // allow.
+    if cx.is_link && cx.link_target.is_some_and(resolves_into_dotagents) {
+        return (LifecycleOwnerKind::Ambiguous, None);
+    }
+
+    if cx.in_git_repo {
+        (LifecycleOwnerKind::InRepo, None)
+    } else {
+        (LifecycleOwnerKind::Manual, None)
+    }
+}
+
+pub(crate) fn scope_label(scope: &RootScope) -> &'static str {
+    match scope {
+        RootScope::Global => "global",
+        RootScope::Project(_) => "project",
+    }
+}
+
+fn project_label(scope: &RootScope) -> Option<String> {
+    match scope {
+        RootScope::Global => None,
+        RootScope::Project(project) => Some(project.0.to_string_lossy().into_owned()),
+    }
+}
+
+/// The `dep:v1` id's harness/universal path segment for a root, matching the
+/// desktop's `harness_slot` (`skill_deployment.rs`): every harness's own
+/// wire id, except `OpenCode`, whose slot is the un-hyphenated CLI name
+/// `opencode`; `universal` for the shared and parked roots.
+pub(crate) fn harness_slot(id: &AgentId) -> String {
+    if id.as_str() == AgentId::OPEN_CODE {
+        "opencode".to_string()
+    } else {
+        id.as_str().to_string()
+    }
+}
+
+fn harness_slot_for_kind(kind: &RootKind) -> String {
+    match kind {
+        RootKind::Harness(id) | RootKind::Legacy(id) | RootKind::PluginCache(id) => {
+            harness_slot(id)
+        }
+        RootKind::Universal | RootKind::Parked => "universal".to_string(),
+    }
+}
+
+/// Percent-encodes `%` and `/` so a path segment can sit inside a `/`-joined
+/// id without its own separators colliding with the id's. Matches the
+/// desktop's `encode_id_path` (`skill_deployment.rs`) byte for byte.
+fn encode_id_path(path: &str) -> String {
+    path.replace('%', "%25").replace('/', "%2F")
+}
+
+/// Derives a deployment id in the desktop's exact wire format: `dep:v1/
+/// {scope}/{slot}/{destination}/{name}/{project}/{lexical-entry}`. Matches
+/// the desktop's `deployment_id` (`skill_deployment.rs`) byte for byte, given
+/// the same inputs.
+pub(crate) fn deployment_id(
+    name: &str,
+    scope_label: &str,
+    destination: SkillDestination,
+    slot: &str,
+    project_path: Option<&str>,
+    lexical_entry: &Path,
+) -> DeploymentId {
+    let project = match project_path {
+        Some(path) if !path.is_empty() => encode_id_path(path),
+        _ => "-".to_string(),
+    };
+    let destination_label = match destination {
+        SkillDestination::Universal => "universal",
+        SkillDestination::PerHarness => "per-harness",
+    };
+    let raw = format!(
+        "{}{scope_label}/{slot}/{destination_label}/{name}/{project}/{}",
+        DeploymentId::PREFIX,
+        encode_id_path(&lexical_entry.to_string_lossy())
+    );
+    DeploymentId::derived(raw)
+}
+
+/// Derives the owner id for a skills.sh-owned deployment. Matches the
+/// desktop's `owner_id_for` (`skill_ownership.rs`) byte for byte.
+fn owner_id(scope_label: &str, project_path: Option<&str>, skill_name: &str) -> OwnerId {
+    let raw = match (scope_label, project_path) {
+        ("global", _) => format!("owner:v1/global/{skill_name}"),
+        (_, Some(path)) if !path.is_empty() => {
+            format!("owner:v1/project/{}/{skill_name}", encode_id_path(path))
+        }
+        _ => format!("owner:v1/project/-/{skill_name}"),
+    };
+    OwnerId::derived(raw)
+}
+
+/// Content fingerprint over a deployment's whole directory tree: sha256 over
+/// the sorted `(relative path, bytes)` pairs, each length-framed as `u64 LE
+/// len(rel_path) || rel_path bytes || u64 LE file_len || file bytes`, capped
+/// at [`MAX_FOLDER_FILES`] files and [`MAX_FOLDER_BYTES`] total bytes. The
+/// truncation edge case (a file so large only part of it fits the
+/// remaining byte budget) degrades to "read nothing further", since
+/// [`ScopeFs::read_capped`] has no partial-read primitive.
+///
+/// Consumes `files` as already gathered by [`walk_folder_for_facts`]'s single
+/// pass, rather than walking the tree again: the fingerprint's own file set
+/// is a byproduct of that one walk, not a second `read_dir` per directory.
+/// `skill_md` reuses the bytes [`read_skill_md`] already read for the file at
+/// `skill_md.path` when that read covered the whole file, so `SKILL.md`
+/// itself is never read a second time here.
+fn content_fingerprint(
+    fs: &dyn ScopeFs,
+    files: &[(PathBuf, PathBuf, u64)],
+    skill_md: &SkillMdBytes,
+) -> Fingerprint {
+    let mut files: Vec<_> = files.to_vec();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut buf = Vec::new();
+    let mut remaining = MAX_FOLDER_BYTES;
+    for (rel_path, abs_path, len) in &files {
+        let rel_bytes = rel_path.to_string_lossy().into_owned().into_bytes();
+        buf.extend_from_slice(&(rel_bytes.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&rel_bytes);
+        buf.extend_from_slice(&len.to_le_bytes());
+        if remaining == 0 {
+            continue;
+        }
+        match skill_md.read_capped(fs, abs_path, remaining.min(*len)) {
+            Ok(bytes) => {
+                remaining = remaining.saturating_sub(bytes.len() as u64);
+                buf.extend_from_slice(&bytes);
+            }
+            Err(_) => remaining = 0,
+        }
+    }
+    Fingerprint::of_bytes(&buf)
+}
+
+/// The already-read bytes of `<skill_dir>/SKILL.md`, so a folder walk that
+/// re-encounters that same file (both hash schemes walk the whole folder,
+/// `SKILL.md` included) can reuse them instead of reading the file again.
+/// Only usable when the caller's read was not truncated and covered exactly
+/// the bytes now wanted; [`SkillMdBytes::read_capped`] falls back to a real
+/// read otherwise, so a truncated or oversized `SKILL.md` is still handled
+/// correctly, just not from cache.
+struct SkillMdBytes<'a> {
+    path: &'a Path,
+    bytes: &'a [u8],
+    truncated: bool,
+}
+
+impl SkillMdBytes<'_> {
+    fn read_capped(&self, fs: &dyn ScopeFs, path: &Path, want: u64) -> std::io::Result<Vec<u8>> {
+        if !self.truncated && path == self.path && want == self.bytes.len() as u64 {
+            return Ok(self.bytes.to_vec());
+        }
+        fs.read_capped(path, want)
+    }
+}
+
+/// The embedded `cl100k_base` vocab is loaded once per process.
+static TOKENIZER: OnceLock<Option<CoreBPE>> = OnceLock::new();
+
+fn tokenizer() -> Option<&'static CoreBPE> {
+    TOKENIZER
+        .get_or_init(|| tiktoken_rs::cl100k_base().ok())
+        .as_ref()
+}
+
+/// Token count of `text`, `cl100k_base`. `None` tokenizer (the embedded vocab
+/// failed to build, which should never happen) yields 0.
+fn count_tokens(text: &str, tokenizer: Option<&CoreBPE>) -> u32 {
+    tokenizer.map_or(0, |bpe| bpe.encode_with_special_tokens(text).len() as u32)
+}
+
+/// True when `skill_dir` follows a symlink to an existing file or directory.
+/// `ScopeFs` has no "metadata that follows links" primitive, so a symlink is
+/// resolved by hand: `canonicalize` then `symlink_metadata` on the target.
+fn exists_following_links(fs: &dyn ScopeFs, path: &Path) -> bool {
+    match fs.symlink_metadata(path) {
+        Ok(meta) if meta.kind == FileKind::Symlink => fs.canonicalize(path).is_ok(),
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+/// True when `path` follows a symlink to an existing directory.
+fn is_dir_following_links(fs: &dyn ScopeFs, path: &Path) -> bool {
+    match fs.symlink_metadata(path) {
+        Ok(meta) if meta.kind == FileKind::Dir => true,
+        Ok(meta) if meta.kind == FileKind::Symlink => fs
+            .canonicalize(path)
+            .ok()
+            .and_then(|target| fs.symlink_metadata(&target).ok())
+            .is_some_and(|m| m.kind == FileKind::Dir),
+        _ => false,
+    }
+}
+
+/// A skill "ships specs" (the getsentry/skillet pattern) when it has a
+/// `spec.md` file or an `evals/` subdirectory alongside `SKILL.md`.
+fn has_spec(fs: &dyn ScopeFs, skill_dir: &Path) -> bool {
+    exists_following_links(fs, &skill_dir.join("spec.md"))
+        || is_dir_following_links(fs, &skill_dir.join("evals"))
+}
+
+/// A regular or symlinked-to-a-file entry found while walking a skill folder
+/// for content facts, queued for hashing once the whole folder has been
+/// walked and its entries sorted. Holds only the path and size, never the
+/// file's bytes, so the walk's memory use doesn't grow with folder size.
+struct HashableFile {
+    rel_path: PathBuf,
+    abs_path: PathBuf,
+    len: u64,
+}
+
+/// Accumulated facts from walking a skill folder for [`DeploymentDto`]'s
+/// content facts. Distinct from [`content_fingerprint`]/[`walk_content_files`]
+/// (the older fingerprint scheme): this walk also counts a symlinked file
+/// toward `file_count` (without ever hashing it) and tracks the newest
+/// mtime.
+#[derive(Default)]
+struct FactsWalk {
+    hashable: Vec<HashableFile>,
+    total_bytes: u64,
+    file_count: u32,
+    newest: Option<DateTime<Utc>>,
+    truncated: bool,
+    /// The same regular files as `hashable`, gathered under
+    /// [`content_fingerprint`]'s own unreduced [`MAX_FOLDER_BYTES`]/
+    /// [`MAX_FOLDER_FILES`] budget rather than `hashable`'s (which has
+    /// `skill_md_bytes.len()` deducted up front): the two schemes' file
+    /// sets only diverge right at the byte cap, which real skill folders
+    /// never approach, so this second budget only matters there.
+    fingerprint_files: Vec<(PathBuf, PathBuf, u64)>,
+    fingerprint_total_bytes: u64,
+    fingerprint_file_count: usize,
+}
+
+impl FactsWalk {
+    /// Whether the fingerprint side has spent its own, unreduced
+    /// `MAX_FOLDER_FILES`/`MAX_FOLDER_BYTES` budget - the walk may stop only
+    /// once this and `truncated` (the hash side's budget) are both true,
+    /// since the two run independently and the hash side commonly hits its
+    /// smaller/reduced budget first.
+    fn fingerprint_done(&self) -> bool {
+        self.fingerprint_file_count >= MAX_FOLDER_FILES
+            || self.fingerprint_total_bytes >= MAX_FOLDER_BYTES
+    }
+}
+
+/// Walks `dir` once into `walk`, gathering both [`content_hash`] facts
+/// (byte/file counts, the newest mtime) and the file list
+/// [`content_fingerprint`] hashes, stopping each independently once its own
+/// [`MAX_FOLDER_FILES`]/byte budget is reached - the walk itself only ends
+/// once both budgets are spent, so an entry past the hash side's (often
+/// smaller, reduced) budget still reaches the fingerprint side's own gate.
+/// One `read_dir` and one
+/// `symlink_metadata` per entry serves both; before this merge each ran its
+/// own recursive walk over the same tree. Never follows a symlinked
+/// directory; a symlinked file counts toward `hashable`'s `file_count` but
+/// is never opened, hashed, sized into `total_bytes`, or added to
+/// `fingerprint_files` (`content_fingerprint` has never counted symlinks).
+/// Unreadable entries are skipped rather than failing the whole walk. A
+/// per-directory-entry [`OpContext::checkpoint`] means a cancellation here
+/// must fail the whole walk (and so the caller's digests) rather than return
+/// whatever partial `walk` was accumulated so far, since a short walk would
+/// silently produce a plausible-but-wrong content hash.
+fn walk_folder_for_facts(
+    fs: &dyn ScopeFs,
+    ctx: &OpContext,
+    root: &Path,
+    dir: &Path,
+    max_bytes: u64,
+    walk: &mut FactsWalk,
+) -> Result<(), CoreError> {
+    if walk.truncated && walk.fingerprint_done() {
+        return Ok(());
+    }
+    let Ok(mut entries) = fs.read_dir(dir) else {
+        return Ok(());
+    };
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    for entry in entries {
+        ctx.checkpoint()?;
+        if walk.truncated && walk.fingerprint_done() {
+            return Ok(());
+        }
+        let path = dir.join(&entry.name);
+        match entry.kind {
+            FileKind::Symlink => {
+                let is_file = fs
+                    .canonicalize(&path)
+                    .ok()
+                    .and_then(|target| fs.symlink_metadata(&target).ok())
+                    .is_some_and(|m| m.kind == FileKind::File);
+                if is_file && !walk.truncated {
+                    walk.file_count += 1;
+                    if walk.file_count as usize >= MAX_FOLDER_FILES {
+                        walk.truncated = true;
+                    }
+                }
+            }
+            FileKind::Dir => {
+                walk_folder_for_facts(fs, ctx, root, &path, max_bytes, walk)?;
+            }
+            FileKind::File => {
+                let Ok(meta) = fs.symlink_metadata(&path) else {
+                    continue;
+                };
+                if !walk.truncated {
+                    // Enforce the remaining byte budget before queuing the
+                    // file, not after: a single oversized file must never be
+                    // added to the hash queue, only counted as the reason
+                    // the hash side stopped. It still falls through to the
+                    // fingerprint gate below, which runs on its own budget.
+                    let remaining = max_bytes.saturating_sub(walk.total_bytes);
+                    if meta.len > remaining {
+                        walk.truncated = true;
+                    } else {
+                        walk.total_bytes += meta.len;
+                        walk.file_count += 1;
+                        if let Some(modified) = meta.modified {
+                            if walk.newest.is_none_or(|n| modified > n) {
+                                walk.newest = Some(modified);
+                            }
+                        }
+                        if let Ok(rel) = path.strip_prefix(root) {
+                            walk.hashable.push(HashableFile {
+                                rel_path: rel.to_path_buf(),
+                                abs_path: path.clone(),
+                                len: meta.len,
+                            });
+                        }
+                        if walk.file_count as usize >= MAX_FOLDER_FILES
+                            || walk.total_bytes >= max_bytes
+                        {
+                            walk.truncated = true;
+                        }
+                    }
+                }
+
+                // `content_fingerprint`'s own, unreduced budget: mirrors
+                // the old standalone `walk_content_files`'s per-entry gate.
+                if walk.fingerprint_file_count < MAX_FOLDER_FILES
+                    && walk.fingerprint_total_bytes < MAX_FOLDER_BYTES
+                {
+                    let fp_remaining =
+                        MAX_FOLDER_BYTES.saturating_sub(walk.fingerprint_total_bytes);
+                    if meta.len > fp_remaining {
+                        walk.fingerprint_total_bytes = MAX_FOLDER_BYTES;
+                    } else {
+                        walk.fingerprint_total_bytes += meta.len;
+                        walk.fingerprint_file_count += 1;
+                        if let Ok(rel) = path.strip_prefix(root) {
+                            walk.fingerprint_files.push((
+                                rel.to_path_buf(),
+                                path.clone(),
+                                meta.len,
+                            ));
+                        }
+                    }
+                }
+            }
+            FileKind::Other => {}
+        }
+    }
+    Ok(())
+}
+
+/// sha256 over the sorted (relative path, bytes) pairs of a skill folder.
+/// Every record is length-framed - `u64 LE len(rel_path) || rel_path bytes
+/// || u64 LE file_len || file bytes` - so that, say, a file "a" containing
+/// "bc" hashes differently from a file "ab" containing "c". Bytes are read
+/// one file at a time rather than held in memory all at once. `max_bytes`
+/// bounds the total file bytes read across every file; the truncation edge
+/// case (a file so large only part of it fits the remaining byte budget)
+/// degrades to "read nothing further from this file onward", since
+/// [`ScopeFs::read_capped`] has no partial-read primitive. Checks
+/// [`OpContext::checkpoint`] once per file, close enough granularity for a
+/// folder of many small files; cancellation surfaces as an error rather
+/// than a digest over a prefix of `files`, for the same reason
+/// [`walk_folder_for_facts`] never returns a partial `walk` as a success.
+fn content_hash_from_walk(
+    mut files: Vec<HashableFile>,
+    fs: &dyn ScopeFs,
+    ctx: &OpContext,
+    max_bytes: u64,
+    skill_md: &SkillMdBytes,
+) -> Result<String, CoreError> {
+    files.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    let mut hasher = Sha256::new();
+    let mut remaining = max_bytes;
+    for file in &files {
+        ctx.checkpoint()?;
+        let rel_bytes = file.rel_path.to_string_lossy().into_owned().into_bytes();
+        hasher.update((rel_bytes.len() as u64).to_le_bytes());
+        hasher.update(&rel_bytes);
+        hasher.update(file.len.to_le_bytes());
+        if remaining == 0 {
+            continue;
+        }
+        match skill_md.read_capped(fs, &file.abs_path, remaining.min(file.len)) {
+            Ok(bytes) => {
+                remaining = remaining.saturating_sub(bytes.len() as u64);
+                hasher.update(&bytes);
+            }
+            Err(_) => remaining = 0,
+        }
+    }
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(hex, "{byte:02x}").ok();
+    }
+    Ok(hex)
+}
+
+/// Every content fact about a skill folder that [`DeploymentDto`] carries,
+/// gathered from one `SKILL.md` read and one folder walk.
+#[derive(Debug, Clone)]
+struct ContentFacts {
+    frontmatter: Option<frontmatter::SkillFrontmatter>,
+    frontmatter_fields: BTreeMap<String, String>,
+    has_spec: bool,
+    folder_bytes: u64,
+    file_count: u32,
+    skill_md_tokens: u32,
+    description_tokens: u32,
+    content_hash: String,
+    /// Content fingerprint over the whole directory tree - a different,
+    /// whole-folder scheme from `content_hash`, kept for parity with the
+    /// desktop's `SkillCandidate`. Computed from the same [`FactsWalk`] that
+    /// derives `content_hash`, not a second folder walk.
+    content_fingerprint: Fingerprint,
+    modified_at: Option<DateTime<Utc>>,
+    folder_truncated: bool,
+}
+
+impl Default for ContentFacts {
+    /// Used only for an unresolved link, whose caller always sets its own
+    /// `content_fingerprint: None` rather than reading this field - the
+    /// empty-bytes fingerprint here is a placeholder, never surfaced.
+    fn default() -> Self {
+        ContentFacts {
+            frontmatter: None,
+            frontmatter_fields: BTreeMap::new(),
+            has_spec: false,
+            folder_bytes: 0,
+            file_count: 0,
+            skill_md_tokens: 0,
+            description_tokens: 0,
+            content_hash: String::new(),
+            content_fingerprint: Fingerprint::of_bytes(&[]),
+            modified_at: None,
+            folder_truncated: false,
+        }
+    }
+}
+
+/// Walks `skill_dir` once and derives every [`ContentFacts`] field from that
+/// walk plus the already-read `skill_md_bytes`/`parsed` (so the caller's own
+/// `SKILL.md` read and parse, already needed for `description`/
+/// `spec_violations`, is never repeated here, and the walk's own encounter
+/// with `SKILL.md` as a folder entry reuses those same bytes rather than
+/// reading the file again). `skill_md_bytes`' own length is deducted from
+/// the `content_hash` walk's byte budget first, since that walk re-hashes
+/// `SKILL.md` as part of the folder; `content_fingerprint` keeps its own
+/// unreduced budget, unchanged from before this merge.
+fn compute_content_facts(
+    fs: &dyn ScopeFs,
+    ctx: &OpContext,
+    skill_dir: &Path,
+    skill_md_bytes: &[u8],
+    skill_md_truncated: bool,
+    parsed: &frontmatter::FrontmatterParseResult,
+) -> Result<ContentFacts, CoreError> {
+    let content = String::from_utf8_lossy(skill_md_bytes).into_owned();
+    let frontmatter = parsed.as_frontmatter().cloned();
+    let name_for_tokens = frontmatter
+        .as_ref()
+        .and_then(|f| f.name.clone())
+        .unwrap_or_default();
+    let description_for_tokens = frontmatter
+        .as_ref()
+        .and_then(|f| f.description.clone())
+        .unwrap_or_default();
+
+    let mut walk = FactsWalk::default();
+    walk_folder_for_facts(
+        fs,
+        ctx,
+        skill_dir,
+        skill_dir,
+        MAX_FOLDER_BYTES.saturating_sub(skill_md_bytes.len() as u64),
+        &mut walk,
+    )?;
+
+    let skill_md_path = skill_dir.join("SKILL.md");
+    let skill_md = SkillMdBytes {
+        path: &skill_md_path,
+        bytes: skill_md_bytes,
+        truncated: skill_md_truncated,
+    };
+    let tok = tokenizer();
+    Ok(ContentFacts {
+        frontmatter_fields: frontmatter::frontmatter_fields(&content),
+        has_spec: has_spec(fs, skill_dir),
+        folder_bytes: walk.total_bytes,
+        file_count: walk.file_count,
+        skill_md_tokens: count_tokens(&content, tok),
+        description_tokens: count_tokens(
+            &format!("{name_for_tokens}: {description_for_tokens}"),
+            tok,
+        ),
+        content_fingerprint: content_fingerprint(fs, &walk.fingerprint_files, &skill_md),
+        content_hash: content_hash_from_walk(walk.hashable, fs, ctx, MAX_FOLDER_BYTES, &skill_md)?,
+        modified_at: walk.newest,
+        folder_truncated: walk.truncated || skill_md_truncated,
+        frontmatter,
+    })
+}
+
+/// Whether `dir` sits inside a git working tree (a `.git` file or directory
+/// on some ancestor up to the scope root), bounded to the scope: this walks
+/// through [`ScopedReads`], so it never reads real directories above the
+/// scope's home or projects. See [`ScopeFs::ancestor_holds`].
+fn in_git_repo(fs: &dyn ScopeFs, scope: &NormalizedScope, dir: &Path) -> bool {
+    ScopedReads::new(fs, scope)
+        .ancestor_holds(dir, ".git")
+        .unwrap_or(false)
+}
+
+/// Whether `path`'s components contain `.agents/skills` back to back -
+/// i.e. the path resolves into the shared dotagents-managed root.
+fn resolves_into_dotagents(path: &Path) -> bool {
+    let comps: Vec<String> = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    comps
+        .windows(2)
+        .any(|w| w[0] == ".agents" && w[1] == "skills")
+}
+
+/// The install-source badge is a projection of the owner classification, not
+/// a second classifier: the owner lookup already answered "which ledger, in
+/// which scope, claims this folder", and that is the same question. A
+/// separate lock-file check here would be scope-blind - one home lock file
+/// tested against every root's bare name - and would badge a per-harness
+/// manual folder as skills.sh whenever the home lock names a same-named
+/// skill. An `Ambiguous` dual claim (a dotagents row and a skills.sh row for
+/// one name) reads as dotagents because it is a dotagents-managed root with
+/// no single owner row. An `Ambiguous` link back into the universal root has
+/// no source of its own; the scan call site badges it `Manual`.
+fn source_kind_from_owner(owner: LifecycleOwnerKind) -> SourceKind {
+    match owner {
+        LifecycleOwnerKind::Plugin => SourceKind::Plugin,
+        LifecycleOwnerKind::Fork => SourceKind::Fork,
+        LifecycleOwnerKind::SkillsSh => SourceKind::SkillsSh,
+        LifecycleOwnerKind::InRepo => SourceKind::InRepo,
+        LifecycleOwnerKind::Dotagents
+        | LifecycleOwnerKind::WildcardDotagents
+        | LifecycleOwnerKind::Ambiguous => SourceKind::Dotagents,
+        LifecycleOwnerKind::Copy | LifecycleOwnerKind::Manual => SourceKind::Manual,
+    }
+}
+
+/// Recomputes the whole-folder `content_hash` for `skill_dir`, outside of a
+/// scan. Mutation guards (`skill_add_operation`, `skill_independent_copy`)
+/// need the live hash before writing over an existing deployment, with no
+/// `Inventory` in hand.
+///
+/// Takes the filesystem port directly, rather than a [`Runtime`], because it
+/// is not a scoped operation: `skill_dir` is NOT confined to a scope. That is
+/// deliberate and load-bearing: `skill_independent_copy` hashes a staging
+/// directory that need not sit under the scope root, and a scope-confined
+/// read would report it as missing. The caller therefore owns the choice of
+/// path - pass a directory the user's own action named, never one taken
+/// from untrusted input.
+pub fn skill_content_hash(
+    fs: &dyn ScopeFs,
+    ctx: &OpContext,
+    skill_dir: &Path,
+) -> Result<String, CoreError> {
+    // The Add path walks a folder that may be large and must stay
+    // interruptible, which is why this takes a context like every other op
+    // rather than making the caller choose between a digest and a
+    // cancellable one.
+    ctx.checkpoint()?;
+    let skill_md_path = skill_dir.join("SKILL.md");
+    let (bytes, truncated) = fs
+        .read_prefix(&skill_md_path, SKILL_MD_MAX_BYTES)
+        .map_err(|e| CoreError::io(skill_md_path.clone(), e))?;
+    let mut walk = FactsWalk::default();
+    walk_folder_for_facts(
+        fs,
+        ctx,
+        skill_dir,
+        skill_dir,
+        MAX_FOLDER_BYTES.saturating_sub(bytes.len() as u64),
+        &mut walk,
+    )?;
+    let skill_md = SkillMdBytes {
+        path: &skill_md_path,
+        bytes: &bytes,
+        truncated,
+    };
+    content_hash_from_walk(walk.hashable, fs, ctx, MAX_FOLDER_BYTES, &skill_md)
+}
+
+/// Runs `scan` and derives issues from the inventory.
+///
+/// Preconditions: same as [`scan`]. Issue derivation itself reads no root
+/// directory and takes no lease of its own; it only re-reads a candidate
+/// `SKILL.md` already named by the inventory, to test whether
+/// [`propose_colon_scalar_repair`] would fix its frontmatter
+/// ([`IssueKind::RepairableFrontmatter`]) and whether a broken-looking link's
+/// target exists at all ([`IssueKind::BrokenLink`] vs
+/// [`IssueKind::UnreadableLink`]). A read that fails there is treated as "not
+/// repairable"/"not readable" rather than surfaced as an error: `diagnose`
+/// never fails just because one deployment's extra read did.
+pub fn diagnose(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Diagnosis, CoreError> {
+    rt.run(Operation::Diagnose, ctx, || diagnose_body(rt, ctx, req))
+}
+
+fn diagnose_body(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Diagnosis, CoreError> {
+    let clock = rt.ports.clock.as_ref();
+    let op_start = clock.monotonic();
+    let step_start = clock.monotonic();
+    let inventory = scan(rt, ctx, req);
+    // Discard `scan`'s own timing immediately: an error below must leave
+    // `ctx` with `diagnose`'s own timing or none, never `scan`'s.
+    ctx.take_timing();
+    let inventory = inventory?;
+    let scan_step = crate::timing::step(clock, "scan", step_start);
+    ctx.checkpoint()?;
+    let step_start = clock.monotonic();
+    let issues = derive_issues(rt.ports.fs.as_ref(), &inventory);
+    let derive_step = crate::timing::step(clock, "derive_issues", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "diagnose",
+        op_start,
+        vec![scan_step, derive_step],
+    ));
+    Ok(Diagnosis { inventory, issues })
+}
+
+/// Reuses [`diagnose`] to find every skill with more than one `Canonical` or
+/// `Independent` deployment whose `content_hash` differs from another's:
+/// two copies of one skill that hold different bytes. Never merges and
+/// writes nothing - the caller opens both paths in the user's editor side
+/// by side, the same way `git` opens a merge conflict.
+///
+/// Preconditions: shared lease (through [`diagnose`]'s [`scan`]).
+pub fn diagnose_conflict(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &crate::dto::DiagnoseConflictRequest,
+) -> Result<crate::dto::ConflictReport, CoreError> {
+    rt.run(Operation::DiagnoseConflict, ctx, || {
+        diagnose_conflict_body(rt, ctx, req)
+    })
+}
+
+fn diagnose_conflict_body(
+    rt: &Runtime,
+    ctx: &OpContext,
+    _req: &crate::dto::DiagnoseConflictRequest,
+) -> Result<crate::dto::ConflictReport, CoreError> {
+    let clock = rt.ports.clock.as_ref();
+    let start = clock.monotonic();
+    let diagnosis = diagnose(rt, ctx, &ScanRequest::default())?;
+    let report = crate::dto::ConflictReport {
+        conflicts: conflicts_in(&diagnosis.inventory),
+    };
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "diagnose_conflict",
+        start,
+        Vec::new(),
+    ));
+    Ok(report)
+}
+
+/// Every pair of `Canonical`/`Independent` deployments of one skill whose
+/// `content_hash` differs, over an inventory already scanned. Shared by
+/// [`diagnose_conflict`] and [`fix_skill`] so a fix for one skill does not
+/// pay for a second full scan just to find that skill's own conflicts.
+fn conflicts_in(inventory: &Inventory) -> Vec<crate::dto::ConflictSummary> {
+    let mut conflicts = Vec::new();
+    for skill in &inventory.skills {
+        let copies: Vec<&DeploymentDto> = skill
+            .deployments
+            .iter()
+            .filter(|d| {
+                matches!(
+                    d.backing,
+                    BackingRelationship::Canonical | BackingRelationship::Independent
+                )
+            })
+            .collect();
+        for i in 0..copies.len() {
+            for j in (i + 1)..copies.len() {
+                let (a, b) = (copies[i], copies[j]);
+                if a.content_hash != b.content_hash {
+                    conflicts.push(crate::dto::ConflictSummary {
+                        skill: skill.name.clone(),
+                        message: format!(
+                            "{} and {} hold different bytes for `{}`",
+                            a.path.display(),
+                            b.path.display(),
+                            skill.name.0
+                        ),
+                        path_a: a.path.clone(),
+                        path_b: b.path.clone(),
+                    });
+                }
+            }
+        }
+    }
+    conflicts
+}
+
+/// Runs the doctor invariants from `docs/action-map/lifecycle-states.md`
+/// for one skill and applies whichever repair exists.
+///
+/// A [`IssueKind::RepairableFrontmatter`] issue is repaired the same way
+/// [`preview_frontmatter_repair`]/[`apply_frontmatter_repair`] would (this
+/// is the dispatch those two entry points gain, per the migration
+/// mapping). Every other issue - a dangling link ([`IssueKind::BrokenLink`],
+/// invariant 1, repaired by the desktop's journaled `repair_skill_link`, not
+/// duplicated here), a stale registry or lockfile entry (invariants 2 and 3,
+/// detect-only - see [`crate::doctor`]'s module doc comment for why), a
+/// folder in two states at once (invariant 4), or a quarantine over its
+/// retention cap (invariant 5, unit 3.9's follow-up: pruning needs a lease
+/// and a journal entry this op does not take) - is returned unfixed, named
+/// with its path. Conflicts ([`diagnose_conflict`]'s own logic, reused
+/// through [`conflicts_in`] against the same scan rather than a second one)
+/// are reported alongside, never written.
+///
+/// Preconditions: none beyond what the sub-operations this composes need;
+/// each runs its own lease.
+pub fn fix_skill(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &crate::dto::FixSkillRequest,
+) -> Result<crate::dto::FixSkillOutcome, CoreError> {
+    rt.run(Operation::FixSkill, ctx, || fix_skill_body(rt, ctx, req))
+}
+
+fn fix_skill_body(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &crate::dto::FixSkillRequest,
+) -> Result<crate::dto::FixSkillOutcome, CoreError> {
+    use crate::dto::UnrepairedIssue;
+
+    ctx.checkpoint()?;
+    let diagnosis = diagnose(
+        rt,
+        ctx,
+        &ScanRequest {
+            skills: vec![req.skill.clone()],
+            timings: false,
+        },
+    );
+    ctx.take_timing();
+    let diagnosis = diagnosis?;
+
+    let mut applied = Vec::new();
+    let mut unrepaired = Vec::new();
+
+    // `BrokenLink` issues are named by `check_link_resolves_in_root`
+    // (invariant 1) below instead of here, so a dangling link is reported
+    // once, not once per source.
+    for issue in diagnosis
+        .issues
+        .iter()
+        .filter(|issue| issue.skill == req.skill && issue.kind != IssueKind::BrokenLink)
+    {
+        let NextAction::PreviewRepair { deployment_id } = &issue.next_action else {
+            unrepaired.push(UnrepairedIssue {
+                path: issue_path(&diagnosis, issue),
+                message: issue.message.clone(),
+                kind: unrepaired_issue_kind(issue.kind),
+            });
+            continue;
+        };
+        let preview = preview_frontmatter_repair(
+            rt,
+            ctx,
+            &RepairPreviewRequest {
+                deployment_id: deployment_id.clone(),
+            },
+        );
+        ctx.take_timing();
+        let preview = match preview {
+            Ok(preview) => preview,
+            Err(error) => {
+                unrepaired.push(UnrepairedIssue {
+                    path: issue_path(&diagnosis, issue),
+                    message: error.message,
+                    kind: crate::dto::UnrepairedIssueKind::Frontmatter,
+                });
+                continue;
+            }
+        };
+        let outcome = apply_frontmatter_repair(
+            rt,
+            ctx,
+            &RepairApplyRequest {
+                preview: preview.clone(),
+                mode: RepairApplyMode::ApplyFix,
+            },
+        );
+        ctx.take_timing();
+        match outcome {
+            Ok(RepairOutcome::Applied {
+                event_id,
+                deployment_id,
+            }) => applied.push(crate::dto::FixApplied::FrontmatterRepair {
+                deployment_id,
+                event_id,
+            }),
+            Ok(RepairOutcome::AlreadyApplied { .. }) => {}
+            Err(error) => unrepaired.push(UnrepairedIssue {
+                path: preview.path.clone(),
+                message: error.message,
+                kind: crate::dto::UnrepairedIssueKind::Frontmatter,
+            }),
+        }
+    }
+
+    let fs = rt.ports.fs.as_ref();
+    let home = &rt.scope.home.lexical;
+    for violation in crate::doctor::check_link_resolves_in_root(&diagnosis)
+        .into_iter()
+        .chain(crate::doctor::check_registry_entry_has_folder(fs, home))
+        .chain(crate::doctor::check_lockfile_entry_has_folder(
+            fs,
+            home,
+            &diagnosis.inventory,
+        ))
+        .chain(crate::doctor::check_no_folder_in_two_states(
+            &diagnosis.inventory,
+            std::slice::from_ref(&req.skill),
+        ))
+        .filter(|violation| violation.skill.as_ref() == Some(&req.skill))
+    {
+        unrepaired.push(UnrepairedIssue {
+            kind: unrepaired_issue_kind_for_invariant(violation.invariant),
+            path: violation.path,
+            message: violation.message,
+        });
+    }
+    // Global, not skill-scoped: reported whenever a fix for any skill
+    // happens to run, the same way the pre-fix code did.
+    if let Some(violation) = crate::doctor::check_quarantine_within_cap(fs, home)
+        .into_iter()
+        .next()
+    {
+        unrepaired.push(UnrepairedIssue {
+            kind: unrepaired_issue_kind_for_invariant(violation.invariant),
+            path: violation.path,
+            message: violation.message,
+        });
+    }
+
+    let conflicts = conflicts_in(&diagnosis.inventory);
+    ctx.take_timing();
+
+    Ok(crate::dto::FixSkillOutcome {
+        skill: req.skill.clone(),
+        applied,
+        unrepaired,
+        conflicts,
+    })
+}
+
+/// Maps a diagnosed [`IssueKind`] to the coarser [`UnrepairedIssueKind`] a
+/// caller branches on. `RepairableFrontmatter` issues never reach here
+/// unrepaired at this kind (see the two call sites below that classify
+/// their own repair-attempt failures), so any unmatched kind falls back to
+/// `Other` rather than claiming a category the caller can't act on.
+fn unrepaired_issue_kind(kind: IssueKind) -> crate::dto::UnrepairedIssueKind {
+    match kind {
+        IssueKind::UnreadableLink => crate::dto::UnrepairedIssueKind::Link,
+        IssueKind::SpecViolation | IssueKind::RepairableFrontmatter => {
+            crate::dto::UnrepairedIssueKind::Frontmatter
+        }
+        _ => crate::dto::UnrepairedIssueKind::Other,
+    }
+}
+
+/// Maps a [`DoctorInvariant`] to the coarser [`UnrepairedIssueKind`] a
+/// caller branches on.
+fn unrepaired_issue_kind_for_invariant(
+    invariant: crate::doctor::DoctorInvariant,
+) -> crate::dto::UnrepairedIssueKind {
+    match invariant {
+        crate::doctor::DoctorInvariant::LinkResolvesInRoot => crate::dto::UnrepairedIssueKind::Link,
+        _ => crate::dto::UnrepairedIssueKind::Other,
+    }
+}
+
+/// Resolves `issue`'s own deployment to its path via `diagnosis`'s
+/// inventory, so an unrepaired issue names a real file instead of an empty
+/// path. `IssueKind::Duplicate` (from `duplicate_issues`) carries no
+/// `deployment_id`, since the issue is about the skill having two
+/// deployments rather than one of them; fall back to the skill's first
+/// `Canonical` or `Independent` deployment (never `LinkedTo`, which just
+/// points back at one of the others) so the path still names a real file.
+fn issue_path(diagnosis: &Diagnosis, issue: &Issue) -> PathBuf {
+    issue
+        .deployment_id
+        .as_ref()
+        .and_then(|id| {
+            diagnosis
+                .inventory
+                .skills
+                .iter()
+                .flat_map(|skill| &skill.deployments)
+                .find(|deployment| &deployment.id == id)
+        })
+        .or_else(|| {
+            diagnosis
+                .inventory
+                .skills
+                .iter()
+                .find(|skill| skill.name == issue.skill)
+                .and_then(|skill| {
+                    skill.deployments.iter().find(|deployment| {
+                        matches!(
+                            deployment.backing,
+                            BackingRelationship::Canonical | BackingRelationship::Independent
+                        )
+                    })
+                })
+        })
+        .map(|deployment| deployment.path.clone())
+        .unwrap_or_default()
+}
+
+/// Runs `scan` and checks every deployment's currency against its install
+/// method's source - skills.sh by lock hash against tree hash, dotagents by
+/// pinned commit against newest commit, plugin by cache version against the
+/// marketplace manifest, manual/in-repo/fork never. One entry per skill
+/// name; see [`crate::skill_update_check`] for the rule each method follows.
+///
+/// Preconditions: same as [`scan`]. Ports for skills.sh, dotagents, and
+/// plugin lookups are supplied directly, not through [`crate::ports::Ports`]:
+/// unlike a mutation's fs/lease/journal ports, these three are read-only
+/// network lookups this one op needs, so a direct parameter avoids adding
+/// three more `Option<Arc<dyn _>>` fields (and every existing `Ports`
+/// literal in this crate's other tests) for a single caller.
+pub fn outdated(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &ScanRequest,
+    tree_lookup: &dyn crate::skill_update_check::SourceTreeLookup,
+    commit_lookup: &dyn crate::skill_update_check::CommitLookup,
+    plugin_lookup: &dyn crate::skill_update_check::PluginManifestLookup,
+) -> Result<BTreeMap<String, crate::skill_update_check::OutdatedRecord>, CoreError> {
+    rt.run(Operation::Outdated, ctx, || {
+        outdated_body(rt, ctx, req, tree_lookup, commit_lookup, plugin_lookup)
+    })
+}
+
+fn outdated_body(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &ScanRequest,
+    tree_lookup: &dyn crate::skill_update_check::SourceTreeLookup,
+    commit_lookup: &dyn crate::skill_update_check::CommitLookup,
+    plugin_lookup: &dyn crate::skill_update_check::PluginManifestLookup,
+) -> Result<BTreeMap<String, crate::skill_update_check::OutdatedRecord>, CoreError> {
+    let clock = rt.ports.clock.as_ref();
+    let start = clock.monotonic();
+    let inventory = scan(rt, ctx, req)?;
+    let targets: Vec<crate::skill_update_check::OutdatedTarget> = inventory
+        .skills
+        .iter()
+        .filter_map(outdated_target)
+        .collect();
+    let result = crate::skill_update_check::outdated(
+        rt.ports.fs.as_ref(),
+        &rt.scope.home.lexical,
+        &targets,
+        tree_lookup,
+        commit_lookup,
+        plugin_lookup,
+    );
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "outdated",
+        start,
+        Vec::new(),
+    ));
+    Ok(result)
+}
+
+/// Picks the deployment that decides `skill`'s currency rule, and builds the
+/// `OutdatedTarget` for it. A skill deployed by more than one install method
+/// is classified by provenance precedence (dotagents beats plugin beats
+/// skills-sh beats in-repo beats manual, via `SourceKind`'s derived `Ord`),
+/// not by whichever deployment `scan` happened to list first - matching
+/// `apps/desktop`'s `provenance::classify_source_kind` precedence.
+///
+/// `Fork` is checked first, ahead of that `Ord`-driven pick: a fork detaches
+/// a skill from whatever ledger/link it was cut from, so a per-harness link
+/// left behind (classified `Manual`) or a same-named dotagents/skills-sh row
+/// must never outrank the fork's own pinned-commit currency rule. `Fork` is
+/// deliberately last in `SourceKind`'s `Ord` for unrelated precedence
+/// reasons elsewhere, so `min_by_key` alone would pick the wrong deployment
+/// here.
+fn outdated_target(skill: &InstalledSkillDto) -> Option<crate::skill_update_check::OutdatedTarget> {
+    let deployment = skill
+        .deployments
+        .iter()
+        .find(|deployment| deployment.source_kind == SourceKind::Fork)
+        .or_else(|| {
+            skill
+                .deployments
+                .iter()
+                .min_by_key(|deployment| deployment.source_kind)
+        })?;
+    let plugin = deployment
+        .plugin
+        .as_ref()
+        .map(|p| (p.marketplace.clone(), p.plugin.clone(), p.version.clone()));
+    let project_path = match (deployment.source_kind, &deployment.root.scope) {
+        (SourceKind::SkillsSh | SourceKind::Dotagents, RootScope::Project(project)) => {
+            Some(project.0.clone())
+        }
+        _ => None,
+    };
+    Some(crate::skill_update_check::OutdatedTarget {
+        name: skill.name.0.clone(),
+        source_kind: deployment.source_kind,
+        plugin,
+        project_path,
+    })
+}
+
+/// Pure(ish) issue derivation over an [`Inventory`]; see [`diagnose`] for the
+/// two rules that re-read a file. Issues are sorted by severity (`Error`,
+/// `Warning`, `Off`), then skill name, then kind, matching the doc comment on
+/// [`ops::diagnose`](diagnose).
+fn derive_issues(fs: &dyn ScopeFs, inventory: &Inventory) -> Vec<Issue> {
+    let mut issues = Vec::new();
+
+    for skill in &inventory.skills {
+        for deployment in &skill.deployments {
+            if let Some(issue) = broken_or_unreadable_link_issue(fs, skill, deployment) {
+                issues.push(issue);
+            }
+            for violation in &deployment.spec_violations {
+                issues.push(Issue {
+                    kind: IssueKind::SpecViolation,
+                    severity: Severity::Warning,
+                    skill: skill.name.clone(),
+                    deployment_id: Some(deployment.id.clone()),
+                    message: violation.clone(),
+                    next_action: NextAction::None,
+                });
+            }
+            if let Some(issue) = repairable_frontmatter_issue(fs, skill, deployment) {
+                issues.push(issue);
+            }
+            if matches!(deployment.root.kind, RootKind::Parked) {
+                issues.push(Issue {
+                    kind: IssueKind::Parked,
+                    severity: Severity::Off,
+                    skill: skill.name.clone(),
+                    deployment_id: Some(deployment.id.clone()),
+                    message: format!("{} is parked", deployment.path.display()),
+                    next_action: NextAction::None,
+                });
+            }
+            if deployment.disabled_by.is_some() {
+                issues.push(Issue {
+                    kind: IssueKind::Disabled,
+                    severity: Severity::Off,
+                    skill: skill.name.clone(),
+                    deployment_id: Some(deployment.id.clone()),
+                    message: format!("{} is disabled", deployment.path.display()),
+                    next_action: NextAction::None,
+                });
+            }
+        }
+        issues.extend(duplicate_issues(skill));
+    }
+
+    for observation in &inventory.observations {
+        if observation.message.starts_with(TRUNCATED_SKILL_MD_PREFIX) {
+            continue;
+        }
+        issues.push(Issue {
+            kind: IssueKind::RootUnreadable,
+            severity: Severity::Error,
+            skill: SkillName(String::new()),
+            deployment_id: None,
+            message: observation.message.clone(),
+            next_action: NextAction::Rescan,
+        });
+    }
+
+    issues.sort_by(|a, b| {
+        b.severity
+            .cmp(&a.severity)
+            .then_with(|| a.skill.0.cmp(&b.skill.0))
+            .then_with(|| format!("{:?}", a.kind).cmp(&format!("{:?}", b.kind)))
+    });
+    issues
+}
+
+/// A linked deployment with no content fingerprint means its target could
+/// not be read; [`fs`] tells apart "the target is missing"
+/// ([`IssueKind::BrokenLink`]) from "the target exists but couldn't be read"
+/// ([`IssueKind::UnreadableLink`]), which the fingerprint-less deployment
+/// alone cannot.
+fn broken_or_unreadable_link_issue(
+    fs: &dyn ScopeFs,
+    skill: &InstalledSkillDto,
+    deployment: &DeploymentDto,
+) -> Option<Issue> {
+    if !matches!(deployment.backing, BackingRelationship::LinkedTo)
+        || deployment.content_fingerprint.is_some()
+    {
+        return None;
+    }
+    let link_target = deployment.link_target.as_deref()?;
+    let (kind, message) = if fs.symlink_metadata(link_target).is_ok() {
+        (
+            IssueKind::UnreadableLink,
+            format!("{} could not be read", link_target.display()),
+        )
+    } else {
+        (
+            IssueKind::BrokenLink,
+            format!("{} links to a missing target", deployment.path.display()),
+        )
+    };
+    Some(Issue {
+        kind,
+        severity: Severity::Error,
+        skill: skill.name.clone(),
+        deployment_id: Some(deployment.id.clone()),
+        message,
+        next_action: NextAction::RepairLink {
+            deployment_id: deployment.id.clone(),
+        },
+    })
+}
+
+/// `true` when one of `deployment`'s spec violations is the "invalid YAML
+/// frontmatter" message [`crate::frontmatter::validate_skill`] emits.
+fn has_invalid_yaml_violation(deployment: &DeploymentDto) -> bool {
+    deployment
+        .spec_violations
+        .iter()
+        .any(|v| v.starts_with("invalid YAML frontmatter"))
+}
+
+/// Ports the desktop's `apply_modes`
+/// (`apps/desktop/src-tauri/src/skills/skill_frontmatter_repair.rs`) gate
+/// and per-owner mode selection byte-for-byte, so `diagnose`'s
+/// `PreviewRepair` next action and `preview_frontmatter_repair`/
+/// `apply_frontmatter_repair`'s own gate agree by construction: a plugin
+/// deployment, a symlink, a whole-directory link, or a read-only deployment
+/// not owned by `Manual` gets no modes at all; a `SkillsSh`/`Dotagents`
+/// -owned canonical universal deployment gets `ForkAndFix`+
+/// `FixInstalledCopy`; a `Copy`/`Fork`/`Manual`-owned deployment gets
+/// `ApplyFix`; anything else gets none. The desktop has no core-side
+/// equivalent field this omits - every condition in `apply_modes` maps to a
+/// [`DeploymentDto`] field.
+fn desktop_repair_apply_modes(deployment: &DeploymentDto) -> Vec<RepairApplyMode> {
+    if deployment.plugin.is_some()
+        || deployment.link_target.is_some()
+        || deployment.shared_via_whole_dir_link
+        || (deployment.mutability == DeploymentMutability::ReadOnly
+            && deployment.owner_kind != LifecycleOwnerKind::Manual)
+    {
+        return vec![];
+    }
+    match deployment.owner_kind {
+        LifecycleOwnerKind::SkillsSh | LifecycleOwnerKind::Dotagents => {
+            if matches!(deployment.root.scope, RootScope::Global)
+                && deployment.destination == SkillDestination::Universal
+                && matches!(deployment.backing, BackingRelationship::Canonical)
+            {
+                vec![
+                    RepairApplyMode::ForkAndFix,
+                    RepairApplyMode::FixInstalledCopy,
+                ]
+            } else {
+                vec![]
+            }
+        }
+        LifecycleOwnerKind::Copy | LifecycleOwnerKind::Fork | LifecycleOwnerKind::Manual => {
+            vec![RepairApplyMode::ApplyFix]
+        }
+        _ => vec![],
+    }
+}
+
+/// Re-reads `deployment`'s `SKILL.md` and checks whether
+/// [`propose_colon_scalar_repair`] can fix it. `None` when the deployment's
+/// frontmatter parsed fine, the file can no longer be read, no safe unique
+/// repair exists, or [`desktop_repair_apply_modes`] would refuse every mode
+/// this core build can write (`ApplyFix`) - otherwise `preview_repair` would
+/// contradict this very diagnosis by refusing the action `diagnose` just
+/// proposed.
+fn repairable_frontmatter_issue(
+    fs: &dyn ScopeFs,
+    skill: &InstalledSkillDto,
+    deployment: &DeploymentDto,
+) -> Option<Issue> {
+    if !has_invalid_yaml_violation(deployment) {
+        return None;
+    }
+    if !desktop_repair_apply_modes(deployment).contains(&RepairApplyMode::ApplyFix) {
+        return None;
+    }
+    let bytes = fs
+        .read_capped(&deployment.path.join("SKILL.md"), SKILL_MD_MAX_BYTES)
+        .ok()?;
+    let content = String::from_utf8_lossy(&bytes);
+    let (_, reason) = propose_colon_scalar_repair(&content).ok()?;
+    Some(Issue {
+        kind: IssueKind::RepairableFrontmatter,
+        severity: Severity::Warning,
+        skill: skill.name.clone(),
+        deployment_id: Some(deployment.id.clone()),
+        message: reason,
+        next_action: NextAction::PreviewRepair {
+            deployment_id: deployment.id.clone(),
+        },
+    })
+}
+
+/// One [`IssueKind::Duplicate`] per `(harness, scope)` group that has more
+/// than one `Canonical` or `Independent` deployment of this skill: two
+/// copies a reader would see as the same name installed twice.
+fn duplicate_issues(skill: &InstalledSkillDto) -> Vec<Issue> {
+    let mut groups: BTreeMap<(Option<String>, String), Vec<&DeploymentDto>> = BTreeMap::new();
+    for deployment in &skill.deployments {
+        if !matches!(
+            deployment.backing,
+            BackingRelationship::Canonical | BackingRelationship::Independent
+        ) {
+            continue;
+        }
+        let harness = deployment.harness.as_ref().map(|h| h.as_str().to_string());
+        let scope = match &deployment.root.scope {
+            RootScope::Global => "global".to_string(),
+            RootScope::Project(p) => format!("project:{}", p.0.display()),
+        };
+        groups.entry((harness, scope)).or_default().push(deployment);
+    }
+    groups
+        .into_values()
+        .filter(|group| group.len() > 1)
+        .map(|group| Issue {
+            kind: IssueKind::Duplicate,
+            severity: Severity::Warning,
+            skill: skill.name.clone(),
+            deployment_id: None,
+            message: format!(
+                "{} is installed {} times in the same scope",
+                skill.name.0,
+                group.len()
+            ),
+            next_action: NextAction::None,
+        })
+        .collect()
+}
+
+/// Reports harness facts from the catalog, optionally probing the machine.
+///
+/// Preconditions: none. With `observe = false` and no `tools` this reads
+/// nothing. A harness without a catalog row is
+/// [`ErrorCode::InvalidRequest`]; a `tools` list without a `ToolLookup`
+/// port is [`ErrorCode::Unsupported`].
+pub fn capabilities(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &CapabilitiesRequest,
+) -> Result<Capabilities, CoreError> {
+    rt.run(Operation::Capabilities, ctx, || {
+        capabilities_body(rt, ctx, req)
+    })
+}
+
+fn capabilities_body(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &CapabilitiesRequest,
+) -> Result<Capabilities, CoreError> {
+    ctx.checkpoint()?;
+    let clock = rt.ports.clock.as_ref();
+    let op_start = clock.monotonic();
+    let catalog = &rt.ports.catalog;
+    if let Some(unknown) = req.harnesses.iter().find(|id| catalog.get(id).is_none()) {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            format!("no catalog row for agent `{}`", unknown.as_str()),
+        ));
+    }
+    let step_start = clock.monotonic();
+    let tools = match (&rt.ports.tools, req.tools.is_empty()) {
+        (_, true) => Vec::new(),
+        (None, false) => {
+            return Err(CoreError::new(
+                ErrorCode::Unsupported,
+                "tool lookup needs a ToolLookup port; this adapter has none",
+            ))
+        }
+        (Some(lookup), false) => req
+            .tools
+            .iter()
+            .map(|name| ToolAvailability {
+                name: name.clone(),
+                path: lookup.find_binary(name),
+            })
+            .collect(),
+    };
+    let tools_step = crate::timing::step(clock, "tools_lookup", step_start);
+    let step_start = clock.monotonic();
+    let harnesses = catalog
+        .facts
+        .iter()
+        .filter(|f| req.harnesses.is_empty() || req.harnesses.contains(&f.id))
+        .map(|f| {
+            let observed = req.observe.then(|| observe_harness(rt, f));
+            CapabilityReport::from_facts(f, observed)
+        })
+        .collect();
+    let harnesses_step = crate::timing::step(clock, "harness_reports", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "capabilities",
+        op_start,
+        vec![tools_step, harnesses_step],
+    ));
+    Ok(Capabilities { harnesses, tools })
+}
+
+/// Detects, per first-class harness, whether it exists on this machine: the
+/// executable on `PATH`, its version and install method (probed with
+/// `--version`, evidence-backed), whether it is configured, and whether it
+/// has run. Pure over ports: this is the only op that touches
+/// `rt.ports.spawner`; `scan` and every other op never do.
+///
+/// Preconditions: none. Without a `ToolLookup` port every executable reads
+/// as absent; without a `ProcessSpawner` port version and install method
+/// stay `Unknown` even when the binary is found.
+pub fn harnesses(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &HarnessesRequest,
+) -> Result<HarnessReport, CoreError> {
+    rt.run(Operation::Harnesses, ctx, || harnesses_body(rt, ctx, req))
+}
+
+fn harnesses_body(
+    rt: &Runtime,
+    ctx: &OpContext,
+    _req: &HarnessesRequest,
+) -> Result<HarnessReport, CoreError> {
+    ctx.checkpoint()?;
+    let clock = rt.ports.clock.as_ref();
+    let op_start = clock.monotonic();
+    let step_start = clock.monotonic();
+    let ports = DetectionPorts {
+        fs: rt.ports.fs.as_ref(),
+        home: &rt.scope.home.canonical,
+        tools: rt.ports.tools.as_deref(),
+        spawner: rt.ports.spawner.as_deref(),
+    };
+    let harnesses = builtin_adapters()
+        .iter()
+        .map(|adapter| adapter.detect(&ports))
+        .collect();
+    let detect_step = crate::timing::step(clock, "detect_harnesses", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "harnesses",
+        op_start,
+        vec![detect_step],
+    ));
+    Ok(HarnessReport { harnesses })
+}
+
+/// Probes the machine for one harness's [`HarnessObserved`] facts.
+///
+/// `config_present` is `true` when any of the harness's global roots exists
+/// under the home; a project-scoped root says nothing about the harness
+/// itself being configured, so only [`ScopeLevel::Global`] roots are probed.
+/// `config_writable` stays [`Support::Unknown`]: telling a parseable config
+/// apart from a `.jsonc` one with comments needs a per-harness parser this
+/// operation does not have. `runner_binary` resolves through the
+/// [`crate::ports::ToolLookup`] port when both a binary name and the port
+/// are present.
+fn observe_harness(rt: &Runtime, facts: &HarnessFacts) -> HarnessObserved {
+    let config_present = facts.roots.iter().any(|root| {
+        root.level == ScopeLevel::Global
+            && rt
+                .ports
+                .fs
+                .symlink_metadata(&rt.scope.home.canonical.join(&root.relative_path))
+                .is_ok()
+    });
+    let runner_binary = facts.runner.binary.as_deref().and_then(|binary| {
+        rt.ports
+            .tools
+            .as_deref()
+            .and_then(|lookup| lookup.find_binary(binary))
+    });
+    HarnessObserved {
+        config_present,
+        config_writable: Support::Unknown,
+        runner_binary,
+    }
+}
+
+/// Finds the one deployment matching `id` in `inventory`, with its skill
+/// name. Mirrors [`crate::ports::MutationSession::resolve_exact`] for the
+/// read-only paths (`preview_frontmatter_repair`, `list_events`'s drift
+/// check) that scan without taking the exclusive lease.
+fn resolve_deployment<'a>(
+    inventory: &'a Inventory,
+    id: &DeploymentId,
+) -> Result<(&'a SkillName, &'a DeploymentDto), CoreError> {
+    let mut found = inventory
+        .skills
+        .iter()
+        .flat_map(|s| s.deployments.iter().map(move |d| (&s.name, d)));
+    let mut matches = found.by_ref().filter(|(_, d)| &d.id == id);
+    match (matches.next(), matches.next()) {
+        (Some(one), None) => Ok(one),
+        (None, _) => Err(CoreError::new(
+            ErrorCode::AmbiguousTarget,
+            format!("no copy matches {}", id.as_str()),
+        )),
+        (Some(_), Some(_)) => Err(CoreError::new(
+            ErrorCode::AmbiguousTarget,
+            format!("more than one copy matches {}", id.as_str()),
+        )),
+    }
+}
+
+/// Reads `SKILL.md` under `dir`, fails with [`ErrorCode::Io`] when absent or
+/// unreadable, and with [`ErrorCode::ExecutionFailed`] when it is not UTF-8.
+fn read_skill_md_text(
+    fs: &dyn ScopeFs,
+    dir: &Path,
+) -> Result<(PathBuf, Vec<u8>, String), CoreError> {
+    let path = dir.join("SKILL.md");
+    let bytes = fs
+        .read_capped(&path, SKILL_MD_MAX_BYTES)
+        .map_err(|e| CoreError::io(&path, e))?;
+    let text = String::from_utf8(bytes.clone()).map_err(|_| {
+        CoreError::new(ErrorCode::ExecutionFailed, "SKILL.md is not valid UTF-8").at(&path)
+    })?;
+    Ok((path, bytes, text))
+}
+
+/// The file a `SKILL.md` repair writes: `skill_md` itself, or its target when
+/// it is a symlink. An atomic write to the link path would replace the link
+/// with a regular file and silently split this harness from every other one
+/// that shares the target. A target outside the scope is refused, since the
+/// core writes only inside it.
+fn skill_md_write_target(
+    scope: &crate::scope::NormalizedScope,
+    fs: &dyn ScopeFs,
+    skill_md: PathBuf,
+) -> Result<PathBuf, CoreError> {
+    if !fs
+        .symlink_metadata(&skill_md)
+        .is_ok_and(|f| f.kind == FileKind::Symlink)
+    {
+        return Ok(skill_md);
+    }
+    let target = fs
+        .canonicalize(&skill_md)
+        .map_err(|e| CoreError::io(&skill_md, e))?;
+    if !scope.contains(&target) {
+        return Err(CoreError::new(
+            ErrorCode::Unsupported,
+            format!(
+                "SKILL.md is a link to {}, outside the folders Skill Studio manages; \
+                 edit that file directly",
+                target.display()
+            ),
+        )
+        .at(&skill_md));
+    }
+    Ok(target)
+}
+
+/// Builds a proposal id: sha256 over deployment id, path, owner id, owner
+/// kind, the expected fingerprint, and the proposed text, matching
+/// [`crate::identity::ProposalId`]'s invariant.
+fn proposal_id_for(
+    deployment: &DeploymentDto,
+    expected_fingerprint: &Fingerprint,
+    proposed_content: &str,
+) -> crate::identity::ProposalId {
+    let raw = format!(
+        "{}|{}|{:?}|{:?}|{}|{}",
+        deployment.id.as_str(),
+        deployment.path.display(),
+        deployment.owner_id,
+        deployment.owner_kind,
+        expected_fingerprint.as_str(),
+        proposed_content,
+    );
+    crate::identity::ProposalId(crate::identity::sha256_hex(raw.as_bytes()))
+}
+
+/// Proposes a frontmatter fix for one deployment without writing.
+///
+/// Preconditions: shared lease. The deployment must resolve exactly once.
+/// The only fix known today is [`propose_colon_scalar_repair`]'s unquoted
+/// `: ` repair, so a deployment whose `SKILL.md` does not match that one
+/// safe, deterministic shape fails with [`ErrorCode::Unsupported`]. Per the
+/// migration mapping, the core applies to a deployment only in this PR: a
+/// read-only deployment is [`ErrorCode::Unsupported`] rather than proposing
+/// a fork or a ledger-owned copy the core cannot yet write.
+pub fn preview_frontmatter_repair(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &RepairPreviewRequest,
+) -> Result<FrontmatterRepairPreview, CoreError> {
+    rt.run(Operation::PreviewFrontmatterRepair, ctx, || {
+        preview_frontmatter_repair_body(rt, ctx, req)
+    })
+}
+
+fn preview_frontmatter_repair_body(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &RepairPreviewRequest,
+) -> Result<FrontmatterRepairPreview, CoreError> {
+    ctx.checkpoint()?;
+    let clock = rt.ports.clock.as_ref();
+    let op_start = clock.monotonic();
+    let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
+    let step_start = clock.monotonic();
+    let inventory = scan_inner(
+        rt,
+        ctx,
+        &ScanRequest {
+            skills: Vec::new(),
+            timings: false,
+        },
+    );
+    // Discard `scan_inner`'s own timing immediately: an error below must
+    // leave `ctx` with this op's own timing or none, never the nested
+    // scan's.
+    ctx.take_timing();
+    let inventory = inventory?;
+    let scan_step = crate::timing::step(clock, "scan", step_start);
+    let step_start = clock.monotonic();
+    let (_skill, deployment) = resolve_deployment(&inventory, &req.deployment_id)?;
+    // `desktop_repair_apply_modes` is the desktop's real gate (plugin,
+    // symlink, whole-dir-link, and the `ReadOnly && owner != Manual`
+    // carve-out), not just a `mutability` check - see its doc comment. Core
+    // only has a writer for `ApplyFix` (`apply_frontmatter_repair`);
+    // `ForkAndFix`/`FixInstalledCopy` need a fork writer / ledger writer
+    // this core build doesn't have yet, so a deployment the desktop would
+    // offer only those modes for is `Unsupported` here rather than
+    // approximated as `ApplyFix`.
+    if !desktop_repair_apply_modes(deployment).contains(&RepairApplyMode::ApplyFix) {
+        return Err(CoreError::new(
+            ErrorCode::Unsupported,
+            "this copy is not repairable by this core build",
+        )
+        .at(&deployment.path));
+    }
+    let fs = rt.ports.fs.as_ref();
+    let (path, bytes, content) = read_skill_md_text(fs, &deployment.path)?;
+    let (proposed_content, reason) = propose_colon_scalar_repair(&content)
+        .map_err(|message| CoreError::new(ErrorCode::Unsupported, message).at(&path))?;
+    let expected_fingerprint = Fingerprint::of_bytes(&bytes);
+    let proposed_fingerprint = Fingerprint::of_bytes(proposed_content.as_bytes());
+    let proposal_id = proposal_id_for(deployment, &expected_fingerprint, &proposed_content);
+    let diff = similar::TextDiff::from_lines(&content, &proposed_content)
+        .unified_diff()
+        .header("original", "proposed")
+        .to_string();
+    let propose_step = crate::timing::step(clock, "propose_repair", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "preview_frontmatter_repair",
+        op_start,
+        vec![scan_step, propose_step],
+    ));
+    Ok(FrontmatterRepairPreview {
+        proposal_id,
+        deployment_id: deployment.id.clone(),
+        path,
+        scope: deployment.root.scope.clone(),
+        reason,
+        owner_id: deployment.owner_id.clone(),
+        owner_kind: deployment.owner_kind,
+        expected_fingerprint,
+        proposed_fingerprint,
+        original_content: content,
+        proposed_content,
+        diff,
+        // Narrowing per the migration mapping: the core writes a
+        // deployment only in this PR. `FixInstalledCopy`/`ForkAndFix` need
+        // a ledger writer or a fork writer in core, which land in a later
+        // phase; the adapter resolves those modes itself until then.
+        allowed_apply_modes: vec![RepairApplyMode::ApplyFix],
+        managed_update_warning: None,
+    })
+}
+
+/// Applies a previewed fix under the exclusive lease.
+///
+/// Preconditions: exclusive lease; `preview.expected_fingerprint` still
+/// matches the file ([`ErrorCode::StaleProposal`] otherwise); owner unchanged
+/// ([`ErrorCode::OwnershipChanged`] otherwise); mode allowed. Records
+/// `repair_skill_frontmatter` before the write and finishes it after.
+pub fn apply_frontmatter_repair(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &RepairApplyRequest,
+) -> Result<RepairOutcome, CoreError> {
+    rt.run(Operation::ApplyFrontmatterRepair, ctx, || {
+        apply_frontmatter_repair_body(rt, ctx, req)
+    })
+}
+
+fn apply_frontmatter_repair_body(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &RepairApplyRequest,
+) -> Result<RepairOutcome, CoreError> {
+    ctx.checkpoint()?;
+    let clock = rt.ports.clock.as_ref();
+    let op_start = clock.monotonic();
+    let preview = &req.preview;
+    if !preview.allowed_apply_modes.contains(&req.mode) {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            format!("{:?} is not in the preview's allowed apply modes", req.mode),
+        ));
+    }
+    // Narrowing per the migration mapping: the core writes a deployment
+    // only in this PR; `preview_frontmatter_repair` never offers the other
+    // two modes, so this can only fire on a hand-built request.
+    if req.mode != RepairApplyMode::ApplyFix {
+        return Err(CoreError::new(
+            ErrorCode::Unsupported,
+            format!("{:?} is not implemented by this core build", req.mode),
+        ));
+    }
+
+    let step_start = clock.monotonic();
+    let session =
+        crate::ports::MutationSession::begin_for_deployment(rt, ctx, &preview.deployment_id);
+    // Discard the nested scan's timing immediately: an error below must
+    // leave `ctx` with this op's own timing or none, never the nested
+    // scan's.
+    ctx.take_timing();
+    let mut session = session?;
+    let (skill, deployment) = resolve_deployment(&session.fresh, &preview.deployment_id)?;
+    if deployment.owner_id != preview.owner_id || deployment.owner_kind != preview.owner_kind {
+        return Err(CoreError::new(
+            ErrorCode::OwnershipChanged,
+            "the copy's owner changed since the preview",
+        )
+        .at(&deployment.path));
+    }
+    // Re-checked under the exclusive lease: the deployment could have
+    // become a symlink, gone plugin-owned, or otherwise stopped satisfying
+    // `desktop_repair_apply_modes` between preview and apply even with the
+    // owner unchanged.
+    if !desktop_repair_apply_modes(deployment).contains(&RepairApplyMode::ApplyFix) {
+        return Err(CoreError::new(
+            ErrorCode::Unsupported,
+            "this copy is not repairable by this core build",
+        )
+        .at(&deployment.path));
+    }
+    let begin_step = crate::timing::step(clock, "begin_session", step_start);
+
+    let step_start = clock.monotonic();
+    let fs = rt.ports.fs.as_ref();
+    let (path, bytes, content) = read_skill_md_text(fs, &deployment.path)?;
+    let live_fingerprint = Fingerprint::of_bytes(&bytes);
+    if live_fingerprint == preview.proposed_fingerprint {
+        let verify_step = crate::timing::step(clock, "read_and_verify", step_start);
+        ctx.record_timing(crate::timing::op_timing(
+            clock,
+            "apply_frontmatter_repair",
+            op_start,
+            vec![begin_step, verify_step],
+        ));
+        return Ok(RepairOutcome::AlreadyApplied {
+            deployment_id: deployment.id.clone(),
+        });
+    }
+    if live_fingerprint != preview.expected_fingerprint {
+        return Err(CoreError::new(
+            ErrorCode::StaleProposal,
+            "SKILL.md changed since the preview was generated",
+        )
+        .at(&path));
+    }
+    // The repair is deterministic: recompute it from the bytes on disk and
+    // compare the resulting proposal id, rather than trusting the caller's
+    // `preview.proposed_content`, which is never written as sent.
+    let (proposed_content, _reason) = propose_colon_scalar_repair(&content)
+        .map_err(|message| CoreError::new(ErrorCode::StaleProposal, message).at(&path))?;
+    let proposal_id = proposal_id_for(deployment, &live_fingerprint, &proposed_content);
+    if proposal_id != preview.proposal_id {
+        return Err(CoreError::new(
+            ErrorCode::StaleProposal,
+            "the recomputed repair no longer matches the preview",
+        )
+        .at(&path));
+    }
+    let path = skill_md_write_target(&rt.scope, fs, path)?;
+    let verify_step = crate::timing::step(clock, "read_and_verify", step_start);
+
+    let step_start = clock.monotonic();
+    let deployment_id = deployment.id.clone();
+    let skill = skill.clone();
+    let harness = deployment.harness.clone();
+    let scope_label = scope_label(&deployment.root.scope).to_string();
+    let project_path = match &deployment.root.scope {
+        RootScope::Global => None,
+        RootScope::Project(project) => Some(project.0.clone()),
+    };
+
+    let id = rt.ports.ids.next_event_id();
+    let manifest = session
+        .store
+        .backup_paths(&session.guard, &id, std::slice::from_ref(&path))?;
+    let pre_fingerprint = manifest.entries.first().and_then(|e| e.fingerprint.clone());
+    let inverse = crate::events::restore_backup_inverse(&path, pre_fingerprint.as_ref(), None);
+    let draft = crate::events::EventDraft {
+        kind: crate::events::EventKind::RepairSkillFrontmatter,
+        skill,
+        harness,
+        scope: Some(scope_label),
+        project_path,
+        payload: serde_json::json!({
+            "deployment_id": deployment_id.as_str(),
+            "mode": req.mode,
+        }),
+        inverse: Some(inverse),
+        backup_dir: Some(manifest.backup_dir.clone()),
+    };
+    session.store.record(&session.guard, &id, &draft)?;
+
+    let scoped = crate::ports::confine(&rt.scope, fs, &path)?;
+    fs.write_atomic(&session.guard, &scoped, proposed_content.as_bytes())
+        .map_err(|e| CoreError::io(&path, e))?;
+
+    // The recorded post-fingerprint must use the same tag+length-framed
+    // scheme as `backup_paths`'s manifest entries (`hash_entry` on the host
+    // side, `fingerprint_path` here): that's what `list_events`'s drift
+    // check and `restore_event` compare a live path against, and it is not
+    // the same hash as `Fingerprint::of_bytes` over the raw text used above
+    // to compare `SKILL.md` bytes against `preview.proposed_fingerprint`.
+    let post_fingerprint = crate::events::fingerprint_path(fs, &path)?.ok_or_else(|| {
+        CoreError::new(
+            ErrorCode::ExecutionFailed,
+            "the file just written is missing on the immediate re-read",
+        )
+        .at(&path)
+    })?;
+    session.store.finish(
+        &session.guard,
+        &id,
+        crate::events::EventStatus::Done,
+        Some(post_fingerprint),
+    )?;
+
+    session.finish(rt, ctx);
+    let write_step = crate::timing::step(clock, "write_and_record", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "apply_frontmatter_repair",
+        op_start,
+        vec![begin_step, verify_step, write_step],
+    ));
+    Ok(RepairOutcome::Applied {
+        event_id: id,
+        deployment_id,
+    })
+}
+
+/// Lists history rows, newest first.
+///
+/// Preconditions: none. Returns an empty list when no store exists; never
+/// creates one. `req.after` pages backwards through the log. With
+/// `req.check_drift` each restorable row compares live fingerprints with
+/// the recorded ones and reports [`crate::dto::DriftState`]; otherwise
+/// `drift` is `Unchecked`.
+pub fn list_events(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &ListEventsRequest,
+) -> Result<Vec<EventDto>, CoreError> {
+    rt.run(Operation::ListEvents, ctx, || {
+        list_events_body(rt, ctx, req)
+    })
+}
+
+fn list_events_body(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &ListEventsRequest,
+) -> Result<Vec<EventDto>, CoreError> {
+    ctx.checkpoint()?;
+    let clock = rt.ports.clock.as_ref();
+    let op_start = clock.monotonic();
+    let step_start = clock.monotonic();
+    let Some(store) = rt
+        .ports
+        .history
+        .open(&rt.scope, HistoryAccess::ReadIfExists)?
+    else {
+        ctx.record_timing(crate::timing::op_timing(
+            clock,
+            "list_events",
+            op_start,
+            vec![crate::timing::step(clock, "open_store", step_start)],
+        ));
+        return Ok(Vec::new());
+    };
+    let filter = EventFilter {
+        skill: req.skill.clone(),
+        limit: if req.limit == 0 {
+            DEFAULT_EVENT_LIMIT
+        } else {
+            req.limit
+        },
+        after: req.after.clone(),
+    };
+    let rows = store.list(&filter)?;
+    let mut dtos: Vec<EventDto> = rows
+        .iter()
+        .map(super::events::EventRecord::to_dto)
+        .collect();
+    let list_step = crate::timing::step(clock, "open_and_list", step_start);
+    let step_start = clock.monotonic();
+    if req.check_drift {
+        let fs = rt.ports.fs.as_ref();
+        for (row, dto) in rows.iter().zip(dtos.iter_mut()) {
+            let Some(inverse) = &row.inverse else {
+                continue;
+            };
+            // Only the `restore_backup` shape (this PR's only writer) can be
+            // drift-checked without kind-specific knowledge of what else an
+            // event may have touched.
+            let Some(obj) = inverse.as_object() else {
+                continue;
+            };
+            if obj.get("op").and_then(|v| v.as_str()) != Some("restore_backup") {
+                continue;
+            }
+            let (Some(path), Some(post)) = (
+                obj.get("path").and_then(|v| v.as_str()),
+                obj.get("post_fingerprint").and_then(|v| v.as_str()),
+            ) else {
+                continue;
+            };
+            let live = crate::events::fingerprint_path(fs, Path::new(path))?;
+            let live = live
+                .as_ref()
+                .map_or("absent", super::identity::Fingerprint::bare_hex);
+            dto.drift = if live == post {
+                DriftState::Clean
+            } else {
+                DriftState::Drifted
+            };
+        }
+    }
+    let drift_step = crate::timing::step(clock, "check_drift", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "list_events",
+        op_start,
+        vec![list_step, drift_step],
+    ));
+    Ok(dtos)
+}
+
+/// What a restore will do to the live file, decided before the claim on
+/// `reverted_by` so the claim is only taken once nothing else can fail.
+enum RestorePlan {
+    /// The original event's backup recorded the path as absent.
+    RemoveIfPresent,
+    /// The bytes to write back, read from the original event's backup.
+    Write(Vec<u8>),
+    /// A directory's files to write back, read from the original event's
+    /// backup, paths relative to the directory itself. Applied through
+    /// [`fsops::stage_files`]/[`fsops::swap`] (see [`restore_event`]'s
+    /// mutation step) rather than [`ScopeFs::write_atomic`], which only ever
+    /// writes one file.
+    WriteDir(Vec<fsops::StageFile>),
+}
+
+/// Puts back a link an op took down, with the target text `read_link`
+/// returned before it did. A relative target stays relative, so a link the
+/// skills CLI wrote keeps working when the user moves the home. The target
+/// is confined as resolved from `link_path`'s parent.
+pub(crate) fn recreate_link(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    link_path: &Path,
+    recorded_target: &Path,
+) -> Result<(), CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let resolved_target =
+        crate::fsops::join_lexical(link_path.parent().unwrap_or(link_path), recorded_target);
+    let scoped_link = crate::ports::confine(&rt.scope, fs, link_path)?;
+    let scoped_target = crate::ports::confine(&rt.scope, fs, &resolved_target)?;
+    if recorded_target.is_relative() {
+        fs.symlink_relative(guard, &scoped_target, recorded_target, &scoped_link)
+    } else {
+        fs.symlink(guard, &scoped_target, &scoped_link)
+    }
+    .map_err(|e| CoreError::io(link_path, e))
+}
+
+/// [`RestorePlan::WriteDir`]'s mutation step: stages `files` beside `path`
+/// under its own journal root (the same lease/journal primitives
+/// `ops::update`'s own `Copy` method uses) and swaps the staged folder into
+/// `path`, which - since a folder already sits there - quarantines the
+/// pre-update tree. That quarantined copy is not itself wired to a further
+/// undo. Undoing a restore replays only what the restore's own inverse
+/// records (`write_back`, `remove_links`; see
+/// [`restore_event`]).
+pub(crate) fn restore_write_dir(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    path: &Path,
+    files: &[fsops::StageFile],
+) -> Result<(), CoreError> {
+    let universal_root = path.parent().ok_or_else(|| {
+        CoreError::new(ErrorCode::Io, "restore target has no parent directory").at(path)
+    })?;
+    let final_name = path
+        .file_name()
+        .ok_or_else(|| CoreError::new(ErrorCode::Io, "restore target has no file name").at(path))?;
+    let fs = rt.ports.fs.as_ref();
+    ops_install::ensure_journal_root(rt, guard, fs)?;
+    let journal_root = ops_install::journal_root(&rt.scope.home.lexical);
+    let journal = FsJournal::new(journal_root, rt.ports.fs.clone());
+
+    let root = fsops::Root::open(fs, universal_root.to_path_buf())
+        .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
+    let plan_id = PlanId(rt.ports.ids.next_event_id().0);
+    let plan = PlanWriter::begin(
+        &journal,
+        guard,
+        plan_id,
+        rt.ports.clock.now(),
+        format!("restore {}", path.display()),
+        universal_root.to_path_buf(),
+        Vec::new(),
+    )
+    .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()))?;
+
+    let staged = fsops::stage_files(&root, &plan, files)
+        .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
+    // Same directory the doctor prune and check sweep, not a
+    // restore-specific name - see `ops_update`'s module doc for the same
+    // fix applied there.
+    let quarantine_dir = Path::new(crate::doctor::QUARANTINE_DIR_NAME);
+    fsops::swap(&root, &plan, Path::new(final_name), &staged, quarantine_dir)
+        .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
+    plan.finish(PlanStatus::Done)
+        .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()))?;
+    Ok(())
+}
+
+/// Reverts one event using its recorded inverse.
+///
+/// Preconditions: exclusive lease; the event must exist, must not already be
+/// reverted, and must carry an inverse this build understands
+/// ([`crate::dto::RestoreCapability::Yes`]). Old `harness_disable` and
+/// `harness_enable` events report `NoInverse`: restoring one would put a
+/// whole agent config file back from a backup. Backs up the live state under the new
+/// restore event's own id before applying the inverse, so the restore is
+/// itself restorable and `force` never destroys the only copy of anything.
+pub fn restore_event(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &RestoreRequest,
+) -> Result<RestoreOutcome, CoreError> {
+    rt.run(Operation::RestoreEvent, ctx, || {
+        restore_event_body(rt, ctx, req)
+    })
+}
+
+/// Follows `target_event` links through `Restore` rows. An old restore of a
+/// `harness_disable` or `harness_enable` event would rewrite an agent config
+/// file from a backup, so the whole chain is refused like the event itself.
+fn restore_chain_ends_at_harness_event(
+    store: &dyn crate::ports::HistoryStore,
+    start: &crate::events::EventRecord,
+) -> Result<bool, CoreError> {
+    let mut current = start.clone();
+    // A chain cannot be longer than the table; the cap only stops a cycle.
+    for _ in 0..64 {
+        match current.kind() {
+            Some(
+                crate::events::EventKind::HarnessDisable | crate::events::EventKind::HarnessEnable,
+            ) => return Ok(true),
+            Some(crate::events::EventKind::Restore) => {}
+            _ => return Ok(false),
+        }
+        let Some(next) = current
+            .payload
+            .get("target_event")
+            .and_then(|v| v.as_str())
+            .map(|id| crate::identity::EventId(id.to_string()))
+        else {
+            return Ok(false);
+        };
+        match store.get(&next)? {
+            Some(record) => current = record,
+            None => return Ok(false),
+        }
+    }
+    Ok(false)
+}
+
+fn restore_event_body(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &RestoreRequest,
+) -> Result<RestoreOutcome, CoreError> {
+    ctx.checkpoint()?;
+    let clock = rt.ports.clock.as_ref();
+    let op_start = clock.monotonic();
+    let step_start = clock.monotonic();
+    let session = crate::ports::MutationSession::begin(rt, ctx);
+    // Discard the nested scan's timing immediately: an error below must
+    // leave `ctx` with this op's own timing or none, never the nested
+    // scan's.
+    ctx.take_timing();
+    let mut session = session?;
+
+    let target = session
+        .store
+        .get(&req.event_id)?
+        .ok_or_else(|| CoreError::new(ErrorCode::InvalidRequest, "event not found"))?;
+    match target.restore_capability() {
+        crate::dto::RestoreCapability::Reverted { .. } => {
+            return Err(CoreError::new(
+                ErrorCode::AlreadyReverted,
+                "this event was already reverted",
+            ))
+        }
+        crate::dto::RestoreCapability::NoInverse | crate::dto::RestoreCapability::UnknownKind => {
+            return Err(CoreError::new(
+                ErrorCode::Unsupported,
+                "this event cannot be restored",
+            ))
+        }
+        crate::dto::RestoreCapability::NotCompleted { status } => {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                format!(
+                    "event {} did not complete (status: {status}); its inverse never moved what it describes",
+                    req.event_id.0
+                ),
+            ))
+        }
+        crate::dto::RestoreCapability::Yes => {}
+    }
+    if restore_chain_ends_at_harness_event(&*session.store, &target)? {
+        return Err(CoreError::new(
+            ErrorCode::Unsupported,
+            "this event cannot be restored",
+        ));
+    }
+    let inverse = target.inverse.as_ref().ok_or_else(|| {
+        CoreError::new(
+            ErrorCode::Unsupported,
+            "restore_capability() reported Yes but the event has no inverse",
+        )
+    })?;
+    let begin_step = crate::timing::step(clock, "begin_session", step_start);
+    let (path, pre, post) =
+        crate::events::parse_restore_backup_inverse(inverse).ok_or_else(|| {
+            CoreError::new(
+                ErrorCode::Unsupported,
+                "restore of this event kind is not implemented",
+            )
+        })?;
+    let step_start = clock.monotonic();
+
+    let fs = rt.ports.fs.as_ref();
+    let expected = post.as_deref().unwrap_or("absent");
+    let live_fingerprint = crate::events::fingerprint_path(fs, &path)?;
+    let live = live_fingerprint
+        .as_ref()
+        .map_or("absent", super::identity::Fingerprint::bare_hex);
+    if live != expected && !req.force {
+        return Err(CoreError::new(
+            ErrorCode::DriftConflict,
+            "the file changed since this event; pass force to restore anyway",
+        )
+        .at(&path));
+    }
+    // `split`'s per-harness copies: each is drift-checked the same way as
+    // `path`, so an edit made in a copy after the split is never deleted
+    // without `force`.
+    let remove_copies = crate::events::parse_restore_remove_copies(inverse);
+    for (copy, expected) in &remove_copies {
+        let live = crate::events::fingerprint_path(fs, copy)?;
+        let live = live
+            .as_ref()
+            .map_or("absent", super::identity::Fingerprint::bare_hex);
+        if live != "absent" && live != expected && !req.force {
+            return Err(CoreError::new(
+                ErrorCode::DriftConflict,
+                "a split copy changed since this event; pass force to restore anyway",
+            )
+            .at(copy));
+        }
+    }
+
+    // Mirrors of an earlier restore's own work (see `with_write_back`): the
+    // links it recreated must still be exactly those links, and the places
+    // its removed copies go back to must be empty or hold such a link.
+    let secondary_post = crate::events::parse_restore_secondary_post(inverse);
+    let remove_links = crate::events::parse_restore_remove_links(inverse);
+    let write_back = crate::events::parse_restore_write_back(inverse);
+    if !req.force {
+        for (link, target) in &remove_links {
+            let intact = match fs.symlink_metadata(link) {
+                Err(_) => true,
+                Ok(facts) => {
+                    facts.kind == FileKind::Symlink
+                        && fs.read_link(link).ok().as_deref() == Some(target.as_path())
+                }
+            };
+            if !intact {
+                return Err(CoreError::new(
+                    ErrorCode::DriftConflict,
+                    "a link this restore created changed since; pass force to restore anyway",
+                )
+                .at(link));
+            }
+        }
+        for copy in &write_back {
+            let is_recorded_link = remove_links.iter().any(|(link, _)| link == copy);
+            if !is_recorded_link && fs.symlink_metadata(copy).is_ok() {
+                return Err(CoreError::new(
+                    ErrorCode::DriftConflict,
+                    "something now sits where this restore removed a copy; pass force to restore anyway",
+                )
+                .at(copy));
+            }
+        }
+        for (secondary, expected) in &secondary_post {
+            let live = crate::events::fingerprint_path(fs, secondary)?;
+            let live = live
+                .as_ref()
+                .map_or("absent", super::identity::Fingerprint::bare_hex);
+            if live != expected {
+                return Err(CoreError::new(
+                    ErrorCode::DriftConflict,
+                    "a file this event also changed was edited since; pass force to restore anyway",
+                )
+                .at(secondary));
+            }
+        }
+        crate::ops_install::check_registry_drift(fs, inverse)?;
+    }
+    let mut write_back_plans: Vec<(PathBuf, Vec<fsops::StageFile>)> = Vec::new();
+    if !write_back.is_empty() {
+        let backup_dir = target.backup_dir.as_deref().ok_or_else(|| {
+            CoreError::new(ErrorCode::Io, "a write_back inverse implies a backup_dir").at(&path)
+        })?;
+        let original_manifest = session.store.read_manifest(backup_dir)?;
+        for copy in &write_back {
+            let entry = original_manifest
+                .entries
+                .iter()
+                .find(|e| &e.original == copy && e.is_dir)
+                .ok_or_else(|| {
+                    CoreError::new(
+                        ErrorCode::Io,
+                        "the original event's manifest has no folder entry for this copy",
+                    )
+                    .at(copy)
+                })?;
+            let files = session
+                .store
+                .read_backup_files(backup_dir, &entry.relative)?;
+            write_back_plans.push((copy.clone(), files));
+        }
+    }
+    // What this restore takes down is recorded as what its own undo puts
+    // back: only links that are live links now, and the live target text.
+    let links_to_remove: Vec<(PathBuf, PathBuf)> = remove_links
+        .iter()
+        .filter_map(|(link, _)| {
+            let facts = fs.symlink_metadata(link).ok()?;
+            if facts.kind != FileKind::Symlink {
+                return None;
+            }
+            Some((link.clone(), fs.read_link(link).ok()?))
+        })
+        .collect();
+
+    // Every manifest entry besides `path` itself - e.g. `remove`'s own
+    // registry.json backup, next to its deployment tree - restores
+    // best-effort alongside the primary path below, keyed by its own
+    // original location rather than folded into `plan`: `path`'s restore is
+    // the one drift-checked and claimed against above. A secondary entry
+    // whose current state cannot be read fails the restore closed, before
+    // anything is written, because the restore backs it up first; one that
+    // cannot be written back later does not fail it.
+    let mut extra_plans: Vec<(PathBuf, RestorePlan)> = Vec::new();
+    let plan = match &pre {
+        None => {
+            // The original event's backup recorded the path as absent:
+            // restoring means removing whatever is there now, if anything.
+            RestorePlan::RemoveIfPresent
+        }
+        Some(_pre_fingerprint) => {
+            let backup_dir = target.backup_dir.as_deref().ok_or_else(|| {
+                CoreError::new(
+                    ErrorCode::Io,
+                    "a restore_backup inverse implies a backup_dir",
+                )
+                .at(&path)
+            })?;
+            let original_manifest = session.store.read_manifest(backup_dir)?;
+            let entry = original_manifest
+                .entries
+                .iter()
+                .find(|e| e.original == path)
+                .ok_or_else(|| {
+                    CoreError::new(
+                        ErrorCode::Io,
+                        "the original event's manifest has no entry for this path",
+                    )
+                    .at(&path)
+                })?;
+            // Read from the backup entry itself (see `BackupEntry::is_dir`'s
+            // own doc), not the live path's current type: after a `remove`
+            // the live path is absent, which would otherwise always look
+            // like "not a directory" and send a directory's restore through
+            // the single-file `Write` branch below.
+            let plan = if entry.is_dir {
+                let files = session
+                    .store
+                    .read_backup_files(backup_dir, &entry.relative)?;
+                RestorePlan::WriteDir(files)
+            } else {
+                let bytes = session
+                    .store
+                    .read_backup_bytes(backup_dir, &entry.relative)?;
+                RestorePlan::Write(bytes)
+            };
+            for other in &original_manifest.entries {
+                // A write-back path is written once, by `write_back_plans`.
+                if other.original == path || write_back.contains(&other.original) {
+                    continue;
+                }
+                // A secondary path the event recorded as absent before and
+                // after its write is taken back out only when the event
+                // vouched for it with a `secondary_post` row; any other
+                // absent entry stays skipped, as before that field existed.
+                if other.fingerprint.is_none() {
+                    if secondary_post.iter().any(|(p, _)| p == &other.original) {
+                        extra_plans.push((other.original.clone(), RestorePlan::RemoveIfPresent));
+                    }
+                    continue;
+                }
+                let other_plan = if other.is_dir {
+                    session
+                        .store
+                        .read_backup_files(backup_dir, &other.relative)
+                        .map(RestorePlan::WriteDir)
+                } else {
+                    session
+                        .store
+                        .read_backup_bytes(backup_dir, &other.relative)
+                        .map(RestorePlan::Write)
+                };
+                if let Ok(other_plan) = other_plan {
+                    extra_plans.push((other.original.clone(), other_plan));
+                }
+            }
+            plan
+        }
+    };
+
+    let restore_id = rt.ports.ids.next_event_id();
+    // Backs up the file's current bytes under the restore event's own id
+    // before touching it: with `force` this is exactly "the drifted bytes
+    // are backed up first"; without drift it still gives the restore its
+    // own undo. Split copies about to be deleted are backed up with it.
+    let mut restore_backup_targets = vec![path.clone()];
+    restore_backup_targets.extend(remove_copies.iter().map(|(copy, _)| copy.clone()));
+    // The extra paths the event also changed are overwritten below, so a
+    // forced restore keeps their drifted bytes too. An event whose
+    // `secondary_post` patch failed or predates it has no drift row for
+    // them, but its undo still rewrites them.
+    restore_backup_targets.extend(extra_plans.iter().map(|(extra, _)| extra.clone()));
+    // A forced write over a real folder quarantines it; the backup keeps it
+    // restorable.
+    restore_backup_targets.extend(write_back.iter().cloned());
+    let manifest =
+        session
+            .store
+            .backup_paths(&session.guard, &restore_id, &restore_backup_targets)?;
+    let restore_pre_fingerprint = manifest.entries.first().and_then(|e| e.fingerprint.clone());
+    // Copies this restore removes that the backup above holds as folders:
+    // its own undo writes them back.
+    let removed_copies: Vec<PathBuf> = remove_copies
+        .iter()
+        .map(|(copy, _)| copy)
+        .filter(|copy| {
+            manifest
+                .entries
+                .iter()
+                .any(|e| &e.original == *copy && e.is_dir)
+        })
+        .cloned()
+        .collect();
+    let restore_inverse = crate::events::with_write_back(
+        crate::events::restore_backup_inverse_with_links(
+            &path,
+            restore_pre_fingerprint.as_ref(),
+            None,
+            &links_to_remove,
+        ),
+        &removed_copies,
+    );
+    let draft = crate::events::EventDraft {
+        kind: crate::events::EventKind::Restore,
+        skill: target.skill.clone(),
+        harness: target.harness.clone(),
+        scope: target.scope.clone(),
+        project_path: target.project_path.clone(),
+        payload: serde_json::json!({ "target_event": target.id.0 }),
+        inverse: Some(restore_inverse),
+        backup_dir: Some(manifest.backup_dir.clone()),
+    };
+    session.store.record(&session.guard, &restore_id, &draft)?;
+
+    // Every fallible, non-mutating step runs before the claim below: a
+    // failure here must leave the target event revertible, not stuck behind
+    // a claim nothing ever undoes. A path to write back goes through a
+    // linked config file; a path to remove is the link itself.
+    let scoped = if pre.is_some() {
+        crate::ports::confine_write_through(&rt.scope, fs, &path)?
+    } else {
+        crate::ports::confine(&rt.scope, fs, &path)?
+    };
+    let claimed = session
+        .store
+        .claim_revert(&session.guard, &target.id, &restore_id)?;
+    if !claimed {
+        session.store.finish(
+            &session.guard,
+            &restore_id,
+            crate::events::EventStatus::Failed,
+            None,
+        )?;
+        return Err(CoreError::new(
+            ErrorCode::AlreadyReverted,
+            "this event was already reverted",
+        ));
+    }
+
+    let mutation_result = match &plan {
+        RestorePlan::RemoveIfPresent => match fs.symlink_metadata(&path) {
+            // An install's folder: the drift check above already matched
+            // its whole tree, or `force` was given and the backup holds it.
+            Ok(facts) if facts.kind == FileKind::Dir => {
+                crate::ops_remove::remove_tree_best_effort(fs, &path);
+                if fs.symlink_metadata(&path).is_ok() {
+                    Err(CoreError::new(
+                        ErrorCode::Io,
+                        "could not remove the folder this event wrote",
+                    )
+                    .at(&path))
+                } else {
+                    Ok(())
+                }
+            }
+            Ok(_) => fs
+                .remove_file(&session.guard, &scoped)
+                .map_err(|e| CoreError::io(&path, e)),
+            Err(_) => Ok(()),
+        },
+        RestorePlan::Write(bytes) => fs
+            .write_atomic(&session.guard, &scoped, bytes)
+            .map_err(|e| CoreError::io(&path, e)),
+        RestorePlan::WriteDir(files) => restore_write_dir(rt, &session.guard, &path, files),
+    };
+    if let Err(err) = mutation_result {
+        // The claim was already made durable, but nothing actually moved:
+        // release it so the target event stays revertible on retry, and
+        // report the original I/O error, not any failure of the release.
+        let _ = session
+            .store
+            .release_revert(&session.guard, &target.id, &restore_id);
+        let _ = session.store.finish(
+            &session.guard,
+            &restore_id,
+            crate::events::EventStatus::Failed,
+            None,
+        );
+        return Err(err);
+    }
+
+    let mut copy_errors: Vec<String> = Vec::new();
+    let mut recreated_links: Vec<(PathBuf, PathBuf)> = Vec::new();
+    // The mirror of an earlier restore, in the order that restore's own
+    // steps ran backwards: its links come down, its removed copies come
+    // back (possibly where a link was), then its removed Codex rows.
+    for (link, _) in &links_to_remove {
+        match crate::ports::confine(&rt.scope, fs, link) {
+            Ok(scoped) => {
+                if let Err(error) = fs.remove_file(&session.guard, &scoped) {
+                    copy_errors.push(format!("could not remove {}: {error}", link.display()));
+                }
+            }
+            Err(error) => copy_errors.push(error.message),
+        }
+    }
+    for (copy, files) in &write_back_plans {
+        let written = copy
+            .parent()
+            .map_or(Ok(()), |root| ensure_dir_all(rt, &session, fs, root));
+        let written = written.and_then(|()| restore_write_dir(rt, &session.guard, copy, files));
+        if let Err(error) = written {
+            copy_errors.push(error.message);
+        }
+    }
+
+    // Before the links below: a split copy can sit exactly where a link it
+    // replaced has to come back. Before the extra paths too: one of them can be
+    // a user folder a forced restore backed up, which goes back last.
+    for (copy, _) in &remove_copies {
+        let Ok(facts) = fs.symlink_metadata(copy) else {
+            continue;
+        };
+        match crate::ports::confine(&rt.scope, fs, copy) {
+            // Never walk through a link that replaced the copy: that would
+            // delete whatever the link points at.
+            Ok(scoped) if facts.kind != FileKind::Dir => {
+                let _ = fs.remove_file(&session.guard, &scoped);
+            }
+            Ok(_) => crate::ops_remove::remove_tree_best_effort(fs, copy),
+            Err(error) => copy_errors.push(error.message),
+        }
+        if fs.symlink_metadata(copy).is_ok() {
+            copy_errors.push(format!("could not remove {}", copy.display()));
+        }
+    }
+    // Best-effort, after the primary path is already restored and claimed:
+    // a secondary path this cannot put back (a permissions error, a path no
+    // longer confined to the scope) leaves the restore's own outcome
+    // reporting only `path`, rather than failing a restore that otherwise
+    // succeeded. See `extra_plans`' own comment above.
+    for (other_path, other_plan) in &extra_plans {
+        // Removing takes down the path itself, never what a link there points at.
+        if matches!(other_plan, RestorePlan::RemoveIfPresent) {
+            if let Ok(facts) = fs.symlink_metadata(other_path) {
+                match crate::ports::confine(&rt.scope, fs, other_path) {
+                    Ok(_) if facts.kind == FileKind::Dir => {
+                        crate::ops_remove::remove_tree_best_effort(fs, other_path);
+                    }
+                    Ok(scoped) => {
+                        let _ = fs.remove_file(&session.guard, &scoped);
+                    }
+                    Err(_) => {}
+                }
+            }
+            continue;
+        }
+        // A link there is replaced, not written through: its target was not
+        // backed up.
+        if fs
+            .symlink_metadata(other_path)
+            .is_ok_and(|facts| facts.kind == FileKind::Symlink)
+        {
+            match crate::ports::confine(&rt.scope, fs, other_path) {
+                Ok(scoped) => {
+                    if let Err(e) = fs.remove_file(&session.guard, &scoped) {
+                        copy_errors.push(CoreError::io(other_path, e).message);
+                        continue;
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        if let Ok(other_scoped) = crate::ports::confine_write_through(&rt.scope, fs, other_path) {
+            let result: Result<(), CoreError> = match other_plan {
+                RestorePlan::RemoveIfPresent => Ok(()),
+                RestorePlan::Write(bytes) => fs
+                    .write_atomic(&session.guard, &other_scoped, bytes)
+                    .map_err(|e| CoreError::io(other_path, e)),
+                RestorePlan::WriteDir(files) => {
+                    restore_write_dir(rt, &session.guard, other_path, files)
+                }
+            };
+            let _ = result;
+        }
+    }
+    if !copy_errors.is_empty() {
+        let _ = session.store.patch_payload(
+            &session.guard,
+            &restore_id,
+            serde_json::json!({ "remove_copies_error": copy_errors }),
+        );
+    }
+    // Every harness link `remove` (or whichever event this reverts) took
+    // down, recreated the same best-effort way - see
+    // `crate::events::restore_backup_inverse_with_links`'s own doc for why
+    // this cannot go through `RestorePlan` like the entries above. The
+    // recorded `target` is the raw `read_link` text, which the real skills
+    // CLI writes relative to the link's own directory (`skills/dist/cli.mjs`
+    // calls `symlink(relativePath, linkPath)`); `confine` rejects any `..`
+    // segment, so a relative target is resolved against `link_path`'s parent
+    // first, the same lexical join `set_claude_code_switch`'s own drift
+    // check already applies to a live link's target (see its `join_lexical`
+    // call above). An escape past the scope root is caught by `confine`
+    // itself, not by this join.
+    for (link_path, target) in crate::events::parse_restore_links(inverse) {
+        if fs.symlink_metadata(&link_path).is_ok() {
+            continue;
+        }
+        if recreate_link(rt, &session.guard, &link_path, &target).is_ok() {
+            recreated_links.push((link_path, target));
+        }
+    }
+    // What only the writes above can say: the restore's own undo takes back
+    // exactly the links it created and puts back exactly the rows it removed
+    // and the copies it wrote, so a chain of undos replays.
+    let written_back: Vec<(PathBuf, Fingerprint)> = write_back_plans
+        .iter()
+        .filter_map(|(copy, _)| {
+            let fingerprint = crate::events::fingerprint_path(fs, copy).ok().flatten()?;
+            Some((copy.clone(), fingerprint))
+        })
+        .collect();
+    // The extra paths as this restore left them: its own undo refuses when
+    // one was edited since, like any other undo.
+    let extra_post: Vec<(PathBuf, Result<Option<Fingerprint>, CoreError>)> = extra_plans
+        .iter()
+        .map(|(extra, _)| {
+            // An unreadable path gets a value no live state matches, so its
+            // undo needs `force` rather than skipping the check.
+            (extra.clone(), crate::events::fingerprint_path(fs, extra))
+        })
+        .collect();
+    let mirror_patch = crate::events::with_secondary_post(
+        crate::events::with_remove_copies(
+            crate::events::with_remove_links(serde_json::json!({}), &recreated_links),
+            &written_back,
+        ),
+        &extra_post,
+    );
+    let _ = session
+        .store
+        .patch_inverse(&session.guard, &restore_id, mirror_patch);
+    // The `.skill-lock.json` row `ops::remove` saved before the real CLI
+    // dropped it (`SkillsSh` only - see `restore_backup_inverse_with_links_and_lock`'s
+    // own doc), put back the same best-effort way as the harness links
+    // above: an event with no saved row (an old event, or `Dotagents`, whose
+    // row lives in `agents.toml`/`agents.lock` instead) parses to `None`
+    // here and writes nothing.
+    if let Some((skill_name, entry)) = crate::events::parse_restore_lock_entry(inverse) {
+        let lock_path = crate::lock_file::lock_file_path(&rt.scope.home.lexical);
+        if let Err(error) = crate::lock_file::restore_lock_entry(
+            &session.guard,
+            fs,
+            &rt.scope,
+            &lock_path,
+            &skill_name,
+            &entry,
+        ) {
+            // Best-effort, same as the harness links above: the restore
+            // itself still succeeds (the file it undoes is already back),
+            // but the failure is not silently dropped - it lands on the
+            // restore event's own payload so Activity can surface it,
+            // instead of only ever existing as a discarded `Result`.
+            let _ = session.store.patch_payload(
+                &session.guard,
+                &restore_id,
+                serde_json::json!({ "lock_entry_restore_error": error.message }),
+            );
+        }
+    }
+
+    // An install's registry writes (`copies` entries, saved preferences),
+    // put back the same best-effort way as the lock row above.
+    if let Err(error) = crate::ops_install::restore_registry(&session.guard, fs, inverse) {
+        let _ = session.store.patch_payload(
+            &session.guard,
+            &restore_id,
+            serde_json::json!({ "registry_restore_error": error.message }),
+        );
+    }
+
+    let restored_fingerprint = crate::events::fingerprint_path(fs, &path)?;
+    session.store.finish(
+        &session.guard,
+        &restore_id,
+        crate::events::EventStatus::Done,
+        restored_fingerprint,
+    )?;
+
+    session.finish(rt, ctx);
+    let restore_step = crate::timing::step(clock, "restore_write", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "restore_event",
+        op_start,
+        vec![begin_step, restore_step],
+    ));
+    Ok(RestoreOutcome {
+        restore_event_id: restore_id,
+        reverted_event_id: target.id,
+        restored_paths: std::iter::once(path).chain(write_back).collect(),
+    })
+}
+
+/// Finds the skill entry that owns `deployment_id` in `inventory`.
+pub(crate) fn resolve_skill<'a>(
+    inventory: &'a Inventory,
+    deployment_id: &DeploymentId,
+) -> Result<&'a InstalledSkillDto, CoreError> {
+    inventory
+        .skills
+        .iter()
+        .find(|s| s.deployments.iter().any(|d| &d.id == deployment_id))
+        .ok_or_else(|| {
+            CoreError::new(
+                ErrorCode::AmbiguousTarget,
+                format!("no copy matches {}", deployment_id.as_str()),
+            )
+        })
+}
+
+/// Finds every per-harness link deployment pointing at `target_path`, among
+/// `skill`'s other deployments, for any harness root.
+///
+/// `target_path` is canonicalized here rather than compared lexically: scan
+/// records a link's target already canonical (`link_target`), but a
+/// deployment's own `path` is lexical, so the two only compare equal once
+/// both sides go through the same filesystem, and not, for example, when
+/// `target_path`'s ancestry crosses a symlink the test host (or the user's
+/// `$HOME`) happens to have, like macOS's `/tmp` -> `/private/tmp`.
+///
+/// An entry seen through a whole-folder link (`~/.claude/skills ->
+/// ~/.agents/skills`) is left out: its path names the Universal entry
+/// itself, so unlinking it would remove the Universal link, not a
+/// per-harness one.
+pub(crate) fn find_all_links<'a>(
+    skill: &'a InstalledSkillDto,
+    target_path: &Path,
+    fs: &dyn ScopeFs,
+) -> Vec<&'a DeploymentDto> {
+    let Ok(canonical_target) = fs.canonicalize(target_path) else {
+        return Vec::new();
+    };
+    skill
+        .deployments
+        .iter()
+        .filter(|d| {
+            d.backing == BackingRelationship::LinkedTo
+                && !d.shared_via_whole_dir_link
+                && d.link_target.as_deref() == Some(canonical_target.as_path())
+        })
+        .collect()
+}
+
+/// Per-harness symlinks that resolve to `target`'s folder but scan as
+/// `Independent`, because the folder is an agent's own
+/// (`~/.claude/skills/foo -> ~/.codex/skills/foo`), not the Universal root.
+/// [`find_all_links`] only sees links into the Universal root.
+fn find_independent_links<'a>(
+    skill: &'a InstalledSkillDto,
+    target: &DeploymentDto,
+    fs: &dyn ScopeFs,
+) -> Vec<&'a DeploymentDto> {
+    let Ok(canonical_target) = fs.canonicalize(&target.path) else {
+        return Vec::new();
+    };
+    skill
+        .deployments
+        .iter()
+        .filter(|d| {
+            d.id != target.id
+                && d.is_symlink
+                && d.backing == BackingRelationship::Independent
+                && !d.shared_via_whole_dir_link
+                && d.link_target.as_deref() == Some(canonical_target.as_path())
+        })
+        .collect()
+}
+
+pub use crate::ops_discard::discard;
+pub use crate::ops_doctor::doctor;
+pub use crate::ops_install::{install, install_preferences};
+pub use crate::ops_remove::{remove, sweep_quarantine};
+pub use crate::ops_split::split;
+pub use crate::ops_update::{update, update_all, update_split_copies};
+
+/// Moves one real copy's directory into the parked root, in the slot for
+/// where it came from ([`crate::park_layout`]).
+///
+/// Preconditions: exclusive lease; the deployment must resolve exactly once
+/// and hold its own bytes: the Universal folder or an agent's own folder, at
+/// global or project scope. A plugin copy, a link, and a copy that is already
+/// parked are refused ([`refuse_unparkable`]), as is a copy whose origin
+/// already has a parked copy of this skill. Undo is not implemented by this
+/// build: the event's `inverse` is `None`, and `restore_event` refuses it
+/// ([`ErrorCode::Unsupported`]); use `unpark` instead.
+///
+/// Sequence, matching `docs/action-map/primitives-and-call-stack.md`'s Park
+/// row: the journal row is recorded before any filesystem step, every
+/// per-skill link into the folder (any harness) is removed first, then the
+/// directory is renamed into `.agents/skills-parked`.
+pub fn park(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOutcome, CoreError> {
+    rt.run(Operation::Park, ctx, || park_body(rt, ctx, req))
+}
+
+fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOutcome, CoreError> {
+    ctx.checkpoint()?;
+    let clock = rt.ports.clock.as_ref();
+    let op_start = clock.monotonic();
+    let step_start = clock.monotonic();
+    let session = crate::ports::MutationSession::begin_for_deployment(rt, ctx, &req.deployment_id);
+    ctx.take_timing();
+    let mut session = session?;
+
+    let deployment = session.resolve_exact(&req.deployment_id)?.clone();
+    refuse_unparkable(&deployment)?;
+    let skill = resolve_skill(&session.fresh, &deployment.id)?.clone();
+    let begin_step = crate::timing::step(clock, "begin_session", step_start);
+
+    let step_start = clock.monotonic();
+    let parked = park_found_copy(rt, ctx, &mut session, &deployment, &skill)?;
+    session.finish(rt, ctx);
+    let write_step = crate::timing::step(clock, "remove_link_and_rename", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "park",
+        op_start,
+        vec![begin_step, write_step],
+    ));
+    Ok(ParkOutcome {
+        event_id: parked.event_id,
+        deployment_id: deployment.id,
+        parked_path: parked.parked_dir,
+        warnings: Vec::new(),
+    })
+}
+
+/// What [`park_found_copy`] left behind.
+pub(crate) struct ParkedCopy {
+    pub event_id: EventId,
+    pub parked_dir: PathBuf,
+    /// The `.origin` note written next to the parked copy, when its origin
+    /// folder is one the catalog names.
+    pub origin_note: Option<PathBuf>,
+}
+
+/// The park steps that run once `deployment` is resolved and checked
+/// parkable: remove every link into it, migrate a legacy flat copy that
+/// would swallow the slot, write the `.origin` notes, move the folder into
+/// `.agents/skills-parked`, and journal it as a `park` row. Shared by `park`
+/// and `turn_off_for_agent`, so both leave a copy `unpark` handles the same
+/// way. The caller holds the session and finishes it.
+pub(crate) fn park_found_copy(
+    rt: &Runtime,
+    ctx: &OpContext,
+    session: &mut crate::ports::MutationSession,
+    deployment: &DeploymentDto,
+    skill: &InstalledSkillDto,
+) -> Result<ParkedCopy, CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    // Before any row: a refusal here leaves no journal entry behind.
+    let dotagents = crate::ops_park_dotagents::plan_park(rt, deployment, &skill.name)?;
+    let links: Vec<PathBuf> = find_all_links(skill, &deployment.path, fs)
+        .into_iter()
+        .chain(find_independent_links(skill, deployment, fs))
+        .map(|d| d.path.clone())
+        .collect();
+    let scoped_links = links
+        .iter()
+        .map(|link| crate::ports::confine(&rt.scope, fs, link))
+        .collect::<Result<Vec<_>, _>>()?;
+    let link_pairs: Vec<(PathBuf, PathBuf)> = links
+        .iter()
+        .filter_map(|link| fs.read_link(link).ok().map(|target| (link.clone(), target)))
+        .collect();
+    let link_targets: serde_json::Map<String, serde_json::Value> = link_pairs
+        .iter()
+        .map(|(link, target)| {
+            (
+                link.to_string_lossy().into_owned(),
+                serde_json::Value::String(target.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+
+    let origin = deployment.root.clone();
+    let parked_root = rt.scope.home.lexical.join(PARKED_ROOT_RELATIVE);
+    let project_key = match &origin.scope {
+        RootScope::Global => None,
+        RootScope::Project(project) => Some(crate::park_layout::project_key(
+            &fs.canonicalize(&project.0)
+                .unwrap_or_else(|_| project.0.clone()),
+        )),
+    };
+    let slot_dir =
+        crate::park_layout::parked_slot_dir(&parked_root, &origin, project_key.as_deref())
+            .ok_or_else(|| {
+                CoreError::new(ErrorCode::Unsupported, "this folder cannot be parked")
+                    .at(&deployment.path)
+            })?;
+    let parked_dir = slot_dir.join(&skill.name.0);
+    // Only a folder with a `SKILL.md` is a legacy flat copy; a folder without
+    // one may be a slot that happens to share this skill's name.
+    let legacy_flat_taken = origin.kind == RootKind::Universal
+        && origin.scope == RootScope::Global
+        && fs
+            .symlink_metadata(&parked_root.join(&skill.name.0).join("SKILL.md"))
+            .is_ok();
+    if fs.symlink_metadata(&parked_dir).is_ok() || legacy_flat_taken {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "a parked copy from this folder already exists for this skill",
+        )
+        .at(&parked_dir));
+    }
+    // A legacy flat copy named like this slot would swallow the new copy:
+    // move it to `universal/<name>` first.
+    if let Some(top_level) = slot_dir
+        .strip_prefix(&parked_root)
+        .ok()
+        .and_then(|relative| relative.components().next())
+    {
+        migrate_legacy_flat_copy(
+            rt,
+            session,
+            &parked_root,
+            &top_level.as_os_str().to_string_lossy(),
+        )?;
+    }
+    let origin_root_relative = origin_root_relative(rt, &origin, &deployment.path);
+    let scope_label = scope_label(&deployment.root.scope).to_string();
+    let project_path = match &deployment.root.scope {
+        RootScope::Global => None,
+        RootScope::Project(project) => Some(project.0.clone()),
+    };
+
+    let id = rt.ports.ids.next_event_id();
+    let mut payload = serde_json::json!({
+        "deployment_id": deployment.id.as_str(),
+        "from": deployment.path,
+        "to": parked_dir,
+        "origin": origin,
+        "links": links,
+        "link_targets": link_targets,
+    });
+    // Undo of a directory move is out of this build's scope: `Park` carries
+    // no inverse, and turn-on is the way back. A dotagents skill still gets
+    // `agents.toml` and `agents.lock` backed up, for recovery by hand.
+    let backup_dir = match &dotagents {
+        Some(plan) => {
+            payload["dotagents"] = plan.payload();
+            Some(
+                session
+                    .store
+                    .backup_paths(&session.guard, &id, &plan.backup_paths())?
+                    .backup_dir,
+            )
+        }
+        None => None,
+    };
+    let draft = crate::events::EventDraft {
+        kind: crate::events::EventKind::Park,
+        skill: skill.name.clone(),
+        harness: None,
+        scope: Some(scope_label),
+        project_path,
+        payload,
+        inverse: None,
+        backup_dir,
+    };
+    session.store.record(&session.guard, &id, &draft)?;
+
+    // What this attempt created, so a failed move leaves no empty key folder.
+    let mut created_dirs: Vec<PathBuf> = Vec::new();
+    let mut written_files: Vec<PathBuf> = Vec::new();
+    // Set when a failed `dotagents remove` could not move the copy back: the
+    // marker that names its origin is then the only record of where it goes.
+    let mut copy_stays_parked = false;
+    let write_result = (|| -> Result<(), CoreError> {
+        for (link, scoped_link) in links.iter().zip(&scoped_links) {
+            fs.remove_file(&session.guard, scoped_link)
+                .map_err(|e| CoreError::io(link, e))?;
+        }
+        let parent = parked_dir.parent().unwrap_or(&parked_dir).to_path_buf();
+        created_dirs.extend(ensure_dir_all_tracked(rt, session, fs, &parent)?);
+        // `undo_on_failure` is false for a marker other parked copies share.
+        let mut write_marker =
+            |marker: PathBuf, text: &str, undo_on_failure: bool| -> Result<(), CoreError> {
+                let scoped_marker = crate::ports::confine(&rt.scope, fs, &marker)?;
+                fs.write_atomic(&session.guard, &scoped_marker, text.as_bytes())
+                    .map_err(|e| CoreError::io(&marker, e))?;
+                if undo_on_failure {
+                    written_files.push(marker);
+                }
+                Ok(())
+            };
+        if let (RootScope::Project(project), Some(key)) = (&origin.scope, &project_key) {
+            let key_dir = parked_root
+                .join(crate::park_layout::PARKED_PROJECTS_DIR)
+                .join(key);
+            write_marker(
+                key_dir.join(crate::park_layout::PROJECT_ORIGIN_MARKER),
+                &project.0.to_string_lossy(),
+                created_dirs.contains(&key_dir),
+            )?;
+        }
+        if let Some(relative) = &origin_root_relative {
+            let marker_dir = slot_dir.join(crate::park_layout::COPY_ORIGIN_DIR);
+            created_dirs.extend(ensure_dir_all_tracked(rt, session, fs, &marker_dir)?);
+            write_marker(marker_dir.join(&skill.name.0), relative, true)?;
+        }
+        crate::park_move::move_dir(rt, session, &deployment.path, &parked_dir)?;
+        // After the move: `dotagents remove` deletes the skill's folder, and
+        // the parked copy must survive it.
+        if let Some(plan) = &dotagents {
+            if let Err(e) = crate::ops_park_dotagents::run_remove(
+                rt,
+                ctx,
+                &session.guard,
+                plan,
+                &skill.name,
+                &deployment.root.scope,
+            ) {
+                let moved_back =
+                    crate::park_move::move_dir(rt, session, &parked_dir, &deployment.path);
+                let files_back =
+                    crate::ops_park_dotagents::restore_originals(rt, &session.guard, plan);
+                let mut message = e.message.clone();
+                if let Err(move_error) = &moved_back {
+                    copy_stays_parked = true;
+                    message = format!(
+                        "{message} The copy could not be moved back and is still at {}: {}",
+                        parked_dir.display(),
+                        move_error.message
+                    );
+                }
+                if let Err(files_error) = &files_back {
+                    message = format!(
+                        "{message} agents.toml and agents.lock could not be written back: {}",
+                        files_error.message
+                    );
+                }
+                return Err(CoreError::new(e.code, message).at(&deployment.path));
+            }
+            // What the files hold now: turn-on restores the backed-up originals
+            // wholesale when nothing else changed them since.
+            if let Some(after) = plan.payload_after(rt, &skill.name) {
+                let _ = session.store.patch_payload(
+                    &session.guard,
+                    &id,
+                    serde_json::json!({ "dotagents_after": after }),
+                );
+            }
+        }
+        Ok(())
+    })();
+    if let Err(e) = write_result {
+        if !copy_stays_parked {
+            remove_park_scaffolding(rt, session, &written_files, &created_dirs);
+        }
+        // While the folder is still at its own path, the links that came
+        // down are the only change left to undo.
+        if fs.symlink_metadata(&deployment.path).is_ok() {
+            for (link, target) in &link_pairs {
+                if fs.symlink_metadata(link).is_err() {
+                    let _ = recreate_link(rt, &session.guard, link, target);
+                }
+            }
+        }
+        // Recorded either way: a failed row with a finished rollback must not
+        // be offered to Turn on, one with a stranded copy must.
+        let _ = session.store.patch_payload(
+            &session.guard,
+            &id,
+            serde_json::json!({ PARK_ROLLBACK_INCOMPLETE: copy_stays_parked }),
+        );
+        let _ = session.store.finish(
+            &session.guard,
+            &id,
+            crate::events::EventStatus::Failed,
+            None,
+        );
+        return Err(e);
+    }
+
+    session
+        .store
+        .finish(&session.guard, &id, crate::events::EventStatus::Done, None)?;
+    Ok(ParkedCopy {
+        event_id: id,
+        parked_dir,
+        origin_note: origin_root_relative.map(|_| {
+            slot_dir
+                .join(crate::park_layout::COPY_ORIGIN_DIR)
+                .join(&skill.name.0)
+        }),
+    })
+}
+
+/// Moves a parked deployment's directory back to the place it was parked
+/// from and recreates every per-skill link `park` removed.
+///
+/// Preconditions: exclusive lease; the deployment must resolve exactly once,
+/// live at the parked root ([`RootKind::Parked`]); nothing may already
+/// occupy the path this skill would return to. The place is the `from` the
+/// `park` row recorded; a parked copy with no row returns to the origin its
+/// parked folder names (an old flat copy returns to the global Universal
+/// root).
+///
+/// This reverses the most recent unreverted `park` event recorded for the
+/// skill (matched by `payload.to` naming this deployment's path), per
+/// `primitives-and-call-stack.md`'s "the reverse, from the journal entry".
+/// A parked directory with no matching `park` row (never parked by this
+/// build, or the row aged out) still unparks: no link is then recreated.
+pub fn unpark(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &UnparkRequest,
+) -> Result<UnparkOutcome, CoreError> {
+    rt.run(Operation::Unpark, ctx, || unpark_body(rt, ctx, req))
+}
+
+fn unpark_body(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &UnparkRequest,
+) -> Result<UnparkOutcome, CoreError> {
+    ctx.checkpoint()?;
+    let clock = rt.ports.clock.as_ref();
+    let op_start = clock.monotonic();
+    let step_start = clock.monotonic();
+    let session = crate::ports::MutationSession::begin_for_deployment(rt, ctx, &req.deployment_id);
+    ctx.take_timing();
+    let mut session = session?;
+
+    let deployment = session.resolve_exact(&req.deployment_id)?.clone();
+    if deployment.root.kind != RootKind::Parked {
+        return Err(
+            CoreError::new(ErrorCode::Unsupported, "only a parked copy can be unparked")
+                .at(&deployment.path),
+        );
+    }
+    let skill = resolve_skill(&session.fresh, &deployment.id)?.clone();
+
+    let fs = rt.ports.fs.as_ref();
+    let park_row = session
+        .store
+        .list(&crate::events::EventFilter {
+            skill: Some(skill.name.clone()),
+            limit: DEFAULT_EVENT_LIMIT,
+            after: None,
+        })?
+        .into_iter()
+        .filter(|row| {
+            row.kind == crate::events::EventKind::Park.as_str()
+                && row.reverted_by.is_none()
+                && row
+                    .payload
+                    .get("to")
+                    .and_then(|v| v.as_str())
+                    .map(Path::new)
+                    == Some(deployment.path.as_path())
+        })
+        // Newest first, one rule: a finished park, or a failed one whose copy
+        // is still parked. A rolled-back attempt never rewrites live files.
+        .find(|row| {
+            row.status != crate::events::EventStatus::Failed
+                || failed_park_leaves_copy_parked(fs, &row.payload, &deployment.path)
+        });
+    let links = park_row
+        .as_ref()
+        .map(|row| park_row_links(&row.payload))
+        .unwrap_or_default();
+    let recorded_targets = park_row
+        .as_ref()
+        .and_then(|row| row.payload.get("link_targets").cloned())
+        .unwrap_or_default();
+    let begin_step = crate::timing::step(clock, "begin_session", step_start);
+
+    let step_start = clock.monotonic();
+    let restored_dir = match recorded_origin_dir(park_row.as_ref(), &skill.name) {
+        Some(dir) => dir,
+        None => unrecorded_origin_dir(rt, &deployment, &skill.name)?,
+    };
+    if fs.symlink_metadata(&restored_dir).is_ok() {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "a copy already exists where this skill was parked from",
+        )
+        .at(&restored_dir));
+    }
+    let origin_scope = deployment
+        .parked_origin
+        .as_ref()
+        .map_or(&deployment.root.scope, |origin| &origin.scope);
+    let scope_label = scope_label(origin_scope).to_string();
+    let project_path = match origin_scope {
+        RootScope::Global => None,
+        RootScope::Project(project) => Some(project.0.clone()),
+    };
+
+    let id = rt.ports.ids.next_event_id();
+    // A skill parked from dotagents goes back into `agents.toml` and
+    // `agents.lock` below. Like the park, the row has no inverse; the backup
+    // is for recovery by hand.
+    let dotagents = park_row
+        .as_ref()
+        .and_then(|row| crate::ops_park_dotagents::recorded(&row.payload));
+    let backup_dir = match &dotagents {
+        Some(recorded) => {
+            let files: Vec<PathBuf> = std::iter::once(recorded.config.clone())
+                .chain(recorded.lock.clone())
+                .chain(recorded.gitignore.clone())
+                .collect();
+            Some(
+                session
+                    .store
+                    .backup_paths(&session.guard, &id, &files)?
+                    .backup_dir,
+            )
+        }
+        None => None,
+    };
+    let draft = crate::events::EventDraft {
+        kind: crate::events::EventKind::Unpark,
+        skill: skill.name.clone(),
+        harness: None,
+        scope: Some(scope_label),
+        project_path,
+        payload: serde_json::json!({
+            "deployment_id": deployment.id.as_str(),
+            "from": deployment.path,
+            "to": restored_dir,
+            "links": links,
+        }),
+        inverse: None,
+        backup_dir,
+    };
+    session.store.record(&session.guard, &id, &draft)?;
+
+    let parent = restored_dir.parent().unwrap_or(&restored_dir).to_path_buf();
+    let scoped_parent = crate::ports::confine(&rt.scope, fs, &parent)?;
+    fs.create_dir_all(&session.guard, &scoped_parent)
+        .map_err(|e| CoreError::io(&parent, e))?;
+    // Before the folder moves: a failure here leaves the copy parked, so the
+    // turn-on can be tried again.
+    let listed_again = match &dotagents {
+        Some(recorded) => {
+            let originals = crate::ops_park_dotagents::backed_up_files(
+                session.store.as_ref(),
+                park_row.as_ref().and_then(|row| row.backup_dir.as_deref()),
+            );
+            match crate::ops_park_dotagents::turn_on(
+                rt,
+                &session.guard,
+                recorded,
+                &originals,
+                &skill.name,
+            ) {
+                Ok(files) => files,
+                Err(e) => {
+                    let _ = session.store.finish(
+                        &session.guard,
+                        &id,
+                        crate::events::EventStatus::Failed,
+                        None,
+                    );
+                    return Err(CoreError::new(
+                        e.code,
+                        format!(
+                            "the skill stays parked: dotagents' agents.toml or agents.lock could not list it again: {}",
+                            e.message
+                        ),
+                    )
+                    .at(&deployment.path));
+                }
+            }
+        }
+        None => Vec::new(),
+    };
+    if let Err(e) = crate::park_move::move_dir(rt, &session, &deployment.path, &restored_dir) {
+        let _ = crate::ops_park_dotagents::restore_files(rt, &session.guard, &listed_again);
+        let _ = session.store.finish(
+            &session.guard,
+            &id,
+            crate::events::EventStatus::Failed,
+            None,
+        );
+        return Err(e);
+    }
+    if let Some(parent) = deployment.path.parent() {
+        let marker = parent
+            .join(crate::park_layout::COPY_ORIGIN_DIR)
+            .join(&skill.name.0);
+        if let Ok(scoped) = crate::ports::confine(&rt.scope, fs, &marker) {
+            let _ = fs.remove_file(&session.guard, &scoped);
+        }
+    }
+    let relinked = (|| {
+        for link_path in &links {
+            let relative_target = recorded_targets
+                .get(link_path.to_string_lossy().as_ref())
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+                .filter(|target| target.is_relative());
+            if let Some(target) = relative_target {
+                recreate_link(rt, &session.guard, link_path, &target)?;
+                continue;
+            }
+            let scoped_target = crate::ports::confine(&rt.scope, fs, &restored_dir)?;
+            let scoped_link = crate::ports::confine(&rt.scope, fs, link_path)?;
+            fs.symlink(&session.guard, &scoped_target, &scoped_link)
+                .map_err(|e| CoreError::io(link_path, e))?;
+        }
+        Ok::<(), CoreError>(())
+    })();
+    if let Err(e) = relinked {
+        let _ = session.store.finish(
+            &session.guard,
+            &id,
+            crate::events::EventStatus::Failed,
+            None,
+        );
+        return Err(CoreError::new(
+            e.code,
+            format!(
+                "the skill is back at its place, but a link to it could not be recreated: {}",
+                e.message
+            ),
+        )
+        .at(restored_dir));
+    }
+
+    // The copy is back, so this park record is spent; a later turn-on must
+    // not pick it up.
+    if let Some(row) = &park_row {
+        let _ = session.store.claim_revert(&session.guard, &row.id, &id);
+    }
+    session
+        .store
+        .finish(&session.guard, &id, crate::events::EventStatus::Done, None)?;
+    session.finish(rt, ctx);
+    let write_step = crate::timing::step(clock, "rename_and_relink", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "unpark",
+        op_start,
+        vec![begin_step, write_step],
+    ));
+    Ok(UnparkOutcome {
+        event_id: id,
+        deployment_id: deployment.id,
+        restored_path: restored_dir,
+    })
+}
+
+/// The folder a `park` row recorded as the copy's origin, when it still names
+/// this skill. `unpark` restores here, not to a place recomputed from the
+/// parked path.
+fn recorded_origin_dir(
+    park_row: Option<&crate::events::EventRecord>,
+    name: &SkillName,
+) -> Option<PathBuf> {
+    let from = PathBuf::from(park_row?.payload.get("from")?.as_str()?);
+    (from.is_absolute() && from.file_name().is_some_and(|n| n == name.0.as_str())).then_some(from)
+}
+
+/// The skills folders `origin` can name, each with the path the catalog spells
+/// it by (`.config/opencode/skill`): the Universal root, or an agent's own
+/// roots, at global or project scope. An agent can have more than one.
+fn origin_roots(rt: &Runtime, origin: &RootRef) -> Vec<(String, PathBuf)> {
+    let (level, universal_base) = match &origin.scope {
+        RootScope::Global => (ScopeLevel::Global, rt.scope.home.lexical.clone()),
+        RootScope::Project(project) => (ScopeLevel::Project, project.0.clone()),
+    };
+    match &origin.kind {
+        RootKind::Universal => vec![(
+            UNIVERSAL_ROOT_RELATIVE.to_string(),
+            universal_base.join(UNIVERSAL_ROOT_RELATIVE),
+        )],
+        RootKind::Harness(id) => rt
+            .ports
+            .catalog
+            .facts
+            .iter()
+            .filter(|facts| &facts.id == id)
+            .flat_map(|facts| &facts.roots)
+            .filter(|spec| spec.role == RootRole::Own && spec.level == level)
+            .map(|spec| {
+                let path = match &origin.scope {
+                    RootScope::Global => rt.scope.global_root_path(Path::new(&spec.relative_path)),
+                    RootScope::Project(project) => project.0.join(&spec.relative_path),
+                };
+                (spec.relative_path.clone(), path)
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The catalog spelling of the folder `copy_parent` is, among `origin`'s
+/// roots. `None` when it matches none of them.
+pub(crate) fn origin_root_relative(
+    rt: &Runtime,
+    origin: &RootRef,
+    copy_parent: &Path,
+) -> Option<String> {
+    let fs = rt.ports.fs.as_ref();
+    let parent = copy_parent.parent()?;
+    let roots = origin_roots(rt, origin);
+    let canonical_parent = fs.canonicalize(parent).ok();
+    roots
+        .into_iter()
+        .find(|(_, path)| {
+            path == parent
+                || canonical_parent
+                    .as_ref()
+                    .is_some_and(|canonical| fs.canonicalize(path).ok().as_ref() == Some(canonical))
+        })
+        .map(|(relative, _)| relative)
+}
+
+/// Where a parked copy with no journal row returns to: the folder its
+/// `.origin` marker names, or the origin's first root for a copy parked
+/// before markers existed.
+///
+/// The marker is only a key into the catalog's roots; it never supplies a
+/// path. A project copy returns only into a project the scope covers.
+fn unrecorded_origin_dir(
+    rt: &Runtime,
+    deployment: &DeploymentDto,
+    name: &SkillName,
+) -> Result<PathBuf, CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let refuse =
+        |message: &str| Err(CoreError::new(ErrorCode::Unsupported, message).at(&deployment.path));
+    let Some(origin) = deployment.parked_origin.as_ref() else {
+        return refuse("this parked copy does not say where it came from");
+    };
+    if let RootScope::Project(project) = &origin.scope {
+        let known = rt.scope.projects.iter().any(|root| {
+            root.lexical == project.0
+                || fs
+                    .canonicalize(&project.0)
+                    .is_ok_and(|canonical| canonical == root.canonical)
+        });
+        if !known {
+            return refuse(
+                "this copy came from a project that is not in the scope, so it is not restored there",
+            );
+        }
+    }
+    let roots = origin_roots(rt, origin);
+    let marker = deployment
+        .path
+        .parent()
+        .map(|slot| slot.join(crate::park_layout::COPY_ORIGIN_DIR).join(&name.0));
+    let recorded = marker
+        .and_then(|marker| fs.read_capped(&marker, 1024).ok())
+        .and_then(|bytes| String::from_utf8(bytes).ok());
+    let dir = match recorded {
+        Some(text) => roots
+            .into_iter()
+            .find(|(relative, _)| relative == text.trim())
+            .map(|(_, path)| path),
+        None => roots.into_iter().next().map(|(_, path)| path),
+    };
+    match dir {
+        Some(dir) => Ok(dir.join(&name.0)),
+        None => refuse(
+            "the record of where this copy came from names a folder Skill Studio does not manage",
+        ),
+    }
+}
+
+/// Moves an old flat parked copy of a skill named `top_level` (the name of a
+/// slot folder) to `universal/<top_level>`, so the slot folder holds only
+/// slot content. Does nothing when `top_level` holds no `SKILL.md`. Journaled
+/// as a park of the Universal copy it came from, so unpark still returns it
+/// there.
+fn migrate_legacy_flat_copy(
+    rt: &Runtime,
+    session: &mut crate::ports::MutationSession,
+    parked_root: &Path,
+    top_level: &str,
+) -> Result<(), CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let legacy = parked_root.join(top_level);
+    if fs.symlink_metadata(&legacy.join("SKILL.md")).is_err() {
+        return Ok(());
+    }
+    let destination = parked_root.join("universal").join(top_level);
+    if fs.symlink_metadata(&destination).is_ok() {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "an old parked copy named like this folder is in the way, and its new place is taken",
+        )
+        .at(&legacy));
+    }
+    let origin = RootRef {
+        scope: RootScope::Global,
+        kind: RootKind::Universal,
+    };
+    let id = rt.ports.ids.next_event_id();
+    let draft = crate::events::EventDraft {
+        kind: crate::events::EventKind::Park,
+        skill: SkillName(top_level.to_string()),
+        harness: None,
+        scope: Some(scope_label(&origin.scope).to_string()),
+        project_path: None,
+        payload: serde_json::json!({
+            "from": rt.scope.home.lexical.join(UNIVERSAL_ROOT_RELATIVE).join(top_level),
+            "to": destination,
+            "origin": origin,
+            "migrated_from": legacy,
+            "links": Vec::<PathBuf>::new(),
+            "link_targets": serde_json::Map::new(),
+        }),
+        inverse: None,
+        backup_dir: None,
+    };
+    session.store.record(&session.guard, &id, &draft)?;
+
+    // A skill named `universal` would move into itself, so it goes through a
+    // sibling name. Every other name moves in one step, which leaves no
+    // window for a crash to strand the skill under a hidden name.
+    let holding = parked_root.join(format!(".legacy-{}", crate::fsops::unique_suffix()));
+    let result = if top_level == "universal" {
+        crate::park_move::move_dir(rt, &*session, &legacy, &holding).and_then(|()| {
+            let parent = destination.parent().unwrap_or(&destination).to_path_buf();
+            ensure_dir_all(rt, &*session, fs, &parent)?;
+            crate::park_move::move_dir(rt, &*session, &holding, &destination)
+        })
+    } else {
+        let parent = destination.parent().unwrap_or(&destination).to_path_buf();
+        ensure_dir_all(rt, &*session, fs, &parent)
+            .and_then(|()| crate::park_move::move_dir(rt, &*session, &legacy, &destination))
+    };
+    let status = if result.is_ok() {
+        crate::events::EventStatus::Done
+    } else {
+        if fs.symlink_metadata(&holding).is_ok() && fs.symlink_metadata(&legacy).is_err() {
+            let _ = crate::park_move::move_dir(rt, &*session, &holding, &legacy);
+        }
+        crate::events::EventStatus::Failed
+    };
+    let _ = session.store.finish(&session.guard, &id, status, None);
+    result
+}
+
+/// Undoes what a failed park created: the markers it wrote, then the
+/// directories it made, innermost first. Best effort; a directory that is not
+/// empty stays.
+pub(crate) fn remove_park_scaffolding(
+    rt: &Runtime,
+    session: &crate::ports::MutationSession,
+    files: &[PathBuf],
+    dirs: &[PathBuf],
+) {
+    let fs = rt.ports.fs.as_ref();
+    for file in files {
+        if let Ok(scoped) = crate::ports::confine(&rt.scope, fs, file) {
+            let _ = fs.remove_file(&session.guard, &scoped);
+        }
+    }
+    for dir in dirs.iter().rev() {
+        if crate::ports::confine(&rt.scope, fs, dir).is_ok() {
+            let _ = fs.fsops_remove_dir(dir);
+        }
+    }
+}
+
+/// Refuses a copy `park` cannot move, with the reason a person can act on.
+pub(crate) fn refuse_unparkable(deployment: &DeploymentDto) -> Result<(), CoreError> {
+    let refuse =
+        |message: &str| Err(CoreError::new(ErrorCode::Unsupported, message).at(&deployment.path));
+    if deployment.plugin.is_some() || matches!(deployment.root.kind, RootKind::PluginCache(_)) {
+        return refuse("a plugin copy cannot be parked; turn it off with /plugin in the agent");
+    }
+    if deployment.root.kind == RootKind::Parked {
+        return refuse("this copy is already parked");
+    }
+    let is_agent_symlink = deployment.is_symlink && deployment.root.kind != RootKind::Universal;
+    if deployment.backing == BackingRelationship::LinkedTo || is_agent_symlink {
+        return refuse("a link cannot be parked; park the real folder it points to instead");
+    }
+    if crate::park_layout::slot_for(&deployment.root.kind).is_none() {
+        return refuse("only the Universal folder or an agent's own skills folder can be parked");
+    }
+    Ok(())
+}
+
+/// What to know before parking or removing one copy: whether git tracks it.
+///
+/// Read-only and never blocks a park or a remove; the caller uses the answer
+/// to warn that the move shows as deleted files in the project's repository.
+/// A host with no process spawner, no `git` binary, or a folder outside a
+/// repository reports `git_tracked: false`.
+pub fn park_check(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &ParkCheckRequest,
+) -> Result<ParkCheck, CoreError> {
+    ctx.checkpoint()?;
+    let skills: Vec<SkillName> = req.deployment_id.skill_name().into_iter().collect();
+    let inventory = scan(
+        rt,
+        ctx,
+        &ScanRequest {
+            skills,
+            timings: false,
+        },
+    )?;
+    let skill = resolve_skill(&inventory, &req.deployment_id)?;
+    let deployment = skill
+        .deployments
+        .iter()
+        .find(|d| d.id == req.deployment_id)
+        .ok_or_else(|| {
+            CoreError::new(
+                ErrorCode::AmbiguousTarget,
+                format!("no copy matches {}", req.deployment_id.as_str()),
+            )
+        })?;
+    let scope = deployment
+        .parked_origin
+        .as_ref()
+        .map_or(&deployment.root.scope, |origin| &origin.scope);
+    let project = match scope {
+        RootScope::Global => None,
+        RootScope::Project(project) => Some(project.0.clone()),
+    };
+    let git_tracked = if deployment.parked_origin.is_some() {
+        Some(false)
+    } else {
+        git_tracks_folder(rt, ctx, &deployment.path)
+    };
+    Ok(ParkCheck {
+        git_tracked,
+        project,
+    })
+}
+
+/// The warning an adapter shows before it parks `deployment_id`: git tracks
+/// the copy, so the move shows as deleted files in the repository. `None`
+/// when git does not track it or the check cannot run; the park reports its
+/// own refusals, and a warning never blocks it.
+pub fn park_git_warning(
+    rt: &Runtime,
+    ctx: &OpContext,
+    deployment_id: &DeploymentId,
+) -> Option<String> {
+    let check = park_check(
+        rt,
+        ctx,
+        &ParkCheckRequest {
+            deployment_id: deployment_id.clone(),
+        },
+    )
+    .ok()?;
+    check.git_tracked.unwrap_or(false).then(|| {
+        "git tracks this skill folder, so the move shows as deleted files in the repository"
+            .to_string()
+    })
+}
+
+/// Whether `folder` is in a git work tree and `git ls-files` lists a file
+/// under it (or the folder itself, for a tracked symlink). `None` when git
+/// cannot be run safely: on macOS without the command line tools,
+/// `/usr/bin/git` is a stub that opens an install dialog.
+fn git_tracks_folder(rt: &Runtime, ctx: &OpContext, folder: &Path) -> Option<bool> {
+    let Some(spawner) = rt.ports.spawner.as_ref() else {
+        return Some(false);
+    };
+    if cfg!(target_os = "macos") {
+        let probe = ProcessSpec {
+            program: "xcode-select".to_string(),
+            args: vec!["-p".to_string()],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 5_000,
+        };
+        let tools_installed = spawner
+            .run(&probe, ctx.cancel.as_ref())
+            .is_ok_and(|output| output.status == Some(0));
+        if !tools_installed {
+            return None;
+        }
+    }
+    let (Some(parent), Some(name)) = (folder.parent(), folder.file_name()) else {
+        return Some(false);
+    };
+    let spec = ProcessSpec {
+        program: "git".to_string(),
+        args: vec![
+            "--literal-pathspecs".to_string(),
+            "ls-files".to_string(),
+            "--".to_string(),
+            name.to_string_lossy().into_owned(),
+        ],
+        cwd: Some(parent.to_path_buf()),
+        env: vec![(
+            "HOME".to_string(),
+            rt.scope.home.lexical.display().to_string(),
+        )],
+        timeout_ms: 10_000,
+    };
+    Some(
+        spawner
+            .run(&spec, ctx.cancel.as_ref())
+            .is_ok_and(|output| output.status == Some(0) && !output.stdout.trim().is_empty()),
+    )
+}
+
+/// Payload key on a failed `park` row whose rollback could not move the copy
+/// back: the copy is still parked, so Turn on must still use the row.
+const PARK_ROLLBACK_INCOMPLETE: &str = "rollback_incomplete";
+
+/// Whether a failed `park` row still has its copy parked at `parked_dir`.
+/// New rows say so in [`PARK_ROLLBACK_INCOMPLETE`]; rows from before that
+/// marker existed are judged by whether the copy is still there.
+fn failed_park_leaves_copy_parked(
+    fs: &dyn ScopeFs,
+    payload: &serde_json::Value,
+    parked_dir: &Path,
+) -> bool {
+    match payload
+        .get(PARK_ROLLBACK_INCOMPLETE)
+        .and_then(serde_json::Value::as_bool)
+    {
+        Some(stranded) => stranded,
+        None => fs.symlink_metadata(parked_dir).is_ok(),
+    }
+}
+
+/// The link paths a `park` row removed. Rows written before `links` existed
+/// carry only the Claude Code link, as `claude_link`.
+fn park_row_links(payload: &serde_json::Value) -> Vec<PathBuf> {
+    if let Some(links) = payload.get("links").and_then(|v| v.as_array()) {
+        return links
+            .iter()
+            .filter_map(|v| v.as_str().map(PathBuf::from))
+            .collect();
+    }
+    payload
+        .get("claude_link")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .into_iter()
+        .collect()
+}
+
+/// Creates `dir` and every missing ancestor, one level at a time.
+/// [`crate::ports::confine`] canonicalizes a path's parent to prove it lies
+/// inside the scope, so it needs that parent to already exist; a home with
+/// no `.config` at all makes a single `confine(".config/opencode")` fail
+/// before `create_dir_all` ever runs. Walking up to the first existing
+/// ancestor and confining one level at a time avoids that.
+pub(crate) fn ensure_dir_all(
+    rt: &Runtime,
+    session: &crate::ports::MutationSession,
+    fs: &dyn ScopeFs,
+    dir: &Path,
+) -> Result<(), CoreError> {
+    ensure_dir_all_tracked(rt, session, fs, dir).map(|_| ())
+}
+
+/// [`ensure_dir_all`], returning the directories it created, outermost first.
+pub(crate) fn ensure_dir_all_tracked(
+    rt: &Runtime,
+    session: &crate::ports::MutationSession,
+    fs: &dyn ScopeFs,
+    dir: &Path,
+) -> Result<Vec<PathBuf>, CoreError> {
+    let mut missing = Vec::new();
+    let mut current = dir.to_path_buf();
+    while fs.symlink_metadata(&current).is_err() {
+        missing.push(current.clone());
+        match current.parent() {
+            Some(parent) if parent != current => current = parent.to_path_buf(),
+            _ => break,
+        }
+    }
+    missing.reverse();
+    for path in &missing {
+        let scoped = crate::ports::confine(&rt.scope, fs, path)?;
+        fs.create_dir_all(&session.guard, &scoped)
+            .map_err(|e| CoreError::io(path, e))?;
+    }
+    Ok(missing)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scope::RuntimeScope;
+    use crate::testing::FixtureBuilder;
+
+    /// A failed park row from before `rollback_incomplete` existed is offered
+    /// to Turn on while its copy is still parked and not once it is gone;
+    /// a row that says its rollback finished is never offered, and one that
+    /// says it did not always is. Fails if an old stranded copy loses its
+    /// recorded links, or a rolled-back attempt rewrites live files.
+    #[test]
+    fn a_failed_park_row_is_offered_by_its_marker_or_by_its_copy_still_parked() {
+        let fs = FixtureBuilder::new().dir("/parked/foo").build_fs();
+        let parked = Path::new("/parked/foo");
+        let gone = Path::new("/parked/gone");
+        let legacy = serde_json::json!({});
+        assert!(failed_park_leaves_copy_parked(&fs, &legacy, parked));
+        assert!(!failed_park_leaves_copy_parked(&fs, &legacy, gone));
+        let finished = serde_json::json!({ PARK_ROLLBACK_INCOMPLETE: false });
+        assert!(!failed_park_leaves_copy_parked(&fs, &finished, parked));
+        let stranded = serde_json::json!({ PARK_ROLLBACK_INCOMPLETE: true });
+        assert!(failed_park_leaves_copy_parked(&fs, &stranded, gone));
+    }
+
+    fn scope() -> NormalizedScope {
+        let fs = FixtureBuilder::new().dir("/h").build_fs();
+        NormalizedScope::normalize(&RuntimeScope::fixture("/h"), &fs).unwrap()
+    }
+
+    #[test]
+    fn partial_inventory_exits_4_without_an_error_value() {
+        let inv = Inventory {
+            skills: vec![],
+            projects: vec![],
+            completeness: Completeness::Partial,
+            observations: vec![],
+            unread_roots: vec![],
+            timings: vec![],
+        };
+        let env = ResultEnvelope::from_result(
+            Operation::Scan,
+            &scope(),
+            &OpContext::uncancellable(CorrelationId("c1".into())),
+            Ok(inv),
+        );
+        assert_eq!(env.status, OpStatus::Partial);
+        assert_eq!(env.exit_status(), 4);
+    }
+
+    #[test]
+    fn diagnosis_with_a_warning_exits_1_and_partial_wins() {
+        use crate::dto::{Issue, IssueKind, NextAction, Severity};
+        use crate::identity::SkillName;
+        let issue = Issue {
+            kind: IssueKind::BrokenLink,
+            severity: Severity::Warning,
+            skill: SkillName("x".into()),
+            deployment_id: None,
+            message: "target missing".into(),
+            next_action: NextAction::None,
+        };
+        let complete = Diagnosis {
+            inventory: Inventory {
+                skills: vec![],
+                projects: vec![],
+                completeness: Completeness::Complete,
+                observations: vec![],
+                unread_roots: vec![],
+                timings: vec![],
+            },
+            issues: vec![issue.clone()],
+        };
+        let mut partial = complete.clone();
+        partial.inventory.completeness = Completeness::Partial;
+        let ctx = || OpContext::uncancellable(CorrelationId("c3".into()));
+        let ok = ResultEnvelope::from_result(Operation::Diagnose, &scope(), &ctx(), Ok(complete));
+        assert_eq!(ok.exit_status(), 1);
+        let part = ResultEnvelope::from_result(Operation::Diagnose, &scope(), &ctx(), Ok(partial));
+        assert_eq!(part.exit_status(), 4);
+    }
+
+    /// Given a complete, issue-free `Ok` result, when `exit_status` reads
+    /// it, then it exits `0`, not the issues-found exit code every `Ok`
+    /// result would get if the guard never actually checked `found_issues`;
+    /// on failure the panic names the exit code it got instead.
+    #[test]
+    fn an_ok_result_with_no_issues_exits_0_not_the_issues_found_code() {
+        let inv = Inventory {
+            skills: vec![],
+            projects: vec![],
+            completeness: Completeness::Complete,
+            observations: vec![],
+            unread_roots: vec![],
+            timings: vec![],
+        };
+        let env = ResultEnvelope::from_result(
+            Operation::Scan,
+            &scope(),
+            &OpContext::uncancellable(CorrelationId("c-ok".into())),
+            Ok(inv),
+        );
+        assert_eq!(env.status, OpStatus::Ok);
+        assert_eq!(
+            env.exit_status(),
+            0,
+            "an Ok result with no issues must exit 0, not the issues-found exit code"
+        );
+    }
+
+    /// `FixSkillOutcome::found_issues` is true exactly when at least one of
+    /// `unrepaired`/`conflicts` is non-empty, never for either reason alone
+    /// omitted and never unconditionally; on failure the panic names the
+    /// case (both empty, only unrepaired, only conflicts) it got wrong.
+    #[test]
+    fn fix_skill_outcome_found_issues_is_true_when_either_list_is_nonempty_or_names_the_case_it_missed(
+    ) {
+        use crate::dto::{ConflictSummary, FixSkillOutcome, UnrepairedIssue, UnrepairedIssueKind};
+
+        let clean = FixSkillOutcome {
+            skill: SkillName("x".into()),
+            applied: Vec::new(),
+            unrepaired: Vec::new(),
+            conflicts: Vec::new(),
+        };
+        assert!(
+            !clean.found_issues(),
+            "no unrepaired issues and no conflicts must report no issues found"
+        );
+
+        let only_unrepaired = FixSkillOutcome {
+            unrepaired: vec![UnrepairedIssue {
+                path: PathBuf::from("/h/skill/SKILL.md"),
+                message: "still broken".into(),
+                kind: UnrepairedIssueKind::Link,
+            }],
+            ..clean.clone()
+        };
+        assert!(
+            only_unrepaired.found_issues(),
+            "an unrepaired issue alone must report issues found"
+        );
+
+        let only_conflicts = FixSkillOutcome {
+            conflicts: vec![ConflictSummary {
+                skill: SkillName("x".into()),
+                message: "two copies differ".into(),
+                path_a: PathBuf::from("/h/skill-a"),
+                path_b: PathBuf::from("/h/skill-b"),
+            }],
+            ..clean
+        };
+        assert!(
+            only_conflicts.found_issues(),
+            "a conflict alone must report issues found"
+        );
+    }
+
+    #[test]
+    fn capabilities_rejects_unknown_harnesses_and_resolves_tools() {
+        use crate::harness::HarnessCatalog;
+        use crate::identity::AgentId;
+        use crate::ports::Ports;
+        use crate::testing::{
+            FakeClock, FakeIds, FakeLease, FakeToolLookup, NoHistory, RecordingSink,
+        };
+        use std::path::Path;
+        use std::sync::Arc;
+
+        let fs = FixtureBuilder::new().dir("/h").build_fs();
+        let mut ports = Ports {
+            fs: Arc::new(fs),
+            clock: Arc::new(FakeClock::at(0)),
+            ids: Arc::new(FakeIds::default()),
+            leases: Arc::new(FakeLease::default()),
+            history: Arc::new(NoHistory),
+            sink: Arc::new(RecordingSink::default()),
+            spawner: None,
+            discovery: None,
+            tools: None,
+            catalog: Arc::new(HarnessCatalog::builtin()),
+
+            telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+        };
+        let ctx = OpContext::uncancellable(CorrelationId("c4".into()));
+
+        let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports.clone()).unwrap();
+        let unknown = CapabilitiesRequest {
+            harnesses: vec![AgentId::from("windsurf")],
+            ..Default::default()
+        };
+        let err = capabilities(&rt, &ctx, &unknown).unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidRequest);
+
+        let with_tools = CapabilitiesRequest {
+            tools: vec!["npx".into(), "dotagents".into()],
+            ..Default::default()
+        };
+        let err = capabilities(&rt, &ctx, &with_tools).unwrap_err();
+        assert_eq!(err.code, ErrorCode::Unsupported, "no ToolLookup port");
+
+        let mut lookup = FakeToolLookup::default();
+        lookup
+            .binaries
+            .insert("npx".into(), "/usr/local/bin/npx".into());
+        ports.tools = Some(Arc::new(lookup));
+        let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
+        let caps = capabilities(&rt, &ctx, &with_tools).unwrap();
+        assert_eq!(caps.harnesses.len(), 6);
+        assert_eq!(
+            caps.tools[0].path.as_deref(),
+            Some(Path::new("/usr/local/bin/npx"))
+        );
+        assert_eq!(caps.tools[1].path, None);
+    }
+
+    #[test]
+    fn capabilities_observe_reports_config_presence_and_runner_binary() {
+        use crate::harness::HarnessCatalog;
+        use crate::identity::AgentId;
+        use crate::ports::Ports;
+        use crate::testing::{
+            FakeClock, FakeIds, FakeLease, FakeToolLookup, NoHistory, RecordingSink,
+        };
+        use std::sync::Arc;
+
+        // Claude Code's global root exists on disk; Codex's does not.
+        let fs = FixtureBuilder::new().dir("/h/.claude/skills").build_fs();
+        let mut lookup = FakeToolLookup::default();
+        lookup
+            .binaries
+            .insert("claude".into(), "/usr/local/bin/claude".into());
+        let ports = Ports {
+            fs: Arc::new(fs),
+            clock: Arc::new(FakeClock::at(0)),
+            ids: Arc::new(FakeIds::default()),
+            leases: Arc::new(FakeLease::default()),
+            history: Arc::new(NoHistory),
+            sink: Arc::new(RecordingSink::default()),
+            spawner: None,
+            discovery: None,
+            tools: Some(Arc::new(lookup)),
+            catalog: Arc::new(HarnessCatalog::builtin()),
+
+            telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+        };
+        let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
+        let ctx = OpContext::uncancellable(CorrelationId("c5".into()));
+        let req = CapabilitiesRequest {
+            harnesses: vec![AgentId::from(AgentId::CLAUDE_CODE), AgentId::from("codex")],
+            observe: true,
+            ..Default::default()
+        };
+        let caps = capabilities(&rt, &ctx, &req).unwrap();
+
+        let claude = caps
+            .harnesses
+            .iter()
+            .find(|r| r.harness.as_str() == AgentId::CLAUDE_CODE)
+            .unwrap();
+        let observed = claude.observed.as_ref().expect("observe=true fills this");
+        assert!(observed.config_present);
+        assert_eq!(
+            observed.runner_binary.as_deref(),
+            Some(Path::new("/usr/local/bin/claude"))
+        );
+
+        let codex = caps
+            .harnesses
+            .iter()
+            .find(|r| r.harness.as_str() == "codex")
+            .unwrap();
+        assert!(!codex.observed.as_ref().unwrap().config_present);
+    }
+
+    #[test]
+    fn harnesses_reports_every_first_class_harness_with_a_state_and_evidence_or_names_the_missing_row(
+    ) {
+        use crate::harness::HarnessCatalog;
+        use crate::identity::AgentId;
+        use crate::ports::Ports;
+        use crate::testing::{
+            FakeClock, FakeIds, FakeLease, FakeProcessSpawner, FakeToolLookup, NoHistory,
+            RecordingSink,
+        };
+        use std::sync::Arc;
+
+        // Claude Code resolves on PATH and answers `--version`; every other
+        // harness is absent, so its state must fall back to `NotFound` with
+        // `Unknown` version/install-method evidence rather than a panic or a
+        // missing row.
+        let fs = FixtureBuilder::new().dir("/h").build_fs();
+        let mut lookup = FakeToolLookup::default();
+        lookup.binaries.insert(
+            "claude".into(),
+            "/usr/local/Cellar/claude/1.2.3/bin/claude".into(),
+        );
+        let mut spawner = FakeProcessSpawner::default();
+        spawner.outputs.insert(
+            "/usr/local/Cellar/claude/1.2.3/bin/claude".into(),
+            ("claude-code 1.2.3\n".into(), 0),
+        );
+        let ports = Ports {
+            fs: Arc::new(fs),
+            clock: Arc::new(FakeClock::at(0)),
+            ids: Arc::new(FakeIds::default()),
+            leases: Arc::new(FakeLease::default()),
+            history: Arc::new(NoHistory),
+            sink: Arc::new(RecordingSink::default()),
+            spawner: Some(Arc::new(spawner)),
+            discovery: None,
+            tools: Some(Arc::new(lookup)),
+            catalog: Arc::new(HarnessCatalog::builtin()),
+
+            telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+        };
+        let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
+        let ctx = OpContext::uncancellable(CorrelationId("c6".into()));
+
+        let report = harnesses(&rt, &ctx, &HarnessesRequest {}).unwrap();
+        assert_eq!(report.harnesses.len(), 6, "one row per first-class harness");
+
+        let claude = report
+            .harnesses
+            .iter()
+            .find(|row| row.id.as_str() == AgentId::CLAUDE_CODE)
+            .expect("claude-code row is missing");
+        assert!(claude.executable.is_some());
+        assert_eq!(claude.version.value.as_deref(), Some("claude-code 1.2.3"));
+        assert!(
+            claude.install_method.value.is_some(),
+            "a resolved executable path must infer an install method, not stay Unknown"
+        );
+
+        for row in report
+            .harnesses
+            .iter()
+            .filter(|r| r.id.as_str() != AgentId::CLAUDE_CODE)
+        {
+            assert!(
+                row.executable.is_none(),
+                "{} should not resolve without a binary on PATH",
+                row.id.as_str()
+            );
+            assert!(
+                row.version.value.is_none(),
+                "{} version must be Unknown",
+                row.id.as_str()
+            );
+            assert!(
+                row.install_method.value.is_none(),
+                "{} install method must be Unknown",
+                row.id.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn busy_lease_exits_3() {
+        let env: ResultEnvelope<Inventory> = ResultEnvelope::from_result(
+            Operation::Scan,
+            &scope(),
+            &OpContext::uncancellable(CorrelationId("c2".into())),
+            Err(CoreError::new(ErrorCode::ScopeBusy, "held by pid 42")),
+        );
+        assert_eq!(env.exit_status(), 3);
+        assert!(env.data.is_none());
+    }
+
+    #[test]
+    fn a_hash_budget_stop_does_not_shorten_the_fingerprint_file_list_or_names_the_missing_file() {
+        // b.md is bigger than what's left of `max_bytes` after `a.md`, so
+        // the hash side truncates there; `c.md` is small again, but must
+        // never be reached by the hash side once truncated. The fingerprint
+        // side runs on its own MAX_FOLDER_BYTES budget (unaffected by this
+        // small `max_bytes`) and so must see all three files regardless.
+        let fs = FixtureBuilder::new()
+            .dir("/h/skill")
+            .file("/h/skill/a.md", &[b'a'; 10])
+            .file("/h/skill/b.md", &[b'b'; 20])
+            .file("/h/skill/c.md", &[b'c'; 10])
+            .build_fs();
+        let root = Path::new("/h/skill");
+        let mut walk = FactsWalk::default();
+        walk_folder_for_facts(
+            &fs,
+            &OpContext::uncancellable(CorrelationId("facts-walk-test".into())),
+            root,
+            root,
+            25,
+            &mut walk,
+        )
+        .unwrap();
+
+        let hashable: Vec<_> = walk.hashable.iter().map(|f| f.rel_path.clone()).collect();
+        assert_eq!(hashable, vec![Path::new("a.md")]);
+        assert!(walk.truncated, "hash side must stop once b.md overflows");
+
+        let fingerprint_names: Vec<_> = walk
+            .fingerprint_files
+            .iter()
+            .map(|(rel, _, _)| rel.clone())
+            .collect();
+        for name in ["a.md", "b.md", "c.md"] {
+            assert!(
+                fingerprint_names.contains(&PathBuf::from(name)),
+                "fingerprint_files is missing {name}, only has {fingerprint_names:?}"
+            );
+        }
+    }
+
+    /// Minimal `DeploymentDto` for `outdated_target` precedence tests - only
+    /// `source_kind` and `plugin` matter to that function; every other field
+    /// takes a placeholder value no test here reads.
+    fn minimal_deployment(
+        source_kind: SourceKind,
+        plugin: Option<PluginSourceDto>,
+    ) -> DeploymentDto {
+        DeploymentDto {
+            id: DeploymentId::parse("dep:v1/g/-/universal/-/x").unwrap(),
+            root: RootRef::new(RootScope::Global, RootKind::Universal).unwrap(),
+            harness: None,
+            path: PathBuf::from("/h/.agents/skills/x"),
+            destination: SkillDestination::Universal,
+            backing: BackingRelationship::Independent,
+            mutability: DeploymentMutability::ReadOnly,
+            link_target: None,
+            shared_via_whole_dir_link: false,
+            is_symlink: false,
+            resolved_path: None,
+            symlink_is_broken: false,
+            symlink_error: None,
+            owner_kind: LifecycleOwnerKind::Copy,
+            owner_id: None,
+            content_fingerprint: None,
+            disabled_by: None,
+            disabled_readers: Vec::new(),
+            spec_violations: Vec::new(),
+            plugin,
+            frontmatter: None,
+            frontmatter_fields: BTreeMap::new(),
+            has_spec: false,
+            folder_bytes: 0,
+            file_count: 0,
+            skill_md_tokens: 0,
+            description_tokens: 0,
+            content_hash: "hash".to_string(),
+            modified_at: None,
+            folder_truncated: false,
+            in_git_repo: false,
+            studio_disabled: false,
+            source_kind,
+            parked_origin: None,
+        }
+    }
+
+    /// Flow: a skill deployed by both skills-sh and dotagents (the plan's
+    /// scan order does not put dotagents first).
+    /// Expectation: `outdated_target` classifies it as `SourceKind::Dotagents`,
+    /// the higher-precedence method, not whichever deployment is first in
+    /// `skill.deployments`.
+    /// A failure here means precedence reverted to `deployments.first()`, or
+    /// names the wrong method it picked instead.
+    #[test]
+    fn a_skill_deployed_by_two_methods_is_classified_by_precedence_not_deployment_order_or_names_the_method_it_picked(
+    ) {
+        let skill = InstalledSkillDto {
+            name: SkillName("write-tests".to_string()),
+            description: None,
+            deployments: vec![
+                minimal_deployment(SourceKind::SkillsSh, None),
+                minimal_deployment(SourceKind::Dotagents, None),
+            ],
+        };
+        let target = outdated_target(&skill).expect("a deployed skill always yields a target");
+        assert_eq!(target.source_kind, SourceKind::Dotagents);
+    }
+
+    /// Flow: a forked skill whose per-harness link is still on disk, so
+    /// `scan` also reports a `Manual` deployment for the same skill name.
+    /// Expectation: `outdated_target` still classifies it as
+    /// `SourceKind::Fork`, not `Manual` - `Fork` sorts last in `SourceKind`'s
+    /// derived `Ord`, so the shared `min_by_key` precedence alone would pick
+    /// `Manual` here.
+    /// A failure here means the fork-first check was dropped, so a fork with
+    /// a leftover per-harness link silently loses its currency rule and
+    /// reports `NotTracked` forever, or names the wrong method it picked
+    /// instead.
+    #[test]
+    fn a_forked_skill_with_a_leftover_manual_link_is_still_classified_as_fork_or_names_the_method_it_picked(
+    ) {
+        let skill = InstalledSkillDto {
+            name: SkillName("find-bugs".to_string()),
+            description: None,
+            deployments: vec![
+                minimal_deployment(SourceKind::Manual, None),
+                minimal_deployment(SourceKind::Fork, None),
+            ],
+        };
+        let target = outdated_target(&skill).expect("a deployed skill always yields a target");
+        assert_eq!(target.source_kind, SourceKind::Fork);
+    }
+
+    /// A canonical deployment whose `owner_kind` cannot be repointed (here
+    /// `Plugin`) must not source a takeover, even when a verified `LinkedTo`
+    /// deployment resolves to the exact same path; on failure the panic
+    /// names the `owner_kind` the linked deployment was left with.
+    #[test]
+    fn propagate_verified_linked_owners_ignores_a_canonical_owner_that_is_not_mutable() {
+        let shared_path = PathBuf::from("/agents/skills/write-tests");
+        let canonical_id = DeploymentId::parse("dep:v1/g/-/universal/-/canonical").unwrap();
+        let linked_id = DeploymentId::parse("dep:v1/g/-/claude-code/-/linked").unwrap();
+        let mut skill = InstalledSkillDto {
+            name: SkillName("write-tests".to_string()),
+            description: None,
+            deployments: vec![
+                DeploymentDto {
+                    id: canonical_id.clone(),
+                    destination: SkillDestination::Universal,
+                    backing: BackingRelationship::Canonical,
+                    owner_kind: LifecycleOwnerKind::Plugin,
+                    ..minimal_deployment(SourceKind::Plugin, None)
+                },
+                DeploymentDto {
+                    id: linked_id.clone(),
+                    destination: SkillDestination::Universal,
+                    backing: BackingRelationship::LinkedTo,
+                    link_target: Some(shared_path.clone()),
+                    owner_kind: LifecycleOwnerKind::Copy,
+                    ..minimal_deployment(SourceKind::Manual, None)
+                },
+            ],
+        };
+        let resolved_paths = HashMap::from([
+            (canonical_id, shared_path.clone()),
+            (linked_id, shared_path),
+        ]);
+
+        propagate_verified_linked_owners(&mut skill, &resolved_paths);
+
+        assert_eq!(
+            skill.deployments[1].owner_kind,
+            LifecycleOwnerKind::Copy,
+            "a non-mutable canonical owner (Plugin) must never source a takeover, or this \
+             test proves nothing about the mutability filter"
+        );
+    }
+
+    /// A `LinkedTo` deployment with a real `link_target` - but not a
+    /// whole-directory link - is still a verified link shape, and its owner
+    /// must be taken over from the matching canonical deployment; on
+    /// failure the panic names the owner the linked deployment kept
+    /// instead.
+    #[test]
+    fn propagate_verified_linked_owners_takes_over_a_link_target_only_verified_link() {
+        let shared_path = PathBuf::from("/agents/skills/write-tests");
+        let canonical_id = DeploymentId::parse("dep:v1/g/-/universal/-/canonical").unwrap();
+        let linked_id = DeploymentId::parse("dep:v1/g/-/claude-code/-/linked").unwrap();
+        let mut skill = InstalledSkillDto {
+            name: SkillName("write-tests".to_string()),
+            description: None,
+            deployments: vec![
+                DeploymentDto {
+                    id: canonical_id.clone(),
+                    destination: SkillDestination::Universal,
+                    backing: BackingRelationship::Canonical,
+                    owner_kind: LifecycleOwnerKind::SkillsSh,
+                    owner_id: Some(OwnerId::parse("owner:v1/skills-sh:write-tests").unwrap()),
+                    ..minimal_deployment(SourceKind::SkillsSh, None)
+                },
+                DeploymentDto {
+                    id: linked_id.clone(),
+                    destination: SkillDestination::Universal,
+                    backing: BackingRelationship::LinkedTo,
+                    link_target: Some(shared_path.clone()),
+                    shared_via_whole_dir_link: false,
+                    owner_kind: LifecycleOwnerKind::Copy,
+                    ..minimal_deployment(SourceKind::Manual, None)
+                },
+            ],
+        };
+        let resolved_paths = HashMap::from([
+            (canonical_id, shared_path.clone()),
+            (linked_id, shared_path),
+        ]);
+
+        propagate_verified_linked_owners(&mut skill, &resolved_paths);
+
+        assert_eq!(
+            skill.deployments[1].owner_kind,
+            LifecycleOwnerKind::SkillsSh,
+            "a link_target-only verified link must still take over the canonical owner, or \
+             this test proves nothing about the link_target/whole_dir_link disjunction"
+        );
+    }
+
+    /// A `LinkedTo` deployment whose resolved path does not match any
+    /// canonical deployment's resolved path must never take over an
+    /// unrelated canonical owner just because it shares the same scope; on
+    /// failure the panic names the owner it wrongly took over.
+    #[test]
+    fn propagate_verified_linked_owners_never_matches_a_canonical_owner_at_a_different_path() {
+        let canonical_id = DeploymentId::parse("dep:v1/g/-/universal/-/canonical").unwrap();
+        let linked_id = DeploymentId::parse("dep:v1/g/-/claude-code/-/linked").unwrap();
+        let mut skill = InstalledSkillDto {
+            name: SkillName("write-tests".to_string()),
+            description: None,
+            deployments: vec![
+                DeploymentDto {
+                    id: canonical_id.clone(),
+                    destination: SkillDestination::Universal,
+                    backing: BackingRelationship::Canonical,
+                    owner_kind: LifecycleOwnerKind::SkillsSh,
+                    ..minimal_deployment(SourceKind::SkillsSh, None)
+                },
+                DeploymentDto {
+                    id: linked_id.clone(),
+                    destination: SkillDestination::Universal,
+                    backing: BackingRelationship::LinkedTo,
+                    link_target: Some(PathBuf::from("/agents/skills/other-skill")),
+                    owner_kind: LifecycleOwnerKind::Copy,
+                    ..minimal_deployment(SourceKind::Manual, None)
+                },
+            ],
+        };
+        let resolved_paths = HashMap::from([
+            (canonical_id, PathBuf::from("/agents/skills/write-tests")),
+            (linked_id, PathBuf::from("/agents/skills/other-skill")),
+        ]);
+
+        propagate_verified_linked_owners(&mut skill, &resolved_paths);
+
+        assert_eq!(
+            skill.deployments[1].owner_kind,
+            LifecycleOwnerKind::Copy,
+            "a linked deployment resolved to a different path than the canonical owner must \
+             never take over that owner, or this test proves nothing about the path match"
+        );
+    }
+
+    /// A `LinkedTo` deployment whose own destination is `PerHarness` - not
+    /// `Universal` - is not a candidate for takeover, even when it would
+    /// otherwise resolve to the exact same path as a matching canonical
+    /// owner; on failure the panic names the owner it wrongly took over.
+    #[test]
+    fn propagate_verified_linked_owners_skips_a_linked_deployment_whose_own_destination_is_not_universal(
+    ) {
+        let shared_path = PathBuf::from("/agents/skills/write-tests");
+        let canonical_id = DeploymentId::parse("dep:v1/g/-/universal/-/canonical").unwrap();
+        let linked_id = DeploymentId::parse("dep:v1/g/-/claude-code/-/linked").unwrap();
+        let mut skill = InstalledSkillDto {
+            name: SkillName("write-tests".to_string()),
+            description: None,
+            deployments: vec![
+                DeploymentDto {
+                    id: canonical_id.clone(),
+                    destination: SkillDestination::Universal,
+                    backing: BackingRelationship::Canonical,
+                    owner_kind: LifecycleOwnerKind::SkillsSh,
+                    ..minimal_deployment(SourceKind::SkillsSh, None)
+                },
+                DeploymentDto {
+                    id: linked_id.clone(),
+                    destination: SkillDestination::PerHarness,
+                    backing: BackingRelationship::LinkedTo,
+                    link_target: Some(shared_path.clone()),
+                    owner_kind: LifecycleOwnerKind::Copy,
+                    ..minimal_deployment(SourceKind::Manual, None)
+                },
+            ],
+        };
+        let resolved_paths = HashMap::from([
+            (canonical_id, shared_path.clone()),
+            (linked_id, shared_path),
+        ]);
+
+        propagate_verified_linked_owners(&mut skill, &resolved_paths);
+
+        assert_eq!(
+            skill.deployments[1].owner_kind,
+            LifecycleOwnerKind::Copy,
+            "a linked deployment whose own destination is not Universal must never take over \
+             a canonical owner, or this test proves nothing about the destination guard"
+        );
+    }
+
+    mod scan_tests {
+        use super::*;
+        use crate::harness::HarnessCatalog;
+        use crate::ports::{Clock, Ports};
+        use crate::scope::ProjectSelection;
+        use crate::testing::{FakeClock, FakeIds, FakeLease, NoHistory, RecordingSink};
+        use chrono::Utc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        /// A clock whose `monotonic()` jumps forward by 3s on every call,
+        /// so a scan that reads it more than once always blows the default
+        /// 2s read budget - used to exercise the partial-completeness path
+        /// without a real clock or a real timeout.
+        struct SteppingClock(AtomicU64);
+
+        impl SteppingClock {
+            fn new() -> Self {
+                SteppingClock(AtomicU64::new(0))
+            }
+        }
+
+        impl Clock for SteppingClock {
+            fn now(&self) -> chrono::DateTime<Utc> {
+                Utc::now()
+            }
+
+            fn monotonic(&self) -> Duration {
+                let calls = self.0.fetch_add(1, Ordering::SeqCst);
+                Duration::from_millis(calls * 3_000)
+            }
+        }
+
+        fn runtime_with(fs: crate::testing::FixtureFs, clock: Arc<dyn Clock>) -> Runtime {
+            let ports = Ports {
+                fs: Arc::new(fs),
+                clock,
+                ids: Arc::new(FakeIds::default()),
+                leases: Arc::new(FakeLease::default()),
+                history: Arc::new(NoHistory),
+                sink: Arc::new(RecordingSink::default()),
+                spawner: None,
+                discovery: None,
+                tools: None,
+                catalog: Arc::new(HarnessCatalog::builtin()),
+
+                telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+            };
+            Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap()
+        }
+
+        pub(super) fn ctx() -> OpContext {
+            OpContext::uncancellable(CorrelationId("scan-test".into()))
+        }
+
+        #[test]
+        fn empty_scope_yields_no_skills_and_complete() {
+            let fs = FixtureBuilder::new().dir("/h").build_fs();
+            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+            assert!(inv.skills.is_empty());
+            assert_eq!(inv.completeness, Completeness::Complete);
+        }
+
+        #[test]
+        fn scan_never_spawns_a_probe_even_when_a_spawner_port_is_wired() {
+            use crate::testing::PanicOnSpawn;
+
+            let fs = FixtureBuilder::new()
+                .dir("/h/.claude/skills/write-tests")
+                .file(
+                    "/h/.claude/skills/write-tests/SKILL.md",
+                    b"---\nname: write-tests\ndescription: Writes tests.\n---\nBody.",
+                )
+                .build_fs();
+            let ports = Ports {
+                fs: Arc::new(fs),
+                clock: Arc::new(FakeClock::at(0)),
+                ids: Arc::new(FakeIds::default()),
+                leases: Arc::new(FakeLease::default()),
+                history: Arc::new(NoHistory),
+                sink: Arc::new(RecordingSink::default()),
+                spawner: Some(Arc::new(PanicOnSpawn)),
+                discovery: None,
+                tools: None,
+                catalog: Arc::new(HarnessCatalog::builtin()),
+
+                telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+            };
+            let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+            assert_eq!(inv.skills.len(), 1, "scan must still find the skill");
+        }
+
+        #[test]
+        fn finds_a_skill_under_a_harness_own_root() {
+            let fs = FixtureBuilder::new()
+                .dir("/h/.claude/skills/write-tests")
+                .file(
+                    "/h/.claude/skills/write-tests/SKILL.md",
+                    b"---\nname: write-tests\ndescription: Writes tests.\n---\nBody.",
+                )
+                .build_fs();
+            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+
+            assert_eq!(inv.skills.len(), 1);
+            let skill = &inv.skills[0];
+            assert_eq!(skill.name.0, "write-tests");
+            assert_eq!(skill.description.as_deref(), Some("Writes tests."));
+            assert_eq!(skill.deployments.len(), 1);
+            let deployment = &skill.deployments[0];
+            assert_eq!(
+                deployment.harness.as_ref().map(AgentId::as_str),
+                Some("claude-code")
+            );
+            assert!(deployment.spec_violations.is_empty());
+            assert_eq!(inv.completeness, Completeness::Complete);
+        }
+
+        /// Given a plain directory (not a symlink, not a whole-dir link)
+        /// under a harness's own root - never the universal root - when it
+        /// is scanned, then it is `Independent`/`PerHarness`, not folded in
+        /// with the universal-linked skills; on failure the panic names the
+        /// backing/destination pair the scan reported instead.
+        #[test]
+        fn a_plain_per_harness_skill_is_independent_not_linked_to_the_universal_root() {
+            let fs = FixtureBuilder::new()
+                .dir("/h/.claude/skills/write-tests")
+                .file(
+                    "/h/.claude/skills/write-tests/SKILL.md",
+                    b"---\nname: write-tests\ndescription: Writes tests.\n---\nBody.",
+                )
+                .build_fs();
+            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+
+            assert_eq!(inv.skills.len(), 1);
+            let deployment = &inv.skills[0].deployments[0];
+            assert_eq!(
+                (deployment.destination, deployment.backing),
+                (
+                    SkillDestination::PerHarness,
+                    BackingRelationship::Independent
+                ),
+                "a plain per-harness skill directory must be Independent/PerHarness, not \
+                 reported as linked into the universal root"
+            );
+        }
+
+        /// Given a per-skill symlink under a harness's own root whose target
+        /// resolves, but not to anywhere under the universal skills root,
+        /// when it is scanned, then it is `Independent`/`PerHarness`, not
+        /// promoted to a universal link; on failure the panic names the
+        /// backing/destination pair the scan reported instead.
+        #[test]
+        fn a_per_skill_symlink_pointing_outside_the_universal_root_is_not_treated_as_linked() {
+            let fs = FixtureBuilder::new()
+                .dir("/h/.claude/skills")
+                .dir("/elsewhere/write-tests")
+                .file(
+                    "/elsewhere/write-tests/SKILL.md",
+                    b"---\nname: write-tests\ndescription: Writes tests.\n---\nBody.",
+                )
+                .alias("/h/.claude/skills/write-tests", "/elsewhere/write-tests")
+                .build_fs();
+            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+
+            assert_eq!(inv.skills.len(), 1);
+            let deployment = &inv.skills[0].deployments[0];
+            assert_eq!(
+                (deployment.destination, deployment.backing),
+                (
+                    SkillDestination::PerHarness,
+                    BackingRelationship::Independent
+                ),
+                "a per-skill symlink resolving outside the universal root must be \
+                 Independent/PerHarness, not promoted to a universal link"
+            );
+        }
+
+        fn claude_plugin_fixture(settings_json: Option<&[u8]>) -> crate::testing::FixtureBuilder {
+            let mut builder = FixtureBuilder::new()
+                .dir("/h/.claude/plugins/cache/mp/plug/v1/skills/plugin-skill")
+                .file(
+                    "/h/.claude/plugins/cache/mp/plug/v1/.claude-plugin/plugin.json",
+                    b"{\"name\": \"plug\"}",
+                )
+                .file(
+                    "/h/.claude/plugins/cache/mp/plug/v1/skills/plugin-skill/SKILL.md",
+                    b"---\nname: plugin-skill\ndescription: Plugin.\n---\n",
+                );
+            if let Some(bytes) = settings_json {
+                builder = builder.file("/h/.claude/settings.json", bytes);
+            }
+            builder
+        }
+
+        fn plugin_enabled_in(inv: &Inventory) -> Option<bool> {
+            inv.skills[0].deployments[0]
+                .plugin
+                .as_ref()
+                .expect("plugin deployment")
+                .enabled
+        }
+
+        #[test]
+        fn claude_plugin_enabled_true_is_reported() {
+            let fs = claude_plugin_fixture(Some(b"{\"enabledPlugins\": {\"plug@mp\": true}}"))
+                .build_fs();
+            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+            assert_eq!(plugin_enabled_in(&inv), Some(true));
+        }
+
+        #[test]
+        fn claude_plugin_enabled_false_is_reported() {
+            let fs = claude_plugin_fixture(Some(b"{\"enabledPlugins\": {\"plug@mp\": false}}"))
+                .build_fs();
+            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+            assert_eq!(plugin_enabled_in(&inv), Some(false));
+        }
+
+        #[test]
+        fn claude_plugin_enabled_is_none_when_key_absent() {
+            let fs = claude_plugin_fixture(Some(b"{\"enabledPlugins\": {}}")).build_fs();
+            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+            assert_eq!(plugin_enabled_in(&inv), None);
+        }
+
+        #[test]
+        fn claude_plugin_enabled_is_none_when_settings_file_absent() {
+            let fs = claude_plugin_fixture(None).build_fs();
+            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+            assert_eq!(plugin_enabled_in(&inv), None);
+        }
+
+        #[test]
+        fn moved_aside_entries_are_visible_and_disabled() {
+            // `MOVE_ASIDE_DIR_NAME` is itself dot-prefixed, so it is never
+            // mistaken for a skill directory, but its children are walked
+            // separately and reported as `StudioMoved`-disabled deployments
+            // rather than being invisible.
+            let fs = FixtureBuilder::new()
+                .dir("/h/.claude/skills/.skill-studio-disabled/parked-skill")
+                .file(
+                    "/h/.claude/skills/.skill-studio-disabled/parked-skill/SKILL.md",
+                    b"---\nname: parked-skill\ndescription: Parked.\n---\n",
+                )
+                .build_fs();
+            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+            assert_eq!(inv.skills.len(), 1);
+            let deployment = &inv.skills[0].deployments[0];
+            assert_eq!(deployment.disabled_by, Some(DisabledBy::StudioMoved));
+        }
+
+        #[test]
+        fn skills_filter_restricts_results() {
+            let fs = FixtureBuilder::new()
+                .dir("/h/.claude/skills/write-tests")
+                .file(
+                    "/h/.claude/skills/write-tests/SKILL.md",
+                    b"---\nname: write-tests\ndescription: Writes tests.\n---\n",
+                )
+                .dir("/h/.claude/skills/other-skill")
+                .file(
+                    "/h/.claude/skills/other-skill/SKILL.md",
+                    b"---\nname: other-skill\ndescription: Other.\n---\n",
+                )
+                .build_fs();
+            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
+            let req = ScanRequest {
+                skills: vec![SkillName("write-tests".into())],
+                timings: false,
+            };
+            let inv = scan(&rt, &ctx(), &req).unwrap();
+            assert_eq!(inv.skills.len(), 1);
+            assert_eq!(inv.skills[0].name.0, "write-tests");
+        }
+
+        #[test]
+        fn exceeded_read_budget_marks_inventory_partial() {
+            let fs = FixtureBuilder::new()
+                .dir("/h/.claude/skills/write-tests")
+                .file(
+                    "/h/.claude/skills/write-tests/SKILL.md",
+                    b"---\nname: write-tests\ndescription: Writes tests.\n---\n",
+                )
+                .build_fs();
+            let rt = runtime_with(fs, Arc::new(SteppingClock::new()));
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+            assert_eq!(inv.completeness, Completeness::Partial);
+            assert!(!inv.observations.is_empty());
+        }
+
+        /// A clock that reports zero elapsed time for the first
+        /// `within_budget_calls` reads after `start`, then jumps past the
+        /// default 2s budget on every call after that - lets a test trip the
+        /// budget check at an exact target-group boundary instead of a
+        /// guessed call count.
+        struct BudgetAfterNClock {
+            calls: AtomicU64,
+            within_budget_calls: u64,
+        }
+
+        impl BudgetAfterNClock {
+            fn new(within_budget_calls: u64) -> Self {
+                BudgetAfterNClock {
+                    calls: AtomicU64::new(0),
+                    within_budget_calls,
+                }
+            }
+        }
+
+        impl Clock for BudgetAfterNClock {
+            fn now(&self) -> chrono::DateTime<Utc> {
+                Utc::now()
+            }
+
+            fn monotonic(&self) -> Duration {
+                // Call 0 is `scan_inner`'s `start` read. Calls 1-3 are its
+                // own timing instrumentation, read before the roots walk
+                // begins: the `ledgers_read` step's start and its
+                // `timing::step` reading, then the `roots_walk` step's
+                // start. Calls (1 + PRELUDE_CALLS)..=(within_budget_calls +
+                // PRELUDE_CALLS) are every call the global groups make
+                // walking their roots and timing `dir_walk`/`skill_md_read`/
+                // `frontmatter_parse`/`plugin_cache_walk`.
+                const PRELUDE_CALLS: u64 = 3;
+                let call = self.calls.fetch_add(1, Ordering::SeqCst);
+                if call <= self.within_budget_calls + PRELUDE_CALLS {
+                    Duration::from_millis(0)
+                } else {
+                    Duration::from_millis(3_000)
+                }
+            }
+        }
+
+        /// Never trips a budget, just counts `monotonic()` calls - used to
+        /// measure exactly how many clock reads one `scan` makes walking a
+        /// fixture's global roots, so [`BudgetAfterNClock`] can be
+        /// calibrated to trip right at the project-scope boundary without a
+        /// hand-counted constant that would silently go stale the next time
+        /// `scan_inner`'s instrumentation changes.
+        struct CountingClock {
+            calls: AtomicU64,
+        }
+
+        impl Clock for CountingClock {
+            fn now(&self) -> chrono::DateTime<Utc> {
+                Utc::now()
+            }
+
+            fn monotonic(&self) -> Duration {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Duration::from_millis(0)
+            }
+        }
+
+        #[test]
+        fn global_roots_and_plugin_caches_scan_before_project_roots() {
+            let fs = FixtureBuilder::new()
+                .dir("/h/.claude/skills/home-skill")
+                .file(
+                    "/h/.claude/skills/home-skill/SKILL.md",
+                    b"---\nname: home-skill\ndescription: Home.\n---\n",
+                )
+                .dir("/h/.claude/plugins/cache/mp/plug/v1/skills/plugin-skill")
+                .file(
+                    "/h/.claude/plugins/cache/mp/plug/v1/.claude-plugin/plugin.json",
+                    br#"{"name":"plug"}"#,
+                )
+                .file(
+                    "/h/.claude/plugins/cache/mp/plug/v1/skills/plugin-skill/SKILL.md",
+                    b"---\nname: plugin-skill\ndescription: Plugin.\n---\n",
+                )
+                .dir("/h/proj/.claude/skills/project-skill")
+                .file(
+                    "/h/proj/.claude/skills/project-skill/SKILL.md",
+                    b"---\nname: project-skill\ndescription: Project.\n---\n",
+                )
+                .build_fs();
+
+            let mut scope = RuntimeScope::fixture("/h");
+            scope.projects = ProjectSelection::Explicit {
+                paths: vec![PathBuf::from("/h/proj")],
+            };
+
+            let ports_for = |clock: Arc<dyn Clock>| Ports {
+                fs: Arc::new(fs.clone()),
+                clock,
+                ids: Arc::new(FakeIds::default()),
+                leases: Arc::new(FakeLease::default()),
+                history: Arc::new(NoHistory),
+                sink: Arc::new(RecordingSink::default()),
+                spawner: None,
+                discovery: None,
+                tools: None,
+                catalog: Arc::new(HarnessCatalog::builtin()),
+
+                telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+            };
+
+            // Run the same fixture with no project roots at all through a
+            // clock that never trips, so every clock read comes from
+            // `scan_inner`'s own timing (`ledgers_read`, `roots_walk`, and
+            // the per-section reads inside it) plus the global groups' own
+            // walk - never from a project group, since there are none to
+            // walk. Subtracting the fixed pre/post-loop reads (4 before the
+            // loop, 6 after it: `roots_walk`'s own elapsed read, the two
+            // post-loop steps' start+elapsed reads, and the whole-call
+            // `op_timing` read) leaves exactly the call count the global
+            // groups' walk consumed, which is what the calibrated clock
+            // below needs to trip the budget right at the project-scope
+            // boundary without a guessed constant that would go stale the
+            // next time `scan_inner`'s instrumentation changes.
+            let mut probe_scope = scope.clone();
+            probe_scope.projects = ProjectSelection::Explicit { paths: Vec::new() };
+            let counting_clock = Arc::new(CountingClock {
+                calls: AtomicU64::new(0),
+            });
+            let probe_rt = Runtime::new(
+                &probe_scope,
+                ports_for(counting_clock.clone() as Arc<dyn Clock>),
+            )
+            .unwrap();
+            scan(&probe_rt, &ctx(), &ScanRequest::default()).unwrap();
+            const PRELUDE_CALLS: u64 = 4;
+            const POSTLUDE_CALLS: u64 = 6;
+            let within_budget_calls =
+                counting_clock.calls.load(Ordering::SeqCst) - PRELUDE_CALLS - POSTLUDE_CALLS;
+
+            let rt = Runtime::new(
+                &scope,
+                ports_for(Arc::new(BudgetAfterNClock::new(within_budget_calls))),
+            )
+            .unwrap();
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+
+            assert_eq!(inv.completeness, Completeness::Partial);
+            let names: Vec<&str> = inv.skills.iter().map(|s| s.name.0.as_str()).collect();
+            assert!(names.contains(&"home-skill"));
+            assert!(names.contains(&"plugin-skill"));
+            assert!(!names.contains(&"project-skill"));
+            assert!(!inv.observations.is_empty());
+            for observation in &inv.observations {
+                let root = observation
+                    .root
+                    .as_ref()
+                    .expect("budget observations always name a root");
+                assert!(matches!(root.scope, RootScope::Project(_)));
+            }
+        }
+
+        #[test]
+        fn timings_are_recorded_only_when_requested() {
+            let fs = FixtureBuilder::new().dir("/h").build_fs();
+            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
+            let req = ScanRequest {
+                skills: Vec::new(),
+                timings: true,
+            };
+            let inv = scan(&rt, &ctx(), &req).unwrap();
+            assert_eq!(inv.timings.len(), 1);
+            assert_eq!(inv.timings[0].phase, "scan");
+        }
+
+        /// A scan under a readable root whose one skill has an unreadable
+        /// `SKILL.md` puts that skill's own directory in `unread_roots`,
+        /// not the whole root. Fails if `unread_roots` stays empty (the
+        /// desktop merge in `skill_refresh.rs` would then drop that
+        /// skill's previous row instead of carrying it over) or if it
+        /// contains the root instead of the narrower skill directory
+        /// (which would carry over every sibling skill too).
+        #[test]
+        fn unreadable_skill_md_under_a_readable_root_scopes_unread_roots_to_that_skill_dir() {
+            use crate::testing::FailingFs;
+
+            let fs = FixtureBuilder::new()
+                .dir("/h/.claude/skills/good-skill")
+                .file(
+                    "/h/.claude/skills/good-skill/SKILL.md",
+                    b"---\nname: good-skill\ndescription: Fine.\n---\n",
+                )
+                .dir("/h/.claude/skills/broken-skill")
+                .file("/h/.claude/skills/broken-skill/SKILL.md", b"---\n---\n")
+                .build_fs();
+            let failing = FailingFs::wrap(Arc::new(fs));
+            failing.fail_read_prefix_for(PathBuf::from("/h/.claude/skills/broken-skill/SKILL.md"));
+            let ports = Ports {
+                fs: Arc::new(failing),
+                clock: Arc::new(FakeClock::at(0)),
+                ids: Arc::new(FakeIds::default()),
+                leases: Arc::new(FakeLease::default()),
+                history: Arc::new(NoHistory),
+                sink: Arc::new(RecordingSink::default()),
+                spawner: None,
+                discovery: None,
+                tools: None,
+                catalog: Arc::new(HarnessCatalog::builtin()),
+
+                telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+            };
+            let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+
+            assert_eq!(inv.completeness, Completeness::Partial);
+            assert_eq!(
+                inv.unread_roots,
+                vec![PathBuf::from("/h/.claude/skills/broken-skill")]
+            );
+            assert_eq!(
+                inv.skills.len(),
+                1,
+                "the readable skill must still be found"
+            );
+            assert_eq!(inv.skills[0].name.0, "good-skill");
+        }
+    }
+
+    /// [`Runtime::run`]'s own coverage: every op records itself, the
+    /// recorded timing matches the envelope's, a failure carries its error
+    /// code with no steps, and the `Operation` -> [`crate::timing::OpTiming::op`]
+    /// mapping every body relies on stays pinned.
+    mod telemetry_tests {
+        use super::*;
+        use crate::dto::{InstallMethod, InstallRequest};
+        use crate::harness::HarnessCatalog;
+        use crate::identity::{ProjectRef, RootScope, SkillName};
+        use crate::ports::{OpOutcome, Ports};
+        use crate::testing::{
+            FakeClock, FakeIds, FakeLease, NoHistory, RecordingSink, RecordingTelemetry,
+            TickingClock,
+        };
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        // Ticks by 1ms on every `monotonic()` read, so every test below that
+        // asserts on `elapsed_ms`/`offset_ms` fails if the code under test
+        // stops calling the clock, instead of trivially passing against a
+        // clock frozen at `0` - see spec item 2, "tests that cannot fail
+        // today".
+        fn runtime_with(
+            fs: crate::testing::FixtureFs,
+            telemetry: Arc<RecordingTelemetry>,
+        ) -> Runtime {
+            let ports = Ports {
+                fs: Arc::new(fs),
+                clock: Arc::new(TickingClock::at(0)),
+                ids: Arc::new(FakeIds::default()),
+                leases: Arc::new(FakeLease::default()),
+                history: Arc::new(NoHistory),
+                sink: Arc::new(RecordingSink::default()),
+                spawner: None,
+                discovery: None,
+                tools: None,
+                catalog: Arc::new(HarnessCatalog::builtin()),
+                telemetry,
+            };
+            Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap()
+        }
+
+        #[test]
+        fn a_successful_scan_records_one_op_record_whose_timing_equals_the_envelope_timing() {
+            let fs = FixtureBuilder::new()
+                .dir("/h/.claude/skills/good-skill")
+                .file(
+                    "/h/.claude/skills/good-skill/SKILL.md",
+                    b"---\nname: good-skill\ndescription: Fine.\n---\n",
+                )
+                .build_fs();
+            let telemetry = Arc::new(RecordingTelemetry::default());
+            let rt = runtime_with(fs, Arc::clone(&telemetry));
+            let ctx = OpContext::uncancellable(CorrelationId("c-scan".into()));
+
+            let result = scan(&rt, &ctx, &ScanRequest::default());
+            let env = ResultEnvelope::from_result(Operation::Scan, &rt.scope, &ctx, result);
+
+            let records = telemetry.records();
+            assert_eq!(records.len(), 1, "exactly one op record per scan call");
+            let record = &records[0];
+            assert_eq!(record.operation, Operation::Scan);
+            assert_eq!(record.outcome, OpOutcome::Ok);
+            assert_eq!(record.correlation_id, CorrelationId("c-scan".into()));
+            assert_eq!(Some(record.timing.clone()), env.timings);
+        }
+
+        #[test]
+        fn a_failed_install_records_the_error_code_and_no_steps() {
+            let fs = FixtureBuilder::new().dir("/h").build_fs();
+            let telemetry = Arc::new(RecordingTelemetry::default());
+            let rt = runtime_with(fs, Arc::clone(&telemetry));
+            let ctx = OpContext::uncancellable(CorrelationId("c-install".into()));
+
+            // `SkillsSh` against a project path that does not exist fails
+            // `validate_cli_project_path` before anything else runs, so no
+            // step ever gets filed.
+            let req = InstallRequest {
+                skill: SkillName("missing-project".into()),
+                method: InstallMethod::SkillsSh,
+                scope: RootScope::Project(ProjectRef(PathBuf::from("/h/no-such-project"))),
+                harnesses: Vec::new(),
+                files: Vec::new(),
+                source: Some("owner/repo".into()),
+                trust_identity: None,
+                trust_confirmed: false,
+                save_as_preference: false,
+                link_mode: crate::dto::InstallLinkMode::Link,
+                destination: crate::identity::SkillDestination::Universal,
+            };
+            let err = install(&rt, &ctx, &req).unwrap_err();
+
+            let records = telemetry.records();
+            assert_eq!(records.len(), 1, "exactly one op record per install call");
+            let record = &records[0];
+            assert_eq!(record.operation, Operation::Install);
+            assert_eq!(record.outcome, OpOutcome::Err { code: err.code });
+            assert!(
+                record.timing.steps.is_empty(),
+                "a call that fails before recording a step must file no steps"
+            );
+        }
+
+        /// [`Runtime::run`] names an `OpRecord`'s timing from `Operation`'s
+        /// own serde name (see `op_snake_case_name`), so this pins every
+        /// variant's literal against accidental rename - an exhaustive
+        /// match so a new variant fails to compile here rather than
+        /// silently falling out of coverage.
+        #[test]
+        fn every_operation_serializes_to_its_documented_snake_case_name() {
+            let all = [
+                Operation::Scan,
+                Operation::Diagnose,
+                Operation::Capabilities,
+                Operation::Harnesses,
+                Operation::PreviewFrontmatterRepair,
+                Operation::ApplyFrontmatterRepair,
+                Operation::ListEvents,
+                Operation::RestoreEvent,
+                Operation::Park,
+                Operation::Unpark,
+                Operation::FixSkill,
+                Operation::DiagnoseConflict,
+                Operation::Remove,
+                Operation::Update,
+                Operation::UpdateAll,
+                Operation::Install,
+                Operation::InstallPreferences,
+                Operation::Doctor,
+                Operation::Outdated,
+                Operation::SweepQuarantine,
+                Operation::Split,
+                Operation::TurnOffForAgent,
+                Operation::SkillUsage,
+            ];
+            for operation in all {
+                let expected = match operation {
+                    Operation::Scan => "scan",
+                    Operation::Diagnose => "diagnose",
+                    Operation::Capabilities => "capabilities",
+                    Operation::Harnesses => "harnesses",
+                    Operation::PreviewFrontmatterRepair => "preview_frontmatter_repair",
+                    Operation::ApplyFrontmatterRepair => "apply_frontmatter_repair",
+                    Operation::ListEvents => "list_events",
+                    Operation::RestoreEvent => "restore_event",
+                    Operation::Park => "park",
+                    Operation::Unpark => "unpark",
+                    Operation::FixSkill => "fix_skill",
+                    Operation::DiagnoseConflict => "diagnose_conflict",
+                    Operation::Remove => "remove",
+                    Operation::Update => "update",
+                    Operation::UpdateAll => "update_all",
+                    Operation::Install => "install",
+                    Operation::InstallPreferences => "install_preferences",
+                    Operation::Doctor => "doctor",
+                    Operation::Outdated => "outdated",
+                    Operation::SweepQuarantine => "sweep_quarantine",
+                    Operation::Split => "split",
+                    Operation::TurnOffForAgent => "turn_off_for_agent",
+                    Operation::SkillUsage => "skill_usage",
+                };
+                let value = serde_json::to_value(operation).unwrap();
+                assert_eq!(
+                    value,
+                    serde_json::Value::String(expected.to_string()),
+                    "Operation::{operation:?} must serialize to {expected:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn an_op_that_files_no_timing_still_records_with_the_clock_elapsed() {
+            let fake_clock = Arc::new(FakeClock::at(0));
+            let telemetry = Arc::new(RecordingTelemetry::default());
+            let ports = Ports {
+                fs: Arc::new(FixtureBuilder::new().dir("/h").build_fs()),
+                clock: Arc::clone(&fake_clock) as Arc<dyn crate::ports::Clock>,
+                ids: Arc::new(FakeIds::default()),
+                leases: Arc::new(FakeLease::default()),
+                history: Arc::new(NoHistory),
+                sink: Arc::new(RecordingSink::default()),
+                spawner: None,
+                discovery: None,
+                tools: None,
+                catalog: Arc::new(HarnessCatalog::builtin()),
+                telemetry: Arc::clone(&telemetry) as Arc<dyn crate::ports::Telemetry>,
+            };
+            let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
+            let ctx = OpContext::uncancellable(CorrelationId("c-noop".into()));
+
+            let result: Result<(), crate::error::CoreError> = rt.run(Operation::Scan, &ctx, || {
+                fake_clock.advance(Duration::from_millis(42));
+                Ok(())
+            });
+            result.unwrap();
+
+            let records = telemetry.records();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].timing.elapsed_ms, 42);
+            assert!(records[0].timing.steps.is_empty());
+        }
+
+        #[test]
+        fn doctor_records_one_transaction_with_scan_and_diagnose_as_nested_ops() {
+            let fs = FixtureBuilder::new().dir("/h").build_fs();
+            let telemetry = Arc::new(RecordingTelemetry::default());
+            let rt = runtime_with(fs, Arc::clone(&telemetry));
+            let ctx = OpContext::uncancellable(CorrelationId("c-doctor".into()));
+
+            crate::ops_doctor::doctor(&rt, &ctx, &crate::dto::DoctorRequest {}).unwrap();
+
+            let records = telemetry.records();
+            assert_eq!(
+                records.len(),
+                1,
+                "doctor must send one transaction, not one per nested op"
+            );
+            let record = &records[0];
+            assert_eq!(record.operation, Operation::Doctor);
+            assert_eq!(record.timing.op, "doctor");
+            let nested_ops: Vec<Operation> = record.nested.iter().map(|n| n.operation).collect();
+            assert_eq!(
+                nested_ops,
+                vec![Operation::Scan, Operation::Diagnose],
+                "doctor's body calls diagnose, which itself calls scan, in that order"
+            );
+            // `doctor_body` calls `diagnose` directly (depth 1); `diagnose_body`
+            // calls `scan` (depth 2). `nested` is post-order, so `Scan` (the
+            // one that finishes first) is reported before its own parent,
+            // `Diagnose`.
+            let depths: Vec<usize> = record.nested.iter().map(|n| n.depth).collect();
+            assert_eq!(
+                depths,
+                vec![2, 1],
+                "scan is nested two deep under doctor (via diagnose); diagnose is nested one deep"
+            );
+            for nested in &record.nested {
+                assert!(
+                    nested.offset_ms + nested.timing.elapsed_ms <= record.timing.elapsed_ms,
+                    "a nested op must start and finish inside the root's own elapsed time: {nested:?}"
+                );
+            }
+            let scan = record
+                .nested
+                .iter()
+                .find(|n| n.operation == Operation::Scan)
+                .expect("scan present");
+            let diagnose = record
+                .nested
+                .iter()
+                .find(|n| n.operation == Operation::Diagnose)
+                .expect("diagnose present");
+            assert!(
+                diagnose.offset_ms > 0,
+                "diagnose is expected to start after doctor's own root_start, not at it: diagnose={}",
+                diagnose.offset_ms
+            );
+            assert!(
+                scan.offset_ms > diagnose.offset_ms,
+                "scan is expected to start later than its parent diagnose: scan={}, diagnose={}",
+                scan.offset_ms,
+                diagnose.offset_ms
+            );
+        }
+
+        #[test]
+        fn outdated_is_named_after_itself_and_carries_the_nested_scan() {
+            let fs = FixtureBuilder::new().dir("/h").build_fs();
+            let telemetry = Arc::new(RecordingTelemetry::default());
+            let rt = runtime_with(fs, Arc::clone(&telemetry));
+            let ctx = OpContext::uncancellable(CorrelationId("c-outdated".into()));
+
+            struct NoTrees;
+            impl crate::skill_update_check::SourceTreeLookup for NoTrees {
+                fn tree_shas_at_head(
+                    &self,
+                    _repo: &str,
+                ) -> Result<std::collections::HashMap<String, String>, CoreError> {
+                    unreachable!("no skills in the fixture, so no repo is ever looked up")
+                }
+            }
+            struct NoCommits;
+            impl crate::skill_update_check::CommitLookup for NoCommits {
+                fn latest_commit(
+                    &self,
+                    _repo: &str,
+                    _path: &str,
+                ) -> Result<Option<crate::skill_update_check::CommitInfo>, CoreError>
+                {
+                    unreachable!("no skills in the fixture, so no repo is ever looked up")
+                }
+            }
+            struct NoPlugins;
+            impl crate::skill_update_check::PluginManifestLookup for NoPlugins {
+                fn marketplace_version(
+                    &self,
+                    _marketplace: &str,
+                    _plugin: &str,
+                ) -> Result<Option<String>, CoreError> {
+                    unreachable!("no skills in the fixture, so no marketplace is ever looked up")
+                }
+            }
+
+            outdated(
+                &rt,
+                &ctx,
+                &ScanRequest::default(),
+                &NoTrees,
+                &NoCommits,
+                &NoPlugins,
+            )
+            .unwrap();
+
+            let records = telemetry.records();
+            assert_eq!(
+                records.len(),
+                1,
+                "outdated's own nested scan must not send a second transaction"
+            );
+            let record = &records[0];
+            assert_eq!(record.operation, Operation::Outdated);
+            assert_eq!(record.timing.op, "outdated");
+            assert!(
+                record.nested.iter().any(|n| n.operation == Operation::Scan),
+                "outdated's body scans before checking currency"
+            );
+        }
+
+        #[test]
+        fn update_all_records_one_transaction_spanning_the_whole_loop() {
+            let fs = FixtureBuilder::new()
+                .dir("/h/.claude/skills/skill-a")
+                .file(
+                    "/h/.claude/skills/skill-a/SKILL.md",
+                    b"---\nname: skill-a\ndescription: One.\n---\n",
+                )
+                .dir("/h/.claude/skills/skill-b")
+                .file(
+                    "/h/.claude/skills/skill-b/SKILL.md",
+                    b"---\nname: skill-b\ndescription: Two.\n---\n",
+                )
+                .build_fs();
+            let telemetry = Arc::new(RecordingTelemetry::default());
+            let rt = runtime_with(fs, Arc::clone(&telemetry));
+            let ctx = OpContext::uncancellable(CorrelationId("c-update-all".into()));
+
+            let requests = vec![
+                crate::dto::UpdateRequest {
+                    skill: SkillName("skill-a".into()),
+                    method: InstallMethod::Copy,
+                    scope: RootScope::Global,
+                    files: Vec::new(),
+                    source: None,
+                    ref_pin: None,
+                },
+                crate::dto::UpdateRequest {
+                    skill: SkillName("skill-b".into()),
+                    method: InstallMethod::Copy,
+                    scope: RootScope::Global,
+                    files: Vec::new(),
+                    source: None,
+                    ref_pin: None,
+                },
+            ];
+            crate::ops_update::update_all(&rt, &ctx, &requests, |_, _| {});
+
+            let records = telemetry.records();
+            assert_eq!(
+                records.len(),
+                1,
+                "update_all must send one transaction spanning the whole loop"
+            );
+            let record = &records[0];
+            assert_eq!(record.operation, Operation::UpdateAll);
+            // Derived from the fixture, not from a run: two installed skills
+            // means two `update` calls in `update_all`'s loop.
+            let update_count = record
+                .nested
+                .iter()
+                .filter(|n| n.operation == Operation::Update)
+                .count();
+            assert_eq!(update_count, 2, "one nested Update per skill in the batch");
+            let nested_sum: u64 = record.nested.iter().map(|n| n.timing.elapsed_ms).sum();
+            assert!(
+                record.timing.elapsed_ms > 0,
+                "the ticking clock must have advanced across the whole loop"
+            );
+            assert!(
+                record.timing.elapsed_ms >= nested_sum,
+                "the root's elapsed time must cover every nested call's own elapsed time"
+            );
+        }
+
+        #[test]
+        fn a_stale_timing_left_in_the_context_is_not_attributed_to_the_next_op() {
+            let fs = FixtureBuilder::new().dir("/h").build_fs();
+            let telemetry = Arc::new(RecordingTelemetry::default());
+            let rt = runtime_with(fs, Arc::clone(&telemetry));
+            let ctx = OpContext::uncancellable(CorrelationId("c-stale".into()));
+            ctx.record_timing(crate::timing::OpTiming {
+                op: "install".to_string(),
+                elapsed_ms: 999,
+                steps: vec![crate::timing::StepTiming {
+                    name: "planted".to_string(),
+                    elapsed_ms: 999,
+                    parent: None,
+                }],
+            });
+
+            // A body that files no timing of its own: without the fix,
+            // `Runtime::run` would leave the planted `install` timing in
+            // `ctx` untouched and attribute it to this `doctor` call.
+            rt.run(Operation::Doctor, &ctx, || Ok(())).unwrap();
+
+            let records = telemetry.records();
+            assert_eq!(records.len(), 1);
+            let record = &records[0];
+            assert_eq!(record.timing.op, "doctor");
+            assert!(
+                record.timing.steps.is_empty(),
+                "the planted install timing must not leak into this call's timing"
+            );
+        }
+
+        #[test]
+        fn a_timing_filed_before_a_nested_call_survives_it() {
+            let fs = FixtureBuilder::new().dir("/h").build_fs();
+            let telemetry = Arc::new(RecordingTelemetry::default());
+            let rt = runtime_with(fs, Arc::clone(&telemetry));
+            let ctx = OpContext::uncancellable(CorrelationId("c-survives".into()));
+
+            rt.run(Operation::Doctor, &ctx, || {
+                let clock = rt.ports.clock.as_ref();
+                let step_start = clock.monotonic();
+                let step = crate::timing::step(clock, "before_nested", step_start);
+                ctx.record_timing(crate::timing::OpTiming {
+                    op: "doctor".to_string(),
+                    elapsed_ms: step.elapsed_ms,
+                    steps: vec![step],
+                });
+                rt.run(Operation::Scan, &ctx, || Ok(()))?;
+                Ok(())
+            })
+            .unwrap();
+
+            let records = telemetry.records();
+            assert_eq!(records.len(), 1);
+            let record = &records[0];
+            assert_eq!(record.timing.op, "doctor");
+            assert!(
+                record
+                    .timing
+                    .steps
+                    .iter()
+                    .any(|s| s.name == "before_nested"),
+                "the step the body filed before calling the nested op must survive it"
+            );
+            let nested_ops: Vec<Operation> = record.nested.iter().map(|n| n.operation).collect();
+            assert_eq!(nested_ops, vec![Operation::Scan]);
+        }
+
+        #[test]
+        fn a_panic_inside_a_body_does_not_leave_the_context_nested() {
+            let fs = FixtureBuilder::new().dir("/h").build_fs();
+            let telemetry = Arc::new(RecordingTelemetry::default());
+            let rt = runtime_with(fs, Arc::clone(&telemetry));
+            let ctx = OpContext::uncancellable(CorrelationId("c-panic".into()));
+
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                rt.run(Operation::Scan, &ctx, || -> Result<(), CoreError> {
+                    // A nested op that finished before the panic is already
+                    // in the context's `nested` list when the panic unwinds.
+                    rt.run(Operation::Diagnose, &ctx, || Ok(()))?;
+                    panic!("boom")
+                })
+            }));
+            assert!(panicked.is_err(), "the panic must propagate out of run");
+
+            // If `depth` were left raised by the panic, this call would be
+            // (wrongly) treated as nested and record nothing of its own.
+            rt.run(Operation::Doctor, &ctx, || Ok(())).unwrap();
+
+            let records = telemetry.records();
+            assert_eq!(
+                records.len(),
+                1,
+                "the call after the panic must record once, on its own"
+            );
+            assert_eq!(records[0].operation, Operation::Doctor);
+            assert!(
+                records[0].nested.is_empty(),
+                "the panicked run's nested op must not be attributed to the next run"
+            );
+        }
+    }
+}

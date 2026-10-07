@@ -1,0 +1,124 @@
+{
+  "skills": [
+    {
+      "name": "omega",
+      "description": "Helps with omega for fixture-driven tests.",
+      "deployments": [
+        {
+          "id": "dep:v1/global/claude-code/universal/omega/-/%24HOME%2F.claude%2Fskills%2Fomega",
+          "root": {
+            "scope": {
+              "scope": "global"
+            },
+            "kind": {
+              "kind": "harness",
+              "harness": "claude-code"
+            }
+          },
+          "harness": "claude-code",
+          "path": "$HOME/.claude/skills/omega",
+          "destination": "universal",
+          "backing": "linked_to",
+          "mutability": "read_only",
+          "link_target": null,
+          "shared_via_whole_dir_link": true,
+          "is_symlink": false,
+          "resolved_path": "$HOME/.agents/skills/omega",
+          "symlink_is_broken": false,
+          "symlink_error": null,
+          "owner_kind": "manual",
+          "owner_id": null,
+          "content_fingerprint": "sha256:29237022f8996917d93b79db5fe5729defa4a2cf8521aa10dbb18f6acf44d6cd",
+          "disabled_by": null,
+          "disabled_readers": [],
+          "spec_violations": [],
+          "plugin": null,
+          "frontmatter": {
+            "name": "omega",
+            "description": "Helps with omega for fixture-driven tests.",
+            "license": null,
+            "compatibility": null,
+            "metadata": null,
+            "allowed-tools": null,
+            "disable-model-invocation": null,
+            "user-invocable": null
+          },
+          "frontmatter_fields": {
+            "description": "Helps with omega for fixture-driven tests.",
+            "name": "omega"
+          },
+          "has_spec": false,
+          "folder_bytes": 97,
+          "file_count": 1,
+          "skill_md_tokens": 21,
+          "description_tokens": 10,
+          "content_hash": "29237022f8996917d93b79db5fe5729defa4a2cf8521aa10dbb18f6acf44d6cd",
+          "modified_at": "-",
+          "folder_truncated": false,
+          "in_git_repo": false,
+          "studio_disabled": false,
+          "source_kind": "manual"
+        },
+        {
+          "id": "dep:v1/global/universal/universal/omega/-/%24HOME%2F.agents%2Fskills%2Fomega",
+          "root": {
+            "scope": {
+              "scope": "global"
+            },
+            "kind": {
+              "kind": "universal"
+            }
+          },
+          "harness": null,
+          "path": "$HOME/.agents/skills/omega",
+          "destination": "universal",
+          "backing": "canonical",
+          "mutability": "read_only",
+          "link_target": null,
+          "shared_via_whole_dir_link": false,
+          "is_symlink": false,
+          "resolved_path": null,
+          "symlink_is_broken": false,
+          "symlink_error": null,
+          "owner_kind": "manual",
+          "owner_id": null,
+          "content_fingerprint": "sha256:29237022f8996917d93b79db5fe5729defa4a2cf8521aa10dbb18f6acf44d6cd",
+          "disabled_by": null,
+          "disabled_readers": [],
+          "spec_violations": [],
+          "plugin": null,
+          "frontmatter": {
+            "name": "omega",
+            "description": "Helps with omega for fixture-driven tests.",
+            "license": null,
+            "compatibility": null,
+            "metadata": null,
+            "allowed-tools": null,
+            "disable-model-invocation": null,
+            "user-invocable": null
+          },
+          "frontmatter_fields": {
+            "description": "Helps with omega for fixture-driven tests.",
+            "name": "omega"
+          },
+          "has_spec": false,
+          "folder_bytes": 97,
+          "file_count": 1,
+          "skill_md_tokens": 21,
+          "description_tokens": 10,
+          "content_hash": "29237022f8996917d93b79db5fe5729defa4a2cf8521aa10dbb18f6acf44d6cd",
+          "modified_at": "-",
+          "folder_truncated": false,
+          "in_git_repo": false,
+          "studio_disabled": false,
+          "source_kind": "manual"
+        }
+      ]
+    }
+  ],
+  "projects": [],
+  "completeness": "complete",
+  "observations": [],
+  "unread_roots": [],
+  "timings": []
+}

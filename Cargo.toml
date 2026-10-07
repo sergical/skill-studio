@@ -1,0 +1,66 @@
+[workspace]
+members = ["crates/*", "apps/desktop/src-tauri", "apps/cli", "apps/mcp"]
+resolver = "2"
+
+# `preserve_order` swaps `serde_json::Map`'s backing store for an
+# `indexmap::IndexMap`, so a parsed JSON object round-trips through this
+# workspace in the document's own key order instead of sorted (`BTreeMap`)
+# order. `opencode_config.rs`'s v1 `permission.skill` rules are
+# last-match-wins in that document order (`OpenCode`'s own `Object.entries`
+# + `findLast`), so a sorted `Map` silently reordered rules under it and
+# could flip which one won. Set once, workspace-wide, so every crate that
+# touches user-owned JSON (not just this one) gets the same order-preserving
+# behavior rather than each crate deciding separately.
+[workspace.dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+# Pure churn with no safety or clarity gain for this workspace; allowed at
+# the workspace level per plan.md section 7.
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+too_many_lines = "allow"
+struct_excessive_bools = "allow"
+similar_names = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+# `Default::default()` inside a struct literal already names the field and
+# its type on the left of the `:`; spelling the type out again on the right
+# is pure churn repeated ~75 times across the workspace.
+default_trait_access = "allow"
+# A one-off struct declared next to the single test that deserializes into
+# it (matching another crate's on-disk shape, say) reads better right where
+# it's used than hoisted above the test's setup code.
+items_after_statements = "allow"
+
+# A debug-build scan of a real home spends most of its time inside
+# dependencies (hashing, tokenizing, regex, JSON), about 10x slower than
+# release. Optimize only dependencies so workspace crates keep fast
+# incremental debug builds.
+[profile.dev.package."*"]
+opt-level = 2
+
+# The release workflow uploads a .dSYM per target next to each DMG. Cargo's
+# default release profile carries no debug info, so dsymutil would emit an
+# empty bundle; line tables are enough to symbolicate crash reports and add
+# little to the binary, and "packed" writes them to a separate .dSYM beside
+# the binary in target/<triple>/release/ instead of into the executable.
+[profile.release]
+debug = "line-tables-only"
+split-debuginfo = "packed"

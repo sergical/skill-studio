@@ -1,0 +1,607 @@
+//! `~/.agents/.skill-lock.json` - the shared install ledger written by
+//! `npx skills`.
+//!
+//! Ported from the desktop app's `skills/lock_file.rs`. The core never
+//! resolves the home directory itself: callers pass the already-normalized
+//! home root (from [`crate::scope::NormalizedScope`]) and read the bytes
+//! through [`crate::ports::ScopeFs::read_capped`].
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::error::{CoreError, ErrorCode};
+use crate::ports::{confine, ExclusiveGuard, FileKind, ScopeFs};
+use crate::scope::NormalizedScope;
+use crate::tree_hash::{is_install_junk, tree_hash_ignoring_junk};
+
+/// Largest lock file the core will read. Larger is treated as corrupt
+/// rather than silently truncated.
+pub const LOCK_FILE_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// One installed skill's provenance, as recorded by `npx skills`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledSkillEntry {
+    /// `owner/repo` or other source identifier.
+    pub source: String,
+    /// Where `source` came from (e.g. `"github"`).
+    #[serde(rename = "sourceType")]
+    pub source_type: String,
+    /// Canonical URL for `source`.
+    #[serde(rename = "sourceUrl")]
+    pub source_url: String,
+    /// Path of the skill within its source, when it isn't the source root.
+    #[serde(rename = "skillPath", default)]
+    pub skill_path: Option<String>,
+    /// Content hash of the installed skill folder at install time.
+    #[serde(rename = "skillFolderHash")]
+    pub skill_folder_hash: String,
+    /// ISO-8601 install timestamp.
+    #[serde(rename = "installedAt")]
+    pub installed_at: String,
+    /// ISO-8601 last-update timestamp.
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+    /// Every other key the entry carries, kept verbatim. `npx skills` owns
+    /// this file and writes keys this reader does not model (`dismissed`,
+    /// `lastSelectedAgents`, and whatever a newer release adds); without a
+    /// catch-all a read/write round trip through the core would drop them.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The lock file's top-level shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillLockFile {
+    /// Lock file format version.
+    pub version: u32,
+    /// Installed skills, keyed by skill name.
+    pub skills: HashMap<String, InstalledSkillEntry>,
+}
+
+/// The default, empty lock file returned when none exists on disk yet.
+fn empty_lock_file() -> SkillLockFile {
+    SkillLockFile {
+        version: 3,
+        skills: HashMap::new(),
+    }
+}
+
+/// The lock file's name inside an `.agents` directory - the one string
+/// every reader of the shared lock file joins onto its own root, so it
+/// isn't duplicated at each call site.
+pub const LOCK_FILE_NAME: &str = ".skill-lock.json";
+
+/// `<home>/.agents/.skill-lock.json` - the path every reader of the shared
+/// lock file, real or fixture home, resolves against.
+pub fn lock_file_path(home: &Path) -> PathBuf {
+    lock_file_path_in(&home.join(".agents"))
+}
+
+/// `<agents_dir>/.skill-lock.json` - for callers that already have an
+/// `.agents` directory in hand (a project's, not just the home's).
+pub fn lock_file_path_in(agents_dir: &Path) -> PathBuf {
+    agents_dir.join(LOCK_FILE_NAME)
+}
+
+/// Reads and parses the lock file at `path` through `fs`.
+///
+/// A missing file is not an error: it yields the same empty, version-3 lock
+/// file a fresh install would produce. A file larger than
+/// [`LOCK_FILE_MAX_BYTES`] or one that fails to parse as JSON is
+/// [`ErrorCode::Io`].
+pub fn read_lock_file(fs: &dyn ScopeFs, path: &Path) -> Result<SkillLockFile, CoreError> {
+    let bytes = match fs.read_capped(path, LOCK_FILE_MAX_BYTES) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_lock_file()),
+        Err(e) => return Err(CoreError::io(path, e)),
+    };
+    serde_json::from_slice(&bytes).map_err(|e| {
+        CoreError::new(ErrorCode::Io, format!("failed to parse lock file: {e}")).at(path)
+    })
+}
+
+/// Whether `skill_name` has an entry in `lock`.
+pub fn is_skill_installed(lock: &SkillLockFile, skill_name: &str) -> bool {
+    lock.skills.contains_key(skill_name)
+}
+
+/// The raw JSON value for `skill_name`'s row in the lock file at `path`,
+/// kept exactly as written - unknown fields included - so a caller that
+/// saves it before letting `npx skills remove` drop the row (`ops::remove`)
+/// can hand it to [`restore_lock_entry`] byte-for-byte, rather than losing
+/// whatever [`InstalledSkillEntry`]'s typed fields do not model. `None` when
+/// the file is missing or `skill_name` has no entry.
+pub fn read_lock_entry_value(
+    fs: &dyn ScopeFs,
+    path: &Path,
+    skill_name: &str,
+) -> Result<Option<serde_json::Value>, CoreError> {
+    let bytes = match fs.read_capped(path, LOCK_FILE_MAX_BYTES) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(CoreError::io(path, e)),
+    };
+    let doc: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+        CoreError::new(ErrorCode::Io, format!("failed to parse lock file: {e}")).at(path)
+    })?;
+    Ok(doc
+        .get("skills")
+        .and_then(|skills| skills.get(skill_name))
+        .cloned())
+}
+
+/// Writes `entry` back into the lock file at `path` under `skill_name`,
+/// through the caller's already-held exclusive lease - the same
+/// read-whole-document/mutate-one-key/write-atomic shape
+/// `ops_remove::drop_registry_entry` uses to drop a `skill-studio.json` row,
+/// run in reverse, keeping every other key (including the file's own
+/// `version`) untouched so `npx skills`, not this write, still owns the
+/// file's schema. A no-op when `skill_name` already has an entry: a
+/// reinstall that raced the undo keeps its own row rather than losing it to
+/// the one being restored.
+pub fn restore_lock_entry(
+    guard: &ExclusiveGuard,
+    fs: &dyn ScopeFs,
+    scope: &NormalizedScope,
+    path: &Path,
+    skill_name: &str,
+    entry: &serde_json::Value,
+) -> Result<(), CoreError> {
+    let mut doc: serde_json::Value = match fs.read_capped(path, LOCK_FILE_MAX_BYTES) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| {
+            CoreError::new(ErrorCode::Io, format!("failed to parse lock file: {e}")).at(path)
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let empty = empty_lock_file();
+            serde_json::json!({ "version": empty.version, "skills": {} })
+        }
+        Err(e) => return Err(CoreError::io(path, e)),
+    };
+    let skills = doc
+        .as_object_mut()
+        .ok_or_else(|| CoreError::new(ErrorCode::Io, "lock file is not a JSON object").at(path))?
+        .entry("skills")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let skills = skills.as_object_mut().ok_or_else(|| {
+        CoreError::new(ErrorCode::Io, "lock file's \"skills\" is not a JSON object").at(path)
+    })?;
+    if skills.contains_key(skill_name) {
+        return Ok(());
+    }
+    skills.insert(skill_name.to_string(), entry.clone());
+    write_lock_document(guard, fs, scope, path, &doc)
+}
+
+/// Sets `skill_name`'s `skillFolderHash` in the lock file at `path`, keeping
+/// every other key as `npx skills` wrote it, so the update check sees the
+/// skill as current after a write that did not go through the CLI. A no-op
+/// when the file or the row is missing.
+pub fn set_skill_folder_hash(
+    guard: &ExclusiveGuard,
+    fs: &dyn ScopeFs,
+    scope: &NormalizedScope,
+    path: &Path,
+    skill_name: &str,
+    hash: &str,
+) -> Result<(), CoreError> {
+    let bytes = match fs.read_capped(path, LOCK_FILE_MAX_BYTES) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(CoreError::io(path, e)),
+    };
+    let mut doc: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+        CoreError::new(ErrorCode::Io, format!("failed to parse lock file: {e}")).at(path)
+    })?;
+    let Some(row) = doc
+        .get_mut("skills")
+        .and_then(|skills| skills.get_mut(skill_name))
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+    row.insert(
+        "skillFolderHash".to_string(),
+        serde_json::Value::String(hash.to_string()),
+    );
+    write_lock_document(guard, fs, scope, path, &doc)
+}
+
+/// Serializes `doc` the way `npx skills` does and writes it atomically.
+fn write_lock_document(
+    guard: &ExclusiveGuard,
+    fs: &dyn ScopeFs,
+    scope: &NormalizedScope,
+    path: &Path,
+    doc: &serde_json::Value,
+) -> Result<(), CoreError> {
+    // The `npx skills` CLI itself always writes this file pretty-printed
+    // (`JSON.stringify(doc, null, 2) + "\n"` - checked against its packed
+    // `dist/cli.mjs`), so restoring a row compactly would leave the file in
+    // a shape that CLI never produces, even though both parse identically.
+    // `to_vec_pretty`'s default indent is the same two spaces.
+    let mut bytes = serde_json::to_vec_pretty(doc).map_err(|e| {
+        CoreError::new(ErrorCode::Io, format!("failed to serialize lock file: {e}")).at(path)
+    })?;
+    bytes.push(b'\n');
+    if let Some(parent) = path.parent() {
+        let scoped_parent = confine(scope, fs, parent)?;
+        fs.create_dir_all(guard, &scoped_parent)
+            .map_err(|e| CoreError::io(parent, e))?;
+    }
+    let scoped = confine(scope, fs, path)?;
+    fs.write_atomic(guard, &scoped, &bytes)
+        .map_err(|e| CoreError::io(path, e))
+}
+
+/// `<project>/skills-lock.json`'s file name - the CLI's own project-scope
+/// lock file (schema version 1), written next to the project root rather
+/// than under `.agents`, and shaped differently from the shared
+/// `.skill-lock.json` above (no `sourceUrl`/`skillFolderHash`/timestamps,
+/// just `source`/`sourceType`/`computedHash`). The core only reads it, to
+/// classify a project-scope skills.sh install's ownership; `npx skills`
+/// keeps owning the write.
+pub const PROJECT_LOCK_FILE_NAME: &str = "skills-lock.json";
+
+/// `<project>/skills-lock.json`'s path.
+pub fn project_lock_file_path(project: &Path) -> PathBuf {
+    project.join(PROJECT_LOCK_FILE_NAME)
+}
+
+/// Only the key set of a v1 `skills-lock.json`'s `skills` map - every other
+/// field is per-entry provenance `is_skill_installed`'s callers don't need.
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ProjectLockFile {
+    #[serde(default)]
+    skills: HashMap<String, serde_json::Value>,
+}
+
+/// The skill names a project-scope `skills-lock.json` at `path` names, or an
+/// empty set when the file is missing, oversized, or not valid JSON -
+/// matching [`read_lock_file`]'s "no ledger" behavior instead of failing a
+/// scan over a file `npx skills` may not have written yet.
+pub fn read_project_lock_skill_names(fs: &dyn ScopeFs, path: &Path) -> HashSet<String> {
+    let Ok(bytes) = fs.read_capped(path, LOCK_FILE_MAX_BYTES) else {
+        return HashSet::new();
+    };
+    serde_json::from_slice::<ProjectLockFile>(&bytes)
+        .map(|f| f.skills.into_keys().collect())
+        .unwrap_or_default()
+}
+
+/// Whether an installed skills.sh folder still matches what `npx skills`
+/// installed, as [`local_edits`] decides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalEdits {
+    /// The folder's tree hash equals the lock entry's `skillFolderHash`.
+    Unedited,
+    /// The folder's tree hash differs from the lock entry's hash.
+    Edited,
+    /// The check could not run: no lock entry, an empty hash, or a folder
+    /// that could not be hashed. Callers treat this as "not edited".
+    Unknown,
+}
+
+/// Length of a hex SHA-1. The CLI records a git tree SHA only for GitHub
+/// sources; other sources get a sha256 (64 hex chars) that can never equal
+/// a tree hash.
+const TREE_SHA_HEX_LEN: usize = 40;
+
+/// Compares the git tree hash of `folder` - the installed copy an update
+/// would replace - with `skill_name`'s `skillFolderHash` in `lock`.
+///
+/// The recorded hash is GitHub's tree SHA, which includes upstream files
+/// the CLI never copies (`metadata.json`). A mismatch alone therefore does
+/// not prove an edit: it counts as [`LocalEdits::Edited`] only when a file
+/// was modified after the entry's `updatedAt`. When mtimes or the
+/// timestamp are unavailable, a mismatch counts as edited.
+pub fn local_edits(
+    fs: &dyn ScopeFs,
+    lock: &SkillLockFile,
+    skill_name: &str,
+    folder: &Path,
+) -> LocalEdits {
+    let Some(entry) = lock.skills.get(skill_name) else {
+        return LocalEdits::Unknown;
+    };
+    if entry.skill_folder_hash.len() != TREE_SHA_HEX_LEN {
+        return LocalEdits::Unknown;
+    }
+    match tree_hash_ignoring_junk(fs, folder) {
+        Ok(hash) if hash == entry.skill_folder_hash => LocalEdits::Unedited,
+        Ok(_) => {
+            let installed = chrono::DateTime::parse_from_rfc3339(&entry.updated_at).ok();
+            // A per-agent link's own mtime is when it was linked, not when
+            // the skill changed; walk the folder it points to.
+            let real = fs
+                .canonicalize(folder)
+                .unwrap_or_else(|_| folder.to_path_buf());
+            match (installed, newest_modified(fs, &real)) {
+                (Some(installed), Some(newest)) if newest <= installed => LocalEdits::Unknown,
+                _ => LocalEdits::Edited,
+            }
+        }
+        Err(_) => LocalEdits::Unknown,
+    }
+}
+
+/// The latest mtime of `dir`, its non-junk files and its non-junk
+/// subfolders, or `None` when the platform reports none. Folder mtimes
+/// matter: adding, deleting or renaming an entry bumps the parent's mtime
+/// even when `cp -p`, `rsync -a` or `mv` keep the file's own.
+fn newest_modified(fs: &dyn ScopeFs, dir: &Path) -> Option<chrono::DateTime<chrono::Utc>> {
+    let mut newest = fs.symlink_metadata(dir).ok().and_then(|f| f.modified);
+    for item in fs.read_dir(dir).ok()? {
+        if is_install_junk(&item.name, item.kind) {
+            continue;
+        }
+        let path = dir.join(&item.name);
+        let modified = match item.kind {
+            FileKind::Dir => newest_modified(fs, &path),
+            FileKind::File => fs.symlink_metadata(&path).ok().and_then(|f| f.modified),
+            _ => None,
+        };
+        newest = newest.max(modified);
+    }
+    newest
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::FixtureBuilder;
+
+    #[test]
+    fn missing_lock_file_yields_empty_default() {
+        let fs = FixtureBuilder::new().dir("/home").build_fs();
+        let lock = read_lock_file(&fs, &lock_file_path(Path::new("/home"))).unwrap();
+        assert_eq!(lock.version, 3);
+        assert!(lock.skills.is_empty());
+    }
+
+    #[test]
+    fn parses_an_existing_lock_file() {
+        let json = r#"{
+            "version": 3,
+            "skills": {
+                "write-tests": {
+                    "source": "owner/repo",
+                    "sourceType": "github",
+                    "sourceUrl": "https://github.com/owner/repo",
+                    "skillFolderHash": "abc123",
+                    "installedAt": "2024-01-31T00:00:00Z",
+                    "updatedAt": "2024-01-31T00:00:00Z"
+                }
+            }
+        }"#;
+        let fs = FixtureBuilder::new()
+            .dir("/home/.agents")
+            .file("/home/.agents/.skill-lock.json", json.as_bytes())
+            .build_fs();
+        let lock = read_lock_file(&fs, &lock_file_path(Path::new("/home"))).unwrap();
+        assert_eq!(lock.version, 3);
+        assert!(is_skill_installed(&lock, "write-tests"));
+        assert!(!is_skill_installed(&lock, "other-skill"));
+    }
+
+    #[test]
+    fn malformed_lock_file_is_an_io_error() {
+        let fs = FixtureBuilder::new()
+            .dir("/home/.agents")
+            .file("/home/.agents/.skill-lock.json", b"not json")
+            .build_fs();
+        let err = read_lock_file(&fs, &lock_file_path(Path::new("/home"))).unwrap_err();
+        assert_eq!(err.code, ErrorCode::Io);
+    }
+
+    /// A real v1 `skills-lock.json` sample (PR #295's
+    /// `03-add-local-folder-project` fixture) parses to its one skill name,
+    /// even though it carries none of the shared lock file's required
+    /// fields (`sourceUrl`, `skillFolderHash`, timestamps) - proof the two
+    /// shapes are read independently, not through the same struct.
+    #[test]
+    fn reads_the_v1_project_lock_file_shape_the_shared_lock_file_cannot_parse() {
+        let json = r#"{
+            "version": 1,
+            "skills": {
+                "my-local-skill": {
+                    "source": "../../../my-skill",
+                    "sourceType": "local",
+                    "computedHash": "222854256926340ae167d8b3e6c43ab9755db110c5e7a79fe0fff971605a61d5"
+                }
+            }
+        }"#;
+        let fs = FixtureBuilder::new()
+            .dir("/proj")
+            .file("/proj/skills-lock.json", json.as_bytes())
+            .build_fs();
+        assert!(read_lock_file(&fs, &project_lock_file_path(Path::new("/proj"))).is_err());
+
+        let names = read_project_lock_skill_names(&fs, &project_lock_file_path(Path::new("/proj")));
+        assert_eq!(names, HashSet::from(["my-local-skill".to_string()]));
+    }
+
+    #[test]
+    fn missing_project_lock_file_yields_no_names_or_names_the_wrongly_failed_scan() {
+        let fs = FixtureBuilder::new().dir("/proj").build_fs();
+        let names = read_project_lock_skill_names(&fs, &project_lock_file_path(Path::new("/proj")));
+        assert!(names.is_empty());
+    }
+
+    /// `read_project_lock_skill_names_returns_empty_or_the_names_it_can_still_read_for_every_malformed_shape`:
+    /// table over the shapes `npx skills` could plausibly leave behind - a
+    /// truncated write, a schema bump, a hand-edited file, or one too big to
+    /// be this file at all - each named by what it returns rather than by
+    /// how it fails, since this reader never surfaces an error (it matches
+    /// `read_lock_file`'s "no ledger" behavior, see its own doc comment).
+    #[test]
+    fn read_project_lock_skill_names_returns_empty_or_the_names_it_can_still_read_for_every_malformed_shape(
+    ) {
+        let cases: Vec<(&str, &[u8], HashSet<String>)> = vec![
+            (
+                "malformed JSON yields no names",
+                b"not json at all",
+                HashSet::new(),
+            ),
+            (
+                // No version check exists in `read_project_lock_skill_names`
+                // (unlike `read_lock_file`'s shared-lock schema): a version
+                // bump alone doesn't invalidate the `skills` map it already
+                // parsed, so this still returns the one name.
+                "a version other than 1 still yields the names it can parse",
+                br#"{"version": 2, "skills": {"a-skill": {"source": "x"}}}"#,
+                HashSet::from(["a-skill".to_string()]),
+            ),
+            (
+                "a non-object skills value yields no names",
+                br#"{"version": 1, "skills": "not-an-object"}"#,
+                HashSet::new(),
+            ),
+        ];
+        for (label, bytes, expected) in cases {
+            let fs = FixtureBuilder::new()
+                .dir("/proj")
+                .file("/proj/skills-lock.json", bytes)
+                .build_fs();
+            let names =
+                read_project_lock_skill_names(&fs, &project_lock_file_path(Path::new("/proj")));
+            assert_eq!(names, expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn read_project_lock_skill_names_over_a_file_past_the_size_cap_yields_no_names() {
+        let mut json = String::from(r#"{"version": 1, "skills": {"a": {"padding": ""#);
+        json.push_str(&"x".repeat(LOCK_FILE_MAX_BYTES as usize + 1));
+        json.push_str(r#""}}}"#);
+        let fs = FixtureBuilder::new()
+            .dir("/proj")
+            .file("/proj/skills-lock.json", json.as_bytes())
+            .build_fs();
+        let names = read_project_lock_skill_names(&fs, &project_lock_file_path(Path::new("/proj")));
+        assert!(
+            names.is_empty(),
+            "a file over the size cap must yield no names, not a truncated parse"
+        );
+    }
+
+    const INSTALLED_AT: &str = "2026-01-01T00:00:00.000Z";
+    const SKILL_MD: &[u8] = b"---\nname: write-tests\n---\nBody\n";
+
+    /// A lock file recording `hash` for `write-tests`.
+    fn lock_with_hash(hash: &str) -> SkillLockFile {
+        let mut skills = HashMap::new();
+        skills.insert(
+            "write-tests".to_string(),
+            InstalledSkillEntry {
+                source: "owner/repo".into(),
+                source_type: "github".into(),
+                source_url: "https://github.com/owner/repo".into(),
+                skill_path: None,
+                skill_folder_hash: hash.into(),
+                installed_at: INSTALLED_AT.into(),
+                updated_at: INSTALLED_AT.into(),
+                extra: serde_json::Map::new(),
+            },
+        );
+        SkillLockFile { version: 3, skills }
+    }
+
+    /// The hash `npx skills` would have recorded for an untouched install.
+    fn installed_hash() -> String {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", SKILL_MD)
+            .build_fs();
+        crate::tree_hash::tree_hash(&fs, Path::new("/skill")).unwrap()
+    }
+
+    #[test]
+    fn an_unedited_install_reads_as_unedited_or_every_update_warns() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", SKILL_MD)
+            .build_fs();
+        let lock = lock_with_hash(&installed_hash());
+        assert_eq!(
+            local_edits(&fs, &lock, "write-tests", Path::new("/skill")),
+            LocalEdits::Unedited
+        );
+    }
+
+    #[test]
+    fn one_changed_byte_reads_as_edited_or_update_overwrites_silently() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", b"---\nname: write-tests\n---\nBody!\n")
+            .build_fs();
+        let lock = lock_with_hash(&installed_hash());
+        assert_eq!(
+            local_edits(&fs, &lock, "write-tests", Path::new("/skill")),
+            LocalEdits::Edited
+        );
+    }
+
+    #[test]
+    fn an_added_file_reads_as_edited_or_update_deletes_it_silently() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", SKILL_MD)
+            .file("/skill/notes.md", b"mine\n")
+            .build_fs();
+        let lock = lock_with_hash(&installed_hash());
+        assert_eq!(
+            local_edits(&fs, &lock, "write-tests", Path::new("/skill")),
+            LocalEdits::Edited
+        );
+    }
+
+    #[test]
+    fn a_skill_without_a_lock_entry_reads_as_unknown_or_it_is_wrongly_called_edited() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", b"anything\n")
+            .build_fs();
+        let lock = lock_with_hash(&installed_hash());
+        assert_eq!(
+            local_edits(&fs, &lock, "other-skill", Path::new("/skill")),
+            LocalEdits::Unknown
+        );
+    }
+
+    #[test]
+    fn finder_and_python_litter_is_ignored_or_an_untouched_install_warns() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", SKILL_MD)
+            .file("/skill/.DS_Store", b"\0\0")
+            .file("/skill/scripts/__pycache__/a.pyc", b"x")
+            .file("/skill/.git/HEAD", b"ref")
+            .build_fs();
+        let lock = lock_with_hash(&installed_hash());
+        assert_eq!(
+            local_edits(&fs, &lock, "write-tests", Path::new("/skill")),
+            LocalEdits::Unedited
+        );
+    }
+
+    #[test]
+    fn an_edit_beside_litter_still_reads_as_edited_or_the_ignore_hides_real_edits() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", b"changed\n")
+            .file("/skill/.DS_Store", b"\0\0")
+            .build_fs();
+        let lock = lock_with_hash(&installed_hash());
+        assert_eq!(
+            local_edits(&fs, &lock, "write-tests", Path::new("/skill")),
+            LocalEdits::Edited
+        );
+    }
+
+    #[test]
+    fn a_sha256_lock_hash_reads_as_unknown_or_every_non_github_skill_warns() {
+        let fs = FixtureBuilder::new()
+            .file("/skill/SKILL.md", SKILL_MD)
+            .build_fs();
+        let lock = lock_with_hash(&"a".repeat(64));
+        assert_eq!(
+            local_edits(&fs, &lock, "write-tests", Path::new("/skill")),
+            LocalEdits::Unknown
+        );
+    }
+}

@@ -30,14 +30,25 @@ describe("Add Skill form validation", () => {
         agents: [],
         scope: "global",
         projectPath: null,
-        trial: false,
         githubEntries: null,
       }),
     ).toBe(false);
   });
 
+  it("never offers pack for a GitHub source while the pack commands are unregistered in lib.rs, catching a regression that reintroduces it", () => {
+    const githubSource = parseSkillSource("https://github.com/owner/repo");
+    const withDotagents = availableAddSkillMethods(githubSource, methodDefaults(true));
+    const withoutDotagents = availableAddSkillMethods(githubSource, methodDefaults(false));
+
+    expect(withDotagents).not.toContain("pack");
+    expect(withoutDotagents).not.toContain("pack");
+  });
+
   it("accepts normal sources with a valid install method", () => {
-    const gitSource = parseSkillSource("git:https://example.com/skills.git");
+    const gitSource = {
+      ...parseSkillSource("git:https://example.com/skills.git"),
+      skillName: "skills",
+    };
     const localSource = parseSkillSource("~/skills/find-bugs");
     const gitMethods = availableAddSkillMethods(gitSource, methodDefaults(true));
     const localMethods = availableAddSkillMethods(localSource, methodDefaults(false));
@@ -52,9 +63,25 @@ describe("Add Skill form validation", () => {
         agents: [],
         scope: "global",
         projectPath: null,
-        trial: false,
         githubEntries: null,
       }),
     ).toBe(true);
+  });
+
+  it("rejects a git source with no skill name - derive_name (skill_install.rs) refuses to install one without an explicit name, and the sheet has no repo listing to infer one from", () => {
+    const gitSource = parseSkillSource("git:https://example.com/skills.git");
+    const methods = availableAddSkillMethods(gitSource, methodDefaults(true));
+
+    expect(
+      isAddSkillFormValid({
+        parsed: gitSource,
+        noMethodsAvailable: methods.length === 0,
+        destination: "universal",
+        agents: [],
+        scope: "global",
+        projectPath: null,
+        githubEntries: null,
+      }),
+    ).toBe(false);
   });
 });

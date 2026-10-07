@@ -4,11 +4,6 @@
 
 html {
   scroll-behavior: smooth;
-  scrollbar-width: none;
-}
-
-html::-webkit-scrollbar {
-  display: none;
 }
 
 html,
@@ -23,6 +18,7 @@ body {
   color-scheme: dark;
   min-width: 320px;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  font-synthesis: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -44,18 +40,51 @@ html[data-site-theme="light"] body {
   color-scheme: light;
 }
 
-button,
-a,
-input {
-  font: inherit;
+/* StyleX emits its rules in cascade layers, and any unlayered rule beats every layer.
+   index.html declares this layer first, so component font sizes win over it. */
+@layer reset {
+  button,
+  a,
+  input {
+    font: inherit;
+  }
 }
 
 button {
   cursor: pointer;
 }
 
+/* The prerendered homepage is drawn in the dark theme. A light-theme visitor sees nothing until
+   the client render replaces it, instead of a flash of the dark page. */
+html[data-site-theme="light"] #root[data-prerendered="dark"] {
+  visibility: hidden;
+}
+
+/* Prerendered pages ship both theme icons; show the one for the current theme. */
+html:not([data-site-theme="light"]) [data-theme-icon="light"],
+html[data-site-theme="light"] [data-theme-icon="dark"] {
+  display: none;
+}
+
+/* Safari still draws the disclosure triangle unless the marker pseudo-element is hidden. */
+summary::-webkit-details-marker {
+  display: none;
+}
+
 ::selection {
   background: rgba(255, 255, 255, 0.16);
+}
+
+@media (prefers-color-scheme: light) {
+  html:not([data-site-theme="dark"]) ::selection {
+    background: rgba(0, 0, 0, 0.12);
+    color: inherit;
+  }
+}
+
+html[data-site-theme="light"] ::selection {
+  background: rgba(0, 0, 0, 0.12);
+  color: inherit;
 }
 
 ::view-transition-old(root),
@@ -73,8 +102,30 @@ button {
   outline-offset: 2px;
 }
 
+/* A surface that stays dark in the light theme keeps the white ring. */
+html[data-site-theme="light"] :focus-visible:where(:not([data-surface="dark"] *)) {
+  outline-color: rgba(0, 0, 0, 0.56);
+}
+
+/* A surface in the opposite colour to the page draws the ring in its own text colour. */
+html [data-surface="inverse"] :focus-visible {
+  outline-color: currentColor;
+}
+
 [id] {
   scroll-margin-top: 72px;
+}
+
+/* Registered so the closing finale's dither glow can transition (see home/ClosingFinale.tsx). */
+@property --finale-glow-alpha {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0.3;
+}
+@property --finale-glow-reach {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 60%;
 }
 
 @media (prefers-reduced-motion: reduce) {

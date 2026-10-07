@@ -23,6 +23,9 @@ pub(crate) struct SkillMdWriteTransaction {
     _guard: MutexGuard<'static, ()>,
 }
 
+// Every method here takes `&self` as a capability token proving the caller
+// holds the write-transaction guard, not because the body reads it.
+#[allow(clippy::unused_self)]
 impl SkillMdWriteTransaction {
     /// Reads text that will be checked or rewritten before this transaction
     /// replaces the same SKILL.md.
@@ -69,7 +72,11 @@ pub(crate) fn begin_skill_md_write_transaction() -> Result<SkillMdWriteTransacti
     Ok(SkillMdWriteTransaction { _guard: guard })
 }
 
-/// Atomically replaces SKILL.md in one app-managed write transaction.
+/// Atomically replaces SKILL.md in one app-managed write transaction. Only
+/// `write_skill_md_compare_and_swap` writes SKILL.md in production; this
+/// plain (non-comparing) write survives as a test helper for the atomic
+/// replace primitive itself.
+#[cfg(test)]
 pub(crate) fn write_skill_md(path: &Path, content: &str) -> Result<(), String> {
     begin_skill_md_write_transaction()?.replace_text(path, content)
 }
@@ -140,8 +147,7 @@ fn atomic_replace_skill_md_unlocked(path: &Path, bytes: &[u8]) -> Result<(), Str
     let counter = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |duration| duration.as_nanos());
     let temp = parent.join(format!(
         ".SKILL.md.tmp-{}-{counter}-{nanos}",
         std::process::id()

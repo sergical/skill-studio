@@ -7,28 +7,36 @@
 // ============================================================================
 
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   forkSkill,
-  keepSkillTrial,
   openSkillPath,
   parkSkill,
   pullForkUpstream,
   removeSkill,
   unforkSkill,
   unparkSkill,
-  updateSkill,
+  updatePlugin,
 } from "../../lib/skill-api";
 import {
   lifecycleTargetForDeployment,
   lifecycleTargetForPark,
   lifecycleTargetForSkill,
-  lifecycleTargetForTrial,
-  skillGlobalRemovalTarget,
-  updateSkillOwners,
+  skillCanPark,
+  skillRemovalBlockedReason,
+  skillRemovalChoices,
+  pullForkAndUpdatePlugins,
+  skillHasManagedUpdate,
+  skillRemovalEmptiesSkill,
+  skillUpdateOwnerTargets,
+  updateSkillPluginsWithToasts,
 } from "../../lib/skill-lifecycle-target";
-import type { InstalledSkill, TrialInfo } from "@skill-studio/lib";
+import type { PluginInstallUpdater, SkillRemovalChoice } from "../../lib/skill-lifecycle-target";
+import type { InstalledSkill, Toast } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
+import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
+import type { UpdateFinish } from "../../hooks/useGuardedSkillUpdate";
 
 /**
  * The one deployment `forkSkill` will accept: the shared-folder copy at
@@ -43,6 +51,58 @@ function sharedFolderDeployment(skill: InstalledSkill) {
 }
 
 type AddToast = ReturnType<typeof useAppStore.getState>["addToast"];
+
+/**
+ * The header's update button: a fork pulls upstream, any other kind with an update runs the update.
+ * Any kind, not only dotagents/skills-sh: a skill with a plugin copy reports `plugin` as its kind
+ * while its skills.sh copy still has an update, and the header is the page's only Update.
+ */
+/**
+ * The header Update: managed copies first, through the overwrite guard, then the
+ * skill's plugin installs. Plugins wait for the guard's `onFinished`, so a
+ * cancelled overwrite dialog or a failed copy update leaves them alone.
+ */
+export async function runHeaderUpdate<
+  S extends Pick<InstalledSkill, "deployments" | "update_owner_ids" | "update_owners">,
+>(
+  skill: S,
+  guard: {
+    requestUpdate: (
+      skill: S,
+      options: { skipPlugins: boolean; onFinished: (finish: UpdateFinish) => Promise<void> },
+    ) => Promise<void>;
+  },
+  addToast: (toast: Omit<Toast, "id">) => void,
+  updatePluginInstall: PluginInstallUpdater,
+): Promise<void> {
+  if (skillUpdateOwnerTargets(skill).length === 0) {
+    await updateSkillPluginsWithToasts(skill, addToast, updatePluginInstall);
+    return;
+  }
+  await guard.requestUpdate(skill, {
+    skipPlugins: true,
+    onFinished: async ({ success }) => {
+      if (success) await updateSkillPluginsWithToasts(skill, addToast, updatePluginInstall);
+    },
+  });
+}
+
+/** "Pull latest" only when the fork itself is outdated; a fork whose only update is a plugin takes "Update". */
+export function headerUpdateLabel(
+  skill: Pick<InstalledSkill, "source_kind" | "update_owner_ids">,
+): "Pull latest" | "Update" | null {
+  if (skill.update_owner_ids.length === 0) return null;
+  return skill.source_kind === "fork" && skillHasManagedUpdate(skill) ? "Pull latest" : "Update";
+}
+
+/**
+ * The header Remove button's success toast: "Removed" plus the skill name,
+ * not "Updated N deployments" (unit 3.9b) - `removeSkill` takes exactly one
+ * deployment off disk, so a deployment count has nothing to count.
+ */
+export function removeSuccessToast(skillName: string): Omit<Toast, "id"> {
+  return { type: "success", title: "Removed", message: skillName };
+}
 
 /**
  * Runs `fn` with `setBusy` bracketing it, and reports a thrown error as an
@@ -84,12 +144,16 @@ export interface SkillPageActions {
   copyPath: () => void;
   /** The one primary action for the header - "Pull latest" or "Update" - `null` when there is none. */
   primaryAction: SkillPageAction | null;
-  parkAction: SkillPageAction;
+  /** Park or Unpark - `null` when the skill has no Global Universal folder to move. */
+  parkAction: SkillPageAction | null;
   /** Fork (when forkable) or Un-fork (when already forked) - `null` when neither applies. */
   forkAction: SkillPageAction | null;
-  /** Global-only removal, present only when an exact mutable lifecycle target exists. */
-  removeAction: SkillPageAction | null;
-  keepTrial: (trial: TrialInfo) => SkillPageAction;
+  /** One entry per scope with an exact mutable removal target, global first. */
+  removeActions: (SkillPageAction & { key: string })[];
+  /** Why there is no Remove, for a skill whose files the app must not delete. */
+  removeBlockedReason: string | null;
+  /** The "Update will replace your edits" dialog; render it once beside the header. */
+  updateDialog: ReactNode;
 }
 
 /**
@@ -99,23 +163,42 @@ export interface SkillPageActions {
  * and `SkillDetailActions`, aside from the update button always targeting
  * global scope (the page header has no scope picker) and Remove gaining the
  * same `ask()` confirm the other destructive actions here already use.
+ *
+ * `skill` is nullable so `SkillPage` can call this once, unconditionally,
+ * even on the "no longer installed" render - every hook above still runs
+ * every time, only the returned actions collapse to no-ops.
  */
 export function useSkillPageActions(
-  skill: InstalledSkill,
+  skill: InstalledSkill | null,
   onRemoveComplete: () => void,
 ): SkillPageActions {
   const addToast = useAppStore((state) => state.addToast);
   const [copied, setCopied] = useState(false);
   const [isParking, setIsParking] = useState(false);
-  const [isKeeping, setIsKeeping] = useState(false);
   const [isForking, setIsForking] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [isUnforking, setIsUnforking] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
+  const guard = useGuardedSkillUpdate();
+
+  if (!skill) {
+    return {
+      path: undefined,
+      copied,
+      reveal: () => undefined,
+      openEditor: () => undefined,
+      copyPath: () => undefined,
+      primaryAction: null,
+      parkAction: null,
+      forkAction: null,
+      removeActions: [],
+      removeBlockedReason: null,
+      updateDialog: null,
+    };
+  }
 
   const path = skill.deployments[0]?.path ?? skill.skill_path;
-  const globalRemovalTarget = skillGlobalRemovalTarget(skill);
 
   const reveal = () => {
     if (!path) return;
@@ -164,12 +247,6 @@ export function useSkillPageActions(
       },
     );
 
-  const keepTrial = (trial: TrialInfo) => () =>
-    runAction(addToast, setIsKeeping, "Couldn't keep skill", async () => {
-      await keepSkillTrial(lifecycleTargetForTrial(skill, trial));
-      addToast({ type: "success", title: `Kept ${skill.name}` });
-    });
-
   const forkDeployment = sharedFolderDeployment(skill);
 
   const doFork = () => {
@@ -200,66 +277,44 @@ export function useSkillPageActions(
     });
   };
 
+  const updatePluginInstall: PluginInstallUpdater = (target) =>
+    updatePlugin(target.plugin_id, "Claude Code", target.scope, target.project_path);
+
   const doPullUpstream = () =>
-    runAction(addToast, setIsPulling, "Pull upstream failed", async () => {
-      const result = await pullForkUpstream(lifecycleTargetForSkill(skill, "global"));
-      if (result.message) {
-        addToast({ type: "info", title: result.message });
-      } else if (result.conflicts.length > 0) {
-        addToast({
-          type: "warning",
-          title: `${result.conflicts.length} conflicts — open the editor to resolve`,
-          message: result.conflicts.join(", "),
-        });
-      } else {
-        const mergedCount = result.merged.length + result.added.length + result.removed.length;
-        addToast({ type: "success", title: `Merged ${mergedCount} files` });
-      }
-    });
+    runAction(addToast, setIsPulling, "Pull upstream failed", () =>
+      pullForkAndUpdatePlugins(
+        skill,
+        () => pullForkUpstream(lifecycleTargetForSkill(skill, "global")),
+        addToast,
+        updatePluginInstall,
+      ),
+    );
 
   const doUpdate = () =>
-    runAction(addToast, setIsUpdating, "Update failed", async () => {
-      const summary = await updateSkillOwners(skill, updateSkill);
-      if (summary.failures.length === 0) {
-        addToast({
-          type: "success",
-          title: `Updated ${summary.succeeded} deployment${summary.succeeded === 1 ? "" : "s"}`,
-          message: skill.name,
-        });
-      } else {
-        addToast({
-          type: "warning",
-          title: `Updated ${summary.succeeded} of ${summary.attempted} deployments`,
-          message: summary.failures.map((failure) => failure.message).join("; "),
-        });
-      }
-    });
+    runAction(addToast, setIsUpdating, "Update failed", () =>
+      runHeaderUpdate(skill, guard, addToast, updatePluginInstall),
+    );
 
-  const doRemove = async () => {
-    if (!globalRemovalTarget) return;
-    const confirmed = await ask(`Remove ${skill.name}?`, {
-      title: "Remove skill",
+  const doRemove = async (choice: SkillRemovalChoice) => {
+    const confirmed = await ask(choice.confirmMessage, {
+      title: choice.confirmTitle,
       kind: "warning",
+      okLabel: choice.label,
     });
     if (!confirmed) return;
     await runAction(addToast, setIsRemoving, "Remove failed", async () => {
-      const result = await removeSkill(globalRemovalTarget);
-      if (result.success) {
-        onRemoveComplete();
-      } else {
-        addToast({ type: "error", title: "Remove failed", message: result.error });
-      }
+      await removeSkill(choice.preview.target);
+      if (skillRemovalEmptiesSkill(skill, choice.selection)) onRemoveComplete();
+      addToast(removeSuccessToast(skill.name));
     });
   };
 
   let primaryAction: SkillPageAction | null = null;
-  if (skill.source_kind === "fork" && skill.update_owner_ids.length > 0) {
-    primaryAction = { label: "Pull latest", run: doPullUpstream, busy: isPulling };
-  } else if (
-    (skill.source_kind === "dotagents" || skill.source_kind === "skills-sh") &&
-    skill.update_owner_ids.length > 0
-  ) {
-    primaryAction = { label: "Update", run: doUpdate, busy: isUpdating };
+  const updateLabel = headerUpdateLabel(skill);
+  if (updateLabel === "Pull latest") {
+    primaryAction = { label: updateLabel, run: doPullUpstream, busy: isPulling };
+  } else if (updateLabel === "Update") {
+    primaryAction = { label: updateLabel, run: doUpdate, busy: isUpdating || guard.isResolving };
   }
 
   let forkAction: SkillPageAction | null = null;
@@ -269,9 +324,12 @@ export function useSkillPageActions(
     forkAction = { label: "Fork", run: doFork, busy: isForking };
   }
 
-  const removeAction: SkillPageAction | null = globalRemovalTarget
-    ? { label: "Remove", run: doRemove, busy: isRemoving }
-    : null;
+  const removeActions = skillRemovalChoices(skill).map((choice) => ({
+    key: choice.key,
+    label: choice.label,
+    run: () => void doRemove(choice),
+    busy: isRemoving,
+  }));
 
   return {
     path,
@@ -280,13 +338,12 @@ export function useSkillPageActions(
     openEditor,
     copyPath,
     primaryAction,
-    parkAction: {
-      label: skill.parked ? "Unpark" : "Park",
-      run: togglePark,
-      busy: isParking,
-    },
+    parkAction: skillCanPark(skill)
+      ? { label: skill.parked ? "Unpark" : "Park", run: togglePark, busy: isParking }
+      : null,
     forkAction,
-    removeAction,
-    keepTrial: (trial) => ({ label: "Keep", run: keepTrial(trial), busy: isKeeping }),
+    removeActions,
+    removeBlockedReason: skillRemovalBlockedReason(skill),
+    updateDialog: guard.dialog,
   };
 }

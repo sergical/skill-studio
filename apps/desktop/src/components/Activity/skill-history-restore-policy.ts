@@ -14,3 +14,25 @@ function isDriftRefusal(message: string): boolean {
 export function shouldOfferForceRestore(event: SkillEvent, message: string): boolean {
   return event.force_restorable && isDriftRefusal(message);
 }
+
+/**
+ * The row's label. A split that names an agent is that agent's turn-off: the
+ * plain split row has no agent, "Turn off for one agent" writes the agent on it.
+ */
+export function eventLabel(event: SkillEvent, agentLabel: string | null): string {
+  if (event.kind === "split" && agentLabel) return `Turned off for ${agentLabel}`;
+  return kindLabel(event.kind);
+}
+
+/** "unlink harness" from "unlink_harness", for kinds with no friendlier label. */
+export function kindLabel(kind: string): string {
+  switch (kind) {
+    // `ops::sweep_quarantine`'s own journal row (unit 3.9b) - the generic
+    // underscore-to-space fallback would read "quarantine prune", which
+    // reads as an imperative instruction rather than a thing that happened.
+    case "quarantine_prune":
+      return "Quarantine pruned";
+    default:
+      return kind.replace(/_/g, " ");
+  }
+}

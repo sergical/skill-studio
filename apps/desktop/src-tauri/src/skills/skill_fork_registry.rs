@@ -5,7 +5,6 @@
 // `agents.lock`, or `.skill-lock.json` itself, those belong to the owning
 // CLI. Tracks which skills have been detached from their ledger ("forked")
 // so local edits survive `dotagents sync` / `npx skills update`, plus a
-// `trials` bucket for "Try for 24 hours" installs (see `skill_trial`), a
 // `parked` bucket for skills disabled globally (see `skill_park`), and a
 // `harness_disabled` bucket for the one per-harness disable that has no
 // native config to read back from (Claude Code - see `skill_harness_disable`).
@@ -19,30 +18,30 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use skill_studio_core::discovery_sources::DiscoverySources;
+use skill_studio_core::tracked_projects::TrackedProjects;
 
-use super::provenance::SourceKind;
 use super::skill_deployment::SkillDestination;
 use super::skill_dto::InstallScope;
+use super::SourceKind;
 
 fn path_is_empty(path: &Path) -> bool {
     path.as_os_str().is_empty()
 }
 
 /// Which CLI a forked skill was originally managed by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum OriginTool {
     Dotagents,
     SkillsSh,
 }
 
-/// How `add_skill` installed a skill - shared by `AddSkillRequest.method` and
-/// `TrialRecord.method`, since a trial's expiry step needs to know which tool
-/// (if any) owns the skill it's about to remove.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// How `add_skill` installed a skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AddMethod {
     Dotagents,
@@ -50,89 +49,10 @@ pub enum AddMethod {
     Copy,
 }
 
-/// Which scope a trial (or an `add_skill` request) targeted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TrialScope {
-    Global,
-    Project,
-}
-
-/// Durable state for trial expiry. `Expiring` prevents an interrupted CLI
-/// removal from matching a later installation at the same path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum TrialStatus {
-    #[default]
-    Active,
-    Expiring,
-    RecoveryRequired,
-}
-
-/// One "Try for 24 hours" install, tracked so `skill_trial`'s expiry loop
-/// knows when to remove it and how.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TrialRecord {
-    /// Stable identity of the exact deployment this trial owns. Empty only
-    /// for records written before registry version 2.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub deployment_id: String,
-    pub started_at: String,
-    pub expires_at: String,
-    #[serde(default)]
-    pub status: TrialStatus,
-    pub method: AddMethod,
-    pub scope: TrialScope,
-    #[serde(default)]
-    pub project_path: Option<String>,
-    /// The exact directory `add_skill` created for this trial - expiry
-    /// trashes and removes this path directly instead of recomputing it
-    /// from `scope`/`project_path`, which was wrong for `skills-sh` trials
-    /// (that method never writes the shared `.agents/skills` folder).
-    #[serde(default)]
-    pub skill_dir: PathBuf,
-    /// Recursive content fingerprint recorded immediately after install.
-    /// Empty only for legacy records, which expiry must not mutate.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub deployment_fingerprint: String,
-    /// The per-skill Claude Code symlink `add_skill` created for this trial,
-    /// if any - `None` when Claude Code wasn't selected or the whole-dir
-    /// symlink already covered it.
-    #[serde(default)]
-    pub claude_link: Option<PathBuf>,
-    /// Raw target of `claude_link` at install time. Missing only from legacy
-    /// records, which expiry refuses when a Claude link is present.
-    #[serde(default)]
-    pub claude_link_target: Option<PathBuf>,
-}
-
-/// The `trials` map key for a given scope: `"global/<name>"` or
-/// `"project/<name>"` - lets the same skill name be on trial globally and in
-/// a project at the same time, and lets `keep_skill_trial`/expiry key back
-/// into the map unambiguously.
-pub fn trial_key(scope: TrialScope, name: &str) -> String {
-    match scope {
-        TrialScope::Global => format!("global/{name}"),
-        TrialScope::Project => format!("project/{name}"),
-    }
-}
-
-/// Registry key used by all new trial records.
-pub fn deployment_trial_key(deployment_id: &str) -> String {
-    format!("deployment/{deployment_id}")
-}
-
-/// The skill name embedded in a `trials` map key, e.g. `"global/find-bugs"`
-/// -> `"find-bugs"`. Falls back to the whole key for anything that doesn't
-/// look like one `trial_key` produced (there shouldn't be any).
-pub fn name_from_trial_key(key: &str) -> &str {
-    key.split_once('/').map(|(_, name)| name).unwrap_or(key)
-}
-
 /// One forked skill's provenance, enough to reinstall it from its origin
 /// (`unfork_skill`) or to fetch its upstream at a specific commit
 /// (`pull_fork_upstream`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ForkRecord {
     /// Global Universal deployment detached by this fork. Empty only for a
     /// legacy record, which callers must resolve by its exact local path.
@@ -151,8 +71,10 @@ pub struct ForkRecord {
     /// The `ref` dotagents had declared for this skill, if any. `None` for
     /// skills.sh forks and unpinned dotagents forks.
     pub declared_ref: Option<String>,
-    /// The commit the local copy was last synced from - the "base" of the
-    /// three-way merge `pull_fork_upstream` runs.
+    /// The commit the local copy was last synced from - the "base"
+    /// `pull_fork_upstream` diffs against to tell an edited file from an
+    /// untouched one, writing conflict markers (never merging) where both
+    /// sides changed.
     pub base_commit: String,
 }
 
@@ -179,7 +101,7 @@ pub struct ParkedRecord {
 
 /// One first-class agent's per-skill disable that has no native config to
 /// read back, tracked here instead - currently only Claude Code (removing
-/// its per-skill symlink), since Codex and OpenCode read their own disable
+/// its per-skill symlink), since Codex and `OpenCode` read their own disable
 /// state straight from `~/.codex/config.toml` / `opencode.json`. See
 /// `skill_harness_disable`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,7 +118,7 @@ pub struct ClaudeLinkRemoved {
 /// One skill bundled into a pack: `name` is its directory name, `path` is
 /// the exact deployment directory it was bundled from - see
 /// `skill_pack::resolve_members`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PackMember {
     pub name: String,
     pub path: PathBuf,
@@ -243,6 +165,11 @@ pub struct CopyDeploymentRecord {
     /// True when the exact copy is stored under `.skill-studio-disabled`.
     #[serde(default)]
     pub disabled: bool,
+    /// The `.skill-lock.json` source the copy was split from. Set by the
+    /// core's split; only a copy that names the lock row's source takes
+    /// part in that skill's update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_source: Option<String>,
 }
 
 /// `~/.agents/skill-studio.json`'s shape.
@@ -250,11 +177,15 @@ pub struct CopyDeploymentRecord {
 pub struct ForkRegistry {
     #[serde(default = "default_version")]
     pub version: u32,
+    /// Write counter bumped by [`write_fork_registry`] on every write, via
+    /// the core's [`skill_studio_core::registry::write_registry_document`].
+    /// Distinct from `version`, which marks a schema migration and is set
+    /// by hand - see `crates/skill-studio-core/src/registry.rs`. Defaults to
+    /// 0 for a file written before this field existed.
+    #[serde(default)]
+    pub write_version: u64,
     #[serde(default)]
     pub forks: BTreeMap<String, ForkRecord>,
-    /// "Try for 24 hours" installs, keyed by skill name - see `skill_trial`.
-    #[serde(default)]
-    pub trials: BTreeMap<String, TrialRecord>,
     /// Skills parked (disabled globally) via `skill_park`, keyed by name.
     #[serde(default)]
     pub parked: BTreeMap<String, ParkedRecord>,
@@ -291,6 +222,57 @@ pub struct ForkRegistry {
     /// by default: `kentcdodds/kcd-skills` still needs confirmation.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub trusted_dotagents_sources: BTreeSet<String>,
+    /// Folders the user added by hand or stopped tracking - the core's
+    /// [`TrackedProjects`], saved here so the CLI, the MCP server, and every
+    /// version of the desktop app discover the same projects.
+    #[serde(default, skip_serializing_if = "TrackedProjects::is_empty")]
+    pub projects: TrackedProjects,
+    /// Per-harness project discovery switches - see
+    /// `skill_studio_core::discovery_sources::DiscoverySources`. Saved here so
+    /// the desktop app, the CLI, and the MCP server honour the same choice.
+    #[serde(default, skip_serializing_if = "DiscoverySources::is_empty")]
+    pub discovery: DiscoverySources,
+    /// The telemetry switch: whether crash reports, operation timings, and
+    /// `WebView` errors leave this Mac. Off in the registry by default; the
+    /// welcome screen offers it on (`FIRST_RUN_TELEMETRY_DEFAULT` in
+    /// `useFirstRun.ts`) and `save_harnesses_choice` writes the user's
+    /// explicit choice here. `lib.rs` reads it on every launch; before a
+    /// choice exists it reads as off, and a registry saved by an older build
+    /// without the key reads as off too. An rc build wrote this key as
+    /// `error_reporting_enabled`; `read_fork_registry` migrates that key via
+    /// `migrate_rc_telemetry_key` before deserializing. See
+    /// `telemetry_commands`.
+    #[serde(default)]
+    pub telemetry_enabled: bool,
+    /// The first-run screen's saved choice - see `harness_first_run`.
+    /// Absent means the screen has never been completed, so the app shows
+    /// it again on the next launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harnesses: Option<super::harness_first_run::HarnessesChoice>,
+    /// Every top-level key this build doesn't know about. Keeps a write from
+    /// erasing a field a newer or older build added - the file is shared
+    /// with the CLI and with whichever app version last wrote it. This is
+    /// also how a pre-#278 `trials` bucket survives the upgrade: nothing
+    /// reads it anymore, but it round-trips here unread rather than being
+    /// dropped. That is only true for a trial that was still `Active`: its
+    /// deployment was never moved, so the skill stays installed and usable
+    /// exactly as `keep_skill_trial` used to leave it. A trial interrupted
+    /// mid-expiry (`TrialStatus::Expiring`) before the upgrade is neither
+    /// completed nor reverted by this build - its backup sits wherever
+    /// `skill_trial`'s expiry left it in `~/.agents/skills-trash`, and this
+    /// build does not resume or undo that move. Tracked as a follow-up.
+    #[serde(flatten)]
+    pub unknown: serde_json::Map<String, serde_json::Value>,
+}
+
+impl skill_studio_core::registry::RegistryDocument for ForkRegistry {
+    fn write_version(&self) -> u64 {
+        self.write_version
+    }
+
+    fn set_write_version(&mut self, version: u64) {
+        self.write_version = version;
+    }
 }
 
 pub const CURRENT_REGISTRY_VERSION: u32 = 4;
@@ -307,8 +289,8 @@ impl Default for ForkRegistry {
     fn default() -> Self {
         ForkRegistry {
             version: default_version(),
+            write_version: 0,
             forks: BTreeMap::new(),
-            trials: BTreeMap::new(),
             parked: BTreeMap::new(),
             harness_disabled: BTreeMap::new(),
             packs: BTreeMap::new(),
@@ -317,6 +299,11 @@ impl Default for ForkRegistry {
             server_url: None,
             preferred_editor: None,
             trusted_dotagents_sources: BTreeSet::new(),
+            projects: TrackedProjects::default(),
+            discovery: DiscoverySources::default(),
+            telemetry_enabled: false,
+            harnesses: None,
+            unknown: serde_json::Map::new(),
         }
     }
 }
@@ -327,14 +314,28 @@ pub fn fork_registry_path(home: &Path) -> PathBuf {
 }
 
 /// `<app data>/skill-studio/forks/<name>/base` - the last-synced snapshot of
-/// a forked skill, used as the "base" side of `pull_fork_upstream`'s
-/// three-way merge.
+/// a forked skill, used as the "base" `pull_fork_upstream` diffs against to
+/// find files both sides changed and write conflict markers into.
 pub fn fork_snapshot_dir(app_data: &Path, name: &str) -> PathBuf {
     app_data
         .join("skill-studio")
         .join("forks")
         .join(name)
         .join("base")
+}
+
+/// An rc build saved the telemetry switch as `error_reporting_enabled`.
+/// Moves that value to `telemetry_enabled` when the new key is absent and
+/// drops the old key either way, so the next write does not carry it
+/// forward and a file an rc build rewrote after this build (both keys
+/// present) still reads.
+fn migrate_rc_telemetry_key(document: &mut serde_json::Map<String, serde_json::Value>) {
+    // `shift_remove`, not `remove`: with `preserve_order` a plain `remove`
+    // swaps the last key into the hole and reorders the user's file.
+    let Some(old) = document.shift_remove("error_reporting_enabled") else {
+        return;
+    };
+    document.entry("telemetry_enabled").or_insert(old);
 }
 
 /// Read the registry: a missing file yields a fresh default one, but an
@@ -348,9 +349,20 @@ pub fn read_fork_registry(home: &Path) -> Result<ForkRegistry, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ForkRegistry::default()),
         Err(e) => return Err(format!("Failed to read {}: {e}", path.display())),
     };
-    serde_json::from_str(&content).map_err(|_| {
-        "~/.agents/skill-studio.json is malformed; fix or move it before forking".to_string()
-    })
+    let malformed =
+        || "~/.agents/skill-studio.json is malformed; fix or move it, then try again".to_string();
+    let registry: ForkRegistry = serde_json::from_str(&content).map_err(|_| malformed())?;
+    if !registry.unknown.contains_key("error_reporting_enabled") {
+        return Ok(registry);
+    }
+    // Only a file that still holds the rc key takes the second pass: read as
+    // a map, where the new key's presence is visible, then migrate. The
+    // direct parse above stays the common path and keeps serde's rejection
+    // of a duplicated known key, which a `Value` parse would collapse.
+    let mut document: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&content).map_err(|_| malformed())?;
+    migrate_rc_telemetry_key(&mut document);
+    serde_json::from_value(serde_json::Value::Object(document)).map_err(|_| malformed())
 }
 
 /// `read_fork_registry`, but for read-only snapshot/candidate building: an
@@ -363,28 +375,72 @@ pub fn read_fork_registry_or_default(home: &Path) -> ForkRegistry {
     })
 }
 
-/// Counter appended to the write's temp file name, so concurrent writers
-/// never pick the same temp path.
-static WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// Where `FileLease` keeps its advisory lock files for this registry -
+/// `core_runtime::data_root()`'s `leases` subdirectory, the same lease root
+/// the CLI, MCP, and desktop's park/unpark commands already share.
+fn registry_lease_root() -> PathBuf {
+    super::core_runtime::data_root().join("leases")
+}
 
-/// Write `registry` atomically (temp file + rename), creating `~/.agents` if
-/// it doesn't already exist.
+/// Write `registry` atomically under the exclusive lease over `home`,
+/// bumping `write_version` by one - see
+/// `skill_studio_core::registry::write_registry_document`. Creates
+/// `~/.agents` if it doesn't already exist.
 pub fn write_fork_registry(home: &Path, registry: &ForkRegistry) -> Result<(), String> {
+    // The core's scope normalization canonicalizes `home`, which requires
+    // it to exist already - callers historically relied on this function
+    // creating a never-before-seen home (e.g. a fresh project scope) via
+    // `create_dir_all` on the registry's parent, so do that first here too.
+    std::fs::create_dir_all(home)
+        .map_err(|e| format!("Failed to create {}: {e}", home.display()))?;
     let path = fork_registry_path(home);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+    let fs = skill_studio_host::RealFs::new();
+    let leases = skill_studio_host::FileLease::new(registry_lease_root());
+    let mut document = registry.clone();
+    skill_studio_core::registry::write_registry_document(&leases, &fs, home, &path, &mut document)
+        .map_err(|e| e.to_string())
+}
+
+/// `write_fork_registry`, for a caller that already holds `home`'s
+/// `WriteLease` - a command that took its lease before touching several
+/// lease-guarded things, for instance. Writes under that held lease instead
+/// of taking a second, conflicting one: advisory locks don't nest within
+/// one process, so a nested `write_fork_registry` would report the caller's
+/// own lease as busy instead of writing.
+pub fn write_fork_registry_locked(
+    guard: &super::write_lease::WriteLeaseGuard,
+    home: &Path,
+    registry: &ForkRegistry,
+) -> Result<(), String> {
+    std::fs::create_dir_all(home)
+        .map_err(|e| format!("Failed to create {}: {e}", home.display()))?;
+    let path = fork_registry_path(home);
+    let fs = skill_studio_host::RealFs::new();
+    let mut document = registry.clone();
+    skill_studio_core::registry::write_registry_document_locked(
+        guard.as_exclusive_guard(),
+        &fs,
+        home,
+        &path,
+        &mut document,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// `write_fork_registry` or `write_fork_registry_locked`, chosen by whether
+/// `guard` is `Some` - lets one recovery function serve both a caller that
+/// already holds `home`'s `WriteLease` (startup reconcile, which takes the
+/// lease once for its whole pass) and one that doesn't (a test calling the
+/// same function directly).
+pub fn write_fork_registry_maybe_locked(
+    guard: Option<&super::write_lease::WriteLeaseGuard>,
+    home: &Path,
+    registry: &ForkRegistry,
+) -> Result<(), String> {
+    match guard {
+        Some(guard) => write_fork_registry_locked(guard, home, registry),
+        None => write_fork_registry(home, registry),
     }
-    let json = serde_json::to_string_pretty(registry)
-        .map_err(|e| format!("Failed to serialize fork registry: {e}"))?;
-    let unique = WRITE_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let tmp_path = path.with_extension(format!("json.tmp.{}.{unique}", std::process::id()));
-    std::fs::write(&tmp_path, json)
-        .map_err(|e| format!("Failed to write {}: {e}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, &path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_path);
-        format!("Failed to rename {}: {e}", tmp_path.display())
-    })
 }
 
 #[cfg(test)]
@@ -425,7 +481,58 @@ mod tests {
             reloaded.forks["find-bugs"].origin_tool,
             OriginTool::Dotagents
         );
-        assert!(reloaded.trials.is_empty());
+    }
+
+    /// The exact shape `skill_trial.rs::record_trial` wrote before #278
+    /// deleted it (see `TrialRecord`), for a global-scope Copy trial that
+    /// was still `Active` when the user upgraded.
+    fn pre_removal_trials_bucket_json() -> serde_json::Value {
+        serde_json::json!({
+            "deployment/dep:v1/global/universal/universal/find-bugs/-/x": {
+                "deployment_id": "dep:v1/global/universal/universal/find-bugs/-/x",
+                "started_at": "2026-01-01T00:00:00Z",
+                "expires_at": "2026-01-02T00:00:00Z",
+                "status": "active",
+                "method": "copy",
+                "scope": "global",
+                "project_path": null,
+                "skill_dir": "/home/user/.agents/skills/find-bugs",
+                "deployment_fingerprint": "a".repeat(64),
+                "claude_link": null,
+                "claude_link_target": null,
+            }
+        })
+    }
+
+    /// Flow: a registry written before #278 removed the trial feature still
+    /// has a populated `trials` bucket on disk (an `Active` trial, not an
+    /// empty map). Expectation: reading and re-writing it keeps that bucket's
+    /// *content* byte-for-byte via the `unknown` catch-all, not merely
+    /// present - the deployment itself was never moved by an active trial,
+    /// so the skill stays installed either way. Failure: the round trip
+    /// drops, reorders, or mutates a field, which would mean the upgrade
+    /// path built during removal is silently rewriting old trial data
+    /// instead of leaving it untouched.
+    #[test]
+    fn a_populated_pre_removal_trials_bucket_survives_the_upgrade_round_trip_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".agents")).unwrap();
+        let trials = pre_removal_trials_bucket_json();
+        std::fs::write(
+            tmp.path().join(".agents/skill-studio.json"),
+            serde_json::to_string(&serde_json::json!({"version": 4, "trials": trials})).unwrap(),
+        )
+        .unwrap();
+
+        let reg = read_fork_registry(tmp.path()).unwrap();
+        write_fork_registry(tmp.path(), &reg).unwrap();
+
+        let reloaded = read_fork_registry(tmp.path()).unwrap();
+        assert_eq!(
+            reloaded.unknown.get("trials"),
+            Some(&trials),
+            "a populated pre-removal trials bucket must round-trip with its content unchanged"
+        );
     }
 
     #[test]
@@ -435,6 +542,99 @@ mod tests {
         std::fs::write(tmp.path().join(".agents/skill-studio.json"), "not json").unwrap();
         let err = read_fork_registry(tmp.path()).unwrap_err();
         assert!(err.contains("malformed"));
+    }
+
+    /// (F1) Flow: a Copy install runs through the core's `ops::install`
+    /// directly against `home`, the way `apps/cli`'s `add` subcommand and
+    /// the MCP server's install tool both will - neither goes through the
+    /// desktop's own `add_skill`. Expectation: the `copies` entry it writes
+    /// deserializes into this file's own `CopyDeploymentRecord` with a
+    /// `deployment_id` in the desktop's `dep:v1/...` shape, so the desktop's
+    /// removal/discovery code (keyed by that field) recognizes a
+    /// core-installed skill without a schema migration.
+    /// Failure: a missing/malformed `deployment_id`, or a `copies` entry
+    /// that doesn't deserialize into `CopyDeploymentRecord` at all - either
+    /// means the core and the desktop have silently drifted onto two
+    /// different `copies` shapes.
+    #[test]
+    fn a_core_copy_install_writes_a_registry_the_desktop_reads_back_or_names_the_missing_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let data_root = home.join(".skill-studio");
+
+        let ports = skill_studio_core::ports::Ports {
+            fs: std::sync::Arc::new(skill_studio_host::RealFs::new()),
+            clock: std::sync::Arc::new(skill_studio_core::testing::FakeClock::at(0)),
+            ids: std::sync::Arc::new(skill_studio_core::testing::FakeIds::default()),
+            leases: std::sync::Arc::new(skill_studio_host::FileLease::new(
+                data_root.join("leases"),
+            )),
+            // `install` records a journal event row before its first write,
+            // which `NoHistory` refuses - use a real sqlite-backed store, the
+            // same as the core's own `ops_install.rs` tests.
+            history: std::sync::Arc::new(skill_studio_host::SqliteHistoryOpener::new(
+                home.join(".history").join("events.sqlite3"),
+            )),
+            sink: std::sync::Arc::new(skill_studio_core::testing::RecordingSink::default()),
+            spawner: None,
+            discovery: None,
+            tools: None,
+            catalog: std::sync::Arc::new(skill_studio_core::harness::HarnessCatalog::builtin()),
+
+            telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+        };
+        let rt = skill_studio_core::ports::Runtime::new(
+            &skill_studio_core::scope::RuntimeScope::fixture(home),
+            ports,
+        )
+        .unwrap();
+
+        let req = skill_studio_core::dto::InstallRequest {
+            skill: skill_studio_core::identity::SkillName("find-bugs".to_string()),
+            method: skill_studio_core::dto::InstallMethod::Copy,
+            scope: skill_studio_core::identity::RootScope::Global,
+            harnesses: Vec::new(),
+            files: vec![skill_studio_core::dto::InstallFile {
+                relative_path: PathBuf::from("SKILL.md"),
+                contents: b"---\nname: find-bugs\ndescription: finds bugs\n---\nBody.\n".to_vec(),
+                mode: None,
+            }],
+            source: None,
+            trust_identity: None,
+            trust_confirmed: false,
+            save_as_preference: false,
+            link_mode: skill_studio_core::dto::InstallLinkMode::Link,
+            destination: skill_studio_core::identity::SkillDestination::Universal,
+        };
+        skill_studio_core::ops::install(&rt, &skill_studio_core::testing::golden::ctx(), &req)
+            .unwrap();
+
+        let reg = read_fork_registry(home).unwrap();
+        assert_eq!(reg.copies.len(), 1, "expected exactly one copies entry");
+        // R1: the map is keyed by the deployment id, not the skill name -
+        // built the same way the core's own `copy_deployment_id` does, via
+        // this crate's own `skill_deployment::deployment_id` builder.
+        let destination = home.join(".agents").join("skills").join("find-bugs");
+        let deployment_id = crate::skills::skill_deployment::deployment_id(
+            "find-bugs",
+            "global",
+            SkillDestination::Universal,
+            "universal",
+            None,
+            &destination,
+        );
+        let record = reg.copies.get(&deployment_id).expect(
+            "the copies map must be keyed by the deployment id the core just wrote a record under",
+        );
+        assert_eq!(record.deployment_id, deployment_id);
+        assert_eq!(record.scope, InstallScope::Global);
+        assert_eq!(record.destination, SkillDestination::Universal);
+        // R2: `content_hash` must be populated, not left empty - empty is
+        // documented as legacy-only, and destructive mutations refuse it.
+        assert!(
+            !record.content_hash.is_empty(),
+            "content_hash must not be empty for a freshly installed copy"
+        );
     }
 
     #[test]
@@ -462,14 +662,218 @@ mod tests {
     }
 
     #[test]
-    fn trial_key_distinguishes_global_and_project_scope() {
-        let global_key = trial_key(TrialScope::Global, "find-bugs");
-        let project_key = trial_key(TrialScope::Project, "find-bugs");
-        assert_eq!(global_key, "global/find-bugs");
-        assert_eq!(project_key, "project/find-bugs");
-        assert_ne!(global_key, project_key);
-        assert_eq!(name_from_trial_key(&global_key), "find-bugs");
-        assert_eq!(name_from_trial_key(&project_key), "find-bugs");
+    fn an_unknown_top_level_key_survives_read_then_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".agents")).unwrap();
+        std::fs::write(
+            tmp.path().join(".agents/skill-studio.json"),
+            r#"{"version":4,"a_future_field":{"nested":true}}"#,
+        )
+        .unwrap();
+
+        let reg = read_fork_registry(tmp.path()).unwrap();
+        assert_eq!(
+            reg.unknown.get("a_future_field"),
+            Some(&serde_json::json!({"nested": true}))
+        );
+        write_fork_registry(tmp.path(), &reg).unwrap();
+
+        let reloaded = read_fork_registry(tmp.path()).unwrap();
+        assert_eq!(
+            reloaded.unknown.get("a_future_field"),
+            Some(&serde_json::json!({"nested": true}))
+        );
+    }
+
+    #[test]
+    fn write_fork_registry_bumps_write_version_by_one_or_names_the_stuck_value() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = ForkRegistry::default();
+        assert_eq!(
+            reg.write_version, 0,
+            "a fresh registry starts at write_version 0"
+        );
+
+        write_fork_registry(tmp.path(), &reg).unwrap();
+        let after_first = read_fork_registry(tmp.path()).unwrap();
+        assert_eq!(
+            after_first.write_version, 1,
+            "write_fork_registry did not bump write_version on its first write"
+        );
+
+        write_fork_registry(tmp.path(), &after_first).unwrap();
+        let after_second = read_fork_registry(tmp.path()).unwrap();
+        assert_eq!(
+            after_second.write_version, 2,
+            "write_fork_registry did not bump write_version on a second write"
+        );
+    }
+
+    #[test]
+    fn projects_round_trips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut reg = ForkRegistry::default();
+        reg.projects.added.push(tmp.path().join("proj"));
+        write_fork_registry(tmp.path(), &reg).unwrap();
+
+        let reloaded = read_fork_registry(tmp.path()).unwrap();
+        assert_eq!(reloaded.projects.added, [tmp.path().join("proj")]);
+    }
+
+    #[test]
+    fn an_empty_projects_list_is_not_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fork_registry(tmp.path(), &ForkRegistry::default()).unwrap();
+
+        let content =
+            std::fs::read_to_string(tmp.path().join(".agents/skill-studio.json")).unwrap();
+        assert!(!content.contains("\"projects\""));
+    }
+
+    #[test]
+    fn discovery_switches_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut reg = ForkRegistry::default();
+        reg.discovery.set("codex", false);
+        write_fork_registry(tmp.path(), &reg).unwrap();
+
+        let content =
+            std::fs::read_to_string(tmp.path().join(".agents/skill-studio.json")).unwrap();
+        assert!(content.contains(r#""discovery": {"#));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content).unwrap()["discovery"],
+            serde_json::json!({ "codex": false })
+        );
+
+        let reloaded = read_fork_registry(tmp.path()).unwrap();
+        assert_eq!(reloaded.discovery, reg.discovery);
+    }
+
+    #[test]
+    fn default_discovery_is_not_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fork_registry(tmp.path(), &ForkRegistry::default()).unwrap();
+
+        let content =
+            std::fs::read_to_string(tmp.path().join(".agents/skill-studio.json")).unwrap();
+        assert!(!content.contains("\"discovery\""));
+    }
+
+    #[test]
+    fn a_registry_with_a_saved_first_run_and_no_telemetry_key_reads_as_off_or_opts_the_user_in() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".agents")).unwrap();
+        std::fs::write(
+            tmp.path().join(".agents/skill-studio.json"),
+            r#"{"version":4,"write_version":0,"harnesses":{"kept":["claude-code"],"search_project_folders":false,"saved_at":"2026-09-28T00:00:00Z"}}"#,
+        )
+        .unwrap();
+
+        let reg = read_fork_registry(tmp.path()).unwrap();
+        assert!(
+            !reg.telemetry_enabled,
+            "an absent key must read as off - only the welcome screen or Settings may turn it on"
+        );
+    }
+
+    #[test]
+    fn a_saved_false_for_telemetry_survives_a_round_trip_or_names_the_dropped_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = ForkRegistry {
+            telemetry_enabled: false,
+            ..ForkRegistry::default()
+        };
+        write_fork_registry(tmp.path(), &reg).unwrap();
+
+        let content =
+            std::fs::read_to_string(tmp.path().join(".agents/skill-studio.json")).unwrap();
+        assert!(
+            content.contains(r#""telemetry_enabled": false"#),
+            "a saved false must be written, not dropped by skip_serializing_if: {content}"
+        );
+
+        let reloaded = read_fork_registry(tmp.path()).unwrap();
+        assert!(
+            !reloaded.telemetry_enabled,
+            "a saved false must still read back as false after the round trip"
+        );
+    }
+
+    /// Flow: an rc build wrote `error_reporting_enabled: true` into
+    /// `~/.agents/skill-studio.json` before this rename. Expectation:
+    /// `migrate_rc_telemetry_key` reads that opt-in as `telemetry_enabled:
+    /// true`, and a subsequent write migrates the key rather than carrying
+    /// the old name forward.
+    #[test]
+    fn an_rc_registry_saved_under_error_reporting_enabled_still_reads_as_telemetry_on() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".agents")).unwrap();
+        std::fs::write(
+            tmp.path().join(".agents/skill-studio.json"),
+            r#"{"version":4,"write_version":0,"error_reporting_enabled":true}"#,
+        )
+        .unwrap();
+
+        let reg = read_fork_registry(tmp.path()).unwrap();
+        assert!(
+            reg.telemetry_enabled,
+            "an rc user's opt-in under the old key must not be lost by the rename"
+        );
+
+        write_fork_registry(tmp.path(), &reg).unwrap();
+        let content =
+            std::fs::read_to_string(tmp.path().join(".agents/skill-studio.json")).unwrap();
+        assert!(
+            content.contains(r#""telemetry_enabled": true"#)
+                && !content.contains("error_reporting_enabled"),
+            "a rewrite must migrate the key, not carry the old name forward"
+        );
+
+        // A later rc build could rewrite the file with both keys present -
+        // the new key it doesn't understand round-trips through `unknown`,
+        // and it writes its own `error_reporting_enabled` alongside it.
+        std::fs::write(
+            tmp.path().join(".agents/skill-studio.json"),
+            r#"{"version":4,"write_version":0,"telemetry_enabled":false,"error_reporting_enabled":true,"trials":{},"later_key":1}"#,
+        )
+        .unwrap();
+
+        let reg = read_fork_registry(tmp.path());
+        assert!(
+            reg.is_ok(),
+            "a file an rc build rewrote after this build must still read, not fail as malformed"
+        );
+        let reg = reg.unwrap();
+        assert!(
+            !reg.telemetry_enabled,
+            "when both keys exist the new key wins; an OR merge would reopen consent from the old key"
+        );
+        assert_eq!(
+            reg.unknown.keys().collect::<Vec<_>>(),
+            ["trials", "later_key"],
+            "dropping the old key must not reorder the other unknown keys"
+        );
+
+        write_fork_registry(tmp.path(), &reg).unwrap();
+        let content =
+            std::fs::read_to_string(tmp.path().join(".agents/skill-studio.json")).unwrap();
+        assert!(
+            !content.contains("error_reporting_enabled"),
+            "a rewrite must drop the old key even when both were present: {content}"
+        );
+
+        // An rc opt-out under the old key alone must stay off, not be
+        // replaced by a hard-coded true.
+        std::fs::write(
+            tmp.path().join(".agents/skill-studio.json"),
+            r#"{"version":4,"write_version":0,"error_reporting_enabled":false}"#,
+        )
+        .unwrap();
+        let reg = read_fork_registry(tmp.path()).unwrap();
+        assert!(
+            !reg.telemetry_enabled,
+            "an rc user's opt-out under the old key must read as off"
+        );
     }
 
     #[test]
@@ -478,7 +882,7 @@ mod tests {
         write_fork_registry(tmp.path(), &ForkRegistry::default()).unwrap();
         let leftover = std::fs::read_dir(tmp.path().join(".agents"))
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
             .count();
         assert_eq!(leftover, 0);

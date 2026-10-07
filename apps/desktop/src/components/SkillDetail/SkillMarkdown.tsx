@@ -22,7 +22,7 @@ const PROSE = "max-w-[72ch]";
 
 export function SkillMarkdown({ content, className }: SkillMarkdownProps) {
   return (
-    <div className={`text-body leading-[1.6] text-text-secondary ${className ?? ""}`}>
+    <div className={`select-text text-body leading-[1.6] text-text-secondary ${className ?? ""}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -71,11 +71,24 @@ export function SkillMarkdown({ content, className }: SkillMarkdownProps) {
               {children}
             </blockquote>
           ),
-          a: ({ children, href }) => (
-            <a href={href} className="text-accent">
-              {children}
-            </a>
-          ),
+          a: ({ children, href }) => {
+            // The Rust new-window handler sends web links to the browser. Any
+            // other href (relative, `#anchor`, `mailto:`) would navigate the
+            // app's own window and could strand it on a blank page, so those
+            // render as plain text with the target in a tooltip.
+            if (!href?.startsWith("http://") && !href?.startsWith("https://")) {
+              return (
+                <span className="text-accent" title={href}>
+                  {children}
+                </span>
+              );
+            }
+            return (
+              <a href={href} className="text-accent" target="_blank" rel="noreferrer noopener">
+                {children}
+              </a>
+            );
+          },
           code: ({ children, className: codeClassName }) => (
             <code
               className={`rounded-[4px] bg-bg-tertiary px-1 py-px font-mono text-small ${codeClassName ?? ""}`}

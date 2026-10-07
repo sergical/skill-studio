@@ -18,7 +18,9 @@ interface InstallControlsProps {
   skill: SkillWithStatus;
   resolvedTopSource: string | null;
   onInstallStart: (skillName: string) => void;
+  onInstallPaused: () => void;
   onInstallComplete: (result: SkillInstallCompletion) => void;
+  onUpdateComplete: () => void;
   onRemoveComplete: () => void;
 }
 
@@ -27,7 +29,9 @@ export function InstallControls({
   skill,
   resolvedTopSource,
   onInstallStart,
+  onInstallPaused,
   onInstallComplete,
+  onUpdateComplete,
   onRemoveComplete,
 }: InstallControlsProps) {
   if (!skill.is_installed) {
@@ -36,6 +40,7 @@ export function InstallControls({
         skill={skill}
         resolvedTopSource={resolvedTopSource}
         onInstallStart={onInstallStart}
+        onInstallPaused={onInstallPaused}
         onInstallComplete={onInstallComplete}
       />
     );
@@ -45,6 +50,7 @@ export function InstallControls({
     <InstalledSkillLifecycleActions
       skill={skill}
       onInstallComplete={onInstallComplete}
+      onUpdateComplete={onUpdateComplete}
       onRemoveComplete={onRemoveComplete}
     />
   );
