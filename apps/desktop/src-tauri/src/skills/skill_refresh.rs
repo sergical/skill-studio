@@ -274,6 +274,22 @@ pub fn request_skill_rescan(state: tauri::State<SkillRefreshState>, app: tauri::
     });
 }
 
+/// Rebuild the snapshot now and return it. A caller that needs the scan that
+/// follows its own write uses this: a revision bump alone is not proof of a
+/// rescan, because patches (`patch_snapshot`, name reconciliation, invocation
+/// rebuilds) bump it without reading skill folders. `rebuild_lock` makes the
+/// scan start after the caller's write; other listeners get the snapshot
+/// through `SNAPSHOT_EVENT` as usual.
+#[tauri::command]
+pub async fn rescan_skills_now(app: tauri::AppHandle) -> Result<SkillSnapshot, String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "rescan_skills_now", move || {
+        let state = app.state::<SkillRefreshState>();
+        rebuild_snapshot_now(&app, &state)
+    })
+    .await
+}
+
 /// Mark the next rebuild as full, from a caller (`skill_update_check`) that
 /// only has an `AppHandle`, not a `tauri::State`. A no-op before
 /// `SkillRefreshState` is managed (there's nothing to rebuild yet).

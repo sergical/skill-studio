@@ -12,18 +12,20 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import {
   forkSkill,
   openSkillPath,
-  parkSkill,
+  parkCheck,
+  parkSkills,
   pullForkUpstream,
   removeSkill,
+  rescanSkillsNow,
   unforkSkill,
-  unparkSkill,
+  unparkSkills,
   updatePlugin,
 } from "../../lib/skill-api";
 import {
+  isLiveCopy,
   lifecycleTargetForDeployment,
-  lifecycleTargetForPark,
   lifecycleTargetForSkill,
-  skillCanPark,
+  parkEveryAgentPlan,
   skillRemovalBlockedReason,
   skillRemovalChoices,
   pullForkAndUpdatePlugins,
@@ -33,9 +35,18 @@ import {
   updateSkillPluginsWithToasts,
 } from "../../lib/skill-lifecycle-target";
 import type { PluginInstallUpdater, SkillRemovalChoice } from "../../lib/skill-lifecycle-target";
-import type { InstalledSkill, Toast } from "@skill-studio/lib";
+import { deploymentLabelFromAgentId, homeRelativePath } from "@skill-studio/lib";
+import type {
+  Deployment,
+  InstalledSkill,
+  LifecycleTarget,
+  ParkCheck,
+  SkillSnapshot,
+  Toast,
+} from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
+import { gitWarningText } from "./skill-location-helpers";
 import type { UpdateFinish } from "../../hooks/useGuardedSkillUpdate";
 
 /**
@@ -104,6 +115,188 @@ export function removeSuccessToast(skillName: string): Omit<Toast, "id"> {
   return { type: "success", title: "Removed", message: skillName };
 }
 
+type GitCheck = (target: LifecycleTarget) => Promise<Pick<ParkCheck, "git_tracked">>;
+
+interface ParkForEveryAgentApi {
+  parkSkills: typeof parkSkills;
+  unparkSkills: typeof unparkSkills;
+  parkCheck: GitCheck;
+  ask: (
+    message: string,
+    options: { title: string; kind: "warning"; okLabel: string },
+  ) => Promise<boolean>;
+  /** The full rescan that runs after the write, or `null` when it fails or runs out of time. */
+  rescan: () => Promise<RescanResult | null>;
+}
+
+type RescanResult = Pick<SkillSnapshot, "skills" | "scan_partial" | "unread_roots">;
+
+const RESCAN_TIMEOUT_MS = 10_000;
+
+async function rescanAfterWrite(): Promise<RescanResult | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), RESCAN_TIMEOUT_MS);
+  });
+  const rescan = rescanSkillsNow().then(
+    (snapshot): RescanResult | null => snapshot,
+    () => null,
+  );
+  try {
+    return await Promise.race([rescan, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const PARK_FOR_EVERY_AGENT_API: ParkForEveryAgentApi = {
+  parkSkills,
+  unparkSkills,
+  parkCheck,
+  ask,
+  rescan: rescanAfterWrite,
+};
+
+/** The confirm text for parking project folders, with the git warning for each tracked one. */
+async function projectParkMessage(folders: Deployment[], check: GitCheck): Promise<string> {
+  const lines = await Promise.all(
+    folders.map(async (folder) => {
+      const gitTracked = await check({ deployment_id: folder.id }).then(
+        (answer) => answer.git_tracked,
+        () => null,
+      );
+      const warning = gitWarningText(gitTracked, "parking");
+      return warning
+        ? `${homeRelativePath(folder.path)}\n${warning}`
+        : homeRelativePath(folder.path);
+    }),
+  );
+  return `This moves these project folders into ~/.agents/skills-parked:\n\n${lines.join("\n\n")}`;
+}
+
+function stillOnMessage(stillOn: Deployment[]): string | null {
+  if (stillOn.length === 0) return null;
+  const paths = stillOn.map((deployment) => homeRelativePath(deployment.path)).join(", ");
+  const pluginHint = stillOn.some((deployment) => deployment.plugin)
+    ? " Turn a plugin's copy off with /plugin in its agent."
+    : "";
+  return `Still on: ${paths}.${pluginHint}`;
+}
+
+const UNCONFIRMED = "Skill Studio couldn't rescan to confirm which agents still load it.";
+
+/**
+ * The agents that still skip a restored copy: its own agent when `disabled_by`
+ * is set, and for a shared copy each reader whose own setting hides it.
+ */
+function agentsStillOff(deployment: Deployment): string[] {
+  const own = deployment.disabled_by === null ? [] : [deployment.agent];
+  const readers = (deployment.disabled_readers ?? []).map(deploymentLabelFromAgentId);
+  return [...own, ...readers];
+}
+
+/** Lists the copies an agent still has off in its own settings after Turn on. */
+function stillOffMessage(fresh: Deployment[]): string | null {
+  const off = fresh.flatMap((deployment) => {
+    const agents = deployment.scope === "parked" ? [] : agentsStillOff(deployment);
+    return agents.length === 0
+      ? []
+      : [`${homeRelativePath(deployment.path)} (${agents.join(", ")})`];
+  });
+  if (off.length === 0) return null;
+  return `Still off in agent settings: ${off.join(", ")}. The skill page shows where to turn it on.`;
+}
+
+function isUnder(path: string, root: string): boolean {
+  return path === root || path.startsWith(root.endsWith("/") ? root : `${root}/`);
+}
+
+/**
+ * The skill's copies from a rescan that read every place they live, or `null`
+ * when the scan was cut short or could not read one of them: a partial scan
+ * carries old rows forward and can leave the skill out.
+ */
+function completeRescanOf(
+  skill: InstalledSkill,
+  snapshot: RescanResult | null,
+): Deployment[] | null {
+  if (!snapshot || snapshot.scan_partial) return null;
+  const fresh = snapshot.skills.find((candidate) => candidate.name === skill.name)?.deployments;
+  if (!fresh) return null;
+  const paths = [...skill.deployments, ...fresh].map((deployment) => deployment.path);
+  const unread = snapshot.unread_roots.some((root) => paths.some((path) => isUnder(path, root)));
+  return unread ? null : fresh;
+}
+
+/**
+ * Reads the skill back from a rescan after the write and names anything that
+ * did not change: copies still on after Park, copies still off after Turn on.
+ * Without a complete rescan the result is unknown, so it says so instead of
+ * reporting success. Only plugin copies are certain without one: Park never moves them.
+ */
+async function leftoverCheck(
+  skill: InstalledSkill,
+  rescan: ParkForEveryAgentApi["rescan"],
+): Promise<{ message: string | null; confirmed: boolean }> {
+  const fresh = completeRescanOf(skill, await rescan());
+  if (!fresh) {
+    const plugins = skill.parked
+      ? null
+      : stillOnMessage(
+          skill.deployments.filter((deployment) => deployment.plugin && isLiveCopy(deployment)),
+        );
+    return { message: [plugins, UNCONFIRMED].filter(Boolean).join(" "), confirmed: false };
+  }
+  const message = skill.parked ? stillOffMessage(fresh) : stillOnMessage(fresh.filter(isLiveCopy));
+  return { message, confirmed: true };
+}
+
+/**
+ * Park every live folder of `skill`, or turn every parked one back on, in one
+ * batch. Project folders wait for a confirm that carries the git warning.
+ * Returns the toast to show, or `null` when the confirm was cancelled. The
+ * toast is a warning when the core refused a folder or a copy stays on.
+ */
+export async function parkForEveryAgent(
+  skill: InstalledSkill,
+  api: ParkForEveryAgentApi = PARK_FOR_EVERY_AGENT_API,
+): Promise<Omit<Toast, "id"> | null> {
+  const plan = parkEveryAgentPlan(skill);
+  if (!skill.parked && plan.projectFolders.length > 0) {
+    const confirmed = await api.ask(await projectParkMessage(plan.projectFolders, api.parkCheck), {
+      title: `Park ${skill.name} for every agent?`,
+      kind: "warning",
+      okLabel: "Park",
+    });
+    if (!confirmed) return null;
+  }
+  const results = skill.parked
+    ? await api.unparkSkills(plan.targets)
+    : await api.parkSkills(plan.targets);
+  const errors = results.flatMap((result) => (result.error ? [result.error] : []));
+  const done = skill.parked ? "Turned on" : "Parked";
+  const leftover = await leftoverCheck(skill, api.rescan);
+  if (errors.length > 0) {
+    const total = plan.targets.length;
+    return {
+      type: "warning",
+      title: `${done} ${total - errors.length} of ${total} copies of ${skill.name}`,
+      message: [errors[0], leftover.message].filter(Boolean).join(" "),
+    };
+  }
+  if (leftover.message) {
+    const still = skill.parked ? "still off" : "still on";
+    return {
+      type: "warning",
+      title: leftover.confirmed
+        ? `${done} ${skill.name}, but a copy is ${still}`
+        : `${done} ${skill.name}, not confirmed`,
+      message: leftover.message,
+    };
+  }
+  return { type: "success", title: `${done} ${skill.name}` };
+}
+
 /**
  * Runs `fn` with `setBusy` bracketing it, and reports a thrown error as an
  * error toast titled `errorTitle`. Every action below is this same shape.
@@ -144,7 +337,7 @@ export interface SkillPageActions {
   copyPath: () => void;
   /** The one primary action for the header - "Pull latest" or "Update" - `null` when there is none. */
   primaryAction: SkillPageAction | null;
-  /** Park or Unpark - `null` when the skill has no Global Universal folder to move. */
+  /** Park or turn on for every agent (the ⋯ menu; Locations switches act per agent) - `null` when the skill has no Global Universal folder to move. */
   parkAction: SkillPageAction | null;
   /** Fork (when forkable) or Un-fork (when already forked) - `null` when neither applies. */
   forkAction: SkillPageAction | null;
@@ -235,15 +428,10 @@ export function useSkillPageActions(
     runAction(
       addToast,
       setIsParking,
-      skill.parked ? "Couldn't unpark skill" : "Couldn't park skill",
+      skill.parked ? "Couldn't turn skill on" : "Couldn't park skill",
       async () => {
-        if (skill.parked) {
-          await unparkSkill(lifecycleTargetForPark(skill));
-          addToast({ type: "success", title: `Unparked ${skill.name}` });
-        } else {
-          await parkSkill(lifecycleTargetForPark(skill));
-          addToast({ type: "success", title: `Parked ${skill.name}` });
-        }
+        const toast = await parkForEveryAgent(skill);
+        if (toast) addToast(toast);
       },
     );
 
@@ -338,9 +526,14 @@ export function useSkillPageActions(
     openEditor,
     copyPath,
     primaryAction,
-    parkAction: skillCanPark(skill)
-      ? { label: skill.parked ? "Unpark" : "Park", run: togglePark, busy: isParking }
-      : null,
+    parkAction:
+      parkEveryAgentPlan(skill).targets.length > 0
+        ? {
+            label: skill.parked ? "Turn on for every agent" : "Park for every agent",
+            run: togglePark,
+            busy: isParking,
+          }
+        : null,
     forkAction,
     removeActions,
     removeBlockedReason: skillRemovalBlockedReason(skill),
