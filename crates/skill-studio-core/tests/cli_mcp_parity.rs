@@ -58,6 +58,12 @@ const EXCLUSIONS: &[Exclusion] = &[
         reason: "the confirmed fix for a parked copy left behind, offered only in the desktop's \
                   Locations card and Needs attention list; the CLI and MCP have no such issue",
     },
+    Exclusion {
+        name: "unlist_parked_dotagents",
+        reason: "the confirmed fix for a parked copy dotagents still lists, offered only in the \
+                  desktop's Locations card; the CLI and MCP park through `park`, which already \
+                  unlists the skill",
+    },
 ];
 
 /// An `ops` function whose surface spells it differently: the op's name,
