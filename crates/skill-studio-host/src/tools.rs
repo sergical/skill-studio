@@ -585,25 +585,18 @@ mod tests {
         let tools = tmp.path().join("tools");
         fs::create_dir_all(&tools).unwrap();
         let mise = tools.join("mise");
-        fs::write(
+        crate::test_scripts::write_fake_executable(
             &mise,
-            format!(
-                "#!/bin/sh\necho 'export PATH=\"{}:$PATH\"'\n",
-                mise_node.display()
-            ),
-        )
-        .unwrap();
-        fs::set_permissions(&mise, fs::Permissions::from_mode(0o755)).unwrap();
+            &format!("echo 'export PATH=\"{}:$PATH\"'", mise_node.display()),
+        );
         let shell = tmp.path().join("zsh");
-        fs::write(
+        crate::test_scripts::write_fake_executable(
             &shell,
-            format!(
-                "#!/bin/sh\nPATH=\"{}:/usr/bin:/bin\"\nexport PATH\nexec /bin/sh -c \"$2\"\n",
+            &format!(
+                "PATH=\"{}:/usr/bin:/bin\"\nexport PATH\nexec /bin/sh -c \"$2\"",
                 tools.display()
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+        );
 
         let dirs = probe_login_shell_path(
             shell.to_str().unwrap(),
@@ -637,11 +630,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_shell_that_exits_without_printing_path_falls_back_or_returns_an_empty_path() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let shell = dir.path().join("silent-shell");
-        fs::write(&shell, "#!/bin/sh\nexit 0\n").unwrap();
-        fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_scripts::write_fake_executable(&shell, "exit 0");
 
         let dirs = probe_login_shell_path(
             shell.to_str().unwrap(),

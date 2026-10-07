@@ -18,7 +18,11 @@ import {
   skillsWithLocalEdits,
 } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
-import { runHomeUpdateAll } from "../../hooks/skillBatchUpdates";
+import {
+  startHomeUpdateAll,
+  stopHomeUpdateAll,
+  useActiveUpdateAll,
+} from "../../hooks/skillBatchUpdates";
 import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
 import { UpdateOverwritesEditsDialog } from "../SkillDetail/UpdateOverwritesEditsDialog";
 import { GroupHead } from "../SkillList/GroupHead";
@@ -37,6 +41,7 @@ import {
   rowAt,
   skillKey,
   updateAllFailureMessage,
+  updateAllTitle,
 } from "./home-inbox-data";
 import { HomeLeftBehindActions } from "./HomeLeftBehindActions";
 import { rowClickOpensSkill } from "./home-row-click";
@@ -540,37 +545,39 @@ function UpdatesGroup({
   /** This group's offset into the page's continuous `aria-rowindex` sequence. */
   start: number;
 }) {
-  const [progress, setProgress] = useState<{
-    done: number;
-    total: number;
-    current: string | null;
-  } | null>(null);
   const addToast = useAppStore((state) => state.addToast);
   const [editedSkills, setEditedSkills] = useState<InstalledSkill[]>([]);
   const [isCheckingEdits, setIsCheckingEdits] = useState(false);
-  const isUpdatingAll = progress !== null || isCheckingEdits;
+  const activeBatch = useActiveUpdateAll();
+  const progress = activeBatch?.progress ?? null;
+  const isStopping = activeBatch?.isStopping ?? false;
+  const isUpdatingAll = activeBatch !== null || isCheckingEdits;
 
   const runUpdateAll = async (forkNames?: ReadonlySet<string>) => {
-    setProgress({ done: 0, total: 0, current: null });
     // `updateAllOutdatedSkills` catches every `pullFork`/`updateAllOwners`
-    // rejection itself and folds it into `failures`, so this await never
-    // throws - a plain (React Compiler-friendly) sequence needs no
-    // try/finally to still always clear the loading flag.
-    const tally = await runHomeUpdateAll(
-      updates,
-      (done, total, current) => setProgress({ done, total, current }),
-      forkNames,
-    );
-    const { skillsAttempted, skillsSucceeded, failures } = tally;
+    // rejection itself and folds it into `failures`, so this never throws.
+    const tally = await startHomeUpdateAll(updates, forkNames);
+    if (!tally) return;
+    const { failures } = tally;
     const conflictNote = conflictedSkillsNote(tally.conflicted ?? []);
     addToast({
-      type: failures > 0 || conflictNote ? "warning" : "success",
-      title: `Updated ${skillsSucceeded} of ${skillsAttempted} skill${skillsAttempted === 1 ? "" : "s"}`,
+      type: failures > 0 || conflictNote || tally.stopped ? "warning" : "success",
+      title: updateAllTitle(tally),
       message:
         [updateAllFailureMessage(tally), conflictNote].filter(Boolean).join(". ") || undefined,
     });
-    // react-doctor-disable-next-line react-doctor/no-loading-flag-reset-outside-finally -- the React Compiler rejects try/finally here (react-hooks-js/todo); `updateAllOutdatedSkills` never rejects, so this always runs
-    setProgress(null);
+  };
+
+  const handleStop = async () => {
+    try {
+      await stopHomeUpdateAll();
+    } catch (error) {
+      addToast({
+        type: "error",
+        title: "Could not stop Update all",
+        message: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
   };
 
   const handleUpdateAll = async () => {
@@ -605,6 +612,7 @@ function UpdatesGroup({
                     handleUpdateAll();
                   }}
                   disabled={isUpdatingAll}
+                  title={activeBatch ? "Update all is already running." : undefined}
                 >
                   {progress
                     ? progress.total > 0
@@ -629,6 +637,14 @@ function UpdatesGroup({
                 Updating {progress.current ?? "skills"}
                 {progress.total > 0 && ` · ${progress.done} of ${progress.total}`}
               </p>
+              <Button
+                variant="link"
+                className="h-auto self-start p-0 text-small"
+                onClick={handleStop}
+                disabled={isStopping}
+              >
+                {isStopping ? "Stopping…" : "Cancel"}
+              </Button>
             </div>
           )}
         </div>

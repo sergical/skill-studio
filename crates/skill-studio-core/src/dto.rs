@@ -1131,6 +1131,10 @@ pub struct UpdateAllOutcome {
     /// `skill.0` -> error message, for every item whose `outcome` is `None`.
     #[serde(default)]
     pub errors: std::collections::BTreeMap<String, String>,
+    /// Skills never started because the batch's cancel token was set; they
+    /// have no entry in `items` or `errors`.
+    #[serde(default)]
+    pub not_run: Vec<SkillName>,
 }
 
 /// Request wrapper for `ops::update_all` - the op itself takes a plain

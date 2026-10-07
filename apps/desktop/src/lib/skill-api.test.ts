@@ -110,6 +110,7 @@ const EXPECTED_WRAPPER_COMMANDS = {
   },
   removeSkill: { kind: "command", command: "remove_skill", registeredInLibRs: true },
   updateSkill: { kind: "command", command: "update_skill", registeredInLibRs: true },
+  cancelUpdateAll: { kind: "command", command: "cancel_update_all", registeredInLibRs: true },
   updateAllSkillsWithProgress: { kind: "event", event: "skills://update-all-progress" },
   readInstalledSkillMd: {
     kind: "command",
@@ -254,6 +255,11 @@ const EXPECTED_WRAPPER_COMMANDS = {
   requestSkillRescan: {
     kind: "command",
     command: "request_skill_rescan",
+    registeredInLibRs: true,
+  },
+  rescanSkillsNow: {
+    kind: "command",
+    command: "rescan_skills_now",
     registeredInLibRs: true,
   },
   onSkillSnapshot: { kind: "event", event: "skills://snapshot" },

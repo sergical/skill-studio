@@ -3,11 +3,16 @@
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
-import type { InstalledSkill, PullResult } from "@skill-studio/lib";
+import type { BulkTargetResult, Deployment, InstalledSkill, PullResult } from "@skill-studio/lib";
 
 import { pullUpstreamToast } from "../../lib/skill-lifecycle-target";
 import type { UpdateFinish } from "../../hooks/useGuardedSkillUpdate";
-import { headerUpdateLabel, removeSuccessToast, runHeaderUpdate } from "./skill-page-actions";
+import {
+  headerUpdateLabel,
+  parkForEveryAgent,
+  removeSuccessToast,
+  runHeaderUpdate,
+} from "./skill-page-actions";
 
 function fixtureResult(overrides: Partial<PullResult> = {}): PullResult {
   return {
@@ -201,5 +206,347 @@ describe("runHeaderUpdate", () => {
       },
     );
     expect(plugins).toEqual(["codex@official"]);
+  });
+});
+
+describe("parkForEveryAgent", () => {
+  const folder = (id: string, overrides: Partial<Deployment> = {}): Deployment => ({
+    id,
+    destination: "universal",
+    owner_kind: "skills-sh",
+    mutability: "mutable",
+    backing: { kind: "canonical" },
+    agent: "Universal",
+    scope: "global",
+    path: `/home/u/.agents/skills/${id}`,
+    is_symlink: false,
+    symlink_is_broken: false,
+    content_hash: "x",
+    disabled: false,
+    codex_implicit_invocation: null,
+    disabled_by: null,
+    invocation: "both",
+    spec_violations: [],
+    shared_via_whole_dir_link: false,
+    ...overrides,
+  });
+  const skill = (parked: boolean, deployments: Deployment[]) =>
+    // SAFETY: parkForEveryAgent reads only name, parked and deployments.
+    ({ name: "tidy", parked, source_kind: "skills-sh", deployments }) as InstalledSkill;
+  const fakeApi = (
+    errors: (string | null)[] = [],
+    {
+      confirm = true,
+      gitTracked = false,
+      rescanned = [],
+      scanPartial = false,
+      unreadRoots = [],
+    }: {
+      confirm?: boolean;
+      gitTracked?: boolean | null;
+      /**
+       * The skill's copies in the snapshot after the write; `"missing"` when
+       * the scan leaves the skill out, `null` when no snapshot lands.
+       */
+      rescanned?: Deployment[] | "missing" | null;
+      scanPartial?: boolean;
+      unreadRoots?: string[];
+    } = {},
+  ) => {
+    const calls: { kind: "park" | "unpark"; ids: string[] }[] = [];
+    const prompts: string[] = [];
+    const respond =
+      (kind: "park" | "unpark") =>
+      async (targets: { deployment_id?: string | null }[]): Promise<BulkTargetResult[]> => {
+        calls.push({ kind, ids: targets.map((target) => target.deployment_id ?? "") });
+        return targets.map((_, i) => ({ error: errors[i] ?? null }));
+      };
+    const api = {
+      parkSkills: respond("park"),
+      unparkSkills: respond("unpark"),
+      parkCheck: async () => ({ git_tracked: gitTracked, project: "/home/u/web" }),
+      ask: async (message: string) => {
+        prompts.push(message);
+        return confirm;
+      },
+      rescan: async () =>
+        rescanned
+          ? {
+              skills: rescanned === "missing" ? [] : [skill(false, rescanned)],
+              scan_partial: scanPartial,
+              unread_roots: unreadRoots,
+            }
+          : null,
+    };
+    return { calls, prompts, api };
+  };
+
+  it("park_for_every_agent_parks_the_separate_agent_copy_too_not_only_the_shared_folder", async () => {
+    const shared = folder("shared");
+    const codexCopy = folder("codex-copy", {
+      destination: "per-harness",
+      agent: "Codex",
+      backing: { kind: "independent" },
+      path: "/home/u/.codex/skills/tidy",
+    });
+    const claudeLink = folder("claude-link", {
+      destination: "per-harness",
+      agent: "Claude Code",
+      backing: { kind: "linked-to", deployment_id: "shared" },
+      is_symlink: true,
+      path: "/home/u/.claude/skills/tidy",
+    });
+    const { calls, api } = fakeApi();
+
+    const toast = await parkForEveryAgent(skill(false, [shared, codexCopy, claudeLink]), api);
+
+    expect(calls).toEqual([{ kind: "park", ids: ["shared", "codex-copy"] }]);
+    expect(toast).toEqual({ type: "success", title: "Parked tidy" });
+  });
+
+  it("turn_on_for_every_agent_unparks_every_parked_copy_not_only_the_universal_one", async () => {
+    const parkedShared = folder("parked-shared", {
+      scope: "parked",
+      parked_origin: { kind: "universal", scope: "global" },
+    });
+    const parkedCodex = folder("parked-codex", {
+      scope: "parked",
+      parked_origin: { kind: "codex", scope: "global" },
+    });
+    const { calls, api } = fakeApi();
+
+    const toast = await parkForEveryAgent(skill(true, [parkedShared, parkedCodex]), api);
+
+    expect(calls).toEqual([{ kind: "unpark", ids: ["parked-shared", "parked-codex"] }]);
+    expect(toast?.title).toBe("Turned on tidy");
+  });
+
+  it("park_for_every_agent_warns_with_the_first_refusal_when_one_copy_stays_live", async () => {
+    const { api } = fakeApi([null, "the folder changed on disk"]);
+
+    const toast = await parkForEveryAgent(
+      skill(false, [
+        folder("shared"),
+        folder("codex-copy", { destination: "per-harness", backing: { kind: "independent" } }),
+      ]),
+      api,
+    );
+
+    expect(toast).toEqual({
+      type: "warning",
+      title: "Parked 1 of 2 copies of tidy",
+      message: "the folder changed on disk",
+    });
+  });
+
+  it("park_for_every_agent_warns_that_a_plugin_copy_stays_on_instead_of_reporting_success", async () => {
+    const pluginCopy = folder("plugin-copy", {
+      destination: "per-harness",
+      owner_kind: "plugin",
+      backing: { kind: "independent" },
+      path: "/home/u/.claude/plugins/cache/official/tidy/skills/tidy",
+      plugin: {
+        name: "tidy",
+        version: "1.0.0",
+        harness: "claude",
+        marketplace: "official",
+        id: "tidy@official",
+      },
+    });
+    const before = skill(false, [folder("shared"), pluginCopy]);
+    const rescanned = fakeApi([], { rescanned: [pluginCopy] });
+    const noSnapshot = fakeApi([], { rescanned: null });
+
+    const toast = await parkForEveryAgent(before, rescanned.api);
+    const fallback = await parkForEveryAgent(before, noSnapshot.api);
+
+    expect(rescanned.calls).toEqual([{ kind: "park", ids: ["shared"] }]);
+    for (const result of [toast, fallback]) {
+      expect(result?.type).toBe("warning");
+      expect(result?.message).toContain(".claude/plugins/cache/official/tidy/skills/tidy");
+      expect(result?.message).toContain("/plugin");
+    }
+  });
+
+  it("park_for_every_agent_warns_it_could_not_confirm_when_no_rescan_lands_instead_of_reporting_success", async () => {
+    // ~/.codex/skills -> ~/src: Codex keeps loading the checkout, and without a rescan nothing shows it.
+    const codexAlias = folder("codex-alias", {
+      backing: { kind: "linked-to", deployment_id: "dev-link" },
+      shared_via_whole_dir_link: true,
+      path: "/home/u/.codex/skills/tidy",
+      resolved_path: "/home/u/src/tidy",
+    });
+    const { calls, api } = fakeApi([], { rescanned: null });
+
+    const toast = await parkForEveryAgent(skill(false, [devLink, codexAlias]), api);
+
+    expect(calls).toEqual([{ kind: "park", ids: ["dev-link"] }]);
+    expect(toast).toEqual({
+      type: "warning",
+      title: "Parked tidy, not confirmed",
+      message: "Skill Studio couldn't rescan to confirm which agents still load it.",
+    });
+  });
+
+  it("turn_on_for_every_agent_names_a_copy_an_agent_still_has_off_in_its_own_settings", async () => {
+    const parkedCodex = folder("parked-codex", {
+      scope: "parked",
+      agent: "Codex",
+      parked_origin: { kind: "codex", scope: "global" },
+    });
+    const restoredButOff = folder("codex-copy", {
+      destination: "per-harness",
+      agent: "Codex",
+      backing: { kind: "independent" },
+      path: "/home/u/.codex/skills/tidy",
+      disabled_by: "codex-config",
+    });
+    const { calls, api } = fakeApi([], { rescanned: [restoredButOff] });
+
+    const toast = await parkForEveryAgent(skill(true, [parkedCodex]), api);
+
+    expect(calls).toEqual([{ kind: "unpark", ids: ["parked-codex"] }]);
+    expect(toast).toEqual({
+      type: "warning",
+      title: "Turned on tidy, but a copy is still off",
+      message:
+        "Still off in agent settings: ~/.codex/skills/tidy (Codex). The skill page shows where to turn it on.",
+    });
+  });
+
+  it("turn_on_for_every_agent_names_the_agents_whose_own_setting_still_hides_the_restored_shared_copy", async () => {
+    // Codex and OpenCode read ~/.agents/skills; their own deny lists the shared copy under disabled_readers.
+    const parkedShared = folder("parked-shared", {
+      scope: "parked",
+      parked_origin: { kind: "universal", scope: "global" },
+    });
+    const restoredShared = folder("tidy", { disabled_readers: ["codex", "open-code"] });
+    const { api } = fakeApi([], { rescanned: [restoredShared] });
+
+    const toast = await parkForEveryAgent(skill(true, [parkedShared]), api);
+
+    expect(toast).toEqual({
+      type: "warning",
+      title: "Turned on tidy, but a copy is still off",
+      message:
+        "Still off in agent settings: ~/.agents/skills/tidy (Codex, OpenCode). The skill page shows where to turn it on.",
+    });
+  });
+
+  it("park_and_turn_on_report_not_confirmed_when_the_rescan_is_incomplete_instead_of_reading_stale_rows_as_success", async () => {
+    const parkedShared = folder("parked-shared", {
+      scope: "parked",
+      path: "/home/u/.agents/skills-parked/tidy",
+      parked_origin: { kind: "universal", scope: "global" },
+    });
+    const claudeCopy = folder("claude-copy", {
+      destination: "per-harness",
+      agent: "Claude Code",
+      path: "/home/u/.claude/skills/tidy",
+    });
+    const cases = [
+      // The restored root went unread, so the scan left the skill out.
+      { parked: true, before: [parkedShared], rescan: { rescanned: "missing" as const } },
+      // Budget ran out: rows carried forward from the last scan still look parked.
+      {
+        parked: true,
+        before: [parkedShared],
+        rescan: { rescanned: [parkedShared], scanPartial: true },
+      },
+      // The Claude root went unread, so its copy is missing from the fresh rows.
+      {
+        parked: false,
+        before: [claudeCopy],
+        rescan: { rescanned: [], unreadRoots: ["/home/u/.claude/skills"] },
+      },
+    ];
+
+    for (const { parked, before, rescan } of cases) {
+      const toast = await parkForEveryAgent(skill(parked, before), fakeApi([], rescan).api);
+
+      expect(toast).toEqual({
+        type: "warning",
+        title: parked ? "Turned on tidy, not confirmed" : "Parked tidy, not confirmed",
+        message: "Skill Studio couldn't rescan to confirm which agents still load it.",
+      });
+    }
+  });
+
+  const devLink = folder("dev-link", {
+    is_symlink: true,
+    symlink_target: "/home/u/src/tidy",
+    resolved_path: "/home/u/src/tidy",
+  });
+
+  it("park_for_every_agent_moves_a_shared_folder_that_is_a_link_to_a_dev_checkout", async () => {
+    const claudeLink = folder("claude-link", {
+      backing: { kind: "linked-to", deployment_id: "dev-link" },
+      is_symlink: true,
+      symlink_target: "/home/u/.agents/skills/dev-link",
+      path: "/home/u/.claude/skills/tidy",
+      resolved_path: "/home/u/src/tidy",
+    });
+    const { calls, api } = fakeApi();
+
+    const toast = await parkForEveryAgent(skill(false, [devLink, claudeLink]), api);
+
+    expect(calls).toEqual([{ kind: "park", ids: ["dev-link"] }]);
+    expect(toast).toEqual({ type: "success", title: "Parked tidy" });
+  });
+
+  it("park_for_every_agent_names_the_copies_the_rescan_still_finds_live", async () => {
+    // ~/.codex/skills -> ~/src: parking moves only the shared link, so Codex still loads the checkout.
+    const codexAlias = folder("codex-alias", {
+      backing: { kind: "linked-to", deployment_id: "dev-link" },
+      shared_via_whole_dir_link: true,
+      path: "/home/u/.codex/skills/tidy",
+      resolved_path: "/home/u/src/tidy",
+    });
+    const parkedLink = folder("parked-link", { scope: "parked" });
+    const movedAside = folder("moved-aside", {
+      path: "/home/u/.claude/skills/.skill-studio-disabled/tidy",
+      disabled_by: "studio-moved",
+    });
+    const { calls, api } = fakeApi([], { rescanned: [parkedLink, codexAlias, movedAside] });
+
+    const toast = await parkForEveryAgent(skill(false, [devLink, codexAlias, movedAside]), api);
+
+    expect(calls).toEqual([{ kind: "park", ids: ["dev-link"] }]);
+    expect(toast).toEqual({
+      type: "warning",
+      title: "Parked tidy, but a copy is still on",
+      message: "Still on: ~/.codex/skills/tidy.",
+    });
+  });
+
+  it("park_for_every_agent_moves_the_shared_folder_when_the_shared_root_is_itself_a_link", async () => {
+    // ~/.agents/skills -> ~/Dropbox/skills marks every shared folder as reached through a whole-folder link.
+    const sharedThroughRootLink = folder("shared", { shared_via_whole_dir_link: true });
+    const { calls, api } = fakeApi();
+
+    const toast = await parkForEveryAgent(skill(false, [sharedThroughRootLink]), api);
+
+    expect(calls).toEqual([{ kind: "park", ids: ["shared"] }]);
+    expect(toast).toEqual({ type: "success", title: "Parked tidy" });
+  });
+
+  it("park_for_every_agent_waits_for_a_confirm_with_the_git_warning_before_moving_a_project_folder", async () => {
+    const project = folder("project", {
+      scope: "project",
+      path: "/home/u/web/.agents/skills/tidy",
+      project_path: "/home/u/web",
+    });
+    const cancelled = fakeApi([], { confirm: false, gitTracked: true });
+
+    const toast = await parkForEveryAgent(skill(false, [folder("shared"), project]), cancelled.api);
+
+    expect(toast).toBeNull();
+    expect(cancelled.calls).toEqual([]);
+    expect(cancelled.prompts[0]).toContain("web/.agents/skills/tidy");
+    expect(cancelled.prompts[0]).toContain("Git tracks this folder");
+
+    const confirmed = fakeApi([], { confirm: true, gitTracked: true });
+    await parkForEveryAgent(skill(false, [folder("shared"), project]), confirmed.api);
+    expect(confirmed.calls).toEqual([{ kind: "park", ids: ["shared", "project"] }]);
   });
 });

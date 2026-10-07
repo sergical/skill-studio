@@ -407,14 +407,7 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&bin_dir).unwrap();
         let claude_bin = bin_dir.join("claude");
-        std::fs::write(&claude_bin, "#!/bin/sh\nexit 0\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&claude_bin).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&claude_bin, perms).unwrap();
-        }
+        super::super::test_support::write_fake_executable(&claude_bin, "exit 0");
 
         let lease_root = tmp.path().join("leases");
         let catalog = Arc::new(HarnessCatalog::builtin());
@@ -490,14 +483,7 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&bin_dir).unwrap();
         let claude_bin = bin_dir.join("claude");
-        std::fs::write(&claude_bin, "#!/bin/sh\nexit 0\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&claude_bin).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&claude_bin, perms).unwrap();
-        }
+        super::super::test_support::write_fake_executable(&claude_bin, "exit 0");
 
         let lease_root = tmp.path().join("leases");
         let catalog = Arc::new(HarnessCatalog::builtin());

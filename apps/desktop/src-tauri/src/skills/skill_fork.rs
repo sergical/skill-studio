@@ -3425,47 +3425,36 @@ mod tests {
     }
 
     /// `run_npx(args, Some(cwd))` must run the child process itself in
-    /// `cwd`, not just log it - a fake `npx` script records its own working
-    /// directory (via `pwd`) so this asserts the real
-    /// `Command::current_dir` call, not the argv this function builds.
+    /// `cwd`, not just log it - a fake `npx` (`touch` with a relative name)
+    /// creates its marker in its own working directory, so this asserts the
+    /// real `Command::current_dir` call, not the argv this function builds.
     /// Goes through `run_npx_with_spawner`, over a `RealProcessSpawner`
     /// scoped to the fake `npx`'s own dir: `run_npx` itself now resolves
     /// `npx` off a real login-shell probe, which a fake on this process's
     /// `PATH` can no longer intercept.
+    #[cfg(unix)]
     #[test]
     fn run_npx_with_a_cwd_runs_the_process_there_or_names_the_ignored_cwd() {
         let bin_dir = tempfile::tempdir().expect("fake bin dir");
-        let recording = bin_dir.path().join("pwd.log");
-        let fake_npx = bin_dir.path().join("npx");
-        std::fs::write(
-            &fake_npx,
-            format!("#!/bin/sh\npwd > '{}'\nexit 0\n", recording.display()),
-        )
-        .expect("write fake npx");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake_npx, std::fs::Permissions::from_mode(0o700))
-                .expect("chmod fake npx");
-        }
+        // A link to a system binary, not a freshly written script: running a
+        // just-written script can stall for minutes on macOS hosts that scan
+        // new executables. `touch` given a relative name creates it in the
+        // process's cwd, which is what this test needs to observe.
+        std::os::unix::fs::symlink("/usr/bin/touch", bin_dir.path().join("npx"))
+            .expect("link fake npx");
 
         let target_dir = tempfile::tempdir().expect("target cwd");
         let spawner =
             skill_studio_host::RealProcessSpawner::with_search_path(vec![bin_dir.path().into()]);
         let result = run_npx_with_spawner(
             &spawner,
-            &["--version".to_string()],
+            &["cwd-marker".to_string()],
             Some(target_dir.path()),
         );
 
         assert!(result.is_ok(), "{result:?}");
-        let recorded_cwd = std::fs::read_to_string(&recording)
-            .expect("read recording")
-            .trim()
-            .to_string();
-        assert_eq!(
-            std::fs::canonicalize(&recorded_cwd).expect("canonicalize recorded cwd"),
-            std::fs::canonicalize(target_dir.path()).expect("canonicalize target cwd"),
+        assert!(
+            target_dir.path().join("cwd-marker").exists(),
             "run_npx must launch the process in the given cwd, not wherever the test process runs"
         );
     }

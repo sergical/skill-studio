@@ -123,6 +123,8 @@ interface UpdateAllTally {
   /** `attempted`/`succeeded` count update targets (one per copy); these count distinct skills, which is what the toast names. */
   skillsAttempted: number;
   skillsSucceeded: number;
+  /** True when a stop request left skills unattempted; `skillsSucceeded` then counts only skills that finished. */
+  stopped?: boolean;
   /** The first failed target's message, so the toast can say why. */
   firstError: string | null;
   /** Skills whose pull left conflict markers; set only when there are any. */
@@ -130,6 +132,13 @@ interface UpdateAllTally {
 }
 
 const MAX_ERROR_LENGTH = 140;
+
+/** The "Update all" toast title: "Updated N of M skills", or "Stopped. Updated N of M skills." after a stop. */
+export function updateAllTitle(tally: UpdateAllTally): string {
+  const { skillsAttempted, skillsSucceeded } = tally;
+  const counts = `Updated ${skillsSucceeded} of ${skillsAttempted} skill${skillsAttempted === 1 ? "" : "s"}`;
+  return tally.stopped ? `Stopped. ${counts}.` : counts;
+}
 
 /** "1 failed: <first error>" for the toast, or `undefined` when nothing failed. Counts skills, matching the toast title; a skill with any failed copy counts once. */
 export function updateAllFailureMessage(tally: UpdateAllTally): string | undefined {
@@ -156,6 +165,9 @@ export function updateAllFailureMessage(tally: UpdateAllTally): string | undefin
  * run last, through `updatePluginInstall`, once per plugin id, scope, and project
  * even when several skills ship from one plugin. A fork is pulled only when the fork
  * itself is outdated, and a failed pull does not stop its plugin installs.
+ * `shouldStop` is checked before each fork and each plugin install and before the
+ * owner batch; whatever it skips counts as not updated, and `tally.stopped` is set.
+ * A step already running always finishes.
  */
 export async function updateAllOutdatedSkills(
   skills: Pick<
@@ -173,6 +185,7 @@ export async function updateAllOutdatedSkills(
     fork: (target: LifecycleTarget) => Promise<ForkRecord>;
   },
   updatePluginInstall?: PluginInstallUpdater,
+  shouldStop?: () => boolean,
 ): Promise<UpdateAllTally> {
   const pullsUpstream = (skill: (typeof skills)[number]) =>
     skillHasManagedUpdate(skill) &&
@@ -200,6 +213,7 @@ export async function updateAllOutdatedSkills(
     ),
   );
   const failedSkillNames = new Set<string>();
+  const skippedSkillNames = new Set<string>();
   // Skills whose own copies or fork creation failed, as opposed to a fork pull: only these hold
   // their plugins back.
   const copyFailedNames = new Set<string>();
@@ -254,6 +268,10 @@ export async function updateAllOutdatedSkills(
   onProgress?.(0, total, forks[0]?.name ?? afterForksName());
 
   for (const [index, skill] of forks.entries()) {
+    if (shouldStop?.()) {
+      for (const unstarted of forks.slice(index)) skippedSkillNames.add(unstarted.name);
+      break;
+    }
     const makesFork = skill.source_kind !== "fork" && forkEdited !== undefined;
     try {
       const pullOne = makesFork
@@ -280,7 +298,9 @@ export async function updateAllOutdatedSkills(
     if (total !== plannedTotal) onProgress?.(done, total, current);
   };
   retotal(forks.length, afterForksName());
-  if (ownerTargets.length > 0) {
+  if (ownerTargets.length > 0 && shouldStop?.()) {
+    for (const entry of owners) skippedSkillNames.add(entry.name);
+  } else if (ownerTargets.length > 0) {
     try {
       // Refused targets finish first, so `done` alone cannot say which owner is next:
       // each event consumes one entry of the skill it names.
@@ -294,6 +314,7 @@ export async function updateAllOutdatedSkills(
       // twice-installed skill collapse to one entry there; `items` carries
       // one entry per owner regardless, so count failures from `items`
       // instead (N1, review round 3).
+      for (const name of outcome.not_run) skippedSkillNames.add(name);
       const failedItems = outcome.items.filter((item) => item.outcome === null);
       tally.succeeded += outcome.items.length - failedItems.length;
       for (const item of failedItems) {
@@ -328,17 +349,26 @@ export async function updateAllOutdatedSkills(
     }
   }
   if (updatePluginInstall && pluginTargets.length > 0) {
-    const plugins = await updatePluginTargets(pluginTargets, (target) =>
-      updatePluginInstall(target).finally(() => {
-        pluginsDone += 1;
-        const next = pluginTargets[pluginsDone];
-        onProgress?.(
-          forks.length + ownerTargets.length + pluginsDone,
-          total,
-          next ? pluginSkillName(next) : null,
-        );
-      }),
+    const plugins = await updatePluginTargets(
+      pluginTargets,
+      (target) =>
+        updatePluginInstall(target).finally(() => {
+          pluginsDone += 1;
+          const next = pluginTargets[pluginsDone];
+          onProgress?.(
+            forks.length + ownerTargets.length + pluginsDone,
+            total,
+            next ? pluginSkillName(next) : null,
+          );
+        }),
+      shouldStop,
     );
+    const notRunKeys = new Set(plugins.notRun.map(pluginTargetKey));
+    for (const skill of skills) {
+      if (pluginTargetsOf(skill).some((target) => notRunKeys.has(pluginTargetKey(target)))) {
+        skippedSkillNames.add(skill.name);
+      }
+    }
     tally.succeeded += plugins.succeeded;
     if (plugins.failures.length > 0) {
       const failedKeys = new Set(
@@ -354,7 +384,9 @@ export async function updateAllOutdatedSkills(
   }
 
   // Core can report one requested skill under two names, so the difference can go below zero.
-  tally.skillsSucceeded = Math.max(0, tally.skillsAttempted - failedSkillNames.size);
+  const notUpdated = new Set([...failedSkillNames, ...skippedSkillNames]);
+  tally.skillsSucceeded = Math.max(0, tally.skillsAttempted - notUpdated.size);
+  if (skippedSkillNames.size > 0) tally.stopped = true;
   return tally;
 }
 
