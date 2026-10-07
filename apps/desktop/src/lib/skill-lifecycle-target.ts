@@ -1026,7 +1026,7 @@ export function parkEveryAgentPlan(skill: ParkView): ParkEveryAgentPlan {
     ]),
   );
   const movedLinkPaths = new Set(
-    folders.filter((deployment) => deployment.is_symlink).map((deployment) => deployment.path),
+    folders.flatMap((deployment) => (deployment.is_symlink ? [deployment.path] : [])),
   );
   const losesTheSkill = (deployment: Deployment) =>
     (deployment.backing.kind === "linked-to" && realIds.has(deployment.backing.deployment_id)) ||
