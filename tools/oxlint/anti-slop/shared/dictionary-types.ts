@@ -69,17 +69,19 @@ function nestedDeclaredTypeName(node: ESTree.Node): string | null {
 	}
 }
 
+function astChildNodes(node: ESTree.Node): readonly ESTree.Node[] {
+	return Object.entries(node).flatMap(([key, value]): readonly ESTree.Node[] => {
+		if (key === "parent") return [];
+		const candidates: readonly ESTree.Node[] = Array.isArray(value) ? value : [value];
+		// Property values that are not AST nodes (strings, numbers, null) have no `type`.
+		return candidates.filter((candidate) => candidate?.type !== undefined);
+	});
+}
+
 function collectNestedTypeNames(node: ESTree.Node, names: Set<string>): void {
 	const name = nestedDeclaredTypeName(node);
 	if (name !== null) names.add(name);
-	for (const [key, value] of Object.entries(node)) {
-		if (key === "parent") continue;
-		const children: readonly ESTree.Node[] = Array.isArray(value) ? value : [value];
-		// Property values that are not AST nodes (strings, numbers, null) have no `type`.
-		for (const child of children) {
-			if (child?.type !== undefined) collectNestedTypeNames(child, names);
-		}
-	}
+	for (const child of astChildNodes(node)) collectNestedTypeNames(child, names);
 }
 
 function declaredStatement(statement: ESTree.Statement): ESTree.Node | null {
@@ -98,8 +100,8 @@ export function createTypeEnvironment(program: ESTree.Program): TypeEnvironment 
 	for (const statement of program.body) {
 		const declaration = declaredStatement(statement);
 		if (declaration !== null) {
-			for (const [key, child] of Object.entries(declaration)) {
-				if (key !== "parent" && child?.type !== undefined) collectNestedTypeNames(child, nestedTypeNames);
+			for (const child of astChildNodes(declaration)) {
+				collectNestedTypeNames(child, nestedTypeNames);
 			}
 		}
 		if (declaration?.type === "ImportDeclaration") {

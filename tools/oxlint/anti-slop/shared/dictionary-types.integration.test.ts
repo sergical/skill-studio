@@ -1069,6 +1069,66 @@ describe("anti-slop interface dictionary rules", () => {
 		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(0);
 	});
 
+	it("keeps an inherited unknown dictionary flagged when a nested interface reuses the name inside a top-level arrow function variable", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: string;
+			}
+			const run = () => {
+				interface Derived extends Base<unknown> {}
+				const d: Derived = { entry: 42 };
+				void d;
+			};
+			void run;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("keeps an inherited unknown dictionary flagged when a nested alias reuses the name inside a top-level arrow function variable", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`type Value = string;
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived<T> extends Base<unknown> {
+				[key: string]: T;
+			}
+			const run = () => {
+				type Value = unknown;
+				const d: Derived<Value> = { entry: 42 };
+				void d;
+			};
+			void run;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("keeps an inherited unknown dictionary flagged when a nested interface reuses the name inside a top-level block", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: string;
+			}
+			{
+				interface Derived extends Base<unknown> {}
+				const d: Derived = { entry: 42 };
+				void d;
+			}`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
 	it("keeps an inherited unsafe symbol key when the override covers a different key union", () => {
 		const diagnostics = lintAntiSlopFixture(
 			`interface Base<V> {
