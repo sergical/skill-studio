@@ -7,7 +7,12 @@
 
 import type { InstalledSkill, SkillSnapshot } from "./skill-types";
 
+/** Whether the background update check found a newer commit upstream for `skill`. */
+export function hasUpdate(skill: InstalledSkill): boolean {
+  return skill.update_owner_ids.length > 0;
+}
+
 /** Every skill with a newer commit available upstream, per the background update check. */
 export function skillsWithUpdates(snapshot: SkillSnapshot): InstalledSkill[] {
-  return snapshot.skills.filter((skill) => skill.update_owner_ids.length > 0);
+  return snapshot.skills.filter(hasUpdate);
 }

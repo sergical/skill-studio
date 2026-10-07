@@ -20,10 +20,10 @@ export function updatePluginInstall(target: PluginUpdateTarget): Promise<PluginU
   return updatePlugin(target.plugin_id, "Claude Code", target.scope, target.project_path);
 }
 
-/** Home's "Update all"; `forkNames` are the edited skills to fork and merge instead of overwrite. */
+/** Home's "Update all"; `forkNames` are the edited skills to fork and merge instead of overwrite. `onProgress`'s third argument names the skill that starts next. */
 export function runHomeUpdateAll(
   updates: InstalledSkill[],
-  onProgress: (done: number, total: number) => void,
+  onProgress: (done: number, total: number, current: string | null) => void,
   forkNames?: ReadonlySet<string>,
 ) {
   return updateAllOutdatedSkills(

@@ -58,6 +58,7 @@
 //! creates is recorded for removal. Plugins and other runtime files that
 //! `install` may rewrite are outside the backup: undo does not restore them.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::dto::{InstallMethod, UpdateAllItem, UpdateAllOutcome, UpdateOutcome, UpdateRequest};
@@ -1103,6 +1104,59 @@ pub fn update_all(
     }
 }
 
+/// A successful `dotagents install` in one scope, and the tree hashes of the
+/// skills it covered, taken before it ran.
+struct DotagentsBatch {
+    scope: RootScope,
+    event_id: crate::identity::EventId,
+    hashes_before: BTreeMap<SkillName, String>,
+}
+
+/// Hashes the destination of each later un-pinned dotagents request in
+/// `scope`. A skill whose hash fails is left out, so it runs on its own.
+fn hash_later_dotagents(
+    rt: &Runtime,
+    later: &[UpdateRequest],
+    scope: &RootScope,
+) -> BTreeMap<SkillName, String> {
+    let root = ops_install::scope_root(rt, scope).join(UNIVERSAL_ROOT_RELATIVE);
+    later
+        .iter()
+        .filter(|req| {
+            req.method == InstallMethod::Dotagents && req.ref_pin.is_none() && req.scope == *scope
+        })
+        .filter_map(|req| {
+            let hash = crate::tree_hash::tree_hash(rt.ports.fs.as_ref(), &root.join(&req.skill.0));
+            Some((req.skill.clone(), hash.ok()?))
+        })
+        .collect()
+}
+
+/// The outcome for a skill an earlier install in `batch` already refreshed.
+fn covered_by_install(
+    rt: &Runtime,
+    req: &UpdateRequest,
+    batch: &DotagentsBatch,
+) -> Result<UpdateOutcome, CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let destination = ops_install::scope_root(rt, &req.scope)
+        .join(UNIVERSAL_ROOT_RELATIVE)
+        .join(&req.skill.0);
+    if fs.symlink_metadata(&destination).is_err() {
+        return Err(
+            CoreError::new(ErrorCode::Io, "the CLI removed the expected destination")
+                .at(&destination),
+        );
+    }
+    Ok(UpdateOutcome {
+        event_id: batch.event_id.clone(),
+        skill: req.skill.clone(),
+        tree_hash_before: batch.hashes_before[&req.skill].clone(),
+        tree_hash_after: crate::tree_hash::tree_hash(fs, &destination)?,
+        deployment_path: destination,
+    })
+}
+
 fn update_all_body(
     rt: &Runtime,
     ctx: &OpContext,
@@ -1112,9 +1166,35 @@ fn update_all_body(
     let clock = rt.ports.clock.as_ref();
     let start = clock.monotonic();
     let mut items = Vec::with_capacity(requests.len());
-    let mut errors = std::collections::BTreeMap::new();
-    for req in requests {
-        let result = update(rt, ctx, req);
+    let mut errors = BTreeMap::new();
+    // One `dotagents install` refreshes every declared skill in its scope, and
+    // that update's journal row already backs up their folders. Later
+    // requests the install covered reuse its row instead of installing again.
+    let mut installed: Vec<DotagentsBatch> = Vec::new();
+    for (index, req) in requests.iter().enumerate() {
+        let covers_batch = req.method == InstallMethod::Dotagents && req.ref_pin.is_none();
+        let covered = covers_batch
+            .then(|| installed.iter().find(|batch| batch.scope == req.scope))
+            .flatten()
+            .filter(|batch| batch.hashes_before.contains_key(&req.skill));
+        let result = if let Some(batch) = covered {
+            refuse_parked(rt, req).and_then(|()| covered_by_install(rt, req, batch))
+        } else {
+            let hashes_before = if covers_batch {
+                hash_later_dotagents(rt, &requests[index + 1..], &req.scope)
+            } else {
+                BTreeMap::new()
+            };
+            let result = update(rt, ctx, req);
+            if let (true, Ok(outcome)) = (covers_batch, &result) {
+                installed.push(DotagentsBatch {
+                    scope: req.scope.clone(),
+                    event_id: outcome.event_id.clone(),
+                    hashes_before,
+                });
+            }
+            result
+        };
         on_outcome(&req.skill, &result);
         match result {
             Ok(outcome) => items.push(UpdateAllItem {

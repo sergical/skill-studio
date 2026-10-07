@@ -39,7 +39,7 @@ import {
   uniquePluginTargets,
   updatePluginTargets,
 } from "../../lib/skill-lifecycle-target";
-import type { PluginInstallUpdater } from "../../lib/skill-lifecycle-target";
+import type { PluginInstallUpdater, PluginUpdateTarget } from "../../lib/skill-lifecycle-target";
 import { issueRowState, rowState, updateRowState } from "../SkillList/skill-row-state";
 import type { RowState } from "../SkillList/skill-row-state";
 
@@ -148,8 +148,9 @@ export function updateAllFailureMessage(tally: UpdateAllTally): string | undefin
  * form for that path), while every other outdated owner flattens into one
  * `updateAllOwners` call - one IPC round trip and one rescan for the whole
  * batch, instead of one update round trip and rescan per skill.
- * `onProgress(done, total)` counts forks and owner targets in one sequence;
- * `updateAllOwners` reports how many of its own targets finished. A skill named
+ * `onProgress(done, total, current)` counts forks and owner targets in one sequence;
+ * `updateAllOwners` reports how many of its own targets finished. `current` names
+ * the skill that starts next, or is `null` once everything finished. A skill named
  * in `forkEdited.names` is forked first and then pulled like a fork, so its
  * local edits survive instead of being overwritten by the batch. Plugin installs
  * run last, through `updatePluginInstall`, once per plugin id, scope, and project
@@ -166,7 +167,7 @@ export async function updateAllOutdatedSkills(
     targets: LifecycleTarget[],
     onOwnerDone: (done: number) => void,
   ) => Promise<UpdateAllOutcome>,
-  onProgress?: (done: number, total: number) => void,
+  onProgress?: (done: number, total: number, current: string | null) => void,
   forkEdited?: {
     names: ReadonlySet<string>;
     fork: (target: LifecycleTarget) => Promise<ForkRecord>;
@@ -215,30 +216,6 @@ export async function updateAllOutdatedSkills(
     tally.failures += count;
     tally.firstError ??= message;
   };
-  onProgress?.(0, total);
-
-  for (const [index, skill] of forks.entries()) {
-    const makesFork = skill.source_kind !== "fork" && forkEdited !== undefined;
-    try {
-      const pullOne = makesFork
-        ? () => forkThenPull(forkTargetForSkill(skill), forkEdited.fork, pullFork)
-        : () => pullFork(lifecycleTargetForPark(skill));
-      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- update-all runs sequentially on purpose; concurrent `npx skills update` calls race on ~/.agents/.skill-lock.json
-      const pull = await pullOne();
-      if (pull.conflicts.length > 0) (tally.conflicted ??= []).push(skill.name);
-      tally.succeeded += 1;
-    } catch (error) {
-      failedSkillNames.add(skill.name);
-      if (makesFork && !(error instanceof ForkPullError)) copyFailedNames.add(skill.name);
-      fail(1, error instanceof Error ? error.message : String(error));
-    }
-    onProgress?.(index + 1, total);
-  }
-
-  // A skill whose fork failed keeps all its owners untouched, so its other copies are not updated either.
-  const ownerTargets = skills.flatMap((skill) =>
-    failedSkillNames.has(skill.name) ? [] : ownerTargetsOf(skill),
-  );
   // A skill whose copies failed keeps its plugins untouched, and so does every other skill
   // sharing one of those plugins. They leave the total too, so progress still reaches it.
   const blockedPluginKeys = () =>
@@ -257,17 +234,56 @@ export async function updateAllOutdatedSkills(
       ),
     );
   };
-  const retotal = (done: number) => {
+  // The first skill that ships `target`'s plugin install: the name shown while it updates.
+  const pluginSkillName = (target: PluginUpdateTarget) =>
+    skills.find((skill) =>
+      pluginTargetsOf(skill).some((own) => pluginTargetKey(own) === pluginTargetKey(target)),
+    )?.name ?? null;
+  // A skill whose fork failed keeps all its owners untouched, so its other copies are not updated either.
+  const ownerEntries = () =>
+    skills.flatMap((skill) =>
+      failedSkillNames.has(skill.name)
+        ? []
+        : ownerTargetsOf(skill).map((target) => ({ name: skill.name, target })),
+    );
+  const firstPluginName = () => {
+    const [first] = pluginTargetsOfOk();
+    return first ? pluginSkillName(first) : null;
+  };
+  const afterForksName = () => ownerEntries()[0]?.name ?? firstPluginName();
+  onProgress?.(0, total, forks[0]?.name ?? afterForksName());
+
+  for (const [index, skill] of forks.entries()) {
+    const makesFork = skill.source_kind !== "fork" && forkEdited !== undefined;
+    try {
+      const pullOne = makesFork
+        ? () => forkThenPull(forkTargetForSkill(skill), forkEdited.fork, pullFork)
+        : () => pullFork(lifecycleTargetForPark(skill));
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- update-all runs sequentially on purpose; concurrent `npx skills update` calls race on ~/.agents/.skill-lock.json
+      const pull = await pullOne();
+      if (pull.conflicts.length > 0) (tally.conflicted ??= []).push(skill.name);
+      tally.succeeded += 1;
+    } catch (error) {
+      failedSkillNames.add(skill.name);
+      if (makesFork && !(error instanceof ForkPullError)) copyFailedNames.add(skill.name);
+      fail(1, error instanceof Error ? error.message : String(error));
+    }
+    onProgress?.(index + 1, total, forks[index + 1]?.name ?? afterForksName());
+  }
+
+  const owners = ownerEntries();
+  const ownerTargets = owners.map((entry) => entry.target);
+  const retotal = (done: number, current: string | null) => {
     const plannedTotal = total;
     total = forks.length + ownerTargets.length + pluginTargetsOfOk().length;
     tally.attempted = total;
-    if (total !== plannedTotal) onProgress?.(done, total);
+    if (total !== plannedTotal) onProgress?.(done, total, current);
   };
-  retotal(forks.length);
+  retotal(forks.length, afterForksName());
   if (ownerTargets.length > 0) {
     try {
       const outcome = await updateAllOwners(ownerTargets, (done) =>
-        onProgress?.(forks.length + done, total),
+        onProgress?.(forks.length + done, total, owners[done]?.name ?? firstPluginName()),
       );
       // `errors` is keyed by skill name, so two failing owners of one
       // twice-installed skill collapse to one entry there; `items` carries
@@ -295,7 +311,7 @@ export async function updateAllOutdatedSkills(
     }
   }
 
-  retotal(forks.length + ownerTargets.length);
+  retotal(forks.length + ownerTargets.length, firstPluginName());
   const pluginTargets = pluginTargetsOfOk();
   if (updatePluginInstall) {
     // A skill sharing a plugin with a failed one is not updated, so it does not count as updated.
@@ -310,7 +326,12 @@ export async function updateAllOutdatedSkills(
     const plugins = await updatePluginTargets(pluginTargets, (target) =>
       updatePluginInstall(target).finally(() => {
         pluginsDone += 1;
-        onProgress?.(forks.length + ownerTargets.length + pluginsDone, total);
+        const next = pluginTargets[pluginsDone];
+        onProgress?.(
+          forks.length + ownerTargets.length + pluginsDone,
+          total,
+          next ? pluginSkillName(next) : null,
+        );
       }),
     );
     tally.succeeded += plugins.succeeded;

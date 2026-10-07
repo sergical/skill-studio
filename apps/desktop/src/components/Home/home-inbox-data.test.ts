@@ -226,6 +226,33 @@ describe("updateAllOutdatedSkills", () => {
     });
   });
 
+  it("update_all_reports_the_skill_that_starts_next_or_shows_a_stale_name", async () => {
+    const skills = [
+      ownerSkill("alpha", "owner:v1/global/alpha"),
+      ownerSkill("beta", "owner:v1/global/beta"),
+    ];
+    const seen: [number, number, string | null][] = [];
+
+    await updateAllOutdatedSkills(
+      skills,
+      async () => {
+        throw new Error("no forks in this batch");
+      },
+      async (targets, onOwnerDone) => {
+        const owners = targets.map((target) => target.owner_id ?? "");
+        owners.forEach((_, index) => onOwnerDone(index + 1));
+        return succeedAll(owners);
+      },
+      (done, total, current) => seen.push([done, total, current]),
+    );
+
+    expect(seen).toEqual([
+      [0, 2, "alpha"],
+      [1, 2, "beta"],
+      [2, 2, null],
+    ]);
+  });
+
   it("update_all_pulls_a_fork_upstream_separately_from_the_batched_owner_call_or_names_the_extra_call", async () => {
     const owner = ownerSkill("alpha", "owner:v1/global/alpha");
 

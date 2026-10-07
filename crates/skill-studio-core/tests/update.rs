@@ -2057,3 +2057,95 @@ fn forced_undo_replaces_a_linked_extra_file_with_a_plain_file_or_writes_into_the
 
     std::fs::remove_dir_all(&home).ok();
 }
+
+/// `update_all_runs_one_dotagents_install_per_scope_and_shares_its_event_or_names_the_extra_install`:
+/// two dotagents skills in the global scope need one `dotagents install`,
+/// since it refreshes every declared folder. Fails when the spawner is called
+/// twice, or when the second item gets its own journal row (its undo is the
+/// first row's).
+#[test]
+fn update_all_runs_one_dotagents_install_per_scope_and_shares_its_event_or_names_the_extra_install()
+{
+    let home = unique_temp_dir("update_all_dotagents_once");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_installed_skill(&home, "other", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let requests = vec![
+        cli_request("delta", InstallMethod::Dotagents),
+        cli_request("other", InstallMethod::Dotagents),
+    ];
+    let mut seen = 0;
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| seen += 1);
+
+    assert_eq!(seen, 2, "on_outcome must fire for the covered skill too");
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let first = result.items[0].outcome.as_ref().unwrap();
+    let second = result.items[1].outcome.as_ref().unwrap();
+    assert_eq!(second.event_id, first.event_id);
+    assert_eq!(second.skill.0, "other");
+    assert_ne!(second.tree_hash_before, second.tree_hash_after);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `update_all_runs_a_pinned_dotagents_skill_on_its_own_or_skips_the_new_ref`:
+/// a request with `ref_pin` edits `agents.toml` before installing, so the
+/// earlier install cannot stand in for it. Fails when the spawner runs once.
+#[test]
+fn update_all_runs_a_pinned_dotagents_skill_on_its_own_or_skips_the_new_ref() {
+    let home = unique_temp_dir("update_all_dotagents_pinned");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_installed_skill(&home, "other", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let mut pinned = cli_request("delta", InstallMethod::Dotagents);
+    pinned.ref_pin = Some("bbb".to_string());
+    let requests = vec![cli_request("other", InstallMethod::Dotagents), pinned];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let first = result.items[0].outcome.as_ref().unwrap();
+    let second = result.items[1].outcome.as_ref().unwrap();
+    assert_ne!(second.event_id, first.event_id);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `update_all_refuses_a_parked_dotagents_skill_after_an_install_or_runs_the_cli_for_it`:
+/// a parked skill that the earlier install would cover is still an error
+/// item, as it is for a single update. Fails when it reports success.
+#[test]
+fn update_all_refuses_a_parked_dotagents_skill_after_an_install_or_runs_the_cli_for_it() {
+    let home = unique_temp_dir("update_all_dotagents_parked");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_installed_skill(&home, "other", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    let parked = home.join(".agents/skills-parked/other");
+    std::fs::create_dir_all(&parked).unwrap();
+    std::fs::write(parked.join("SKILL.md"), "parked").unwrap();
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let requests = vec![
+        cli_request("delta", InstallMethod::Dotagents),
+        cli_request("other", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.items[0].outcome.is_some());
+    assert!(result.items[1].outcome.is_none());
+    assert!(result.errors["other"].contains("is parked"));
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+
+    std::fs::remove_dir_all(&home).ok();
+}

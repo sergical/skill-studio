@@ -229,6 +229,21 @@ describe("applySkillListFilter", () => {
     expect(result.map((s) => s.name)).toEqual(["model-only"]);
   });
 
+  it("keeps only skills with an update available", () => {
+    const skills = [
+      fixtureSkill({ name: "stale", update_owner_ids: ["owner-1"] }),
+      fixtureSkill({ name: "current", update_owner_ids: [] }),
+    ];
+
+    const result = applySkillListFilter(skills, {
+      scope: "all",
+      update: "available",
+      query: "",
+    });
+
+    expect(result.map((s) => s.name)).toEqual(["stale"]);
+  });
+
   it("filters by 30-day usage", () => {
     const skills = [fixtureSkill({ name: "used" }), fixtureSkill({ name: "unused" })];
     const invocations = [fixtureStats({ skill: "used", last_30_days: 3 })];

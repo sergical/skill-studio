@@ -423,7 +423,7 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
         toggleGroup={toggleGroup}
         onSelectSkill={onSelectSkill}
         onShowAllIssues={() => goToSkills({ issue: "any" })}
-        onShowAllUpdates={() => setActiveView({ kind: "skills" })}
+        onShowAllUpdates={() => goToSkills({ update: "available" })}
         onShowAllUnused={() => goToSkills({ usage: "unused-30d" })}
         onShowAllRecent={() => setActiveView({ kind: "activity" })}
         openSkill={openSkill}
