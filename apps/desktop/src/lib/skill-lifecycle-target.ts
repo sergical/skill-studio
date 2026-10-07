@@ -62,6 +62,8 @@ export interface PluginUpdateFailure extends SkillOwnerUpdateFailure {
 interface PluginUpdateSummary extends SkillOwnerUpdateSummary {
   failures: PluginUpdateFailure[];
   alreadyCurrent: number;
+  /** Targets never started because `shouldStop` turned true. */
+  notRun: PluginUpdateTarget[];
 }
 
 /** One install of a Claude Code plugin that has an update, as `update_owners` reports it. */
@@ -108,7 +110,7 @@ export function skillPluginUpdateTargets(
   );
 }
 
-export const pluginOwnerIdFor = (target: PluginUpdateTarget) =>
+const pluginOwnerIdFor = (target: PluginUpdateTarget) =>
   `${PLUGIN_OWNER_PREFIX}${target.plugin_id}`;
 
 export const pluginTargetKey = (target: PluginUpdateTarget) =>
@@ -734,11 +736,17 @@ export async function updateSkillOwners(
 export async function updatePluginTargets(
   targets: PluginUpdateTarget[],
   updatePluginInstall: PluginInstallUpdater,
+  shouldStop?: () => boolean,
 ): Promise<PluginUpdateSummary> {
   const failures: PluginUpdateFailure[] = [];
+  const notRun: PluginUpdateTarget[] = [];
   let succeeded = 0;
   let alreadyCurrent = 0;
   for (const target of targets) {
+    if (shouldStop?.()) {
+      notRun.push(target);
+      continue;
+    }
     try {
       // Plugin updates are sequential because each takes the backend write lease.
       // react-doctor-disable-next-line react-doctor/async-await-in-loop -- concurrent plugin updates are refused by the backend write lease
@@ -762,11 +770,11 @@ export async function updatePluginTargets(
       });
     }
   }
-  return { attempted: targets.length, succeeded, failures, alreadyCurrent };
+  return { attempted: targets.length, succeeded, failures, alreadyCurrent, notRun };
 }
 
 /** Run an update for each owner target in turn and return every failure. */
-export async function updateOwnerTargets(
+async function updateOwnerTargets(
   targets: LifecycleTarget[],
   updateOwner: (target: LifecycleTarget) => Promise<{ success: boolean; error?: string | null }>,
 ): Promise<SkillOwnerUpdateSummary> {
@@ -977,6 +985,56 @@ export function skillParkVerb(
 ): "Park" | "Unpark" | null {
   if (!skillCanPark(skill)) return null;
   return skill.parked ? "Unpark" : "Park";
+}
+
+/**
+ * Mirrors `refuse_unparkable` in the core: the Universal folder may be a link
+ * (a dev checkout), agent folders may not. A moved-aside copy is already off
+ * and keeps its own restore action.
+ */
+function corePark(deployment: Deployment): boolean {
+  return (
+    deployment.scope !== "parked" &&
+    deployment.disabled_by !== "studio-moved" &&
+    !deployment.plugin &&
+    deployment.backing.kind !== "linked-to" &&
+    !deployment.symlink_is_broken &&
+    (!deployment.is_symlink || deployment.destination === "universal")
+  );
+}
+
+/** A copy an agent still loads: not parked, not moved aside, not turned off in the agent. */
+export function isLiveCopy(deployment: Deployment): boolean {
+  return deployment.scope !== "parked" && deployment.disabled_by === null;
+}
+
+interface ParkEveryAgentPlan {
+  targets: LifecycleTarget[];
+  /** Project folders in `targets`. Moving one shows as deleted files when git tracks it. */
+  projectFolders: Deployment[];
+}
+
+/**
+ * What the skill page's "Park for every agent" / "Turn on for every agent"
+ * moves: each live folder the core can park, or each parked copy once the
+ * whole skill is parked. Links are left out because the core moves or keeps
+ * them by where they really point, which only a rescan shows. No targets when
+ * a parked copy sits beside a live one; the Locations card resolves that first.
+ */
+export function parkEveryAgentPlan(skill: ParkView): ParkEveryAgentPlan {
+  if (findLeftBehindPairs(skill).length > 0) return { targets: [], projectFolders: [] };
+  if (skill.parked) {
+    const parked = skill.deployments.filter((deployment) => deployment.scope === "parked");
+    return {
+      targets: parked.map((deployment) => ({ deployment_id: deployment.id })),
+      projectFolders: [],
+    };
+  }
+  const folders = skill.deployments.filter(corePark);
+  return {
+    targets: folders.map((deployment) => ({ deployment_id: deployment.id })),
+    projectFolders: folders.filter((deployment) => deployment.scope === "project"),
+  };
 }
 
 /** The Global Universal folder park/unpark may move. Project and Per harness stay independent. */

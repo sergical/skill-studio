@@ -18,6 +18,14 @@
         "type": "string"
       },
       "default": {}
+    },
+    "not_run": {
+      "description": "Skills never started because the batch's cancel token was set; they\nhave no entry in `items` or `errors`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SkillName"
+      },
+      "default": []
     }
   },
   "required": [

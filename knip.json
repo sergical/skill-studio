@@ -1,5 +1,5 @@
 {
-  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreExportsUsedInFile": {
     "interface": true,
     "type": true
@@ -9,7 +9,6 @@
       "entry": [
         "doctor.config.ts",
         ".cursor/skills/verify-skill-studio/playwright.config.ts",
-        "tools/oxlint/anti-slop/index.ts",
         "tools/oxlint/anti-slop/shared/*.integration.test.ts"
       ],
       "project": ["tools/oxlint/anti-slop/**/*.ts", "*.ts"]
@@ -32,11 +31,8 @@
       "project": ["src/**/*.{ts,tsx}"]
     },
     "packages/marketing": {
-      "entry": [
-        "src/remotion/index.ts",
-        "src/docs/docs-main.ts",
-        "src/prerender/site-prerender.tsx"
-      ],
+      "ignoreBinaries": ["agent-browser"],
+      "entry": ["src/remotion/index.ts", "src/prerender/site-prerender.tsx"],
       "project": ["src/**/*.{ts,tsx}"]
     }
   }

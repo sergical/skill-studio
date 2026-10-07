@@ -488,6 +488,114 @@ mod tests {
         }
     }
 
+    /// Serves one canned HTTP response on a loopback port and returns the
+    /// `Server` access that points at it plus the request line it received.
+    async fn fake_skills_server(
+        status_line: &'static str,
+        body: &'static str,
+    ) -> (SkillsShAccess, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let served = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let n = socket.read(&mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let response = format!(
+                "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            request.lines().next().unwrap_or_default().to_string()
+        });
+        let access = SkillsShAccess::Server {
+            base_url: format!("http://{addr}/api/v1"),
+        };
+        (access, served)
+    }
+
+    /// Flow: the user types a query in the Skill Store and the proxy answers.
+    /// Expectation: each API row becomes a result with its id, name, installs
+    /// and source, the query is sent URL-encoded, and `has_more` is false.
+    /// A failure here means the store lists wrong or empty rows for a good reply.
+    #[tokio::test]
+    async fn search_skills_maps_the_proxy_response_into_results() {
+        let (access, request) = fake_skills_server(
+            "200 OK",
+            r#"{"data":[{"id":"obra/tdd/tdd","name":"tdd","installs":42,"source":"obra/tdd"}]}"#,
+        )
+        .await;
+
+        let response = search_skills(&access, "test driven", Some(5))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            request.await.unwrap(),
+            "GET /api/v1/skills/search?q=test%20driven&limit=5 HTTP/1.1"
+        );
+        assert!(!response.has_more);
+        assert_eq!(response.skills.len(), 1);
+        assert_eq!(response.skills[0].id, "obra/tdd/tdd");
+        assert_eq!(response.skills[0].name, "tdd");
+        assert_eq!(response.skills[0].installs, 42);
+        assert_eq!(response.skills[0].top_source.as_deref(), Some("obra/tdd"));
+    }
+
+    /// Flow: a search where the proxy refuses the query (an empty `q` gets a
+    /// 400) or fails (500, 401).
+    /// Expectation: an error naming the status, never an empty result list.
+    /// A failure here means the store shows "no results" for a broken search.
+    #[tokio::test]
+    async fn search_skills_returns_an_error_not_an_empty_list_for_an_http_error() {
+        for (status_line, expected) in [
+            (
+                "400 Bad Request",
+                "Skills API returned status: 400 Bad Request",
+            ),
+            (
+                "500 Internal Server Error",
+                "Skills API returned status: 500 Internal Server Error",
+            ),
+            (
+                "401 Unauthorized",
+                "skills.sh API key is invalid or expired",
+            ),
+        ] {
+            let (access, _request) = fake_skills_server(status_line, r#"{"error":"nope"}"#).await;
+            let err = search_skills(&access, "", None).await.unwrap_err();
+            assert_eq!(err, expected);
+        }
+    }
+
+    /// Flow: the user opens a skill's details in the Skill Store.
+    /// Expectation: the SKILL.md file's text from the response reaches
+    /// `skill_md`, ahead of other files, with the id and install count.
+    /// A failure here means the preview panel is empty or shows the wrong file.
+    #[tokio::test]
+    async fn get_skill_details_carries_the_skill_md_body_from_the_response() {
+        let (access, request) = fake_skills_server(
+            "200 OK",
+            r#"{"id":"obra/tdd/tdd","source":"obra/tdd","slug":"tdd","installs":7,"hash":"abc","files":[{"path":"README.md","contents":"readme"},{"path":"SKILL.md","contents":"---\nname: tdd\n---\nWrite the test first."}]}"#,
+        )
+        .await;
+
+        let details = get_skill_details(&access, "obra/tdd/tdd").await.unwrap();
+
+        assert_eq!(
+            request.await.unwrap(),
+            "GET /api/v1/skills/obra/tdd/tdd HTTP/1.1"
+        );
+        assert_eq!(details.id, "obra/tdd/tdd");
+        assert_eq!(details.installs, 7);
+        assert_eq!(
+            details.skill_md.as_deref(),
+            Some("---\nname: tdd\n---\nWrite the test first.")
+        );
+    }
+
     /// Flow: build the details URL for a normal skill and for names that try
     /// to add path levels.
     /// Expectation: the path is exactly base + skills + owner + repo + skill;

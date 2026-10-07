@@ -466,34 +466,6 @@ pub async fn set_skills_invocation(
     .await
 }
 
-#[tauri::command]
-pub async fn set_skill_invocation(
-    name: String,
-    path: String,
-    policy: InvocationPolicy,
-    app: tauri::AppHandle,
-) -> Result<(), String> {
-    let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "set_skill_invocation", move || {
-        let refresh_state = app.state::<SkillRefreshState>();
-        let snapshot = read_snapshot(&refresh_state, &path)?;
-
-        let result = write_invocation_target(&snapshot, &name, &path, policy);
-        if result.is_ok() {
-            if let Err(error) =
-                skill_refresh::reconcile_skill_names_and_emit(&app, &refresh_state, [name], &[])
-            {
-                eprintln!(
-                    "[set_skill_invocation] targeted snapshot reconciliation failed: {error}"
-                );
-                refresh_state.mark_skills_dirty();
-            }
-        }
-        result
-    })
-    .await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

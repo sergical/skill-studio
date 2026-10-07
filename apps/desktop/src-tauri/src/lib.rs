@@ -373,6 +373,7 @@ pub fn run() {
             let refresh_state = skills::skill_refresh::init(app.handle());
             app.manage(refresh_state);
             app.manage(skills::skill_add_operation::AddSkillOperationState::default());
+            app.manage(skills::commands::UpdateAllCancelState::default());
             app.manage(skills::skill_pack::PackImportTrustState::default());
             if let Some(home) = dirs::home_dir() {
                 if let Err(error) =
@@ -454,6 +455,7 @@ pub fn run() {
             skills::commands::remove_skill,
             skills::commands::update_skill,
             skills::commands::update_all_skills,
+            skills::commands::cancel_update_all,
             skills::commands::read_installed_skill_md,
             skills::commands::write_installed_skill_md_if_unchanged,
             skills::skill_frontmatter_repair::preview_skill_frontmatter_repair,
@@ -491,7 +493,6 @@ pub fn run() {
             skills::skill_split::turn_off_for_agent,
             skills::skill_split::turn_off_check,
             skills::skill_harness_disable::restore_moved_deployment,
-            skills::skill_invocation::set_skill_invocation,
             skills::skill_invocation::set_skills_invocation,
             skills::commands::set_plugin_enabled,
             skills::commands::uninstall_plugin,
@@ -506,6 +507,7 @@ pub fn run() {
             // Background refresh / invocation snapshot
             skills::skill_refresh::get_skill_snapshot,
             skills::skill_refresh::request_skill_rescan,
+            skills::skill_refresh::rescan_skills_now,
             skills::skill_refresh::get_tracked_projects,
             skills::skill_refresh::register_skill_projects,
             skills::skill_refresh::unregister_skill_project,

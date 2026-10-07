@@ -72,13 +72,19 @@ export function SkillMarkdown({ content, className }: SkillMarkdownProps) {
             </blockquote>
           ),
           a: ({ children, href }) => {
-            const isExternal = href?.startsWith("http://") || href?.startsWith("https://");
+            // The Rust new-window handler sends web links to the browser. Any
+            // other href (relative, `#anchor`, `mailto:`) would navigate the
+            // app's own window and could strand it on a blank page, so those
+            // render as plain text with the target in a tooltip.
+            if (!href?.startsWith("http://") && !href?.startsWith("https://")) {
+              return (
+                <span className="text-accent" title={href}>
+                  {children}
+                </span>
+              );
+            }
             return (
-              <a
-                href={href}
-                className="text-accent"
-                {...(isExternal ? { target: "_blank", rel: "noreferrer noopener" } : {})}
-              >
+              <a href={href} className="text-accent" target="_blank" rel="noreferrer noopener">
                 {children}
               </a>
             );

@@ -21,6 +21,10 @@ interface SkillActivityViewProps {
   onSelectSkill: (name: string) => void;
 }
 
+function activityNow(scannedAt: string | undefined) {
+  return scannedAt ? new Date(scannedAt) : new Date();
+}
+
 /**
  * Full activity history for own and plugin skills, from every harness with a
  * usage reader that's turned on in Settings: a year-long heatmap, a per-skill
@@ -35,7 +39,7 @@ export function SkillActivityView({ snapshot, onSelectSkill }: SkillActivityView
   const stats = snapshot?.invocations ?? [];
   // The snapshot's scan time, not the render time, so a stale snapshot doesn't make the window
   // and the heatmap disagree about "now".
-  const now = snapshot?.scanned_at ? new Date(snapshot.scanned_at) : new Date();
+  const now = activityNow(snapshot?.scanned_at);
   const lens = useActivityLens(stats, now);
   const hasAnyInvocations = snapshot ? snapshot.invocations.some((s) => s.total > 0) : false;
 
