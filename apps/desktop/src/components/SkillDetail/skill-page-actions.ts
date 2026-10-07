@@ -37,12 +37,13 @@ import {
   updateSkillPluginsWithToasts,
 } from "../../lib/skill-lifecycle-target";
 import type { PluginInstallUpdater, SkillRemovalChoice } from "../../lib/skill-lifecycle-target";
-import { homeRelativePath } from "@skill-studio/lib";
+import { deploymentLabelFromAgentId, homeRelativePath } from "@skill-studio/lib";
 import type {
   Deployment,
   InstalledSkill,
   LifecycleTarget,
   ParkCheck,
+  SkillSnapshot,
   Toast,
 } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
@@ -126,27 +127,29 @@ interface ParkForEveryAgentApi {
     message: string,
     options: { title: string; kind: "warning"; okLabel: string },
   ) => Promise<boolean>;
-  /** The skills from the first snapshot built after the call, or `null` when none lands in time. */
-  rescan: () => Promise<InstalledSkill[] | null>;
+  /** The first snapshot built after the call, or `null` when none lands in time. */
+  rescan: () => Promise<RescanResult | null>;
 }
+
+type RescanResult = Pick<SkillSnapshot, "skills" | "scan_partial" | "unread_roots">;
 
 const RESCAN_TIMEOUT_MS = 10_000;
 
-async function rescanAfterWrite(): Promise<InstalledSkill[] | null> {
+async function rescanAfterWrite(): Promise<RescanResult | null> {
   const before = (await getSkillSnapshot())?.revision ?? 0;
   return new Promise((resolve) => {
     let settled = false;
     let unlisten: (() => void) | undefined;
-    const finish = (skills: InstalledSkill[] | null) => {
+    const finish = (snapshot: RescanResult | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       unlisten?.();
-      resolve(skills);
+      resolve(snapshot);
     };
     const timer = setTimeout(() => finish(null), RESCAN_TIMEOUT_MS);
     onSkillSnapshot((snapshot) => {
-      if (snapshot.revision > before) finish(snapshot.skills);
+      if (snapshot.revision > before) finish(snapshot);
     }).then(
       (stop) => {
         unlisten = stop;
@@ -194,30 +197,61 @@ function stillOnMessage(stillOn: Deployment[]): string | null {
 
 const UNCONFIRMED = "Skill Studio couldn't rescan to confirm which agents still load it.";
 
+/**
+ * The agents that still skip a restored copy: its own agent when `disabled_by`
+ * is set, and for a shared copy each reader whose own setting hides it.
+ */
+function agentsStillOff(deployment: Deployment): string[] {
+  const own = deployment.disabled_by === null ? [] : [deployment.agent];
+  const readers = (deployment.disabled_readers ?? []).map(deploymentLabelFromAgentId);
+  return [...own, ...readers];
+}
+
 /** Lists the copies an agent still has off in its own settings after Turn on. */
 function stillOffMessage(fresh: Deployment[]): string | null {
-  const off = fresh.filter(
-    (deployment) => deployment.scope !== "parked" && deployment.disabled_by !== null,
-  );
+  const off = fresh.flatMap((deployment) => {
+    const agents = deployment.scope === "parked" ? [] : agentsStillOff(deployment);
+    return agents.length === 0
+      ? []
+      : [`${homeRelativePath(deployment.path)} (${agents.join(", ")})`];
+  });
   if (off.length === 0) return null;
-  const paths = off
-    .map((deployment) => `${homeRelativePath(deployment.path)} (${deployment.agent})`)
-    .join(", ");
-  return `Still off in agent settings: ${paths}. The skill page shows where to turn it on.`;
+  return `Still off in agent settings: ${off.join(", ")}. The skill page shows where to turn it on.`;
+}
+
+function isUnder(path: string, root: string): boolean {
+  return path === root || path.startsWith(root.endsWith("/") ? root : `${root}/`);
+}
+
+/**
+ * The skill's copies from a rescan that read every place they live, or `null`
+ * when the scan was cut short or could not read one of them: a partial scan
+ * carries old rows forward and can leave the skill out.
+ */
+function completeRescanOf(
+  skill: InstalledSkill,
+  snapshot: RescanResult | null,
+): Deployment[] | null {
+  if (!snapshot || snapshot.scan_partial) return null;
+  const fresh = snapshot.skills.find((candidate) => candidate.name === skill.name)?.deployments;
+  if (!fresh) return null;
+  const paths = [...skill.deployments, ...fresh].map((deployment) => deployment.path);
+  const unread = snapshot.unread_roots.some((root) => paths.some((path) => isUnder(path, root)));
+  return unread ? null : fresh;
 }
 
 /**
  * Reads the skill back from a rescan after the write and names anything that
  * did not change: copies still on after Park, copies still off after Turn on.
- * Without a rescan the result is unknown, so it says so instead of reporting
- * success. Only plugin copies are certain without one: Park never moves them.
+ * Without a complete rescan the result is unknown, so it says so instead of
+ * reporting success. Only plugin copies are certain without one: Park never moves them.
  */
 async function leftoverCheck(
   skill: InstalledSkill,
   rescan: ParkForEveryAgentApi["rescan"],
 ): Promise<{ message: string | null; confirmed: boolean }> {
-  const skills = await rescan();
-  if (!skills) {
+  const fresh = completeRescanOf(skill, await rescan());
+  if (!fresh) {
     const plugins = skill.parked
       ? null
       : stillOnMessage(
@@ -225,7 +259,6 @@ async function leftoverCheck(
         );
     return { message: [plugins, UNCONFIRMED].filter(Boolean).join(" "), confirmed: false };
   }
-  const fresh = skills.find((candidate) => candidate.name === skill.name)?.deployments ?? [];
   const message = skill.parked ? stillOffMessage(fresh) : stillOnMessage(fresh.filter(isLiveCopy));
   return { message, confirmed: true };
 }

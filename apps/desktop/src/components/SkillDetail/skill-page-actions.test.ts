@@ -239,11 +239,18 @@ describe("parkForEveryAgent", () => {
       confirm = true,
       gitTracked = false,
       rescanned = [],
+      scanPartial = false,
+      unreadRoots = [],
     }: {
       confirm?: boolean;
       gitTracked?: boolean | null;
-      /** The skill's copies in the snapshot after the write; `null` when no snapshot lands. */
-      rescanned?: Deployment[] | null;
+      /**
+       * The skill's copies in the snapshot after the write; `"missing"` when
+       * the scan leaves the skill out, `null` when no snapshot lands.
+       */
+      rescanned?: Deployment[] | "missing" | null;
+      scanPartial?: boolean;
+      unreadRoots?: string[];
     } = {},
   ) => {
     const calls: { kind: "park" | "unpark"; ids: string[] }[] = [];
@@ -262,7 +269,14 @@ describe("parkForEveryAgent", () => {
         prompts.push(message);
         return confirm;
       },
-      rescan: async () => (rescanned ? [skill(false, rescanned)] : null),
+      rescan: async () =>
+        rescanned
+          ? {
+              skills: rescanned === "missing" ? [] : [skill(false, rescanned)],
+              scan_partial: scanPartial,
+              unread_roots: unreadRoots,
+            }
+          : null,
     };
     return { calls, prompts, api };
   };
@@ -398,6 +412,64 @@ describe("parkForEveryAgent", () => {
       message:
         "Still off in agent settings: ~/.codex/skills/tidy (Codex). The skill page shows where to turn it on.",
     });
+  });
+
+  it("turn_on_for_every_agent_names_the_agents_whose_own_setting_still_hides_the_restored_shared_copy", async () => {
+    // Codex and OpenCode read ~/.agents/skills; their own deny lists the shared copy under disabled_readers.
+    const parkedShared = folder("parked-shared", {
+      scope: "parked",
+      parked_origin: { kind: "universal", scope: "global" },
+    });
+    const restoredShared = folder("tidy", { disabled_readers: ["codex", "open-code"] });
+    const { api } = fakeApi([], { rescanned: [restoredShared] });
+
+    const toast = await parkForEveryAgent(skill(true, [parkedShared]), api);
+
+    expect(toast).toEqual({
+      type: "warning",
+      title: "Turned on tidy, but a copy is still off",
+      message:
+        "Still off in agent settings: ~/.agents/skills/tidy (Codex, OpenCode). The skill page shows where to turn it on.",
+    });
+  });
+
+  it("park_and_turn_on_report_not_confirmed_when_the_rescan_is_incomplete_instead_of_reading_stale_rows_as_success", async () => {
+    const parkedShared = folder("parked-shared", {
+      scope: "parked",
+      path: "/home/u/.agents/skills-parked/tidy",
+      parked_origin: { kind: "universal", scope: "global" },
+    });
+    const claudeCopy = folder("claude-copy", {
+      destination: "per-harness",
+      agent: "Claude Code",
+      path: "/home/u/.claude/skills/tidy",
+    });
+    const cases = [
+      // The restored root went unread, so the scan left the skill out.
+      { parked: true, before: [parkedShared], rescan: { rescanned: "missing" as const } },
+      // Budget ran out: rows carried forward from the last scan still look parked.
+      {
+        parked: true,
+        before: [parkedShared],
+        rescan: { rescanned: [parkedShared], scanPartial: true },
+      },
+      // The Claude root went unread, so its copy is missing from the fresh rows.
+      {
+        parked: false,
+        before: [claudeCopy],
+        rescan: { rescanned: [], unreadRoots: ["/home/u/.claude/skills"] },
+      },
+    ];
+
+    for (const { parked, before, rescan } of cases) {
+      const toast = await parkForEveryAgent(skill(parked, before), fakeApi([], rescan).api);
+
+      expect(toast).toEqual({
+        type: "warning",
+        title: parked ? "Turned on tidy, not confirmed" : "Parked tidy, not confirmed",
+        message: "Skill Studio couldn't rescan to confirm which agents still load it.",
+      });
+    }
   });
 
   const devLink = folder("dev-link", {
