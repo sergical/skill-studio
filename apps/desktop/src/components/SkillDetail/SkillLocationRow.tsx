@@ -1,8 +1,8 @@
 // ============================================================================
 // SkillLocationRow - one harness/reader row inside a scope's drawer: an
 // identity icon carrying the row's one status dot, its name and path, a
-// facts-only chip, a Park / Turn on button (or a disabled switch for an
-// always-on reader), and the ⋯ menu. Status never lives in the name or the chip - see status-spec.md §1.
+// facts-only chip, an on/off switch (off = parked; disabled for an always-on
+// reader), and the ⋯ menu. Status never lives in the name or the chip - see status-spec.md §1.
 // ============================================================================
 
 import { Link2, Puzzle } from "lucide-react";
@@ -12,7 +12,11 @@ import { SwitchControl } from "../ui/SwitchControl";
 import { TooltipControl } from "../ui/TooltipControl";
 import { homeRelativePath } from "@skill-studio/lib";
 import { SkillLocationMenu } from "./SkillLocationMenu";
-import { RowActionButton, SkillLocationRowButtons } from "./SkillLocationRowButtons";
+import {
+  ROW_SWITCH_SLOT,
+  RowActionSwitch,
+  SkillLocationRowButtons,
+} from "./SkillLocationRowButtons";
 import { parkActionFor, rowMenu, tipLines } from "./skill-location-status";
 import type { LocationAction, LocationRow } from "./skill-location-status";
 
@@ -43,7 +47,7 @@ function LocationRowSwitch({ row }: { row: LocationRow }) {
             : row.caption || `Off because this skill is disabled in the Universal folder.`
         }
       >
-        <span className="inline-flex">
+        <span className={ROW_SWITCH_SLOT}>
           <SwitchControl
             checked={row.switchOn}
             disabled
@@ -66,7 +70,7 @@ function LocationRowSwitch({ row }: { row: LocationRow }) {
   if (pluginDisabledByClaudeLabel) {
     return (
       <TooltipControl content={pluginDisabledByClaudeLabel}>
-        <span className="inline-flex">
+        <span className={ROW_SWITCH_SLOT}>
           <SwitchControl
             checked={false}
             disabled
@@ -78,7 +82,7 @@ function LocationRowSwitch({ row }: { row: LocationRow }) {
     );
   }
 
-  return <span className="w-6" aria-hidden="true" />;
+  return <span className="w-10 shrink-0" aria-hidden="true" />;
 }
 
 export function SkillLocationRow({
@@ -140,8 +144,8 @@ export function SkillLocationRow({
             onAction={onAction}
           />
         ) : turnOff ? (
-          <RowActionButton
-            label={`Turn off for ${row.harnessLabel}`}
+          <RowActionSwitch
+            checked
             ariaLabel={`Turn off ${row.harnessLabel} only: every agent gets its own copy, then the ${row.harnessLabel} copy is parked`}
             action={turnOff}
             onAction={onAction}

@@ -132,12 +132,6 @@
     border-color: var(--color-border);
   }
 
-  /* The ::-webkit-scrollbar styling below turns every scrollbar into a classic
-     one that takes width, even where macOS would overlay it. A container that
-     starts to overflow would then narrow and reflow its content, so every
-     scroll container reserves the gutter up front. The substring match also
-     catches variant-prefixed classes (`md:overflow-y-auto`). Only vertical
-     scrollbars take inline space, so `overflow-x-auto` is left out. */
   :where(
     [class*="overflow-auto"],
     [class*="overflow-scroll"],
@@ -146,6 +140,22 @@
   ) {
     scrollbar-gutter: stable;
   }
+}
+
+/* The ::-webkit-scrollbar styling below turns every scrollbar into a classic
+   one that takes width. A container that starts to overflow would narrow and
+   reflow its content. `scrollbar-gutter: stable` alone still let pages shift
+   in the app, so vertical scroll containers also always show their
+   (transparent) track and the width stays constant. This rule is unlayered so
+   it beats Tailwind's utilities layer. The substring match also catches
+   variant-prefixed classes (`md:overflow-y-auto`). Only the y axis changes. */
+:where(
+  [class*="overflow-auto"],
+  [class*="overflow-scroll"],
+  [class*="overflow-y-auto"],
+  [class*="overflow-y-scroll"]
+) {
+  overflow-y: scroll;
 }
 
 /* Right padding for a scroll container whose content must line up with

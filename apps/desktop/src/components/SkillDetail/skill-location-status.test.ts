@@ -292,7 +292,7 @@ describe("buildScopeGroups", () => {
   });
 
   // Flow: every copy is parked. Failure caught: no row offers Turn on, or the card still draws a live folder.
-  it("shows a fully parked skill as one Turn on row and no live rows", () => {
+  it("shows a fully parked skill as one off switch row and no live rows", () => {
     const parked = parkedCopy();
     const skill = fixtureSkill({ deployments: [parked], parked: true });
     const [global] = buildScopeGroups(skill);
@@ -303,8 +303,9 @@ describe("buildScopeGroups", () => {
     expect(skillRollup(skill, [global]).level).toBe("off");
 
     const markup = renderGroup(global);
-    expect(markup).toContain("Turn on");
-    expect(markup).not.toContain('role="switch"');
+    expect(markup).toContain("Turn on the parked");
+    expect(markup.match(/role="switch"/g)).toHaveLength(1);
+    expect(markup).toContain('aria-checked="false"');
     expect(buildInvocationFiles([global])).toEqual([]);
   });
 
