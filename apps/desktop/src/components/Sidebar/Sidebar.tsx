@@ -21,7 +21,6 @@ import {
 } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import { ownSkillsView, pluginSkillsView } from "@skill-studio/lib";
-import { defaultSkillListFilter } from "@skill-studio/lib";
 import { SHORTCUTS } from "../../lib/app-shortcuts";
 import {
   hasNewerSkillSnapshotEmission,
@@ -83,7 +82,7 @@ interface SidebarNavItemsProps {
   pluginCount: number;
   inParked: boolean;
   setActiveView: (view: ActiveView) => void;
-  setSkillListFilter: (patch: Partial<SkillListFilter>) => void;
+  replaceSkillListFilter: (patch: Partial<SkillListFilter>) => void;
 }
 
 /** The three places: Home, Skills (with an optional Plugins place beside it), Activity. */
@@ -94,7 +93,7 @@ function SidebarNavItems({
   pluginCount,
   inParked,
   setActiveView,
-  setSkillListFilter,
+  replaceSkillListFilter,
 }: SidebarNavItemsProps) {
   return (
     <div className="flex flex-col gap-px pt-2.5">
@@ -112,7 +111,7 @@ function SidebarNavItems({
         className={itemClass(skillsActive)}
         aria-current={skillsActive ? "page" : undefined}
         onClick={() => {
-          if (inParked) setSkillListFilter(defaultSkillListFilter());
+          if (inParked) replaceSkillListFilter({});
           setActiveView({ kind: "skills" });
         }}
       >
@@ -156,7 +155,7 @@ interface SidebarParkedSectionProps {
   inParked: boolean;
   parkedCount: number;
   setActiveView: (view: ActiveView) => void;
-  setSkillListFilter: (patch: Partial<SkillListFilter>) => void;
+  replaceSkillListFilter: (patch: Partial<SkillListFilter>) => void;
 }
 
 /** Parked is a sub-section of the skills list, shown only when non-empty. */
@@ -165,7 +164,7 @@ function SidebarParkedSection({
   inParked,
   parkedCount,
   setActiveView,
-  setSkillListFilter,
+  replaceSkillListFilter,
 }: SidebarParkedSectionProps) {
   if (parkedCount === 0) return null;
   const active = anchorView.kind === "skills" && inParked;
@@ -176,7 +175,7 @@ function SidebarParkedSection({
         className={itemClass(active)}
         aria-current={active ? "page" : undefined}
         onClick={() => {
-          setSkillListFilter({ ...defaultSkillListFilter(), scope: "parked" });
+          replaceSkillListFilter({ scope: "parked" });
           setActiveView({ kind: "skills" });
         }}
       >
@@ -287,7 +286,7 @@ export function Sidebar({ snapshot, emittedSnapshotRevision, requestRescan }: Si
   const anchorView = sidebarAnchorView(activeView);
   const setActiveView = useAppStore((state) => state.setActiveView);
   const skillListFilter = useAppStore((state) => state.skillListFilter);
-  const setSkillListFilter = useAppStore((state) => state.setSkillListFilter);
+  const replaceSkillListFilter = useAppStore((state) => state.replaceSkillListFilter);
   const openAddSkillSheet = useAppStore((state) => state.openAddSkillSheet);
   const resolvedTheme = useAppStore((state) => state.resolvedTheme);
   const setTheme = useAppStore((state) => state.setTheme);
@@ -360,14 +359,14 @@ export function Sidebar({ snapshot, emittedSnapshotRevision, requestRescan }: Si
           pluginCount={pluginCount}
           inParked={inParked}
           setActiveView={setActiveView}
-          setSkillListFilter={setSkillListFilter}
+          replaceSkillListFilter={replaceSkillListFilter}
         />
         <SidebarParkedSection
           anchorView={anchorView}
           inParked={inParked}
           parkedCount={parkedCount}
           setActiveView={setActiveView}
-          setSkillListFilter={setSkillListFilter}
+          replaceSkillListFilter={replaceSkillListFilter}
         />
       </div>
 

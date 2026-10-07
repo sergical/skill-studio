@@ -10,6 +10,7 @@ import type { HealthIssueKind } from "./skill-health";
 import { agentsCoveredByDeployment, collectDashboardIssues } from "./skill-health";
 import { pluginDeployments } from "./skill-plugin-partition";
 import type { InstalledSkill, SkillInvocationStats, SkillSourceKind } from "./skill-types";
+import { hasUpdate } from "./skill-updates";
 
 /** Which own skills `applySkillListFilter` considers before the other fields narrow it further. */
 export type SkillListFilterScope = "all" | "global" | "parked" | { project: string };
@@ -26,6 +27,8 @@ export interface SkillListFilter {
   invocation?: InstalledSkill["invocation"];
   /** Whether the skill had any invocations in the last 30 days. */
   usage?: "used-30d" | "unused-30d";
+  /** Keeps only skills the background update check found a newer commit for. */
+  update?: "available";
   query: string;
 }
 
@@ -122,6 +125,7 @@ export function applySkillListFilter(
       return false;
     }
     if (skillsWithIssue && !skillsWithIssue.has(skill.name)) return false;
+    if (filter.update === "available" && !hasUpdate(skill)) return false;
     if (filter.invocation && skill.invocation !== filter.invocation) return false;
     if (usesIn30DaysBySkill) {
       const usedIn30Days = (usesIn30DaysBySkill.get(skill.name) ?? 0) > 0;

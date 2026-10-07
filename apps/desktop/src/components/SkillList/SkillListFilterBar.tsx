@@ -101,7 +101,7 @@ function ActiveChip({ label, onClear }: { label: string; onClear: () => void }) 
 /**
  * How many of `filter`'s optional fields are set, not counting the query -
  * the search box already shows the query, but every other active filter needs
- * a chip: invocation and usage are only ever set from Home's stat tiles and
+ * a chip: invocation, usage, and update are only ever set from Home's stat tiles and
  * have no control of their own in this bar.
  */
 function activeFilterCount(filter: SkillListFilter): number {
@@ -111,6 +111,7 @@ function activeFilterCount(filter: SkillListFilter): number {
   if (filter.issue) count += 1;
   if (filter.invocation) count += 1;
   if (filter.usage) count += 1;
+  if (filter.update) count += 1;
   return count;
 }
 
@@ -418,6 +419,12 @@ export function SkillListActiveFilters({ filter, onChange, onReset }: SkillListA
         <ActiveChip
           label={USAGE_LABELS[filter.usage]}
           onClear={() => onChange({ ...filter, usage: undefined })}
+        />
+      )}
+      {filter.update && (
+        <ActiveChip
+          label="Updates available"
+          onClear={() => onChange({ ...filter, update: undefined })}
         />
       )}
       <Button variant="ghost" size="xs" className="px-2 text-text-tertiary" onClick={onReset}>

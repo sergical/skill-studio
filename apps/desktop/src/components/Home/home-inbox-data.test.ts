@@ -226,6 +226,62 @@ describe("updateAllOutdatedSkills", () => {
     });
   });
 
+  it("update_all_reports_the_skill_that_starts_next_or_shows_a_stale_name", async () => {
+    const skills = [
+      ownerSkill("alpha", "owner:v1/global/alpha"),
+      ownerSkill("beta", "owner:v1/global/beta"),
+    ];
+    const seen: [number, number, string | null][] = [];
+
+    await updateAllOutdatedSkills(
+      skills,
+      async () => {
+        throw new Error("no forks in this batch");
+      },
+      async (targets, onOwnerDone) => {
+        const owners = targets.map((target) => target.owner_id ?? "");
+        ["alpha", "beta"].forEach((name, index) => onOwnerDone(index + 1, name));
+        return succeedAll(owners);
+      },
+      (done, total, current) => seen.push([done, total, current]),
+    );
+
+    expect(seen).toEqual([
+      [0, 2, "alpha"],
+      [1, 2, "beta"],
+      [2, 2, null],
+    ]);
+  });
+
+  it("update_all_keeps_the_current_name_when_a_later_skill_finishes_first_or_names_the_wrong_skill", async () => {
+    const skills = ["alpha", "beta", "gamma"].map((name) =>
+      ownerSkill(name, `owner:v1/global/${name}`),
+    );
+    const seen: [number, number, string | null][] = [];
+
+    await updateAllOutdatedSkills(
+      skills,
+      async () => {
+        throw new Error("no forks in this batch");
+      },
+      async (targets, onOwnerDone) => {
+        const owners = targets.map((target) => target.owner_id ?? "");
+        onOwnerDone(1, "beta");
+        onOwnerDone(2, "alpha");
+        onOwnerDone(3, "gamma");
+        return succeedAll(owners);
+      },
+      (done, total, current) => seen.push([done, total, current]),
+    );
+
+    expect(seen).toEqual([
+      [0, 3, "alpha"],
+      [1, 3, "alpha"],
+      [2, 3, "gamma"],
+      [3, 3, null],
+    ]);
+  });
+
   it("update_all_pulls_a_fork_upstream_separately_from_the_batched_owner_call_or_names_the_extra_call", async () => {
     const owner = ownerSkill("alpha", "owner:v1/global/alpha");
 
@@ -396,7 +452,7 @@ describe("updateAllOutdatedSkills", () => {
         message: null,
       }),
       async (targets, onOwnerDone) => {
-        onOwnerDone(1);
+        onOwnerDone(1, "alpha");
         return succeedAll(targets.map((target) => target.owner_id ?? ""));
       },
       (done, total) => seen.push([done, total]),

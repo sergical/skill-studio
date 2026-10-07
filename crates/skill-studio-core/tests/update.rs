@@ -21,7 +21,8 @@ use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::{AgentId, LifecycleOwnerKind, RootScope, SkillName};
 use skill_studio_core::ops;
 use skill_studio_core::ports::{
-    CancelToken, MutationSession, Ports, ProcessOutput, ProcessSpawner, ProcessSpec, Runtime,
+    CancelToken, CoreNotice, EventSink, LeaseHandle, LeaseKey, LeaseMode, LeaseProvider,
+    MutationSession, OpState, Ports, ProcessOutput, ProcessSpawner, ProcessSpec, Runtime,
 };
 use skill_studio_core::scope::RuntimeScope;
 use skill_studio_core::testing::golden::{ctx, unique_temp_dir};
@@ -108,9 +109,13 @@ impl ProcessSpawner for FakeNpxUpdateSpawner {
                 cwd.join(".agents")
             };
             std::fs::write(lock_dir.join("agents.lock"), "# rewritten by install\n").unwrap();
+            // Only declared entries are refreshed, so a folder `agents.toml`
+            // does not name stays as it was.
+            let declared = std::fs::read_to_string(lock_dir.join("agents.toml")).unwrap();
             std::fs::read_dir(root)
                 .unwrap()
                 .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| declared.contains(&format!("name = \"{name}\"")))
                 .chain(self.installs_new.iter().map(|s| (*s).to_string()))
                 .collect()
         } else {
@@ -2054,6 +2059,542 @@ fn forced_undo_replaces_a_linked_extra_file_with_a_plain_file_or_writes_into_the
     );
     assert_eq!(std::fs::read_to_string(&toml).unwrap(), SIBLINGS_TOML);
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "user bytes\n");
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `update_all_runs_one_dotagents_install_per_scope_and_shares_its_event_or_names_the_extra_install`:
+/// two dotagents skills in the global scope need one `dotagents install`,
+/// since it refreshes every declared folder. Fails when the spawner is called
+/// twice, or when the second item gets its own journal row (its undo is the
+/// first row's).
+#[test]
+fn update_all_runs_one_dotagents_install_per_scope_and_shares_its_event_or_names_the_extra_install()
+{
+    let home = unique_temp_dir("update_all_dotagents_once");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_installed_skill(&home, "other", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let requests = vec![
+        cli_request("delta", InstallMethod::Dotagents),
+        cli_request("other", InstallMethod::Dotagents),
+    ];
+    let mut seen = 0;
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| seen += 1);
+
+    assert_eq!(seen, 2, "on_outcome must fire for the covered skill too");
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let first = result.items[0].outcome.as_ref().unwrap();
+    let second = result.items[1].outcome.as_ref().unwrap();
+    assert_eq!(second.event_id, first.event_id);
+    assert_eq!(second.skill.0, "other");
+    assert_ne!(second.tree_hash_before, second.tree_hash_after);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `update_all_runs_a_pinned_dotagents_skill_on_its_own_or_skips_the_new_ref`:
+/// a request with `ref_pin` edits `agents.toml` before installing, so the
+/// earlier install cannot stand in for it. Fails when the spawner runs once.
+#[test]
+fn update_all_runs_a_pinned_dotagents_skill_on_its_own_or_skips_the_new_ref() {
+    let home = unique_temp_dir("update_all_dotagents_pinned");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_installed_skill(&home, "other", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let mut pinned = cli_request("delta", InstallMethod::Dotagents);
+    pinned.ref_pin = Some("bbb".to_string());
+    let requests = vec![cli_request("other", InstallMethod::Dotagents), pinned];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let first = result.items[0].outcome.as_ref().unwrap();
+    let second = result.items[1].outcome.as_ref().unwrap();
+    assert_ne!(second.event_id, first.event_id);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `update_all_refuses_a_parked_dotagents_skill_after_an_install_or_runs_the_cli_for_it`:
+/// a parked skill that the earlier install would cover is still an error
+/// item, as it is for a single update. Fails when it reports success.
+#[test]
+fn update_all_refuses_a_parked_dotagents_skill_after_an_install_or_runs_the_cli_for_it() {
+    let home = unique_temp_dir("update_all_dotagents_parked");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_installed_skill(&home, "other", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    let parked = home.join(".agents/skills-parked/other");
+    std::fs::create_dir_all(&parked).unwrap();
+    std::fs::write(parked.join("SKILL.md"), "parked").unwrap();
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let requests = vec![
+        cli_request("delta", InstallMethod::Dotagents),
+        cli_request("other", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.items[0].outcome.is_some());
+    assert!(result.items[1].outcome.is_none());
+    assert!(result.errors["other"].contains("is parked"));
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+const THREE_DECLARED_TOML: &str = "version = 1\n\n[[skills]]\nname = \"alpha\"\nsource = \"o/r\"\n\n[[skills]]\nname = \"beta\"\nsource = \"o/r\"\n\n[[skills]]\nname = \"gamma\"\nsource = \"o/r\"\n";
+
+/// Flow: update-all asks for a declared dotagents skill, then a folder that
+/// `agents.toml` does not name.
+/// Expectation: the undeclared one is an error item, as for a single update,
+/// and the spawner ran once.
+/// A failure means the batch reported success for a skill the install never
+/// touched.
+#[test]
+fn update_all_reports_an_undeclared_dotagents_folder_as_an_error_after_a_declared_install() {
+    let home = unique_temp_dir("update_all_dotagents_undeclared");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_installed_skill(&home, "stray", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let requests = vec![
+        cli_request("delta", InstallMethod::Dotagents),
+        cli_request("stray", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.items[0].outcome.is_some());
+    assert!(result.items[1].outcome.is_none());
+    assert!(
+        result.errors["stray"].contains("no [[skills]] entry"),
+        "{:?}",
+        result.errors
+    );
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: update-all with A unpinned, B pinned, C unpinned in one scope.
+/// Expectation: C reports B's event id, since B's install ran after A's and
+/// refreshed C's folder.
+/// A failure means C points at A's journal row, so undoing C restores the
+/// wrong files.
+#[test]
+fn update_all_shares_the_latest_dotagents_install_event_with_a_later_covered_skill() {
+    let home = unique_temp_dir("update_all_dotagents_latest_event");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    seed_dotagents_files(&home, THREE_DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let mut pinned = cli_request("beta", InstallMethod::Dotagents);
+    pinned.ref_pin = Some("bbb".to_string());
+    let requests = vec![
+        cli_request("alpha", InstallMethod::Dotagents),
+        pinned,
+        cli_request("gamma", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
+    let event = |i: usize| result.items[i].outcome.as_ref().unwrap().event_id.clone();
+    assert_ne!(event(0), event(1));
+    assert_eq!(event(2), event(1));
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: update-all runs [alpha dotagents, beta copy, beta dotagents] in one
+/// scope, so a copy update rewrites beta after alpha's install refreshed it.
+/// Expectation: the last request runs its own install and gets its own event.
+/// A failure means beta reports alpha's install as its update although the
+/// copy update wrote the folder since.
+#[test]
+fn update_all_runs_a_new_dotagents_install_after_another_method_wrote_the_scope() {
+    let home = unique_temp_dir("update_all_dotagents_mixed_methods");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    seed_dotagents_files(&home, THREE_DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let requests = vec![
+        cli_request("alpha", InstallMethod::Dotagents),
+        copy_request("beta", "v3"),
+        cli_request("beta", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
+    let event = |i: usize| result.items[i].outcome.as_ref().unwrap().event_id.clone();
+    assert_ne!(event(2), event(0));
+    assert_ne!(event(2), event(1));
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: update-all covers beta with alpha's dotagents install, but beta's
+/// folder changes (a restore, another app) before beta's turn.
+/// Expectation: beta runs its own install instead of reusing alpha's event.
+/// A failure means beta reports success for content the install never wrote.
+#[test]
+fn update_all_runs_its_own_dotagents_install_for_a_folder_changed_after_the_shared_one() {
+    let home = unique_temp_dir("update_all_dotagents_drifted");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    seed_dotagents_files(&home, THREE_DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let beta = home.join(UNIVERSAL_ROOT_RELATIVE).join("beta");
+    let requests = vec![
+        cli_request("alpha", InstallMethod::Dotagents),
+        cli_request("beta", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |skill, _| {
+        if skill.0 == "alpha" {
+            std::fs::write(beta.join("SKILL.md"), "edited after the install").unwrap();
+        }
+    });
+
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
+    let event = |i: usize| result.items[i].outcome.as_ref().unwrap().event_id.clone();
+    assert_ne!(event(1), event(0));
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: update-all covers beta with alpha's dotagents install, but
+/// `agents.toml` changes (beta pinned to a new ref) before beta's turn.
+/// Expectation: beta runs its own install for the new configuration.
+/// A failure means beta reports success without installing the edited entry.
+#[test]
+fn update_all_runs_its_own_dotagents_install_after_agents_toml_changed() {
+    let home = unique_temp_dir("update_all_dotagents_toml_changed");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    seed_dotagents_files(&home, THREE_DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let toml = home.join(".agents/agents.toml");
+    let requests = vec![
+        cli_request("alpha", InstallMethod::Dotagents),
+        cli_request("beta", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |skill, _| {
+        if skill.0 == "alpha" {
+            let text = std::fs::read_to_string(&toml).unwrap();
+            std::fs::write(&toml, format!("{text}\n# beta moved to a new ref\n")).unwrap();
+        }
+    });
+
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
+    let event = |i: usize| result.items[i].outcome.as_ref().unwrap().event_id.clone();
+    assert_ne!(event(1), event(0));
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Rewrites one skill folder on the first `Committed` notice, the moment the
+/// first update releases its lease, as another client could.
+struct WriteOnFirstCommit {
+    target: PathBuf,
+    done: Mutex<bool>,
+}
+
+impl EventSink for WriteOnFirstCommit {
+    fn notify(&self, notice: CoreNotice) {
+        let mut done = self.done.lock().unwrap();
+        if let (
+            false,
+            CoreNotice::OpState {
+                state: OpState::Committed,
+                ..
+            },
+        ) = (*done, notice)
+        {
+            std::fs::write(&self.target, "written as the lease was released").unwrap();
+            *done = true;
+        }
+    }
+}
+
+/// Flow: update-all covers beta with alpha's dotagents install, and another
+/// client rewrites beta just as alpha's install releases its lease.
+/// Expectation: beta runs its own install.
+/// A failure means the snapshot of alpha's install output was taken after
+/// the lease was released, so it recorded the other client's write as the
+/// install's and skipped beta.
+#[test]
+fn update_all_snapshots_the_dotagents_install_before_its_lease_is_released() {
+    let home = unique_temp_dir("update_all_dotagents_lease_gap");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    seed_dotagents_files(&home, THREE_DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let mut rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+    rt.ports.sink = Arc::new(WriteOnFirstCommit {
+        target: home
+            .join(UNIVERSAL_ROOT_RELATIVE)
+            .join("beta")
+            .join("SKILL.md"),
+        done: Mutex::new(false),
+    });
+
+    let requests = vec![
+        cli_request("alpha", InstallMethod::Dotagents),
+        cli_request("beta", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
+    let event = |i: usize| result.items[i].outcome.as_ref().unwrap().event_id.clone();
+    assert_ne!(event(1), event(0));
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Rewrites `agents.toml` just before the first exclusive lease is granted,
+/// as another client could while the update waits for the lease.
+struct EditBeforeFirstLease {
+    inner: FileLease,
+    toml: PathBuf,
+    text: &'static str,
+    done: Mutex<bool>,
+}
+
+impl LeaseProvider for EditBeforeFirstLease {
+    fn acquire(
+        &self,
+        keys: &[LeaseKey],
+        mode: LeaseMode,
+        wait: std::time::Duration,
+    ) -> Result<Box<dyn LeaseHandle>, skill_studio_core::error::CoreError> {
+        let mut done = self.done.lock().unwrap();
+        if !*done && mode == LeaseMode::Exclusive {
+            std::fs::write(&self.toml, self.text).unwrap();
+            *done = true;
+        }
+        self.inner.acquire(keys, mode, wait)
+    }
+}
+
+/// Flow: update-all asks for alpha then beta, and another client drops beta
+/// from `agents.toml` while alpha's update waits for the lease.
+/// Expectation: beta is not covered by alpha's install; it fails as an
+/// undeclared skill, and the spawner ran once.
+/// A failure means coverage came from `agents.toml` as read before the lease,
+/// so beta was reported as updated by an install that no longer declared it.
+#[test]
+fn update_all_takes_dotagents_coverage_from_agents_toml_read_under_the_lease() {
+    let home = unique_temp_dir("update_all_dotagents_toml_before_lease");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    seed_dotagents_files(&home, THREE_DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let mut rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+    rt.ports.leases = Arc::new(EditBeforeFirstLease {
+        inner: FileLease::new(home.join(".leases")),
+        toml: home.join(".agents/agents.toml"),
+        text: "version = 1\n\n[[skills]]\nname = \"alpha\"\nsource = \"o/r\"\n\n[[skills]]\nname = \"gamma\"\nsource = \"o/r\"\n",
+        done: Mutex::new(false),
+    });
+
+    let requests = vec![
+        cli_request("alpha", InstallMethod::Dotagents),
+        cli_request("beta", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.items[0].outcome.is_some());
+    assert!(
+        result.items[1].outcome.is_none(),
+        "beta must not be covered"
+    );
+    assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Counts exclusive lease grants.
+struct CountingLeases {
+    inner: FileLease,
+    exclusive: Mutex<usize>,
+}
+
+impl LeaseProvider for CountingLeases {
+    fn acquire(
+        &self,
+        keys: &[LeaseKey],
+        mode: LeaseMode,
+        wait: std::time::Duration,
+    ) -> Result<Box<dyn LeaseHandle>, skill_studio_core::error::CoreError> {
+        if mode == LeaseMode::Exclusive {
+            *self.exclusive.lock().unwrap() += 1;
+        }
+        self.inner.acquire(keys, mode, wait)
+    }
+}
+
+/// Flow: update-all covers beta with alpha's dotagents install.
+/// Expectation: beta's coverage check takes the scope's exclusive lease too,
+/// so two grants for one install.
+/// A failure means the check reads beta's folder while another update can
+/// swap it, and can match a tree that never existed on disk.
+#[test]
+fn update_all_checks_dotagents_coverage_under_the_scope_lease() {
+    let home = unique_temp_dir("update_all_dotagents_cover_leased");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    seed_dotagents_files(&home, THREE_DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let mut rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+    let leases = Arc::new(CountingLeases {
+        inner: FileLease::new(home.join(".leases")),
+        exclusive: Mutex::new(0),
+    });
+    rt.ports.leases = leases.clone();
+
+    let requests = vec![
+        cli_request("alpha", InstallMethod::Dotagents),
+        cli_request("beta", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+    assert_eq!(*leases.exclusive.lock().unwrap(), 2);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: update-all with one dotagents skill in the global scope and one in
+/// a project.
+/// Expectation: each scope runs its own install and gets its own event.
+/// A failure means a global install stood in for a project skill.
+#[test]
+fn update_all_runs_one_dotagents_install_in_each_scope() {
+    let home = unique_temp_dir("update_all_dotagents_two_scopes");
+    let project = home.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    seed_installed_skill(&project, "delta", "v1");
+    std::fs::write(project.join("agents.toml"), DECLARED_TOML).unwrap();
+    std::fs::write(project.join("agents.lock"), LOCK_BEFORE).unwrap();
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let mut scope = RuntimeScope::fixture(&home);
+    scope.projects = skill_studio_core::scope::ProjectSelection::Explicit {
+        paths: vec![project.clone()],
+    };
+    let ports = Ports {
+        fs: Arc::new(RealFs::new()),
+        clock: Arc::new(FakeClock::at(0)),
+        ids: Arc::new(FakeIds::default()),
+        leases: Arc::new(FileLease::new(home.join(".leases"))),
+        history: Arc::new(SqliteHistoryOpener::new(
+            home.join(".history").join("events.sqlite3"),
+        )),
+        sink: Arc::new(RecordingSink::default()),
+        spawner: Some(spawner.clone()),
+        discovery: None,
+        tools: None,
+        catalog: Arc::new(HarnessCatalog::builtin()),
+        telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+    };
+    let rt = Runtime::new(&scope, ports).unwrap();
+
+    let mut in_project = cli_request("delta", InstallMethod::Dotagents);
+    in_project.scope = RootScope::Project(skill_studio_core::identity::ProjectRef(project.clone()));
+    let requests = vec![cli_request("delta", InstallMethod::Dotagents), in_project];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
+    let first = result.items[0].outcome.as_ref().unwrap();
+    let second = result.items[1].outcome.as_ref().unwrap();
+    assert_ne!(first.event_id, second.event_id);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: update-all covers a second dotagents skill with the first install,
+/// then the shared event is undone.
+/// Expectation: the covered skill's folder is back at its old content.
+/// A failure means the shared row did not back up the covered folder.
+#[test]
+fn undoing_the_shared_dotagents_event_restores_the_covered_skill_folder() {
+    let home = unique_temp_dir("update_all_dotagents_undo_shared");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_installed_skill(&home, "other", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let requests = vec![
+        cli_request("delta", InstallMethod::Dotagents),
+        cli_request("other", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    let other = home.join(UNIVERSAL_ROOT_RELATIVE).join("other/SKILL.md");
+    assert!(std::fs::read_to_string(&other)
+        .unwrap()
+        .contains("Body at v2"));
+
+    let event_id = result.items[1].outcome.as_ref().unwrap().event_id.clone();
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id,
+            force: false,
+        },
+    )
+    .unwrap_or_else(|e| panic!("undo of the shared event must succeed: {e}"));
+
+    assert!(std::fs::read_to_string(&other)
+        .unwrap()
+        .contains("Body at v1"));
 
     std::fs::remove_dir_all(&home).ok();
 }

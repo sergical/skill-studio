@@ -58,6 +58,7 @@
 //! creates is recorded for removal. Plugins and other runtime files that
 //! `install` may rewrite are outside the backup: undo does not restore them.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::dto::{InstallMethod, UpdateAllItem, UpdateAllOutcome, UpdateOutcome, UpdateRequest};
@@ -670,9 +671,28 @@ pub fn update(
     ctx: &OpContext,
     req: &UpdateRequest,
 ) -> Result<UpdateOutcome, CoreError> {
+    update_then_release(rt, ctx, req, &mut |_| {})
+}
+
+/// A point inside [`update_body`] where the lease is held, for
+/// [`update_all`] to see the scope exactly as this update does.
+enum UpdateStage<'a> {
+    /// `agents.toml` was read and checked; nothing is written yet.
+    DotagentsPlanned(&'a DotagentsPlan),
+    /// The update succeeded and its row is done; the lease is not released yet.
+    Written,
+}
+
+/// [`update`], calling `on_stage` at each [`UpdateStage`].
+fn update_then_release(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &UpdateRequest,
+    on_stage: &mut dyn FnMut(UpdateStage<'_>),
+) -> Result<UpdateOutcome, CoreError> {
     rt.run(Operation::Update, ctx, || {
         refuse_parked(rt, req)?;
-        update_body(rt, ctx, req)
+        update_body(rt, ctx, req, on_stage)
     })
 }
 
@@ -719,6 +739,7 @@ fn update_body(
     rt: &Runtime,
     ctx: &OpContext,
     req: &UpdateRequest,
+    on_stage: &mut dyn FnMut(UpdateStage<'_>),
 ) -> Result<UpdateOutcome, CoreError> {
     ctx.checkpoint()?;
     let clock = rt.ports.clock.as_ref();
@@ -758,6 +779,9 @@ fn update_body(
         InstallMethod::Dotagents => Some(plan_dotagents_update(rt, fs, req)?),
         InstallMethod::Copy | InstallMethod::SkillsSh => None,
     };
+    if let Some(plan) = &dotagents {
+        on_stage(UpdateStage::DotagentsPlanned(plan));
+    }
 
     let step_start = clock.monotonic();
     let id = rt.ports.ids.next_event_id();
@@ -870,6 +894,7 @@ fn update_body(
     session
         .store
         .finish(&session.guard, &id, EventStatus::Done, post_fingerprint)?;
+    on_stage(UpdateStage::Written);
     session.finish(rt, ctx);
     let write_step = crate::timing::step(clock, "write", step_start);
     ctx.record_timing(crate::timing::op_timing(
@@ -1103,6 +1128,135 @@ pub fn update_all(
     }
 }
 
+/// A successful `dotagents install` in one scope, and the tree hashes of the
+/// skills it covered, taken before and right after it ran.
+struct DotagentsBatch {
+    scope: RootScope,
+    event_id: crate::identity::EventId,
+    hashes_before: BTreeMap<SkillName, String>,
+    hashes_after: BTreeMap<SkillName, String>,
+    /// `agents.toml` and `agents.lock` right after the install, so an edit
+    /// to a later skill's source or ref makes it run its own install.
+    files_after: DotagentsFiles,
+}
+
+type DotagentsFiles = [Option<Vec<u8>>; 2];
+
+/// The scope's `agents.toml` and `agents.lock` bytes; `None` for one that is
+/// missing or unreadable.
+fn read_dotagents_files(rt: &Runtime, scope: &RootScope) -> DotagentsFiles {
+    let fs = rt.ports.fs.as_ref();
+    let project = match scope {
+        RootScope::Global => None,
+        RootScope::Project(project) => Some(project.0.as_path()),
+    };
+    let dir = crate::dotagents_ledger::dotagents_dir(&rt.scope.home.lexical, project);
+    ["agents.toml", "agents.lock"].map(|name| {
+        let path = crate::ports::resolve_config_link(fs, &dir.join(name)).ok()?;
+        fs.read_capped(&path, crate::dotagents_ledger::DOTAGENTS_FILE_MAX_BYTES)
+            .ok()
+    })
+}
+
+impl DotagentsBatch {
+    /// The batch that covers `req`, when the skill's folder, `agents.toml` and
+    /// `agents.lock` are still exactly what the install left. Anything that
+    /// wrote them since (a restore, another app) makes `req` run its own
+    /// install instead.
+    fn covering<'a>(
+        installed: &'a [DotagentsBatch],
+        rt: &Runtime,
+        req: &UpdateRequest,
+    ) -> Option<&'a DotagentsBatch> {
+        if req.method != InstallMethod::Dotagents || req.ref_pin.is_some() {
+            return None;
+        }
+        let batch = installed.iter().find(|batch| batch.scope == req.scope)?;
+        let after = batch.hashes_after.get(&req.skill)?;
+        if read_dotagents_files(rt, &req.scope) != batch.files_after {
+            return None;
+        }
+        let destination = ops_install::scope_root(rt, &req.scope)
+            .join(UNIVERSAL_ROOT_RELATIVE)
+            .join(&req.skill.0);
+        let now = crate::tree_hash::tree_hash(rt.ports.fs.as_ref(), &destination).ok()?;
+        (now == *after).then_some(batch)
+    }
+}
+
+/// The covered outcome for `req`, checked under the scope's exclusive lease
+/// so no other update can change the folder or `agents.toml` mid-check;
+/// `None` when `req` must run its own update.
+fn cover_under_lease(
+    installed: &[DotagentsBatch],
+    rt: &Runtime,
+    req: &UpdateRequest,
+) -> Option<Result<UpdateOutcome, CoreError>> {
+    if !installed.iter().any(|batch| batch.scope == req.scope) {
+        return None;
+    }
+    let _guard = crate::ports::acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).ok()?;
+    let batch = DotagentsBatch::covering(installed, rt, req)?;
+    Some(refuse_parked(rt, req).map(|()| covered_by_install(req, batch, rt)))
+}
+
+/// Re-hashes each skill in `before` after the install, leaving out any whose
+/// folder is gone or unreadable so it runs on its own.
+fn hash_after_install(
+    rt: &Runtime,
+    scope: &RootScope,
+    before: &BTreeMap<SkillName, String>,
+) -> BTreeMap<SkillName, String> {
+    let root = ops_install::scope_root(rt, scope).join(UNIVERSAL_ROOT_RELATIVE);
+    before
+        .keys()
+        .filter_map(|skill| {
+            let hash = crate::tree_hash::tree_hash(rt.ports.fs.as_ref(), &root.join(&skill.0));
+            Some((skill.clone(), hash.ok()?))
+        })
+        .collect()
+}
+
+/// Hashes the destination of each later un-pinned dotagents request in
+/// `scope` that the running install covers: declared in `agents.toml` and
+/// passing the checks a single `update` runs. A skill whose hash fails is
+/// left out, so it runs on its own.
+fn hash_later_dotagents(
+    rt: &Runtime,
+    later: &[UpdateRequest],
+    scope: &RootScope,
+    declared: &[String],
+) -> BTreeMap<SkillName, String> {
+    let root = ops_install::scope_root(rt, scope).join(UNIVERSAL_ROOT_RELATIVE);
+    later
+        .iter()
+        .filter(|req| {
+            req.method == InstallMethod::Dotagents
+                && req.ref_pin.is_none()
+                && req.scope == *scope
+                && declared.contains(&req.skill.0)
+                && validate_cli_request(rt, req).is_ok()
+        })
+        .filter_map(|req| {
+            let hash = crate::tree_hash::tree_hash(rt.ports.fs.as_ref(), &root.join(&req.skill.0));
+            Some((req.skill.clone(), hash.ok()?))
+        })
+        .collect()
+}
+
+/// The outcome for a skill an earlier install in `batch` already refreshed.
+fn covered_by_install(req: &UpdateRequest, batch: &DotagentsBatch, rt: &Runtime) -> UpdateOutcome {
+    UpdateOutcome {
+        event_id: batch.event_id.clone(),
+        skill: req.skill.clone(),
+        tree_hash_before: batch.hashes_before[&req.skill].clone(),
+        tree_hash_after: batch.hashes_after[&req.skill].clone(),
+        deployment_path: ops_install::scope_root(rt, &req.scope)
+            .join(UNIVERSAL_ROOT_RELATIVE)
+            .join(&req.skill.0),
+    }
+}
+
 fn update_all_body(
     rt: &Runtime,
     ctx: &OpContext,
@@ -1112,9 +1266,49 @@ fn update_all_body(
     let clock = rt.ports.clock.as_ref();
     let start = clock.monotonic();
     let mut items = Vec::with_capacity(requests.len());
-    let mut errors = std::collections::BTreeMap::new();
-    for req in requests {
-        let result = update(rt, ctx, req);
+    let mut errors = BTreeMap::new();
+    // One `dotagents install` refreshes every declared skill in its scope, and
+    // that update's journal row already backs up their folders. Later
+    // requests the install covered reuse its row instead of installing again.
+    let mut installed: Vec<DotagentsBatch> = Vec::new();
+    for (index, req) in requests.iter().enumerate() {
+        let is_dotagents = req.method == InstallMethod::Dotagents;
+        let result = if let Some(covered) = cover_under_lease(&installed, rt, req) {
+            covered
+        } else {
+            let mut hashes_before = BTreeMap::new();
+            let mut snapshot = None;
+            let result = update_then_release(rt, ctx, req, &mut |stage| match stage {
+                UpdateStage::DotagentsPlanned(plan) => {
+                    hashes_before = hash_later_dotagents(
+                        rt,
+                        &requests[index + 1..],
+                        &req.scope,
+                        &plan.declared,
+                    );
+                }
+                UpdateStage::Written if is_dotagents => {
+                    snapshot = Some((
+                        hash_after_install(rt, &req.scope, &hashes_before),
+                        read_dotagents_files(rt, &req.scope),
+                    ));
+                }
+                UpdateStage::Written => {}
+            });
+            // Any other write in the scope (another method, a failed or pinned
+            // install) may have changed what the cached install left behind.
+            installed.retain(|batch| batch.scope != req.scope);
+            if let (Some((hashes_after, files_after)), Ok(outcome)) = (snapshot, &result) {
+                installed.push(DotagentsBatch {
+                    scope: req.scope.clone(),
+                    event_id: outcome.event_id.clone(),
+                    hashes_before,
+                    hashes_after,
+                    files_after,
+                });
+            }
+            result
+        };
         on_outcome(&req.skill, &result);
         match result {
             Ok(outcome) => items.push(UpdateAllItem {

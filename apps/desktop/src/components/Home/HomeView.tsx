@@ -8,12 +8,7 @@
 
 import { useState } from "react";
 import { Button } from "@skill-studio/ui";
-import {
-  defaultSkillListFilter,
-  formatTokens,
-  homeInvocationCounts,
-  homePromptCost,
-} from "@skill-studio/lib";
+import { formatTokens, homeInvocationCounts, homePromptCost } from "@skill-studio/lib";
 import type {
   HealthIssue,
   InstalledSkill,
@@ -330,7 +325,7 @@ function InvocationCostCard({
  */
 export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeViewProps) {
   const setActiveView = useAppStore((state) => state.setActiveView);
-  const setSkillListFilter = useAppStore((state) => state.setSkillListFilter);
+  const replaceSkillListFilter = useAppStore((state) => state.replaceSkillListFilter);
   const openSkill = useAppStore((state) => state.openSkill);
 
   const [linkedRootDialog, setLinkedRootDialog] = useState<{
@@ -356,8 +351,8 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
     toggleGroup,
   } = useHomeGroupVisibility();
 
-  const goToSkills = (patch: Parameters<typeof setSkillListFilter>[0]) => {
-    setSkillListFilter({ ...defaultSkillListFilter(), ...patch });
+  const goToSkills = (patch: Parameters<typeof replaceSkillListFilter>[0]) => {
+    replaceSkillListFilter(patch);
     setActiveView({ kind: "skills" });
   };
   const goToInvocation = (invocation: InvocationPolicy) => goToSkills({ invocation });
@@ -423,7 +418,7 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
         toggleGroup={toggleGroup}
         onSelectSkill={onSelectSkill}
         onShowAllIssues={() => goToSkills({ issue: "any" })}
-        onShowAllUpdates={() => setActiveView({ kind: "skills" })}
+        onShowAllUpdates={() => goToSkills({ update: "available" })}
         onShowAllUnused={() => goToSkills({ usage: "unused-30d" })}
         onShowAllRecent={() => setActiveView({ kind: "activity" })}
         openSkill={openSkill}

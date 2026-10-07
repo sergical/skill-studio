@@ -15,7 +15,7 @@ import { SkillListActiveFilters, SkillListFilterBar } from "./SkillListFilterBar
 import { useProjectFolderActions } from "../../hooks/useProjectFolderActions";
 import { collectDashboardIssues } from "@skill-studio/lib";
 import { applySkillListFilter } from "@skill-studio/lib";
-import { ownSkillsView } from "@skill-studio/lib";
+import { ownSkillsView, ownSkillsWithPluginUpdates } from "@skill-studio/lib";
 import type { SkillSnapshot } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 
@@ -59,7 +59,10 @@ export function SkillsView({ snapshot, onSelectSkill, active }: SkillsViewProps)
   // list is always the user's own skills.
   const baseSkills = ownSkillsView(allSkills);
   const issues = collectDashboardIssues(baseSkills);
-  const rows = applySkillListFilter(baseSkills, filter, issues, snapshot?.invocations);
+  // Home counts plugin-only skills with an update, so the update filter lists them too.
+  const listedSkills =
+    filter.update === "available" ? ownSkillsWithPluginUpdates(allSkills) : baseSkills;
+  const rows = applySkillListFilter(listedSkills, filter, issues, snapshot?.invocations);
 
   /** Adds a project via the shared hook, then switches the scope to it. */
   const handleAddProject = async () => {

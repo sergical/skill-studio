@@ -151,7 +151,7 @@ function ShowAllLink({
 }
 
 /** "Pull latest" for one Updates row - see `useGuardedSkillUpdate`'s `pullLatest`. */
-function PullLatestButton({ skill }: { skill: InstalledSkill }) {
+function PullLatestButton({ skill, isBusy = false }: { skill: InstalledSkill; isBusy?: boolean }) {
   const [isPulling, setIsPulling] = useState(false);
   const guard = useGuardedSkillUpdate();
 
@@ -167,10 +167,10 @@ function PullLatestButton({ skill }: { skill: InstalledSkill }) {
         variant="ghost"
         className={ROW_ACTION_CLASS}
         onClick={handlePull}
-        disabled={isPulling || guard.isResolving}
+        disabled={isPulling || guard.isResolving || isBusy}
       >
-        {isPulling || guard.isResolving ? (
-          <span className="inline-block size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+        {isPulling || guard.isResolving || isBusy ? (
+          <span className="inline-block size-3 animate-spin motion-reduce:animate-none rounded-full border-2 border-current border-t-transparent" />
         ) : (
           "Pull latest"
         )}
@@ -540,20 +540,25 @@ function UpdatesGroup({
   /** This group's offset into the page's continuous `aria-rowindex` sequence. */
   start: number;
 }) {
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [progress, setProgress] = useState<{
+    done: number;
+    total: number;
+    current: string | null;
+  } | null>(null);
   const addToast = useAppStore((state) => state.addToast);
   const [editedSkills, setEditedSkills] = useState<InstalledSkill[]>([]);
-  const isUpdatingAll = progress !== null;
+  const [isCheckingEdits, setIsCheckingEdits] = useState(false);
+  const isUpdatingAll = progress !== null || isCheckingEdits;
 
   const runUpdateAll = async (forkNames?: ReadonlySet<string>) => {
-    setProgress({ done: 0, total: 0 });
+    setProgress({ done: 0, total: 0, current: null });
     // `updateAllOutdatedSkills` catches every `pullFork`/`updateAllOwners`
     // rejection itself and folds it into `failures`, so this await never
     // throws - a plain (React Compiler-friendly) sequence needs no
     // try/finally to still always clear the loading flag.
     const tally = await runHomeUpdateAll(
       updates,
-      (done, total) => setProgress({ done, total }),
+      (done, total, current) => setProgress({ done, total, current }),
       forkNames,
     );
     const { skillsAttempted, skillsSucceeded, failures } = tally;
@@ -569,12 +574,12 @@ function UpdatesGroup({
   };
 
   const handleUpdateAll = async () => {
-    setProgress({ done: 0, total: 0 });
+    setIsCheckingEdits(true);
     // `skillsWithLocalEdits` treats a failed check as "no edits", so it never rejects.
     const edited = await skillsWithLocalEdits(updates, skillLocalEdits);
+    setIsCheckingEdits(false);
     if (edited.length > 0) {
       setEditedSkills(edited);
-      setProgress(null);
       return;
     }
     await runUpdateAll();
@@ -605,17 +610,26 @@ function UpdatesGroup({
                     ? progress.total > 0
                       ? `Updating ${progress.done} of ${progress.total}…`
                       : "Updating…"
-                    : "Update all"}
+                    : isCheckingEdits
+                      ? "Updating…"
+                      : "Update all"}
                 </Button>
               )
             }
           />
-          {progress && progress.total > 0 && (
-            <Progress
-              value={(progress.done / progress.total) * 100}
-              aria-label={`Updating ${progress.done} of ${progress.total}`}
-              className="px-3 pb-2"
-            />
+          {progress && (
+            <div className="flex flex-col gap-1 px-3 pb-2">
+              <Progress
+                value={progress.total > 0 ? (progress.done / progress.total) * 100 : 0}
+                aria-label={
+                  progress.total > 0 ? `Updating ${progress.done} of ${progress.total}` : "Updating"
+                }
+              />
+              <p className="text-small text-text-secondary">
+                Updating {progress.current ?? "skills"}
+                {progress.total > 0 && ` · ${progress.done} of ${progress.total}`}
+              </p>
+            </div>
           )}
         </div>
       </div>
@@ -649,7 +663,9 @@ function UpdatesGroup({
                     </span>
                   </>
                 }
-                action={<PullLatestButton skill={skill} />}
+                action={
+                  <PullLatestButton skill={skill} isBusy={progress?.current === skill.name} />
+                }
               />
             );
           })}

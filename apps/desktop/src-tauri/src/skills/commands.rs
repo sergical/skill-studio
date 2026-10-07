@@ -2511,10 +2511,11 @@ fn unresolved_target_skill(
 /// `update_all_with_runtime`, N1 review round 2) in the one `spawn_blocking`
 /// task `time_command_blocking` wraps the whole body in (N2: the review
 /// round 1 fix - resolving targets reads ledgers off disk, which no longer
-/// runs untimed on the Tokio worker) - each skill still gets its own
-/// journal row (`ops::update_all`'s own per-request loop), but no part of
-/// resolving targets, reading ledgers, or writing skills touches the UI
-/// task. A refused target is one failed item, not a failed call
+/// runs untimed on the Tokio worker) - each skill gets its own
+/// journal row (`ops::update_all`'s own per-request loop), except a dotagents
+/// skill an earlier install in the same scope covered, which shares that
+/// install's row. No part of resolving targets, reading ledgers, or writing
+/// skills touches the UI task. A refused target is one failed item, not a failed call
 /// (`run_update_all_batch`). Each finished target emits
 /// `UPDATE_ALL_PROGRESS_EVENT`. Only a succeeded item's owner has its badge
 /// cleared (N1, via `owners_to_clear`); a failed item's badge stays on so
