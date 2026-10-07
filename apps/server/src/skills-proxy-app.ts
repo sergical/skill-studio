@@ -157,10 +157,10 @@ function cacheTtlSecondsFor(path: string): number {
  * params in a different order) is dropped so it can't fragment the cache or
  * drain a caller's rate-limit quota with cache-busting variations. The skill
  * detail route takes no query params at all. */
-const ALLOWED_QUERY_PARAMS = {
+const ALLOWED_QUERY_PARAMS: Partial<Record<string, readonly string[]>> = {
   "/api/v1/skills": ["page", "per_page", "view"],
   "/api/v1/skills/search": ["limit", "q"],
-} satisfies Record<string, readonly string[]>;
+};
 
 /** Rebuilds `url`'s query string using only `path`'s allowed params, in
  * sorted order - used for both the upstream request and the cache key so the
