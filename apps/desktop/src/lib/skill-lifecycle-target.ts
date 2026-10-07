@@ -108,7 +108,7 @@ export function skillPluginUpdateTargets(
   );
 }
 
-export const pluginOwnerIdFor = (target: PluginUpdateTarget) =>
+const pluginOwnerIdFor = (target: PluginUpdateTarget) =>
   `${PLUGIN_OWNER_PREFIX}${target.plugin_id}`;
 
 export const pluginTargetKey = (target: PluginUpdateTarget) =>
@@ -766,7 +766,7 @@ export async function updatePluginTargets(
 }
 
 /** Run an update for each owner target in turn and return every failure. */
-export async function updateOwnerTargets(
+async function updateOwnerTargets(
   targets: LifecycleTarget[],
   updateOwner: (target: LifecycleTarget) => Promise<{ success: boolean; error?: string | null }>,
 ): Promise<SkillOwnerUpdateSummary> {
