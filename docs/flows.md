@@ -44,3 +44,28 @@ A new user-facing flow must add a row to this table and a flow-level test.
 | Make independent copy         | Skill page Make independent copy     | `make_skill_independent_copy`                                                                            | `apps/desktop/src-tauri/src/skills/skill_independent_copy.rs::linked_skill_becomes_an_identical_owned_copy_and_other_scope_is_untouched`                        |
 | App update install            | Settings Restart to update           | `install_update`                                                                                         | `apps/desktop/src-tauri/src/skills/skill_update.rs::confirm_install_runs_the_downloaded_update_exactly_once`                                                    |
 | Invocation policy             | Skill page invocation control        | `set_skill_invocation`, `set_skills_invocation`                                                          | `apps/desktop/src-tauri/src/skills/skill_invocation.rs::set_skill_invocation_with_rewrites_the_file_on_disk`                                                    |
+
+## Timing
+
+Run the timing check on demand. It builds a temp home with 378 skills and prints a table. It asserts only correctness, never a duration, and CI does not run it.
+
+```
+cargo test -p skill-studio-core --all-features --test timing -- --ignored --nocapture
+```
+
+Measured on the author's machine on 2026-10-07 (debug build, local disk, median of 5 runs, scan first run is one run):
+
+| Job                                    | Median ms | Max ms |
+| -------------------------------------- | --------: | -----: |
+| Scan, first run on a new runtime       |     160.6 |  160.6 |
+| Scan, repeat on one runtime            |     118.9 |  120.7 |
+| Park one shared skill                  |      82.7 |   87.2 |
+| Unpark it                              |      81.3 |   95.6 |
+| Remove one fork-owned shared skill     |      88.9 |   92.6 |
+
+Skipped, with the reason:
+
+- Snapshot build: it lives in the desktop crate, not in core.
+- Park for every agent on a dotagents skill: it runs `dotagents remove` through the process spawner.
+- Remove of a manual skill: core refuses it, so a fork-owned skill is timed instead.
+- Install, update, uninstall: they run npx or the network.
