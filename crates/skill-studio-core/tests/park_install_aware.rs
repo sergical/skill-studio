@@ -23,11 +23,13 @@ use skill_studio_core::dto::{
     DeploymentDto, InstallMethod, ListEventsRequest, ParkRequest, RestoreCapability,
     RestoreRequest, ScanRequest, UnparkRequest, UpdateRequest,
 };
+use skill_studio_core::events::{EventDraft, EventKind, EventStatus};
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::{RootKind, RootScope, SkillName};
 use skill_studio_core::ops;
 use skill_studio_core::ports::{
-    CancelToken, NeverCancel, Ports, ProcessOutput, ProcessSpawner, ProcessSpec, Runtime,
+    acquire_exclusive, CancelToken, HistoryAccess, NeverCancel, Ports, ProcessOutput,
+    ProcessSpawner, ProcessSpec, Runtime,
 };
 use skill_studio_core::scope::{ProjectSelection, RuntimeScope};
 use skill_studio_core::testing::golden::{ctx, unique_temp_dir};
@@ -672,6 +674,66 @@ fn a_dotagents_park_row_has_no_inverse() {
     unpark_foo(&rt);
     let events = ops::list_events(&rt, &ctx(), &ListEventsRequest::default()).unwrap();
     assert_eq!(events[0].restore, RestoreCapability::NoInverse);
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: park a dotagents skill that has a Claude Code link, record more
+/// newer events for it than one `list_events` page holds, then turn it on.
+/// Expectation: the park row is still found, so the Claude link and the
+/// `agents.toml` entry come back. Failure: the lookup stops at the newest
+/// page, finds no row, restores only the folder, and still reports success.
+#[cfg(unix)]
+#[test]
+fn unpark_finds_a_park_row_buried_under_more_than_one_page_of_newer_events() {
+    let (home, stub) = dotagents_home("park_dotagents_buried_row", EXPLICIT_TOML);
+    let rt = runtime(&home, stub.clone(), true);
+    let claude_link = home.join(".claude/skills/foo");
+    std::fs::create_dir_all(claude_link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(home.join(".agents/skills/foo"), &claude_link).unwrap();
+    park_foo(&rt);
+    assert!(std::fs::symlink_metadata(&claude_link).is_err());
+
+    let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+    let mut store = rt
+        .ports
+        .history
+        .open(&rt.scope, HistoryAccess::ReadWrite)
+        .unwrap()
+        .unwrap();
+    for _ in 0..=ops::DEFAULT_EVENT_LIMIT {
+        let draft = EventDraft {
+            kind: EventKind::InvocationChange,
+            skill: SkillName("foo".into()),
+            harness: None,
+            scope: None,
+            project_path: None,
+            payload: serde_json::json!({}),
+            inverse: None,
+            backup_dir: None,
+        };
+        let id = rt.ports.ids.next_event_id();
+        store.record(&guard, &id, &draft).unwrap();
+        store.finish(&guard, &id, EventStatus::Done, None).unwrap();
+    }
+    drop(store);
+    drop(guard);
+
+    unpark_foo(&rt);
+
+    assert!(
+        std::fs::symlink_metadata(&claude_link).is_ok(),
+        "the recorded Claude link was not recreated"
+    );
+    assert_eq!(
+        std::fs::canonicalize(&claude_link).unwrap(),
+        std::fs::canonicalize(home.join(".agents/skills/foo")).unwrap(),
+    );
+    assert_eq!(
+        read(&stub.toml_path()),
+        EXPLICIT_TOML,
+        "agents.toml was not restored"
+    );
+    assert!(read(&stub.lock_path()).contains("[skills.foo]"));
     std::fs::remove_dir_all(&home).ok();
 }
 
