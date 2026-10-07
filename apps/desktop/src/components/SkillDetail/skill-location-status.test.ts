@@ -22,7 +22,7 @@ import {
   titleLink,
 } from "./skill-location-status";
 import type { ScopeGroup } from "./skill-location-status";
-import { rowSwitchView } from "./skill-location-switch-view";
+import { phaseAfter, rowSwitchView } from "./skill-location-switch-view";
 import {
   perSkillLinkDeployment,
   realCopyDeployment,
@@ -1124,7 +1124,23 @@ describe("rowSwitchView", () => {
       busy: false,
     });
   });
+
+  // Failure caught: a confirm-first or failed action holds the switch busy, or a direct one bounces.
+  it.each([
+    [true, true, "held"],
+    [true, false, "idle"],
+    [false, true, "idle"],
+    [false, false, "idle"],
+  ] as const)("after ok=%s changesAtOnce=%s the switch is %s", (ok, changesAtOnce, expected) => {
+    expect(phaseAfter(ok, changesAtOnce)).toBe(expected);
+  });
 });
+
+/** The `aria-checked` of the switch with this accessible name, so a neighbour's switch can't pass. */
+function switchChecked(markup: string, label: string): string | null {
+  const tag = markup.match(new RegExp(`<[^>]*aria-label="${label}"[^>]*>`))?.[0];
+  return tag?.match(/aria-checked="(\w+)"/)?.[1] ?? null;
+}
 
 describe("Locations row switch markup", () => {
   // Failure caught: a live own copy renders a button, or a reader announces the off action as its name.
@@ -1162,8 +1178,29 @@ describe("Locations row switch markup", () => {
         ],
       }),
     );
+    expect(switchChecked(renderGroup(global), "Claude Code")).toBe("true");
+  });
+
+  // Flow: Codex's config.toml turns off a real Codex copy. Failure caught: the row shows an on
+  // switch whose off parks the copy and whose on leaves the setting in place, or Park disappears.
+  it("renders a copy an agent setting turns off as a disabled off switch with Park in the menu", () => {
+    const codex = realCopyDeployment(
+      { agent: "Codex", path: "/home/.codex/skills/find-bugs" },
+      {
+        owner_kind: "copy",
+        mutability: "mutable",
+        disabled: true,
+        disabled_by: "codex-config",
+        disabling_config_files: [{ agent: "codex", path: "/Users/dev/.codex/config.toml" }],
+      },
+    );
+    const [global] = buildScopeGroups(fixtureSkill({ deployments: [codex] }));
     const markup = renderGroup(global);
-    expect(markup).toContain('aria-label="Claude Code"');
-    expect(markup).toContain('aria-checked="true"');
+    expect(switchChecked(markup, "Codex copy")).toBe("false");
+    expect(markup.match(/<[^>]*aria-label="Codex copy"[^>]*>/)?.[0]).toContain("aria-disabled");
+    const row = global.rows.find((r) => r.harness === "codex")!;
+    expect(rowMenu(row, global.label).entries.map((entry) => entry.label)).toContain(
+      "Park this copy",
+    );
   });
 });

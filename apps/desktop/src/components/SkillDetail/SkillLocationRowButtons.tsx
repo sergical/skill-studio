@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import { SwitchControl } from "../ui/SwitchControl";
-import { SWITCH_REFRESH_HOLD_MS, rowSwitchView } from "./skill-location-switch-view";
+import { SWITCH_REFRESH_HOLD_MS, phaseAfter, rowSwitchView } from "./skill-location-switch-view";
 import type { RowSwitchPhase } from "./skill-location-switch-view";
 import { parkActionFor } from "./skill-location-status";
 import type { LocationAction, LocationRow } from "./skill-location-status";
@@ -94,7 +94,7 @@ export function RowActionSwitch({
         onCheckedChange={() => {
           setPhase("pending");
           void onAction(action)
-            .then((ok) => setPhase(ok && changesAtOnce ? "held" : "idle"))
+            .then((ok) => setPhase(phaseAfter(ok, changesAtOnce)))
             .catch(() => setPhase("idle"));
         }}
       />
@@ -157,12 +157,26 @@ export function SkillLocationRowButtons({
   const park = parkActionFor(row, scopeLabel, projectPath);
   if (!park) return null;
   const isShared = row.kind === "shared";
+  const name = isShared ? `${row.harnessLabel} for every agent` : `${row.harnessLabel} copy`;
+  if (!row.switchOn) {
+    return (
+      <span className={ROW_SWITCH_SLOT}>
+        <SwitchControl
+          checked={false}
+          disabled
+          onCheckedChange={() => undefined}
+          ariaLabel={name}
+          title={`${row.caption || "Off"}. Skill Studio doesn't change that setting; park it from the ⋯ menu.`}
+        />
+      </span>
+    );
+  }
   const parkWhat = isShared ? "park it for every agent" : "park this copy";
   return (
     <RowActionSwitch
       key={row.deployment?.id ?? row.path}
       checked
-      ariaLabel={isShared ? `${row.harnessLabel} for every agent` : `${row.harnessLabel} copy`}
+      ariaLabel={name}
       title={`On. Turn off to ${parkWhat}: agents stop seeing it until you turn it back on.`}
       action={park}
       onAction={onAction}

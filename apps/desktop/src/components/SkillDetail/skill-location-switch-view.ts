@@ -31,3 +31,8 @@ export function rowSwitchView({
   if (phase === "held") return { shown: !checked, busy: true };
   return { shown: changesAtOnce ? !checked : checked, busy: true };
 }
+
+/** The phase after the action settles: a direct change that worked holds until the row remounts. */
+export function phaseAfter(ok: boolean, changesAtOnce: boolean): RowSwitchPhase {
+  return ok && changesAtOnce ? "held" : "idle";
+}
