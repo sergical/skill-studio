@@ -83,6 +83,8 @@ pub struct WriteLease {
     lease: FileLease,
     /// How long `try_acquire` waits for a holder to release.
     wait: Duration,
+    /// How long `acquire_scan_lease` waits for a writer to release.
+    scan_wait: Duration,
 }
 
 impl Default for WriteLease {
@@ -90,6 +92,7 @@ impl Default for WriteLease {
         WriteLease {
             lease: FileLease::new(core_runtime::data_root().join("leases")),
             wait: SCAN_WAIT,
+            scan_wait: SCAN_READ_WAIT,
         }
     }
 }
@@ -103,6 +106,7 @@ impl WriteLease {
         WriteLease {
             lease: FileLease::new(lease_root),
             wait: Duration::ZERO,
+            scan_wait: Duration::ZERO,
         }
     }
 
@@ -113,6 +117,7 @@ impl WriteLease {
         WriteLease {
             lease: FileLease::new(lease_root),
             wait,
+            scan_wait: wait,
         }
     }
 
@@ -139,7 +144,7 @@ impl WriteLease {
         scan_wait_probe::notify(&home.canonicalize().unwrap_or_else(|_| home.to_path_buf()));
         let handle = self
             .lease
-            .acquire(&keys, LeaseMode::Shared, self.wait.max(SCAN_READ_WAIT))
+            .acquire(&keys, LeaseMode::Shared, self.scan_wait)
             .map_err(|e| e.message)?;
         HELD_ON_THIS_THREAD.with(|held| held.set(held.get() + 1));
         Ok(ScanLeaseGuard(Some(handle)))
