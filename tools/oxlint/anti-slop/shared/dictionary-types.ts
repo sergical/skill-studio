@@ -9,6 +9,8 @@ const BUILT_INS = new Set([
 	"Omit",
 	"PropertyKey",
 	"NonNullable",
+	"Array",
+	"ReadonlyArray",
 ]);
 const TRANSPARENT_WRAPPERS = new Set(["Readonly", "Partial", "Required", "NonNullable"]);
 
@@ -183,7 +185,7 @@ function isProvablySafeValue(
 			unwrapped.members.every(
 				(member) =>
 					member.type === "TSPropertySignature" &&
-					member.typeAnnotation !== undefined &&
+					member.typeAnnotation != null &&
 					isSafe(member.typeAnnotation.typeAnnotation),
 			)
 		);
@@ -203,7 +205,7 @@ function isProvablySafeValue(
 		const [argument, ...rest] = unwrapped.typeArguments?.params ?? [];
 		return (
 			(name === "Array" || name === "ReadonlyArray") &&
-			!environment.interfaces.has(name) &&
+			isBuiltIn(name, environment) &&
 			argument !== undefined &&
 			rest.length === 0 &&
 			isSafe(argument)
@@ -228,7 +230,7 @@ function isEffectivelyEmptyMember(member: ESTree.TSSignature): boolean {
 		member.type === "TSPropertySignature" &&
 		member.optional === true &&
 		member.typeAnnotation !== null &&
-		member.typeAnnotation !== undefined &&
+		member.typeAnnotation != null &&
 		isNeverType(member.typeAnnotation.typeAnnotation)
 	);
 }

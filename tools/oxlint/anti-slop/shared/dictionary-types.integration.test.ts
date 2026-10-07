@@ -836,6 +836,75 @@ describe("anti-slop interface dictionary rules", () => {
 		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
 	});
 
+	it("keeps an inherited unknown dictionary flagged, without throwing, when the override object literal has an untyped property", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: { id; };
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("keeps an inherited unknown dictionary flagged when the override value uses an imported Array", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`import type { Array } from "./other";
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: Array<string>;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("keeps an inherited unknown dictionary flagged when the override value uses a default-imported ReadonlyArray", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`import type ReadonlyArray from "./other";
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: ReadonlyArray<string>;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("keeps an inherited unknown dictionary flagged when the override value uses a local class named Array", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`class Array<T> {
+				item?: T;
+			}
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: Array<string>;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
 	it("keeps an inherited unsafe symbol key when the override covers a different key union", () => {
 		const diagnostics = lintAntiSlopFixture(
 			`interface Base<V> {
