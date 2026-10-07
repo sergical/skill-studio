@@ -69,17 +69,16 @@ function nestedDeclaredTypeName(node: ESTree.Node): string | null {
 	}
 }
 
-function collectNestedTypeNames(node: unknown, names: Set<string>): void {
-	if (Array.isArray(node)) {
-		for (const child of node) collectNestedTypeNames(child, names);
-		return;
-	}
-	if (typeof node !== "object" || node === null) return;
-	const record = node as ESTree.Node;
-	const name = nestedDeclaredTypeName(record);
+function collectNestedTypeNames(node: ESTree.Node, names: Set<string>): void {
+	const name = nestedDeclaredTypeName(node);
 	if (name !== null) names.add(name);
-	for (const [key, child] of Object.entries(record)) {
-		if (key !== "parent") collectNestedTypeNames(child, names);
+	for (const [key, value] of Object.entries(node)) {
+		if (key === "parent") continue;
+		const children: readonly ESTree.Node[] = Array.isArray(value) ? value : [value];
+		// Property values that are not AST nodes (strings, numbers, null) have no `type`.
+		for (const child of children) {
+			if (child?.type !== undefined) collectNestedTypeNames(child, names);
+		}
 	}
 }
 
@@ -100,7 +99,7 @@ export function createTypeEnvironment(program: ESTree.Program): TypeEnvironment 
 		const declaration = declaredStatement(statement);
 		if (declaration !== null) {
 			for (const [key, child] of Object.entries(declaration)) {
-				if (key !== "parent") collectNestedTypeNames(child, nestedTypeNames);
+				if (key !== "parent" && child?.type !== undefined) collectNestedTypeNames(child, nestedTypeNames);
 			}
 		}
 		if (declaration?.type === "ImportDeclaration") {
@@ -873,7 +872,11 @@ function interfaceDictionaryValueTypes(
 
 	// Merged declarations form one interface, so a safe signature in any of them
 	// overrides the inherited signature of the same key kind in all of them.
-	const hasInherited = scoped.some(({ declaration }) => declaration.extends.length > 0);
+	// A nested interface may reuse this name, and name lookup cannot tell them
+	// apart, so a nested name never lets an override hide inherited evidence.
+	const hasInherited =
+		!environment.nestedTypeNames.has(name) &&
+		scoped.some(({ declaration }) => declaration.extends.length > 0);
 	const directKeyKinds = new Set(
 		hasInherited
 			? scoped

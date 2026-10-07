@@ -1025,9 +1025,44 @@ describe("anti-slop interface dictionary rules", () => {
 				[key: string]: T;
 			}
 			function run() {
-				const d: Derived<Value> = { entry: \"x\" };
+				const d: Derived<Value> = { entry: "x" };
 				void d;
 			}`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(0);
+	});
+
+	it("keeps an inherited unknown dictionary flagged when a nested interface reuses the name of a top-level interface with a string override", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: string;
+			}
+			function run() {
+				interface Derived extends Base<unknown> {}
+				const d: Derived = { entry: 42 };
+				void d;
+			}`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("accepts a top-level interface with a string override when no nested interface reuses its name, not flagged as unsafe", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: string;
+			}
+			const d: Derived = { entry: "x" };
+			void d;`,
 			["no-unsafe-dictionary-type"],
 		);
 
