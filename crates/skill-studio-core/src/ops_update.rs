@@ -1184,6 +1184,22 @@ impl DotagentsBatch {
     }
 }
 
+/// The covered outcome for `req`, checked under the scope's exclusive lease
+/// so no other update can change the folder or `agents.toml` mid-check;
+/// `None` when `req` must run its own update.
+fn cover_under_lease(
+    installed: &[DotagentsBatch],
+    rt: &Runtime,
+    req: &UpdateRequest,
+) -> Option<Result<UpdateOutcome, CoreError>> {
+    if !installed.iter().any(|batch| batch.scope == req.scope) {
+        return None;
+    }
+    let _guard = crate::ports::acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).ok()?;
+    let batch = DotagentsBatch::covering(installed, rt, req)?;
+    Some(refuse_parked(rt, req).map(|()| covered_by_install(req, batch, rt)))
+}
+
 /// Re-hashes each skill in `before` after the install, leaving out any whose
 /// folder is gone or unreadable so it runs on its own.
 fn hash_after_install(
@@ -1257,8 +1273,8 @@ fn update_all_body(
     let mut installed: Vec<DotagentsBatch> = Vec::new();
     for (index, req) in requests.iter().enumerate() {
         let is_dotagents = req.method == InstallMethod::Dotagents;
-        let result = if let Some(batch) = DotagentsBatch::covering(&installed, rt, req) {
-            refuse_parked(rt, req).map(|()| covered_by_install(req, batch, rt))
+        let result = if let Some(covered) = cover_under_lease(&installed, rt, req) {
+            covered
         } else {
             let mut hashes_before = BTreeMap::new();
             let mut snapshot = None;

@@ -2453,6 +2453,60 @@ fn update_all_takes_dotagents_coverage_from_agents_toml_read_under_the_lease() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// Counts exclusive lease grants.
+struct CountingLeases {
+    inner: FileLease,
+    exclusive: Mutex<usize>,
+}
+
+impl LeaseProvider for CountingLeases {
+    fn acquire(
+        &self,
+        keys: &[LeaseKey],
+        mode: LeaseMode,
+        wait: std::time::Duration,
+    ) -> Result<Box<dyn LeaseHandle>, skill_studio_core::error::CoreError> {
+        if mode == LeaseMode::Exclusive {
+            *self.exclusive.lock().unwrap() += 1;
+        }
+        self.inner.acquire(keys, mode, wait)
+    }
+}
+
+/// Flow: update-all covers beta with alpha's dotagents install.
+/// Expectation: beta's coverage check takes the scope's exclusive lease too,
+/// so two grants for one install.
+/// A failure means the check reads beta's folder while another update can
+/// swap it, and can match a tree that never existed on disk.
+#[test]
+fn update_all_checks_dotagents_coverage_under_the_scope_lease() {
+    let home = unique_temp_dir("update_all_dotagents_cover_leased");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    seed_dotagents_files(&home, THREE_DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let mut rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+    let leases = Arc::new(CountingLeases {
+        inner: FileLease::new(home.join(".leases")),
+        exclusive: Mutex::new(0),
+    });
+    rt.ports.leases = leases.clone();
+
+    let requests = vec![
+        cli_request("alpha", InstallMethod::Dotagents),
+        cli_request("beta", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+    assert_eq!(*leases.exclusive.lock().unwrap(), 2);
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
 /// Flow: update-all with one dotagents skill in the global scope and one in
 /// a project.
 /// Expectation: each scope runs its own install and gets its own event.
