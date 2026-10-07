@@ -4127,38 +4127,15 @@ mod tests {
     /// `OpencodeHomeGuard` serializes on.
     #[test]
     fn a_scan_level_error_carries_over_codex_home_even_when_it_is_outside_home() {
-        let _guard = super::super::test_support::opencode_env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         // `home` is never created, so `Runtime::new`'s `physical()` call on
         // it fails to canonicalize and the total-failure branch runs.
         let home = tmp.path().join("home");
         let codex_home = tmp.path().join("codex-home-outside-home");
         fs::create_dir_all(&codex_home).unwrap();
-        let prev_codex_home = std::env::var_os("CODEX_HOME");
-        let prev_skill_studio_fixture = std::env::var_os("SKILL_STUDIO_FIXTURE");
-        // SAFETY: `opencode_env_lock` above serializes every test in this
-        // process that touches `CODEX_HOME`/`SKILL_STUDIO_FIXTURE`.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("CODEX_HOME", &codex_home);
-            std::env::remove_var("SKILL_STUDIO_FIXTURE");
-        }
+        let _env = super::super::test_support::LiveCodexHomeGuard::new(&codex_home);
         let result =
             core_scan_installed_skills(&home, &[], &tmp.path().join("update-check.json"), &[]);
-        // SAFETY: same as above - still under `opencode_env_lock`.
-        #[allow(unsafe_code)]
-        unsafe {
-            match prev_codex_home {
-                Some(v) => std::env::set_var("CODEX_HOME", v),
-                None => std::env::remove_var("CODEX_HOME"),
-            }
-            match prev_skill_studio_fixture {
-                Some(v) => std::env::set_var("SKILL_STUDIO_FIXTURE", v),
-                None => std::env::remove_var("SKILL_STUDIO_FIXTURE"),
-            }
-        }
 
         assert!(
             result.unread_roots.contains(&codex_home),
@@ -4185,35 +4162,12 @@ mod tests {
     /// entry. Same lock and env handling as the test above.
     #[test]
     fn a_scan_level_error_lists_each_unread_location_once_or_names_the_nested_duplicate() {
-        let _guard = super::super::test_support::opencode_env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         let codex_home = home.join(".codex");
-        let prev_codex_home = std::env::var_os("CODEX_HOME");
-        let prev_skill_studio_fixture = std::env::var_os("SKILL_STUDIO_FIXTURE");
-        // SAFETY: `opencode_env_lock` above serializes every test in this
-        // process that touches `CODEX_HOME`/`SKILL_STUDIO_FIXTURE`.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("CODEX_HOME", &codex_home);
-            std::env::remove_var("SKILL_STUDIO_FIXTURE");
-        }
+        let _env = super::super::test_support::LiveCodexHomeGuard::new(&codex_home);
         let result =
             core_scan_installed_skills(&home, &[], &tmp.path().join("update-check.json"), &[]);
-        // SAFETY: same as above - still under `opencode_env_lock`.
-        #[allow(unsafe_code)]
-        unsafe {
-            match prev_codex_home {
-                Some(v) => std::env::set_var("CODEX_HOME", v),
-                None => std::env::remove_var("CODEX_HOME"),
-            }
-            match prev_skill_studio_fixture {
-                Some(v) => std::env::set_var("SKILL_STUDIO_FIXTURE", v),
-                None => std::env::remove_var("SKILL_STUDIO_FIXTURE"),
-            }
-        }
 
         assert!(
             result.unread_roots.contains(&home),
