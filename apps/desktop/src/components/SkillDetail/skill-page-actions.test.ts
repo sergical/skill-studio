@@ -378,6 +378,17 @@ describe("parkForEveryAgent", () => {
     expect(toast?.message).toContain(".codex/skills/tidy");
   });
 
+  it("park_for_every_agent_moves_the_shared_folder_when_the_shared_root_is_itself_a_link", async () => {
+    // ~/.agents/skills -> ~/Dropbox/skills marks every shared folder as reached through a whole-folder link.
+    const sharedThroughRootLink = folder("shared", { shared_via_whole_dir_link: true });
+    const { calls, api } = fakeApi();
+
+    const toast = await parkForEveryAgent(skill(false, [sharedThroughRootLink]), api);
+
+    expect(calls).toEqual([{ kind: "park", ids: ["shared"] }]);
+    expect(toast).toEqual({ type: "success", title: "Parked tidy" });
+  });
+
   it("park_for_every_agent_waits_for_a_confirm_with_the_git_warning_before_moving_a_project_folder", async () => {
     const project = folder("project", {
       scope: "project",

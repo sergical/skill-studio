@@ -986,7 +986,6 @@ function corePark(deployment: Deployment): boolean {
     !deployment.plugin &&
     deployment.backing.kind !== "linked-to" &&
     !deployment.symlink_is_broken &&
-    !deployment.shared_via_whole_dir_link &&
     (!deployment.is_symlink || deployment.destination === "universal")
   );
 }
