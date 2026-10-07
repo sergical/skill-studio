@@ -5,7 +5,7 @@
 This area answers one question: what skills exist, and how are they used.
 It covers the path from a disk scan to the published snapshot, and every screen that only reads.
 
-Commands: `get_skill_snapshot`, `get_installed_skills`, `request_skill_rescan`, `get_popular_skills`, `search_skills`, `get_skill_details`, skill-use reads (core `skill_uses` parsers, host `SkillInvocationIndex`).
+Commands: `get_skill_snapshot`, `get_installed_skills`, `request_skill_rescan`, `rescan_skills_now`, `get_popular_skills`, `search_skills`, `get_skill_details`, skill-use reads (core `skill_uses` parsers, host `SkillInvocationIndex`).
 
 UI entry points: `useSkillSnapshot` (App.tsx), Sidebar Sync button (Sidebar.tsx:235), SkillStore search and list (SkillStore.tsx), Activity view (SkillActivityView.tsx), Home tiles (HomeView.tsx).
 
@@ -15,14 +15,15 @@ The snapshot is the one object every read screen renders from.
 It is a single `SkillSnapshot`, held in `SkillRefreshState.snapshot`, an `RwLock<Option<SkillSnapshot>>`.
 The lock is `None` until the first rebuild finishes.
 
-| Command                | Location               | What it does                                                                                                          |
-| ---------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `get_skill_snapshot`   | `skill_refresh.rs:274` | Returns the current snapshot, or `None`. Never rebuilds.                                                              |
-| `get_installed_skills` | `commands.rs:161`      | Returns skills from the snapshot. Rebuilds first, in place, when the snapshot is stale or misses a requested project. |
-| `request_skill_rescan` | `skill_refresh.rs:281` | Sets a dirty flag. Does not rebuild itself.                                                                           |
-| `get_popular_skills`   | `commands.rs:136`      | Fetches one page of skills.sh listings over HTTP.                                                                     |
-| `search_skills`        | `commands.rs:125`      | Fetches a search result over HTTP.                                                                                    |
-| `get_skill_details`    | `commands.rs:147`      | Fetches one skill's files and body over HTTP.                                                                         |
+| Command                | Location               | What it does                                                                                                                                         |
+| ---------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `get_skill_snapshot`   | `skill_refresh.rs:274` | Returns the current snapshot, or `None`. Never rebuilds.                                                                                             |
+| `get_installed_skills` | `commands.rs:161`      | Returns skills from the snapshot. Rebuilds first, in place, when the snapshot is stale or misses a requested project.                                |
+| `request_skill_rescan` | `skill_refresh.rs:281` | Sets a dirty flag. Does not rebuild itself.                                                                                                          |
+| `rescan_skills_now`    | `skill_refresh.rs`     | Rebuilds the snapshot and returns it. Called by the Park/Turn on for every agent leftover check. Blocks only the calling command, not the UI thread. |
+| `get_popular_skills`   | `commands.rs:136`      | Fetches one page of skills.sh listings over HTTP.                                                                                                    |
+| `search_skills`        | `commands.rs:125`      | Fetches a search result over HTTP.                                                                                                                   |
+| `get_skill_details`    | `commands.rs:147`      | Fetches one skill's files and body over HTTP.                                                                                                        |
 
 `rebuild_snapshot_now` (`skill_refresh.rs:482`) is the only function that writes the snapshot.
 A `rebuild_lock` mutex serializes every rebuild, so two rebuilds never race.

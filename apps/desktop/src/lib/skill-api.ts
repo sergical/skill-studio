@@ -861,6 +861,11 @@ export async function requestSkillRescan(): Promise<void> {
   return callCommand("request_skill_rescan");
 }
 
+/** Rebuild the snapshot now and return it; use after a write that needs its own scan. */
+export async function rescanSkillsNow(): Promise<SkillSnapshot> {
+  return callCommand("rescan_skills_now");
+}
+
 /**
  * Subscribe to `skills://snapshot`, emitted every time the background
  * refresh thread (re)builds the snapshot. Returns an unlisten function.

@@ -11,14 +11,12 @@ import type { ReactNode } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   forkSkill,
-  getSkillSnapshot,
-  onSkillSnapshot,
   openSkillPath,
   parkCheck,
   parkSkills,
   pullForkUpstream,
   removeSkill,
-  requestSkillRescan,
+  rescanSkillsNow,
   unforkSkill,
   unparkSkills,
   updatePlugin,
@@ -127,7 +125,7 @@ interface ParkForEveryAgentApi {
     message: string,
     options: { title: string; kind: "warning"; okLabel: string },
   ) => Promise<boolean>;
-  /** The first snapshot built after the call, or `null` when none lands in time. */
+  /** The full rescan that runs after the write, or `null` when it fails or runs out of time. */
   rescan: () => Promise<RescanResult | null>;
 }
 
@@ -136,29 +134,19 @@ type RescanResult = Pick<SkillSnapshot, "skills" | "scan_partial" | "unread_root
 const RESCAN_TIMEOUT_MS = 10_000;
 
 async function rescanAfterWrite(): Promise<RescanResult | null> {
-  const before = (await getSkillSnapshot())?.revision ?? 0;
-  return new Promise((resolve) => {
-    let settled = false;
-    let unlisten: (() => void) | undefined;
-    const finish = (snapshot: RescanResult | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      unlisten?.();
-      resolve(snapshot);
-    };
-    const timer = setTimeout(() => finish(null), RESCAN_TIMEOUT_MS);
-    onSkillSnapshot((snapshot) => {
-      if (snapshot.revision > before) finish(snapshot);
-    }).then(
-      (stop) => {
-        unlisten = stop;
-        if (settled) stop();
-        else void requestSkillRescan().catch(() => finish(null));
-      },
-      () => finish(null),
-    );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), RESCAN_TIMEOUT_MS);
   });
+  const rescan = rescanSkillsNow().then(
+    (snapshot): RescanResult | null => snapshot,
+    () => null,
+  );
+  try {
+    return await Promise.race([rescan, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const PARK_FOR_EVERY_AGENT_API: ParkForEveryAgentApi = {
