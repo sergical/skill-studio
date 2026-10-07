@@ -144,7 +144,7 @@ export interface SkillPageActions {
   copyPath: () => void;
   /** The one primary action for the header - "Pull latest" or "Update" - `null` when there is none. */
   primaryAction: SkillPageAction | null;
-  /** Park or Unpark - `null` when the skill has no Global Universal folder to move. */
+  /** Park or turn on for every agent (the ⋯ menu; Locations switches act per agent) - `null` when the skill has no Global Universal folder to move. */
   parkAction: SkillPageAction | null;
   /** Fork (when forkable) or Un-fork (when already forked) - `null` when neither applies. */
   forkAction: SkillPageAction | null;
@@ -339,7 +339,11 @@ export function useSkillPageActions(
     copyPath,
     primaryAction,
     parkAction: skillCanPark(skill)
-      ? { label: skill.parked ? "Unpark" : "Park", run: togglePark, busy: isParking }
+      ? {
+          label: skill.parked ? "Turn on for every agent" : "Park for every agent",
+          run: togglePark,
+          busy: isParking,
+        }
       : null,
     forkAction,
     removeActions,

@@ -1,12 +1,13 @@
 // ============================================================================
 // SkillPageHeaderActions - The header bar's action cluster: the one primary
-// action, Park and Fork, the assistant toggle, and the ⋯ overflow menu. Rendered as
+// action, Fork, the assistant toggle, and the ⋯ overflow menu (which holds
+// Park for every agent). Rendered as
 // `PageShell`'s `actions` - pulled out of `InstalledSkillHeader`, which now
 // shows identity only.
 // ============================================================================
 
 import type { ReactNode, RefObject } from "react";
-import { CirclePause, CirclePlay, GitFork, MoreHorizontal, PanelRight } from "lucide-react";
+import { GitFork, MoreHorizontal, PanelRight } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import { MenuControl, MenuItem, MenuSeparator } from "../ui/MenuControl";
 import { SKILL_ASSISTANT_DRAWER_ID } from "./SkillAssistantDrawer";
@@ -60,18 +61,6 @@ export function SkillPageHeaderActions({
           {actions.primaryAction.busy ? "Working…" : actions.primaryAction.label}
         </Button>
       )}
-      {actions.parkAction && (
-        <SecondaryActionButton
-          action={actions.parkAction}
-          icon={
-            actions.parkAction.label === "Unpark" ? (
-              <CirclePlay size={16} aria-hidden />
-            ) : (
-              <CirclePause size={16} aria-hidden />
-            )
-          }
-        />
-      )}
       {actions.forkAction && (
         <SecondaryActionButton
           action={actions.forkAction}
@@ -98,6 +87,18 @@ export function SkillPageHeaderActions({
         trigger={<MoreHorizontal size={16} />}
         align="end"
       >
+        {actions.parkAction && (
+          <>
+            <MenuItem
+              closeOnClick
+              onClick={actions.parkAction.run}
+              disabled={actions.parkAction.busy}
+            >
+              {actions.parkAction.label}
+            </MenuItem>
+            <MenuSeparator />
+          </>
+        )}
         <MenuItem closeOnClick onClick={actions.reveal} disabled={!actions.path}>
           Reveal in Finder
         </MenuItem>
