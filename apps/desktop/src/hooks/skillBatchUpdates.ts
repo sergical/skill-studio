@@ -24,13 +24,19 @@ export function updatePluginInstall(target: PluginUpdateTarget): Promise<PluginU
 
 /** Stop request for one `runHomeUpdateAll` batch. */
 export interface UpdateAllControl {
+  /** Names this batch to the backend, so a Cancel that lands before the batch starts still reaches it. */
+  batchId: string;
   stopRequested: boolean;
+}
+
+export function newUpdateAllControl(): UpdateAllControl {
+  return { batchId: crypto.randomUUID(), stopRequested: false };
 }
 
 /** Stops the batch after the step it is on, in the frontend phases and in the backend's own loop. */
 export async function requestUpdateAllStop(control: UpdateAllControl): Promise<void> {
   control.stopRequested = true;
-  await cancelUpdateAll();
+  await cancelUpdateAll(control.batchId);
 }
 
 /** Home's "Update all"; `forkNames` are the edited skills to fork and merge instead of overwrite. `onProgress`'s third argument names the skill that starts next. */
@@ -46,8 +52,10 @@ export async function runHomeUpdateAll(
       updates,
       pullForkUpstream,
       (targets, onOwnerDone) =>
-        updateAllSkillsWithProgress(targets, ({ done, skill_name }) =>
-          onOwnerDone(done, skill_name),
+        updateAllSkillsWithProgress(
+          targets,
+          ({ done, skill_name }) => onOwnerDone(done, skill_name),
+          control?.batchId,
         ),
       onProgress,
       forkNames && { names: forkNames, fork: forkSkill },

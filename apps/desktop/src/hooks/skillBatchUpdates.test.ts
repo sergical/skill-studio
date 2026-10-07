@@ -7,7 +7,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { Deployment, InstalledSkill, UpdateOutcome } from "@skill-studio/lib";
 import { updateAllTitle } from "../components/Home/home-inbox-data";
 import { requestUpdateAllStop, runHomeUpdateAll } from "./skillBatchUpdates";
-import type { UpdateAllControl } from "./skillBatchUpdates";
+import { newUpdateAllControl } from "./skillBatchUpdates";
 
 // Plain Node environment: `mockIPC` needs a `window` to hang its bridge off and `recordIpcCall`
 // needs a frame scheduler, so both are added to `globalThis`.
@@ -17,15 +17,18 @@ Object.assign(globalThis, {
 });
 
 const calls: string[] = [];
+const payloads: { command: string; payload: unknown }[] = [];
 
 /** Records every command and answers it through `respond`; event plumbing is answered by `mockIPC` itself. */
 type IpcReply = object | null;
 
 function mockCommands(respond: (command: string) => IpcReply | Promise<IpcReply>) {
   calls.length = 0;
+  payloads.length = 0;
   mockIPC(
-    (command) => {
+    (command, payload) => {
       calls.push(command);
+      payloads.push({ command, payload });
       return respond(command);
     },
     { shouldMockEvents: true },
@@ -113,7 +116,7 @@ function outcomeFor(skill: string): UpdateOutcome {
 
 describe("Home Update all cancel", () => {
   it("cancel_during_the_fork_phase_calls_cancel_update_all_and_skips_the_owner_batch_or_runs_every_phase_anyway", async () => {
-    const control: UpdateAllControl = { stopRequested: false };
+    const control = newUpdateAllControl();
     mockCommands(async (command) => {
       if (command === "pull_fork_upstream") {
         await requestUpdateAllStop(control);
@@ -151,7 +154,7 @@ describe("Home Update all cancel", () => {
       [outdated("forked", "fork"), outdated("alpha", "skills-sh")],
       () => {},
       undefined,
-      { stopRequested: false },
+      newUpdateAllControl(),
     );
 
     expect(calls).toEqual(["pull_fork_upstream", "update_all_skills"]);
@@ -175,5 +178,20 @@ describe("Home Update all cancel", () => {
     );
 
     expect(updateAllTitle(tally)).toBe("Stopped. Updated 1 of 3 skills.");
+  });
+
+  it("a_cancel_before_the_backend_starts_names_the_same_batch_as_the_update_or_the_late_start_runs_everything", async () => {
+    const control = newUpdateAllControl();
+    mockCommands((command) => {
+      if (command === "pull_fork_upstream") return pullResult;
+      return null;
+    });
+
+    await requestUpdateAllStop(control);
+    await runHomeUpdateAll([outdated("alpha", "skills-sh")], () => {}, undefined, control);
+
+    const cancel = payloads.find((call) => call.command === "cancel_update_all");
+    expect(cancel?.payload).toMatchObject({ batchId: control.batchId });
+    expect(calls).not.toContain("update_all_skills");
   });
 });

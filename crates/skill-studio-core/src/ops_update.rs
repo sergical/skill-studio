@@ -1273,16 +1273,17 @@ fn update_all_body(
     let mut installed: Vec<DotagentsBatch> = Vec::new();
     let mut not_run = Vec::new();
     for (index, req) in requests.iter().enumerate() {
-        // Checked only between requests: a running install is never killed,
-        // because a half-written skill is worse than a slow stop.
-        if ctx.cancel.is_cancelled() {
-            not_run.push(req.skill.clone());
-            continue;
-        }
         let is_dotagents = req.method == InstallMethod::Dotagents;
         let result = if let Some(covered) = cover_under_lease(&installed, rt, req) {
+            // Already refreshed by a finished install, so cancel must still report it.
             covered
         } else {
+            // Checked only between requests: a running install is never killed,
+            // because a half-written skill is worse than a slow stop.
+            if ctx.cancel.is_cancelled() {
+                not_run.push(req.skill.clone());
+                continue;
+            }
             let mut hashes_before = BTreeMap::new();
             let mut snapshot = None;
             let result = update_then_release(rt, ctx, req, &mut |stage| match stage {

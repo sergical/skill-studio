@@ -2680,3 +2680,41 @@ fn update_all_stops_after_the_running_request_and_reports_the_rest_as_not_run_or
 
     std::fs::remove_dir_all(&home).ok();
 }
+
+/// `update_all_reports_skills_a_finished_dotagents_install_covered_after_cancel_or_calls_them_not_run`:
+/// Cancel is set while the one `dotagents install` runs. It refreshed both
+/// declared skills, so both report done and none is `not_run`. Fails if the
+/// cancel check runs before the covered lookup: `other` lands in `not_run`
+/// although its folder already changed.
+#[test]
+fn update_all_reports_skills_a_finished_dotagents_install_covered_after_cancel_or_calls_them_not_run(
+) {
+    let home = unique_temp_dir("update_all_cancel_covered");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_installed_skill(&home, "other", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let spawner = Arc::new(CancelsDuringRun {
+        inner: FakeNpxUpdateSpawner::new(home.clone(), "v2"),
+        cancelled: cancelled.clone(),
+    });
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+    let ctx = skill_studio_core::ports::OpContext::with_cancel(
+        skill_studio_core::identity::CorrelationId("cancel-covered".into()),
+        Arc::new(FlagToken(cancelled)),
+    );
+
+    let requests = vec![
+        cli_request("delta", InstallMethod::Dotagents),
+        cli_request("other", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx, &requests, |_, _| {});
+
+    assert_eq!(spawner.inner.recorded.lock().unwrap().len(), 1);
+    assert!(result.not_run.is_empty(), "{:?}", result.not_run);
+    assert_eq!(result.items.len(), 2);
+    assert!(result.items.iter().all(|item| item.outcome.is_some()));
+
+    std::fs::remove_dir_all(&home).ok();
+}

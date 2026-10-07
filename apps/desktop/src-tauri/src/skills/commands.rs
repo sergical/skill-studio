@@ -291,6 +291,26 @@ mod tests {
         );
     }
 
+    /// Flow: Cancel reaches the backend before the batch has started, then a
+    /// second batch starts. Expectation: the first batch still finds its flag
+    /// set, and the second batch's flag is its own. A failure means a late
+    /// start clears an earlier Cancel and the whole batch runs.
+    #[test]
+    fn a_cancel_before_the_batch_starts_stays_set_and_a_second_batch_keeps_its_own_flag_or_runs_everything(
+    ) {
+        use skill_studio_core::ports::CancelToken;
+        let state = UpdateAllCancelState::default();
+
+        state.cancel("first");
+        let first = state.flag("first");
+        let second = state.flag("second");
+
+        assert!(first.is_cancelled());
+        assert!(!second.is_cancelled());
+        state.forget("first");
+        assert!(!state.flag("first").is_cancelled());
+    }
+
     /// Flow: every target of an "Update all" batch is refused. Expectation:
     /// Ok with every item failed, and `run` (which builds the runtime and
     /// takes the write lease) is never called. A failure means an all-refused
@@ -2528,25 +2548,54 @@ impl skill_studio_core::ports::CancelToken for UpdateAllCancelFlag {
     }
 }
 
-/// The one active "Update all" batch's cancel flag. Home runs a single batch
-/// at a time, so one flag is enough: a new batch clears it, `cancel_update_all`
-/// sets it.
+/// Cancel flags by batch id. The UI names a batch before it starts, so a
+/// Cancel that arrives first creates the flag already set, and a second batch
+/// never touches another batch's flag.
 #[derive(Default)]
-pub struct UpdateAllCancelState(std::sync::Arc<UpdateAllCancelFlag>);
+pub struct UpdateAllCancelState(
+    std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<UpdateAllCancelFlag>>>,
+);
 
 impl UpdateAllCancelState {
-    fn begin_batch(&self) -> std::sync::Arc<UpdateAllCancelFlag> {
-        self.0 .0.store(false, std::sync::atomic::Ordering::SeqCst);
-        self.0.clone()
+    fn flag(&self, batch_id: &str) -> std::sync::Arc<UpdateAllCancelFlag> {
+        let mut flags = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        flags.entry(batch_id.to_string()).or_default().clone()
+    }
+
+    fn cancel(&self, batch_id: &str) {
+        self.flag(batch_id)
+            .0
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn forget(&self, batch_id: &str) {
+        let mut flags = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        flags.remove(batch_id);
     }
 }
 
-/// Asks the running "Update all" to stop after the skill it is on. The skill
-/// in progress finishes; no later skill starts.
+/// Drops a finished batch's flag on every exit path of `update_all_skills`.
+struct ForgetBatch<'a>(&'a UpdateAllCancelState, String);
+
+impl Drop for ForgetBatch<'_> {
+    fn drop(&mut self) {
+        self.0.forget(&self.1);
+    }
+}
+
+/// Asks the "Update all" batch `batch_id` to stop after the skill it is on. The
+/// skill in progress finishes; no later skill starts. It works before the
+/// batch has started.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri's command extractor requires an owned `State<T>`.
-pub fn cancel_update_all(state: tauri::State<UpdateAllCancelState>) {
-    state.0 .0.store(true, std::sync::atomic::Ordering::SeqCst);
+pub fn cancel_update_all(batch_id: String, state: tauri::State<UpdateAllCancelState>) {
+    state.cancel(&batch_id);
 }
 
 /// "Update all": resolves every target, then runs `ops::update_all` over the
@@ -2566,12 +2615,18 @@ pub fn cancel_update_all(state: tauri::State<UpdateAllCancelState>) {
 #[tauri::command]
 pub async fn update_all_skills(
     targets: Vec<LifecycleTarget>,
+    batch_id: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(&timing_app, "update_all_skills", move || {
         let refresh_state = app.state::<SkillRefreshState>();
-        let cancel = app.state::<UpdateAllCancelState>().begin_batch();
+        let cancel_state = app.state::<UpdateAllCancelState>();
+        // A caller with no id (the list's bulk Update) cannot be cancelled.
+        let (cancel, _forget) = match batch_id {
+            Some(id) => (cancel_state.flag(&id), Some(ForgetBatch(&cancel_state, id))),
+            None => (std::sync::Arc::default(), None),
+        };
         let snapshot = rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
         let app_data = app
             .path()

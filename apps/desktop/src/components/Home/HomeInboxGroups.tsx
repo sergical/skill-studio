@@ -18,7 +18,11 @@ import {
   skillsWithLocalEdits,
 } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
-import { requestUpdateAllStop, runHomeUpdateAll } from "../../hooks/skillBatchUpdates";
+import {
+  newUpdateAllControl,
+  requestUpdateAllStop,
+  runHomeUpdateAll,
+} from "../../hooks/skillBatchUpdates";
 import type { UpdateAllControl } from "../../hooks/skillBatchUpdates";
 import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
 import { UpdateOverwritesEditsDialog } from "../SkillDetail/UpdateOverwritesEditsDialog";
@@ -551,11 +555,11 @@ function UpdatesGroup({
   const [editedSkills, setEditedSkills] = useState<InstalledSkill[]>([]);
   const [isCheckingEdits, setIsCheckingEdits] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
-  const stopControl = useRef<UpdateAllControl>({ stopRequested: false });
+  const stopControl = useRef<UpdateAllControl>(newUpdateAllControl());
   const isUpdatingAll = progress !== null || isCheckingEdits;
 
   const runUpdateAll = async (forkNames?: ReadonlySet<string>) => {
-    stopControl.current = { stopRequested: false };
+    stopControl.current = newUpdateAllControl();
     setIsStopping(false);
     setProgress({ done: 0, total: 0, current: null });
     // `updateAllOutdatedSkills` catches every `pullFork`/`updateAllOwners`

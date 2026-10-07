@@ -347,13 +347,16 @@ export async function updateSkill(
  * for every non-fork owner target; forks still pull upstream one at a time
  * through `pullForkUpstream`, since that CLI call has no batched form.
  */
-async function updateAllSkills(targets: LifecycleTarget[]): Promise<UpdateAllOutcome> {
-  return callCommand("update_all_skills", { targets });
+async function updateAllSkills(
+  targets: LifecycleTarget[],
+  batchId?: string,
+): Promise<UpdateAllOutcome> {
+  return callCommand("update_all_skills", { targets, batchId });
 }
 
-/** Asks the running "Update all" to stop after the skill it is on. */
-export async function cancelUpdateAll(): Promise<void> {
-  return callCommand("cancel_update_all");
+/** Asks the "Update all" batch named `batchId` to stop after the skill it is on, even before it starts. */
+export async function cancelUpdateAll(batchId: string): Promise<void> {
+  return callCommand("cancel_update_all", { batchId });
 }
 
 /** Event name each finished "Update all" target is reported on. */
@@ -366,12 +369,13 @@ const UPDATE_ALL_PROGRESS_EVENT = "skills://update-all-progress";
 export async function updateAllSkillsWithProgress(
   targets: LifecycleTarget[],
   onProgress: (progress: UpdateAllProgress) => void,
+  batchId?: string,
 ): Promise<UpdateAllOutcome> {
   const unlisten = await listen<UpdateAllProgress>(UPDATE_ALL_PROGRESS_EVENT, (event) => {
     onProgress(event.payload);
   });
   try {
-    return await updateAllSkills(targets);
+    return await updateAllSkills(targets, batchId);
   } finally {
     unlisten();
   }
