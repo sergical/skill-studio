@@ -55,13 +55,13 @@ cargo test -p skill-studio-core --all-features --test timing -- --ignored --noca
 
 Measured on the author's machine on 2026-10-07 (debug build, local disk, median of 5 runs, scan first run is one run):
 
-| Job                                    | Median ms | Max ms |
-| -------------------------------------- | --------: | -----: |
-| Scan, first run on a new runtime       |     160.6 |  160.6 |
-| Scan, repeat on one runtime            |     118.9 |  120.7 |
-| Park one shared skill                  |      82.7 |   87.2 |
-| Unpark it                              |      81.3 |   95.6 |
-| Remove one fork-owned shared skill     |      88.9 |   92.6 |
+| Job                                | Median ms | Max ms |
+| ---------------------------------- | --------: | -----: |
+| Scan, first run on a new runtime   |     160.6 |  160.6 |
+| Scan, repeat on one runtime        |     118.9 |  120.7 |
+| Park one shared skill              |      82.7 |   87.2 |
+| Unpark it                          |      81.3 |   95.6 |
+| Remove one fork-owned shared skill |      88.9 |   92.6 |
 
 Skipped, with the reason:
 
