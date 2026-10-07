@@ -260,6 +260,7 @@ mod tests {
                 Ok(UpdateAllOutcome {
                     items,
                     errors: Default::default(),
+                    not_run: Vec::new(),
                 })
             },
             |event| progress.push((event.done, event.total, event.skill_name)),
@@ -288,6 +289,26 @@ mod tests {
                 (2, 2, "updatable".to_string())
             ]
         );
+    }
+
+    /// Flow: Cancel reaches the backend before the batch has started, then a
+    /// second batch starts. Expectation: the first batch still finds its flag
+    /// set, and the second batch's flag is its own. A failure means a late
+    /// start clears an earlier Cancel and the whole batch runs.
+    #[test]
+    fn a_cancel_before_the_batch_starts_stays_set_and_a_second_batch_keeps_its_own_flag_or_runs_everything(
+    ) {
+        use skill_studio_core::ports::CancelToken;
+        let state = UpdateAllCancelState::default();
+
+        state.cancel("first");
+        let first = state.flag("first");
+        let second = state.flag("second");
+
+        assert!(first.is_cancelled());
+        assert!(!second.is_cancelled());
+        state.forget("first");
+        assert!(!state.flag("first").is_cancelled());
     }
 
     /// Flow: every target of an "Update all" batch is refused. Expectation:
@@ -1530,6 +1551,7 @@ mod tests {
                 "beta".to_string(),
                 "update failed".to_string(),
             )]),
+            not_run: Vec::new(),
         };
         let owners = vec![
             (
@@ -1603,6 +1625,7 @@ mod tests {
                 },
             ],
             errors: std::collections::BTreeMap::new(),
+            not_run: Vec::new(),
         };
         let owners = vec![
             (
@@ -1672,6 +1695,7 @@ mod tests {
                 "beta".to_string(),
                 "update failed".to_string(),
             )]),
+            not_run: Vec::new(),
         };
         let owners = vec![
             (
@@ -2434,7 +2458,12 @@ async fn update_all_with_runtime(
         + 'static,
 ) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        run_update_all_sync(&requests, build_runtime, on_outcome)
+        run_update_all_sync(
+            &requests,
+            build_runtime,
+            std::sync::Arc::new(skill_studio_core::ports::NeverCancel),
+            on_outcome,
+        )
     })
     .await;
     crate::timing_log::join_result_to_err("update_all_skills", joined)
@@ -2452,14 +2481,16 @@ async fn update_all_with_runtime(
 fn run_update_all_sync(
     requests: &[skill_studio_core::dto::UpdateRequest],
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
+    cancel: std::sync::Arc<dyn skill_studio_core::ports::CancelToken>,
     mut on_outcome: impl FnMut(
         &skill_studio_core::identity::SkillName,
         &Result<skill_studio_core::dto::UpdateOutcome, skill_studio_core::error::CoreError>,
     ),
 ) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
     let rt = build_runtime()?;
-    let ctx = skill_studio_core::ports::OpContext::uncancellable(
+    let ctx = skill_studio_core::ports::OpContext::with_cancel(
         skill_studio_core::identity::CorrelationId(ulid::Ulid::new().to_string()),
+        cancel,
     );
     Ok(skill_studio_core::ops::update_all(
         &rt,
@@ -2579,6 +2610,7 @@ fn run_update_all_batch(
         skill_studio_core::dto::UpdateAllOutcome {
             items: Vec::new(),
             errors: std::collections::BTreeMap::new(),
+            not_run: Vec::new(),
         }
     } else {
         run(&requests, &mut |skill_name| {
@@ -2617,6 +2649,66 @@ fn unresolved_target_skill(
     skill_studio_core::identity::SkillName(name)
 }
 
+/// Whether the running "Update all" batch should stop before its next skill.
+#[derive(Default)]
+struct UpdateAllCancelFlag(std::sync::atomic::AtomicBool);
+
+impl skill_studio_core::ports::CancelToken for UpdateAllCancelFlag {
+    fn is_cancelled(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// Cancel flags by batch id. The UI names a batch before it starts, so a
+/// Cancel that arrives first creates the flag already set, and a second batch
+/// never touches another batch's flag.
+#[derive(Default)]
+pub struct UpdateAllCancelState(
+    std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<UpdateAllCancelFlag>>>,
+);
+
+impl UpdateAllCancelState {
+    fn flag(&self, batch_id: &str) -> std::sync::Arc<UpdateAllCancelFlag> {
+        let mut flags = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        flags.entry(batch_id.to_string()).or_default().clone()
+    }
+
+    fn cancel(&self, batch_id: &str) {
+        self.flag(batch_id)
+            .0
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn forget(&self, batch_id: &str) {
+        let mut flags = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        flags.remove(batch_id);
+    }
+}
+
+/// Drops a finished batch's flag on every exit path of `update_all_skills`.
+struct ForgetBatch<'a>(&'a UpdateAllCancelState, String);
+
+impl Drop for ForgetBatch<'_> {
+    fn drop(&mut self) {
+        self.0.forget(&self.1);
+    }
+}
+
+/// Asks the "Update all" batch `batch_id` to stop after the skill it is on. The
+/// skill in progress finishes; no later skill starts. It works before the
+/// batch has started.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri's command extractor requires an owned `State<T>`.
+pub fn cancel_update_all(batch_id: String, state: tauri::State<UpdateAllCancelState>) {
+    state.cancel(&batch_id);
+}
+
 /// "Update all": resolves every target, then runs `ops::update_all` over the
 /// resolvable ones via `run_update_all_sync` (shared with the test-only
 /// `update_all_with_runtime`, N1 review round 2) in the one `spawn_blocking`
@@ -2634,11 +2726,18 @@ fn unresolved_target_skill(
 #[tauri::command]
 pub async fn update_all_skills(
     targets: Vec<LifecycleTarget>,
+    batch_id: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(&timing_app, "update_all_skills", move || {
         let refresh_state = app.state::<SkillRefreshState>();
+        let cancel_state = app.state::<UpdateAllCancelState>();
+        // A caller with no id (the list's bulk Update) cannot be cancelled.
+        let (cancel, _forget) = match batch_id {
+            Some(id) => (cancel_state.flag(&id), Some(ForgetBatch(&cancel_state, id))),
+            None => (std::sync::Arc::default(), None),
+        };
         let snapshot = rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
         let app_data = app
             .path()
@@ -2671,6 +2770,7 @@ pub async fn update_all_skills(
                 run_update_all_sync(
                     requests,
                     super::core_runtime::build_runtime_write,
+                    cancel.clone(),
                     |skill, _| on_finished(&skill.0),
                 )
             },

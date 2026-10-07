@@ -45,7 +45,7 @@ describe("update entry points", () => {
   it("every_caller_of_a_batch_update_helper_checks_for_local_edits_first_or_update_all_overwrites_silently", () => {
     const unguarded = Object.entries(sources)
       .filter(([path]) => !path.includes(".test.") && !path.includes("/skillBatchUpdates.ts"))
-      .filter(([, text]) => /\b(runHomeUpdateAll|runListUpdate)\(/.test(text))
+      .filter(([, text]) => /\b(runHomeUpdateAll|startHomeUpdateAll|runListUpdate)\(/.test(text))
       .filter(([, text]) => !/\bskillsWithLocalEdits\(/.test(text))
       .map(([path]) => path);
     expect(unguarded).toEqual([]);

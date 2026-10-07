@@ -2598,3 +2598,123 @@ fn undoing_the_shared_dotagents_event_restores_the_covered_skill_folder() {
 
     std::fs::remove_dir_all(&home).ok();
 }
+
+/// Runs the wrapped fake CLI, then sets `cancelled`: the user pressed Cancel
+/// while that request's process was still running.
+struct CancelsDuringRun {
+    inner: FakeNpxUpdateSpawner,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ProcessSpawner for CancelsDuringRun {
+    fn run(
+        &self,
+        spec: &ProcessSpec,
+        cancel: &dyn CancelToken,
+    ) -> Result<ProcessOutput, skill_studio_core::CoreError> {
+        let output = self.inner.run(spec, cancel);
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        output
+    }
+}
+
+struct FlagToken(Arc<std::sync::atomic::AtomicBool>);
+
+impl CancelToken for FlagToken {
+    fn is_cancelled(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// `update_all_stops_after_the_running_request_and_reports_the_rest_as_not_run_or_keeps_going`:
+/// Cancel is set while the first skill's `npx skills update` runs. That skill
+/// finishes (its folder is updated, its journal row exists) and the next two
+/// never start. Fails if the loop ignores the token (the spawner runs three
+/// times), if the running request is cut short (no outcome for `one`), or if
+/// the unstarted skills are missing from `not_run`.
+#[test]
+fn update_all_stops_after_the_running_request_and_reports_the_rest_as_not_run_or_keeps_going() {
+    let home = unique_temp_dir("update_all_cancel_between_requests");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["one", "two", "three"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let spawner = Arc::new(CancelsDuringRun {
+        inner: FakeNpxUpdateSpawner::new(home.clone(), "v2"),
+        cancelled: cancelled.clone(),
+    });
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+    let ctx = skill_studio_core::ports::OpContext::with_cancel(
+        skill_studio_core::identity::CorrelationId("cancel-batch".into()),
+        Arc::new(FlagToken(cancelled)),
+    );
+
+    let requests: Vec<UpdateRequest> = ["one", "two", "three"]
+        .iter()
+        .map(|name| cli_request(name, InstallMethod::SkillsSh))
+        .collect();
+    let mut seen = Vec::new();
+    let result = ops::update_all(&rt, &ctx, &requests, |skill, _| seen.push(skill.0.clone()));
+
+    assert_eq!(spawner.inner.recorded.lock().unwrap().len(), 1);
+    assert_eq!(seen, vec!["one"]);
+    assert_eq!(result.items.len(), 1);
+    assert!(result.items[0].outcome.is_some());
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(
+        result.not_run,
+        vec![SkillName("two".into()), SkillName("three".into())]
+    );
+    let body = |name: &str| {
+        std::fs::read_to_string(
+            home.join(UNIVERSAL_ROOT_RELATIVE)
+                .join(name)
+                .join("SKILL.md"),
+        )
+        .unwrap()
+    };
+    assert!(body("one").contains("v2"));
+    assert!(body("two").contains("v1"));
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `update_all_reports_skills_a_finished_dotagents_install_covered_after_cancel_or_calls_them_not_run`:
+/// Cancel is set while the one `dotagents install` runs. It refreshed both
+/// declared skills, so both report done and none is `not_run`. Fails if the
+/// cancel check runs before the covered lookup: `other` lands in `not_run`
+/// although its folder already changed.
+#[test]
+fn update_all_reports_skills_a_finished_dotagents_install_covered_after_cancel_or_calls_them_not_run(
+) {
+    let home = unique_temp_dir("update_all_cancel_covered");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_installed_skill(&home, "other", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let spawner = Arc::new(CancelsDuringRun {
+        inner: FakeNpxUpdateSpawner::new(home.clone(), "v2"),
+        cancelled: cancelled.clone(),
+    });
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+    let ctx = skill_studio_core::ports::OpContext::with_cancel(
+        skill_studio_core::identity::CorrelationId("cancel-covered".into()),
+        Arc::new(FlagToken(cancelled)),
+    );
+
+    let requests = vec![
+        cli_request("delta", InstallMethod::Dotagents),
+        cli_request("other", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx, &requests, |_, _| {});
+
+    assert_eq!(spawner.inner.recorded.lock().unwrap().len(), 1);
+    assert!(result.not_run.is_empty(), "{:?}", result.not_run);
+    assert_eq!(result.items.len(), 2);
+    assert!(result.items.iter().all(|item| item.outcome.is_some()));
+
+    std::fs::remove_dir_all(&home).ok();
+}

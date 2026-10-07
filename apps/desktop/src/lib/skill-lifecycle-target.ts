@@ -62,6 +62,8 @@ export interface PluginUpdateFailure extends SkillOwnerUpdateFailure {
 interface PluginUpdateSummary extends SkillOwnerUpdateSummary {
   failures: PluginUpdateFailure[];
   alreadyCurrent: number;
+  /** Targets never started because `shouldStop` turned true. */
+  notRun: PluginUpdateTarget[];
 }
 
 /** One install of a Claude Code plugin that has an update, as `update_owners` reports it. */
@@ -734,11 +736,17 @@ export async function updateSkillOwners(
 export async function updatePluginTargets(
   targets: PluginUpdateTarget[],
   updatePluginInstall: PluginInstallUpdater,
+  shouldStop?: () => boolean,
 ): Promise<PluginUpdateSummary> {
   const failures: PluginUpdateFailure[] = [];
+  const notRun: PluginUpdateTarget[] = [];
   let succeeded = 0;
   let alreadyCurrent = 0;
   for (const target of targets) {
+    if (shouldStop?.()) {
+      notRun.push(target);
+      continue;
+    }
     try {
       // Plugin updates are sequential because each takes the backend write lease.
       // react-doctor-disable-next-line react-doctor/async-await-in-loop -- concurrent plugin updates are refused by the backend write lease
@@ -762,7 +770,7 @@ export async function updatePluginTargets(
       });
     }
   }
-  return { attempted: targets.length, succeeded, failures, alreadyCurrent };
+  return { attempted: targets.length, succeeded, failures, alreadyCurrent, notRun };
 }
 
 /** Run an update for each owner target in turn and return every failure. */
