@@ -233,15 +233,28 @@ describe("parkForEveryAgent", () => {
   const skill = (parked: boolean, deployments: Deployment[]) =>
     // SAFETY: parkForEveryAgent reads only name, parked and deployments.
     ({ name: "tidy", parked, source_kind: "skills-sh", deployments }) as InstalledSkill;
-  const fakeApi = (errors: (string | null)[] = []) => {
+  const fakeApi = (
+    errors: (string | null)[] = [],
+    { confirm = true, gitTracked = false }: { confirm?: boolean; gitTracked?: boolean | null } = {},
+  ) => {
     const calls: { kind: "park" | "unpark"; ids: string[] }[] = [];
+    const prompts: string[] = [];
     const respond =
       (kind: "park" | "unpark") =>
       async (targets: { deployment_id?: string | null }[]): Promise<BulkTargetResult[]> => {
         calls.push({ kind, ids: targets.map((target) => target.deployment_id ?? "") });
         return targets.map((_, i) => ({ error: errors[i] ?? null }));
       };
-    return { calls, api: { parkSkills: respond("park"), unparkSkills: respond("unpark") } };
+    const api = {
+      parkSkills: respond("park"),
+      unparkSkills: respond("unpark"),
+      parkCheck: async () => ({ git_tracked: gitTracked, project: "/home/u/web" }),
+      ask: async (message: string) => {
+        prompts.push(message);
+        return confirm;
+      },
+    };
+    return { calls, prompts, api };
   };
 
   it("park_for_every_agent_parks_the_separate_agent_copy_too_not_only_the_shared_folder", async () => {
@@ -255,6 +268,7 @@ describe("parkForEveryAgent", () => {
     const claudeLink = folder("claude-link", {
       destination: "per-harness",
       agent: "Claude Code",
+      backing: { kind: "linked-to", deployment_id: "shared" },
       is_symlink: true,
       path: "/home/u/.claude/skills/tidy",
     });
@@ -280,14 +294,17 @@ describe("parkForEveryAgent", () => {
     const toast = await parkForEveryAgent(skill(true, [parkedShared, parkedCodex]), api);
 
     expect(calls).toEqual([{ kind: "unpark", ids: ["parked-shared", "parked-codex"] }]);
-    expect(toast.title).toBe("Turned on tidy");
+    expect(toast?.title).toBe("Turned on tidy");
   });
 
   it("park_for_every_agent_warns_with_the_first_refusal_when_one_copy_stays_live", async () => {
     const { api } = fakeApi([null, "the folder changed on disk"]);
 
     const toast = await parkForEveryAgent(
-      skill(false, [folder("shared"), folder("project", { scope: "project" })]),
+      skill(false, [
+        folder("shared"),
+        folder("codex-copy", { destination: "per-harness", backing: { kind: "independent" } }),
+      ]),
       api,
     );
 
@@ -296,5 +313,70 @@ describe("parkForEveryAgent", () => {
       title: "Parked 1 of 2 copies of tidy",
       message: "the folder changed on disk",
     });
+  });
+
+  it("park_for_every_agent_warns_that_a_plugin_copy_stays_on_instead_of_reporting_success", async () => {
+    const pluginCopy = folder("plugin-copy", {
+      destination: "per-harness",
+      owner_kind: "plugin",
+      backing: { kind: "independent" },
+      path: "/home/u/.claude/plugins/cache/official/tidy/skills/tidy",
+      plugin: {
+        name: "tidy",
+        version: "1.0.0",
+        harness: "claude",
+        marketplace: "official",
+        id: "tidy@official",
+      },
+    });
+    const { calls, api } = fakeApi();
+
+    const toast = await parkForEveryAgent(skill(false, [folder("shared"), pluginCopy]), api);
+
+    expect(calls).toEqual([{ kind: "park", ids: ["shared"] }]);
+    expect(toast?.type).toBe("warning");
+    expect(toast?.message).toContain(".claude/plugins/cache/official/tidy/skills/tidy");
+    expect(toast?.message).toContain("/plugin");
+  });
+
+  it("park_for_every_agent_moves_a_shared_folder_that_is_a_link_to_a_dev_checkout", async () => {
+    const devLink = folder("dev-link", {
+      is_symlink: true,
+      symlink_target: "/home/u/src/tidy",
+      resolved_path: "/home/u/src/tidy",
+    });
+    const claudeLink = folder("claude-link", {
+      destination: "per-harness",
+      backing: { kind: "linked-to", deployment_id: "dev-link" },
+      is_symlink: true,
+      path: "/home/u/.claude/skills/tidy",
+      resolved_path: "/home/u/src/tidy",
+    });
+    const { calls, api } = fakeApi();
+
+    const toast = await parkForEveryAgent(skill(false, [devLink, claudeLink]), api);
+
+    expect(calls).toEqual([{ kind: "park", ids: ["dev-link"] }]);
+    expect(toast).toEqual({ type: "success", title: "Parked tidy" });
+  });
+
+  it("park_for_every_agent_waits_for_a_confirm_with_the_git_warning_before_moving_a_project_folder", async () => {
+    const project = folder("project", {
+      scope: "project",
+      path: "/home/u/web/.agents/skills/tidy",
+      project_path: "/home/u/web",
+    });
+    const cancelled = fakeApi([], { confirm: false, gitTracked: true });
+
+    const toast = await parkForEveryAgent(skill(false, [folder("shared"), project]), cancelled.api);
+
+    expect(toast).toBeNull();
+    expect(cancelled.calls).toEqual([]);
+    expect(cancelled.prompts[0]).toContain("web/.agents/skills/tidy");
+    expect(cancelled.prompts[0]).toContain("Git tracks this folder");
+
+    const confirmed = fakeApi([], { confirm: true, gitTracked: true });
+    await parkForEveryAgent(skill(false, [folder("shared"), project]), confirmed.api);
+    expect(confirmed.calls).toEqual([{ kind: "park", ids: ["shared", "project"] }]);
   });
 });

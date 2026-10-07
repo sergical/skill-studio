@@ -12,6 +12,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import {
   forkSkill,
   openSkillPath,
+  parkCheck,
   parkSkills,
   pullForkUpstream,
   removeSkill,
@@ -22,7 +23,7 @@ import {
 import {
   lifecycleTargetForDeployment,
   lifecycleTargetForSkill,
-  parkEveryAgentTargets,
+  parkEveryAgentPlan,
   skillRemovalBlockedReason,
   skillRemovalChoices,
   pullForkAndUpdatePlugins,
@@ -32,9 +33,17 @@ import {
   updateSkillPluginsWithToasts,
 } from "../../lib/skill-lifecycle-target";
 import type { PluginInstallUpdater, SkillRemovalChoice } from "../../lib/skill-lifecycle-target";
-import type { InstalledSkill, Toast } from "@skill-studio/lib";
+import { homeRelativePath } from "@skill-studio/lib";
+import type {
+  Deployment,
+  InstalledSkill,
+  LifecycleTarget,
+  ParkCheck,
+  Toast,
+} from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
+import { gitWarningText } from "./skill-location-helpers";
 import type { UpdateFinish } from "../../hooks/useGuardedSkillUpdate";
 
 /**
@@ -103,34 +112,93 @@ export function removeSuccessToast(skillName: string): Omit<Toast, "id"> {
   return { type: "success", title: "Removed", message: skillName };
 }
 
+type GitCheck = (target: LifecycleTarget) => Promise<Pick<ParkCheck, "git_tracked">>;
+
+interface ParkForEveryAgentApi {
+  parkSkills: typeof parkSkills;
+  unparkSkills: typeof unparkSkills;
+  parkCheck: GitCheck;
+  ask: (
+    message: string,
+    options: { title: string; kind: "warning"; okLabel: string },
+  ) => Promise<boolean>;
+}
+
+const PARK_FOR_EVERY_AGENT_API: ParkForEveryAgentApi = { parkSkills, unparkSkills, parkCheck, ask };
+
+/** The confirm text for parking project folders, with the git warning for each tracked one. */
+async function projectParkMessage(folders: Deployment[], check: GitCheck): Promise<string> {
+  const lines = await Promise.all(
+    folders.map(async (folder) => {
+      const gitTracked = await check({ deployment_id: folder.id }).then(
+        (answer) => answer.git_tracked,
+        () => null,
+      );
+      const warning = gitWarningText(gitTracked, "parking");
+      return warning
+        ? `${homeRelativePath(folder.path)}\n${warning}`
+        : homeRelativePath(folder.path);
+    }),
+  );
+  return `This moves these project folders into ~/.agents/skills-parked:\n\n${lines.join("\n\n")}`;
+}
+
+function stillOnMessage(stillOn: Deployment[]): string | null {
+  if (stillOn.length === 0) return null;
+  const paths = stillOn.map((deployment) => homeRelativePath(deployment.path)).join(", ");
+  const pluginHint = stillOn.some((deployment) => deployment.plugin)
+    ? " Turn a plugin's copy off with /plugin in its agent."
+    : "";
+  return `Still on: ${paths}.${pluginHint}`;
+}
+
+/**
+ * Park every live folder of `skill`, or turn every parked one back on, in one
+ * batch. Project folders wait for a confirm that carries the git warning.
+ * Returns the toast to show, or `null` when the confirm was cancelled. The
+ * toast is a warning when the core refused a folder or a copy stays on.
+ */
+export async function parkForEveryAgent(
+  skill: InstalledSkill,
+  api: ParkForEveryAgentApi = PARK_FOR_EVERY_AGENT_API,
+): Promise<Omit<Toast, "id"> | null> {
+  const plan = parkEveryAgentPlan(skill);
+  if (!skill.parked && plan.projectFolders.length > 0) {
+    const confirmed = await api.ask(await projectParkMessage(plan.projectFolders, api.parkCheck), {
+      title: `Park ${skill.name} for every agent?`,
+      kind: "warning",
+      okLabel: "Park",
+    });
+    if (!confirmed) return null;
+  }
+  const results = skill.parked
+    ? await api.unparkSkills(plan.targets)
+    : await api.parkSkills(plan.targets);
+  const errors = results.flatMap((result) => (result.error ? [result.error] : []));
+  const done = skill.parked ? "Turned on" : "Parked";
+  const stillOn = stillOnMessage(plan.stillOn);
+  if (errors.length > 0) {
+    const total = plan.targets.length;
+    return {
+      type: "warning",
+      title: `${done} ${total - errors.length} of ${total} copies of ${skill.name}`,
+      message: [errors[0], stillOn].filter(Boolean).join(" "),
+    };
+  }
+  if (stillOn) {
+    return {
+      type: "warning",
+      title: `${done} ${skill.name}, but a copy is still on`,
+      message: stillOn,
+    };
+  }
+  return { type: "success", title: `${done} ${skill.name}` };
+}
+
 /**
  * Runs `fn` with `setBusy` bracketing it, and reports a thrown error as an
  * error toast titled `errorTitle`. Every action below is this same shape.
  */
-/**
- * Park every live folder of `skill`, or turn every parked one back on, in one
- * batch. Returns the toast to show: success, or a warning naming how many
- * folders the core refused and the first reason.
- */
-export async function parkForEveryAgent(
-  skill: InstalledSkill,
-  api: { parkSkills: typeof parkSkills; unparkSkills: typeof unparkSkills } = {
-    parkSkills,
-    unparkSkills,
-  },
-): Promise<Omit<Toast, "id">> {
-  const targets = parkEveryAgentTargets(skill);
-  const results = skill.parked ? await api.unparkSkills(targets) : await api.parkSkills(targets);
-  const errors = results.flatMap((result) => (result.error ? [result.error] : []));
-  const done = skill.parked ? "Turned on" : "Parked";
-  if (errors.length === 0) return { type: "success", title: `${done} ${skill.name}` };
-  return {
-    type: "warning",
-    title: `${done} ${targets.length - errors.length} of ${targets.length} copies of ${skill.name}`,
-    message: errors[0],
-  };
-}
-
 async function runAction(
   addToast: AddToast,
   setBusy: (busy: boolean) => void,
@@ -260,7 +328,8 @@ export function useSkillPageActions(
       setIsParking,
       skill.parked ? "Couldn't turn skill on" : "Couldn't park skill",
       async () => {
-        addToast(await parkForEveryAgent(skill));
+        const toast = await parkForEveryAgent(skill);
+        if (toast) addToast(toast);
       },
     );
 
@@ -356,7 +425,7 @@ export function useSkillPageActions(
     copyPath,
     primaryAction,
     parkAction:
-      parkEveryAgentTargets(skill).length > 0
+      parkEveryAgentPlan(skill).targets.length > 0
         ? {
             label: skill.parked ? "Turn on for every agent" : "Park for every agent",
             run: togglePark,

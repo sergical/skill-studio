@@ -979,27 +979,58 @@ export function skillParkVerb(
   return skill.parked ? "Unpark" : "Park";
 }
 
+/** Mirrors `refuse_unparkable` in the core: the Universal folder may be a link (a dev checkout), agent folders may not. */
+function corePark(deployment: Deployment): boolean {
+  return (
+    deployment.scope !== "parked" &&
+    !deployment.plugin &&
+    deployment.backing.kind !== "linked-to" &&
+    !deployment.symlink_is_broken &&
+    !deployment.shared_via_whole_dir_link &&
+    (!deployment.is_symlink || deployment.destination === "universal")
+  );
+}
+
+interface ParkEveryAgentPlan {
+  targets: LifecycleTarget[];
+  /** Live copies the batch cannot move, such as a plugin's copy. They stay on after Park. */
+  stillOn: Deployment[];
+  /** Project folders in `targets`. Moving one shows as deleted files when git tracks it. */
+  projectFolders: Deployment[];
+}
+
 /**
- * Every folder the skill page's "Park for every agent" / "Turn on for every
- * agent" moves: each live real folder (the shared copy, agent copies, project
- * copies), or each parked copy once the whole skill is parked. Links and
- * plugin folders are skipped because parking the folder they read covers
- * them, or the core refuses them. Empty when a parked copy sits beside a live
- * one; the Locations card resolves that first.
+ * What the skill page's "Park for every agent" / "Turn on for every agent"
+ * moves: each live folder the core can park, or each parked copy once the
+ * whole skill is parked. A link is left out when the folder it reads is in the
+ * batch, because the core moves links with their folder. No targets when a
+ * parked copy sits beside a live one; the Locations card resolves that first.
  */
-export function parkEveryAgentTargets(skill: ParkView): LifecycleTarget[] {
-  if (findLeftBehindPairs(skill).length > 0) return [];
-  const folders = skill.parked
-    ? skill.deployments.filter((deployment) => deployment.scope === "parked")
-    : skill.deployments.filter(
-        (deployment) =>
-          deployment.scope !== "parked" &&
-          !deployment.plugin &&
-          !deployment.is_symlink &&
-          !deployment.symlink_is_broken &&
-          !deployment.shared_via_whole_dir_link,
-      );
-  return folders.map((deployment) => ({ deployment_id: deployment.id }));
+export function parkEveryAgentPlan(skill: ParkView): ParkEveryAgentPlan {
+  const none: ParkEveryAgentPlan = { targets: [], stillOn: [], projectFolders: [] };
+  if (findLeftBehindPairs(skill).length > 0) return none;
+  if (skill.parked) {
+    const parked = skill.deployments.filter((deployment) => deployment.scope === "parked");
+    return { ...none, targets: parked.map((deployment) => ({ deployment_id: deployment.id })) };
+  }
+  const folders = skill.deployments.filter(corePark);
+  const movedIds = new Set(folders.map((deployment) => deployment.id));
+  const movedPaths = new Set(
+    folders.flatMap((deployment) => [deployment.path, deployment.resolved_path ?? deployment.path]),
+  );
+  const movesWithAFolder = (deployment: Deployment) =>
+    (deployment.backing.kind === "linked-to" && movedIds.has(deployment.backing.deployment_id)) ||
+    (deployment.resolved_path != null && movedPaths.has(deployment.resolved_path));
+  return {
+    targets: folders.map((deployment) => ({ deployment_id: deployment.id })),
+    stillOn: skill.deployments.filter(
+      (deployment) =>
+        deployment.scope !== "parked" &&
+        !movedIds.has(deployment.id) &&
+        !movesWithAFolder(deployment),
+    ),
+    projectFolders: folders.filter((deployment) => deployment.scope === "project"),
+  };
 }
 
 /** The Global Universal folder park/unpark may move. Project and Per harness stay independent. */
