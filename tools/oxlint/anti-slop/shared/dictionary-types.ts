@@ -48,7 +48,40 @@ export type TypeEnvironment = {
 	readonly aliases: ReadonlyMap<string, ESTree.TSTypeAliasDeclaration>;
 	readonly interfaces: ReadonlyMap<string, readonly ESTree.TSInterfaceDeclaration[]>;
 	readonly shadowedBuiltIns: ReadonlySet<string>;
+	/** Type-level names declared below top level; the environment does not model scopes. */
+	readonly nestedTypeNames: ReadonlySet<string>;
 };
+
+function nestedDeclaredTypeName(node: ESTree.Node): string | null {
+	switch (node.type) {
+		case "TSTypeAliasDeclaration":
+		case "TSInterfaceDeclaration":
+		case "TSEnumDeclaration":
+		case "TSImportEqualsDeclaration":
+			return node.id.name;
+		case "ClassDeclaration":
+		case "ClassExpression":
+			return node.id?.name ?? null;
+		case "TSTypeParameter":
+			return node.name.name;
+		default:
+			return null;
+	}
+}
+
+function collectNestedTypeNames(node: unknown, names: Set<string>): void {
+	if (Array.isArray(node)) {
+		for (const child of node) collectNestedTypeNames(child, names);
+		return;
+	}
+	if (typeof node !== "object" || node === null) return;
+	const record = node as ESTree.Node;
+	const name = nestedDeclaredTypeName(record);
+	if (name !== null) names.add(name);
+	for (const [key, child] of Object.entries(record)) {
+		if (key !== "parent") collectNestedTypeNames(child, names);
+	}
+}
 
 function declaredStatement(statement: ESTree.Statement): ESTree.Node | null {
 	return statement.type === "ExportNamedDeclaration" ||
@@ -61,9 +94,15 @@ export function createTypeEnvironment(program: ESTree.Program): TypeEnvironment 
 	const aliases = new Map<string, ESTree.TSTypeAliasDeclaration>();
 	const interfaces = new Map<string, ESTree.TSInterfaceDeclaration[]>();
 	const shadowedBuiltIns = new Set<string>();
+	const nestedTypeNames = new Set<string>();
 
 	for (const statement of program.body) {
 		const declaration = declaredStatement(statement);
+		if (declaration !== null) {
+			for (const [key, child] of Object.entries(declaration)) {
+				if (key !== "parent") collectNestedTypeNames(child, nestedTypeNames);
+			}
+		}
 		if (declaration?.type === "ImportDeclaration") {
 			for (const specifier of declaration.specifiers) {
 				if (BUILT_INS.has(specifier.local.name)) shadowedBuiltIns.add(specifier.local.name);
@@ -101,7 +140,7 @@ export function createTypeEnvironment(program: ESTree.Program): TypeEnvironment 
 		}
 	}
 
-	return { aliases, interfaces, shadowedBuiltIns };
+	return { aliases, interfaces, shadowedBuiltIns, nestedTypeNames };
 }
 
 function typeReferenceName(type: ESTree.TSTypeReference): string | null {
@@ -234,7 +273,7 @@ function computeProvablySafeValue(
 		);
 	}
 	const alias = environment.aliases.get(name);
-	if (alias === undefined) return false;
+	if (alias === undefined || environment.nestedTypeNames.has(name)) return false;
 	if (alias.typeParameters != null || unwrapped.typeArguments != null) return false;
 	return isProvablySafeValue(alias.typeAnnotation, NO_SUBSTITUTIONS, environment);
 }

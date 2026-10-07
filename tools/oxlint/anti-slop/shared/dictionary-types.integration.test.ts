@@ -995,6 +995,45 @@ describe("anti-slop interface dictionary rules", () => {
 		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(0);
 	});
 
+	it("keeps an inherited unknown dictionary flagged when a nested type alias shadows the top-level alias used as the override argument", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`type Value = string;
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived<T> extends Base<unknown> {
+				[key: string]: T;
+			}
+			function run() {
+				type Value = unknown;
+				const d: Derived<Value> = { entry: 42 };
+				void d;
+			}`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("accepts an inherited unknown dictionary when the top-level alias used as the override argument is not shadowed, not flagged as unsafe", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`type Value = string;
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived<T> extends Base<unknown> {
+				[key: string]: T;
+			}
+			function run() {
+				const d: Derived<Value> = { entry: \"x\" };
+				void d;
+			}`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(0);
+	});
+
 	it("keeps an inherited unsafe symbol key when the override covers a different key union", () => {
 		const diagnostics = lintAntiSlopFixture(
 			`interface Base<V> {
