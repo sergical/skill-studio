@@ -157,6 +157,13 @@ const SAFE_VALUE_KINDS = new Set([
 ]);
 
 /**
+ * Finished alias verdicts per environment. An alias body is read with no
+ * substitutions, so its verdict never depends on the caller; without this,
+ * aliases that each reference the previous one twice take exponential time.
+ */
+const aliasSafetyVerdicts = new WeakMap<TypeEnvironment, Map<string, boolean>>();
+
+/**
  * An override hides an inherited signature only when its value is provably
  * safe. A value the classifier cannot read (a conditional, an unresolved type
  * parameter, an imported or interface reference) must keep the inherited
@@ -213,12 +220,21 @@ function isProvablySafeValue(
 	}
 	if (visitedAliases.has(name)) return false;
 	if (alias.typeParameters != null || unwrapped.typeArguments != null) return false;
-	return isProvablySafeValue(
+	let verdicts = aliasSafetyVerdicts.get(environment);
+	if (verdicts === undefined) {
+		verdicts = new Map();
+		aliasSafetyVerdicts.set(environment, verdicts);
+	}
+	const known = verdicts.get(name);
+	if (known !== undefined) return known;
+	const verdict = isProvablySafeValue(
 		alias.typeAnnotation,
 		new Map(),
 		environment,
 		new Set([...visitedAliases, name]),
 	);
+	verdicts.set(name, verdict);
+	return verdict;
 }
 
 function isNeverType(type: ESTree.TSType): boolean {
@@ -792,7 +808,7 @@ function interfaceDictionaryValueTypes(
 	nextResolvingInterfaces.add(name);
 	const defaultArguments = mergedInterfaceTypeParameterDefaults(declarations);
 
-	return declarations.flatMap((declaration): readonly KeyedValue[] => {
+	const scoped = declarations.flatMap((declaration) => {
 		const nextSubstitutions = typeParameterSubstitutions(
 			declaration.typeParameters,
 			typeArguments,
@@ -811,12 +827,23 @@ function interfaceDictionaryValueTypes(
 						]
 					: [],
 		);
-		const directKeyKinds = new Set(
-			directValueTypes
-				.filter((entry) => isProvablySafeValue(entry.value.type, entry.value.substitutions, environment))
-				.map((entry) => entry.keyKind)
-				.filter((kind) => kind !== ""),
-		);
+		return [{ declaration, nextSubstitutions, directValueTypes }];
+	});
+
+	// Merged declarations form one interface, so a safe signature in any of them
+	// overrides the inherited signature of the same key kind in all of them.
+	const hasInherited = scoped.some(({ declaration }) => declaration.extends.length > 0);
+	const directKeyKinds = new Set(
+		hasInherited
+			? scoped
+					.flatMap(({ directValueTypes }) => directValueTypes)
+					.filter((entry) => isProvablySafeValue(entry.value.type, entry.value.substitutions, environment))
+					.map((entry) => entry.keyKind)
+					.filter((kind) => kind !== "")
+			: [],
+	);
+
+	return scoped.flatMap(({ declaration, nextSubstitutions, directValueTypes }): readonly KeyedValue[] => {
 		const inheritedValueTypes = declaration.extends.flatMap((heritage): readonly KeyedValue[] => {
 			if (heritage.expression.type !== "Identifier") return [];
 			return namedDictionaryValueTypes(

@@ -905,6 +905,97 @@ describe("anti-slop interface dictionary rules", () => {
 		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
 	});
 
+	it("classifies an override through a 40-alias doubling chain without re-reading shared aliases, so the fixture finishes inside the Oxlint timeout", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`type A0 = string;
+			type A1 = [A0, A0];
+			type A2 = [A1, A1];
+			type A3 = [A2, A2];
+			type A4 = [A3, A3];
+			type A5 = [A4, A4];
+			type A6 = [A5, A5];
+			type A7 = [A6, A6];
+			type A8 = [A7, A7];
+			type A9 = [A8, A8];
+			type A10 = [A9, A9];
+			type A11 = [A10, A10];
+			type A12 = [A11, A11];
+			type A13 = [A12, A12];
+			type A14 = [A13, A13];
+			type A15 = [A14, A14];
+			type A16 = [A15, A15];
+			type A17 = [A16, A16];
+			type A18 = [A17, A17];
+			type A19 = [A18, A18];
+			type A20 = [A19, A19];
+			type A21 = [A20, A20];
+			type A22 = [A21, A21];
+			type A23 = [A22, A22];
+			type A24 = [A23, A23];
+			type A25 = [A24, A24];
+			type A26 = [A25, A25];
+			type A27 = [A26, A26];
+			type A28 = [A27, A27];
+			type A29 = [A28, A28];
+			type A30 = [A29, A29];
+			type A31 = [A30, A30];
+			type A32 = [A31, A31];
+			type A33 = [A32, A32];
+			type A34 = [A33, A33];
+			type A35 = [A34, A34];
+			type A36 = [A35, A35];
+			type A37 = [A36, A36];
+			type A38 = [A37, A37];
+			type A39 = [A38, A38];
+			type A40 = [A39, A39];
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: A40;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(0);
+	});
+
+	it("accepts a safe override declared after an inheriting declaration of the same merged interface, not flagged as unsafe", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {}
+			interface Derived {
+				[key: string]: string;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(0);
+	});
+
+	it("accepts a safe override declared before an inheriting declaration of the same merged interface, not flagged as unsafe", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived {
+				[key: string]: string;
+			}
+			interface Derived extends Base<unknown> {}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(0);
+	});
+
 	it("keeps an inherited unsafe symbol key when the override covers a different key union", () => {
 		const diagnostics = lintAntiSlopFixture(
 			`interface Base<V> {
