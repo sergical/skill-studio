@@ -1474,7 +1474,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
 
           <TabsContent
             value="manual"
-            className="flex flex-1 flex-col gap-5 overflow-y-auto py-4 pl-5 gutter-pr-5"
+            className="flex flex-1 flex-col gap-5 overflow-y-scroll py-4 pl-5 gutter-pr-5"
           >
             <SourceField
               source={source}

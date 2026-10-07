@@ -11,7 +11,7 @@ interface SwitchControlProps {
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
   ariaLabel?: string;
-  /** Shown as a native tooltip - used to explain a disabled switch, e.g. "no off switch here". */
+  /** Shown as a native tooltip, and read as the switch's description: say what turning it off or on does. */
   title?: string;
 }
 

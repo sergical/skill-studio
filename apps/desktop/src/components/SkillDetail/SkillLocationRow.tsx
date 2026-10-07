@@ -145,8 +145,10 @@ export function SkillLocationRow({
           />
         ) : turnOff ? (
           <RowActionSwitch
+            key={turnOff.kind === "turn-off-agent" ? turnOff.shared.id : row.path}
             checked
-            ariaLabel={`Turn off ${row.harnessLabel} only: every agent gets its own copy, then the ${row.harnessLabel} copy is parked`}
+            ariaLabel={row.harnessLabel}
+            title={`On. Turn off to stop ${row.harnessLabel} only: every agent gets its own copy, then the ${row.harnessLabel} copy is parked.`}
             action={turnOff}
             onAction={onAction}
           />

@@ -22,6 +22,7 @@ import {
   titleLink,
 } from "./skill-location-status";
 import type { ScopeGroup } from "./skill-location-status";
+import { rowSwitchView } from "./skill-location-switch-view";
 import {
   perSkillLinkDeployment,
   realCopyDeployment,
@@ -303,7 +304,7 @@ describe("buildScopeGroups", () => {
     expect(skillRollup(skill, [global]).level).toBe("off");
 
     const markup = renderGroup(global);
-    expect(markup).toContain("Turn on the parked");
+    expect(markup).toContain('aria-label="Universal folder copy"');
     expect(markup.match(/role="switch"/g)).toHaveLength(1);
     expect(markup).toContain('aria-checked="false"');
     expect(buildInvocationFiles([global])).toEqual([]);
@@ -1088,5 +1089,81 @@ describe("promoteToGlobal", () => {
   it("offers nothing for a single project", () => {
     const skill = fixtureSkill({ deployments: [projectShared("/repo-a")] });
     expect(promoteToGlobal(buildScopeGroups(skill))).toBe(null);
+  });
+});
+
+describe("rowSwitchView", () => {
+  // Flow: a global park runs at once. Failure caught: the switch stays on while the copy is being parked.
+  it("shows the target state and busy while a direct action is pending", () => {
+    expect(rowSwitchView({ checked: true, changesAtOnce: true, phase: "pending" })).toEqual({
+      shown: false,
+      busy: true,
+    });
+  });
+
+  // Failure caught: a project park flips off, then back on as its confirm dialog opens.
+  it("keeps the current state, busy, while a confirm-first action is pending", () => {
+    expect(rowSwitchView({ checked: true, changesAtOnce: false, phase: "pending" })).toEqual({
+      shown: true,
+      busy: true,
+    });
+  });
+
+  // Failure caught: the switch bounces back to its old state before the refreshed row arrives.
+  it("holds the target state, busy, after a direct action succeeds", () => {
+    expect(rowSwitchView({ checked: false, changesAtOnce: true, phase: "held" })).toEqual({
+      shown: true,
+      busy: true,
+    });
+  });
+
+  // Failure caught: an idle switch stays disabled or shows a stale state.
+  it("shows the current state and is not busy when idle", () => {
+    expect(rowSwitchView({ checked: true, changesAtOnce: true, phase: "idle" })).toEqual({
+      shown: true,
+      busy: false,
+    });
+  });
+});
+
+describe("Locations row switch markup", () => {
+  // Failure caught: a live own copy renders a button, or a reader announces the off action as its name.
+  it("renders a live global own copy as an on switch named for the copy", () => {
+    const claude = realCopyDeployment(
+      { agent: "Claude Code", path: "/home/.claude/skills/find-bugs" },
+      { owner_kind: "copy", mutability: "mutable" },
+    );
+    const [global] = buildScopeGroups(fixtureSkill({ deployments: [claude] }));
+    const markup = renderGroup(global);
+    expect(markup).toContain('role="switch"');
+    expect(markup).toContain('aria-checked="true"');
+    expect(markup).toContain('aria-label="Claude Code copy"');
+  });
+
+  // Failure caught: the shared folder switch does not say it acts on every agent.
+  it("renders a live shared folder as an on switch named for every agent", () => {
+    const [global] = buildScopeGroups(fixtureSkill());
+    const markup = renderGroup(global);
+    expect(markup).toContain('aria-checked="true"');
+    expect(markup).toContain('aria-label="Universal folder for every agent"');
+  });
+
+  // Failure caught: the turn-off-for-one-agent row shows no switch, or names it by the off action.
+  it("renders an agent row under a live shared folder as an on switch named for the agent", () => {
+    const [global] = buildScopeGroups(
+      fixtureSkill({
+        deployments: [
+          fixtureDeployment(),
+          perSkillLinkDeployment({
+            agent: "Claude Code",
+            path: "/home/.claude/skills/find-bugs",
+            universalPath: "/home/.agents/skills/find-bugs",
+          }),
+        ],
+      }),
+    );
+    const markup = renderGroup(global);
+    expect(markup).toContain('aria-label="Claude Code"');
+    expect(markup).toContain('aria-checked="true"');
   });
 });

@@ -5,11 +5,12 @@
 // back beside.
 // ============================================================================
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import { SwitchControl } from "../ui/SwitchControl";
-import { TooltipControl } from "../ui/TooltipControl";
+import { SWITCH_REFRESH_HOLD_MS, rowSwitchView } from "./skill-location-switch-view";
+import type { RowSwitchPhase } from "./skill-location-switch-view";
 import { parkActionFor } from "./skill-location-status";
 import type { LocationAction, LocationRow } from "./skill-location-status";
 
@@ -56,46 +57,49 @@ export function RowActionButton({
 export const ROW_SWITCH_SLOT = "inline-flex w-10 shrink-0 items-center gap-1";
 
 /**
- * A switch that runs a row action; it shows the target state and a spinner until the action
- * settles. `waitsForRefresh` is for an action that changes the copy at once (no confirm): the
- * backend call returns before the `skills://snapshot` event brings the new row, so the switch
- * holds the new state until `checked` catches up instead of bouncing back for a moment.
+ * A switch that runs a row action and shows a spinner until the action settles. `changesAtOnce`
+ * is for an action that changes the copy with no confirm: the backend call returns before the
+ * `skills://snapshot` event brings the new row, so the switch holds the new state until the
+ * refreshed row remounts it (or `SWITCH_REFRESH_HOLD_MS` passes) instead of bouncing back.
  */
 export function RowActionSwitch({
   checked,
   ariaLabel,
+  title,
   action,
   onAction,
-  waitsForRefresh = false,
+  changesAtOnce = false,
 }: {
   checked: boolean;
   ariaLabel: string;
+  title?: string;
   action: LocationAction;
   onAction: (action: LocationAction) => Promise<boolean>;
-  waitsForRefresh?: boolean;
+  changesAtOnce?: boolean;
 }) {
-  const [isPending, setIsPending] = useState(false);
-  const [heldTarget, setHeldTarget] = useState<boolean | null>(null);
-  if (heldTarget !== null && heldTarget === checked) setHeldTarget(null);
-  const isBusy = isPending || heldTarget !== null;
+  const [phase, setPhase] = useState<RowSwitchPhase>("idle");
+  useEffect(() => {
+    if (phase !== "held") return;
+    const timer = setTimeout(() => setPhase("idle"), SWITCH_REFRESH_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [phase]);
+  const { shown, busy } = rowSwitchView({ checked, changesAtOnce, phase });
   return (
     <span className={ROW_SWITCH_SLOT}>
       <SwitchControl
-        checked={isPending ? !checked : (heldTarget ?? checked)}
-        disabled={isBusy}
+        checked={shown}
+        disabled={busy}
         ariaLabel={ariaLabel}
+        title={title}
         onCheckedChange={() => {
-          setIsPending(true);
+          setPhase("pending");
           void onAction(action)
-            .then((ok) => {
-              if (ok && waitsForRefresh) setHeldTarget(!checked);
-            })
-            .catch(() => undefined)
-            .finally(() => setIsPending(false));
+            .then((ok) => setPhase(ok && changesAtOnce ? "held" : "idle"))
+            .catch(() => setPhase("idle"));
         }}
       />
       <span className="inline-flex w-3 justify-center">
-        {isBusy && (
+        {busy && (
           <Loader2
             size={12}
             className="animate-spin motion-reduce:animate-none"
@@ -140,35 +144,30 @@ export function SkillLocationRowButtons({
     }
     return (
       <RowActionSwitch
+        key={row.deployment.id}
         checked={false}
-        ariaLabel={`Turn on the parked ${row.harnessLabel} copy`}
+        ariaLabel={`${row.harnessLabel} copy`}
+        title="Parked. Turn on to put this copy back where agents see it."
         action={{ kind: "unpark", deployment: row.deployment }}
         onAction={onAction}
-        waitsForRefresh
+        changesAtOnce
       />
     );
   }
   const park = parkActionFor(row, scopeLabel, projectPath);
   if (!park) return null;
   const isShared = row.kind === "shared";
+  const parkWhat = isShared ? "park it for every agent" : "park this copy";
   return (
-    <TooltipControl
-      content={`On. Turn off to park ${isShared ? "it for every agent" : "this copy"}: agents stop seeing it until you turn it back on.`}
-    >
-      <span className="inline-flex">
-        <RowActionSwitch
-          checked
-          ariaLabel={
-            isShared
-              ? `Park the ${row.harnessLabel} for every agent`
-              : `Park the ${row.harnessLabel} copy`
-          }
-          action={park}
-          onAction={onAction}
-          // A project copy confirms first (the dialog owns that state); a global one parks at once.
-          waitsForRefresh={projectPath === null}
-        />
-      </span>
-    </TooltipControl>
+    <RowActionSwitch
+      key={row.deployment?.id ?? row.path}
+      checked
+      ariaLabel={isShared ? `${row.harnessLabel} for every agent` : `${row.harnessLabel} copy`}
+      title={`On. Turn off to ${parkWhat}: agents stop seeing it until you turn it back on.`}
+      action={park}
+      onAction={onAction}
+      // A project copy confirms first (the dialog owns that state); a global one parks at once.
+      changesAtOnce={projectPath === null}
+    />
   );
 }

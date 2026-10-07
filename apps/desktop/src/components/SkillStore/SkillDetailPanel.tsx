@@ -72,7 +72,7 @@ export function SkillDetailPanel({
   return (
     <DrawerContent
       side="right"
-      className="w-[min(640px,92vw)] overflow-y-auto bg-bg-secondary"
+      className="w-[min(640px,92vw)] overflow-y-scroll bg-bg-secondary"
       showCloseButton={false}
     >
       <SkillDetailHeader skill={skill} resolvedTopSource={resolvedTopSource} onClose={onClose} />
