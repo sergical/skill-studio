@@ -28,15 +28,15 @@
     "doctor": "react-doctor apps/desktop -y --no-score --no-supply-chain --blocking warning"
   },
   "devDependencies": {
-    "@oxlint/plugins": "^1.80.0",
+    "@oxlint/plugins": "^1.87.0",
     "@playwright/test": "^1.63.0",
     "knip": "^5.88.1",
-    "oxfmt": "^0.65.0",
-    "oxlint": "^1.80.0",
-    "react-doctor": "^0.9.12",
+    "oxfmt": "^0.72.0",
+    "oxlint": "^1.87.0",
+    "react-doctor": "0.9.12",
     "typescript": "6.0.3",
     "vitest": "^4.1.11",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"

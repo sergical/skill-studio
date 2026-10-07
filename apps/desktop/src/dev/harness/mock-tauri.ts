@@ -323,6 +323,9 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         case "request_skill_rescan":
           await publish(currentSnapshot);
           return undefined;
+        case "rescan_skills_now":
+          await publish(currentSnapshot);
+          return currentSnapshot;
         case "get_tracked_projects":
           return snapshotTrackedProjects();
         case "register_skill_projects": {
@@ -758,8 +761,11 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
               },
             });
           }
-          return { items, errors: {} };
+          return { items, errors: {}, not_run: [] };
         }
+
+        case "cancel_update_all":
+          return null;
 
         case "fork_skill": {
           const target = z

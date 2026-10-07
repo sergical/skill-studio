@@ -260,6 +260,7 @@ mod tests {
                 Ok(UpdateAllOutcome {
                     items,
                     errors: Default::default(),
+                    not_run: Vec::new(),
                 })
             },
             |event| progress.push((event.done, event.total, event.skill_name)),
@@ -288,6 +289,26 @@ mod tests {
                 (2, 2, "updatable".to_string())
             ]
         );
+    }
+
+    /// Flow: Cancel reaches the backend before the batch has started, then a
+    /// second batch starts. Expectation: the first batch still finds its flag
+    /// set, and the second batch's flag is its own. A failure means a late
+    /// start clears an earlier Cancel and the whole batch runs.
+    #[test]
+    fn a_cancel_before_the_batch_starts_stays_set_and_a_second_batch_keeps_its_own_flag_or_runs_everything(
+    ) {
+        use skill_studio_core::ports::CancelToken;
+        let state = UpdateAllCancelState::default();
+
+        state.cancel("first");
+        let first = state.flag("first");
+        let second = state.flag("second");
+
+        assert!(first.is_cancelled());
+        assert!(!second.is_cancelled());
+        state.forget("first");
+        assert!(!state.flag("first").is_cancelled());
     }
 
     /// Flow: every target of an "Update all" batch is refused. Expectation:
@@ -714,6 +735,83 @@ mod tests {
 
         write_skill_md_compare_and_swap(&skill_md, "on disk now", "new content").unwrap();
         assert_eq!(std::fs::read_to_string(&skill_md).unwrap(), "new content");
+    }
+
+    /// Flow: the detail page opens an installed skill's SKILL.md that is
+    /// larger than the 2 MiB read cap.
+    /// Expectation: the viewer gets the file's first 2 MiB and not a byte more.
+    /// A failure here means a runaway file is read whole on the UI path.
+    #[test]
+    fn read_installed_skill_md_returns_only_the_first_2_mib_of_an_oversized_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dep_dir = tmp.path().join("foo");
+        std::fs::create_dir_all(&dep_dir).unwrap();
+        let skill_md = dep_dir.join("SKILL.md");
+        std::fs::write(&skill_md, "a".repeat(MAX_SKILL_MD_BYTES + 10)).unwrap();
+        let snapshot = fixture_snapshot(&dep_dir, None);
+
+        let body =
+            read_skill_md_for_snapshot(Some(&snapshot), &skill_md.to_string_lossy()).unwrap();
+
+        assert_eq!(body.len(), MAX_SKILL_MD_BYTES);
+    }
+
+    /// Flow: the detail page opens an installed skill's SKILL.md.
+    /// Expectation: the file's text comes back; a path outside the snapshot
+    /// is refused with the "not an installed skill" error.
+    /// A failure here means the viewer shows the wrong text or reads any file.
+    #[test]
+    fn read_installed_skill_md_returns_the_file_and_refuses_paths_outside_the_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dep_dir = tmp.path().join("foo");
+        std::fs::create_dir_all(&dep_dir).unwrap();
+        let skill_md = dep_dir.join("SKILL.md");
+        std::fs::write(&skill_md, "---\nname: foo\n---\nbody").unwrap();
+        let outside_dir = tmp.path().join("other");
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        let outside = outside_dir.join("SKILL.md");
+        std::fs::write(&outside, "secret").unwrap();
+        let snapshot = fixture_snapshot(&dep_dir, None);
+
+        let body =
+            read_skill_md_for_snapshot(Some(&snapshot), &skill_md.to_string_lossy()).unwrap();
+        assert_eq!(body, "---\nname: foo\n---\nbody");
+
+        let err =
+            read_skill_md_for_snapshot(Some(&snapshot), &outside.to_string_lossy()).unwrap_err();
+        assert!(err.contains("Path is not an installed skill"), "{err}");
+    }
+
+    /// Flow: the editor saves SKILL.md with the text it loaded as the baseline.
+    /// Expectation: an unchanged file is replaced; a file someone changed
+    /// after the read is refused and stays byte for byte as that person left it.
+    /// A failure here means a save silently overwrites another edit.
+    #[test]
+    fn write_installed_skill_md_refuses_when_the_file_changed_since_it_was_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dep_dir = tmp.path().join("foo");
+        std::fs::create_dir_all(&dep_dir).unwrap();
+        let skill_md = dep_dir.join("SKILL.md");
+        std::fs::write(&skill_md, "loaded").unwrap();
+        let snapshot = fixture_snapshot(&dep_dir, None);
+        let path = skill_md.to_string_lossy().to_string();
+
+        write_skill_md_if_unchanged_for_snapshot(Some(&snapshot), &path, "loaded", "edit one")
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&skill_md).unwrap(), "edit one");
+
+        std::fs::write(&skill_md, "someone else \u{2603} edited").unwrap();
+        let before = std::fs::read(&skill_md).unwrap();
+        let err = write_skill_md_if_unchanged_for_snapshot(
+            Some(&snapshot),
+            &path,
+            "edit one",
+            "edit two",
+        )
+        .unwrap_err();
+
+        assert!(err.contains("changed on disk since it was loaded"), "{err}");
+        assert_eq!(std::fs::read(&skill_md).unwrap(), before);
     }
 
     #[test]
@@ -1453,6 +1551,7 @@ mod tests {
                 "beta".to_string(),
                 "update failed".to_string(),
             )]),
+            not_run: Vec::new(),
         };
         let owners = vec![
             (
@@ -1526,6 +1625,7 @@ mod tests {
                 },
             ],
             errors: std::collections::BTreeMap::new(),
+            not_run: Vec::new(),
         };
         let owners = vec![
             (
@@ -1595,6 +1695,7 @@ mod tests {
                 "beta".to_string(),
                 "update failed".to_string(),
             )]),
+            not_run: Vec::new(),
         };
         let owners = vec![
             (
@@ -1801,7 +1902,16 @@ pub(crate) fn require_snapshot_owns_path(
     path: &std::path::Path,
 ) -> Result<(), String> {
     let snapshot = refresh_state.snapshot.read().ok().and_then(|g| g.clone());
-    match &snapshot {
+    require_path_in_snapshot(snapshot.as_ref(), path)
+}
+
+/// `require_snapshot_owns_path` for an already-read snapshot, so the flows
+/// built on it are testable without a `tauri::State`.
+fn require_path_in_snapshot(
+    snapshot: Option<&skill_refresh::SkillSnapshot>,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    match snapshot {
         Some(snapshot) if skill_refresh::snapshot_owns_path(snapshot, path) => Ok(()),
         _ => Err(format!(
             "Path is not an installed skill: {}",
@@ -1843,19 +1953,28 @@ pub async fn read_installed_skill_md(
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(&timing_app, "read_installed_skill_md", move || {
         let refresh_state = app.state::<SkillRefreshState>();
-        let path_buf = std::path::PathBuf::from(&path);
-        require_snapshot_owns_path(&refresh_state, &path_buf)?;
-        canonicalize_skill_md(&path_buf, &path)?;
-
-        let mut file = File::open(&path).map_err(|e| format!("Failed to open {path}: {e}"))?;
-        let mut buf = vec![0u8; MAX_SKILL_MD_BYTES];
-        let n = file
-            .read(&mut buf)
-            .map_err(|e| format!("Failed to read {path}: {e}"))?;
-        buf.truncate(n);
-        Ok(String::from_utf8_lossy(&buf).into_owned())
+        let snapshot = refresh_state.snapshot.read().ok().and_then(|g| g.clone());
+        read_skill_md_for_snapshot(snapshot.as_ref(), &path)
     })
     .await
+}
+
+/// The body of `read_installed_skill_md`, over an already-read snapshot.
+fn read_skill_md_for_snapshot(
+    snapshot: Option<&skill_refresh::SkillSnapshot>,
+    path: &str,
+) -> Result<String, String> {
+    let path_buf = std::path::PathBuf::from(path);
+    require_path_in_snapshot(snapshot, &path_buf)?;
+    canonicalize_skill_md(&path_buf, path)?;
+
+    let mut file = File::open(path).map_err(|e| format!("Failed to open {path}: {e}"))?;
+    let mut buf = vec![0u8; MAX_SKILL_MD_BYTES];
+    let n = file
+        .read(&mut buf)
+        .map_err(|e| format!("Failed to read {path}: {e}"))?;
+    buf.truncate(n);
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// Refuses a `write_installed_skill_md` request that targets a path outside
@@ -1887,10 +2006,10 @@ pub(crate) fn check_skill_md_write_allowed(
 fn validate_skill_md_write(
     path: &str,
     content: &str,
-    refresh_state: &tauri::State<SkillRefreshState>,
+    snapshot: Option<&skill_refresh::SkillSnapshot>,
 ) -> Result<std::path::PathBuf, String> {
     let path_buf = std::path::PathBuf::from(path);
-    require_snapshot_owns_path(refresh_state, &path_buf)?;
+    require_path_in_snapshot(snapshot, &path_buf)?;
     let canonical = canonicalize_skill_md(&path_buf, path)?;
     if content.len() > MAX_SKILL_MD_BYTES {
         return Err(format!(
@@ -1900,9 +2019,20 @@ fn validate_skill_md_write(
         ));
     }
 
-    let snapshot = refresh_state.snapshot.read().ok().and_then(|g| g.clone());
-    check_skill_md_write_allowed(snapshot.as_ref(), &path_buf)?;
+    check_skill_md_write_allowed(snapshot, &path_buf)?;
     Ok(canonical)
+}
+
+/// The body of `write_installed_skill_md_if_unchanged`, over an
+/// already-read snapshot.
+fn write_skill_md_if_unchanged_for_snapshot(
+    snapshot: Option<&skill_refresh::SkillSnapshot>,
+    path: &str,
+    expected_content: &str,
+    content: &str,
+) -> Result<(), String> {
+    let canonical = validate_skill_md_write(path, content, snapshot)?;
+    write_skill_md_compare_and_swap(&canonical, expected_content, content)
 }
 
 /// Write `content` to an installed skill's `SKILL.md`, for the detail
@@ -1927,8 +2057,13 @@ pub async fn write_installed_skill_md_if_unchanged(
         "write_installed_skill_md_if_unchanged",
         move || {
             let refresh_state = app.state::<SkillRefreshState>();
-            let canonical = validate_skill_md_write(&path, &content, &refresh_state)?;
-            write_skill_md_compare_and_swap(&canonical, &expected_content, &content)?;
+            let snapshot = refresh_state.snapshot.read().ok().and_then(|g| g.clone());
+            write_skill_md_if_unchanged_for_snapshot(
+                snapshot.as_ref(),
+                &path,
+                &expected_content,
+                &content,
+            )?;
             skill_refresh::request_snapshot_rebuild(&app);
             Ok(())
         },
@@ -2323,7 +2458,12 @@ async fn update_all_with_runtime(
         + 'static,
 ) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        run_update_all_sync(&requests, build_runtime, on_outcome)
+        run_update_all_sync(
+            &requests,
+            build_runtime,
+            std::sync::Arc::new(skill_studio_core::ports::NeverCancel),
+            on_outcome,
+        )
     })
     .await;
     crate::timing_log::join_result_to_err("update_all_skills", joined)
@@ -2341,14 +2481,16 @@ async fn update_all_with_runtime(
 fn run_update_all_sync(
     requests: &[skill_studio_core::dto::UpdateRequest],
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
+    cancel: std::sync::Arc<dyn skill_studio_core::ports::CancelToken>,
     mut on_outcome: impl FnMut(
         &skill_studio_core::identity::SkillName,
         &Result<skill_studio_core::dto::UpdateOutcome, skill_studio_core::error::CoreError>,
     ),
 ) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
     let rt = build_runtime()?;
-    let ctx = skill_studio_core::ports::OpContext::uncancellable(
+    let ctx = skill_studio_core::ports::OpContext::with_cancel(
         skill_studio_core::identity::CorrelationId(ulid::Ulid::new().to_string()),
+        cancel,
     );
     Ok(skill_studio_core::ops::update_all(
         &rt,
@@ -2468,6 +2610,7 @@ fn run_update_all_batch(
         skill_studio_core::dto::UpdateAllOutcome {
             items: Vec::new(),
             errors: std::collections::BTreeMap::new(),
+            not_run: Vec::new(),
         }
     } else {
         run(&requests, &mut |skill_name| {
@@ -2506,6 +2649,66 @@ fn unresolved_target_skill(
     skill_studio_core::identity::SkillName(name)
 }
 
+/// Whether the running "Update all" batch should stop before its next skill.
+#[derive(Default)]
+struct UpdateAllCancelFlag(std::sync::atomic::AtomicBool);
+
+impl skill_studio_core::ports::CancelToken for UpdateAllCancelFlag {
+    fn is_cancelled(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// Cancel flags by batch id. The UI names a batch before it starts, so a
+/// Cancel that arrives first creates the flag already set, and a second batch
+/// never touches another batch's flag.
+#[derive(Default)]
+pub struct UpdateAllCancelState(
+    std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<UpdateAllCancelFlag>>>,
+);
+
+impl UpdateAllCancelState {
+    fn flag(&self, batch_id: &str) -> std::sync::Arc<UpdateAllCancelFlag> {
+        let mut flags = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        flags.entry(batch_id.to_string()).or_default().clone()
+    }
+
+    fn cancel(&self, batch_id: &str) {
+        self.flag(batch_id)
+            .0
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn forget(&self, batch_id: &str) {
+        let mut flags = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        flags.remove(batch_id);
+    }
+}
+
+/// Drops a finished batch's flag on every exit path of `update_all_skills`.
+struct ForgetBatch<'a>(&'a UpdateAllCancelState, String);
+
+impl Drop for ForgetBatch<'_> {
+    fn drop(&mut self) {
+        self.0.forget(&self.1);
+    }
+}
+
+/// Asks the "Update all" batch `batch_id` to stop after the skill it is on. The
+/// skill in progress finishes; no later skill starts. It works before the
+/// batch has started.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri's command extractor requires an owned `State<T>`.
+pub fn cancel_update_all(batch_id: String, state: tauri::State<UpdateAllCancelState>) {
+    state.cancel(&batch_id);
+}
+
 /// "Update all": resolves every target, then runs `ops::update_all` over the
 /// resolvable ones via `run_update_all_sync` (shared with the test-only
 /// `update_all_with_runtime`, N1 review round 2) in the one `spawn_blocking`
@@ -2523,11 +2726,18 @@ fn unresolved_target_skill(
 #[tauri::command]
 pub async fn update_all_skills(
     targets: Vec<LifecycleTarget>,
+    batch_id: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(&timing_app, "update_all_skills", move || {
         let refresh_state = app.state::<SkillRefreshState>();
+        let cancel_state = app.state::<UpdateAllCancelState>();
+        // A caller with no id (the list's bulk Update) cannot be cancelled.
+        let (cancel, _forget) = match batch_id {
+            Some(id) => (cancel_state.flag(&id), Some(ForgetBatch(&cancel_state, id))),
+            None => (std::sync::Arc::default(), None),
+        };
         let snapshot = rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
         let app_data = app
             .path()
@@ -2560,6 +2770,7 @@ pub async fn update_all_skills(
                 run_update_all_sync(
                     requests,
                     super::core_runtime::build_runtime_write,
+                    cancel.clone(),
                     |skill, _| on_finished(&skill.0),
                 )
             },

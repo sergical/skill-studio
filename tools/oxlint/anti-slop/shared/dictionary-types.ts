@@ -17,6 +17,11 @@ type ResolvedType = {
 	readonly substitutions: TypeSubstitutionEnvironment;
 };
 
+type KeyedValue = {
+	readonly value: ResolvedType;
+	readonly keyKind: string;
+};
+
 const UNRESOLVED_TYPE_PARAMETER = Symbol("unresolved type parameter");
 
 type TypeSubstitution = ResolvedType | typeof UNRESOLVED_TYPE_PARAMETER;
@@ -43,7 +48,51 @@ export type TypeEnvironment = {
 	readonly aliases: ReadonlyMap<string, ESTree.TSTypeAliasDeclaration>;
 	readonly interfaces: ReadonlyMap<string, readonly ESTree.TSInterfaceDeclaration[]>;
 	readonly shadowedBuiltIns: ReadonlySet<string>;
+	/** Type-level names declared below top level; the environment does not model scopes. */
+	readonly nestedTypeNames: ReadonlySet<string>;
 };
+
+function nestedDeclaredTypeName(node: ESTree.Node): string | null {
+	switch (node.type) {
+		case "TSTypeAliasDeclaration":
+		case "TSInterfaceDeclaration":
+		case "TSEnumDeclaration":
+		case "TSImportEqualsDeclaration":
+			return node.id.name;
+		case "ImportSpecifier":
+		case "ImportDefaultSpecifier":
+		case "ImportNamespaceSpecifier":
+			return node.local.name;
+		case "TSModuleDeclaration":
+			return node.id.type === "Identifier" ? node.id.name : null;
+		case "ClassDeclaration":
+		case "ClassExpression":
+			return node.id?.name ?? null;
+		case "TSTypeParameter":
+			return node.name.name;
+		default:
+			return null;
+	}
+}
+
+function astChildNodes(node: ESTree.Node): readonly ESTree.Node[] {
+	return Object.entries(node).flatMap(([key, value]): readonly ESTree.Node[] => {
+		if (key === "parent") return [];
+		const candidates: readonly ESTree.Node[] = Array.isArray(value) ? value : [value];
+		// Property values that are not AST nodes (strings, numbers, null) have no `type`.
+		return candidates.filter((candidate) => candidate?.type !== undefined);
+	});
+}
+
+/** Iterative: a long `a + b + c ...` chain nests deeper than the call stack allows. */
+function collectNestedTypeNames(roots: readonly ESTree.Node[], names: Set<string>): void {
+	const pending = [...roots];
+	for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+		const name = nestedDeclaredTypeName(node);
+		if (name !== null) names.add(name);
+		for (const child of astChildNodes(node)) pending.push(child);
+	}
+}
 
 function declaredStatement(statement: ESTree.Statement): ESTree.Node | null {
 	return statement.type === "ExportNamedDeclaration" ||
@@ -56,9 +105,11 @@ export function createTypeEnvironment(program: ESTree.Program): TypeEnvironment 
 	const aliases = new Map<string, ESTree.TSTypeAliasDeclaration>();
 	const interfaces = new Map<string, ESTree.TSInterfaceDeclaration[]>();
 	const shadowedBuiltIns = new Set<string>();
+	const nestedTypeNames = new Set<string>();
 
 	for (const statement of program.body) {
 		const declaration = declaredStatement(statement);
+		if (declaration !== null) collectNestedTypeNames(astChildNodes(declaration), nestedTypeNames);
 		if (declaration?.type === "ImportDeclaration") {
 			for (const specifier of declaration.specifiers) {
 				if (BUILT_INS.has(specifier.local.name)) shadowedBuiltIns.add(specifier.local.name);
@@ -96,7 +147,7 @@ export function createTypeEnvironment(program: ESTree.Program): TypeEnvironment 
 		}
 	}
 
-	return { aliases, interfaces, shadowedBuiltIns };
+	return { aliases, interfaces, shadowedBuiltIns, nestedTypeNames };
 }
 
 function typeReferenceName(type: ESTree.TSTypeReference): string | null {
@@ -118,6 +169,128 @@ function unwrapTransparentType(type: ESTree.TSType): ESTree.TSType {
 	return current;
 }
 
+const PRIMITIVE_KEY_KINDS = new Set(["TSStringKeyword", "TSNumberKeyword", "TSSymbolKeyword"]);
+
+/**
+ * Only a bare `string`, `number`, or `symbol` key proves an override covers an
+ * inherited signature. Unions, aliases, and template keys return "" so they never
+ * suppress one: comparing their node kinds would treat `string | symbol` and
+ * `string | number` as the same key.
+ */
+function primitiveKeyKind(type: ESTree.TSType): string {
+	const kind = unwrapTransparentType(type).type;
+	return PRIMITIVE_KEY_KINDS.has(kind) ? kind : "";
+}
+
+function indexSignatureKeyKind(member: ESTree.TSIndexSignature): string {
+	const parameter = member.parameters[0];
+	return parameter === undefined ? "" : primitiveKeyKind(parameter.typeAnnotation.typeAnnotation);
+}
+
+const SAFE_VALUE_KINDS = new Set([
+	"TSStringKeyword",
+	"TSNumberKeyword",
+	"TSBooleanKeyword",
+	"TSBigIntKeyword",
+	"TSSymbolKeyword",
+	"TSNullKeyword",
+	"TSUndefinedKeyword",
+	"TSNeverKeyword",
+	"TSLiteralType",
+	"TSTemplateLiteralType",
+]);
+
+/**
+ * Verdicts per environment, type node, and substitution environment. One node
+ * can be read through many aliases or generic defaults; without this,
+ * `A1 = [A0, A0]`, `A2 = [A1, A1]`, ... takes exponential time. A node still
+ * being read holds `false`, so a cycle reads as not safe.
+ */
+const safetyVerdicts = new WeakMap<
+	TypeEnvironment,
+	WeakMap<ESTree.TSType, WeakMap<TypeSubstitutionEnvironment, boolean>>
+>();
+
+const NO_SUBSTITUTIONS: TypeSubstitutionEnvironment = new Map();
+
+/** Deeper nesting reads as not provably safe, so a long alias chain cannot overflow the stack. */
+const MAX_SAFETY_DEPTH = 256;
+
+/**
+ * An override hides an inherited signature only when its value is provably
+ * safe. A value the classifier cannot read (a conditional, an unresolved type
+ * parameter, an imported or interface reference, a named `Array<T>` that a
+ * declaration could shadow) must keep the inherited evidence, or an unsafe
+ * contract slips by.
+ */
+function isProvablySafeValue(
+	type: ESTree.TSType,
+	substitutions: TypeSubstitutionEnvironment,
+	environment: TypeEnvironment,
+	depth = 0,
+): boolean {
+	if (depth > MAX_SAFETY_DEPTH) return false;
+	let byNode = safetyVerdicts.get(environment);
+	if (byNode === undefined) {
+		byNode = new WeakMap();
+		safetyVerdicts.set(environment, byNode);
+	}
+	let bySubstitutions = byNode.get(type);
+	if (bySubstitutions === undefined) {
+		bySubstitutions = new WeakMap();
+		byNode.set(type, bySubstitutions);
+	}
+	const known = bySubstitutions.get(substitutions);
+	if (known !== undefined) return known;
+	bySubstitutions.set(substitutions, false);
+	const verdict = computeProvablySafeValue(type, substitutions, environment, depth);
+	bySubstitutions.set(substitutions, verdict);
+	return verdict;
+}
+
+function computeProvablySafeValue(
+	type: ESTree.TSType,
+	substitutions: TypeSubstitutionEnvironment,
+	environment: TypeEnvironment,
+	depth: number,
+): boolean {
+	const isSafe = (inner: ESTree.TSType): boolean =>
+		isProvablySafeValue(inner, substitutions, environment, depth + 1);
+	const unwrapped = unwrapTransparentType(type);
+	if (SAFE_VALUE_KINDS.has(unwrapped.type)) return true;
+	if (unwrapped.type === "TSUnionType") return unwrapped.types.every(isSafe);
+	if (unwrapped.type === "TSArrayType") return isSafe(unwrapped.elementType);
+	if (unwrapped.type === "TSTupleType")
+		return unwrapped.elementTypes.every((element) =>
+			isSafe(element.type === "TSNamedTupleMember" ? element.elementType : element),
+		);
+	if (unwrapped.type === "TSTypeLiteral") {
+		return (
+			unwrapped.members.length > 0 &&
+			unwrapped.members.every(
+				(member) =>
+					member.type === "TSPropertySignature" &&
+					member.typeAnnotation != null &&
+					isSafe(member.typeAnnotation.typeAnnotation),
+			)
+		);
+	}
+	if (unwrapped.type !== "TSTypeReference") return false;
+	const name = typeReferenceName(unwrapped);
+	if (name === null) return false;
+	const substitution = substitutions.get(name);
+	if (substitution !== undefined) {
+		return (
+			substitution !== UNRESOLVED_TYPE_PARAMETER &&
+			isProvablySafeValue(substitution.type, substitution.substitutions, environment, depth + 1)
+		);
+	}
+	const alias = environment.aliases.get(name);
+	if (alias === undefined || environment.nestedTypeNames.has(name)) return false;
+	if (alias.typeParameters != null || unwrapped.typeArguments != null) return false;
+	return isProvablySafeValue(alias.typeAnnotation, NO_SUBSTITUTIONS, environment, depth + 1);
+}
+
 function isNeverType(type: ESTree.TSType): boolean {
 	return unwrapTransparentType(type).type === "TSNeverKeyword";
 }
@@ -127,7 +300,7 @@ function isEffectivelyEmptyMember(member: ESTree.TSSignature): boolean {
 		member.type === "TSPropertySignature" &&
 		member.optional === true &&
 		member.typeAnnotation !== null &&
-		member.typeAnnotation !== undefined &&
+		member.typeAnnotation != null &&
 		isNeverType(member.typeAnnotation.typeAnnotation)
 	);
 }
@@ -542,13 +715,18 @@ function dictionaryValueTypes(
 	substitutions: TypeSubstitutionEnvironment,
 	resolvingAliases: ReadonlySet<string>,
 	resolvingInterfaces: ReadonlySet<string>,
-): readonly ResolvedType[] {
+): readonly KeyedValue[] {
 	const unwrapped = unwrapTransparentType(type);
 
 	if (unwrapped.type === "TSTypeLiteral") {
-		return unwrapped.members.flatMap((member): readonly ResolvedType[] =>
+		return unwrapped.members.flatMap((member): readonly KeyedValue[] =>
 			member.type === "TSIndexSignature" && member.typeAnnotation !== null
-				? [{ type: member.typeAnnotation.typeAnnotation, substitutions }]
+				? [
+						{
+							value: { type: member.typeAnnotation.typeAnnotation, substitutions },
+							keyKind: indexSignatureKeyKind(member),
+						},
+					]
 				: [],
 		);
 	}
@@ -558,7 +736,13 @@ function dictionaryValueTypes(
 		valueSubstitutions.set(unwrapped.key.name, UNRESOLVED_TYPE_PARAMETER);
 		return unwrapped.typeAnnotation === null
 			? []
-			: [{ type: unwrapped.typeAnnotation, substitutions: valueSubstitutions }];
+			: [
+					{
+						value: { type: unwrapped.typeAnnotation, substitutions: valueSubstitutions },
+						// An `as` clause remaps the keys, so the constraint no longer names them.
+						keyKind: unwrapped.nameType ? "" : primitiveKeyKind(unwrapped.constraint),
+					},
+				];
 	}
 
 	if (unwrapped.type !== "TSTypeReference") return [];
@@ -581,7 +765,7 @@ function namedDictionaryValueTypes(
 	substitutions: TypeSubstitutionEnvironment,
 	resolvingAliases: ReadonlySet<string>,
 	resolvingInterfaces: ReadonlySet<string>,
-): readonly ResolvedType[] {
+): readonly KeyedValue[] {
 	const substitution = substitutions.get(name);
 	if (substitution !== undefined) {
 		if (substitution === UNRESOLVED_TYPE_PARAMETER) return [];
@@ -608,8 +792,15 @@ function namedDictionaryValueTypes(
 	}
 
 	if (name === "Record" && isBuiltIn(name, environment)) {
+		const key = typeArguments?.params[0] ?? null;
 		const value = typeArguments?.params[1] ?? null;
-		return value === null ? [] : [{ type: value, substitutions }];
+		if (value === null) return [];
+		return [
+			{
+				value: { type: value, substitutions },
+				keyKind: key === null ? "" : unwrapTransparentType(key).type,
+			},
+		];
 	}
 
 	if ((name === "Pick" || name === "Omit") && isBuiltIn(name, environment)) {
@@ -665,13 +856,13 @@ function interfaceDictionaryValueTypes(
 	substitutions: TypeSubstitutionEnvironment,
 	resolvingAliases: ReadonlySet<string>,
 	resolvingInterfaces: ReadonlySet<string>,
-): readonly ResolvedType[] {
+): readonly KeyedValue[] {
 	if (resolvingInterfaces.has(name)) return [];
 	const nextResolvingInterfaces = new Set(resolvingInterfaces);
 	nextResolvingInterfaces.add(name);
 	const defaultArguments = mergedInterfaceTypeParameterDefaults(declarations);
 
-	return declarations.flatMap((declaration): readonly ResolvedType[] => {
+	const scoped = declarations.flatMap((declaration) => {
 		const nextSubstitutions = typeParameterSubstitutions(
 			declaration.typeParameters,
 			typeArguments,
@@ -679,12 +870,39 @@ function interfaceDictionaryValueTypes(
 			defaultArguments,
 		);
 		if (nextSubstitutions === null) return [];
-		const directValueTypes = declaration.body.body.flatMap((member): readonly ResolvedType[] =>
-			member.type === "TSIndexSignature"
-				? [{ type: member.typeAnnotation.typeAnnotation, substitutions: nextSubstitutions }]
-				: [],
+		const directValueTypes: readonly KeyedValue[] = declaration.body.body.flatMap(
+			(member): readonly KeyedValue[] =>
+				member.type === "TSIndexSignature"
+					? [
+							{
+								value: { type: member.typeAnnotation.typeAnnotation, substitutions: nextSubstitutions },
+								keyKind: indexSignatureKeyKind(member),
+							},
+						]
+					: [],
 		);
-		const inheritedValueTypes = declaration.extends.flatMap((heritage): readonly ResolvedType[] => {
+		return [{ declaration, nextSubstitutions, directValueTypes }];
+	});
+
+	// Merged declarations form one interface, so a safe signature in any of them
+	// overrides the inherited signature of the same key kind in all of them.
+	// A nested interface may reuse this name, and name lookup cannot tell them
+	// apart, so a nested name never lets an override hide inherited evidence.
+	const hasInherited =
+		!environment.nestedTypeNames.has(name) &&
+		scoped.some(({ declaration }) => declaration.extends.length > 0);
+	const directKeyKinds = new Set(
+		hasInherited
+			? scoped
+					.flatMap(({ directValueTypes }) => directValueTypes)
+					.filter((entry) => isProvablySafeValue(entry.value.type, entry.value.substitutions, environment))
+					.map((entry) => entry.keyKind)
+					.filter((kind) => kind !== "")
+			: [],
+	);
+
+	return scoped.flatMap(({ declaration, nextSubstitutions, directValueTypes }): readonly KeyedValue[] => {
+		const inheritedValueTypes = declaration.extends.flatMap((heritage): readonly KeyedValue[] => {
 			if (heritage.expression.type !== "Identifier") return [];
 			return namedDictionaryValueTypes(
 				heritage.expression.name,
@@ -693,7 +911,7 @@ function interfaceDictionaryValueTypes(
 				nextSubstitutions,
 				resolvingAliases,
 				nextResolvingInterfaces,
-			);
+			).filter((entry) => !directKeyKinds.has(entry.keyKind));
 		});
 		return [...directValueTypes, ...inheritedValueTypes];
 	});
@@ -716,7 +934,7 @@ export function classifyUnsafeDictionary(
 	type: ESTree.TSType,
 	environment: TypeEnvironment,
 ): UnsafeDictionary | null {
-	for (const valueType of dictionaryValueTypes(
+	for (const entry of dictionaryValueTypes(
 		type,
 		environment,
 		lexicalTypeParameterSubstitutions(type),
@@ -724,9 +942,9 @@ export function classifyUnsafeDictionary(
 		new Set(),
 	)) {
 		const unsafeValue = unsafeDirectValue(
-			valueType.type,
+			entry.value.type,
 			environment,
-			valueType.substitutions,
+			entry.value.substitutions,
 			new Set(),
 		);
 		if (unsafeValue !== null) return { kind: "unsafe-dictionary", unsafeValue };

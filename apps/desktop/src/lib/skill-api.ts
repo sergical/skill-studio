@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { recordIpcCall } from "./perf-marks";
+import { isUpdateAllRunning, plainBusyMessage } from "./skill-busy-message";
 import type {
   AddMethodDefaults,
   AddSkillOperationEvent,
@@ -82,7 +83,13 @@ function callCommand<T>(command: string, args?: InvokeArgs): Promise<T> {
     },
     (cause: unknown) => {
       finish(false);
-      throw cause instanceof Error ? cause : new Error(String(cause));
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      // The batch's own refusal is not caused by the batch, so it never gets the Update all wording.
+      error.message = plainBusyMessage(
+        error.message,
+        command !== "update_all_skills" && isUpdateAllRunning(),
+      );
+      throw error;
     },
   );
 }
@@ -340,8 +347,16 @@ export async function updateSkill(
  * for every non-fork owner target; forks still pull upstream one at a time
  * through `pullForkUpstream`, since that CLI call has no batched form.
  */
-async function updateAllSkills(targets: LifecycleTarget[]): Promise<UpdateAllOutcome> {
-  return callCommand("update_all_skills", { targets });
+async function updateAllSkills(
+  targets: LifecycleTarget[],
+  batchId?: string,
+): Promise<UpdateAllOutcome> {
+  return callCommand("update_all_skills", { targets, batchId });
+}
+
+/** Asks the "Update all" batch named `batchId` to stop after the skill it is on, even before it starts. */
+export async function cancelUpdateAll(batchId: string): Promise<void> {
+  return callCommand("cancel_update_all", { batchId });
 }
 
 /** Event name each finished "Update all" target is reported on. */
@@ -354,12 +369,13 @@ const UPDATE_ALL_PROGRESS_EVENT = "skills://update-all-progress";
 export async function updateAllSkillsWithProgress(
   targets: LifecycleTarget[],
   onProgress: (progress: UpdateAllProgress) => void,
+  batchId?: string,
 ): Promise<UpdateAllOutcome> {
   const unlisten = await listen<UpdateAllProgress>(UPDATE_ALL_PROGRESS_EVENT, (event) => {
     onProgress(event.payload);
   });
   try {
-    return await updateAllSkills(targets);
+    return await updateAllSkills(targets, batchId);
   } finally {
     unlisten();
   }
@@ -868,6 +884,11 @@ export async function getSkillSnapshot(): Promise<SkillSnapshot | undefined> {
  */
 export async function requestSkillRescan(): Promise<void> {
   return callCommand("request_skill_rescan");
+}
+
+/** Rebuild the snapshot now and return it; use after a write that needs its own scan. */
+export async function rescanSkillsNow(): Promise<SkillSnapshot> {
+  return callCommand("rescan_skills_now");
 }
 
 /**
