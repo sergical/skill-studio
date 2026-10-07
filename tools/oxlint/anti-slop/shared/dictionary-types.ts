@@ -78,10 +78,14 @@ function astChildNodes(node: ESTree.Node): readonly ESTree.Node[] {
 	});
 }
 
-function collectNestedTypeNames(node: ESTree.Node, names: Set<string>): void {
-	const name = nestedDeclaredTypeName(node);
-	if (name !== null) names.add(name);
-	for (const child of astChildNodes(node)) collectNestedTypeNames(child, names);
+/** Iterative: a long `a + b + c ...` chain nests deeper than the call stack allows. */
+function collectNestedTypeNames(roots: readonly ESTree.Node[], names: Set<string>): void {
+	const pending = [...roots];
+	for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+		const name = nestedDeclaredTypeName(node);
+		if (name !== null) names.add(name);
+		pending.push(...astChildNodes(node));
+	}
 }
 
 function declaredStatement(statement: ESTree.Statement): ESTree.Node | null {
@@ -99,11 +103,7 @@ export function createTypeEnvironment(program: ESTree.Program): TypeEnvironment 
 
 	for (const statement of program.body) {
 		const declaration = declaredStatement(statement);
-		if (declaration !== null) {
-			for (const child of astChildNodes(declaration)) {
-				collectNestedTypeNames(child, nestedTypeNames);
-			}
-		}
+		if (declaration !== null) collectNestedTypeNames(astChildNodes(declaration), nestedTypeNames);
 		if (declaration?.type === "ImportDeclaration") {
 			for (const specifier of declaration.specifiers) {
 				if (BUILT_INS.has(specifier.local.name)) shadowedBuiltIns.add(specifier.local.name);

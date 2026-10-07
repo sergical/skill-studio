@@ -6,6 +6,10 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
+import { createTypeEnvironment } from "./dictionary-types.ts";
+
+import type { ESTree } from "@oxlint/plugins";
+
 interface OxlintJsonDiagnostic {
 	readonly code: string;
 	readonly message: string;
@@ -1127,6 +1131,24 @@ describe("anti-slop interface dictionary rules", () => {
 		);
 
 		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("records nested type names of a 12,000-term sum without overflowing the stack", () => {
+		interface SyntheticNode {
+			readonly type: string;
+			readonly left?: SyntheticNode;
+			readonly right?: SyntheticNode;
+		}
+		// Oxlint's own deserializer overflows near 2,700 terms, so build the tree directly.
+		let sum: SyntheticNode = { type: "Literal" };
+		for (let term = 1; term < 12_000; term += 1) {
+			sum = { type: "BinaryExpression", left: sum, right: { type: "Literal" } };
+		}
+		const body: readonly SyntheticNode[] = [{ type: "ExpressionStatement", left: sum }];
+		// SAFETY: createTypeEnvironment only reads `type` and child nodes of each statement.
+		const program = { type: "Program", body } as ESTree.Program;
+
+		expect(createTypeEnvironment(program).nestedTypeNames.size).toBe(0);
 	});
 
 	it("keeps an inherited unsafe symbol key when the override covers a different key union", () => {
