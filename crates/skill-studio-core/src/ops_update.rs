@@ -1105,11 +1105,51 @@ pub fn update_all(
 }
 
 /// A successful `dotagents install` in one scope, and the tree hashes of the
-/// skills it covered, taken before it ran.
+/// skills it covered, taken before and right after it ran.
 struct DotagentsBatch {
     scope: RootScope,
     event_id: crate::identity::EventId,
     hashes_before: BTreeMap<SkillName, String>,
+    hashes_after: BTreeMap<SkillName, String>,
+}
+
+impl DotagentsBatch {
+    /// The batch that covers `req`, when the skill's folder is still exactly
+    /// what the install left. Anything that wrote it since (a restore, another
+    /// app) makes `req` run its own install instead.
+    fn covering<'a>(
+        installed: &'a [DotagentsBatch],
+        rt: &Runtime,
+        req: &UpdateRequest,
+    ) -> Option<&'a DotagentsBatch> {
+        if req.method != InstallMethod::Dotagents || req.ref_pin.is_some() {
+            return None;
+        }
+        let batch = installed.iter().find(|batch| batch.scope == req.scope)?;
+        let after = batch.hashes_after.get(&req.skill)?;
+        let destination = ops_install::scope_root(rt, &req.scope)
+            .join(UNIVERSAL_ROOT_RELATIVE)
+            .join(&req.skill.0);
+        let now = crate::tree_hash::tree_hash(rt.ports.fs.as_ref(), &destination).ok()?;
+        (now == *after).then_some(batch)
+    }
+}
+
+/// Re-hashes each skill in `before` after the install, leaving out any whose
+/// folder is gone or unreadable so it runs on its own.
+fn hash_after_install(
+    rt: &Runtime,
+    scope: &RootScope,
+    before: &BTreeMap<SkillName, String>,
+) -> BTreeMap<SkillName, String> {
+    let root = ops_install::scope_root(rt, scope).join(UNIVERSAL_ROOT_RELATIVE);
+    before
+        .keys()
+        .filter_map(|skill| {
+            let hash = crate::tree_hash::tree_hash(rt.ports.fs.as_ref(), &root.join(&skill.0));
+            Some((skill.clone(), hash.ok()?))
+        })
+        .collect()
 }
 
 /// Hashes the destination of each later un-pinned dotagents request in
@@ -1140,28 +1180,16 @@ fn hash_later_dotagents(
 }
 
 /// The outcome for a skill an earlier install in `batch` already refreshed.
-fn covered_by_install(
-    rt: &Runtime,
-    req: &UpdateRequest,
-    batch: &DotagentsBatch,
-) -> Result<UpdateOutcome, CoreError> {
-    let fs = rt.ports.fs.as_ref();
-    let destination = ops_install::scope_root(rt, &req.scope)
-        .join(UNIVERSAL_ROOT_RELATIVE)
-        .join(&req.skill.0);
-    if fs.symlink_metadata(&destination).is_err() {
-        return Err(
-            CoreError::new(ErrorCode::Io, "the CLI removed the expected destination")
-                .at(&destination),
-        );
-    }
-    Ok(UpdateOutcome {
+fn covered_by_install(req: &UpdateRequest, batch: &DotagentsBatch, rt: &Runtime) -> UpdateOutcome {
+    UpdateOutcome {
         event_id: batch.event_id.clone(),
         skill: req.skill.clone(),
         tree_hash_before: batch.hashes_before[&req.skill].clone(),
-        tree_hash_after: crate::tree_hash::tree_hash(fs, &destination)?,
-        deployment_path: destination,
-    })
+        tree_hash_after: batch.hashes_after[&req.skill].clone(),
+        deployment_path: ops_install::scope_root(rt, &req.scope)
+            .join(UNIVERSAL_ROOT_RELATIVE)
+            .join(&req.skill.0),
+    }
 }
 
 fn update_all_body(
@@ -1180,12 +1208,8 @@ fn update_all_body(
     let mut installed: Vec<DotagentsBatch> = Vec::new();
     for (index, req) in requests.iter().enumerate() {
         let is_dotagents = req.method == InstallMethod::Dotagents;
-        let covered = (is_dotagents && req.ref_pin.is_none())
-            .then(|| installed.iter().find(|batch| batch.scope == req.scope))
-            .flatten()
-            .filter(|batch| batch.hashes_before.contains_key(&req.skill));
-        let result = if let Some(batch) = covered {
-            refuse_parked(rt, req).and_then(|()| covered_by_install(rt, req, batch))
+        let result = if let Some(batch) = DotagentsBatch::covering(&installed, rt, req) {
+            refuse_parked(rt, req).map(|()| covered_by_install(req, batch, rt))
         } else {
             // Read before the install runs: a pinned request edits
             // `agents.toml`, but never the names it declares.
@@ -1199,15 +1223,16 @@ fn update_all_body(
                 BTreeMap::new()
             };
             let result = update(rt, ctx, req);
-            if is_dotagents {
-                installed.retain(|batch| batch.scope != req.scope);
-                if let Ok(outcome) = &result {
-                    installed.push(DotagentsBatch {
-                        scope: req.scope.clone(),
-                        event_id: outcome.event_id.clone(),
-                        hashes_before,
-                    });
-                }
+            // Any other write in the scope (another method, a failed or pinned
+            // install) may have changed what the cached install left behind.
+            installed.retain(|batch| batch.scope != req.scope);
+            if let (true, Ok(outcome)) = (is_dotagents, &result) {
+                installed.push(DotagentsBatch {
+                    scope: req.scope.clone(),
+                    event_id: outcome.event_id.clone(),
+                    hashes_after: hash_after_install(rt, &req.scope, &hashes_before),
+                    hashes_before,
+                });
             }
             result
         };
