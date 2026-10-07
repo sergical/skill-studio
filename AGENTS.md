@@ -359,6 +359,7 @@ Enabled in `apps/desktop/tsconfig.json`:
 ## Reference docs
 
 - `docs/agent-skill-conventions.md` — agentskills.io spec rules, per-agent discovery paths, invocation control (explicit vs model-invocable), the agent settings that hide a skill (read only; Park is the only off), and the local data sources Skill Studio reads. Check it before researching agent behavior again.
+- `docs/flows.md` — every user-facing flow with its UI entry, command, and flow-level test. A new flow adds a row and a test.
 
 ## Skills.sh Integration
 

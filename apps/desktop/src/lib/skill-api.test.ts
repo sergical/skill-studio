@@ -257,6 +257,11 @@ const EXPECTED_WRAPPER_COMMANDS = {
     command: "request_skill_rescan",
     registeredInLibRs: true,
   },
+  rescanSkillsNow: {
+    kind: "command",
+    command: "rescan_skills_now",
+    registeredInLibRs: true,
+  },
   onSkillSnapshot: { kind: "event", event: "skills://snapshot" },
   appVersion: { kind: "command", command: "app_version", registeredInLibRs: true },
   checkForUpdate: { kind: "command", command: "check_for_update", registeredInLibRs: true },

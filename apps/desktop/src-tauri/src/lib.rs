@@ -498,6 +498,7 @@ pub fn run() {
             // Background refresh / invocation snapshot
             skills::skill_refresh::get_skill_snapshot,
             skills::skill_refresh::request_skill_rescan,
+            skills::skill_refresh::rescan_skills_now,
             skills::skill_refresh::get_tracked_projects,
             skills::skill_refresh::register_skill_projects,
             skills::skill_refresh::unregister_skill_project,
