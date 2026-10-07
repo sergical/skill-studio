@@ -292,3 +292,52 @@ impl Drop for HomeGuard {
         }
     }
 }
+
+/// Pins `CODEX_HOME` to `codex_home` and unsets `SKILL_STUDIO_FIXTURE` for
+/// the guarded test's whole body (RAII, so a panic mid-test still restores
+/// both), so `core_scan_installed_skills` takes its live branch and reads
+/// Codex from `codex_home`. Holds the shared [`opencode_env_lock`], like
+/// every other env guard here.
+pub struct LiveCodexHomeGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    prev_codex_home: Option<std::ffi::OsString>,
+    prev_skill_studio_fixture: Option<std::ffi::OsString>,
+}
+
+impl LiveCodexHomeGuard {
+    pub fn new(codex_home: &Path) -> Self {
+        let lock = opencode_env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev_codex_home = std::env::var_os("CODEX_HOME");
+        let prev_skill_studio_fixture = std::env::var_os("SKILL_STUDIO_FIXTURE");
+        // SAFETY: `lock` above serializes every test that touches these vars.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("CODEX_HOME", codex_home);
+            std::env::remove_var("SKILL_STUDIO_FIXTURE");
+        }
+        Self {
+            _lock: lock,
+            prev_codex_home,
+            prev_skill_studio_fixture,
+        }
+    }
+}
+
+impl Drop for LiveCodexHomeGuard {
+    fn drop(&mut self) {
+        // SAFETY: `self._lock` is still held for the whole body of `drop`.
+        #[allow(unsafe_code)]
+        unsafe {
+            match self.prev_codex_home.take() {
+                Some(v) => std::env::set_var("CODEX_HOME", v),
+                None => std::env::remove_var("CODEX_HOME"),
+            }
+            match self.prev_skill_studio_fixture.take() {
+                Some(v) => std::env::set_var("SKILL_STUDIO_FIXTURE", v),
+                None => std::env::remove_var("SKILL_STUDIO_FIXTURE"),
+            }
+        }
+    }
+}
