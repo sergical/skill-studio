@@ -331,26 +331,7 @@ fn run_controlled_command_with_search_dirs(
     let started = Instant::now();
     let outcome = loop {
         match child.try_wait() {
-            Ok(Some(status)) => {
-                break if status.success() {
-                    Ok(())
-                } else {
-                    let stderr = stderr_buf
-                        .lock()
-                        .map(|guard| String::from_utf8_lossy(&guard).into_owned())
-                        .unwrap_or_default();
-                    let stdout = stdout_buf
-                        .lock()
-                        .map(|guard| String::from_utf8_lossy(&guard).into_owned())
-                        .unwrap_or_default();
-                    let message = failure_message(stdout, stderr);
-                    Err(ControlledProcessError::Failed(if message.is_empty() {
-                        format!("{program} exited with code {}", status.code().unwrap_or(-1))
-                    } else {
-                        message
-                    }))
-                };
-            }
+            Ok(Some(status)) => break Ok(status),
             Ok(None) => {
                 if cancel.load(Ordering::SeqCst) {
                     terminate_and_reap(&mut child, pid);
@@ -371,13 +352,29 @@ fn run_controlled_command_with_search_dirs(
         }
     };
 
+    // The readers can still be draining the pipes when the child exits, so the
+    // failure message is read only after they are joined.
     if let Some(handle) = stdout_thread {
         join_finished_reader(handle);
     }
     if let Some(handle) = stderr_thread {
         join_finished_reader(handle);
     }
-    outcome
+    let status = outcome?;
+    if status.success() {
+        return Ok(());
+    }
+    let read = |buf: &Arc<Mutex<Vec<u8>>>| {
+        buf.lock()
+            .map(|guard| String::from_utf8_lossy(&guard).into_owned())
+            .unwrap_or_default()
+    };
+    let message = failure_message(read(&stdout_buf), read(&stderr_buf));
+    Err(ControlledProcessError::Failed(if message.is_empty() {
+        format!("{program} exited with code {}", status.code().unwrap_or(-1))
+    } else {
+        message
+    }))
 }
 
 /// Run a command under one operation deadline and return bounded stdout.
@@ -478,34 +475,9 @@ fn run_controlled_command_io(
         thread::spawn(move || drain_pipe_bounded(stderr, sink, max_output_bytes))
     });
 
-    let mut outcome = loop {
+    let outcome = loop {
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => {
-                break Ok(stdout_buf
-                    .lock()
-                    .map(|bytes| bytes.clone())
-                    .unwrap_or_default())
-            }
-            Ok(Some(status)) => {
-                let stderr = stderr_buf
-                    .lock()
-                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                    .unwrap_or_default();
-                let stdout = stdout_buf
-                    .lock()
-                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                    .unwrap_or_default();
-                let message = failure_message(stdout, stderr);
-                break Err(ControlledProcessError::Failed(if message.is_empty() {
-                    format!(
-                        "{} exited with code {}",
-                        program.display(),
-                        status.code().unwrap_or(-1)
-                    )
-                } else {
-                    message
-                }));
-            }
+            Ok(Some(status)) => break Ok(status),
             Ok(None) => {
                 if let Err(error) = control.check() {
                     terminate_and_reap(&mut child, pid);
@@ -528,13 +500,28 @@ fn run_controlled_command_io(
     if let Some(handle) = stderr_thread {
         join_finished_reader(handle);
     }
-    if outcome.is_ok() {
-        outcome = Ok(stdout_buf
-            .lock()
-            .map(|bytes| bytes.clone())
-            .unwrap_or_default());
+    let status = outcome?;
+    let stdout = stdout_buf
+        .lock()
+        .map(|bytes| bytes.clone())
+        .unwrap_or_default();
+    if status.success() {
+        return Ok(stdout);
     }
-    outcome
+    let stderr = stderr_buf
+        .lock()
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_default();
+    let message = failure_message(String::from_utf8_lossy(&stdout).into_owned(), stderr);
+    Err(ControlledProcessError::Failed(if message.is_empty() {
+        format!(
+            "{} exited with code {}",
+            program.display(),
+            status.code().unwrap_or(-1)
+        )
+    } else {
+        message
+    }))
 }
 
 /// The text to show for a failed exit. A `--json` command prints its

@@ -69,7 +69,7 @@ function FirstRunScreenBody({ onComplete }: FirstRunScreenProps) {
   return (
     <div className="flex h-full w-full">
       <WelcomeArt />
-      <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+      <div className="flex min-w-0 flex-1 flex-col overflow-y-scroll">
         <div data-tauri-drag-region className="h-9 shrink-0" />
         <div className="flex flex-1 items-center justify-center px-10 pb-10">
           <div className="w-full max-w-md space-y-6">

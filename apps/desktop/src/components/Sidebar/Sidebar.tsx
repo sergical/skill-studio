@@ -352,7 +352,7 @@ export function Sidebar({ snapshot, emittedSnapshotRevision, requestRescan }: Si
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pl-2 gutter-pr-2">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-scroll pl-2 gutter-pr-2">
         <SidebarNavItems
           anchorView={anchorView}
           skillsActive={skillsActive}

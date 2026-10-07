@@ -939,7 +939,7 @@ export function invocationFooterNote(files: InvocationFile[], skillName: string)
 }
 
 /**
- * The Park button a live copy row shows where the old switch was, or `null`
+ * The park action behind a live copy row's switch (or its ⋯ menu when an agent setting has it off), or `null`
  * for a row core refuses to park: a plugin copy, a link, or a synthesized
  * reader. On the shared row it parks the folder for every agent that reads it.
  */
@@ -982,6 +982,15 @@ export function rowMenu(
     condition.menu.forEach((entry, j) => push(entry, i === 0 && j === 0));
   });
   const hasOff = row.conditions.some((c) => c.level === "off");
+  // A copy an agent's own setting turns off shows a disabled switch (Skill Studio never edits
+  // that setting), so its Park lives here.
+  const park = row.switchOn ? null : parkActionFor(row, scopeLabel, projectPath);
+  if (park) {
+    push(
+      { label: row.kind === "shared" ? "Park for every agent" : "Park this copy", action: park },
+      false,
+    );
+  }
 
   if (row.kind === "shared") {
     push(
