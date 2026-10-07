@@ -339,16 +339,17 @@ describe("parkForEveryAgent", () => {
     expect(toast?.message).toContain("/plugin");
   });
 
+  const devLink = folder("dev-link", {
+    is_symlink: true,
+    symlink_target: "/home/u/src/tidy",
+    resolved_path: "/home/u/src/tidy",
+  });
+
   it("park_for_every_agent_moves_a_shared_folder_that_is_a_link_to_a_dev_checkout", async () => {
-    const devLink = folder("dev-link", {
-      is_symlink: true,
-      symlink_target: "/home/u/src/tidy",
-      resolved_path: "/home/u/src/tidy",
-    });
     const claudeLink = folder("claude-link", {
-      destination: "per-harness",
       backing: { kind: "linked-to", deployment_id: "dev-link" },
       is_symlink: true,
+      symlink_target: "/home/u/.agents/skills/dev-link",
       path: "/home/u/.claude/skills/tidy",
       resolved_path: "/home/u/src/tidy",
     });
@@ -358,6 +359,23 @@ describe("parkForEveryAgent", () => {
 
     expect(calls).toEqual([{ kind: "park", ids: ["dev-link"] }]);
     expect(toast).toEqual({ type: "success", title: "Parked tidy" });
+  });
+
+  it("park_for_every_agent_warns_when_an_agent_folder_reads_the_dev_checkout_directly", async () => {
+    // ~/.codex/skills -> ~/src: parking moves only the shared link, so Codex still loads the checkout.
+    const codexAlias = folder("codex-alias", {
+      backing: { kind: "linked-to", deployment_id: "dev-link" },
+      shared_via_whole_dir_link: true,
+      path: "/home/u/.codex/skills/tidy",
+      resolved_path: "/home/u/src/tidy",
+    });
+    const { calls, api } = fakeApi();
+
+    const toast = await parkForEveryAgent(skill(false, [devLink, codexAlias]), api);
+
+    expect(calls).toEqual([{ kind: "park", ids: ["dev-link"] }]);
+    expect(toast?.type).toBe("warning");
+    expect(toast?.message).toContain(".codex/skills/tidy");
   });
 
   it("park_for_every_agent_waits_for_a_confirm_with_the_git_warning_before_moving_a_project_folder", async () => {

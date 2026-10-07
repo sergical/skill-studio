@@ -1015,19 +1015,29 @@ export function parkEveryAgentPlan(skill: ParkView): ParkEveryAgentPlan {
   }
   const folders = skill.deployments.filter(corePark);
   const movedIds = new Set(folders.map((deployment) => deployment.id));
-  const movedPaths = new Set(
-    folders.flatMap((deployment) => [deployment.path, deployment.resolved_path ?? deployment.path]),
+  // A real folder leaves, so everything that reads it loses the skill. A moved
+  // link (a dev checkout) leaves the checkout in place, so only links to the
+  // moved link's own path lose it.
+  const realFolders = folders.filter((deployment) => !deployment.is_symlink);
+  const realIds = new Set(realFolders.map((deployment) => deployment.id));
+  const realPaths = new Set(
+    realFolders.flatMap((deployment) => [
+      deployment.path,
+      deployment.resolved_path ?? deployment.path,
+    ]),
   );
-  const movesWithAFolder = (deployment: Deployment) =>
-    (deployment.backing.kind === "linked-to" && movedIds.has(deployment.backing.deployment_id)) ||
-    (deployment.resolved_path != null && movedPaths.has(deployment.resolved_path));
+  const movedLinkPaths = new Set(
+    folders.filter((deployment) => deployment.is_symlink).map((deployment) => deployment.path),
+  );
+  const losesTheSkill = (deployment: Deployment) =>
+    (deployment.backing.kind === "linked-to" && realIds.has(deployment.backing.deployment_id)) ||
+    (deployment.resolved_path != null && realPaths.has(deployment.resolved_path)) ||
+    (deployment.symlink_target != null && movedLinkPaths.has(deployment.symlink_target));
   return {
     targets: folders.map((deployment) => ({ deployment_id: deployment.id })),
     stillOn: skill.deployments.filter(
       (deployment) =>
-        deployment.scope !== "parked" &&
-        !movedIds.has(deployment.id) &&
-        !movesWithAFolder(deployment),
+        deployment.scope !== "parked" && !movedIds.has(deployment.id) && !losesTheSkill(deployment),
     ),
     projectFolders: folders.filter((deployment) => deployment.scope === "project"),
   };
