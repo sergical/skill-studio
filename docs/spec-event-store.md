@@ -125,7 +125,7 @@ Every mutating command wraps its work in these durable phases, in order:
   already matches the pre-event state.
 - Duplicate/concurrent restores are prevented by a transactional claim:
   `UPDATE events SET reverted_by = ?new WHERE id = ?target AND
-reverted_by IS NULL`; zero rows updated means another restore already
+  reverted_by IS NULL`; zero rows updated means another restore already
   claimed it, and the new restore aborts before touching the filesystem.
   (The in-process `ForkMutationLock` already serializes commands; the
   claim guards against crashed half-restores and future callers.)
