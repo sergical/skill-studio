@@ -671,9 +671,20 @@ pub fn update(
     ctx: &OpContext,
     req: &UpdateRequest,
 ) -> Result<UpdateOutcome, CoreError> {
+    update_then_release(rt, ctx, req, &mut || {})
+}
+
+/// [`update`], calling `before_release` after a successful write while the
+/// lease is still held, so it sees exactly what the update left.
+fn update_then_release(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &UpdateRequest,
+    before_release: &mut dyn FnMut(),
+) -> Result<UpdateOutcome, CoreError> {
     rt.run(Operation::Update, ctx, || {
         refuse_parked(rt, req)?;
-        update_body(rt, ctx, req)
+        update_body(rt, ctx, req, before_release)
     })
 }
 
@@ -720,6 +731,7 @@ fn update_body(
     rt: &Runtime,
     ctx: &OpContext,
     req: &UpdateRequest,
+    before_release: &mut dyn FnMut(),
 ) -> Result<UpdateOutcome, CoreError> {
     ctx.checkpoint()?;
     let clock = rt.ports.clock.as_ref();
@@ -871,6 +883,7 @@ fn update_body(
     session
         .store
         .finish(&session.guard, &id, EventStatus::Done, post_fingerprint)?;
+    before_release();
     session.finish(rt, ctx);
     let write_step = crate::timing::step(clock, "write", step_start);
     ctx.record_timing(crate::timing::op_timing(
@@ -1247,17 +1260,25 @@ fn update_all_body(
             } else {
                 BTreeMap::new()
             };
-            let result = update(rt, ctx, req);
+            let mut snapshot = None;
+            let result = update_then_release(rt, ctx, req, &mut || {
+                if is_dotagents {
+                    snapshot = Some((
+                        hash_after_install(rt, &req.scope, &hashes_before),
+                        read_dotagents_files(rt, &req.scope),
+                    ));
+                }
+            });
             // Any other write in the scope (another method, a failed or pinned
             // install) may have changed what the cached install left behind.
             installed.retain(|batch| batch.scope != req.scope);
-            if let (true, Ok(outcome)) = (is_dotagents, &result) {
+            if let (Some((hashes_after, files_after)), Ok(outcome)) = (snapshot, &result) {
                 installed.push(DotagentsBatch {
                     scope: req.scope.clone(),
                     event_id: outcome.event_id.clone(),
-                    hashes_after: hash_after_install(rt, &req.scope, &hashes_before),
-                    files_after: read_dotagents_files(rt, &req.scope),
                     hashes_before,
+                    hashes_after,
+                    files_after,
                 });
             }
             result

@@ -21,7 +21,8 @@ use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::{AgentId, LifecycleOwnerKind, RootScope, SkillName};
 use skill_studio_core::ops;
 use skill_studio_core::ports::{
-    CancelToken, MutationSession, Ports, ProcessOutput, ProcessSpawner, ProcessSpec, Runtime,
+    CancelToken, CoreNotice, EventSink, MutationSession, OpState, Ports, ProcessOutput,
+    ProcessSpawner, ProcessSpec, Runtime,
 };
 use skill_studio_core::scope::RuntimeScope;
 use skill_studio_core::testing::golden::{ctx, unique_temp_dir};
@@ -2316,6 +2317,68 @@ fn update_all_runs_its_own_dotagents_install_after_agents_toml_changed() {
             std::fs::write(&toml, format!("{text}\n# beta moved to a new ref\n")).unwrap();
         }
     });
+
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
+    let event = |i: usize| result.items[i].outcome.as_ref().unwrap().event_id.clone();
+    assert_ne!(event(1), event(0));
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Rewrites one skill folder on the first `Committed` notice, the moment the
+/// first update releases its lease, as another client could.
+struct WriteOnFirstCommit {
+    target: PathBuf,
+    done: Mutex<bool>,
+}
+
+impl EventSink for WriteOnFirstCommit {
+    fn notify(&self, notice: CoreNotice) {
+        let mut done = self.done.lock().unwrap();
+        if let (
+            false,
+            CoreNotice::OpState {
+                state: OpState::Committed,
+                ..
+            },
+        ) = (*done, notice)
+        {
+            std::fs::write(&self.target, "written as the lease was released").unwrap();
+            *done = true;
+        }
+    }
+}
+
+/// Flow: update-all covers beta with alpha's dotagents install, and another
+/// client rewrites beta just as alpha's install releases its lease.
+/// Expectation: beta runs its own install.
+/// A failure means the snapshot of alpha's install output was taken after
+/// the lease was released, so it recorded the other client's write as the
+/// install's and skipped beta.
+#[test]
+fn update_all_snapshots_the_dotagents_install_before_its_lease_is_released() {
+    let home = unique_temp_dir("update_all_dotagents_lease_gap");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    seed_dotagents_files(&home, THREE_DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let mut rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+    rt.ports.sink = Arc::new(WriteOnFirstCommit {
+        target: home
+            .join(UNIVERSAL_ROOT_RELATIVE)
+            .join("beta")
+            .join("SKILL.md"),
+        done: Mutex::new(false),
+    });
+
+    let requests = vec![
+        cli_request("alpha", InstallMethod::Dotagents),
+        cli_request("beta", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
 
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
