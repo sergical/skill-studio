@@ -614,20 +614,10 @@ mod tests {
         let bin_dir = tempfile::tempdir().expect("fake bin dir");
         let recording = bin_dir.path().join("open.log");
         let fake_open = bin_dir.path().join("open");
-        std::fs::write(
+        super::super::test_support::write_fake_executable(
             &fake_open,
-            format!(
-                "#!/bin/sh\necho \"$@\" > '{}'\nexit 0\n",
-                recording.display()
-            ),
-        )
-        .expect("write fake open");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake_open, std::fs::Permissions::from_mode(0o700))
-                .expect("chmod fake open");
-        }
+            &format!("echo \"$@\" > '{}'\nexit 0", recording.display()),
+        );
 
         let _path_guard = super::super::test_support::PathGuard::new(bin_dir.path());
         let result = open_paths_in_editor(home.path(), &[path_a.clone(), path_b.clone()]);

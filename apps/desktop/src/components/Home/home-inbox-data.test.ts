@@ -174,6 +174,7 @@ function succeedAll(items: UpdateAllItem["skill"][]): UpdateAllOutcome {
   return {
     items: items.map((skill) => ({ skill, outcome: outcomeFor(skill) })),
     errors: {},
+    not_run: [],
   };
 }
 
@@ -181,6 +182,7 @@ function failAll(items: UpdateAllItem["skill"][]): UpdateAllOutcome {
   return {
     items: items.map((skill) => ({ skill, outcome: null })),
     errors: Object.fromEntries(items.map((skill) => [skill, "update failed"])),
+    not_run: [],
   };
 }
 
@@ -397,6 +399,7 @@ describe("updateAllOutdatedSkills", () => {
           { skill: "gamma", outcome: null },
         ],
         errors: { beta: "beta is wildcard-dotagents (read-only)", gamma: "gamma failed" },
+        not_run: [],
       }),
     );
 

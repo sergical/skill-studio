@@ -292,3 +292,88 @@ impl Drop for HomeGuard {
         }
     }
 }
+
+/// Pins `CODEX_HOME` to `codex_home` and unsets `SKILL_STUDIO_FIXTURE` for
+/// the guarded test's whole body (RAII, so a panic mid-test still restores
+/// both), so `core_scan_installed_skills` takes its live branch and reads
+/// Codex from `codex_home`. Holds the shared [`opencode_env_lock`], like
+/// every other env guard here.
+pub struct LiveCodexHomeGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    prev_codex_home: Option<std::ffi::OsString>,
+    prev_skill_studio_fixture: Option<std::ffi::OsString>,
+}
+
+impl LiveCodexHomeGuard {
+    pub fn new(codex_home: &Path) -> Self {
+        let lock = opencode_env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev_codex_home = std::env::var_os("CODEX_HOME");
+        let prev_skill_studio_fixture = std::env::var_os("SKILL_STUDIO_FIXTURE");
+        // SAFETY: `lock` above serializes every test that touches these vars.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("CODEX_HOME", codex_home);
+            std::env::remove_var("SKILL_STUDIO_FIXTURE");
+        }
+        Self {
+            _lock: lock,
+            prev_codex_home,
+            prev_skill_studio_fixture,
+        }
+    }
+}
+
+impl Drop for LiveCodexHomeGuard {
+    fn drop(&mut self) {
+        // SAFETY: `self._lock` is still held for the whole body of `drop`.
+        #[allow(unsafe_code)]
+        unsafe {
+            match self.prev_codex_home.take() {
+                Some(v) => std::env::set_var("CODEX_HOME", v),
+                None => std::env::remove_var("CODEX_HOME"),
+            }
+            match self.prev_skill_studio_fixture.take() {
+                Some(v) => std::env::set_var("SKILL_STUDIO_FIXTURE", v),
+                None => std::env::remove_var("SKILL_STUDIO_FIXTURE"),
+            }
+        }
+    }
+}
+
+/// Writes an executable at `path` that runs the shell `body`, without
+/// writing a new executable file: `path` is a hard link to one runner script
+/// made once per test process, and `body` sits beside it as `<path>.body`
+/// for the runner to source. On macOS hosts that scan new executables,
+/// running a freshly written script can stall for 10 s to minutes, which
+/// trips process timeouts in unrelated tests; a new link to an
+/// already-run file does not. Falls back to a plain script if the link
+/// fails (a temp dir on another filesystem).
+#[cfg(all(test, unix))]
+pub fn write_fake_executable(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    static RUNNER: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    let runner = RUNNER.get_or_init(|| {
+        let runner = tempfile::tempdir().unwrap().keep().join("runner");
+        std::fs::write(&runner, "#!/bin/sh\n. \"$0.body\"\n").unwrap();
+        std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Pay the first-run stall here, outside any test's process deadline.
+        let mut warm_body = runner.as_os_str().to_owned();
+        warm_body.push(".body");
+        std::fs::write(warm_body, ":\n").unwrap();
+        assert!(std::process::Command::new(&runner)
+            .status()
+            .unwrap()
+            .success());
+        runner
+    });
+    if std::fs::hard_link(runner, path).is_ok() {
+        let mut body_path = path.as_os_str().to_owned();
+        body_path.push(".body");
+        std::fs::write(body_path, body).unwrap();
+    } else {
+        std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}

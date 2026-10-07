@@ -848,25 +848,18 @@ mod tests {
     #[test]
     fn a_bare_program_outside_the_process_path_runs_through_the_command_runner_or_names_the_spawn_error(
     ) {
-        use std::os::unix::fs::PermissionsExt;
-
         let tmp = tempfile::tempdir().unwrap();
         let marker = tmp.path().join("marker");
-        let script_path = tmp.path().join("fakeclaude");
-        std::fs::write(
-            &script_path,
-            format!("#!/usr/bin/env sh\ntouch \"{}\"\n", marker.display()),
-        )
-        .unwrap();
-        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms).unwrap();
+        // A link to a system binary, not a freshly written script: running a
+        // just-written script can stall for minutes on macOS hosts that scan
+        // new executables, and races a parallel fork on Linux (ETXTBSY).
+        std::os::unix::fs::symlink("/usr/bin/touch", tmp.path().join("fakeclaude")).unwrap();
 
         let cancel = AtomicBool::new(false);
         let search_dirs = vec![tmp.path().to_path_buf()];
         run_controlled_command_with_search_dirs(
             "fakeclaude",
-            &[],
+            &[marker.display().to_string()],
             None,
             &cancel,
             Duration::from_secs(30),

@@ -175,15 +175,11 @@ mod tests {
 
     #[cfg(unix)]
     fn fake_gh_printing(tmp: &Path, bytes: usize) -> std::path::PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
         let script = tmp.join("gh");
-        std::fs::write(
+        super::super::test_support::write_fake_executable(
             &script,
-            format!("#!/usr/bin/env sh\nhead -c {bytes} /dev/zero | tr '\\0' 'a'\n"),
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            &format!("head -c {bytes} /dev/zero | tr '\\0' 'a'"),
+        );
         script
     }
 
