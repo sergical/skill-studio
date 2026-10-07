@@ -753,6 +753,89 @@ describe("anti-slop interface dictionary rules", () => {
 		expect(diagnostics[0]?.message).toContain("union");
 	});
 
+	it("accepts an inherited unknown dictionary when the override value is a concrete object literal, not flagged as unsafe", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: { id: string };
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(0);
+	});
+
+	it("accepts an inherited unknown dictionary when the override value is an array of strings, not flagged as unsafe", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: string[] | readonly string[] | Array<string>;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(0);
+	});
+
+	it("accepts an inherited unknown dictionary when the override value is a local string alias, not flagged as unsafe", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`type Value = string;
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: Value;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(0);
+	});
+
+	it("keeps an inherited unknown dictionary flagged when the override value is a cyclic local alias", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`type Loop = Loop[] | string;
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: Loop;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
+	it("keeps an inherited unknown dictionary flagged when the override value is an unresolved imported alias", () => {
+		const diagnostics = lintAntiSlopFixture(
+			`import type { Imported } from "./other";
+			interface Base<V> {
+				[key: string]: V;
+			}
+			interface Derived extends Base<unknown> {
+				[key: string]: Imported;
+			}
+			const derived: Derived = {};
+			void derived;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBeGreaterThan(0);
+	});
+
 	it("keeps an inherited unsafe symbol key when the override covers a different key union", () => {
 		const diagnostics = lintAntiSlopFixture(
 			`interface Base<V> {

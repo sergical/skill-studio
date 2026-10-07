@@ -157,23 +157,65 @@ const SAFE_VALUE_KINDS = new Set([
 /**
  * An override hides an inherited signature only when its value is provably
  * safe. A value the classifier cannot read (a conditional, an unresolved type
- * parameter) must keep the inherited evidence, or an unsafe contract slips by.
+ * parameter, an imported or interface reference) must keep the inherited
+ * evidence, or an unsafe contract slips by. `visitedAliases` makes a cyclic
+ * local alias read as not safe.
  */
 function isProvablySafeValue(
 	type: ESTree.TSType,
 	substitutions: TypeSubstitutionEnvironment,
+	environment: TypeEnvironment,
+	visitedAliases: ReadonlySet<string> = new Set(),
 ): boolean {
+	const isSafe = (inner: ESTree.TSType): boolean =>
+		isProvablySafeValue(inner, substitutions, environment, visitedAliases);
 	const unwrapped = unwrapTransparentType(type);
 	if (SAFE_VALUE_KINDS.has(unwrapped.type)) return true;
-	if (unwrapped.type === "TSUnionType")
-		return unwrapped.types.every((member) => isProvablySafeValue(member, substitutions));
+	if (unwrapped.type === "TSUnionType") return unwrapped.types.every(isSafe);
+	if (unwrapped.type === "TSArrayType") return isSafe(unwrapped.elementType);
+	if (unwrapped.type === "TSTupleType")
+		return unwrapped.elementTypes.every((element) =>
+			isSafe(element.type === "TSNamedTupleMember" ? element.elementType : element),
+		);
+	if (unwrapped.type === "TSTypeLiteral") {
+		return (
+			unwrapped.members.length > 0 &&
+			unwrapped.members.every(
+				(member) =>
+					member.type === "TSPropertySignature" &&
+					member.typeAnnotation !== undefined &&
+					isSafe(member.typeAnnotation.typeAnnotation),
+			)
+		);
+	}
 	if (unwrapped.type !== "TSTypeReference") return false;
 	const name = typeReferenceName(unwrapped);
-	const substitution = name === null ? undefined : substitutions.get(name);
-	return (
-		substitution !== undefined &&
-		substitution !== UNRESOLVED_TYPE_PARAMETER &&
-		isProvablySafeValue(substitution.type, substitution.substitutions)
+	if (name === null) return false;
+	const substitution = substitutions.get(name);
+	if (substitution !== undefined) {
+		return (
+			substitution !== UNRESOLVED_TYPE_PARAMETER &&
+			isProvablySafeValue(substitution.type, substitution.substitutions, environment, visitedAliases)
+		);
+	}
+	const alias = environment.aliases.get(name);
+	if (alias === undefined) {
+		const [argument, ...rest] = unwrapped.typeArguments?.params ?? [];
+		return (
+			(name === "Array" || name === "ReadonlyArray") &&
+			!environment.interfaces.has(name) &&
+			argument !== undefined &&
+			rest.length === 0 &&
+			isSafe(argument)
+		);
+	}
+	if (visitedAliases.has(name)) return false;
+	if (alias.typeParameters != null || unwrapped.typeArguments != null) return false;
+	return isProvablySafeValue(
+		alias.typeAnnotation,
+		new Map(),
+		environment,
+		new Set([...visitedAliases, name]),
 	);
 }
 
@@ -769,7 +811,7 @@ function interfaceDictionaryValueTypes(
 		);
 		const directKeyKinds = new Set(
 			directValueTypes
-				.filter((entry) => isProvablySafeValue(entry.value.type, entry.value.substitutions))
+				.filter((entry) => isProvablySafeValue(entry.value.type, entry.value.substitutions, environment))
 				.map((entry) => entry.keyKind)
 				.filter((kind) => kind !== ""),
 		);
