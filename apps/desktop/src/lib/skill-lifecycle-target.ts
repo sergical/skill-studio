@@ -979,10 +979,15 @@ export function skillParkVerb(
   return skill.parked ? "Unpark" : "Park";
 }
 
-/** Mirrors `refuse_unparkable` in the core: the Universal folder may be a link (a dev checkout), agent folders may not. */
+/**
+ * Mirrors `refuse_unparkable` in the core: the Universal folder may be a link
+ * (a dev checkout), agent folders may not. A moved-aside copy is already off
+ * and keeps its own restore action.
+ */
 function corePark(deployment: Deployment): boolean {
   return (
     deployment.scope !== "parked" &&
+    deployment.disabled_by !== "studio-moved" &&
     !deployment.plugin &&
     deployment.backing.kind !== "linked-to" &&
     !deployment.symlink_is_broken &&
@@ -990,10 +995,13 @@ function corePark(deployment: Deployment): boolean {
   );
 }
 
+/** A copy an agent still loads: not parked, not moved aside, not turned off in the agent. */
+export function isLiveCopy(deployment: Deployment): boolean {
+  return deployment.scope !== "parked" && deployment.disabled_by === null;
+}
+
 interface ParkEveryAgentPlan {
   targets: LifecycleTarget[];
-  /** Live copies the batch cannot move, such as a plugin's copy. They stay on after Park. */
-  stillOn: Deployment[];
   /** Project folders in `targets`. Moving one shows as deleted files when git tracks it. */
   projectFolders: Deployment[];
 }
@@ -1001,43 +1009,22 @@ interface ParkEveryAgentPlan {
 /**
  * What the skill page's "Park for every agent" / "Turn on for every agent"
  * moves: each live folder the core can park, or each parked copy once the
- * whole skill is parked. A link is left out when the folder it reads is in the
- * batch, because the core moves links with their folder. No targets when a
- * parked copy sits beside a live one; the Locations card resolves that first.
+ * whole skill is parked. Links are left out because the core moves or keeps
+ * them by where they really point, which only a rescan shows. No targets when
+ * a parked copy sits beside a live one; the Locations card resolves that first.
  */
 export function parkEveryAgentPlan(skill: ParkView): ParkEveryAgentPlan {
-  const none: ParkEveryAgentPlan = { targets: [], stillOn: [], projectFolders: [] };
-  if (findLeftBehindPairs(skill).length > 0) return none;
+  if (findLeftBehindPairs(skill).length > 0) return { targets: [], projectFolders: [] };
   if (skill.parked) {
     const parked = skill.deployments.filter((deployment) => deployment.scope === "parked");
-    return { ...none, targets: parked.map((deployment) => ({ deployment_id: deployment.id })) };
+    return {
+      targets: parked.map((deployment) => ({ deployment_id: deployment.id })),
+      projectFolders: [],
+    };
   }
   const folders = skill.deployments.filter(corePark);
-  const movedIds = new Set(folders.map((deployment) => deployment.id));
-  // A real folder leaves, so everything that reads it loses the skill. A moved
-  // link (a dev checkout) leaves the checkout in place, so only links to the
-  // moved link's own path lose it.
-  const realFolders = folders.filter((deployment) => !deployment.is_symlink);
-  const realIds = new Set(realFolders.map((deployment) => deployment.id));
-  const realPaths = new Set(
-    realFolders.flatMap((deployment) => [
-      deployment.path,
-      deployment.resolved_path ?? deployment.path,
-    ]),
-  );
-  const movedLinkPaths = new Set(
-    folders.flatMap((deployment) => (deployment.is_symlink ? [deployment.path] : [])),
-  );
-  const losesTheSkill = (deployment: Deployment) =>
-    (deployment.backing.kind === "linked-to" && realIds.has(deployment.backing.deployment_id)) ||
-    (deployment.resolved_path != null && realPaths.has(deployment.resolved_path)) ||
-    (deployment.symlink_target != null && movedLinkPaths.has(deployment.symlink_target));
   return {
     targets: folders.map((deployment) => ({ deployment_id: deployment.id })),
-    stillOn: skill.deployments.filter(
-      (deployment) =>
-        deployment.scope !== "parked" && !movedIds.has(deployment.id) && !losesTheSkill(deployment),
-    ),
     projectFolders: folders.filter((deployment) => deployment.scope === "project"),
   };
 }

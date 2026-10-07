@@ -235,7 +235,16 @@ describe("parkForEveryAgent", () => {
     ({ name: "tidy", parked, source_kind: "skills-sh", deployments }) as InstalledSkill;
   const fakeApi = (
     errors: (string | null)[] = [],
-    { confirm = true, gitTracked = false }: { confirm?: boolean; gitTracked?: boolean | null } = {},
+    {
+      confirm = true,
+      gitTracked = false,
+      rescanned = [],
+    }: {
+      confirm?: boolean;
+      gitTracked?: boolean | null;
+      /** The skill's copies in the snapshot after the write; `null` when no snapshot lands. */
+      rescanned?: Deployment[] | null;
+    } = {},
   ) => {
     const calls: { kind: "park" | "unpark"; ids: string[] }[] = [];
     const prompts: string[] = [];
@@ -253,6 +262,7 @@ describe("parkForEveryAgent", () => {
         prompts.push(message);
         return confirm;
       },
+      rescan: async () => (rescanned ? [skill(false, rescanned)] : null),
     };
     return { calls, prompts, api };
   };
@@ -329,14 +339,18 @@ describe("parkForEveryAgent", () => {
         id: "tidy@official",
       },
     });
-    const { calls, api } = fakeApi();
+    const before = skill(false, [folder("shared"), pluginCopy]);
+    const rescanned = fakeApi([], { rescanned: [pluginCopy] });
+    const noSnapshot = fakeApi([], { rescanned: null });
 
-    const toast = await parkForEveryAgent(skill(false, [folder("shared"), pluginCopy]), api);
+    const toast = await parkForEveryAgent(before, rescanned.api);
+    const fallback = await parkForEveryAgent(before, noSnapshot.api);
 
-    expect(calls).toEqual([{ kind: "park", ids: ["shared"] }]);
+    expect(rescanned.calls).toEqual([{ kind: "park", ids: ["shared"] }]);
     expect(toast?.type).toBe("warning");
     expect(toast?.message).toContain(".claude/plugins/cache/official/tidy/skills/tidy");
     expect(toast?.message).toContain("/plugin");
+    expect(fallback).toEqual(toast);
   });
 
   const devLink = folder("dev-link", {
@@ -361,7 +375,7 @@ describe("parkForEveryAgent", () => {
     expect(toast).toEqual({ type: "success", title: "Parked tidy" });
   });
 
-  it("park_for_every_agent_warns_when_an_agent_folder_reads_the_dev_checkout_directly", async () => {
+  it("park_for_every_agent_names_the_copies_the_rescan_still_finds_live", async () => {
     // ~/.codex/skills -> ~/src: parking moves only the shared link, so Codex still loads the checkout.
     const codexAlias = folder("codex-alias", {
       backing: { kind: "linked-to", deployment_id: "dev-link" },
@@ -369,13 +383,21 @@ describe("parkForEveryAgent", () => {
       path: "/home/u/.codex/skills/tidy",
       resolved_path: "/home/u/src/tidy",
     });
-    const { calls, api } = fakeApi();
+    const parkedLink = folder("parked-link", { scope: "parked" });
+    const movedAside = folder("moved-aside", {
+      path: "/home/u/.claude/skills/.skill-studio-disabled/tidy",
+      disabled_by: "studio-moved",
+    });
+    const { calls, api } = fakeApi([], { rescanned: [parkedLink, codexAlias, movedAside] });
 
-    const toast = await parkForEveryAgent(skill(false, [devLink, codexAlias]), api);
+    const toast = await parkForEveryAgent(skill(false, [devLink, codexAlias, movedAside]), api);
 
     expect(calls).toEqual([{ kind: "park", ids: ["dev-link"] }]);
-    expect(toast?.type).toBe("warning");
-    expect(toast?.message).toContain(".codex/skills/tidy");
+    expect(toast).toEqual({
+      type: "warning",
+      title: "Parked tidy, but a copy is still on",
+      message: "Still on: ~/.codex/skills/tidy.",
+    });
   });
 
   it("park_for_every_agent_moves_the_shared_folder_when_the_shared_root_is_itself_a_link", async () => {

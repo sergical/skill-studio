@@ -11,16 +11,20 @@ import type { ReactNode } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   forkSkill,
+  getSkillSnapshot,
+  onSkillSnapshot,
   openSkillPath,
   parkCheck,
   parkSkills,
   pullForkUpstream,
   removeSkill,
+  requestSkillRescan,
   unforkSkill,
   unparkSkills,
   updatePlugin,
 } from "../../lib/skill-api";
 import {
+  isLiveCopy,
   lifecycleTargetForDeployment,
   lifecycleTargetForSkill,
   parkEveryAgentPlan,
@@ -122,9 +126,45 @@ interface ParkForEveryAgentApi {
     message: string,
     options: { title: string; kind: "warning"; okLabel: string },
   ) => Promise<boolean>;
+  /** The skills from the first snapshot built after the call, or `null` when none lands in time. */
+  rescan: () => Promise<InstalledSkill[] | null>;
 }
 
-const PARK_FOR_EVERY_AGENT_API: ParkForEveryAgentApi = { parkSkills, unparkSkills, parkCheck, ask };
+const RESCAN_TIMEOUT_MS = 10_000;
+
+async function rescanAfterWrite(): Promise<InstalledSkill[] | null> {
+  const before = (await getSkillSnapshot())?.revision ?? 0;
+  return new Promise((resolve) => {
+    let settled = false;
+    let unlisten: (() => void) | undefined;
+    const finish = (skills: InstalledSkill[] | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unlisten?.();
+      resolve(skills);
+    };
+    const timer = setTimeout(() => finish(null), RESCAN_TIMEOUT_MS);
+    onSkillSnapshot((snapshot) => {
+      if (snapshot.revision > before) finish(snapshot.skills);
+    }).then(
+      (stop) => {
+        unlisten = stop;
+        if (settled) stop();
+        else void requestSkillRescan().catch(() => finish(null));
+      },
+      () => finish(null),
+    );
+  });
+}
+
+const PARK_FOR_EVERY_AGENT_API: ParkForEveryAgentApi = {
+  parkSkills,
+  unparkSkills,
+  parkCheck,
+  ask,
+  rescan: rescanAfterWrite,
+};
 
 /** The confirm text for parking project folders, with the git warning for each tracked one. */
 async function projectParkMessage(folders: Deployment[], check: GitCheck): Promise<string> {
@@ -153,6 +193,18 @@ function stillOnMessage(stillOn: Deployment[]): string | null {
 }
 
 /**
+ * The copies an agent still loads after Park, read from a rescan. Without a
+ * rescan only plugin copies are certain: Park never moves them.
+ */
+async function copiesStillOn(skill: InstalledSkill, rescan: ParkForEveryAgentApi["rescan"]) {
+  const skills = await rescan();
+  if (!skills)
+    return skill.deployments.filter((deployment) => deployment.plugin && isLiveCopy(deployment));
+  const fresh = skills.find((candidate) => candidate.name === skill.name);
+  return fresh ? fresh.deployments.filter(isLiveCopy) : [];
+}
+
+/**
  * Park every live folder of `skill`, or turn every parked one back on, in one
  * batch. Project folders wait for a confirm that carries the git warning.
  * Returns the toast to show, or `null` when the confirm was cancelled. The
@@ -176,7 +228,7 @@ export async function parkForEveryAgent(
     : await api.parkSkills(plan.targets);
   const errors = results.flatMap((result) => (result.error ? [result.error] : []));
   const done = skill.parked ? "Turned on" : "Parked";
-  const stillOn = stillOnMessage(plan.stillOn);
+  const stillOn = skill.parked ? null : stillOnMessage(await copiesStillOn(skill, api.rescan));
   if (errors.length > 0) {
     const total = plan.targets.length;
     return {
