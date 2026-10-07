@@ -1111,12 +1111,34 @@ struct DotagentsBatch {
     event_id: crate::identity::EventId,
     hashes_before: BTreeMap<SkillName, String>,
     hashes_after: BTreeMap<SkillName, String>,
+    /// `agents.toml` and `agents.lock` right after the install, so an edit
+    /// to a later skill's source or ref makes it run its own install.
+    files_after: DotagentsFiles,
+}
+
+type DotagentsFiles = [Option<Vec<u8>>; 2];
+
+/// The scope's `agents.toml` and `agents.lock` bytes; `None` for one that is
+/// missing or unreadable.
+fn read_dotagents_files(rt: &Runtime, scope: &RootScope) -> DotagentsFiles {
+    let fs = rt.ports.fs.as_ref();
+    let project = match scope {
+        RootScope::Global => None,
+        RootScope::Project(project) => Some(project.0.as_path()),
+    };
+    let dir = crate::dotagents_ledger::dotagents_dir(&rt.scope.home.lexical, project);
+    ["agents.toml", "agents.lock"].map(|name| {
+        let path = crate::ports::resolve_config_link(fs, &dir.join(name)).ok()?;
+        fs.read_capped(&path, crate::dotagents_ledger::DOTAGENTS_FILE_MAX_BYTES)
+            .ok()
+    })
 }
 
 impl DotagentsBatch {
-    /// The batch that covers `req`, when the skill's folder is still exactly
-    /// what the install left. Anything that wrote it since (a restore, another
-    /// app) makes `req` run its own install instead.
+    /// The batch that covers `req`, when the skill's folder, `agents.toml` and
+    /// `agents.lock` are still exactly what the install left. Anything that
+    /// wrote them since (a restore, another app) makes `req` run its own
+    /// install instead.
     fn covering<'a>(
         installed: &'a [DotagentsBatch],
         rt: &Runtime,
@@ -1127,6 +1149,9 @@ impl DotagentsBatch {
         }
         let batch = installed.iter().find(|batch| batch.scope == req.scope)?;
         let after = batch.hashes_after.get(&req.skill)?;
+        if read_dotagents_files(rt, &req.scope) != batch.files_after {
+            return None;
+        }
         let destination = ops_install::scope_root(rt, &req.scope)
             .join(UNIVERSAL_ROOT_RELATIVE)
             .join(&req.skill.0);
@@ -1231,6 +1256,7 @@ fn update_all_body(
                     scope: req.scope.clone(),
                     event_id: outcome.event_id.clone(),
                     hashes_after: hash_after_install(rt, &req.scope, &hashes_before),
+                    files_after: read_dotagents_files(rt, &req.scope),
                     hashes_before,
                 });
             }

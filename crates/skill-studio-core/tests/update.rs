@@ -2290,6 +2290,41 @@ fn update_all_runs_its_own_dotagents_install_for_a_folder_changed_after_the_shar
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// Flow: update-all covers beta with alpha's dotagents install, but
+/// `agents.toml` changes (beta pinned to a new ref) before beta's turn.
+/// Expectation: beta runs its own install for the new configuration.
+/// A failure means beta reports success without installing the edited entry.
+#[test]
+fn update_all_runs_its_own_dotagents_install_after_agents_toml_changed() {
+    let home = unique_temp_dir("update_all_dotagents_toml_changed");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    seed_dotagents_files(&home, THREE_DECLARED_TOML);
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+
+    let toml = home.join(".agents/agents.toml");
+    let requests = vec![
+        cli_request("alpha", InstallMethod::Dotagents),
+        cli_request("beta", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |skill, _| {
+        if skill.0 == "alpha" {
+            let text = std::fs::read_to_string(&toml).unwrap();
+            std::fs::write(&toml, format!("{text}\n# beta moved to a new ref\n")).unwrap();
+        }
+    });
+
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
+    let event = |i: usize| result.items[i].outcome.as_ref().unwrap().event_id.clone();
+    assert_ne!(event(1), event(0));
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
 /// Flow: update-all with one dotagents skill in the global scope and one in
 /// a project.
 /// Expectation: each scope runs its own install and gets its own event.
