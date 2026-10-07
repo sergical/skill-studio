@@ -358,6 +358,14 @@ pub fn write_fake_executable(path: &Path, body: &str) {
         let runner = tempfile::tempdir().unwrap().keep().join("runner");
         std::fs::write(&runner, "#!/bin/sh\n. \"$0.body\"\n").unwrap();
         std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Pay the first-run stall here, outside any test's process deadline.
+        let mut warm_body = runner.as_os_str().to_owned();
+        warm_body.push(".body");
+        std::fs::write(warm_body, ":\n").unwrap();
+        assert!(std::process::Command::new(&runner)
+            .status()
+            .unwrap()
+            .success());
         runner
     });
     if std::fs::hard_link(runner, path).is_ok() {
