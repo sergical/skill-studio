@@ -70,6 +70,9 @@ struct FakeNpxSpawner {
     /// The env the host process would pass down: the real adapter inherits it, and
     /// `ProcessSpec.env` only overlays it.
     inherited_env: Mutex<Vec<(String, String)>>,
+    /// Set by [`FakeNpxSpawner::fail_next_call_after_deleting`]: the next `remove` deletes
+    /// everything it would, then exits nonzero, as a timeout or crash at the end of the run.
+    fail_after_clearing: AtomicBool,
 }
 
 impl FakeNpxSpawner {
@@ -80,7 +83,12 @@ impl FakeNpxSpawner {
             fail_next: AtomicBool::new(false),
             clears_cli_agent_folders: AtomicBool::new(false),
             inherited_env: Mutex::new(Vec::new()),
+            fail_after_clearing: AtomicBool::new(false),
         }
+    }
+
+    fn fail_next_call_after_deleting(&self) {
+        self.fail_after_clearing.store(true, Ordering::SeqCst);
     }
 
     fn inherit_env(&self, key: &str, value: &Path) {
@@ -191,6 +199,14 @@ impl ProcessSpawner for FakeNpxSpawner {
             {
                 std::fs::remove_file(&agents_lock_path).ok();
                 std::fs::remove_file(cwd.join(".agents").join("agents.toml")).ok();
+            }
+            if self.fail_after_clearing.swap(false, Ordering::SeqCst) {
+                return Ok(ProcessOutput {
+                    status: Some(1),
+                    stdout: String::new(),
+                    stderr: "simulated npx crash after deleting".to_string(),
+                    timed_out: false,
+                });
             }
         } else {
             let skill = spec
@@ -2164,5 +2180,145 @@ fn skills_sh_remove_is_refused_when_an_agent_folder_holds_a_nested_symlink() {
     assert!(
         home.join(".agents/skills/x").exists(),
         "the install is untouched"
+    );
+}
+
+/// Flow: a global skills.sh install of `x` and a real folder `x` in `~/.cursor/skills`. The user
+/// removes the install, `~/.cursor/skills` then becomes read-only, and the user undoes the remove.
+/// Expectation: Undo fails naming the folder it could not put back, and does not count as done:
+/// once the cause is fixed, a forced Undo restores the folder.
+/// A failure here means Undo reports success while a folder the CLI deleted stays lost.
+#[test]
+fn undo_after_skills_sh_remove_fails_naming_the_folder_it_could_not_put_back_and_can_be_retried() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = unique_temp_dir("remove_undo_secondary_write_fails");
+    std::fs::create_dir_all(&home).unwrap();
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    let cursor = home.join(".cursor/skills/x");
+    write_skill_md(&cursor);
+    let cursor_before = folder_bytes(&cursor);
+    let outcome = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+    let cursor_skills = home.join(".cursor/skills");
+    std::fs::set_permissions(&cursor_skills, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let request = RestoreRequest {
+        event_id: outcome.event_id,
+        force: false,
+    };
+
+    let err = ops::restore_event(&rt, &ctx(), &request).unwrap_err();
+    std::fs::set_permissions(&cursor_skills, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(
+        err.to_string().contains(&cursor.display().to_string()),
+        "the error names the folder: {err}"
+    );
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            force: true,
+            ..request
+        },
+    )
+    .unwrap();
+    assert_eq!(folder_bytes(&cursor), cursor_before, "cursor folder");
+}
+
+/// Flow: `~/.cursor/skills` is a link to a folder outside the home, which holds a folder `x`.
+/// The user removes a global skills.sh install of `x`.
+/// Expectation: the remove is refused before the CLI runs, naming the folder, and nothing is
+/// deleted.
+/// A failure here means the CLI deletes a folder Undo refuses to put back.
+#[test]
+fn skills_sh_remove_is_refused_when_an_agent_folder_is_reached_through_a_link_out_of_the_scope() {
+    let home = unique_temp_dir("remove_folder_outside_scope");
+    std::fs::create_dir_all(&home).unwrap();
+    let outside = unique_temp_dir("remove_folder_outside_scope_target");
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    write_skill_md(&outside.join("x"));
+    std::fs::create_dir_all(home.join(".cursor")).unwrap();
+    std::os::unix::fs::symlink(&outside, home.join(".cursor/skills")).unwrap();
+
+    let err = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap_err();
+
+    assert!(
+        err.to_string().contains(".cursor/skills/x"),
+        "the error names the folder: {err}"
+    );
+    assert!(outside.join("x").exists(), "the folder is untouched");
+    assert!(
+        home.join(".agents/skills/x").exists(),
+        "the install is untouched"
+    );
+    std::fs::remove_dir_all(&outside).ok();
+}
+
+/// Flow: a global skills.sh install of `x` and a real folder `x` in `~/.cursor/skills`. The CLI
+/// deletes the folders, then exits nonzero. The user puts a new folder `x` in `~/.cursor/skills`
+/// and undoes the failed remove.
+/// Expectation: Undo refuses without force and leaves the new folder as it is.
+/// A failure here means a failed remove leaves Undo free to overwrite later work.
+#[test]
+fn undo_of_a_skills_sh_remove_that_failed_after_deleting_refuses_over_a_recreated_folder() {
+    let home = unique_temp_dir("remove_failed_then_recreated");
+    std::fs::create_dir_all(&home).unwrap();
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    spawner.fail_next_call_after_deleting();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    let cursor = home.join(".cursor/skills/x");
+    write_skill_md(&cursor);
+
+    ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap_err();
+    assert!(!cursor.exists(), "the fake CLI deleted the folder");
+    std::fs::create_dir_all(&cursor).unwrap();
+    std::fs::write(
+        cursor.join("replacement.txt"),
+        "written after the failure\n",
+    )
+    .unwrap();
+    let replacement_before = folder_bytes(&cursor);
+    let events = ops::list_events(&rt, &ctx(), &ListEventsRequest::default()).unwrap();
+    let event_id = events
+        .iter()
+        .find(|e| e.kind == "remove")
+        .unwrap()
+        .id
+        .clone();
+
+    let result = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id,
+            force: false,
+        },
+    );
+
+    assert!(result.is_err(), "Undo must refuse over a recreated folder");
+    assert_eq!(
+        folder_bytes(&cursor),
+        replacement_before,
+        "the recreated folder"
     );
 }

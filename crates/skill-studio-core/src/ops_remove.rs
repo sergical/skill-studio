@@ -672,6 +672,21 @@ fn remove_body(
         )
         .at(&nested));
     }
+    // Undo writes these back through the scope's confinement; a folder it would refuse
+    // (reached through a link out of the scope, say) must not be deleted first.
+    if let Some(folder) = cli_folders
+        .iter()
+        .find(|folder| crate::ports::confine_write_through(&rt.scope, fs, folder).is_err())
+    {
+        return Err(CoreError::new(
+            ErrorCode::Unsupported,
+            format!(
+                "Removing would also delete the folder at {}, which is outside the folders Skill Studio manages, and Undo could not bring it back. Move that folder first.",
+                folder.display()
+            ),
+        )
+        .at(folder));
+    }
     link_targets.extend(cli_links);
     let begin_step = crate::timing::step(clock, "begin_session", step_start);
 
@@ -769,34 +784,53 @@ fn remove_body(
     };
     session.store.record(&session.guard, &id, &draft)?;
 
-    let write_result = remove_and_link(
-        rt,
-        ctx,
-        &mut session,
-        fs,
-        &RemoveAndLinkArgs {
-            path: &deployment.path,
-            deployment_id: &deployment.id,
-            owner_kind: deployment.owner_kind,
-            scope: &deployment.root.scope,
-            name: &skill.name.0,
-            link_paths: &links,
-            quarantine_target: quarantine_target.as_deref(),
-        },
-    )
-    .and_then(|()| {
-        // What each extra folder holds now (normally nothing), so Undo refuses to overwrite
-        // a folder put there after the remove unless forced.
+    // Before the CLI runs, each extra folder is marked "post-state unknown": if the CLI
+    // dies partway, or the reconciling patch below fails, Undo needs force rather than
+    // overwrite a folder recreated since.
+    let unknown_post: Vec<_> = cli_folders
+        .iter()
+        .map(|folder| {
+            (
+                folder.clone(),
+                Err(CoreError::new(ErrorCode::Io, "post-removal state unknown").at(folder)),
+            )
+        })
+        .collect();
+    let guard_result = session.store.patch_inverse(
+        &session.guard,
+        &id,
+        crate::events::with_secondary_post(serde_json::json!({}), &unknown_post),
+    );
+    let write_result = guard_result.and_then(|()| {
+        remove_and_link(
+            rt,
+            ctx,
+            &mut session,
+            fs,
+            &RemoveAndLinkArgs {
+                path: &deployment.path,
+                deployment_id: &deployment.id,
+                owner_kind: deployment.owner_kind,
+                scope: &deployment.root.scope,
+                name: &skill.name.0,
+                link_paths: &links,
+                quarantine_target: quarantine_target.as_deref(),
+            },
+        )
+    });
+    // Success or not, record what each extra folder holds now (normally nothing), so Undo
+    // refuses to overwrite a folder put there after the remove unless forced.
+    if !cli_folders.is_empty() {
         let secondary_post: Vec<_> = cli_folders
             .iter()
             .map(|folder| (folder.clone(), crate::events::fingerprint_path(fs, folder)))
             .collect();
-        session.store.patch_inverse(
+        let _ = session.store.patch_inverse(
             &session.guard,
             &id,
             crate::events::with_secondary_post(serde_json::json!({}), &secondary_post),
-        )
-    });
+        );
+    }
     if let Err(e) = write_result {
         let _ = session
             .store
