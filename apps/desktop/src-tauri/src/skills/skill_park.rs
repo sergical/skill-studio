@@ -160,6 +160,28 @@ pub async fn discard_skill_copy(
     .await
 }
 
+/// Stops dotagents from installing a parked skill again, for the "still in
+/// dotagents" fix: runs `dotagents remove -y` and keeps the parked copy.
+#[tauri::command]
+pub async fn unlist_parked_dotagents(
+    target: LifecycleTarget,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let state_app = app.clone();
+    crate::timing_log::time_command_blocking(&app, "unlist_parked_dotagents", move || {
+        let deployment_id = deployment_id_from_target(&target, "Stop dotagents installing it")?;
+        let names = skill_names_for_deployments([&deployment_id]);
+        let rt = super::core_runtime::build_runtime_write()?;
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let result = ops::unlist_parked_dotagents(&rt, &ctx, &deployment_id);
+        let envelope = ResultEnvelope::from_result(Operation::Remove, &rt.scope, &ctx, result);
+        super::core_runtime::to_command_result(envelope)?;
+        emit_snapshot_for_names(&state_app, "unlist_parked_dotagents", names);
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn unpark_skill(
     target: LifecycleTarget,

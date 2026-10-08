@@ -292,6 +292,34 @@ describe("buildScopeGroups", () => {
     });
   });
 
+  // Flow: a skill parked before Park knew about dotagents is still named in agents.lock, so the
+  // scan reads its parked copy as dotagents-owned. Failure caught: the row shows only Turn on and
+  // hides that the next `dotagents install` brings the skill back, or it offers the fix for a
+  // parked copy dotagents no longer lists.
+  it("offers Stop dotagents installing it on a parked copy dotagents still lists, and not otherwise", () => {
+    const listed = parkedCopy({ owner_kind: "dotagents" });
+    const [declared] = buildScopeGroups(fixtureSkill({ deployments: [listed], parked: true }));
+    expect(declared.parked[0].level).toBe("warning");
+    expect(rowMenu(declared.parked[0], declared.label).entries.map((e) => e.label)).toEqual([
+      "Stop dotagents installing it",
+      "Turn on",
+      "Reveal in Finder",
+    ]);
+    expect(rowMenu(declared.parked[0], declared.label).entries[0].action).toEqual({
+      kind: "unlist-dotagents",
+      deployment: listed,
+    });
+
+    const [unlisted] = buildScopeGroups(
+      fixtureSkill({ deployments: [parkedCopy({ owner_kind: "manual" })], parked: true }),
+    );
+    expect(unlisted.parked[0].level).toBe("off");
+    expect(rowMenu(unlisted.parked[0], unlisted.label).entries.map((e) => e.label)).toEqual([
+      "Turn on",
+      "Reveal in Finder",
+    ]);
+  });
+
   // Flow: every copy is parked. Failure caught: no row offers Turn on, or the card still draws a live folder.
   it("shows a fully parked skill as one off switch row and no live rows", () => {
     const parked = parkedCopy();

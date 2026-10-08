@@ -75,6 +75,8 @@ struct FakeDotagents {
     /// `remove` also writes an unrelated skill into `agents.toml`, as another
     /// tool editing the file at the same time would.
     add_unrelated_entry: AtomicBool,
+    /// `remove` rewrites the files, then exits non-zero.
+    fail_after_edit: AtomicBool,
 }
 
 impl FakeDotagents {
@@ -90,6 +92,7 @@ impl FakeDotagents {
             leave_toml: AtomicBool::new(false),
             block_move_back: AtomicBool::new(false),
             add_unrelated_entry: AtomicBool::new(false),
+            fail_after_edit: AtomicBool::new(false),
         })
     }
 
@@ -203,6 +206,8 @@ impl FakeDotagents {
                 .and_then(toml_edit::Item::as_table_mut)
             {
                 skills.remove(name);
+                // dotagents leaves the emptied table behind as a bare `[skills]`.
+                skills.set_implicit(false);
             }
             std::fs::write(&lock_path, lock_doc.to_string()).unwrap();
         }
@@ -284,6 +289,10 @@ impl ProcessSpawner for FakeDotagents {
                     "the process died inside dotagents remove"
                 );
                 status = self.remove_exit.load(Ordering::SeqCst);
+                let failing_edit = self.fail_after_edit.load(Ordering::SeqCst);
+                if failing_edit {
+                    status = 0;
+                }
                 let confirmed = spec.args.iter().any(|arg| arg == "-y")
                     && !self.ignore_yes.load(Ordering::SeqCst);
                 if status == 0 && confirmed {
@@ -308,6 +317,9 @@ impl ProcessSpawner for FakeDotagents {
                             self.leave_toml.load(Ordering::SeqCst),
                         );
                     }
+                }
+                if failing_edit {
+                    status = 3;
                 }
             }
             None => self.install(),
@@ -438,6 +450,7 @@ const WILDCARD_TOML: &str =
 const EXPLICIT_TOML: &str = "# my dotagents setup\nversion = 1\n\n[[skills]]\nname = \"foo\"\nsource = \"owner/foo\"\n\n[[skills]]\nname = \"bar\"\nsource = \"owner/bar\"\n";
 /// Two wildcard entries; the first one excludes `foo` on purpose.
 const TWO_WILDCARDS_TOML: &str = "version = 1\n\n[[skills]]\nname = \"*\"\nsource = \"owner/mine\"\nexclude = [\"foo\"]\n\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\n";
+const ONLY_FOO_TOML: &str = "version = 1\n\n[[skills]]\nname = \"foo\"\nsource = \"owner/foo\"\n";
 const FOO_LOCK: &str = "[skills.foo]\nsource = \"owner/foo\"\n";
 
 /// A temp home where dotagents has installed `foo` and `bar` from `toml`.
@@ -1532,6 +1545,152 @@ fn turn_on_of_an_explicit_row_in_the_middle_gives_all_three_files_back_byte_for_
         gitignore,
         ".gitignore"
     );
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: park the only skill in `agents.toml` and `agents.lock`, so dotagents
+/// leaves no `skills` array and an empty `[skills]` table behind, then turn it
+/// on with nothing else changed.
+/// Expectation: `agents.lock` is byte for byte what it was before the park.
+/// Failure: the file keeps a bare `[skills]` header and a blank line before
+/// `[skills.foo]` (#419).
+#[test]
+fn turn_on_of_the_only_locked_skill_gives_agents_lock_back_byte_for_byte() {
+    let (home, stub) =
+        dotagents_home_with_pool("park_dotagents_only_lock_row", ONLY_FOO_TOML, &["foo"]);
+    std::fs::write(stub.lock_path(), lock_with_rows(&["foo"])).unwrap();
+    let lock = read(&stub.lock_path());
+    let toml = read(&stub.toml_path());
+    let rt = runtime(&home, stub.clone(), true);
+
+    park_foo(&rt);
+    assert!(
+        read(&stub.lock_path()).contains("[skills]"),
+        "the stub's remove left no empty [skills] table"
+    );
+
+    unpark_foo(&rt);
+    assert_eq!(read(&stub.lock_path()), lock, "agents.lock");
+    assert_eq!(read(&stub.toml_path()), toml, "agents.toml");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: a skill parked before install-aware park is still listed in
+/// `agents.toml` and `agents.lock`; the repair runs `dotagents remove -y`.
+/// Expectation: `agents.toml` no longer lists it and the parked folder is
+/// untouched. Failure: the entry stays, so the next `dotagents install`
+/// brings the skill back, or the repair deletes the parked copy (#402).
+#[test]
+fn unlisting_a_parked_skill_still_in_agents_toml_drops_the_entry_and_keeps_the_parked_copy() {
+    let (home, stub) = dotagents_home("park_dotagents_unlist", EXPLICIT_TOML);
+    let toml = read(&stub.toml_path());
+    let lock = read(&stub.lock_path());
+    let rt = runtime(&home, stub.clone(), true);
+    park_foo(&rt);
+    std::fs::write(stub.toml_path(), &toml).unwrap();
+    std::fs::write(stub.lock_path(), &lock).unwrap();
+    let removes_before = stub.removes();
+    let parked = parked_copy(&rt, "foo");
+    assert_eq!(
+        parked.owner_kind,
+        skill_studio_core::identity::LifecycleOwnerKind::Dotagents,
+        "the pre-park-aware state is not read as dotagents-owned"
+    );
+
+    ops::unlist_parked_dotagents(&rt, &ctx(), &parked.id).unwrap();
+
+    assert_eq!(stub.removes(), removes_before + 1);
+    assert!(!read(&stub.toml_path()).contains("name = \"foo\""));
+    assert!(read(&stub.toml_path()).contains("name = \"bar\""));
+    assert!(parked.path.join("SKILL.md").exists(), "parked copy lost");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: the repair for a parked skill still in `agents.toml` runs after
+/// `dotagents install` put a live copy back at the skill's own path.
+/// Expectation: the repair refuses, `dotagents remove` never runs, and the
+/// live folder is byte-for-byte as it was. Failure: `dotagents remove`
+/// deletes the live folder with no backup.
+#[test]
+fn unlisting_a_parked_skill_refuses_when_dotagents_installed_a_live_copy_again() {
+    let (home, stub) = dotagents_home("park_dotagents_unlist_live", EXPLICIT_TOML);
+    let toml = read(&stub.toml_path());
+    let lock = read(&stub.lock_path());
+    let rt = runtime(&home, stub.clone(), true);
+    park_foo(&rt);
+    std::fs::write(stub.toml_path(), &toml).unwrap();
+    std::fs::write(stub.lock_path(), &lock).unwrap();
+    let parked = parked_copy(&rt, "foo");
+    write_skill(&stub.skill_dir("foo"), "foo");
+    std::fs::write(stub.skill_dir("foo").join("notes.txt"), "live edits").unwrap();
+    let live_skill = read(&stub.skill_dir("foo").join("SKILL.md"));
+    let removes_before = stub.removes();
+
+    let err = ops::unlist_parked_dotagents(&rt, &ctx(), &parked.id).unwrap_err();
+
+    assert!(err.message.contains("installed"), "{}", err.message);
+    assert_eq!(stub.removes(), removes_before, "remove ran");
+    assert_eq!(read(&stub.skill_dir("foo").join("SKILL.md")), live_skill);
+    assert_eq!(read(&stub.skill_dir("foo").join("notes.txt")), "live edits");
+    assert!(parked.path.join("SKILL.md").exists(), "parked copy lost");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: `.agents/.gitignore` is a link into another folder, and
+/// `dotagents install` put a live copy with a local edit back before the
+/// repair runs. Expectation: the repair refuses, `dotagents remove` never
+/// runs, and the edited file is still there. Failure: the guard looks next
+/// to the linked file, misses the live copy, and `remove` deletes it.
+#[cfg(unix)]
+#[test]
+fn unlisting_refuses_over_a_live_copy_when_the_ignore_file_is_a_link() {
+    let (home, stub) = dotagents_home("park_dotagents_unlist_live_link", EXPLICIT_TOML);
+    write_gitignore(&home);
+    let store = home.join("dotfiles");
+    std::fs::create_dir_all(&store).unwrap();
+    let link = home.join(".agents/.gitignore");
+    std::fs::rename(&link, store.join("agents-ignore")).unwrap();
+    std::os::unix::fs::symlink(store.join("agents-ignore"), &link).unwrap();
+    let toml = read(&stub.toml_path());
+    let lock = read(&stub.lock_path());
+    let rt = runtime(&home, stub.clone(), true);
+    park_foo(&rt);
+    std::fs::write(stub.toml_path(), &toml).unwrap();
+    std::fs::write(stub.lock_path(), &lock).unwrap();
+    let parked = parked_copy(&rt, "foo");
+    write_skill(&stub.skill_dir("foo"), "foo");
+    std::fs::write(stub.skill_dir("foo").join("notes.txt"), "local edit").unwrap();
+    let removes_before = stub.removes();
+
+    let err = ops::unlist_parked_dotagents(&rt, &ctx(), &parked.id).unwrap_err();
+
+    assert!(err.message.contains("installed"), "{}", err.message);
+    assert_eq!(stub.removes(), removes_before, "remove ran");
+    assert_eq!(read(&stub.skill_dir("foo").join("notes.txt")), "local edit");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: the repair runs `dotagents remove`, which rewrites `agents.toml`
+/// and `agents.lock` and then exits non-zero. Expectation: the repair fails
+/// and both files are back byte-for-byte as before. Failure: the half-done
+/// edit stays, so dotagents' files no longer match what the person had.
+#[test]
+fn a_failed_unlist_of_a_parked_skill_puts_agents_toml_and_agents_lock_back() {
+    let (home, stub) = dotagents_home("park_dotagents_unlist_fails", EXPLICIT_TOML);
+    let toml = read(&stub.toml_path());
+    let lock = read(&stub.lock_path());
+    let rt = runtime(&home, stub.clone(), true);
+    park_foo(&rt);
+    std::fs::write(stub.toml_path(), &toml).unwrap();
+    std::fs::write(stub.lock_path(), &lock).unwrap();
+    let parked = parked_copy(&rt, "foo");
+    stub.fail_after_edit.store(true, Ordering::SeqCst);
+
+    ops::unlist_parked_dotagents(&rt, &ctx(), &parked.id).unwrap_err();
+
+    assert_eq!(read(&stub.toml_path()), toml, "agents.toml");
+    assert_eq!(read(&stub.lock_path()), lock, "agents.lock");
+    assert!(parked.path.join("SKILL.md").exists(), "parked copy lost");
     std::fs::remove_dir_all(&home).ok();
 }
 

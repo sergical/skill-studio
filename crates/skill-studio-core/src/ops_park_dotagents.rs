@@ -238,7 +238,8 @@ fn item_json(item: &toml_edit::Item) -> serde_json::Value {
 }
 
 /// `agents.toml` without `skill`'s own row, and without `skill` in any
-/// `exclude` list (an empty list reads as no list).
+/// `exclude` list (an empty list reads as no list, and so does an empty
+/// `skills` array: dotagents drops the key once the last row is gone).
 fn config_shape(text: &str, skill: &str) -> Option<serde_json::Value> {
     let doc = parse(Path::new("agents.toml"), text).ok()?;
     let mut shape = item_json(doc.as_item());
@@ -260,15 +261,26 @@ fn config_shape(text: &str, skill: &str) -> Option<serde_json::Value> {
             }
         }
     }
+    if shape
+        .get("skills")
+        .and_then(|v| v.as_array())
+        .is_some_and(Vec::is_empty)
+    {
+        shape.as_object_mut()?.remove("skills");
+    }
     Some(shape)
 }
 
-/// `agents.lock` without `skill`'s row.
+/// `agents.lock` without `skill`'s row, and without an empty `skills` table
+/// (dotagents leaves `skills = {}` where the file had none).
 fn lock_shape(text: &str, skill: &str) -> Option<serde_json::Value> {
     let doc = parse(Path::new("agents.lock"), text).ok()?;
     let mut shape = item_json(doc.as_item());
     if let Some(skills) = shape.get_mut("skills").and_then(|v| v.as_object_mut()) {
         skills.remove(skill);
+        if skills.is_empty() {
+            shape.as_object_mut()?.remove("skills");
+        }
     }
     Some(shape)
 }
@@ -999,6 +1011,25 @@ fn drop_lock_entry(
     Ok(())
 }
 
+impl DotagentsPark {
+    /// The folder `dotagents remove` deletes for `skill`, when one exists.
+    /// Taken from the scope, not from `.gitignore`: that file may be a link
+    /// into another folder.
+    pub(crate) fn live_folder(
+        rt: &Runtime,
+        scope: &RootScope,
+        skill: &SkillName,
+    ) -> Option<PathBuf> {
+        let dir = manifest_dir(rt, scope);
+        let agents = match scope {
+            RootScope::Global => dir,
+            RootScope::Project(_) => dir.join(".agents"),
+        };
+        let folder = agents.join("skills").join(&skill.0);
+        rt.ports.fs.symlink_metadata(&folder).ok().map(|_| folder)
+    }
+}
+
 /// Writes `agents.toml` and `agents.lock` back as `plan_park` read them.
 pub(crate) fn restore_originals(
     rt: &Runtime,
@@ -1237,6 +1268,9 @@ fn with_lock_entry(
     else {
         return Ok(None);
     };
+    if skills.is_empty() {
+        skills.set_implicit(true);
+    }
     skills.insert(&skill.0, toml_edit::Item::Table(table));
     render_checked(path, &doc, text.contains("\r\n")).map(Some)
 }

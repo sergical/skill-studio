@@ -5070,6 +5070,78 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
     })
 }
 
+/// Stops dotagents from installing a parked skill again: runs `dotagents
+/// remove -y` for a parked copy `agents.toml` still lists (a park from before
+/// install-aware park). The parked folder stays where it is. Writes no
+/// journal row, since the turn-on record only exists for parks that ran the
+/// remove themselves.
+pub fn unlist_parked_dotagents(
+    rt: &Runtime,
+    ctx: &OpContext,
+    deployment_id: &DeploymentId,
+) -> Result<(), CoreError> {
+    rt.run(Operation::Remove, ctx, || {
+        ctx.checkpoint()?;
+        let session = crate::ports::MutationSession::begin_for_deployment(rt, ctx, deployment_id);
+        ctx.take_timing();
+        let session = session?;
+        let deployment = session.resolve_exact(deployment_id)?.clone();
+        if deployment.root.kind != RootKind::Parked {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "only a parked copy can be taken out of dotagents here",
+            )
+            .at(&deployment.path));
+        }
+        let skill = resolve_skill(&session.fresh, &deployment.id)?.clone();
+        let plan = crate::ops_park_dotagents::plan_park(rt, &deployment, &skill.name)?.ok_or_else(
+            || {
+                CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    format!("dotagents no longer lists {}", skill.name.0),
+                )
+                .at(&deployment.path)
+            },
+        )?;
+        if let Some(live) = crate::ops_park_dotagents::DotagentsPark::live_folder(
+            rt,
+            &deployment.root.scope,
+            &skill.name,
+        ) {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                format!(
+                    "dotagents has installed {} again at {}; `dotagents remove` would delete it",
+                    skill.name.0,
+                    live.display()
+                ),
+            )
+            .at(&deployment.path));
+        }
+        if let Err(e) = crate::ops_park_dotagents::run_remove(
+            rt,
+            ctx,
+            &session.guard,
+            &plan,
+            &skill.name,
+            &deployment.root.scope,
+        ) {
+            let mut message = e.message.clone();
+            if let Err(files_error) =
+                crate::ops_park_dotagents::restore_originals(rt, &session.guard, &plan)
+            {
+                message = format!(
+                    "{message} agents.toml and agents.lock could not be written back: {}",
+                    files_error.message
+                );
+            }
+            return Err(CoreError::new(e.code, message).at(&deployment.path));
+        }
+        session.finish(rt, ctx);
+        Ok(())
+    })
+}
+
 /// What [`park_found_copy`] left behind.
 pub(crate) struct ParkedCopy {
     pub event_id: EventId,
