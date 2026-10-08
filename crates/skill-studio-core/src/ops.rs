@@ -5420,30 +5420,7 @@ fn unpark_body(
     let skill = resolve_skill(&session.fresh, &deployment.id)?.clone();
 
     let fs = rt.ports.fs.as_ref();
-    let park_row = session
-        .store
-        .list(&crate::events::EventFilter {
-            skill: Some(skill.name.clone()),
-            limit: DEFAULT_EVENT_LIMIT,
-            after: None,
-        })?
-        .into_iter()
-        .filter(|row| {
-            row.kind == crate::events::EventKind::Park.as_str()
-                && row.reverted_by.is_none()
-                && row
-                    .payload
-                    .get("to")
-                    .and_then(|v| v.as_str())
-                    .map(Path::new)
-                    == Some(deployment.path.as_path())
-        })
-        // Newest first, one rule: a finished park, or a failed one whose copy
-        // is still parked. A rolled-back attempt never rewrites live files.
-        .find(|row| {
-            row.status != crate::events::EventStatus::Failed
-                || failed_park_leaves_copy_parked(fs, &row.payload, &deployment.path)
-        });
+    let park_row = find_active_park_row(session.store.as_ref(), &skill.name, &deployment.path, fs)?;
     let links = park_row
         .as_ref()
         .map(|row| park_row_links(&row.payload))
@@ -5992,6 +5969,48 @@ fn git_tracks_folder(rt: &Runtime, ctx: &OpContext, folder: &Path) -> Option<boo
 /// Payload key on a failed `park` row whose rollback could not move the copy
 /// back: the copy is still parked, so Turn on must still use the row.
 const PARK_ROLLBACK_INCOMPLETE: &str = "rollback_incomplete";
+
+/// The newest unreverted `park` row for `skill` that names `parked_dir` as
+/// its destination. Pages through the whole log: a skill with many newer
+/// events must not hide its park row.
+///
+/// Newest first, one rule: a finished park, or a failed one whose copy is
+/// still parked. A rolled-back attempt never rewrites live files.
+fn find_active_park_row(
+    store: &dyn crate::ports::HistoryStore,
+    skill: &SkillName,
+    parked_dir: &Path,
+    fs: &dyn ScopeFs,
+) -> Result<Option<crate::events::EventRecord>, CoreError> {
+    let mut after = None;
+    loop {
+        let page = store.list(&crate::events::EventFilter {
+            skill: Some(skill.clone()),
+            limit: DEFAULT_EVENT_LIMIT,
+            after: after.clone(),
+        })?;
+        let Some(last) = page.last() else {
+            return Ok(None);
+        };
+        after = Some(last.id.clone());
+        let full_page = page.len() >= DEFAULT_EVENT_LIMIT as usize;
+        let found = page.into_iter().find(|row| {
+            row.kind == crate::events::EventKind::Park.as_str()
+                && row.reverted_by.is_none()
+                && row
+                    .payload
+                    .get("to")
+                    .and_then(|v| v.as_str())
+                    .map(Path::new)
+                    == Some(parked_dir)
+                && (row.status != crate::events::EventStatus::Failed
+                    || failed_park_leaves_copy_parked(fs, &row.payload, parked_dir))
+        });
+        if found.is_some() || !full_page {
+            return Ok(found);
+        }
+    }
+}
 
 /// Whether a failed `park` row still has its copy parked at `parked_dir`.
 /// New rows say so in [`PARK_ROLLBACK_INCOMPLETE`]; rows from before that
