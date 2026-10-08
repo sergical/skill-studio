@@ -1615,8 +1615,13 @@ fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_times
         "remove_via_cli must call npx exactly once"
     );
     let (args, cwd, env) = &recorded[0];
+    // The recorded run used the bare `skills` package; the core pins the version whose
+    // agent folders `skills_cli_agents` backs up.
+    let mut pinned_args = trace.args.clone();
+    assert_eq!(pinned_args[0], "skills", "the trace names the bare package");
+    pinned_args[0] = "skills@1.7.0".to_string();
     assert_eq!(
-        args, &trace.args,
+        args, &pinned_args,
         "remove_via_cli's argv drifted from the recorded skills.sh trace"
     );
     // The trace records no cwd for a global remove; the core runs it in the
@@ -2321,4 +2326,43 @@ fn undo_of_a_skills_sh_remove_that_failed_after_deleting_refuses_over_a_recreate
         replacement_before,
         "the recreated folder"
     );
+}
+
+/// Flow: a global skills.sh install of `x` and a link `~/.gemini/skills/x` to a folder outside the
+/// home. The user removes the install.
+/// Expectation: the remove is refused before the CLI runs, naming the link, and nothing is
+/// deleted.
+/// A failure here means the CLI deletes a link Undo refuses to recreate.
+#[test]
+fn skills_sh_remove_is_refused_when_an_agent_link_points_out_of_the_scope() {
+    let home = unique_temp_dir("remove_link_outside_scope");
+    std::fs::create_dir_all(&home).unwrap();
+    let outside = unique_temp_dir("remove_link_outside_scope_target");
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    write_skill_md(&outside.join("x"));
+    std::fs::create_dir_all(home.join(".gemini/skills")).unwrap();
+    std::os::unix::fs::symlink(outside.join("x"), home.join(".gemini/skills/x")).unwrap();
+
+    let err = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap_err();
+
+    assert!(
+        err.to_string().contains(".gemini/skills/x"),
+        "the error names the link: {err}"
+    );
+    assert!(
+        std::fs::symlink_metadata(home.join(".gemini/skills/x")).is_ok(),
+        "the link is untouched"
+    );
+    assert!(
+        home.join(".agents/skills/x").exists(),
+        "the install is untouched"
+    );
+    std::fs::remove_dir_all(&outside).ok();
 }

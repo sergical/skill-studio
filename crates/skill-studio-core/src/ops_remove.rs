@@ -80,7 +80,7 @@ fn remove_cli_args_and_cwd(
     match owner_kind {
         LifecycleOwnerKind::SkillsSh => {
             let mut args = vec![
-                "skills".to_string(),
+                "skills@1.7.0".to_string(),
                 "remove".to_string(),
                 name.to_string(),
                 "--yes".to_string(),
@@ -688,6 +688,21 @@ fn remove_body(
         .at(folder));
     }
     link_targets.extend(cli_links);
+    // Undo recreates each saved link through `recreate_link`'s confinement; a link whose
+    // target it would refuse must not be deleted first.
+    if let Some((link, _)) = link_targets.iter().find(|(link, target)| {
+        let resolved = crate::fsops::join_lexical(link.parent().unwrap_or(link), target);
+        crate::ports::confine(&rt.scope, fs, &resolved).is_err()
+    }) {
+        return Err(CoreError::new(
+            ErrorCode::Unsupported,
+            format!(
+                "Removing would also delete the link {}, which points outside the folders Skill Studio manages, and Undo could not bring it back. Move that link first.",
+                link.display()
+            ),
+        )
+        .at(link));
+    }
     let begin_step = crate::timing::step(clock, "begin_session", step_start);
 
     let step_start = clock.monotonic();
@@ -1027,14 +1042,14 @@ mod tests {
                 "skills.sh global",
                 LifecycleOwnerKind::SkillsSh,
                 &RootScope::Global,
-                vec!["skills", "remove", "alpha", "--yes", "--global"],
+                vec!["skills@1.7.0", "remove", "alpha", "--yes", "--global"],
                 Some(PathBuf::from("/home")),
             ),
             (
                 "skills.sh project",
                 LifecycleOwnerKind::SkillsSh,
                 &project,
-                vec!["skills", "remove", "alpha", "--yes"],
+                vec!["skills@1.7.0", "remove", "alpha", "--yes"],
                 Some(PathBuf::from("/proj")),
             ),
             (

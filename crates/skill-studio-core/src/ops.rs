@@ -4807,18 +4807,14 @@ fn restore_event_body(
             .symlink_metadata(other_path)
             .is_ok_and(|facts| facts.kind == FileKind::Symlink)
         {
-            match crate::ports::confine(&rt.scope, fs, other_path) {
-                Ok(scoped) => {
-                    if let Err(e) = fs.remove_file(&session.guard, &scoped) {
-                        copy_errors.push(CoreError::io(other_path, e).message);
-                        unrestored.extend(required.then(|| other_path.clone()));
-                        continue;
-                    }
-                }
-                Err(_) => {
-                    unrestored.extend(required.then(|| other_path.clone()));
-                    continue;
-                }
+            let Ok(scoped) = crate::ports::confine(&rt.scope, fs, other_path) else {
+                unrestored.extend(required.then(|| other_path.clone()));
+                continue;
+            };
+            if let Err(e) = fs.remove_file(&session.guard, &scoped) {
+                copy_errors.push(CoreError::io(other_path, e).message);
+                unrestored.extend(required.then(|| other_path.clone()));
+                continue;
             }
         }
         let result: Result<(), CoreError> =
@@ -4863,6 +4859,8 @@ fn restore_event_body(
         }
         if recreate_link(rt, &session.guard, &link_path, &target).is_ok() {
             recreated_links.push((link_path, target));
+        } else {
+            unrestored.push(link_path);
         }
     }
     // What only the writes above can say: the restore's own undo takes back
