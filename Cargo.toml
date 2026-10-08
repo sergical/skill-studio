@@ -55,6 +55,13 @@ items_after_statements = "allow"
 # incremental debug builds.
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
+
+# Full debug info made each test binary hundreds of MB and the shared target/
+# grew past 140 GB across worktrees. Line tables still give file:line in
+# panics and backtraces.
+[profile.dev]
+debug = "line-tables-only"
 
 # The release workflow uploads a .dSYM per target next to each DMG. Cargo's
 # default release profile carries no debug info, so dsymutil would emit an

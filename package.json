@@ -24,6 +24,7 @@
     "test:anti-slop": "vitest run tools/oxlint/anti-slop/shared/dictionary-types.integration.test.ts tools/oxlint/anti-slop/shared/no-internal-vocabulary.integration.test.ts",
     "test:lint-set": "vitest run tools/oxlint/anti-slop/shared/lint-set-policy.integration.test.ts",
     "knip": "knip",
+    "clean:target": "sh tools/clean-target.sh",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run doctor && pnpm run knip && pnpm run test && pnpm --filter skill-studio run types:check && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
     "doctor": "react-doctor apps/desktop -y --no-score --no-supply-chain --blocking warning"
   },
