@@ -9,6 +9,7 @@ import { DiscardChangesDialog } from "./DiscardChangesDialog";
 import {
   contentForSave,
   isContentDirty,
+  isLineUnchanged,
   lineRange,
   normalizeLineEndings,
 } from "./skill-editor-lines";
@@ -105,7 +106,7 @@ interface SkillMarkdownEditorProps {
   onDirtyChange?: (isDirty: boolean) => void;
   /** Label for the Save button while not saving - "Save" unless the caller overrides it (e.g. "Fork and save"). */
   saveLabel?: string;
-  /** 1-based SKILL.md line to mark in the gutter and select on open, e.g. the line of a YAML error. */
+  /** 1-based SKILL.md line that is broken, e.g. the line of a YAML error: marked in red, caret placed on it on open. */
   highlightLine?: number;
 }
 
@@ -127,10 +128,23 @@ export function SkillMarkdownEditor({
   const isDirty = isContentDirty(content, initialContent);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
+  const markRef = useRef<HTMLDivElement>(null);
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
   const [layout, setLayout] = useState<GutterLayout | null>(null);
   const lineCount = content.split("\n").length;
-  const markedLine = isDirty ? undefined : highlightLine;
+  const markedLine =
+    highlightLine !== undefined && isLineUnchanged(content, initialContent, highlightLine)
+      ? highlightLine
+      : undefined;
+  const markTop =
+    markedLine !== undefined && layout
+      ? layout.paddingTopPx + layout.heights.slice(0, markedLine - 1).reduce((a, b) => a + b, 0)
+      : 0;
+
+  const syncScroll = (scrollTop: number) => {
+    if (gutterRef.current) gutterRef.current.scrollTop = scrollTop;
+    if (markRef.current) markRef.current.style.translate = `0 ${-scrollTop}px`;
+  };
 
   // Notified from the change handler itself, not an effect syncing a derived
   // value up to the parent - it only needs to fire on an actual dirty-state
@@ -208,12 +222,11 @@ export function SkillMarkdownEditor({
   // padding, which can leave its scroll offset behind the textarea's until the
   // next scroll event. Assigning an unchanged scrollTop is a no-op.
   useLayoutEffect(() => {
-    if (gutterRef.current && textareaRef.current) {
-      gutterRef.current.scrollTop = textareaRef.current.scrollTop;
-    }
+    if (textareaRef.current) syncScroll(textareaRef.current.scrollTop);
   });
 
-  // Opens on the requested line: selects it and scrolls it into the viewport.
+  // Opens on the requested line: puts the caret at its start and scrolls it into
+  // the viewport. A caret, not a selection, so the first keystroke can't replace the line.
   // Runs only when the target changes, so typing never yanks the view back.
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -222,7 +235,7 @@ export function SkillMarkdownEditor({
     const { heights, paddingTopPx } = measureGutterLayout(textarea, initialContent);
     const lineTop = heights.slice(0, highlightLine - 1).reduce((sum, height) => sum + height, 0);
     textarea.focus();
-    textarea.setSelectionRange(range.start, range.end);
+    textarea.setSelectionRange(range.start, range.start);
     textarea.scrollTop = Math.max(0, lineTop + paddingTopPx - 40);
   }, [highlightLine, initialContent]);
 
@@ -233,7 +246,12 @@ export function SkillMarkdownEditor({
   return (
     <div className="select-text flex flex-col gap-2 p-4">
       <div className="flex items-center justify-end gap-3">
-        {isDirty && <span className="mr-auto text-caption text-warning">Unsaved changes</span>}
+        <div className="mr-auto flex gap-3 text-caption">
+          {markedLine !== undefined && (
+            <span className="text-error">Line {markedLine} breaks the YAML frontmatter</span>
+          )}
+          {isDirty && <span className="text-warning">Unsaved changes</span>}
+        </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={handleCancel} disabled={isSaving}>
             <X size={14} />
@@ -270,22 +288,31 @@ export function SkillMarkdownEditor({
             <div
               key={i}
               style={{ height: layout?.heights[i] }}
-              className={i + 1 === markedLine ? "font-semibold text-warning" : undefined}
+              className={i + 1 === markedLine ? "font-semibold text-error" : undefined}
             >
               {i + 1}
             </div>
           ))}
         </div>
-        <Textarea
-          ref={textareaRef}
-          className="max-h-[75vh] min-h-[60vh] resize-y rounded-none border-0 bg-transparent px-3 py-2.5 font-mono text-body leading-[1.5] text-text-primary focus-visible:ring-0"
-          value={content}
-          onChange={(e) => handleContentChange(e.target.value)}
-          onScroll={(e) => {
-            if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop;
-          }}
-          spellCheck={false}
-        />
+        <div className="relative flex min-w-0 flex-1 overflow-hidden">
+          {markedLine !== undefined && layout && (
+            <div
+              ref={markRef}
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 border-l-2 border-error bg-error-soft"
+              style={{ top: markTop, height: layout.heights[markedLine - 1] }}
+            />
+          )}
+          {/* `relative` paints the transparent textarea above the absolute mark. */}
+          <Textarea
+            ref={textareaRef}
+            className="relative max-h-[75vh] min-h-[60vh] resize-y rounded-none border-0 bg-transparent dark:bg-transparent px-3 py-2.5 font-mono text-body leading-[1.5] text-text-primary focus-visible:ring-0"
+            value={content}
+            onChange={(e) => handleContentChange(e.target.value)}
+            onScroll={(e) => syncScroll(e.currentTarget.scrollTop)}
+            spellCheck={false}
+          />
+        </div>
       </div>
       <DiscardChangesDialog
         open={showDiscardDialog}

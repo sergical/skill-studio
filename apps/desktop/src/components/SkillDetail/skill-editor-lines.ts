@@ -37,3 +37,18 @@ export function isContentDirty(content: string, initialRaw: string): boolean {
 export function contentForSave(content: string, initialRaw: string): string {
   return initialRaw.includes("\r\n") ? content.replace(/\r?\n/g, "\r\n") : content;
 }
+
+/**
+ * Whether 1-based `line` still reads the same in the textarea's LF `content` as
+ * in the file as read. Edits elsewhere keep it the same; editing the line, or
+ * adding or removing a line above it, does not.
+ */
+export function isLineUnchanged(content: string, initialRaw: string, line: number): boolean {
+  const before = lineRange(initialRaw, line);
+  const after = lineRange(content, line);
+  if (!before || !after) return false;
+  return (
+    content.slice(after.start, after.end) ===
+    normalizeLineEndings(initialRaw).slice(before.start, before.end)
+  );
+}
