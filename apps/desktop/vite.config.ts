@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { configDefaults, defineConfig } from "vitest/config";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
@@ -31,6 +31,10 @@ export default defineConfig(async () => ({
       },
     },
   },
+
+  // `*.browser.test.tsx` needs a real browser for layout; `pnpm run test:browser` runs it
+  // through vitest.browser.config.ts.
+  test: { exclude: [...configDefaults.exclude, "**/*.browser.test.tsx"] },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

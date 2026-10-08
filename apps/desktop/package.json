@@ -11,6 +11,7 @@
     "tauri": "tauri",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
     "types:generate": "node scripts/generate-types.mjs",
     "types:check": "node scripts/generate-types.mjs --check"
   },
@@ -36,16 +37,23 @@
     "@rolldown/plugin-babel": "^0.2.3",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.11.4",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/babel__core": "^7.20.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "@vitest/browser-playwright": "^5.0.3",
     "babel-plugin-react-compiler": "^1.0.0",
+    "happy-dom": "^20.14.5",
     "json-schema-to-typescript": "^16.0.0",
+    "playwright": "^1.63.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "^8.3.3",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "vitest-browser-react": "^2.3.0"
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"

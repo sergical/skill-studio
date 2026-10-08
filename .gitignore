@@ -36,3 +36,6 @@ lerna-debug.log*
 # Native CLI binaries for the npm platform packages. The release workflow
 # fills these from its build; scripts/rehearse-npm.sh fills a temp copy.
 /packages/npm/cli-darwin-*/bin/
+
+# Vitest browser mode failure screenshots
+.vitest/
