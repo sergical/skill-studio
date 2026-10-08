@@ -23,11 +23,13 @@ use skill_studio_core::dto::{
     DeploymentDto, InstallMethod, ListEventsRequest, ParkRequest, RestoreCapability,
     RestoreRequest, ScanRequest, UnparkRequest, UpdateRequest,
 };
+use skill_studio_core::events::{EventDraft, EventKind, EventStatus};
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::{RootKind, RootScope, SkillName};
 use skill_studio_core::ops;
 use skill_studio_core::ports::{
-    CancelToken, NeverCancel, Ports, ProcessOutput, ProcessSpawner, ProcessSpec, Runtime,
+    acquire_exclusive, CancelToken, HistoryAccess, NeverCancel, Ports, ProcessOutput,
+    ProcessSpawner, ProcessSpec, Runtime,
 };
 use skill_studio_core::scope::{ProjectSelection, RuntimeScope};
 use skill_studio_core::testing::golden::{ctx, unique_temp_dir};
@@ -673,6 +675,97 @@ fn a_dotagents_park_row_has_no_inverse() {
     let events = ops::list_events(&rt, &ctx(), &ListEventsRequest::default()).unwrap();
     assert_eq!(events[0].restore, RestoreCapability::NoInverse);
     std::fs::remove_dir_all(&home).ok();
+}
+
+/// Parks `foo` (dotagents, with a Claude Code link), writes one more
+/// finished event for it than a `list_events` page holds, optionally turns the
+/// park row into an imported legacy row (older `ts`, higher `rowid`, the way
+/// the desktop's `import_legacy_events` appends rows), then turns `foo` on and
+/// checks the link and both dotagents files came back.
+#[cfg(unix)]
+fn assert_unpark_restores_a_buried_park_row(label: &str, import_the_park_row: bool) {
+    let (home, stub) = dotagents_home(label, EXPLICIT_TOML);
+    let rt = runtime(&home, stub.clone(), true);
+    let claude_link = home.join(".claude/skills/foo");
+    std::fs::create_dir_all(claude_link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(home.join(".agents/skills/foo"), &claude_link).unwrap();
+    let parked = park_foo(&rt);
+    assert!(std::fs::symlink_metadata(&claude_link).is_err());
+
+    let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+    let mut store = rt
+        .ports
+        .history
+        .open(&rt.scope, HistoryAccess::ReadWrite)
+        .unwrap()
+        .unwrap();
+    for _ in 0..=ops::DEFAULT_EVENT_LIMIT {
+        let draft = EventDraft {
+            kind: EventKind::InvocationChange,
+            skill: SkillName("foo".into()),
+            harness: None,
+            scope: None,
+            project_path: None,
+            payload: serde_json::json!({}),
+            inverse: None,
+            backup_dir: None,
+        };
+        let id = rt.ports.ids.next_event_id();
+        store.record(&guard, &id, &draft).unwrap();
+        store.finish(&guard, &id, EventStatus::Done, None).unwrap();
+    }
+    drop(store);
+    drop(guard);
+
+    if import_the_park_row {
+        skill_studio_host::reimport_event_as_legacy(
+            &home,
+            &parked.event_id,
+            "imported-park",
+            "2000-01-01T00:00:00+00:00",
+        )
+        .unwrap();
+    }
+
+    unpark_foo(&rt);
+
+    assert!(
+        std::fs::symlink_metadata(&claude_link).is_ok(),
+        "the recorded Claude link was not recreated"
+    );
+    assert_eq!(
+        std::fs::canonicalize(&claude_link).unwrap(),
+        std::fs::canonicalize(home.join(".agents/skills/foo")).unwrap(),
+    );
+    assert_eq!(
+        read(&stub.toml_path()),
+        EXPLICIT_TOML,
+        "agents.toml was not restored"
+    );
+    assert!(read(&stub.lock_path()).contains("[skills.foo]"));
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Flow: park a dotagents skill that has a Claude Code link, record more
+/// newer events for it than one `list_events` page holds, then turn it on.
+/// Expectation: the park row is still found, so the Claude link and the
+/// `agents.toml` entry come back. Failure: the lookup stops at the newest
+/// page, finds no row, restores only the folder, and still reports success.
+#[cfg(unix)]
+#[test]
+fn unpark_finds_a_park_row_buried_under_more_than_one_page_of_newer_events() {
+    assert_unpark_restores_a_buried_park_row("park_dotagents_buried_row", false);
+}
+
+/// Flow: same, but the park row is an imported legacy row: older `ts`, higher
+/// `rowid` than the 201 newer events. Expectation: paging follows the same
+/// `(ts, rowid)` order as the list, so the row is still found and the link and
+/// dotagents files come back. Failure: the page cursor compares `rowid` only,
+/// skips the imported row, and unpark reports success without them.
+#[cfg(unix)]
+#[test]
+fn unpark_finds_an_imported_park_row_with_an_older_ts_and_a_higher_rowid() {
+    assert_unpark_restores_a_buried_park_row("park_dotagents_imported_row", true);
 }
 
 /// Parks `foo` after `setup` made the stub misbehave, and checks the park
