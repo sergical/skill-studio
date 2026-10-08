@@ -7,6 +7,18 @@ export const homeSectionStyles = stylex.create({
     paddingTop: 124,
     "@media (max-width: 600px)": { paddingTop: 86 },
   },
+  // The bottom sections share these columns so their content starts at the same x.
+  columns: {
+    alignItems: "start",
+    display: "grid",
+    gap: 64,
+    gridTemplateColumns: "300px minmax(0, 1fr)",
+    "@media (min-width: 761px) and (max-width: 1000px)": {
+      gap: 32,
+      gridTemplateColumns: "260px minmax(0, 1fr)",
+    },
+    "@media (max-width: 760px)": { gap: 0, gridTemplateColumns: "1fr" },
+  },
   title: {
     fontSize: 34,
     fontWeight: 640,

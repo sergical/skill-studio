@@ -3,25 +3,6 @@ import * as stylex from "@stylexjs/stylex";
 import { siteTokens } from "../SiteTheme.stylex";
 
 export const walkthroughStyles = stylex.create({
-  sidecar: {
-    display: "grid",
-    gridTemplateColumns: "300px minmax(0, 1fr)",
-    gap: 64,
-    alignItems: "start",
-    "@media (min-width: 761px) and (max-width: 1000px)": {
-      gap: 32,
-      gridTemplateColumns: "260px minmax(0, 1fr)",
-    },
-    "@media (max-width: 760px)": { gridTemplateColumns: "1fr", gap: 0 },
-  },
-  sidecarTitle: {
-    fontSize: 34,
-    fontWeight: 640,
-    lineHeight: 1.08,
-    letterSpacing: "-.05em",
-    margin: "0 0 36px",
-    "@media (max-width: 760px)": { fontSize: 32 },
-  },
   sidecarList: { borderTopWidth: 1, borderTopStyle: "solid", borderTopColor: siteTokens.border },
   sidecarItem: {
     borderBottomWidth: 1,
