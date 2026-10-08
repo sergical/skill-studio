@@ -601,7 +601,7 @@ pub fn rebuild_snapshot_now(
 ) -> Result<SkillSnapshot, String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     // Before `rebuild_lock`: see `ScanLeaseGuard` for the order.
-    let _scan_lease =
+    let scan_lease =
         acquire_rebuild_lease(&super::write_lease::WriteLease::default(), state, &home)?;
     let _guard = state
         .rebuild_lock
@@ -616,7 +616,7 @@ pub fn rebuild_snapshot_now(
     // below, so a rebuild that straddles an hour boundary doesn't record the
     // new hour against cutoffs computed for the old one.
     let now = Utc::now();
-    let (mut built, report) = build_snapshot(
+    let (mut built, report) = build_snapshot_releasing(
         &home,
         &mut invocation_index,
         BuildPaths {
@@ -625,6 +625,8 @@ pub fn rebuild_snapshot_now(
             update_check_path: &state.update_check_path,
         },
         now,
+        Some(scan_lease),
+        || {},
     );
     drop(invocation_index);
 
@@ -2132,6 +2134,21 @@ pub fn build_snapshot(
     paths: BuildPaths,
     now: DateTime<Utc>,
 ) -> (SkillSnapshot, SkillUseRefreshReport) {
+    build_snapshot_releasing(home, invocation_index, paths, now, None, || {})
+}
+
+/// `build_snapshot` that drops `scan_lease` once the skill folders are read.
+/// Transcript indexing, database queries and cache writes have no time limit
+/// and read nothing a skill write changes, so a write must not wait on them.
+/// `after_scan_reads` runs right after the drop; tests use it to pause there.
+fn build_snapshot_releasing(
+    home: &Path,
+    invocation_index: &mut SkillInvocationIndex,
+    paths: BuildPaths,
+    now: DateTime<Utc>,
+    scan_lease: Option<super::write_lease::ScanLeaseGuard>,
+    after_scan_reads: impl FnOnce(),
+) -> (SkillSnapshot, SkillUseRefreshReport) {
     let total_start = Instant::now();
     let BuildPaths {
         cache_path,
@@ -2188,6 +2205,9 @@ pub fn build_snapshot(
         &current_owner_ids,
     );
     let overlays_ms = overlays_start.elapsed().as_millis();
+
+    drop(scan_lease);
+    after_scan_reads();
 
     let invocations_start = Instant::now();
     let sources = DiscoverySources::read(&skill_studio_host::RealFs, home);
@@ -5234,6 +5254,64 @@ mod tests {
                 "a timed-out rebuild must leave skills dirty so the next tick retries"
             );
             assert!(acquire_rebuild_lease(&rebuild_lease, &state, home).is_ok());
+        });
+    }
+
+    /// Flow: a rebuild has read the skill folders and is now indexing
+    /// transcripts, which has no time limit. A fork or repair starts then.
+    /// Expectation: the write gets the home lease at once, with the normal 3 s
+    /// wait. Failure it catches: a rebuild that keeps its shared lease through
+    /// invocation indexing, so a slow disk fails a write that has no rival.
+    #[test]
+    fn a_write_gets_the_home_lease_while_a_rebuild_indexes_invocations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        write_skill(&home, "alpha");
+        let lease_root = tmp.path().join("leases");
+        let rebuild_lease = super::super::write_lease::WriteLease::with_lease_root_and_wait(
+            lease_root.clone(),
+            std::time::Duration::from_secs(3),
+        );
+        let write_lease = super::super::write_lease::WriteLease::with_lease_root_and_wait(
+            lease_root,
+            std::time::Duration::from_secs(3),
+        );
+        let state = fixture_state();
+
+        let (paused_tx, paused_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let (home, rebuild_lease, state) = (&home, &rebuild_lease, &state);
+            let cache_path = tmp.path().join("cache.json");
+            let update_check_path = tmp.path().join("update-check.json");
+            let rebuild = scope.spawn(move || {
+                let scan_lease = acquire_rebuild_lease(rebuild_lease, state, home).unwrap();
+                let mut index = SkillInvocationIndex::default();
+                build_snapshot_releasing(
+                    home,
+                    &mut index,
+                    BuildPaths {
+                        cache_path: &cache_path,
+                        runs_root: home,
+                        update_check_path: &update_check_path,
+                    },
+                    Utc::now(),
+                    Some(scan_lease),
+                    || {
+                        paused_tx.send(()).unwrap();
+                        resume_rx.recv().unwrap();
+                    },
+                )
+            });
+            paused_rx.recv().unwrap();
+            let write = write_lease.try_acquire(home);
+            resume_tx.send(()).unwrap();
+            let (snapshot, _report) = rebuild.join().unwrap();
+            assert!(
+                write.is_ok(),
+                "a write was refused while the rebuild only indexed invocations"
+            );
+            assert!(snapshot.skills.iter().any(|s| s.name == "alpha"));
         });
     }
 
