@@ -483,7 +483,6 @@ pub fn run() {
             skills::skill_split::turn_off_for_agent,
             skills::skill_split::turn_off_check,
             skills::skill_harness_disable::restore_moved_deployment,
-            skills::skill_invocation::set_skill_invocation,
             skills::skill_invocation::set_skills_invocation,
             skills::commands::set_plugin_enabled,
             skills::commands::uninstall_plugin,

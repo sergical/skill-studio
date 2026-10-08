@@ -31,7 +31,7 @@ export interface PinnedDeployment {
 /** Whether two views are the same place. A skill page's `from` and one-shot `intent` don't
  * count: they describe how it was opened, not where it is. With `defaults`, "no path" and the
  * path of the default copy count as the same page, since both show the same SKILL.md. */
-export function isSameLocation(
+function isSameLocation(
   left: ActiveView,
   right: ActiveView,
   defaults?: DefaultDeploymentPaths | null,
