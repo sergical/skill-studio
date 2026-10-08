@@ -110,6 +110,9 @@ own `target/` filled 155 GB of the user's disk. These rules are firm:
 - **Check before you report.** Before the final message of a session that
   created worktrees or builds, run
   `du -sh .claude/worktrees .scratch 2>/dev/null` and say what is left and why.
+- **Sweep the shared build folder.** Cargo never deletes old outputs, so the
+  shared `target/` grew to 154 GB. After a batch of merges, run
+  `pnpm run clean:target` (deletes outputs untouched for 2 days).
 
 ### Frontend Commands
 
