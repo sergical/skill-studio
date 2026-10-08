@@ -88,7 +88,7 @@ export function SkillFrontmatterRepairDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>{copy.dialogTitle}</DialogTitle>
           <DialogDescription>

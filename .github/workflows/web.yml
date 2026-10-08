@@ -28,4 +28,6 @@ jobs:
       - run: pnpm run format:check
       - run: pnpm run doctor
       - run: pnpm run test
+      - run: pnpm --filter skill-studio exec playwright install --with-deps chromium
+      - run: pnpm --filter skill-studio run test:browser
       - run: pnpm --filter @skill-studio/marketing run build

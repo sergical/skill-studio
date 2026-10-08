@@ -13,7 +13,7 @@ import {
 } from "../../lib/skill-api";
 import { lifecycleTargetForDeployment } from "../../lib/skill-lifecycle-target";
 import { isFeatureEnabled } from "../../lib/feature-flags";
-import { editableDeployments } from "@skill-studio/lib";
+import { editableDeployments, parseYamlFrontmatterError } from "@skill-studio/lib";
 import type {
   Deployment,
   FrontmatterQuoteRepair,
@@ -308,7 +308,11 @@ export function SkillPage({
     setEditorHighlightLine(line);
     setIsEditorDirty(false);
   };
-  const startEditing = () => openEditor();
+  const yamlViolation = deployment?.spec_violations?.find((violation) =>
+    violation.startsWith("invalid YAML frontmatter at line "),
+  );
+  const startEditing = () =>
+    openEditor(yamlViolation ? parseYamlFrontmatterError(yamlViolation)?.line : undefined);
 
   if (!skill) {
     const name = activeView.kind === "skill" ? activeView.name : "";
