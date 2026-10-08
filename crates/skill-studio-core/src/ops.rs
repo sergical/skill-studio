@@ -4594,8 +4594,15 @@ fn restore_event_body(
                         .read_backup_bytes(backup_dir, &other.relative)
                         .map(RestorePlan::Write)
                 };
-                if let Ok(other_plan) = other_plan {
-                    extra_plans.push((other.original.clone(), other_plan));
+                // Only a path the event vouched for with a `secondary_post` row fails the
+                // restore: Undo would otherwise report success and leave that folder lost.
+                // Other unreadable extras stay skipped, as before that field existed.
+                match other_plan {
+                    Ok(other_plan) => extra_plans.push((other.original.clone(), other_plan)),
+                    Err(e) if secondary_post.iter().any(|(p, _)| p == &other.original) => {
+                        return Err(e)
+                    }
+                    Err(_) => {}
                 }
             }
             plan
@@ -4773,7 +4780,12 @@ fn restore_event_body(
     // longer confined to the scope) leaves the restore's own outcome
     // reporting only `path`, rather than failing a restore that otherwise
     // succeeded. See `extra_plans`' own comment above.
+    // The extra paths the event vouched for with a `secondary_post` row, that this could not
+    // put back: the restore is incomplete, not done (see after the lock and registry steps).
+    let mut unrestored: Vec<PathBuf> = Vec::new();
     for (other_path, other_plan) in &extra_plans {
+        let required = secondary_post.iter().any(|(p, _)| p == other_path)
+            && !matches!(other_plan, RestorePlan::RemoveIfPresent);
         // Removing takes down the path itself, never what a link there points at.
         if matches!(other_plan, RestorePlan::RemoveIfPresent) {
             if let Ok(facts) = fs.symlink_metadata(other_path) {
@@ -4795,27 +4807,31 @@ fn restore_event_body(
             .symlink_metadata(other_path)
             .is_ok_and(|facts| facts.kind == FileKind::Symlink)
         {
-            match crate::ports::confine(&rt.scope, fs, other_path) {
-                Ok(scoped) => {
-                    if let Err(e) = fs.remove_file(&session.guard, &scoped) {
-                        copy_errors.push(CoreError::io(other_path, e).message);
-                        continue;
-                    }
-                }
-                Err(_) => continue,
+            let Ok(scoped) = crate::ports::confine(&rt.scope, fs, other_path) else {
+                unrestored.extend(required.then(|| other_path.clone()));
+                continue;
+            };
+            if let Err(e) = fs.remove_file(&session.guard, &scoped) {
+                copy_errors.push(CoreError::io(other_path, e).message);
+                unrestored.extend(required.then(|| other_path.clone()));
+                continue;
             }
         }
-        if let Ok(other_scoped) = crate::ports::confine_write_through(&rt.scope, fs, other_path) {
-            let result: Result<(), CoreError> = match other_plan {
-                RestorePlan::RemoveIfPresent => Ok(()),
-                RestorePlan::Write(bytes) => fs
-                    .write_atomic(&session.guard, &other_scoped, bytes)
-                    .map_err(|e| CoreError::io(other_path, e)),
-                RestorePlan::WriteDir(files) => {
-                    restore_write_dir(rt, &session.guard, other_path, files)
-                }
+        let result: Result<(), CoreError> =
+            match crate::ports::confine_write_through(&rt.scope, fs, other_path) {
+                Err(e) => Err(e),
+                Ok(other_scoped) => match other_plan {
+                    RestorePlan::RemoveIfPresent => Ok(()),
+                    RestorePlan::Write(bytes) => fs
+                        .write_atomic(&session.guard, &other_scoped, bytes)
+                        .map_err(|e| CoreError::io(other_path, e)),
+                    RestorePlan::WriteDir(files) => {
+                        restore_write_dir(rt, &session.guard, other_path, files)
+                    }
+                },
             };
-            let _ = result;
+        if result.is_err() && required {
+            unrestored.push(other_path.clone());
         }
     }
     if !copy_errors.is_empty() {
@@ -4843,6 +4859,8 @@ fn restore_event_body(
         }
         if recreate_link(rt, &session.guard, &link_path, &target).is_ok() {
             recreated_links.push((link_path, target));
+        } else {
+            unrestored.push(link_path);
         }
     }
     // What only the writes above can say: the restore's own undo takes back
@@ -4914,6 +4932,28 @@ fn restore_event_body(
         );
     }
 
+    if !unrestored.is_empty() {
+        // Release the claim like a failed primary write, so the target stays revertible.
+        // The primary path is back already, so the retry needs `force`.
+        let _ = session
+            .store
+            .release_revert(&session.guard, &target.id, &restore_id);
+        let _ = session.store.finish(
+            &session.guard,
+            &restore_id,
+            crate::events::EventStatus::Failed,
+            None,
+        );
+        let names: Vec<String> = unrestored.iter().map(|p| p.display().to_string()).collect();
+        return Err(CoreError::new(
+            ErrorCode::Io,
+            format!(
+                "the restore is incomplete: could not put back {}. Fix the cause and restore again with force.",
+                names.join(", ")
+            ),
+        )
+        .at(&unrestored[0]));
+    }
     let restored_fingerprint = crate::events::fingerprint_path(fs, &path)?;
     session.store.finish(
         &session.guard,

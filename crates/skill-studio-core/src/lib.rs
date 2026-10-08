@@ -64,6 +64,7 @@ pub mod registry;
 pub mod scope;
 pub mod skill_update_check;
 pub mod skill_uses;
+pub mod skills_cli_agents;
 pub mod snapshot;
 pub mod timing;
 pub mod tracked_projects;

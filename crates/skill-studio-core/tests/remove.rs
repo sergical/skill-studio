@@ -13,7 +13,7 @@
 //! `FakeNpxSpawner` itself only ever writes the skill's own tree, matching
 //! the real CLI's actual scope.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -63,6 +63,16 @@ struct FakeNpxSpawner {
     /// process crashing before it deletes anything - the CLI-based
     /// counterpart to `FailingFs::fail_next_rename` for `Copy`/`Fork`.
     fail_next: AtomicBool,
+    /// Set by [`FakeNpxSpawner::clear_cli_agent_folders`]: `remove` also deletes
+    /// `<agent skills folder>/<name>` for every agent skills CLI 1.7.0 knows, the way the real
+    /// CLI does (`rm -rf` on a real folder, unlink on a symlink).
+    clears_cli_agent_folders: AtomicBool,
+    /// The env the host process would pass down: the real adapter inherits it, and
+    /// `ProcessSpec.env` only overlays it.
+    inherited_env: Mutex<Vec<(String, String)>>,
+    /// Set by [`FakeNpxSpawner::fail_next_call_after_deleting`]: the next `remove` deletes
+    /// everything it would, then exits nonzero, as a timeout or crash at the end of the run.
+    fail_after_clearing: AtomicBool,
 }
 
 impl FakeNpxSpawner {
@@ -71,7 +81,25 @@ impl FakeNpxSpawner {
             home,
             recorded: Mutex::new(Vec::new()),
             fail_next: AtomicBool::new(false),
+            clears_cli_agent_folders: AtomicBool::new(false),
+            inherited_env: Mutex::new(Vec::new()),
+            fail_after_clearing: AtomicBool::new(false),
         }
+    }
+
+    fn fail_next_call_after_deleting(&self) {
+        self.fail_after_clearing.store(true, Ordering::SeqCst);
+    }
+
+    fn inherit_env(&self, key: &str, value: &Path) {
+        self.inherited_env
+            .lock()
+            .unwrap()
+            .push((key.to_string(), value.display().to_string()));
+    }
+
+    fn clear_cli_agent_folders(&self) {
+        self.clears_cli_agent_folders.store(true, Ordering::SeqCst);
     }
 
     fn fail_next_call(&self) {
@@ -114,6 +142,39 @@ impl ProcessSpawner for FakeNpxSpawner {
             // already-removed rather than an error.
             let claude_link = cwd.join(CLAUDE_ROOT_RELATIVE).join(&name);
             std::fs::remove_file(&claude_link).ok();
+            if self.clears_cli_agent_folders.load(Ordering::SeqCst) {
+                // A hand-written subset of the CLI's global agent folders, kept apart from
+                // `cli_removal_targets` so a wrong table cannot hide behind itself. The vibe
+                // folder moves with `VIBE_HOME`, as in the CLI, from the env the child gets:
+                // what the process inherited, overlaid by `spec.env`.
+                let mut effective = self.inherited_env.lock().unwrap().clone();
+                for (key, value) in &spec.env {
+                    effective.retain(|(k, _)| k != key);
+                    if !value.is_empty() {
+                        effective.push((key.clone(), value.clone()));
+                    }
+                }
+                let vibe_home = effective
+                    .iter()
+                    .find(|(k, _)| k == "VIBE_HOME")
+                    .map_or_else(|| cwd.join(".vibe"), |(_, v)| PathBuf::from(v));
+                let mut targets: Vec<PathBuf> = [
+                    ".cursor/skills",
+                    ".deepagents/agent/skills",
+                    ".gemini/skills",
+                ]
+                .iter()
+                .map(|folder| cwd.join(folder).join(&name))
+                .collect();
+                targets.push(vibe_home.join("skills").join(&name));
+                for target in targets {
+                    match std::fs::symlink_metadata(&target) {
+                        Ok(facts) if facts.is_dir() => std::fs::remove_dir_all(&target).unwrap(),
+                        Ok(_) => std::fs::remove_file(&target).unwrap(),
+                        Err(_) => {}
+                    }
+                }
+            }
             let lock_path = cwd.join(".agents").join(".skill-lock.json");
             if let Ok(bytes) = std::fs::read(&lock_path) {
                 if let Ok(mut doc) = serde_json::from_slice::<serde_json::Value>(&bytes) {
@@ -138,6 +199,14 @@ impl ProcessSpawner for FakeNpxSpawner {
             {
                 std::fs::remove_file(&agents_lock_path).ok();
                 std::fs::remove_file(cwd.join(".agents").join("agents.toml")).ok();
+            }
+            if self.fail_after_clearing.swap(false, Ordering::SeqCst) {
+                return Ok(ProcessOutput {
+                    status: Some(1),
+                    stdout: String::new(),
+                    stderr: "simulated npx crash after deleting".to_string(),
+                    timed_out: false,
+                });
             }
         } else {
             let skill = spec
@@ -1546,8 +1615,13 @@ fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_times
         "remove_via_cli must call npx exactly once"
     );
     let (args, cwd, env) = &recorded[0];
+    // The recorded run used the bare `skills` package; the core pins the version whose
+    // agent folders `skills_cli_agents` backs up.
+    let mut pinned_args = trace.args.clone();
+    assert_eq!(pinned_args[0], "skills", "the trace names the bare package");
+    pinned_args[0] = "skills@1.7.0".to_string();
     assert_eq!(
-        args, &trace.args,
+        args, &pinned_args,
         "remove_via_cli's argv drifted from the recorded skills.sh trace"
     );
     // The trace records no cwd for a global remove; the core runs it in the
@@ -1560,9 +1634,17 @@ fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_times
     // The CLI reads its home from `$HOME`, so a `--home` run must point it at
     // the same home the guard checked, not the user's real one.
     assert_eq!(
-        env,
-        &vec![("HOME".to_string(), home.display().to_string())],
+        env.first(),
+        Some(&("HOME".to_string(), home.display().to_string())),
         "remove_via_cli must run the CLI with HOME set to the scope home"
+    );
+    // The folders the CLI clears are the ones the backup covers, whatever the host's own env says.
+    assert!(
+        env.contains(&(
+            "VIBE_HOME".to_string(),
+            home.join(".vibe").display().to_string()
+        )),
+        "remove_via_cli must pin the CLI's agent-folder env vars: {env:?}"
     );
 
     assert!(
@@ -1893,4 +1975,394 @@ fn global_skills_sh_remove_is_refused_when_an_eve_subagent_under_home_has_a_real
         spawner.recorded.lock().unwrap().is_empty(),
         "the CLI must not run"
     );
+}
+
+/// Every file under `dir` as (relative path, bytes), sorted, so two folders compare byte for byte.
+fn folder_bytes(dir: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
+    fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                let relative = path.strip_prefix(root).unwrap().to_path_buf();
+                out.push((relative, std::fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+/// Flow: a global skills.sh install of `x`, plus a real folder `x` in `~/.cursor/skills` and in
+/// `~/.deepagents/agent/skills` (an agent folder Skill Studio does not scan), and a symlink in
+/// `~/.gemini/skills` that points outside `.agents/skills`. The user removes the install, the
+/// CLI clears every agent folder, and the user then undoes the remove.
+/// Expectation: Undo restores both real folders byte for byte and the symlink with its target.
+/// A failure here means the CLI's `rm -rf` in agent folders Skill Studio does not back up
+/// loses the user's data for good.
+#[test]
+fn undo_after_global_skills_sh_remove_restores_every_agent_folder_the_cli_cleared_or_names_the_lost_folder(
+) {
+    let home = unique_temp_dir("remove_undo_cli_agent_folders");
+    std::fs::create_dir_all(&home).unwrap();
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    let cursor = home.join(".cursor/skills/x");
+    let deepagents = home.join(".deepagents/agent/skills/x");
+    for (folder, note) in [(&cursor, "cursor"), (&deepagents, "deepagents")] {
+        write_skill_md(folder);
+        std::fs::create_dir_all(folder.join("notes")).unwrap();
+        std::fs::write(
+            folder.join("notes/own.txt"),
+            format!("my own {note} notes\n"),
+        )
+        .unwrap();
+    }
+    let elsewhere = home.join("elsewhere/x");
+    write_skill_md(&elsewhere);
+    let gemini_link = home.join(".gemini/skills/x");
+    std::fs::create_dir_all(gemini_link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &gemini_link).unwrap();
+    let cursor_before = folder_bytes(&cursor);
+    let deepagents_before = folder_bytes(&deepagents);
+
+    let outcome = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+    assert!(!cursor.exists(), "the fake CLI clears the cursor folder");
+    assert!(
+        !deepagents.exists(),
+        "the fake CLI clears the deepagents folder"
+    );
+    assert!(
+        std::fs::symlink_metadata(&gemini_link).is_err(),
+        "the fake CLI clears the gemini link"
+    );
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(folder_bytes(&cursor), cursor_before, "cursor folder");
+    assert_eq!(
+        folder_bytes(&deepagents),
+        deepagents_before,
+        "deepagents folder"
+    );
+    assert_eq!(
+        std::fs::read_link(&gemini_link).ok().as_deref(),
+        Some(elsewhere.as_path()),
+        "gemini link"
+    );
+}
+
+/// Flow: a global skills.sh install of `x` and a real folder `x` in `~/.cursor/skills`. The user
+/// removes the install, then puts a new folder `x` in `~/.cursor/skills`, then undoes the remove.
+/// Expectation: Undo refuses without force and leaves the new folder as it is.
+/// A failure here means Undo overwrites work the user did after the remove.
+#[test]
+fn undo_after_skills_sh_remove_refuses_to_overwrite_a_folder_added_since_unless_forced() {
+    let home = unique_temp_dir("remove_undo_cli_folder_drift");
+    std::fs::create_dir_all(&home).unwrap();
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    let cursor = home.join(".cursor/skills/x");
+    write_skill_md(&cursor);
+
+    let outcome = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+    std::fs::create_dir_all(&cursor).unwrap();
+    std::fs::write(cursor.join("replacement.txt"), "written after the remove\n").unwrap();
+    let replacement_before = folder_bytes(&cursor);
+
+    let result = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    );
+
+    assert!(result.is_err(), "Undo must refuse over a replacement");
+    assert_eq!(
+        folder_bytes(&cursor),
+        replacement_before,
+        "the replacement folder"
+    );
+}
+
+/// Flow: the host process has `VIBE_HOME` set to a folder of its own, which holds a folder `x`,
+/// and `~/.vibe/skills` holds one too. The user removes a global skills.sh install of `x`.
+/// Expectation: the CLI gets its own env pinned, so it clears `~/.vibe/skills/x`, which was
+/// backed up, and leaves the `VIBE_HOME` folder alone.
+/// A failure here means the CLI deletes a folder Skill Studio did not back up.
+#[test]
+fn skills_sh_remove_pins_the_cli_env_so_a_custom_agent_home_is_not_cleared() {
+    let home = unique_temp_dir("remove_cli_env_pins");
+    std::fs::create_dir_all(&home).unwrap();
+    let custom_vibe = home.join("custom-vibe");
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    spawner.inherit_env("VIBE_HOME", &custom_vibe);
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    let custom = custom_vibe.join("skills/x");
+    let default = home.join(".vibe/skills/x");
+    write_skill_md(&custom);
+    write_skill_md(&default);
+    let default_before = folder_bytes(&default);
+
+    let outcome = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+    assert!(custom.exists(), "the VIBE_HOME folder is not the CLI's");
+    assert!(!default.exists(), "the fake CLI clears ~/.vibe/skills/x");
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(folder_bytes(&default), default_before, "~/.vibe/skills/x");
+}
+
+/// Flow: a global skills.sh install of `x` and a real folder `x` in `~/.cursor/skills` that holds
+/// a symlink. The user removes the install.
+/// Expectation: the remove is refused before the CLI runs, naming the link, and nothing is
+/// deleted.
+/// A failure here means the CLI deletes a folder Undo cannot restore.
+#[test]
+fn skills_sh_remove_is_refused_when_an_agent_folder_holds_a_nested_symlink() {
+    let home = unique_temp_dir("remove_nested_symlink");
+    std::fs::create_dir_all(&home).unwrap();
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    let cursor = home.join(".cursor/skills/x");
+    write_skill_md(&cursor);
+    let link = cursor.join("shared");
+    std::os::unix::fs::symlink(home.join("elsewhere"), &link).unwrap();
+
+    let err = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap_err();
+
+    assert!(
+        err.to_string().contains("shared"),
+        "the error names the link: {err}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&link).is_ok(),
+        "the folder is untouched"
+    );
+    assert!(
+        home.join(".agents/skills/x").exists(),
+        "the install is untouched"
+    );
+}
+
+/// Flow: a global skills.sh install of `x` and a real folder `x` in `~/.cursor/skills`. The user
+/// removes the install, `~/.cursor/skills` then becomes read-only, and the user undoes the remove.
+/// Expectation: Undo fails naming the folder it could not put back, and does not count as done:
+/// once the cause is fixed, a forced Undo restores the folder.
+/// A failure here means Undo reports success while a folder the CLI deleted stays lost.
+#[test]
+fn undo_after_skills_sh_remove_fails_naming_the_folder_it_could_not_put_back_and_can_be_retried() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = unique_temp_dir("remove_undo_secondary_write_fails");
+    std::fs::create_dir_all(&home).unwrap();
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    let cursor = home.join(".cursor/skills/x");
+    write_skill_md(&cursor);
+    let cursor_before = folder_bytes(&cursor);
+    let outcome = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+    let cursor_skills = home.join(".cursor/skills");
+    std::fs::set_permissions(&cursor_skills, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let request = RestoreRequest {
+        event_id: outcome.event_id,
+        force: false,
+    };
+
+    let err = ops::restore_event(&rt, &ctx(), &request).unwrap_err();
+    std::fs::set_permissions(&cursor_skills, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(
+        err.to_string().contains(&cursor.display().to_string()),
+        "the error names the folder: {err}"
+    );
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            force: true,
+            ..request
+        },
+    )
+    .unwrap();
+    assert_eq!(folder_bytes(&cursor), cursor_before, "cursor folder");
+}
+
+/// Flow: `~/.cursor/skills` is a link to a folder outside the home, which holds a folder `x`.
+/// The user removes a global skills.sh install of `x`.
+/// Expectation: the remove is refused before the CLI runs, naming the folder, and nothing is
+/// deleted.
+/// A failure here means the CLI deletes a folder Undo refuses to put back.
+#[test]
+fn skills_sh_remove_is_refused_when_an_agent_folder_is_reached_through_a_link_out_of_the_scope() {
+    let home = unique_temp_dir("remove_folder_outside_scope");
+    std::fs::create_dir_all(&home).unwrap();
+    let outside = unique_temp_dir("remove_folder_outside_scope_target");
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    write_skill_md(&outside.join("x"));
+    std::fs::create_dir_all(home.join(".cursor")).unwrap();
+    std::os::unix::fs::symlink(&outside, home.join(".cursor/skills")).unwrap();
+
+    let err = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap_err();
+
+    assert!(
+        err.to_string().contains(".cursor/skills/x"),
+        "the error names the folder: {err}"
+    );
+    assert!(outside.join("x").exists(), "the folder is untouched");
+    assert!(
+        home.join(".agents/skills/x").exists(),
+        "the install is untouched"
+    );
+    std::fs::remove_dir_all(&outside).ok();
+}
+
+/// Flow: a global skills.sh install of `x` and a real folder `x` in `~/.cursor/skills`. The CLI
+/// deletes the folders, then exits nonzero. The user puts a new folder `x` in `~/.cursor/skills`
+/// and undoes the failed remove.
+/// Expectation: Undo refuses without force and leaves the new folder as it is.
+/// A failure here means a failed remove leaves Undo free to overwrite later work.
+#[test]
+fn undo_of_a_skills_sh_remove_that_failed_after_deleting_refuses_over_a_recreated_folder() {
+    let home = unique_temp_dir("remove_failed_then_recreated");
+    std::fs::create_dir_all(&home).unwrap();
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    spawner.fail_next_call_after_deleting();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    let cursor = home.join(".cursor/skills/x");
+    write_skill_md(&cursor);
+
+    ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap_err();
+    assert!(!cursor.exists(), "the fake CLI deleted the folder");
+    std::fs::create_dir_all(&cursor).unwrap();
+    std::fs::write(
+        cursor.join("replacement.txt"),
+        "written after the failure\n",
+    )
+    .unwrap();
+    let replacement_before = folder_bytes(&cursor);
+    let events = ops::list_events(&rt, &ctx(), &ListEventsRequest::default()).unwrap();
+    let event_id = events
+        .iter()
+        .find(|e| e.kind == "remove")
+        .unwrap()
+        .id
+        .clone();
+
+    let result = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id,
+            force: false,
+        },
+    );
+
+    assert!(result.is_err(), "Undo must refuse over a recreated folder");
+    assert_eq!(
+        folder_bytes(&cursor),
+        replacement_before,
+        "the recreated folder"
+    );
+}
+
+/// Flow: a global skills.sh install of `x` and a link `~/.gemini/skills/x` to a folder outside the
+/// home. The user removes the install.
+/// Expectation: the remove is refused before the CLI runs, naming the link, and nothing is
+/// deleted.
+/// A failure here means the CLI deletes a link Undo refuses to recreate.
+#[test]
+fn skills_sh_remove_is_refused_when_an_agent_link_points_out_of_the_scope() {
+    let home = unique_temp_dir("remove_link_outside_scope");
+    std::fs::create_dir_all(&home).unwrap();
+    let outside = unique_temp_dir("remove_link_outside_scope_target");
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    write_skill_md(&outside.join("x"));
+    std::fs::create_dir_all(home.join(".gemini/skills")).unwrap();
+    std::os::unix::fs::symlink(outside.join("x"), home.join(".gemini/skills/x")).unwrap();
+
+    let err = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap_err();
+
+    assert!(
+        err.to_string().contains(".gemini/skills/x"),
+        "the error names the link: {err}"
+    );
+    assert!(
+        std::fs::symlink_metadata(home.join(".gemini/skills/x")).is_ok(),
+        "the link is untouched"
+    );
+    assert!(
+        home.join(".agents/skills/x").exists(),
+        "the install is untouched"
+    );
+    std::fs::remove_dir_all(&outside).ok();
 }

@@ -528,6 +528,11 @@ impl TraceCtx {
     /// for this trace.
     fn assert_argv_matches(&self, trace_name: &str) {
         let (mut expected_args, cwd_label) = load_command(&self.dir);
+        // The recorded remove runs used the bare `skills` package; the core pins the version
+        // whose agent folders it backs up before the CLI deletes them.
+        if trace_name.contains("-remove-") && expected_args.first().is_some_and(|a| a == "skills") {
+            expected_args[0] = "skills@1.7.0".to_string();
+        }
         // Any `$PROJECT`/`$LOCAL_SKILL_DIR` placeholder left in a recorded
         // argv token (e.g. the source argv for a local-folder install) is
         // left as the literal placeholder, since [`install_request`]'s
