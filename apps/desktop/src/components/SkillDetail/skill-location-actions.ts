@@ -29,6 +29,7 @@ import {
   setPluginEnabled,
   updatePlugin,
   setSkillsInvocation,
+  unlistParkedDotagents,
   unparkSkill,
 } from "../../lib/skill-api";
 import {
@@ -259,6 +260,17 @@ export function useLocationActions(
       case "unpark":
         return runWithErrorToast("Couldn't turn on skill", () =>
           unparkSkill({ deployment_id: action.deployment.id }),
+        );
+      case "unlist-dotagents":
+        return runWithErrorToast(
+          "Couldn't stop dotagents installing it",
+          () => unlistParkedDotagents({ deployment_id: action.deployment.id }),
+          () =>
+            addToast({
+              type: "success",
+              title: `dotagents no longer installs ${skill.name}`,
+              message: "The parked copy stays. Turn it on to use it again.",
+            }),
         );
       case "keep-live":
       case "keep-parked":

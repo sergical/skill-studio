@@ -70,6 +70,7 @@ export type LocationAction =
   | { kind: "unpark"; deployment: Deployment }
   | { kind: "keep-live"; pair: LeftBehindPair }
   | { kind: "keep-parked"; pair: LeftBehindPair }
+  | { kind: "unlist-dotagents"; deployment: Deployment }
   | { kind: "split"; target: LifecycleTarget; projectPath: string | null; readers: AgentId[] }
   | {
       kind: "turn-off-agent";
@@ -384,6 +385,11 @@ function claudeNotLinkedCondition(): Condition {
   };
 }
 
+/** Only a copy `agents.lock` still names reads as dotagents-owned; install-aware Park drops that row. */
+function isStillInDotagents(parked: Deployment): boolean {
+  return parked.owner_kind === "dotagents" || parked.owner_kind === "wildcard-dotagents";
+}
+
 /** A parked copy with no live copy at its origin: quiet, and the fix is "Turn on". */
 function parkedCondition(deployment: Deployment): Condition {
   return {
@@ -394,6 +400,24 @@ function parkedCondition(deployment: Deployment): Condition {
     what: "Parked — turned off for every agent that read this copy.",
     fix: "Turn it on to move it back.",
     menu: [{ label: "Turn on", action: { kind: "unpark", deployment } }],
+  };
+}
+
+/** A parked copy `agents.lock` still names: the next `dotagents install` would bring the skill back. */
+function parkedStillInDotagentsCondition(deployment: Deployment): Condition {
+  return {
+    level: "warning",
+    status: "Still in dotagents",
+    phrase: "parked copy dotagents would install again",
+    plural: "parked copies dotagents would install again",
+    what: "dotagents still lists this parked skill, so its next install brings it back.",
+    fix: "Stop dotagents installing it; the parked copy stays.",
+    menu: [
+      {
+        label: "Stop dotagents installing it",
+        action: { kind: "unlist-dotagents", deployment },
+      },
+    ],
   };
 }
 
@@ -702,7 +726,12 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
     const parked = all.flatMap((d): ParkedLocationRow[] => {
       if (d.scope !== "parked") return [];
       const pair = leftBehind.find((p) => p.parked === d) ?? null;
-      const conditions = [pair ? leftBehindCondition(pair) : parkedCondition(d)];
+      const conditions = pair
+        ? [leftBehindCondition(pair)]
+        : [
+            ...(isStillInDotagents(d) ? [parkedStillInDotagentsCondition(d)] : []),
+            parkedCondition(d),
+          ];
       const originKind = d.parked_origin?.kind ?? "universal";
       const universal = originKind === "universal";
       return [

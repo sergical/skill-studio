@@ -643,6 +643,15 @@ export async function discardSkillCopy(
 }
 
 /**
+ * Stop dotagents from installing a parked skill again: runs `dotagents remove -y`
+ * for the scope and keeps the parked copy. For a skill parked before Park knew
+ * about dotagents, whose `agents.toml` still lists it.
+ */
+export async function unlistParkedDotagents(target: LifecycleTarget): Promise<void> {
+  return callCommand("unlist_parked_dotagents", { target });
+}
+
+/**
  * `parkSkill` for many targets in one call. One result per target, in order:
  * `error` is `null` when it parked, so one refused folder never hides the rest.
  */
