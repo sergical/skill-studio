@@ -221,7 +221,7 @@ impl HistoryStore for SqliteHistoryStore {
             clauses.push("skill = ?");
         }
         if filter.after.is_some() {
-            clauses.push("rowid < (SELECT rowid FROM events WHERE id = ?)");
+            clauses.push("(ts, rowid) < (SELECT ts, rowid FROM events WHERE id = ?)");
         }
         let mut sql = String::from("SELECT * FROM events");
         if !clauses.is_empty() {
@@ -232,7 +232,8 @@ impl HistoryStore for SqliteHistoryStore {
         // desktop's `EventStore::import_legacy_events` imports get appended
         // at the end of the table (highest `rowid`) regardless of their
         // original `ts`, so `rowid` alone would sort an old imported row
-        // above events written just now.
+        // above events written just now. The `after` cursor uses the same
+        // `(ts, rowid)` key, or a page boundary would skip imported rows.
         sql.push_str(" ORDER BY ts DESC, rowid DESC LIMIT ?");
 
         let mut owned_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -689,6 +690,29 @@ fn sql_err(e: rusqlite::Error) -> CoreError {
 #[allow(clippy::needless_pass_by_value)]
 fn json_err(e: serde_json::Error) -> CoreError {
     CoreError::new(ErrorCode::Io, format!("json error: {e}"))
+}
+
+/// Test seam: re-files the event `id` in the `events.sqlite3` under `data_dir`
+/// as an imported legacy row, with id `imported_id`, timestamp `ts`, and a
+/// `rowid` above every existing row, the way the desktop's
+/// `import_legacy_events` appends older events.
+#[doc(hidden)]
+pub fn reimport_event_as_legacy(
+    data_dir: &Path,
+    id: &EventId,
+    imported_id: &str,
+    ts: &str,
+) -> rusqlite::Result<()> {
+    let db = Connection::open(data_dir.join(".history/events.sqlite3"))?;
+    db.execute(
+        "INSERT INTO events
+            (id, ts, kind, skill, harness, scope, project_path, payload, inverse, backup_dir, status, reverted_by, restorable)
+         SELECT ?2, ?3, kind, skill, harness, scope, project_path, payload, inverse, backup_dir, status, reverted_by, restorable
+         FROM events WHERE id = ?1",
+        params![id.0, imported_id, ts],
+    )?;
+    db.execute("DELETE FROM events WHERE id = ?1", params![id.0])?;
+    Ok(())
 }
 
 /// Content hash for an existing path: matches the desktop's
