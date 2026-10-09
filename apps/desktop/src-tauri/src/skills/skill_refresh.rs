@@ -575,6 +575,20 @@ pub async fn set_discovery_source(
     .await
 }
 
+/// The shared home lease a full rebuild needs. When a write holds it past the
+/// wait, the rebuild gives up, and skills go dirty again: the refresh loop
+/// clears the flag before it rebuilds, and an error alone would leave the
+/// snapshot stale until some later file event.
+fn acquire_rebuild_lease(
+    lease: &super::write_lease::WriteLease,
+    state: &SkillRefreshState,
+    home: &Path,
+) -> Result<super::write_lease::ScanLeaseGuard, String> {
+    lease
+        .acquire_scan_lease(home, &effective_project_paths(home))
+        .inspect_err(|_| state.mark_skills_dirty())
+}
+
 /// Build a full snapshot right now on the calling thread, store it, and emit
 /// `SNAPSHOT_EVENT`. Used both by the background loop's full-rebuild path and
 /// by commands that need the caller's next read to see fresh data (a new
@@ -585,12 +599,14 @@ pub fn rebuild_snapshot_now(
     app: &AppHandle,
     state: &SkillRefreshState,
 ) -> Result<SkillSnapshot, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    // Before `rebuild_lock`: see `ScanLeaseGuard` for the order.
+    let scan_lease =
+        acquire_rebuild_lease(&super::write_lease::WriteLease::default(), state, &home)?;
     let _guard = state
         .rebuild_lock
         .lock()
         .map_err(|e| format!("rebuild lock poisoned: {e}"))?;
-
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
 
     let mut invocation_index = state
         .invocation_index
@@ -600,7 +616,7 @@ pub fn rebuild_snapshot_now(
     // below, so a rebuild that straddles an hour boundary doesn't record the
     // new hour against cutoffs computed for the old one.
     let now = Utc::now();
-    let (mut built, report) = build_snapshot(
+    let (mut built, report) = build_snapshot_releasing(
         &home,
         &mut invocation_index,
         BuildPaths {
@@ -609,6 +625,8 @@ pub fn rebuild_snapshot_now(
             update_check_path: &state.update_check_path,
         },
         now,
+        Some(scan_lease),
+        || {},
     );
     drop(invocation_index);
 
@@ -876,6 +894,15 @@ fn reconcile_skill_names_at(
     }
 
     let reconcile_start = Instant::now();
+    // Before `rebuild_lock`: see `ScanLeaseGuard` for the order. A write still
+    // holding its lease past the wait leaves the skills dirty for the next
+    // full rebuild.
+    let Ok(_scan_lease) = super::write_lease::WriteLease::default()
+        .acquire_scan_lease(home, &effective_project_paths(home))
+    else {
+        state.mark_skills_dirty();
+        return Ok(());
+    };
     let _guard = state
         .rebuild_lock
         .lock()
@@ -1877,10 +1904,17 @@ pub(crate) fn apply_skill_snapshot_overlays(
 /// work for only the named skills, not a full rebuild), and returns its
 /// `Inventory`'s skills for `skill_assembly::assemble_installed_skills` to
 /// build `InstalledSkill`/`Deployment` records from - every scan fact comes
-/// from here now, not from the desktop's own scanner. `lease_root` and
-/// `history_root` sit next to `update_check_path` - `scan` never writes, so
-/// a fresh, otherwise-unused directory is fine; `NoHistoryOpener` (from
-/// `default_ports`) means the history store is never touched either.
+/// from here now, not from the desktop's own scanner. The scan leases at
+/// the same `<data_root>/leases` the write commands use (see
+/// `write_lease.rs`), shared for the read, so a writer and a scan exclude
+/// each other while two scans do not. `history_root` sits next to
+/// `update_check_path` - `scan` never writes, so a fresh, otherwise-unused
+/// directory is fine; `NoHistoryOpener` (from `default_ports`) means the
+/// history store is never touched.
+///
+/// A scan on a thread that already holds a write lease (a command rebuilding
+/// the snapshot before it mutates) takes no lease of its own: advisory locks
+/// do not nest within one process, so it would wait on itself.
 ///
 /// A scan failure (a lease held by another instance, an unreadable root)
 /// returns whatever `ops::scan` managed to read before the error, marked
@@ -1902,6 +1936,41 @@ pub(crate) struct CoreScanResult {
     pub unread_roots: Vec<PathBuf>,
 }
 
+/// Lease provider for a scan whose thread already holds the write lease:
+/// grants without locking, since the caller's exclusive lease already keeps
+/// every other writer and scan out.
+struct CallerHoldsLease;
+
+struct CallerHeldHandle {
+    keys: Vec<skill_studio_core::ports::LeaseKey>,
+    mode: skill_studio_core::ports::LeaseMode,
+}
+
+impl skill_studio_core::ports::LeaseHandle for CallerHeldHandle {
+    fn keys(&self) -> &[skill_studio_core::ports::LeaseKey] {
+        &self.keys
+    }
+
+    fn mode(&self) -> skill_studio_core::ports::LeaseMode {
+        self.mode
+    }
+}
+
+impl skill_studio_core::ports::LeaseProvider for CallerHoldsLease {
+    fn acquire(
+        &self,
+        keys: &[skill_studio_core::ports::LeaseKey],
+        mode: skill_studio_core::ports::LeaseMode,
+        _wait: std::time::Duration,
+    ) -> Result<Box<dyn skill_studio_core::ports::LeaseHandle>, skill_studio_core::error::CoreError>
+    {
+        Ok(Box::new(CallerHeldHandle {
+            keys: keys.to_vec(),
+            mode,
+        }))
+    }
+}
+
 pub(crate) fn core_scan_installed_skills(
     home: &Path,
     project_paths: &[PathBuf],
@@ -1911,7 +1980,7 @@ pub(crate) fn core_scan_installed_skills(
     let data_dir = update_check_path
         .parent()
         .map_or_else(|| home.to_path_buf(), Path::to_path_buf);
-    let lease_root = data_dir.join("core-leases");
+    let lease_root = super::core_runtime::data_root().join("leases");
     let history_root = data_dir.join("core-history");
 
     // Fixture mode: `home` is the fixture root (see
@@ -1937,6 +2006,9 @@ pub(crate) fn core_scan_installed_skills(
 
     let catalog = std::sync::Arc::new(skill_studio_core::harness::HarnessCatalog::builtin());
     let mut ports = skill_studio_host::default_ports(lease_root, catalog);
+    if super::write_lease::current_thread_holds_home_lease() {
+        ports.leases = std::sync::Arc::new(CallerHoldsLease);
+    }
     ports.telemetry = skill_studio_host::telemetry::port(
         skill_studio_host::telemetry::Surface::Desktop,
         env!("CARGO_PKG_VERSION"),
@@ -2062,6 +2134,21 @@ pub fn build_snapshot(
     paths: BuildPaths,
     now: DateTime<Utc>,
 ) -> (SkillSnapshot, SkillUseRefreshReport) {
+    build_snapshot_releasing(home, invocation_index, paths, now, None, || {})
+}
+
+/// `build_snapshot` that drops `scan_lease` once the skill folders are read.
+/// Transcript indexing, database queries and cache writes have no time limit
+/// and read nothing a skill write changes, so a write must not wait on them.
+/// `after_scan_reads` runs right after the drop; tests use it to pause there.
+fn build_snapshot_releasing(
+    home: &Path,
+    invocation_index: &mut SkillInvocationIndex,
+    paths: BuildPaths,
+    now: DateTime<Utc>,
+    scan_lease: Option<super::write_lease::ScanLeaseGuard>,
+    after_scan_reads: impl FnOnce(),
+) -> (SkillSnapshot, SkillUseRefreshReport) {
     let total_start = Instant::now();
     let BuildPaths {
         cache_path,
@@ -2118,6 +2205,9 @@ pub fn build_snapshot(
         &current_owner_ids,
     );
     let overlays_ms = overlays_start.elapsed().as_millis();
+
+    drop(scan_lease);
+    after_scan_reads();
 
     let invocations_start = Instant::now();
     let sources = DiscoverySources::read(&skill_studio_host::RealFs, home);
@@ -5018,6 +5108,234 @@ mod tests {
             state.is_skills_dirty(),
             "a partial targeted scan must queue the full rebuild that sets the banner"
         );
+    }
+
+    fn write_skill(home: &Path, name: &str) {
+        let dir = home.join(".claude/skills").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: test\n---\nbody"),
+        )
+        .unwrap();
+    }
+
+    /// Flow: a write holds the home's write lease while it moves a skill
+    /// folder (the folder is in neither place yet), and a background scan
+    /// starts. Expectation: the scan waits for the lease, so it reports the
+    /// state after the move, never the half-moved one. Failure it catches:
+    /// the scan leasing at a different root than the writers, reading the
+    /// skill as missing. The early `recv_timeout` is only the failing signal
+    /// before the fix; the pass condition is the scan's result.
+    #[test]
+    fn scan_waits_for_a_write_holding_the_home_lease_and_sees_the_moved_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        write_skill(&home, "mover");
+        let update_check_path = tmp.path().join("update-check.json");
+        let original = home.join(".claude/skills/mover");
+
+        let guard = super::super::write_lease::WriteLease::default()
+            .try_acquire(&home)
+            .unwrap();
+        let aside = tmp.path().join("aside");
+        fs::rename(&original, &aside).unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let scan_home = home.clone();
+        let scanner = std::thread::spawn(move || {
+            let result = core_scan_installed_skills(&scan_home, &[], &update_check_path, &[]);
+            tx.send(
+                result
+                    .skills
+                    .iter()
+                    .map(|s| s.name.0.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        });
+        let early = rx.recv_timeout(std::time::Duration::from_millis(300));
+        assert!(
+            early.is_err(),
+            "the scan returned while a write held the home lease: {early:?}"
+        );
+
+        fs::rename(&aside, &original).unwrap();
+        drop(guard);
+        let names = rx.recv().unwrap();
+        scanner.join().unwrap();
+        assert_eq!(names, vec!["mover".to_string()]);
+    }
+
+    /// Flow: a write command holds the home lease and then needs
+    /// `rebuild_lock` to patch the snapshot, while a background reconcile
+    /// waits for the same lease. Expectation: the reconcile waits without
+    /// holding `rebuild_lock`, so the write gets the lock, finishes, and
+    /// releases the lease. Failure it catches: a reconcile that takes
+    /// `rebuild_lock` first and then waits for the lease, which leaves the
+    /// write and the reconcile each waiting for what the other holds.
+    #[test]
+    fn a_reconcile_waiting_for_the_home_lease_does_not_hold_the_rebuild_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        write_skill(&home, "mover");
+        let state = fixture_state();
+
+        let guard = super::super::write_lease::WriteLease::default()
+            .try_acquire(&home)
+            .unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        super::super::write_lease::scan_wait_probe::watch(home.canonicalize().unwrap(), tx);
+
+        std::thread::scope(|scope| {
+            let reconcile = scope.spawn(|| {
+                reconcile_skill_names_at(&home, &state, ["mover".to_string()], &[], false, |_| {
+                    Ok(())
+                })
+            });
+            let reached_lease_wait = rx.recv_timeout(std::time::Duration::from_secs(10)).is_ok();
+            let rebuild_lock_free = state.rebuild_lock.try_lock().is_ok();
+            drop(guard);
+            reconcile.join().unwrap().unwrap();
+            assert!(reached_lease_wait, "the reconcile never reached its lease");
+            assert!(
+                rebuild_lock_free,
+                "the reconcile held rebuild_lock while it waited for the home lease"
+            );
+        });
+    }
+
+    /// Flow: an update holds the home lease past the rebuild's wait. The
+    /// refresh loop has already cleared `skills_dirty` when it calls the
+    /// rebuild. Expectation: the timed-out rebuild sets skills dirty again, so
+    /// the next tick retries with no file event, and once the update lets go
+    /// the same lease call succeeds. Failure it catches: a rebuild that only
+    /// returns the error, which leaves the snapshot stale until a file event.
+    /// (The loop needs a real `AppHandle`, so this covers the lease step it
+    /// calls; the loop's own `if skills_dirty` check is unchanged.)
+    #[test]
+    fn a_rebuild_that_times_out_on_the_home_lease_leaves_skills_dirty_for_the_next_tick() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let lease_root = tmp.path().join("leases");
+        let state = fixture_state();
+        let wait = std::time::Duration::from_millis(50);
+        let rebuild_lease = super::super::write_lease::WriteLease::with_lease_root_and_wait(
+            lease_root.clone(),
+            wait,
+        );
+        let update_lease = super::super::write_lease::WriteLease::with_lease_root(lease_root);
+
+        // The update runs on its own thread: a thread that holds the home
+        // lease never waits for it, so the rebuild would not time out here.
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let (update_lease, home) = (&update_lease, &home);
+            let update = scope.spawn(move || {
+                let guard = update_lease.try_acquire(home).unwrap();
+                held_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                drop(guard);
+            });
+            held_rx.recv().unwrap();
+
+            // The loop clears the flag before it rebuilds.
+            state.skills_dirty.store(false, Ordering::SeqCst);
+            let timed_out = acquire_rebuild_lease(&rebuild_lease, &state, home).is_err();
+            let dirty = state.is_skills_dirty();
+
+            release_tx.send(()).unwrap();
+            update.join().unwrap();
+            assert!(timed_out, "the rebuild got a lease a write held");
+            assert!(
+                dirty,
+                "a timed-out rebuild must leave skills dirty so the next tick retries"
+            );
+            assert!(acquire_rebuild_lease(&rebuild_lease, &state, home).is_ok());
+        });
+    }
+
+    /// Flow: a rebuild has read the skill folders and is now indexing
+    /// transcripts, which has no time limit. A fork or repair starts then.
+    /// Expectation: the write gets the home lease at once, with the normal 3 s
+    /// wait. Failure it catches: a rebuild that keeps its shared lease through
+    /// invocation indexing, so a slow disk fails a write that has no rival.
+    #[test]
+    fn a_write_gets_the_home_lease_while_a_rebuild_indexes_invocations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        write_skill(&home, "alpha");
+        let lease_root = tmp.path().join("leases");
+        let rebuild_lease = super::super::write_lease::WriteLease::with_lease_root_and_wait(
+            lease_root.clone(),
+            std::time::Duration::from_secs(3),
+        );
+        let write_lease = super::super::write_lease::WriteLease::with_lease_root_and_wait(
+            lease_root,
+            std::time::Duration::from_secs(3),
+        );
+        let state = fixture_state();
+
+        let (paused_tx, paused_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let (home, rebuild_lease, state) = (&home, &rebuild_lease, &state);
+            let cache_path = tmp.path().join("cache.json");
+            let update_check_path = tmp.path().join("update-check.json");
+            let rebuild = scope.spawn(move || {
+                let scan_lease = acquire_rebuild_lease(rebuild_lease, state, home).unwrap();
+                let mut index = SkillInvocationIndex::default();
+                build_snapshot_releasing(
+                    home,
+                    &mut index,
+                    BuildPaths {
+                        cache_path: &cache_path,
+                        runs_root: home,
+                        update_check_path: &update_check_path,
+                    },
+                    Utc::now(),
+                    Some(scan_lease),
+                    || {
+                        paused_tx.send(()).unwrap();
+                        resume_rx.recv().unwrap();
+                    },
+                )
+            });
+            paused_rx.recv().unwrap();
+            let write = write_lease.try_acquire(home);
+            resume_tx.send(()).unwrap();
+            let (snapshot, _report) = rebuild.join().unwrap();
+            assert!(
+                write.is_ok(),
+                "a write was refused while the rebuild only indexed invocations"
+            );
+            assert!(snapshot.skills.iter().any(|s| s.name == "alpha"));
+        });
+    }
+
+    /// Flow: a command holds the home write lease and rebuilds the snapshot on
+    /// the same thread before it mutates (`resolve_fresh_lifecycle_target`).
+    /// Expectation: the scan reads at once, complete, instead of waiting on
+    /// its own thread's lease until the read timeout. Failure it catches: the
+    /// scan taking a shared lease the same process already holds exclusively.
+    #[test]
+    fn scan_on_a_thread_holding_the_write_lease_does_not_wait_on_itself() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        write_skill(&home, "alpha");
+        let update_check_path = tmp.path().join("update-check.json");
+
+        let _guard = super::super::write_lease::WriteLease::default()
+            .try_acquire(&home)
+            .unwrap();
+        let result = core_scan_installed_skills(&home, &[], &update_check_path, &[]);
+        assert_eq!(
+            result.completeness,
+            skill_studio_core::dto::Completeness::Complete
+        );
+        assert_eq!(result.skills.len(), 1);
     }
 
     /// Pins the assumption `reconcile_skill_names_and_emit`'s doc comment

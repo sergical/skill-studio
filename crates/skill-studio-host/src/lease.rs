@@ -463,4 +463,55 @@ mod tests {
             result.as_ref().err()
         );
     }
+
+    fn lock_file_count(dir: &Path) -> usize {
+        fs::read_dir(dir).unwrap().count()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_root_keeps_one_lock_file_across_many_acquire_release_cycles() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let lease = FileLease::new(dir.path().to_path_buf());
+        let keys = [key("busy-root")];
+        let mut inodes = Vec::new();
+        for n in 0..20 {
+            let mode = if n % 2 == 0 {
+                LeaseMode::Shared
+            } else {
+                LeaseMode::Exclusive
+            };
+            drop(
+                lease
+                    .acquire(&keys, mode, Duration::from_millis(100))
+                    .unwrap(),
+            );
+            inodes.push(fs::metadata(lease.lock_path(&keys[0])).unwrap().ino());
+        }
+        assert_eq!(lock_file_count(dir.path()), 1);
+        assert!(
+            inodes.windows(2).all(|pair| pair[0] == pair[1]),
+            "nothing may unlink a lock file: a client holding the old file would share \
+             the lease with one locking a replacement; inodes {inodes:?}"
+        );
+    }
+
+    #[test]
+    fn lock_files_grow_by_one_per_distinct_root_and_never_shrink() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = FileLease::new(dir.path().to_path_buf());
+        for n in 0..10 {
+            drop(
+                lease
+                    .acquire(
+                        &[key(&format!("root-{n}"))],
+                        LeaseMode::Shared,
+                        Duration::ZERO,
+                    )
+                    .unwrap(),
+            );
+        }
+        assert_eq!(lock_file_count(dir.path()), 10);
+    }
 }
