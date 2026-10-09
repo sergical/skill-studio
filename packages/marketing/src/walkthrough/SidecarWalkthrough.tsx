@@ -4,6 +4,7 @@ import { ChevronDown } from "lucide-react";
 import { chapters, type WalkthroughProps } from "./walkthrough-chapters";
 import { WalkthroughVideo } from "./WalkthroughVideo";
 import { walkthroughStyles as s } from "./Walkthrough.stylex";
+import { homeSectionStyles } from "../home/HomeSection.stylex";
 
 export function SidecarWalkthrough({ theme }: WalkthroughProps) {
   const [selection, setSelection] = useState({ index: 0, animate: false });
@@ -73,8 +74,8 @@ export function SidecarWalkthrough({ theme }: WalkthroughProps) {
 
   return (
     <div data-walkthrough="sidecar">
-      <h2 {...stylex.props(s.sidecarTitle)}>How it works.</h2>
-      <div {...stylex.props(s.sidecar)}>
+      <h2 {...stylex.props(homeSectionStyles.title)}>How it works.</h2>
+      <div {...stylex.props(homeSectionStyles.columns)}>
         <div ref={list} {...stylex.props(s.sidecarList)}>
           {chapters.map((chapter, index) => (
             <div key={chapter.id} {...stylex.props(s.sidecarItem)}>
