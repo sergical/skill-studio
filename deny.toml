@@ -70,17 +70,25 @@ feature-depth = 1
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
-  # All six below are transitive-only (pulled in by tauri's dependency
-  # tree, not a direct dependency of this workspace), and each advisory's
-  # own text says no safe upgrade exists yet. Revisit by trying
-  # `cargo update` and re-running `cargo deny check` next time tauri is
-  # bumped; drop the entry once the fix lands upstream.
+  # Advisories with no available fix that the workspace accepts for now.
+  # Each is unmaintained-only (no patched release exists) and each crate is
+  # pinned transitively: the first six through tauri's dependency tree, the
+  # last through the deprecated `serde_yaml`. Revisit by trying
+  # `cargo update` and re-running `cargo deny check` after a dependency
+  # bump; drop an entry once its crate leaves the tree or a fix lands
+  # upstream.
   { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is unmaintained; transitive via tauri's macro deps, no upgrade path yet" },
   { id = "RUSTSEC-2025-0075", reason = "unic-char-range is unmaintained; transitive via tauri-utils -> urlpattern, no upgrade path yet" },
   { id = "RUSTSEC-2025-0080", reason = "unic-common is unmaintained; transitive via tauri-utils -> urlpattern, no upgrade path yet" },
   { id = "RUSTSEC-2025-0081", reason = "unic-char-property is unmaintained; transitive via tauri-utils -> urlpattern, no upgrade path yet" },
   { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version is unmaintained; transitive via tauri-utils -> urlpattern, no upgrade path yet" },
   { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident is unmaintained; transitive via tauri-utils -> urlpattern, no upgrade path yet" },
+  # unsafe-libyaml is the machine-translated libyaml that serde_yaml uses;
+  # `skill-studio-core` and the desktop crate still parse SKILL.md
+  # frontmatter with serde_yaml, which is deprecated and archived, so no
+  # in-range upgrade removes it. Moving to a maintained YAML crate is the
+  # durable fix and can then drop this entry.
+  { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml is unmaintained; transitive via the deprecated serde_yaml 0.9.34+deprecated, no upgrade path yet" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
