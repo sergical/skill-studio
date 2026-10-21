@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,14 @@ use super::skill_update_check;
 
 const GITHUB_API: &str = "https://api.github.com";
 const USER_AGENT: &str = "AgentStudio/0.1.0";
+
+/// The bound on every request this module makes to `api.github.com`. A
+/// stalled GitHub (the connection is accepted but no response ever
+/// arrives) must not hold the Add-skill lookup open with no ceiling. The
+/// timeout surfaces as a normal connection error, the same as any other
+/// failed fetch. Matches the 8 s bound `skill_install_counts` puts on its
+/// own background fetches.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 
 // ============================================================================
 // DTOs
@@ -82,14 +91,20 @@ pub trait GithubApi {
 
 /// The real `GithubApi`. `token` is a `gh auth token` value when the CLI is
 /// signed in - it raises the rate limit and reaches private repos, and is
-/// never logged or returned.
+/// never logged or returned. `timeout` bounds every request this client
+/// makes; it is a field so a test can build a short bound against a stalled
+/// server without waiting the production timeout.
 pub struct HttpGithubApi {
     token: Option<String>,
+    timeout: Duration,
 }
 
 impl HttpGithubApi {
     pub fn new() -> Self {
-        Self { token: gh_token() }
+        Self {
+            token: gh_token(),
+            timeout: REQUEST_TIMEOUT,
+        }
     }
 }
 
@@ -101,7 +116,11 @@ impl Default for HttpGithubApi {
 
 impl GithubApi for HttpGithubApi {
     async fn get_json(&self, url: &str) -> Result<String, String> {
-        let mut request = reqwest::Client::new()
+        let client = reqwest::Client::builder()
+            .timeout(self.timeout)
+            .build()
+            .map_err(|e| format!("Failed to build GitHub HTTP client: {e}"))?;
+        let mut request = client
             .get(url)
             .header(reqwest::header::USER_AGENT, USER_AGENT)
             .header(reqwest::header::ACCEPT, "application/vnd.github+json");
@@ -506,5 +525,49 @@ mod tests {
         assert_eq!(status_error(404, false), "Repo or branch not found");
         assert!(status_error(403, true).contains("rate limit"));
         assert!(status_error(500, false).contains("500"));
+    }
+
+    /// Flow: the Add-skill sheet resolves a pasted GitHub source and
+    /// `api.github.com` accepts the connection but never sends a response (a
+    /// stalled proxy or a hung GitHub). Expectation: `get_json` abandons the
+    /// request at its bound and returns a connection error, so the sheet
+    /// clears its loading state, instead of hanging with no ceiling.
+    /// A failure here means a stalled api.github.com freezes the Add-skill
+    /// lookup forever.
+    #[tokio::test]
+    async fn a_stalled_github_request_is_abandoned_at_its_timeout() {
+        use std::time::Instant;
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Accept the connection, read the request head, then hold the socket
+        // open without ever writing a response.
+        let held = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+            std::future::pending::<()>().await;
+        });
+
+        let api = HttpGithubApi {
+            token: None,
+            timeout: Duration::from_millis(250),
+        };
+        let started = Instant::now();
+        let err = api
+            .get_json(&format!("http://{addr}/repos/owner/repo"))
+            .await
+            .unwrap_err();
+
+        // The server accepted the connection and read the request, so the only
+        // way `get_json` can return is the client's own bound.
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "a stalled request must be abandoned at its bound, took {:?}",
+            started.elapsed()
+        );
+        assert!(!err.is_empty(), "a bounded fetch still reports its failure");
+        held.abort();
     }
 }
