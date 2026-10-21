@@ -191,9 +191,18 @@ fn status_error(status: reqwest::StatusCode) -> String {
     }
 }
 
+/// The bound on every Skill Store discovery request. A stalled upstream (the
+/// connection is accepted but no response ever arrives, from skills.sh itself
+/// or the Skill Studio server in front of it) must not hold the Tauri command
+/// and the store's busy state open with no ceiling. The timeout surfaces as a
+/// normal connection error, the same as any other failed fetch. Matches the
+/// 8 s bound `skill_install_counts` puts on its own background fetches.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+
 /// Builds the client and headers for `access`: `Direct` carries a bearer
 /// `Authorization` header, `Server` carries none - the server it talks to
-/// holds the real key.
+/// holds the real key. The client is bounded by `REQUEST_TIMEOUT` so a
+/// stalled upstream fails the request instead of hanging it forever.
 fn client_for(
     access: &SkillsShAccess,
 ) -> Result<(reqwest::Client, reqwest::header::HeaderMap), String> {
@@ -204,7 +213,18 @@ fn client_for(
         auth_value.set_sensitive(true);
         headers.insert(reqwest::header::AUTHORIZATION, auth_value);
     }
-    Ok((reqwest::Client::new(), headers))
+    Ok((client_with_timeout(REQUEST_TIMEOUT)?, headers))
+}
+
+/// Builds the HTTP client discovery requests use, bounded by `timeout` so a
+/// stalled upstream fails the request instead of holding it open forever.
+/// Pulled out of `client_for` so a test can build a short-bound client
+/// against a stalled server without waiting the production timeout.
+fn client_with_timeout(timeout: Duration) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))
 }
 
 /// Maps a transport-level failure to reach `access`'s base URL (the request
@@ -568,6 +588,48 @@ mod tests {
             let err = search_skills(&access, "", None).await.unwrap_err();
             assert_eq!(err, expected);
         }
+    }
+
+    /// Flow: the Skill Store's upstream - skills.sh itself, or the Skill
+    /// Studio server in front of it - accepts the TCP connection and then
+    /// never sends a response (a stalled proxy or a hung upstream).
+    /// Expectation: the request is abandoned at its bound and returns a
+    /// connection error, so the store's busy state clears, instead of the
+    /// command hanging with no ceiling.
+    /// A failure here means a stalled upstream freezes Skill Store discovery
+    /// forever.
+    #[tokio::test]
+    async fn a_stalled_upstream_request_is_abandoned_at_its_timeout() {
+        use std::time::Instant;
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Accept the connection, read the request head, then hold the socket
+        // open without ever writing a response.
+        let held = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+            std::future::pending::<()>().await;
+        });
+
+        let bound = Duration::from_millis(250);
+        let client = client_with_timeout(bound).unwrap();
+        let started = Instant::now();
+        let err = client
+            .get(format!("http://{addr}/api/v1/skills/search?q=x&limit=1"))
+            .send()
+            .await
+            .unwrap_err();
+
+        assert!(err.is_timeout(), "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "a stalled request must be abandoned at its bound, took {:?}",
+            started.elapsed()
+        );
+        held.abort();
     }
 
     /// Flow: the user opens a skill's details in the Skill Store.
