@@ -16,6 +16,13 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 
 const UPSTREAM_BASE = "https://skills.sh/api/v1";
 
+/** Sole deadline on the upstream call, in milliseconds - a stalled skills.sh
+ * connection must not hold the proxied request open. The same 8 s the desktop
+ * client already applies to a hung lookup (`skills/skill_install_counts.rs`'s
+ * `FETCH_TIMEOUT`). The abort is a thrown fetch like any other, so it takes
+ * `proxyGet`'s existing 502 `{ error }` branch. Exported so tests can read it. */
+export const UPSTREAM_TIMEOUT_MS = 8000;
+
 /** One proxied GET's outcome: the upstream's own status and JSON body when
  * it responded at all (any status, not just 2xx), or a synthetic `{ error }`
  * body when the request to skills.sh itself couldn't be made. */
@@ -33,8 +40,10 @@ export function upstreamUrl(path: string, search: string): string {
 
 /** Proxies one GET request to skills.sh with `apiKey` as a bearer token,
  * relaying the upstream's status and JSON body verbatim - a non-2xx upstream
- * response is still relayed as-is. Only a failure to reach skills.sh at all
- * (network error, DNS, etc.) maps to a `{ error }` body. */
+ * response is still relayed as-is. A failure to reach skills.sh at all (network
+ * error, DNS, etc.) maps to a `{ error }` body, and the call is bounded by
+ * [`UPSTREAM_TIMEOUT_MS`] so a stalled connection cannot hold the request open -
+ * the timeout abort is such a failure. */
 export async function proxyGet(
   apiKey: string,
   path: string,
@@ -46,6 +55,7 @@ export async function proxyGet(
   try {
     response = await fetchImpl(upstreamUrl(path, search), {
       headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
   } catch (e) {
     reportServerError?.(e, { kind: "upstream" });
