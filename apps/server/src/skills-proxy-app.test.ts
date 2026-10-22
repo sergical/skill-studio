@@ -10,6 +10,7 @@ import { HTTPException } from "hono/http-exception";
 import {
   createSkillsProxyApp,
   proxyGet,
+  UPSTREAM_TIMEOUT_MS,
   upstreamUrl,
   type RateLimiter,
   type ResponseCache,
@@ -41,8 +42,35 @@ describe("proxyGet", () => {
 
     expect(fetchMock).toHaveBeenCalledWith("https://skills.sh/api/v1/skills?page=0", {
       headers: { Authorization: "Bearer sk-test" },
+      signal: expect.any(AbortSignal),
     });
     expect(result).toEqual({ status: 200, body: { data: [] } });
+  });
+
+  it("bounds the upstream call with a timeout signal, mapping the abort to a reported 502", async () => {
+    const controller = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    // A fetch that never resolves on its own, only rejecting when its signal aborts -
+    // the shape of a skills.sh connection that accepts and then stalls.
+    const fetchMock = vi.fn(
+      (_url: string | Request | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        }),
+    );
+    const reportServerError = vi.fn();
+
+    const pending = proxyGet("sk-test", "/skills", "", fetchMock, reportServerError);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(timeoutSpy).toHaveBeenCalledWith(UPSTREAM_TIMEOUT_MS);
+
+    controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+
+    const result = await pending;
+    expect(result.status).toBe(502);
+    expect(result.body).toEqual({ error: "The operation was aborted due to timeout" });
+    expect(reportServerError).toHaveBeenCalledWith(expect.any(Error), { kind: "upstream" });
+    timeoutSpy.mockRestore();
   });
 
   it("relays a non-2xx upstream response as-is", async () => {
@@ -99,7 +127,7 @@ describe("GET /api/v1/skills/:owner/:repo/:slug", () => {
     expect(response.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledWith(
       "https://skills.sh/api/v1/skills/org%20name/repo%2Btools/skill%25%40v1",
-      { headers: { Authorization: "Bearer sk-secret" } },
+      { headers: { Authorization: "Bearer sk-secret" }, signal: expect.any(AbortSignal) },
     );
   });
 });
