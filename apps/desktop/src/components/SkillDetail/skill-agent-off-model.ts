@@ -37,7 +37,7 @@ export function turnOffActionFor(group: ScopeGroup, row: LocationRow): TurnOffAc
 
 /** The confirm text: what the backend does, in the words the user sees. */
 export function turnOffConfirmText(skillName: string, agentLabel: string): string {
-  return `${skillName} is shared by every agent. To turn it off for ${agentLabel} only, Skill Studio gives each agent its own copy, then parks the ${agentLabel} copy. You will see one copy per agent from now on.`;
+  return `${skillName} is shared by every agent. To turn it off for ${agentLabel} only, Skill Studio gives each agent its own copy, then parks the ${agentLabel} copy. You will see one copy per agent from now on. After you turn the ${agentLabel} copy back on, it is a manual copy and Skill Studio will not update it.`;
 }
 
 /** What the dialog shows for a backend check: the normal confirm, or the refusal reason. */
