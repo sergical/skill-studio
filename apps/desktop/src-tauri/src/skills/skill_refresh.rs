@@ -3535,7 +3535,10 @@ mod tests {
         use skill_studio_core::{dto::ScanRequest, ops, testing::golden::ctx};
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
-        let name = format!("park-time-{}", ulid::Ulid::new().to_string().to_lowercase());
+        let name = format!(
+            "park-time-{}",
+            ulid::Ulid::generate().to_string().to_lowercase()
+        );
         let folder = home.join(".agents/skills").join(&name);
         fs::create_dir_all(&folder).unwrap();
         fs::write(
