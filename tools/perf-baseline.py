@@ -151,10 +151,15 @@ def build_and_run(args, target, binaries):
             report["fixtures"][label] = {**data, "outcomes": outcomes, "metrics": metrics}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
-    table = ["# Performance baseline", "", f"Commit: `{report['git_sha']}`. Dirty: {report['dirty']}.", "", report["cache_state"], "", "| Fixture | Metric | N | Median | p95 | Max |", "| --- | --- | ---: | ---: | ---: | ---: |"]
+    table = ["# Performance baseline", "", f"Commit: `{report['git_sha']}`. Dirty: {report['dirty']}.", "", f"Hardware: {report['cpu']}; {report['memory_bytes'] / (1024 ** 3):g} GiB RAM.", "", report["os"].replace("\n", "; ").replace("\t", " "), "", report["cache_state"], "", "| Fixture | Metric | N | Median | p95 | Max |", "| --- | --- | ---: | ---: | ---: | ---: |"]
     for label, fixture in report["fixtures"].items():
         for metric, stats in fixture["metrics"].items():
             table.append(f"| {label} | {metric} | {stats['n']} | {stats['median']:.3f} | {stats['p95']:.3f} | {stats['max']:.3f} |")
+    table += ["", "Host load affects these timings. The recorded local baseline ran alongside other builds and tests.", ""]
+    for label, fixture in report["fixtures"].items():
+        partial = sum(row["status"] == "partial" for row in fixture["outcomes"]["mcp_scan"])
+        table.append(f"{label}: desktop returned {fixture['outcomes']['desktop_skills']} skills; MCP returned partial inventories in {partial}/{args.runs} calls. Partial timings do not measure a complete scan.")
+        table.append("")
     args.output.with_suffix(".md").write_text("\n".join(table) + "\n")
     print(f"Wrote {args.output} and {args.output.with_suffix('.md')}")
 

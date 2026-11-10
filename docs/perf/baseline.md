@@ -2,6 +2,10 @@
 
 Commit: `c205022785ad40db6530dedc99b542d16630a326`. Dirty: False.
 
+Hardware: Apple M3 Max; 36 GiB RAM.
+
+ProductName: macOS; ProductVersion: 26.7; BuildVersion: 25G229
+
 Fresh runtime and reused runtime; OS cache uncontrolled, not cold disk. MCP persistent after initialize. Empty history.
 
 | Fixture     | Metric                       |   N |       Median |           p95 |           Max |
@@ -36,3 +40,11 @@ Fresh runtime and reused runtime; OS cache uncontrolled, not cold disk. MCP pers
 | large       | cli_history_peak_rss_bytes   |  10 |  9846784.000 |   9879552.000 |   9879552.000 |
 | large       | mcp_scan_round_trip_ms       |  10 |     2911.085 |      4360.681 |      4360.681 |
 | large       | desktop_first_list_ipc_bytes |  10 | 12456104.000 |  12456104.000 |  12456104.000 |
+
+Host load affects these timings. The recorded local baseline ran alongside other builds and tests.
+
+small: desktop returned 20 skills; MCP returned partial inventories in 0/10 calls. Partial timings do not measure a complete scan.
+
+real-shaped: desktop returned 378 skills; MCP returned partial inventories in 0/10 calls. Partial timings do not measure a complete scan.
+
+large: desktop returned 5000 skills; MCP returned partial inventories in 10/10 calls. Partial timings do not measure a complete scan.
