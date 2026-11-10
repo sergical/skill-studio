@@ -65,3 +65,34 @@ cargo test -p skill-studio-core --all-features \
   --config 'profile.test.package.skill-studio-core.opt-level=1' \
   --test park_any_copy during_sync
 ```
+
+## Quarantine and destination ownership, 2026-11-10
+
+The final source check runs after a same-volume rename into `.park-quarantine-*`.
+A conflict keeps that source and the complete, flushed destination and reports
+`DriftConflict` with the retained path. Quarantine names are outside the trash
+sweeper's namespace. Only a verified source enters ordinary trash cleanup.
+Destination verification uses the hashes of the bytes read during copying.
+Failure cleanup checks device/inode identities and removes only recorded entries.
+
+Against `8fbb56e3`, these deterministic hook tests failed at their assertions:
+
+- `cross_volume_park_keeps_edit_before_quarantine_or_deletes_already_hashed_bytes`
+- `cross_volume_park_keeps_replacement_before_quarantine_or_deletes_another_inode`
+- `cross_volume_park_keeps_edit_while_hashing_later_file_or_deletes_already_hashed_source`
+- `cross_volume_park_keeps_complete_copy_on_early_drift_or_returns_io_and_deletes_backup`
+- `cross_volume_park_preserves_racing_destination_or_chmods_and_deletes_foreign_skill`
+- `cross_volume_park_refuses_cleanup_of_replaced_destination_or_deletes_foreign_tree`
+- `cross_volume_park_cleans_only_created_entries_or_removes_foreign_file`
+
+The first baseline run failed all six new tests. A separate baseline run of the
+later-file hash test returned success and deleted the edit, so its assertion failed.
+No sleeps or timing assertions are used. Each test uses a temporary home fixture.
+
+Local acceptance, also repeated after simplification:
+
+- `cargo fmt --all --check`
+- `CARGO_TARGET_DIR=/Users/sergiydybskiy/src/skill-studio/target/clippy cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test --release -p skill-studio-core --all-features --test park_any_copy --test park_install_aware --test agent_off`: 126 passed.
+
+Builds use Command Line Tools, the shared target folder, and a temporary `HOME`.

@@ -1434,6 +1434,7 @@ fn cross_volume_park_keeps_source_edit_during_sync_or_deletes_external_bytes() {
         error.code,
         skill_studio_core::error::ErrorCode::DriftConflict
     );
+    let live = error.path.unwrap();
     let copy = home.join(".agents/skills-parked/codex/foo");
     assert_eq!(
         std::fs::read_to_string(copy.join("notes.txt")).unwrap(),
@@ -1472,6 +1473,7 @@ fn cross_volume_park_keeps_replaced_source_during_sync_or_deletes_external_folde
         error.code,
         skill_studio_core::error::ErrorCode::DriftConflict
     );
+    let live = error.path.unwrap();
     let copy = home.join(".agents/skills-parked/codex/foo");
     assert_eq!(
         std::fs::read(copy.join("SKILL.md")).unwrap(),
@@ -1482,5 +1484,239 @@ fn cross_volume_park_keeps_replaced_source_during_sync_or_deletes_external_folde
         std::fs::read(live.join("SKILL.md")).unwrap()
     );
     assert!(live.join("SKILL.md").is_file());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn cross_volume_park_keeps_edit_before_quarantine_or_deletes_already_hashed_bytes() {
+    cross_volume_quarantine_race(false);
+}
+
+#[test]
+fn cross_volume_park_keeps_replacement_before_quarantine_or_deletes_another_inode() {
+    cross_volume_quarantine_race(true);
+}
+
+fn cross_volume_quarantine_race(replace: bool) {
+    let home = unique_temp_dir("park_quarantine_race");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let original = std::fs::read(live.join("SKILL.md")).unwrap();
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    let id = live_copy(&rt, "foo", &live).id;
+    fs.fail_next_rename_cross_device();
+    let source = live.clone();
+    let backup = home.join("external-backup");
+    fs.before_rename_once(live.clone(), move || {
+        if replace {
+            std::fs::rename(&source, backup)?;
+            write_skill(&source, "foo");
+        } else {
+            std::fs::write(source.join("SKILL.md"), "external edit")?;
+        }
+        Ok(())
+    });
+    let error = ops::park(&rt, &ctx(), &ParkRequest { deployment_id: id })
+        .expect_err("Park deleted the source changed after final verification");
+    assert_eq!(
+        error.code,
+        skill_studio_core::error::ErrorCode::DriftConflict
+    );
+    let retained = error.path.unwrap();
+    assert_eq!(
+        std::fs::read(retained.join("SKILL.md")).unwrap(),
+        if replace {
+            original.clone()
+        } else {
+            b"external edit".to_vec()
+        }
+    );
+    assert_eq!(
+        std::fs::read(home.join(".agents/skills-parked/codex/foo/SKILL.md")).unwrap(),
+        original
+    );
+    // A later Park must not sweep the conflict quarantine.
+    write_skill(&live, "foo");
+    let id = live_copy(&rt, "foo", &live).id;
+    let _ = ops::park(&rt, &ctx(), &ParkRequest { deployment_id: id });
+    assert!(retained.join("SKILL.md").exists());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn cross_volume_park_keeps_complete_copy_on_early_drift_or_returns_io_and_deletes_backup() {
+    let home = unique_temp_dir("park_early_drift");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let original = std::fs::read(live.join("SKILL.md")).unwrap();
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    let id = live_copy(&rt, "foo", &live).id;
+    fs.fail_next_rename_cross_device();
+    let source = live.join("SKILL.md");
+    let copy = home.join(".agents/skills-parked/codex/foo/SKILL.md");
+    let injected = fs.clone();
+    fs.before_create_once(copy.parent().unwrap().to_path_buf(), move || {
+        injected.after_read_once(source.clone(), move || {
+            std::fs::write(source, "external edit")
+        });
+        Ok(())
+    });
+    let error = ops::park(&rt, &ctx(), &ParkRequest { deployment_id: id }).unwrap_err();
+    assert_eq!(
+        error.code,
+        skill_studio_core::error::ErrorCode::DriftConflict
+    );
+    assert_eq!(std::fs::read(copy).unwrap(), original);
+    assert_eq!(
+        std::fs::read(error.path.unwrap().join("SKILL.md")).unwrap(),
+        b"external edit"
+    );
+    assert!(fs.full_sync_calls() > 0);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn cross_volume_park_preserves_racing_destination_or_chmods_and_deletes_foreign_skill() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = unique_temp_dir("park_destination_race");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    let id = live_copy(&rt, "foo", &live).id;
+    fs.fail_next_rename_cross_device();
+    let copy = home.join(".agents/skills-parked/codex/foo");
+    let foreign = copy.clone();
+    fs.before_create_once(copy.clone(), move || {
+        write_skill(&foreign, "foreign");
+        std::fs::set_permissions(foreign, std::fs::Permissions::from_mode(0o500))
+    });
+    assert!(ops::park(&rt, &ctx(), &ParkRequest { deployment_id: id }).is_err());
+    assert!(live.join("SKILL.md").exists());
+    assert!(std::fs::read_to_string(copy.join("SKILL.md"))
+        .unwrap()
+        .contains("foreign"));
+    assert_eq!(
+        std::fs::metadata(&copy).unwrap().permissions().mode() & 0o7777,
+        0o500
+    );
+    std::fs::set_permissions(copy, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn cross_volume_park_refuses_cleanup_of_replaced_destination_or_deletes_foreign_tree() {
+    let home = unique_temp_dir("park_cleanup_replacement");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    let id = live_copy(&rt, "foo", &live).id;
+    fs.fail_next_rename_cross_device();
+    let copy = home.join(".agents/skills-parked/codex/foo");
+    let foreign = copy.clone();
+    let backup = home.join("our-copy");
+    fs.after_full_sync_once(move || {
+        std::fs::rename(&foreign, backup)?;
+        write_skill(&foreign, "foreign");
+        Err(std::io::Error::other(
+            "sync failed after destination replacement",
+        ))
+    });
+    assert!(ops::park(&rt, &ctx(), &ParkRequest { deployment_id: id }).is_err());
+    assert!(live.join("SKILL.md").exists());
+    assert!(std::fs::read_to_string(copy.join("SKILL.md"))
+        .unwrap()
+        .contains("foreign"));
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn cross_volume_park_cleans_only_created_entries_or_removes_foreign_file() {
+    let home = unique_temp_dir("park_cleanup_foreign_entry");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    let id = live_copy(&rt, "foo", &live).id;
+    fs.fail_next_rename_cross_device();
+    let copy = home.join(".agents/skills-parked/codex/foo");
+    let foreign = copy.join("external.txt");
+    let injected = foreign.clone();
+    fs.after_full_sync_once(move || {
+        std::fs::write(injected, "foreign")?;
+        Err(std::io::Error::other("sync failed after foreign insertion"))
+    });
+    assert!(ops::park(&rt, &ctx(), &ParkRequest { deployment_id: id }).is_err());
+    assert_eq!(std::fs::read_to_string(foreign).unwrap(), "foreign");
+    assert!(!copy.join("SKILL.md").exists());
+    assert!(live.join("SKILL.md").exists());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn cross_volume_park_keeps_edit_while_hashing_later_file_or_deletes_already_hashed_source() {
+    let home = unique_temp_dir("park_hash_race");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    std::fs::write(live.join("notes.txt"), "last file").unwrap();
+    let original = std::fs::read(live.join("SKILL.md")).unwrap();
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    let id = live_copy(&rt, "foo", &live).id;
+    fs.fail_next_rename_cross_device();
+    let injected = fs.clone();
+    let read_path = live.join("notes.txt");
+    let source = live.clone();
+    let edit = move || {
+        std::fs::create_dir_all(&source)?;
+        std::fs::write(source.join("SKILL.md"), "external edit")
+    };
+    fs.after_full_sync_once(move || {
+        injected.after_read_once(read_path, edit);
+        Ok(())
+    });
+    let injected = fs.clone();
+    let parent = live.parent().unwrap().to_path_buf();
+    let source = live.clone();
+    fs.after_rename_once(live.clone(), move || {
+        let quarantine = std::fs::read_dir(parent)?
+            .map(Result::unwrap)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".park-quarantine-")
+            });
+        if let Some(quarantine) = quarantine {
+            injected.after_read_once(quarantine.path().join("notes.txt"), move || {
+                std::fs::create_dir_all(&source)?;
+                std::fs::write(source.join("SKILL.md"), "external edit")
+            });
+        }
+        Ok(())
+    });
+    let error = ops::park(&rt, &ctx(), &ParkRequest { deployment_id: id })
+        .expect_err("Park deleted a file edited while hashing a later file");
+    assert_eq!(
+        error.code,
+        skill_studio_core::error::ErrorCode::DriftConflict
+    );
+    assert_eq!(
+        std::fs::read(home.join(".agents/skills-parked/codex/foo/SKILL.md")).unwrap(),
+        original
+    );
+    let kept = if live.exists() {
+        live
+    } else {
+        error.path.unwrap()
+    };
+    assert_eq!(
+        std::fs::read(kept.join("SKILL.md")).unwrap(),
+        b"external edit"
+    );
     std::fs::remove_dir_all(home).unwrap();
 }
