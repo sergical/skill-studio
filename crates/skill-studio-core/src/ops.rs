@@ -5162,14 +5162,14 @@ pub fn unlist_parked_dotagents(
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
                 format!(
-                    "dotagents has installed {} again at {}; `dotagents remove` would delete it",
+                    "dotagents has installed {} again at {}; park that live copy first",
                     skill.name.0,
                     live.display()
                 ),
             )
             .at(&deployment.path));
         }
-        if let Err(e) = crate::ops_park_dotagents::run_remove(
+        if let Err(e) = crate::ops_park_dotagents::unlist(
             rt,
             ctx,
             &session.guard,
@@ -5368,10 +5368,8 @@ pub(crate) fn park_found_copy(
             write_marker(marker_dir.join(&skill.name.0), relative, true)?;
         }
         crate::park_move::move_dir(rt, session, &deployment.path, &parked_dir)?;
-        // After the move: `dotagents remove` deletes the skill's folder, and
-        // the parked copy must survive it.
         if let Some(plan) = &dotagents {
-            if let Err(e) = crate::ops_park_dotagents::run_remove(
+            if let Err(e) = crate::ops_park_dotagents::unlist(
                 rt,
                 ctx,
                 &session.guard,

@@ -1204,6 +1204,12 @@ fn cli_turn_on_keeps_concurrent_exclusion_and_refuses_lost_ignore_anchor() {
             &env,
         );
         assert_eq!(parked.json["status"], "ok", "{:?}", parked.json);
+        assert!(!home.join("remove-called").exists());
+        let config = home.join(".agents/agents.toml");
+        let concurrent = std::fs::read_to_string(&config)
+            .unwrap()
+            .replace("exclude = []", "exclude = [\"foo\"]");
+        std::fs::write(&config, concurrent).unwrap();
         if changed_anchor {
             std::fs::write(home.join(".agents/.gitignore"), "!/skills/*/\n").unwrap();
         }
@@ -1223,4 +1229,22 @@ fn cli_turn_on_keeps_concurrent_exclusion_and_refuses_lost_ignore_anchor() {
             assert!(home.join(".agents/skills/foo/SKILL.md").is_file());
         }
     }
+}
+
+#[test]
+fn cli_failed_park_restores_config_and_live_copy_when_lock_write_is_denied() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    let path = park_dotagents::setup(&home);
+    park_dotagents::make_lock_read_only(&home);
+    let before = park_dotagents::config_bytes(&home);
+    let result = run_with_env(
+        &["park", "foo", "--home", home.to_str().unwrap(), "--json"],
+        &[("HOME", home.to_str().unwrap()), ("PATH", path.as_str())],
+    );
+    park_dotagents::restore_lock_permissions(&home);
+    assert_ne!(result.status, 0, "{:?}", result.json);
+    assert_eq!(park_dotagents::config_bytes(&home), before);
+    assert!(home.join(".agents/skills/foo/SKILL.md").is_file());
+    assert!(!home.join("remove-called").exists());
 }
