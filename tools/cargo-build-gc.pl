@@ -109,7 +109,8 @@ sub workspace_args {
     my $home = exists $env->{CARGO_HOME} ? $env->{CARGO_HOME}
              : defined $env->{HOME}      ? "$env->{HOME}/.cargo"
              :                             undef;
-    $home = realpath($home) if defined $home;
+    return unless defined $home;
+    $home = realpath($home =~ m{^/} ? $home : "$cwd/$home");
     return unless defined $home;
     my @extra;
     for (my $i = 1; $i < @$args; $i++) {
