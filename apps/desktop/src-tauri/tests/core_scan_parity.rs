@@ -296,7 +296,7 @@ fn run_desktop(name: &str, home: &Path) -> BTreeMap<String, Vec<Value>> {
         std::env::set_var("HOME", home);
     }
     let (snapshot, _report) =
-        build_snapshot(home, &mut invocation_index, paths, chrono::Utc::now());
+        build_snapshot(home, &mut invocation_index, paths, chrono::Utc::now()).unwrap();
     // SAFETY: same as above - still under `home_env_lock`.
     #[allow(unsafe_code)]
     unsafe {
