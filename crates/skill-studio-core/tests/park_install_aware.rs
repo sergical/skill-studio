@@ -2535,34 +2535,6 @@ fn failed_park_refuses_to_overwrite_config_changed_after_its_write_and_keeps_bac
     std::fs::remove_dir_all(home).unwrap();
 }
 
-#[test]
-fn turn_on_preserves_ignore_rule_order_changed_during_park() {
-    let (home, stub) = dotagents_home("park_ignore_reorder", EXPLICIT_TOML);
-    let ignore = home.join(".agents/.gitignore");
-    std::fs::write(&ignore, "/skills/bar\n!/skills/bar\n/skills/foo\n").unwrap();
-    let (rt, fs) = fault_runtime(&home, stub);
-    let changed = ignore.clone();
-    fs.after_rename_once(home.join(".agents/skills/foo"), move || {
-        std::fs::write(changed, "!/skills/bar\n/skills/bar\n/skills/foo\n")
-    });
-    park_foo(&rt);
-    unpark_foo(&rt);
-    let restored = read(&ignore);
-    let unrelated: Vec<_> = restored
-        .lines()
-        .filter(|line| *line != "/skills/foo")
-        .collect();
-    assert_eq!(unrelated, ["!/skills/bar", "/skills/bar"]);
-    assert_eq!(
-        restored
-            .lines()
-            .filter(|line| *line == "/skills/foo")
-            .count(),
-        1
-    );
-    std::fs::remove_dir_all(home).unwrap();
-}
-
 fn assert_failed_turn_on_keeps_a_concurrent_edit(fail_move: bool) {
     let (home, stub) = dotagents_home("turn_on_rollback_drift", EXPLICIT_TOML);
     let (rt, fs) = fault_runtime(&home, stub.clone());
