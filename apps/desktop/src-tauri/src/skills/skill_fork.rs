@@ -1012,23 +1012,12 @@ pub fn fork_skill_with(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn fork_skill_with_storage(
-    guard: &super::write_lease::WriteLeaseGuard,
+fn refuse_independent_agent_copies(
     home: &Path,
-    app_data: &Path,
     name: &str,
-    path: &Path,
-    ledger: &dyn LedgerTool,
-    fetch: &dyn UpstreamFetch,
-    lookup: &dyn CommitLookup,
-    storage: &dyn ForkTransactionStorage,
-) -> Result<ForkRecord, String> {
-    validate_fork_path(home, name, path)?;
-
-    let agents_dir = home.join(".agents");
-    let skill_dir = agents_dir.join("skills").join(name);
-    let canonical_skill = fs::canonicalize(&skill_dir).map_err(|error| error.to_string())?;
+    skill_dir: &Path,
+) -> Result<(), String> {
+    let canonical_skill = fs::canonicalize(skill_dir).map_err(|error| error.to_string())?;
     let roots = super::agents::AgentId::all()
         .into_iter()
         .map(|agent| agent.global_skills_dir(home))
@@ -1049,6 +1038,26 @@ fn fork_skill_with_storage(
             ));
         }
     }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fork_skill_with_storage(
+    guard: &super::write_lease::WriteLeaseGuard,
+    home: &Path,
+    app_data: &Path,
+    name: &str,
+    path: &Path,
+    ledger: &dyn LedgerTool,
+    fetch: &dyn UpstreamFetch,
+    lookup: &dyn CommitLookup,
+    storage: &dyn ForkTransactionStorage,
+) -> Result<ForkRecord, String> {
+    validate_fork_path(home, name, path)?;
+
+    let agents_dir = home.join(".agents");
+    let skill_dir = agents_dir.join("skills").join(name);
+    refuse_independent_agent_copies(home, name, &skill_dir)?;
     let origin = resolve_fork_origin(&agents_dir, app_data, name, lookup)?;
 
     let recovery_dir = fork_live_recovery_dir(app_data, name);
@@ -1171,6 +1180,16 @@ fn fork_skill_with_storage(
         quarantine_dir: None,
         ..rollback_paths
     };
+    if let Err(error) = refuse_independent_agent_copies(home, name, &skill_dir) {
+        return Err(rollback_fork_before_detach(
+            storage,
+            guard,
+            error,
+            &detached_rollback_paths,
+            Some(&registry_before),
+            ForkRecoveryRollback::KeepComplete,
+        ));
+    }
     if let Err(error) = ledger.remove(origin.tool, name) {
         return Err(rollback_fork_before_detach(
             storage,
@@ -2507,6 +2526,83 @@ mod tests {
             &FakeFetch {
                 files: vec![("SKILL.md", "upstream")],
             },
+            &Lookup,
+        );
+        assert!(
+            result.is_err(),
+            "Fork must refuse before global removal loses an independent copy"
+        );
+        assert!(result.unwrap_err().contains("independent"));
+        assert_eq!(
+            fs::read_to_string(copy.join("SKILL.md")).unwrap(),
+            "independent Codex edit"
+        );
+        assert_eq!(
+            fs::read_to_string(shared.join("SKILL.md")).unwrap(),
+            "original shared content"
+        );
+        assert!(read_fork_registry(&home).unwrap().forks.is_empty());
+    }
+
+    #[test]
+    fn fork_preserves_a_copy_created_during_fetch_or_global_removal_loses_its_edits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_data = tmp.path().join("data");
+        write_file(&home.join(".agents/.skill-lock.json"), &serde_json::json!({
+            "version": 3, "skills": { "sample": {
+                "source": "owner/repo", "sourceType": "github", "sourceUrl": "https://github.com/owner/repo",
+                "skillFolderHash": "baseline", "installedAt": "2020-01-01T00:00:00Z", "updatedAt": "2020-01-01T00:00:00Z"
+            }}
+        }).to_string());
+        struct Lookup;
+        impl CommitLookup for Lookup {
+            fn latest_commit(
+                &self,
+                _: &str,
+                _: &str,
+                _: Option<&str>,
+            ) -> Result<Option<(String, String)>, String> {
+                Ok(Some(("a".repeat(40), "2020-01-01T00:00:00Z".to_string())))
+            }
+        }
+        let shared = home.join(".agents/skills/sample");
+        let copy = home.join(".codex/skills/sample");
+        write_file(&shared.join("SKILL.md"), "original shared content");
+        struct CopyDuringFetch(PathBuf);
+        impl UpstreamFetch for CopyDuringFetch {
+            fn fetch_skill_dir(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+                into: &Path,
+            ) -> Result<(), String> {
+                write_file(&self.0.join("SKILL.md"), "independent Codex edit");
+                write_file(&into.join("SKILL.md"), "upstream");
+                Ok(())
+            }
+        }
+        struct RemovingBoth(Vec<PathBuf>);
+        impl LedgerTool for RemovingBoth {
+            fn remove(&self, _: OriginTool, _: &str) -> Result<(), String> {
+                for path in &self.0 {
+                    fs::remove_dir_all(path).unwrap();
+                }
+                Ok(())
+            }
+            fn reinstall(&self, _: &ForkRecord, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let result = fork_skill_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "sample",
+            &shared,
+            &RemovingBoth(vec![shared.clone(), copy.clone()]),
+            &CopyDuringFetch(copy.clone()),
             &Lookup,
         );
         assert!(

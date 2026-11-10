@@ -546,7 +546,11 @@ function UpdatesGroup({
   start: number;
 }) {
   const addToast = useAppStore((state) => state.addToast);
-  const [editedSkills, setEditedSkills] = useState<InstalledSkill[]>([]);
+  const [pendingUpdate, setPendingUpdate] = useState<{
+    skills: InstalledSkill[];
+    edited: InstalledSkill[];
+  } | null>(null);
+  const editedSkills = pendingUpdate?.edited ?? [];
   const [isCheckingEdits, setIsCheckingEdits] = useState(false);
   const activeBatch = useActiveUpdateAll();
   const progress = activeBatch?.progress ?? null;
@@ -554,13 +558,25 @@ function UpdatesGroup({
   const isUpdatingAll = activeBatch !== null || isCheckingEdits;
 
   const runUpdateAll = async (
+    batch: InstalledSkill[],
+    approvedEdits: InstalledSkill[] = [],
     forkNames?: ReadonlySet<string>,
     skippedNames: ReadonlySet<string> = new Set(),
   ) => {
+    setIsCheckingEdits(true);
+    const currentEdits = await skillsWithLocalEdits(batch, skillLocalEdits);
+    setIsCheckingEdits(false);
+    const newlyEdited = currentEdits.filter(
+      (skill) => !approvedEdits.some((approved) => approved.name === skill.name),
+    );
+    if (newlyEdited.length > 0) {
+      setPendingUpdate({ skills: batch, edited: currentEdits });
+      return;
+    }
     // `updateAllOutdatedSkills` catches every `pullFork`/`updateAllOwners`
     // rejection itself and folds it into `failures`, so this never throws.
     const tally = await startHomeUpdateAll(
-      updates.filter((skill) => !skippedNames.has(skill.name)),
+      batch.filter((skill) => !skippedNames.has(skill.name)),
       forkNames,
     );
     if (!tally) return;
@@ -598,13 +614,13 @@ function UpdatesGroup({
     const edited = await skillsWithLocalEdits(updates, skillLocalEdits);
     setIsCheckingEdits(false);
     if (edited.length > 0) {
-      setEditedSkills(edited);
+      setPendingUpdate({ skills: updates, edited });
       return;
     }
-    await runUpdateAll();
+    await runUpdateAll(updates);
   };
 
-  const closeEditsDialog = () => setEditedSkills([]);
+  const closeEditsDialog = () => setPendingUpdate(null);
   const editedChoices = partitionForkableSkills(editedSkills);
   const forkNames = editedChoices.forkable.map((skill) => skill.name);
   const unforkableNames = editedChoices.unforkable.map((skill) => skill.name);
@@ -712,14 +728,17 @@ function UpdatesGroup({
         unforkableSkillNames={unforkableNames}
         onFork={(choice) => {
           closeEditsDialog();
+          if (!pendingUpdate) return;
           void runUpdateAll(
+            pendingUpdate.skills,
+            pendingUpdate.edited,
             new Set(forkNames),
             choice === "skip" ? new Set(unforkableNames) : undefined,
           );
         }}
         onOverwrite={() => {
           closeEditsDialog();
-          void runUpdateAll();
+          if (pendingUpdate) void runUpdateAll(pendingUpdate.skills, pendingUpdate.edited);
         }}
         onCancel={closeEditsDialog}
       />

@@ -72,11 +72,11 @@ function SelectionUpdate() {
 }
 
 const noop = () => {};
-function HomeUpdate() {
+function HomeUpdate({ skills = updates }: { skills?: typeof updates }) {
   return (
     <>
       <HomeInboxGrid
-        groups={{ ...computeHomeGroups(undefined), updates, allClear: false }}
+        groups={{ ...computeHomeGroups(undefined), updates: skills, allClear: false }}
         starts={{ broken: 0, warn: 0, upd: 0, unused: 2, rec: 2 }}
         filter={null}
         onClearFilter={noop}
@@ -223,4 +223,78 @@ it("single_copy_update_keeps_edits_on_cancel_and_requires_overwrite_or_fork_lose
   await user.click(screen.getByRole("button", { name: "Update copy" }));
   await user.click(await screen.findByRole("button", { name: "Overwrite edits" }));
   await waitFor(() => expect(writes).toEqual(["update_skill"]));
+});
+
+it("Home confirmation updates only the checked batch or a refresh overwrites an unseen edit", async () => {
+  const writes: unknown[] = [];
+  mockIPC((command, args) => {
+    if (command === "skill_local_edits")
+      return [
+        { checked: true, edited: true },
+        { checked: true, edited: true },
+      ];
+    if (command === "fork_skill") return { deployment_id: "forked-alpha" };
+    if (command === "pull_fork_upstream")
+      return {
+        from_commit: "old",
+        to_commit: "new",
+        merged: [],
+        conflicts: [],
+        added: [],
+        removed: [],
+        unchanged: 0,
+        message: null,
+      };
+    if (command === "update_all_skills") {
+      if (args && "targets" in args && Array.isArray(args.targets)) writes.push(...args.targets);
+      return { items: [], errors: {}, not_run: [] };
+    }
+    if (command === "plugin:event|listen") return 1;
+    if (command === "plugin:event|unlisten") return;
+    throw new Error(`unexpected ${command}`);
+  });
+  const user = userEvent.setup();
+  const view = render(<HomeUpdate />);
+  await user.click(screen.getByRole("button", { name: "Update all" }));
+  await screen.findByRole("alertdialog");
+  const unseen = skill({
+    ...updates[0],
+    name: "unseen",
+    update_owner_ids: ["owner:v1/global/unseen"],
+    update_owners: [
+      { owner_id: "owner:v1/global/unseen", latest_commit: "new", latest_commit_at: null },
+    ],
+  });
+  view.rerender(<HomeUpdate skills={[...updates, unseen]} />);
+  await user.click(screen.getByRole("button", { name: "Fork eligible and skip others" }));
+  await screen.findByRole("button", { name: "Update all" });
+  expect(writes).toEqual([]);
+});
+
+it("Home confirmation checks targets again or overwrites edits made while the dialog was open", async () => {
+  let checks = 0;
+  const writes: unknown[] = [];
+  mockIPC((command, args) => {
+    if (command === "skill_local_edits") {
+      checks++;
+      return [
+        { checked: true, edited: true },
+        { checked: true, edited: checks > 1 },
+      ];
+    }
+    if (command === "update_all_skills") {
+      writes.push(args);
+      return { items: [], errors: {}, not_run: [] };
+    }
+    throw new Error(`unexpected ${command}`);
+  });
+  const user = userEvent.setup();
+  render(<HomeUpdate />);
+  await user.click(screen.getByRole("button", { name: "Update all" }));
+  await screen.findByRole("alertdialog");
+  await user.click(screen.getByRole("button", { name: "Overwrite all" }));
+  await waitFor(() => expect(checks).toBe(2));
+  await screen.findByRole("alertdialog");
+  expect(screen.getByText(/beta cannot be forked here/)).toBeTruthy();
+  expect(writes).toEqual([]);
 });
