@@ -32,7 +32,7 @@ pub fn current_thread_holds_home_lease() -> bool {
 
 /// How long a rebuild waits for a write to finish before it gives up. Matches
 /// the core scan's own read budget.
-const SCAN_READ_WAIT: Duration = Duration::from_secs(60);
+const SCAN_READ_WAIT: Duration = Duration::from_mins(1);
 
 /// Holds a shared lease for a rebuild until dropped. The handle is `None`
 /// when the thread already held a lease over the home, which covers the read.
