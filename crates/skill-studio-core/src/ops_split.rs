@@ -20,7 +20,7 @@ use crate::ports::{FileKind, MutationSession, OpContext, Runtime, ScopeFs};
 
 /// The line every surface shows after a split.
 pub const SPLIT_UPDATE_NOTE: &str =
-    "Skill Studio updates unedited copies from the same source. Undo updates from Activity. Copies from another source stay unchanged and keep Update available.";
+    "npx skills update only updates the Universal copy. Skill Studio updates unedited copies from the same source. Undo updates from Activity. Copies from another source stay unchanged and keep Update available.";
 
 /// The skills folder `harness` reads in `scope`, or `None` for a harness
 /// `split` does not write to.

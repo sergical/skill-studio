@@ -1160,16 +1160,22 @@ fn add_copy_with_a_symlinked_file_copies_it_as_a_file_or_names_the_missing_path(
 #[test]
 fn split_writes_the_chosen_copy_and_drops_the_rest_or_names_the_envelope() {
     let (_home_dir, home) = parkable_live_home();
-    let split = run(&[
-        "split",
-        "--home",
-        home.to_str().unwrap(),
-        "--deployment-id",
-        &deployment_id_in_root(&home, "gamma", "universal"),
-        "--harness",
-        "codex",
-        "--json",
-    ]);
+    let split = run_with_env(
+        &[
+            "split",
+            "--home",
+            home.to_str().unwrap(),
+            "--deployment-id",
+            &deployment_id_in_root(&home, "gamma", "universal"),
+            "--harness",
+            "codex",
+            "--json",
+        ],
+        &[
+            ("HOME", home.to_str().unwrap()),
+            ("SKILL_STUDIO_TELEMETRY", "0"),
+        ],
+    );
 
     assert_eq!(split.status, 0, "{:?}", split.json);
     assert_eq!(split.json["operation"], "split", "{:?}", split.json);
@@ -1181,6 +1187,10 @@ fn split_writes_the_chosen_copy_and_drops_the_rest_or_names_the_envelope() {
     assert!(split.json["data"]["update_note"]
         .as_str()
         .is_some_and(|note| note.contains("npx skills update")));
+    assert!(split.json["data"]["update_note"]
+        .as_str()
+        .is_some_and(|note| note.contains("unedited copies from the same source")
+            && note.contains("Undo updates from Activity")));
     assert!(home.join(".codex/skills/gamma/SKILL.md").is_file());
     assert!(!home.join(".agents/skills/gamma").exists());
     assert!(home
