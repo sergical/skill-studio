@@ -16,12 +16,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 
 const UPSTREAM_BASE = "https://skills.sh/api/v1";
 
-/** Sole deadline on the upstream call, in milliseconds - a stalled skills.sh
- * connection must not hold the proxied request open. The same 8 s the desktop
- * client already applies to a hung lookup (`skills/skill_install_counts.rs`'s
- * `FETCH_TIMEOUT`). The abort is a thrown fetch like any other, so it takes
- * `proxyGet`'s existing 502 `{ error }` branch. Exported so tests can read it. */
-export const UPSTREAM_TIMEOUT_MS = 8000;
+const UPSTREAM_TIMEOUT_MS = 8000;
 
 /** One proxied GET's outcome: the upstream's own status and JSON body when
  * it responded at all (any status, not just 2xx), or a synthetic `{ error }`
@@ -50,33 +45,46 @@ export async function proxyGet(
   search: string,
   fetchImpl: typeof fetch = fetch,
   reportServerError?: (cause: unknown, context: { kind: "upstream" | "unhandled" }) => void,
+  timeoutMs = UPSTREAM_TIMEOUT_MS,
 ): Promise<ProxyResult> {
-  let response: Response;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    response = await fetchImpl(upstreamUrl(path, search), {
+    const response = await fetchImpl(upstreamUrl(path, search), {
       headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      signal: controller.signal,
     });
-  } catch (e) {
-    reportServerError?.(e, { kind: "upstream" });
+    if (response.status >= 500) {
+      reportServerError?.(new Error(`skills.sh answered ${response.status}`), { kind: "upstream" });
+    }
+    const body = await response.json().catch((error) => {
+      if (controller.signal.aborted) throw error;
+      if (response.status < 500) {
+        reportServerError?.(
+          new Error(`skills.sh answered ${response.status} with a non-JSON body`),
+          {
+            kind: "upstream",
+          },
+        );
+      }
+      return { error: "skills.sh returned a non-JSON response" };
+    });
+    return { status: response.status, body };
+  } catch (error) {
+    reportServerError?.(error, { kind: "upstream" });
     return {
       status: 502,
-      body: { error: e instanceof Error ? e.message : "Failed to reach skills.sh" },
+      body: {
+        error: controller.signal.aborted
+          ? "skills.sh request timed out"
+          : error instanceof Error
+            ? error.message
+            : "Failed to reach skills.sh",
+      },
     };
+  } finally {
+    clearTimeout(timer);
   }
-  if (response.status >= 500) {
-    reportServerError?.(new Error(`skills.sh answered ${response.status}`), { kind: "upstream" });
-  }
-  const body = await response.json().catch(() => {
-    // A 5xx was reported above; its HTML error page must not count a second time.
-    if (response.status < 500) {
-      reportServerError?.(new Error(`skills.sh answered ${response.status} with a non-JSON body`), {
-        kind: "upstream",
-      });
-    }
-    return { error: "skills.sh returned a non-JSON response" };
-  });
-  return { status: response.status, body };
 }
 
 /** True only when no decoding layer turns a path segment into traversal or a separator. */

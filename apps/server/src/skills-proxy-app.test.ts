@@ -5,12 +5,15 @@
 // entry injects - all with plain fakes, no Miniflare and no network.
 // ============================================================================
 
+import { createServer } from "node:http";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HTTPException } from "hono/http-exception";
 import {
   createSkillsProxyApp,
   proxyGet,
-  UPSTREAM_TIMEOUT_MS,
   upstreamUrl,
   type RateLimiter,
   type ResponseCache,
@@ -47,30 +50,44 @@ describe("proxyGet", () => {
     expect(result).toEqual({ status: 200, body: { data: [] } });
   });
 
-  it("bounds the upstream call with a timeout signal, mapping the abort to a reported 502", async () => {
-    const controller = new AbortController();
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
-    // A fetch that never resolves on its own, only rejecting when its signal aborts -
-    // the shape of a skills.sh connection that accepts and then stalls.
-    const fetchMock = vi.fn(
-      (_url: string | Request | URL, init?: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
-        }),
-    );
-    const reportServerError = vi.fn();
+  it.each([false, true])(
+    "a stalled upstream returns a reported timeout instead of hanging, headers sent: %s",
+    async (headersSent) => {
+      const server = createServer((_request, response) => {
+        if (headersSent) {
+          response.writeHead(200, { "Content-Type": "application/json" });
+          response.write('{"data":');
+        }
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      // SAFETY: listening on a TCP host and port always returns AddressInfo.
+      const address = server.address() as AddressInfo;
+      const localFetch: typeof fetch = (_url, init) =>
+        fetch(`http://127.0.0.1:${address.port}`, init);
+      const report = vi.fn();
+      try {
+        const result = await proxyGet("fixture", "/skills", "", localFetch, report, 50);
+        expect(result).toEqual({ status: 502, body: { error: "skills.sh request timed out" } });
+        expect(report).toHaveBeenCalledTimes(1);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+      }
+    },
+  );
 
-    const pending = proxyGet("sk-test", "/skills", "", fetchMock, reportServerError);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(timeoutSpy).toHaveBeenCalledWith(UPSTREAM_TIMEOUT_MS);
-
-    controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
-
-    const result = await pending;
-    expect(result.status).toBe(502);
-    expect(result.body).toEqual({ error: "The operation was aborted due to timeout" });
-    expect(reportServerError).toHaveBeenCalledWith(expect.any(Error), { kind: "upstream" });
-    timeoutSpy.mockRestore();
+  it("a completed upstream request clears its deadline so success leaves no timer", async () => {
+    vi.useFakeTimers();
+    try {
+      const before = vi.getTimerCount();
+      await proxyGet("fixture", "/skills", "", async () => Response.json({ data: [] }));
+      expect(vi.getTimerCount()).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("relays a non-2xx upstream response as-is", async () => {
