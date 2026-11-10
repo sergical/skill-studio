@@ -861,7 +861,12 @@ mod tests {
         let search_dirs = vec![tmp.path().to_path_buf()];
         run_controlled_command_with_search_dirs(
             "fakeclaude",
-            &["-c".to_string(), format!(": > '{}'", marker.display())],
+            &[
+                "-c".to_string(),
+                r#": > "$1""#.to_string(),
+                "sh".to_string(),
+                marker.display().to_string(),
+            ],
             None,
             &cancel,
             Duration::from_secs(30),
