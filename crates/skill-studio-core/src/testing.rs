@@ -1114,6 +1114,10 @@ impl FailingFs {
 }
 
 impl ScopeFs for FailingFs {
+    fn fsops_hard_link(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        self.inner.fsops_hard_link(from, to)
+    }
+
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
         self.inner.canonicalize(path)
     }

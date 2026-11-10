@@ -2791,3 +2791,108 @@ fn update_all_reports_skills_a_finished_dotagents_install_covered_after_cancel_o
 
     std::fs::remove_dir_all(&home).ok();
 }
+
+#[path = "support/edit_on_exchange.rs"]
+mod edit_on_exchange;
+
+fn covered_lock_restore_race(recreate: bool) {
+    let home = unique_temp_dir("update_all_dotagents_undo_one");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "v1");
+    seed_installed_skill(&home, "other", "v1");
+    seed_dotagents_files(&home, DECLARED_TOML);
+    let lock = home.join(".agents/agents.lock");
+    let lock_text = |delta: &str, other: &str| {
+        format!(
+        "version = 1\nskills = {{ delta = {{ source = \"o/r\", resolved_commit = \"{delta}\" }}, other = {{ source = \"o/r\", resolved_commit = \"{other}\" }} }}\n"
+    )
+    };
+    std::fs::write(&lock, lock_text("old-delta", "old-other")).unwrap();
+    let mut fake = FakeNpxUpdateSpawner::new(home.clone(), "v2");
+    fake.lock_after = Some("version = 1\n[skills.delta]\nsource = \"o/r\"\nresolved_commit = \"new-delta\"\n[skills.other]\nsource = \"o/r\"\nresolved_commit = \"new-other\"\n");
+    let spawner = Arc::new(fake);
+    let mut rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+    let requests = vec![
+        cli_request("delta", InstallMethod::Dotagents),
+        cli_request("other", InstallMethod::Dotagents),
+    ];
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+    let delta = home.join(UNIVERSAL_ROOT_RELATIVE).join("delta/SKILL.md");
+    let other = home.join(UNIVERSAL_ROOT_RELATIVE).join("other/SKILL.md");
+    let event_id = result.items[1].outcome.as_ref().unwrap().event_id.clone();
+    assert_ne!(event_id, result.items[0].outcome.as_ref().unwrap().event_id);
+    rt.ports.fs = Arc::new(edit_on_exchange::EditOnExchange {
+        trigger: if recreate {
+            lock.clone()
+        } else {
+            other.parent().unwrap().to_path_buf()
+        },
+        path: lock.clone(),
+        bytes: lock_text("external-delta", "new-other").into_bytes(),
+        reads: Default::default(),
+    });
+    let restored = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id,
+            force: false,
+        },
+    );
+    if recreate {
+        assert!(
+            restored.is_err(),
+            "Undo replaced a lock file another writer recreated"
+        );
+        assert_eq!(
+            std::fs::read(&lock).unwrap(),
+            lock_text("external-delta", "new-other").into_bytes()
+        );
+        let saved = std::fs::read_dir(lock.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".agents-lock-before-restore-")
+                    && entry.path().extension().is_none()
+            })
+            .unwrap();
+        assert!(std::fs::read_to_string(saved.path())
+            .unwrap()
+            .contains("new-delta"));
+        std::fs::remove_dir_all(home).unwrap();
+        return;
+    }
+    restored.unwrap();
+    let document: toml::Value = toml::from_str(&std::fs::read_to_string(&lock).unwrap()).unwrap();
+    assert_eq!(
+        document["skills"]["delta"]["resolved_commit"].as_str(),
+        Some("external-delta"),
+        "Undo erased the concurrent lock row edit"
+    );
+    assert_eq!(
+        document["skills"]["other"]["resolved_commit"].as_str(),
+        Some("old-other")
+    );
+    assert!(std::fs::read_to_string(&delta)
+        .unwrap()
+        .contains("Body at v2"));
+    assert!(std::fs::read_to_string(&other)
+        .unwrap()
+        .contains("Body at v1"));
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn covered_update_undo_preserves_another_lock_row_edited_during_folder_restore_or_loses_the_edit() {
+    covered_lock_restore_race(false);
+}
+
+#[test]
+fn covered_update_undo_refuses_a_recreated_lock_and_keeps_both_versions_or_overwrites_the_writer() {
+    covered_lock_restore_race(true);
+}

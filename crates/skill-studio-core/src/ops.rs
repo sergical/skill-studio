@@ -5039,8 +5039,16 @@ fn restore_event_body(
     }
 
     if let (Some(restore), Some(scoped)) = (&lock_restore, &lock_scoped) {
-        if let Some(bytes) = &restore.bytes {
-            if fs.write_atomic(&session.guard, scoped, bytes).is_err() {
+        if restore.needs_write {
+            let displaced = scoped
+                .as_path()
+                .with_file_name(format!(".agents-lock-before-restore-{}", restore_id.0));
+            session.store.patch_payload(
+                &session.guard,
+                &restore_id,
+                serde_json::json!({ "displaced_agents_lock": displaced }),
+            )?;
+            if crate::ops_dotagents_history::commit_restore(rt, restore, &displaced).is_err() {
                 unrestored.push(restore.path.clone());
             }
         }

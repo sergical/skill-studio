@@ -75,8 +75,9 @@ impl LockRowUndo {
 
 pub(crate) struct LockRestore {
     pub(crate) path: PathBuf,
-    pub(crate) bytes: Option<Vec<u8>>,
+    pub(crate) needs_write: bool,
     pub(crate) inverse: LockRowUndo,
+    request: LockRowUndo,
 }
 
 pub(crate) fn prepare_restore(
@@ -93,7 +94,7 @@ pub(crate) fn prepare_restore(
             "cannot read the saved agents.lock row",
         )
     })?;
-    let mut doc = document(fs, &undo.path)?;
+    let doc = document(fs, &undo.path)?;
     let live = row(&doc, &undo.skill, &undo.path)?;
     if !force && live != undo.expected {
         return Err(CoreError::new(
@@ -102,29 +103,22 @@ pub(crate) fn prepare_restore(
         )
         .at(&undo.path));
     }
-    let bytes = if live == undo.previous {
-        None
-    } else {
+    let needs_write = live != undo.previous;
+    if needs_write {
         if let Some(previous) = &undo.previous {
             let saved = previous
                 .parse::<DocumentMut>()
                 .map_err(|_| invalid_lock(&undo.path))?;
-            let item = saved
-                .get("row")
-                .ok_or_else(|| invalid_lock(&undo.path))?
-                .clone();
-            if !doc.contains_key("skills") {
-                doc["skills"] = Item::Table(Table::new());
-            }
-            doc["skills"][&undo.skill] = item;
-        } else if let Some(skills) = doc.get_mut("skills").and_then(Item::as_table_like_mut) {
-            skills.remove(&undo.skill);
+            saved.get("row").ok_or_else(|| invalid_lock(&undo.path))?;
         }
-        Some(doc.to_string().into_bytes())
-    };
+    }
     Ok(Some(LockRestore {
         path: undo.path.clone(),
-        bytes,
+        needs_write,
+        request: LockRowUndo {
+            expected: live.clone(),
+            ..undo.clone()
+        },
         inverse: LockRowUndo {
             path: undo.path,
             skill: undo.skill,
@@ -132,4 +126,61 @@ pub(crate) fn prepare_restore(
             expected: undo.previous,
         },
     }))
+}
+
+pub(crate) fn commit_restore(
+    rt: &crate::ports::Runtime,
+    restore: &LockRestore,
+    displaced: &Path,
+) -> Result<(), CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let path = crate::ports::confine_write_through(&rt.scope, fs, &restore.path)?;
+    let displaced = crate::ports::confine(&rt.scope, fs, displaced)?;
+    fs.fsops_rename(path.as_path(), displaced.as_path())
+        .map_err(|error| CoreError::io(&restore.path, error))?;
+    let result = (|| {
+        let mut doc = document(fs, displaced.as_path())?;
+        let undo = &restore.request;
+        if row(&doc, &undo.skill, &undo.path)? != undo.expected {
+            return Err(CoreError::new(
+                ErrorCode::DriftConflict,
+                "the agents.lock skill row changed during restore; both versions are retained",
+            )
+            .at(&undo.path));
+        }
+        if let Some(previous) = &undo.previous {
+            let saved = previous
+                .parse::<DocumentMut>()
+                .map_err(|_| invalid_lock(&undo.path))?;
+            if !doc.contains_key("skills") {
+                doc["skills"] = Item::Table(Table::new());
+            }
+            doc["skills"][&undo.skill] = saved
+                .get("row")
+                .ok_or_else(|| invalid_lock(&undo.path))?
+                .clone();
+        } else if let Some(skills) = doc.get_mut("skills").and_then(Item::as_table_like_mut) {
+            skills.remove(&undo.skill);
+        }
+        let staged = displaced.as_path().with_extension("restored");
+        let mode = fs
+            .symlink_metadata(displaced.as_path())
+            .map_err(|error| CoreError::io(displaced.as_path(), error))?
+            .mode
+            .unwrap_or(0o600)
+            & 0o777;
+        fs.fsops_write_new_file_with_mode(&staged, doc.to_string().as_bytes(), mode)
+            .map_err(|error| CoreError::io(&staged, error))?;
+        fs.fsops_fsync_file(&staged)
+            .map_err(|error| CoreError::io(&staged, error))?;
+        // Linking publishes only into an empty name. A writer that recreates agents.lock wins.
+        fs.fsops_hard_link(&staged, path.as_path())
+            .map_err(|error| CoreError::io(&restore.path, error))?;
+        fs.fsops_fsync_dir(path.as_path().parent().unwrap_or(path.as_path()))
+            .map_err(|error| CoreError::io(&restore.path, error))
+    })();
+    if result.is_err() {
+        let _ = fs.fsops_hard_link(displaced.as_path(), path.as_path());
+    }
+    result
 }

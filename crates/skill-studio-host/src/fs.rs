@@ -51,6 +51,10 @@ fn to_facts(meta: &fs::Metadata) -> FileFacts {
 }
 
 impl ScopeFs for RealFs {
+    fn fsops_hard_link(&self, from: &Path, to: &Path) -> io::Result<()> {
+        fs::hard_link(from, to)
+    }
+
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         fs::canonicalize(path)
     }

@@ -411,6 +411,14 @@ pub trait ScopeFs: Send + Sync {
     /// filesystem showing either the pre-swap or the post-swap pairing,
     /// never a folder that exists at neither or both names.
     fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()>;
+    /// Publishes a file only when the destination is absent. Existing bytes are never replaced.
+    fn fsops_hard_link(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        let _ = (from, to);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "exclusive file publication is unavailable",
+        ))
+    }
 }
 
 /// Finds the projects a scope covers under [`ProjectSelection::Discover`].
