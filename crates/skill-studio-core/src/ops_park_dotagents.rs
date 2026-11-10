@@ -147,7 +147,7 @@ impl DotagentsPark {
         let only_own_entries_gone = removed_only(
             before_text(&self.config).as_deref(),
             config.as_deref(),
-            |text| config_shape(text, name),
+            |text| config_shape(text, name, &self.wildcards),
         ) && removed_only(
             before_text(&self.lock).as_deref(),
             lock.as_deref(),
@@ -238,9 +238,9 @@ fn item_json(item: &toml_edit::Item) -> serde_json::Value {
 }
 
 /// `agents.toml` without `skill`'s own row, and without `skill` in any
-/// `exclude` list (an empty list reads as no list, and so does an empty
+/// recorded wildcard's `exclude` list (an empty list reads as no list, and so does an empty
 /// `skills` array: dotagents drops the key once the last row is gone).
-fn config_shape(text: &str, skill: &str) -> Option<serde_json::Value> {
+fn config_shape(text: &str, skill: &str, wildcards: &[WildcardRef]) -> Option<serde_json::Value> {
     let doc = parse(Path::new("agents.toml"), text).ok()?;
     let mut shape = item_json(doc.as_item());
     if let Some(skills) = shape.get_mut("skills").and_then(|v| v.as_array_mut()) {
@@ -249,6 +249,17 @@ fn config_shape(text: &str, skill: &str) -> Option<serde_json::Value> {
             let Some(row) = row.as_object_mut() else {
                 continue;
             };
+            let recorded = row.get("name").and_then(|v| v.as_str()) == Some("*")
+                && wildcards.iter().any(|w| {
+                    row.get("source")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|source| sources_match(source, &w.source))
+                        && comparable_path(row.get("path").and_then(|v| v.as_str()))
+                            == comparable_path(w.path.as_deref())
+                });
+            if !recorded {
+                continue;
+            }
             if let Some(exclude) = row.get_mut("exclude").and_then(|v| v.as_array_mut()) {
                 exclude.retain(|item| item.as_str() != Some(skill));
             }
@@ -1351,7 +1362,13 @@ fn turn_on_files(
     let after = recorded.after.as_ref();
     // Worked out before any file is written, so a merge that cannot be done
     // fails with agents.toml and agents.lock untouched.
-    let ignore_merge = planned_ignore_merge(fs, recorded, originals, skill)?;
+    let ignore_input = recorded
+        .gitignore
+        .as_ref()
+        .map(|path| read_text(fs, path))
+        .transpose()?
+        .flatten();
+    let ignore_merge = planned_ignore_merge(recorded, originals, skill, ignore_input.clone())?;
     if let Some(current) = read_text(fs, &recorded.config)? {
         let wholesale = untouched_original(
             Some(&current),
@@ -1434,12 +1451,19 @@ fn turn_on_files(
         );
         if let Some(original) = wholesale {
             write_back(rt, guard, gitignore, current, original, changed)?;
-        } else if let Some((text, before)) = ignore_merge {
-            write_text(rt, guard, gitignore, &text)?;
-            changed.push(FileSnapshot {
-                path: gitignore.clone(),
-                text: Some(before),
-            });
+        } else {
+            let merge = if current == ignore_input {
+                ignore_merge
+            } else {
+                planned_ignore_merge(recorded, originals, skill, current)?
+            };
+            if let Some((text, before)) = merge {
+                write_text(rt, guard, gitignore, &text)?;
+                changed.push(FileSnapshot {
+                    path: gitignore.clone(),
+                    text: Some(before),
+                });
+            }
         }
     }
     Ok(())
@@ -1449,15 +1473,14 @@ fn turn_on_files(
 /// the skill's lines back into a file that changed since the park. `None`
 /// when the file goes back wholesale or already has every line.
 fn planned_ignore_merge(
-    fs: &dyn ScopeFs,
     recorded: &RecordedDotagents,
     originals: &[FileSnapshot],
     skill: &SkillName,
+    current: Option<String>,
 ) -> Result<Option<(String, String)>, CoreError> {
     let Some(gitignore) = &recorded.gitignore else {
         return Ok(None);
     };
-    let current = read_text(fs, gitignore)?;
     let wholesale = untouched_original(
         current.as_deref(),
         recorded.after.as_ref().map(|a| a.gitignore.as_str()),
@@ -1499,7 +1522,7 @@ const IGNORE_ALIGN_CELL_CAP: usize = 4_000_000;
 /// earlier backup line, else right before the one aligned to its nearest
 /// later line, else at the end. Git takes the last rule that matches, so a
 /// line put after a negation would change what is ignored. `Err` carries the
-/// missing lines when the alignment would be too big to compute.
+/// missing lines when alignment is too big or adjacent rule anchors have changed.
 fn with_lines_restored(
     original: &str,
     current: &str,
@@ -1543,6 +1566,29 @@ fn with_lines_restored(
             (at, order, *line)
         })
         .collect();
+    let is_rule = |line: &&str| {
+        let line = line.trim_end();
+        !line.is_empty() && !line.starts_with('#')
+    };
+    for ((k, _), (at, _, _)) in missing.iter().zip(&inserts) {
+        let before = stay[..*k].iter().rposition(is_rule);
+        let after = stay[*k..].iter().position(is_rule).map(|i| i + k);
+        let current_before = kept[..*at].iter().rposition(is_rule);
+        let current_after = kept[*at..].iter().position(is_rule).map(|i| i + at);
+        let before_anchor = before.and_then(|i| align[i]);
+        let after_anchor = after.and_then(|i| align[i]);
+        if ((before.is_some() || after.is_some())
+            && before_anchor.is_none()
+            && after_anchor.is_none())
+            || before_anchor != current_before
+            || after_anchor != current_after
+        {
+            return Err(missing
+                .iter()
+                .map(|(_, line)| (*line).to_string())
+                .collect());
+        }
+    }
     inserts.sort_unstable();
     let mut out: Vec<&str> = Vec::with_capacity(kept.len() + inserts.len());
     let mut pending = inserts.into_iter().peekable();
@@ -1642,6 +1688,22 @@ pub(crate) fn backed_up_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turn_on_refuses_comment_only_anchor_or_overrides_external_negation() {
+        assert!(with_lines_restored(
+            "unrelated\n# header\n/skills/foo\n!/skills/foo/\n",
+            "unrelated\n!/skills/*/\n# header\n",
+            &["/skills/foo".to_string()],
+        )
+        .is_err());
+        assert!(with_lines_restored(
+            "# header\n/skills/foo\n!/skills/foo/\n",
+            "!/skills/*/\n# header\n",
+            &["/skills/foo".to_string()],
+        )
+        .is_err());
+    }
 
     fn restore_line(original: &str, current: &str, line: &str) -> String {
         with_lines_restored(original, current, &[line.to_string()])
