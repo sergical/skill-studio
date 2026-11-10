@@ -4346,6 +4346,28 @@ fn restore_chain_ends_at_harness_event(
     Ok(false)
 }
 
+fn restore_chain_is_split_update(
+    store: &dyn crate::ports::HistoryStore,
+    start: &crate::events::EventRecord,
+) -> Result<bool, CoreError> {
+    let mut current = start.clone();
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(current.id.clone()) {
+        if current.kind() != Some(crate::events::EventKind::Restore) {
+            return Ok(current.kind() == Some(crate::events::EventKind::Update)
+                && current.payload["split_copies"] == true);
+        }
+        let Some(id) = current.payload["target_event"].as_str() else {
+            break;
+        };
+        let Some(event) = store.get(&crate::identity::EventId(id.to_string()))? else {
+            break;
+        };
+        current = event;
+    }
+    Ok(false)
+}
+
 fn restore_event_body(
     rt: &Runtime,
     ctx: &OpContext,
@@ -4849,7 +4871,12 @@ fn restore_event_body(
         attempt_inverse["lock_row_undo"]["expected"] =
             displaced_inverse["lock_row_undo"]["previous"].clone();
     }
-    if target.kind() == Some(crate::events::EventKind::Update) {
+    let split_update = restore_chain_is_split_update(&*session.store, &target)?;
+    if target.kind() == Some(crate::events::EventKind::Update) || split_update {
+        let lock = &mut restore_inverse["lock_row_undo"];
+        if split_update && !lock.is_null() && lock["previous"].is_null() {
+            lock["previous"] = inverse["lock_row_undo"]["expected"].clone();
+        }
         if let Some(edits) = restore_inverse["registry_undo"].as_array_mut() {
             for edit in edits {
                 if edit["key"] != "copies" {
@@ -4863,7 +4890,11 @@ fn restore_event_body(
                                 && row["id"] == edit["id"]
                         })
                     }) {
-                        edit["previous"] = saved["previous"].clone();
+                        edit["previous"] = saved
+                            .get("expected")
+                            .filter(|row| row.is_object())
+                            .unwrap_or(&saved["previous"])
+                            .clone();
                     }
                 }
                 if let Some(folder) = edit["previous"]["path"].as_str().map(PathBuf::from) {

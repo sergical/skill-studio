@@ -1214,3 +1214,90 @@ fn split_update_force_undo_rejects_non_object_copies_or_reports_success_without_
 fn split_update_undo_force_redo_rejects_non_object_copies_or_reports_success_without_rows() {
     force_restore_rejects_non_object_copies(true);
 }
+
+fn metadata_loss_restore_chain_keeps_next_update(store: &str) {
+    for first_force in [0, 1] {
+        let home = split_home("metadata_loss_restore_chain");
+        let rt = runtime_with(&home, Arc::new(RealFs::new()));
+        let registry = home.join(".agents/skill-studio.json");
+        let read_registry = || -> serde_json::Value {
+            serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap()
+        };
+        let before = read_registry();
+        let lock_before = read_lock(&home)["skills"]["gamma"].clone();
+        ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+        let updated = read_registry();
+        let lock_updated = read_lock(&home)["skills"]["gamma"].clone();
+        let mut event_id = latest_update(&rt);
+        for step in 0..6 {
+            let force = step % 2 == first_force;
+            if force {
+                match store {
+                    "registry" => std::fs::remove_file(&registry).unwrap(),
+                    "copies" => {
+                        let mut doc = read_registry();
+                        doc.as_object_mut().unwrap().remove("copies");
+                        std::fs::write(&registry, doc.to_string()).unwrap();
+                    }
+                    "lock" => std::fs::remove_file(home.join(".agents/.skill-lock.json")).unwrap(),
+                    "lock-row" => {
+                        let mut doc = read_lock(&home);
+                        doc["skills"].as_object_mut().unwrap().remove("gamma");
+                        std::fs::write(home.join(".agents/.skill-lock.json"), doc.to_string())
+                            .unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            event_id = ops::restore_event(
+                &rt,
+                &ctx(),
+                &skill_studio_core::dto::RestoreRequest { event_id, force },
+            )
+            .unwrap()
+            .restore_event_id;
+            let (expected_registry, expected_lock, revision) = if step % 2 == 0 {
+                (&before, &lock_before, "v1")
+            } else {
+                (&updated, &lock_updated, "v2")
+            };
+            assert_eq!(
+                read_registry()["copies"],
+                expected_registry["copies"],
+                "{store}, phase {first_force}, step {step}"
+            );
+            assert_eq!(
+                &read_lock(&home)["skills"]["gamma"],
+                expected_lock,
+                "{store}, phase {first_force}, step {step}"
+            );
+            for dir in HARNESS_DIRS {
+                assert_eq!(revision_of(&copy_of(&home, dir)), Some(revision));
+            }
+        }
+        let next = ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+        assert!(next.refused.is_empty(), "{store}: {next:?}");
+        assert_eq!(next.updated.len(), 3, "{store}: {next:?}");
+        std::fs::remove_dir_all(home).unwrap();
+    }
+}
+
+#[test]
+fn split_update_registry_loss_alternating_force_restores_keep_copies_or_next_update_loses_rows() {
+    metadata_loss_restore_chain_keeps_next_update("registry");
+}
+
+#[test]
+fn split_update_copies_loss_alternating_force_restores_keep_hashes_or_next_update_refuses() {
+    metadata_loss_restore_chain_keeps_next_update("copies");
+}
+
+#[test]
+fn split_update_lock_loss_alternating_force_restores_keep_source_or_next_update_refuses() {
+    metadata_loss_restore_chain_keeps_next_update("lock");
+}
+
+#[test]
+fn split_update_lock_row_loss_alternating_force_restores_keep_source_or_next_update_refuses() {
+    metadata_loss_restore_chain_keeps_next_update("lock-row");
+}
