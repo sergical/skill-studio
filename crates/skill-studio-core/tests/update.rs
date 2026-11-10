@@ -102,8 +102,7 @@ impl ProcessSpawner for FakeNpxUpdateSpawner {
             spec.env
                 .iter()
                 .find(|(key, _)| key == "HOME")
-                .map(|(_, value)| PathBuf::from(value))
-                .unwrap_or_else(|| self.home.clone())
+                .map_or_else(|| self.home.clone(), |(_, value)| PathBuf::from(value))
         } else {
             spec.cwd.clone().unwrap_or_else(|| self.home.clone())
         };
@@ -1357,7 +1356,7 @@ fn undo_of_a_copy_update_refuses_when_its_registry_row_changed_since_or_names_th
 /// crash between an op's write and its inverse patch leaves behind.
 struct PatchlessHistory(SqliteHistoryOpener);
 
-struct PatchlessStore(Box<dyn skill_studio_core::ports::HistoryStore>);
+struct PatchlessStore(Box<dyn skill_studio_core::ports::HistoryStore>, bool);
 
 impl skill_studio_core::ports::HistoryOpener for PatchlessHistory {
     fn open(
@@ -1367,7 +1366,8 @@ impl skill_studio_core::ports::HistoryOpener for PatchlessHistory {
     ) -> Result<Option<Box<dyn skill_studio_core::ports::HistoryStore>>, skill_studio_core::CoreError>
     {
         Ok(self.0.open(scope, access)?.map(|store| {
-            Box::new(PatchlessStore(store)) as Box<dyn skill_studio_core::ports::HistoryStore>
+            Box::new(PatchlessStore(store, false))
+                as Box<dyn skill_studio_core::ports::HistoryStore>
         }))
     }
 }
@@ -1400,6 +1400,10 @@ impl skill_studio_core::ports::HistoryStore for PatchlessStore {
         original: &std::path::Path,
         displaced: &std::path::Path,
     ) -> Result<(), skill_studio_core::CoreError> {
+        if self.1 {
+            self.1 = false;
+            panic!("crash before displaced tree retention");
+        }
         self.0.retain_displaced(guard, id, original, displaced)
     }
     fn record(
@@ -2925,5 +2929,163 @@ fn new_agent_undo(edit: bool) {
         result.unwrap();
         assert!(!agent.exists(), "Undo left an updated agent copy");
     }
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn skills_sh_update_conflict_restores_all_live_trees_or_leaves_failed_update_published() {
+    let home = unique_temp_dir("update_entry_conflict");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "before");
+    let shared = dir_of(&home, "delta").join("SKILL.md");
+    let agent = home.join(".codex/skills/delta/SKILL.md");
+    std::fs::create_dir_all(agent.parent().unwrap()).unwrap();
+    std::fs::write(&agent, "agent before").unwrap();
+    let before = std::fs::read(&shared).unwrap();
+    let ledger = home.join(".agents/.skill-lock.json");
+    let original = r#"{"skills":{"delta":{"hash":"old"}}}"#;
+    let concurrent = r#"{"skills":{"delta":{"hash":"external"}}}"#;
+    std::fs::write(&ledger, original).unwrap();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(Arc::new(WritesDuringUpdate {
+            inner: FakeNpxUpdateSpawner::new(home.clone(), "v2"),
+            writes: vec![(ledger.clone(), concurrent.into())],
+            ledger_after: Some(r#"{"skills":{"delta":{"hash":"new"}}}"#.into()),
+        })),
+    );
+    let error =
+        ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh)).unwrap_err();
+    assert_eq!(error.code, ErrorCode::DriftConflict);
+    assert_eq!(std::fs::read(&shared).unwrap(), before);
+    assert_eq!(std::fs::read_to_string(&agent).unwrap(), "agent before");
+    assert_eq!(std::fs::read_to_string(&ledger).unwrap(), concurrent);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+struct CrashRetentionHistory(SqliteHistoryOpener);
+impl skill_studio_core::ports::HistoryOpener for CrashRetentionHistory {
+    fn open(
+        &self,
+        scope: &skill_studio_core::scope::NormalizedScope,
+        access: skill_studio_core::ports::HistoryAccess,
+    ) -> Result<Option<Box<dyn skill_studio_core::ports::HistoryStore>>, skill_studio_core::CoreError>
+    {
+        Ok(self.0.open(scope, access)?.map(|store| {
+            Box::new(PatchlessStore(store, true)) as Box<dyn skill_studio_core::ports::HistoryStore>
+        }))
+    }
+}
+
+#[test]
+fn skills_sh_update_restart_then_undo_restores_late_edit_or_uses_pre_cli_snapshot() {
+    let home = unique_temp_dir("update_retention_crash");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "before");
+    let shared = dir_of(&home, "delta").join("SKILL.md");
+    let db = home.join(".agents/skill-studio/events.db");
+    let rt = runtime_with_history(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(Arc::new(WritesDuringUpdate {
+            inner: FakeNpxUpdateSpawner::new(home.clone(), "v2"),
+            writes: vec![(shared.clone(), "late edit".into())],
+            ledger_after: None,
+        })),
+        Arc::new(CrashRetentionHistory(SqliteHistoryOpener::new(db.clone()))),
+    );
+    let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh))
+    }));
+    assert!(crash.is_err());
+    let ids = rt.ports.ids.clone();
+    drop(rt);
+    let mut rt = runtime_with_history(
+        &home,
+        Arc::new(RealFs::new()),
+        None,
+        Arc::new(SqliteHistoryOpener::new(db)),
+    );
+    rt.ports.ids = ids;
+    let session = MutationSession::begin(&rt, &ctx()).unwrap();
+    session.finish(&rt, &ctx());
+    let events = ops::list_events(&rt, &ctx(), &ListEventsRequest::default()).unwrap();
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: events[0].id.clone(),
+            force: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(shared).unwrap(), "late edit");
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn ledger_restart_after_write_keeps_unrelated_addition_or_deletes_concurrent_install() {
+    ledger_crash_recovery(true, false);
+}
+
+#[test]
+fn ledger_restart_before_write_keeps_unrelated_addition_or_deletes_concurrent_install() {
+    ledger_crash_recovery(false, false);
+}
+
+#[test]
+fn ledger_restart_reports_selected_entry_drift_or_overwrites_external_change() {
+    ledger_crash_recovery(true, true);
+}
+
+fn ledger_crash_recovery(write: bool, drift: bool) {
+    use skill_studio_core::ports::Journal;
+    let home = unique_temp_dir("ledger_entry_recovery");
+    std::fs::create_dir_all(home.join(".agents")).unwrap();
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, fs.clone(), None);
+    let session = MutationSession::begin(&rt, &ctx()).unwrap();
+    let path = home.join(".agents/.skill-lock.json");
+    let second = home.join("skills-lock.json");
+    let old = br#"{"skills":{"delta":{"hash":"old"}}}"#;
+    let new = br#"{"skills":{"delta":{"hash":"new"}}}"#;
+    std::fs::write(&path, old).unwrap();
+    std::fs::write(&second, old).unwrap();
+    fs.fail_write_atomic_after(u32::from(write));
+    let changes =
+        [path.clone(), second].map(|path| skill_studio_core::ledger_publication::LedgerChange {
+            path,
+            before: Some(old.to_vec()),
+            after: Some(new.to_vec()),
+        });
+    assert!(
+        skill_studio_core::ledger_publication::publish(&rt, &session.guard, "delta", &changes)
+            .is_err()
+    );
+    let mut live: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    live["skills"]["other"] = serde_json::json!({"hash":"external"});
+    if drift {
+        live["skills"]["delta"]["hash"] = "third".into();
+    }
+    std::fs::write(&path, serde_json::to_vec(&live).unwrap()).unwrap();
+    let journal = skill_studio_core::journal::FsJournal::new(
+        home.join(".agents/skill-studio-journal"),
+        rt.ports.fs.clone(),
+    );
+    let report =
+        skill_studio_core::journal::reconcile(&journal, &session.guard, rt.ports.fs.as_ref())
+            .unwrap();
+    let recovered: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(recovered["skills"]["other"]["hash"], "external");
+    assert_eq!(
+        recovered["skills"]["delta"]["hash"],
+        if drift { "third" } else { "old" }
+    );
+    assert_eq!(report.interrupted.len(), usize::from(drift));
+    assert!(journal.pending().unwrap().is_empty());
+    session.finish(&rt, &ctx());
     std::fs::remove_dir_all(home).unwrap();
 }

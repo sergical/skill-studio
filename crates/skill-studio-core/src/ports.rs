@@ -749,6 +749,22 @@ impl PlanStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "primitive", rename_all = "snake_case")]
 pub enum PlanStep {
+    /// Associates all tree swaps in this transaction with their Undo event.
+    RetainEvent {
+        /// Event whose backups must retain displaced trees before reversal.
+        event_id: crate::identity::EventId,
+    },
+    /// Entry-level compare-and-replace for a shared ledger.
+    LedgerEntry {
+        /// Resolved ledger path.
+        path: PathBuf,
+        /// Selected skill.
+        name: String,
+        /// Entry before publication, encoded as a minimal ledger document.
+        before: Vec<u8>,
+        /// Entry after publication, encoded as a minimal ledger document.
+        after: Vec<u8>,
+    },
     /// [`crate::fsops::stage`] built a folder under a temp name that
     /// nothing else can see yet. Reverse: remove it - nothing else has
     /// touched it.
@@ -809,6 +825,8 @@ impl PlanStep {
     /// The `fsops` primitive's name, for logs and test assertions.
     pub fn primitive_name(&self) -> &'static str {
         match self {
+            PlanStep::RetainEvent { .. } => "retain_event",
+            PlanStep::LedgerEntry { .. } => "ledger_entry",
             PlanStep::Stage { .. } => "stage",
             PlanStep::Swap { .. } => "swap",
             PlanStep::Link { .. } => "link",
@@ -1448,8 +1466,12 @@ impl MutationSession {
         let install_journal_root = crate::ops_install::journal_root(&rt.scope.home.lexical);
         let install_journal =
             crate::journal::FsJournal::new(install_journal_root, rt.ports.fs.clone());
-        let reconciliation =
-            crate::journal::reconcile(&install_journal, &guard, rt.ports.fs.as_ref())?;
+        let reconciliation = crate::journal::reconcile_with_history(
+            &install_journal,
+            &guard,
+            rt.ports.fs.as_ref(),
+            store.as_mut(),
+        )?;
         let repaired = !recovery.interrupted.is_empty()
             || !recovery.completed.is_empty()
             || !reconciliation.reversed.is_empty()

@@ -31,14 +31,17 @@ fn text(bytes: Option<&[u8]>) -> Result<&str, CoreError> {
     std::str::from_utf8(bytes.unwrap_or_default()).map_err(invalid)
 }
 
-fn merge(
+pub(crate) fn merge(
     name: &str,
     file: &str,
     before: Option<&[u8]>,
     after: Option<&[u8]>,
     live: Option<&[u8]>,
 ) -> Result<Vec<u8>, CoreError> {
-    if file.ends_with(".json") {
+    if std::path::Path::new(file)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+    {
         let parse = |bytes: Option<&[u8]>| -> Result<serde_json::Value, CoreError> {
             let document = bytes.map_or_else(
                 || Ok(serde_json::json!({"skills": {}})),
@@ -97,6 +100,9 @@ fn merge(
             return Err(conflict());
         }
         let replacement = rows(&after);
+        if live.get("skills").is_none() && !replacement.is_empty() {
+            live["skills"] = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
+        }
         if let Some(rows) = live
             .get_mut("skills")
             .and_then(toml_edit::Item::as_array_of_tables_mut)
@@ -115,6 +121,9 @@ fn merge(
         };
         if entry(&live)? != entry(&before)? {
             return Err(conflict());
+        }
+        if live.get("skills").is_none() && after.get("skills").and_then(|t| t.get(name)).is_some() {
+            live["skills"] = toml_edit::Item::Table(toml_edit::Table::new());
         }
         if let Some(skills) = live
             .get_mut("skills")
@@ -190,11 +199,70 @@ pub fn publish(
         root,
         Vec::new(),
     )?;
+    publish_writes(rt, guard, name, &plan, writes)?;
+    plan.finish(PlanStatus::Done)
+}
+
+/// Publishes ledgers as part of the caller's tree transaction.
+pub(crate) fn publish_in_plan(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    name: &str,
+    changes: &[LedgerChange],
+    plan: &PlanWriter<'_>,
+) -> Result<(), CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let mut writes = Vec::new();
+    for change in changes {
+        if change.before == change.after {
+            continue;
+        }
+        let path = crate::ports::resolve_config_link(fs, &change.path)?;
+        let previous = match fs.read_capped(&path, 8 * 1024 * 1024) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(CoreError::io(&path, e)),
+        };
+        let file = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        let bytes = merge(
+            name,
+            file,
+            change.before.as_deref(),
+            change.after.as_deref(),
+            previous.as_deref(),
+        )?;
+        writes.push((path, previous, bytes));
+    }
+    publish_writes(rt, guard, name, plan, writes)
+}
+
+type LedgerWrite = (PathBuf, Option<Vec<u8>>, Vec<u8>);
+
+fn publish_writes(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    name: &str,
+    plan: &PlanWriter<'_>,
+    writes: Vec<LedgerWrite>,
+) -> Result<(), CoreError> {
+    let fs = rt.ports.fs.as_ref();
     for (path, previous, bytes) in writes {
-        plan.record_write_file(&path, previous.as_deref())?;
+        let file = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        plan.record_step(crate::ports::PlanStep::LedgerEntry {
+            path: path.clone(),
+            name: name.into(),
+            before: merge(name, file, None, previous.as_deref(), None)?,
+            after: merge(name, file, None, Some(&bytes), None)?,
+        })?;
         let scoped = crate::ports::confine(&rt.scope, fs, &path)?;
         fs.write_atomic(guard, &scoped, &bytes)
             .map_err(|e| CoreError::io(&path, e))?;
     }
-    plan.finish(PlanStatus::Done)
+    Ok(())
 }

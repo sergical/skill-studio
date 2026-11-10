@@ -313,6 +313,11 @@ impl<'a> PlanWriter<'a> {
         &self.id
     }
 
+    /// Durably appends a transaction step before its mutation.
+    pub fn record_step(&self, step: PlanStep) -> Result<(), CoreError> {
+        self.journal.record_step(self.guard, &self.id, step)
+    }
+
     /// Records that [`crate::fsops::stage`] is about to build `staged` (its
     /// temp path). Called before the folder is created, so a crash before
     /// it exists leaves nothing for reversal's `remove_tree` to remove -
@@ -472,6 +477,24 @@ pub fn reconcile(
     guard: &ExclusiveGuard,
     fs: &dyn ScopeFs,
 ) -> Result<Reconciliation, CoreError> {
+    if journal.pending()?.iter().any(|plan| {
+        plan.steps
+            .iter()
+            .any(|step| matches!(step, PlanStep::RetainEvent { .. }))
+    }) {
+        return Err(CoreError::new(
+            ErrorCode::Unsupported,
+            "tree transaction recovery requires its history store",
+        ));
+    }
+    reconcile_retained(journal, guard, fs)
+}
+
+fn reconcile_retained(
+    journal: &dyn Journal,
+    guard: &ExclusiveGuard,
+    fs: &dyn ScopeFs,
+) -> Result<Reconciliation, CoreError> {
     let mut report = Reconciliation::default();
     for plan in journal.pending()?.into_iter().rev() {
         if plan.steps.is_empty() {
@@ -496,11 +519,58 @@ pub fn reconcile(
     Ok(report)
 }
 
+/// Retains displaced trees for Undo before reversing unfinished transactions.
+pub fn reconcile_with_history(
+    journal: &dyn Journal,
+    guard: &ExclusiveGuard,
+    fs: &dyn ScopeFs,
+    store: &mut dyn crate::ports::HistoryStore,
+) -> Result<Reconciliation, CoreError> {
+    for plan in journal.pending()?.into_iter().rev() {
+        let event = plan.steps.iter().find_map(|step| match step {
+            PlanStep::RetainEvent { event_id } => Some(event_id),
+            _ => None,
+        });
+        if let Some(event) = event {
+            for step in &plan.steps {
+                if let PlanStep::Swap {
+                    path,
+                    staged,
+                    staged_binding,
+                    quarantined: Some(displaced),
+                } = step
+                {
+                    let root = Root::open(fs, plan.root.clone())
+                        .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()))?;
+                    for target in step_paths(step) {
+                        confine_to_root(&root, &plan.root, target)
+                            .map_err(|e| CoreError::io(target, e))?;
+                    }
+                    let landed = fs
+                        .fsops_device_inode(path)
+                        .map_err(|e| CoreError::io(path, e))?
+                        == *staged_binding;
+                    let source = if !landed {
+                        path
+                    } else if fs.symlink_metadata(displaced).is_ok() {
+                        displaced
+                    } else {
+                        staged
+                    };
+                    store.retain_displaced(guard, event, path, source)?;
+                }
+            }
+        }
+    }
+    reconcile_retained(journal, guard, fs)
+}
+
 /// Every path inside `step` that reversal would write to - what
 /// [`reverse_steps`] confines under the plan's root before touching
 /// anything for that step.
 fn step_paths(step: &PlanStep) -> Vec<&Path> {
     match step {
+        PlanStep::RetainEvent { .. } => vec![],
         PlanStep::Stage { staged } => vec![staged],
         PlanStep::Swap {
             path,
@@ -514,7 +584,9 @@ fn step_paths(step: &PlanStep) -> Vec<&Path> {
             }
             paths
         }
-        PlanStep::Link { path, .. } | PlanStep::WriteFile { path, .. } => vec![path],
+        PlanStep::LedgerEntry { path, .. }
+        | PlanStep::Link { path, .. }
+        | PlanStep::WriteFile { path, .. } => vec![path],
     }
 }
 
@@ -599,6 +671,51 @@ fn reverse_steps(
             confine_to_root(&root, &plan.root, path)?;
         }
         match step {
+            PlanStep::RetainEvent { .. } => {}
+            PlanStep::LedgerEntry {
+                path,
+                name,
+                before,
+                after,
+            } => {
+                let live = match fs.read_capped(path, MAX_JOURNAL_JSON_BYTES) {
+                    Ok(bytes) => Some(bytes),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(e),
+                };
+                let file = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default();
+                // A recorded forward write may not have run, or reversal may already have run.
+                if crate::ledger_publication::merge(
+                    name,
+                    file,
+                    Some(before),
+                    Some(before),
+                    live.as_deref(),
+                )
+                .is_ok()
+                {
+                    continue;
+                }
+                let bytes = crate::ledger_publication::merge(
+                    name,
+                    file,
+                    Some(after),
+                    Some(before),
+                    live.as_deref(),
+                )
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+                let temp = path.with_extension("ledger-recovery.tmp");
+                if fs.symlink_metadata(&temp).is_ok() {
+                    fs.fsops_remove_file(&temp)?;
+                }
+                fs.fsops_write_new_file(&temp, &bytes)?;
+                fs.fsops_fsync_file(&temp)?;
+                fs.fsops_rename(&temp, path)?;
+                fs.fsops_fsync_dir(path.parent().unwrap_or(Path::new("/")))?;
+            }
             PlanStep::Stage { staged } => remove_tree(fs, staged)?,
             PlanStep::Swap {
                 path,

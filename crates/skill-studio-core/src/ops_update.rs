@@ -484,54 +484,111 @@ fn update_skills_sh_staged(
         Path::new(""),
         &mut files,
     )?;
-    // Each swap renames the live tree into quarantine, capturing late external writes too.
-    let displaced = update_copy(
-        rt,
-        &session.guard,
-        destination.parent().ok_or_else(|| {
-            CoreError::new(ErrorCode::InvalidRequest, "destination has no parent")
-        })?,
-        &req.skill,
-        &files,
-    )?;
-    if let Some(displaced) = displaced {
-        session
-            .store
-            .retain_displaced(&session.guard, id, destination, &displaced)?;
-    }
     for dir in crate::ops::harness_own_skill_roots(rt, &req.scope) {
-        let live = dir.join(&req.skill.0);
-        if fs
-            .symlink_metadata(&live)
-            .is_ok_and(|facts| facts.kind == crate::ports::FileKind::Dir)
-        {
-            if let Some(displaced) = update_copy(rt, &session.guard, &dir, &req.skill, &files)? {
-                session
-                    .store
-                    .retain_displaced(&session.guard, id, &live, &displaced)?;
-            }
-        } else if fs.symlink_metadata(&live).is_err() {
-            if let Ok(relative) = dir.strip_prefix(&root) {
-                let staged_agent = stage.join(relative).join(&req.skill.0);
-                if fs
-                    .symlink_metadata(&staged_agent)
-                    .is_ok_and(|facts| facts.kind == crate::ports::FileKind::Dir)
-                {
-                    let mut agent_files = Vec::new();
-                    update_files(fs, &staged_agent, Path::new(""), &mut agent_files)?;
-                    crate::ops::ensure_dir_all(rt, session, fs, &dir)?;
-                    update_copy(rt, &session.guard, &dir, &req.skill, &agent_files)?;
-                }
+        if let Ok(relative) = dir.strip_prefix(&root) {
+            if fs
+                .symlink_metadata(&stage.join(relative).join(&req.skill.0))
+                .is_ok()
+            {
+                crate::ops::ensure_dir_all(rt, session, fs, &dir)?;
             }
         }
     }
-    for (change, name) in ledgers
-        .iter_mut()
-        .zip([".agents/.skill-lock.json", "skills-lock.json"])
+    let journal = FsJournal::new(
+        ops_install::journal_root(&rt.scope.home.lexical),
+        rt.ports.fs.clone(),
+    );
+    let mut plan_root = root.clone();
+    for target in std::iter::once(rt.scope.home.lexical.clone())
+        .chain(crate::ops::harness_own_skill_roots(rt, &req.scope))
     {
-        change.after = fs.read_capped(&stage.join(name), 8 * 1024 * 1024).ok();
+        while !target.starts_with(&plan_root) {
+            plan_root = plan_root
+                .parent()
+                .ok_or_else(|| CoreError::new(ErrorCode::InvalidRequest, "no transaction root"))?
+                .to_path_buf();
+        }
     }
-    crate::ledger_publication::publish(rt, &session.guard, &req.skill.0, &ledgers)?;
+    let plan = PlanWriter::begin(
+        &journal,
+        &session.guard,
+        PlanId(rt.ports.ids.next_event_id().0),
+        rt.ports.clock.now(),
+        format!("update {}", req.skill.0),
+        plan_root,
+        Vec::new(),
+    )?;
+    plan.record_step(crate::ports::PlanStep::RetainEvent {
+        event_id: id.clone(),
+    })?;
+    let result = (|| {
+        // Each swap renames the live tree into quarantine, capturing late external writes too.
+        let displaced = update_copy_in_plan(
+            rt,
+            &plan,
+            destination.parent().ok_or_else(|| {
+                CoreError::new(ErrorCode::InvalidRequest, "destination has no parent")
+            })?,
+            &req.skill,
+            &files,
+        )?;
+        if let Some(displaced) = displaced {
+            session
+                .store
+                .retain_displaced(&session.guard, id, destination, &displaced)?;
+        }
+        for dir in crate::ops::harness_own_skill_roots(rt, &req.scope) {
+            let live = dir.join(&req.skill.0);
+            if fs
+                .symlink_metadata(&live)
+                .is_ok_and(|facts| facts.kind == crate::ports::FileKind::Dir)
+            {
+                if let Some(displaced) = update_copy_in_plan(rt, &plan, &dir, &req.skill, &files)? {
+                    session
+                        .store
+                        .retain_displaced(&session.guard, id, &live, &displaced)?;
+                }
+            } else if fs.symlink_metadata(&live).is_err() {
+                if let Ok(relative) = dir.strip_prefix(&root) {
+                    let staged_agent = stage.join(relative).join(&req.skill.0);
+                    if fs
+                        .symlink_metadata(&staged_agent)
+                        .is_ok_and(|facts| facts.kind == crate::ports::FileKind::Dir)
+                    {
+                        let mut agent_files = Vec::new();
+                        update_files(fs, &staged_agent, Path::new(""), &mut agent_files)?;
+                        update_copy_in_plan(rt, &plan, &dir, &req.skill, &agent_files)?;
+                    }
+                }
+            }
+        }
+        for (change, name) in ledgers
+            .iter_mut()
+            .zip([".agents/.skill-lock.json", "skills-lock.json"])
+        {
+            change.after = fs.read_capped(&stage.join(name), 8 * 1024 * 1024).ok();
+        }
+        crate::ledger_publication::publish_in_plan(
+            rt,
+            &session.guard,
+            &req.skill.0,
+            &ledgers,
+            &plan,
+        )?;
+        Ok::<(), CoreError>(())
+    })();
+    match result {
+        Ok(()) => plan.finish(PlanStatus::Done)?,
+        Err(error) => {
+            crate::journal::reconcile_with_history(
+                &journal,
+                &session.guard,
+                fs,
+                session.store.as_mut(),
+            )?;
+            return Err(error);
+        }
+    }
     crate::ops_remove::remove_tree_best_effort(fs, &stage);
     Ok(())
 }
@@ -602,8 +659,6 @@ fn update_copy(
     let journal_root = ops_install::journal_root(&rt.scope.home.lexical);
     let journal = FsJournal::new(journal_root, fs.clone());
 
-    let root = Root::open(fs.as_ref(), universal_root.to_path_buf())
-        .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
     let plan_id = PlanId(rt.ports.ids.next_event_id().0);
     let plan = PlanWriter::begin(
         &journal,
@@ -616,6 +671,20 @@ fn update_copy(
     )
     .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()))?;
 
+    let displaced = update_copy_in_plan(rt, &plan, universal_root, skill, files)?;
+    plan.finish(PlanStatus::Done)?;
+    Ok(displaced)
+}
+
+fn update_copy_in_plan(
+    rt: &Runtime,
+    plan: &PlanWriter<'_>,
+    universal_root: &Path,
+    skill: &SkillName,
+    files: &[crate::dto::InstallFile],
+) -> Result<Option<PathBuf>, CoreError> {
+    let root = Root::open(rt.ports.fs.as_ref(), universal_root.to_path_buf())
+        .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
     let contents: Vec<fsops::StageFile> = files
         .iter()
         .map(|f| fsops::StageFile {
@@ -624,17 +693,15 @@ fn update_copy(
             mode: f.mode,
         })
         .collect();
-    let staged = fsops::stage_files(&root, &plan, &contents)
+    let staged = fsops::stage_files(&root, plan, &contents)
         .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
     let final_name = Path::new(&skill.0);
     // Same directory the doctor prune and check sweep, not a
     // update-specific name: a quarantine folder the prune never sees would
     // grow unbounded.
     let quarantine_dir = Path::new(crate::doctor::QUARANTINE_DIR_NAME);
-    let displaced = fsops::swap_retaining(&root, &plan, final_name, &staged, quarantine_dir)
+    let displaced = fsops::swap_retaining(&root, plan, final_name, &staged, quarantine_dir)
         .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
-    plan.finish(PlanStatus::Done)
-        .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()))?;
     Ok(displaced)
 }
 
