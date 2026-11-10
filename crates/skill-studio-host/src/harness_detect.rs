@@ -975,7 +975,7 @@ mod tests {
 
     fn process_running(pid: u32) -> bool {
         let pid = sysinfo::Pid::from_u32(pid);
-        let mut system = sysinfo::System::new();
+        let mut system = sysinfo::System::new().expect("process inspector");
         system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
         system.process(pid).is_some_and(|p| {
             !matches!(
