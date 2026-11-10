@@ -621,3 +621,83 @@ fn doctor_warns_for_old_trash_in_a_selected_project_or_checks_only_the_home() {
     );
     assert!(fs.symlink_metadata(Path::new(path)).is_ok());
 }
+
+#[test]
+fn doctor_retention_warns_only_after_exact_thirty_day_boundary_or_flags_boundary_as_old() {
+    let now = chrono::DateTime::from_timestamp(10_000_000, 0).unwrap();
+    for (age, expected) in [
+        (chrono::Duration::days(30), false),
+        (
+            chrono::Duration::days(30) + chrono::Duration::nanoseconds(1),
+            true,
+        ),
+    ] {
+        let path = "/home/.agents/skills-trash/old";
+        let fs = FixtureBuilder::new().dir(path).file("/home/.agents/skill-studio.json", &serde_json::to_vec(&serde_json::json!({"retained": {"to":path,"created_at":(now-age).to_rfc3339()}})).unwrap()).build_fs();
+        let mut rt = runtime(Arc::new(fs));
+        rt.ports.clock = Arc::new(FakeClock::at(now.timestamp_millis().try_into().unwrap()));
+        let report = ops::doctor(&rt, &ctx(), &DoctorRequest::default()).unwrap();
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.path == Path::new(path) && v.detail.contains("older than")),
+            expected,
+            "{report:?}"
+        );
+    }
+}
+
+#[test]
+fn doctor_retained_symlink_loop_stays_unfollowed_or_hangs_and_reads_target_children() {
+    let root = "/home/.agents/skills-parked";
+    let fs = FixtureBuilder::new()
+        .dir(root)
+        .alias(&format!("{root}/loop"), root)
+        .build_fs();
+    let mut rt = runtime(Arc::new(fs));
+    rt.ports.clock = Arc::new(FakeClock::at(10_000_000_000));
+    let report = ops::doctor(&rt, &ctx(), &DoctorRequest::default()).unwrap();
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.path.to_string_lossy().contains("loop/")),
+        "{report:?}"
+    );
+    assert!(
+        rt.ports
+            .fs
+            .symlink_metadata(Path::new(&format!("{root}/loop")))
+            .unwrap()
+            .kind
+            == skill_studio_core::ports::FileKind::Symlink
+    );
+}
+
+#[test]
+fn doctor_without_retained_candidates_skips_retention_history_or_reads_unneeded_payloads() {
+    struct CountOpens(std::sync::atomic::AtomicUsize);
+    impl skill_studio_core::ports::HistoryOpener for CountOpens {
+        fn open(
+            &self,
+            _: &skill_studio_core::scope::NormalizedScope,
+            _: skill_studio_core::ports::HistoryAccess,
+        ) -> Result<
+            Option<Box<dyn skill_studio_core::ports::HistoryStore>>,
+            skill_studio_core::error::CoreError,
+        > {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(None)
+        }
+    }
+    let history = Arc::new(CountOpens(std::sync::atomic::AtomicUsize::new(0)));
+    let mut rt = runtime(healthy_home());
+    rt.ports.history = history.clone();
+    ops::doctor(&rt, &ctx(), &DoctorRequest::default()).unwrap();
+    assert_eq!(
+        history.0.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "only pending-event detection needs history when no retained candidates exist"
+    );
+}

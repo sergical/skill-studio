@@ -553,7 +553,7 @@ pub fn acquire_exclusive(
 /// How an operation wants the history store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HistoryAccess {
-    /// Open only when the database already exists. Never creates it.
+    /// Open an existing database read-only. Never creates it or changes its schema or journal mode.
     ReadIfExists,
     /// Open or create. Requires an exclusive guard at the call site.
     ReadWrite,

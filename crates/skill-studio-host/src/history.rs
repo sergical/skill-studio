@@ -113,7 +113,9 @@ impl HistoryOpener for SqliteHistoryOpener {
                 if !self.db_path.exists() {
                     return Ok(None);
                 }
-                Ok(Some(Box::new(SqliteHistoryStore::open(&self.db_path)?)))
+                Ok(Some(Box::new(SqliteHistoryStore::open_read_only(
+                    &self.db_path,
+                )?)))
             }
             HistoryAccess::ReadWrite => {
                 Ok(Some(Box::new(SqliteHistoryStore::open(&self.db_path)?)))
@@ -133,6 +135,20 @@ pub struct SqliteHistoryStore {
 }
 
 impl SqliteHistoryStore {
+    fn open_read_only(db_path: &Path) -> Result<Self, CoreError> {
+        let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(sql_err)?;
+        let root = db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        Ok(Self {
+            conn,
+            backups_root: root.join("backups"),
+            root,
+        })
+    }
+
     fn open(db_path: &Path) -> Result<Self, CoreError> {
         let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent).map_err(|e| CoreError::io(parent, e))?;

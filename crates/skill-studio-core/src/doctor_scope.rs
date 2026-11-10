@@ -118,7 +118,7 @@ pub(crate) fn history_pending(rt: &Runtime) -> Vec<DoctorViolation> {
 fn retained_entries(
     fs: &dyn crate::ports::ScopeFs,
     root: &std::path::Path,
-    nested: bool,
+    depth: usize,
     protected: &[PathBuf],
     entries: &mut Vec<PathBuf>,
 ) {
@@ -139,14 +139,14 @@ fn retained_entries(
         } else {
             Vec::new()
         };
-        if nested
+        if depth > 0
             && entry.kind == FileKind::Dir
             && fs.symlink_metadata(&path.join("SKILL.md")).is_err()
             && children
                 .iter()
                 .any(|child| child.kind == FileKind::Dir && !child.name.starts_with('.'))
         {
-            retained_entries(fs, &path, true, protected, entries);
+            retained_entries(fs, &path, depth - 1, protected, entries);
         } else {
             entries.push(path);
         }
@@ -227,6 +227,39 @@ fn creation_time(
     recorded.copied().unwrap_or(modified)
 }
 
+fn read_retention_history(
+    mut list: impl FnMut(
+        &crate::events::EventFilter,
+    ) -> Result<Vec<crate::events::EventRecord>, crate::error::CoreError>,
+    candidates: &BTreeSet<PathBuf>,
+    records: &mut std::collections::BTreeMap<PathBuf, Option<chrono::DateTime<chrono::Utc>>>,
+) -> Result<(), crate::error::CoreError> {
+    let mut filter = crate::events::EventFilter {
+        limit: 256,
+        ..Default::default()
+    };
+    loop {
+        let rows = list(&filter)?;
+        if rows.is_empty() {
+            break;
+        }
+        filter.after = rows.last().map(|row| row.id.clone());
+        for row in rows {
+            let mut paths = std::collections::BTreeMap::new();
+            recorded_paths(&row.payload, Some(row.ts), &mut paths);
+            if let Some(inverse) = row.inverse {
+                recorded_paths(&inverse, Some(row.ts), &mut paths);
+            }
+            for (path, time) in paths {
+                if candidates.contains(&path) {
+                    record_earliest_creation(records, path, time);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn retained_state(
     rt: &Runtime,
     inventory: &crate::dto::Inventory,
@@ -297,6 +330,27 @@ pub(crate) fn retained_state(
             roots.push((forks, true));
         }
     }
+    let candidates: Vec<_> = roots
+        .into_iter()
+        .map(|(root, nested)| {
+            let mut entries = Vec::new();
+            retained_entries(
+                fs,
+                &root,
+                if nested { 32 } else { 0 },
+                &protected,
+                &mut entries,
+            );
+            (root, entries)
+        })
+        .collect();
+    let paths: BTreeSet<_> = candidates
+        .iter()
+        .flat_map(|(_, entries)| entries.iter().cloned())
+        .collect();
+    if paths.is_empty() {
+        return Vec::new();
+    }
     let mut records = std::collections::BTreeMap::new();
     recorded_paths(&registry, None, &mut records);
     let journal =
@@ -320,27 +374,17 @@ pub(crate) fn retained_state(
         .history
         .open(&rt.scope, HistoryAccess::ReadIfExists)
     {
-        Ok(Some(store)) => match store.list(&crate::events::EventFilter {
-            limit: u32::MAX,
-            ..Default::default()
-        }) {
-            Ok(rows) => {
-                for row in rows {
-                    recorded_paths(&row.payload, Some(row.ts), &mut records);
-                    if let Some(inverse) = row.inverse {
-                        recorded_paths(&inverse, Some(row.ts), &mut records);
-                    }
-                }
-            }
-            Err(error) => {
+        Ok(Some(store)) => {
+            let result = read_retention_history(|filter| store.list(filter), &paths, &mut records);
+            if let Err(error) = result {
                 return vec![violation(
                     DoctorInvariant::QuarantineWithinCap,
                     rt.scope.history_root.clone(),
                     Severity::Error,
                     format!("retention history could not be read: {error}"),
-                )]
+                )];
             }
-        },
+        }
         Ok(None) => {}
         Err(_) => return Vec::new(),
     }
@@ -357,9 +401,7 @@ pub(crate) fn retained_state(
         })
         .map(|skill| skill.name.0.clone())
         .collect();
-    for (root, nested) in roots {
-        let mut entries = Vec::new();
-        retained_entries(fs, &root, nested, &protected, &mut entries);
+    for (root, entries) in candidates {
         let mut per_skill = std::collections::BTreeMap::<String, usize>::new();
         for path in entries {
             let facts = fs.symlink_metadata(&path).ok();
@@ -451,5 +493,48 @@ mod tests {
         recorded_paths(&event, Some(referenced), &mut records);
         recorded_paths(&event, Some(created), &mut records);
         assert_eq!(records.get(&path), Some(&Some(created)));
+    }
+    #[test]
+    fn doctor_retention_pages_large_history_and_keeps_earliest_time_or_loads_unbounded_rows() {
+        let path = PathBuf::from("/home/.agents/skills-trash/old");
+        let mut records = std::collections::BTreeMap::new();
+        let mut pages = 0;
+        let mut returned = 0;
+        read_retention_history(|filter| {
+            assert!(filter.limit <= 256, "unbounded history request");
+            let start = filter.after.as_ref().map_or(0, |id| id.0.parse::<usize>().unwrap() + 1);
+            pages += 1;
+            let rows: Vec<_> = (start..(start + filter.limit as usize).min(4097)).map(|n| {
+                serde_json::from_value(serde_json::json!({
+                    "id": n.to_string(), "ts": chrono::DateTime::from_timestamp(10000 - i64::try_from(n).unwrap(), 0).unwrap(),
+                    "kind": "remove", "skill": "old", "harness": null, "scope": null,
+                    "project_path": null, "payload": {"to": path}, "inverse": null,
+                    "backup_dir": null, "status": "done", "reverted_by": null, "restorable": true
+                })).unwrap()
+            }).collect();
+            returned += rows.len();
+            Ok(rows)
+        }, &BTreeSet::from([path.clone()]), &mut records).unwrap();
+        assert_eq!(returned, 4097);
+        assert_eq!(pages, 18);
+        assert_eq!(
+            records.get(&path),
+            Some(&chrono::DateTime::from_timestamp(5904, 0))
+        );
+    }
+
+    #[test]
+    fn doctor_retained_tree_stops_at_depth_limit_or_recurses_without_bound() {
+        let mut builder = crate::testing::FixtureBuilder::new().dir("/home");
+        let mut path = PathBuf::from("/home");
+        for _ in 0..40 {
+            path.push("nested");
+            builder = builder.dir(path.to_str().unwrap());
+        }
+        let fs = builder.build_fs();
+        let mut entries = Vec::new();
+        retained_entries(&fs, std::path::Path::new("/home"), 32, &[], &mut entries);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].components().count(), 35);
     }
 }

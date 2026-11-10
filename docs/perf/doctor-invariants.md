@@ -39,8 +39,8 @@ code, built from desktop-status commit `301f6c69`; the doctor change is
 `b639223f`. The full SHAs, binary hashes, hardware, raw samples, load average,
 and cargo/rustc counts are in `doctor-before-after.json`.
 
-`doctor-profile/` contains ten-iteration Samply recordings, symbol sidecars,
-folded stacks, top-five summaries, and SVGs. These are complete CLI main-thread
+`doctor-profile/` keeps the raw ten-iteration Samply recordings and metadata.
+Derived symbol sidecars, folded stacks, summaries, and SVGs are not committed. These are complete CLI main-thread
 samples, including startup and waits. They are not CPU utilization percentages.
 The added scope checks require reading skill links and retained state. The
 loaded tail is not a new CI budget. A quiet rerun is still needed.
@@ -69,3 +69,13 @@ The shared-lease path accounts for 143 `ftruncate` samples in the before
 profile and 5 in the after profile. Its code is unchanged between these
 builds. This variation is a reason to keep the tail provisional. The lease
 owner can check it in the quiet rerun; this change does not alter that path.
+
+Regenerate an interactive profile from each raw recording:
+
+```sh
+samply load docs/perf/doctor-profile/before.json.gz
+samply load docs/perf/doctor-profile/after.json.gz
+```
+
+The tables above retain the concise profile summary. The raw recordings remain
+available for analysis; generated exports stay outside version control.
