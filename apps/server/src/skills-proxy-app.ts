@@ -16,6 +16,8 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 
 const UPSTREAM_BASE = "https://skills.sh/api/v1";
 
+const UPSTREAM_TIMEOUT_MS = 8000;
+
 /** One proxied GET's outcome: the upstream's own status and JSON body when
  * it responded at all (any status, not just 2xx), or a synthetic `{ error }`
  * body when the request to skills.sh itself couldn't be made. */
@@ -33,40 +35,56 @@ export function upstreamUrl(path: string, search: string): string {
 
 /** Proxies one GET request to skills.sh with `apiKey` as a bearer token,
  * relaying the upstream's status and JSON body verbatim - a non-2xx upstream
- * response is still relayed as-is. Only a failure to reach skills.sh at all
- * (network error, DNS, etc.) maps to a `{ error }` body. */
+ * response is still relayed as-is. A failure to reach skills.sh at all (network
+ * error, DNS, etc.) maps to a `{ error }` body, and the call is bounded by
+ * [`UPSTREAM_TIMEOUT_MS`] so a stalled connection cannot hold the request open -
+ * the timeout abort is such a failure. */
 export async function proxyGet(
   apiKey: string,
   path: string,
   search: string,
   fetchImpl: typeof fetch = fetch,
   reportServerError?: (cause: unknown, context: { kind: "upstream" | "unhandled" }) => void,
+  timeoutMs = UPSTREAM_TIMEOUT_MS,
 ): Promise<ProxyResult> {
-  let response: Response;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    response = await fetchImpl(upstreamUrl(path, search), {
+    const response = await fetchImpl(upstreamUrl(path, search), {
       headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
     });
-  } catch (e) {
-    reportServerError?.(e, { kind: "upstream" });
+    const body = await response.json().catch((error) => {
+      if (controller.signal.aborted) throw error;
+      if (response.status < 500) {
+        reportServerError?.(
+          new Error(`skills.sh answered ${response.status} with a non-JSON body`),
+          {
+            kind: "upstream",
+          },
+        );
+      }
+      return { error: "skills.sh returned a non-JSON response" };
+    });
+    if (response.status >= 500) {
+      reportServerError?.(new Error(`skills.sh answered ${response.status}`), { kind: "upstream" });
+    }
+    return { status: response.status, body };
+  } catch (error) {
+    reportServerError?.(error, { kind: "upstream" });
     return {
       status: 502,
-      body: { error: e instanceof Error ? e.message : "Failed to reach skills.sh" },
+      body: {
+        error: controller.signal.aborted
+          ? "skills.sh request timed out"
+          : error instanceof Error
+            ? error.message
+            : "Failed to reach skills.sh",
+      },
     };
+  } finally {
+    clearTimeout(timer);
   }
-  if (response.status >= 500) {
-    reportServerError?.(new Error(`skills.sh answered ${response.status}`), { kind: "upstream" });
-  }
-  const body = await response.json().catch(() => {
-    // A 5xx was reported above; its HTML error page must not count a second time.
-    if (response.status < 500) {
-      reportServerError?.(new Error(`skills.sh answered ${response.status} with a non-JSON body`), {
-        kind: "upstream",
-      });
-    }
-    return { error: "skills.sh returned a non-JSON response" };
-  });
-  return { status: response.status, body };
 }
 
 /** True only when no decoding layer turns a path segment into traversal or a separator. */

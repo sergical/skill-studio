@@ -2,8 +2,12 @@
 // Skill Studio - Skills Proxy App tests
 // Covers the runtime-neutral app factory: proxy path/query building, unsafe
 // path rejection, and the rate-limit/cache middleware the public Worker
-// entry injects - all with plain fakes, no Miniflare and no network.
+// entry injects. Loopback servers exercise stalled upstream connections.
 // ============================================================================
+
+import { createServer } from "node:http";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HTTPException } from "hono/http-exception";
@@ -41,8 +45,49 @@ describe("proxyGet", () => {
 
     expect(fetchMock).toHaveBeenCalledWith("https://skills.sh/api/v1/skills?page=0", {
       headers: { Authorization: "Bearer sk-test" },
+      signal: expect.any(AbortSignal),
     });
     expect(result).toEqual({ status: 200, body: { data: [] } });
+  });
+
+  it.each([null, 200, 500])(
+    "a stalled upstream returns a reported timeout instead of hanging, header status: %s",
+    async (headerStatus) => {
+      const server = createServer((_request, response) => {
+        if (headerStatus !== null) {
+          response.writeHead(headerStatus, { "Content-Type": "application/json" });
+          response.write('{"data":');
+        }
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      // SAFETY: listening on a TCP host and port always returns AddressInfo.
+      const address = server.address() as AddressInfo;
+      const localFetch: typeof fetch = (_url, init) =>
+        fetch(`http://127.0.0.1:${address.port}`, init);
+      const report = vi.fn();
+      try {
+        const result = await proxyGet("fixture", "/skills", "", localFetch, report, 50);
+        expect(result).toEqual({ status: 502, body: { error: "skills.sh request timed out" } });
+        expect(report).toHaveBeenCalledTimes(1);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+      }
+    },
+  );
+
+  it("a completed upstream request clears its deadline so success leaves no timer", async () => {
+    vi.useFakeTimers();
+    try {
+      const before = vi.getTimerCount();
+      await proxyGet("fixture", "/skills", "", async () => Response.json({ data: [] }));
+      expect(vi.getTimerCount()).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("relays a non-2xx upstream response as-is", async () => {
@@ -99,7 +144,7 @@ describe("GET /api/v1/skills/:owner/:repo/:slug", () => {
     expect(response.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledWith(
       "https://skills.sh/api/v1/skills/org%20name/repo%2Btools/skill%25%40v1",
-      { headers: { Authorization: "Bearer sk-secret" } },
+      { headers: { Authorization: "Bearer sk-secret" }, signal: expect.any(AbortSignal) },
     );
   });
 });
