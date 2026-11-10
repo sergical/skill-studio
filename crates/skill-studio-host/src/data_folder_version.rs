@@ -163,7 +163,7 @@ fn lock_error(error: std::fs::TryLockError) -> String {
 }
 
 /// Holds a compatible folder without creating or migrating its contents.
-pub(crate) fn guard_read_data_folder(folder: &Path) -> Result<DataFolderGuard, String> {
+pub fn guard_read_data_folder(folder: &Path) -> Result<DataFolderGuard, String> {
     let folder = folder_identity(folder).map_err(|error| error.to_string())?;
     let validate = || {
         let version = read_version(&RealFs, &folder).map_err(|error| error.to_string())?;

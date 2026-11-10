@@ -1682,7 +1682,7 @@ fn park_event_times(db_path: &Path, paths: &[&str]) -> Result<BTreeMap<String, S
         return Ok(BTreeMap::new());
     }
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
-    let _guard = skill_studio_host::lock_data_folders(&[parent])?;
+    let _guard = skill_studio_host::guard_read_data_folder(parent)?;
     let read = || -> rusqlite::Result<BTreeMap<String, String>> {
         let db = rusqlite::Connection::open_with_flags(
             db_path,
@@ -2163,6 +2163,11 @@ pub(crate) fn core_scan_installed_skills(
 
     let catalog = std::sync::Arc::new(skill_studio_core::harness::HarnessCatalog::builtin());
     let mut ports = skill_studio_host::default_ports(lease_root, catalog);
+    if std::env::var_os("SKILL_STUDIO_FIXTURE").is_some() {
+        ports.history = std::sync::Arc::new(skill_studio_host::GuardedNoHistoryOpener::new(
+            home.join(".history"),
+        ));
+    }
     if super::write_lease::current_thread_holds_home_lease() {
         ports.leases = std::sync::Arc::new(CallerHoldsLease);
     }
@@ -2797,6 +2802,37 @@ mod tests {
         change: impl FnOnce(&mut TrackedProjects),
     ) -> Result<(TrackedProjects, bool), String> {
         update_registry_section(home, |registry| &mut registry.projects, change)
+    }
+
+    #[test]
+    fn parked_history_read_leaves_absent_folder_missing_or_creates_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("history");
+        assert!(
+            park_event_times(&folder.join("events.sqlite3"), &["parked"])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!folder.exists());
+    }
+
+    #[test]
+    fn fixture_scan_refuses_newer_history_before_lease_or_creates_cache_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        fs::create_dir_all(home.join(".history")).unwrap();
+        fs::write(home.join(".history/schema_version"), b"2\n").unwrap();
+        let _env = super::super::test_support::OpencodeHomeGuard::new(&home);
+        let leases = dir.path().join("leases");
+        let lease = super::super::write_lease::WriteLease::with_lease_root(leases.clone());
+        assert!(lease.acquire_scan_lease(&home, &[]).is_err());
+        assert!(!leases.exists());
+        let cache = dir.path().join("cache/updates.json");
+        let scan = core_scan_installed_skills(&home, &[], &cache, &[]);
+        assert!(scan.unread_roots.contains(&home));
+        assert!(!cache.parent().unwrap().exists());
+        assert_eq!(fs::read_dir(&home).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(home.join(".history")).unwrap().count(), 1);
     }
 
     #[test]

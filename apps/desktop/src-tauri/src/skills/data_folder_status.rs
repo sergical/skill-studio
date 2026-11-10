@@ -36,6 +36,21 @@ pub fn check_and_open(
     }
 }
 
+pub fn check_and_open_with_fixture(
+    app_data: &Path,
+    data_root: &Path,
+    fixture: Option<&Path>,
+) -> (Option<String>, Option<super::event_store::EventStore>) {
+    let _fixture_guard = match fixture
+        .map(|home| skill_studio_host::guard_read_data_folder(&home.join(".history")))
+        .transpose()
+    {
+        Ok(guard) => guard,
+        Err(message) => return (Some(message), None),
+    };
+    check_and_open(app_data, data_root)
+}
+
 /// True when no [`DataFolderStatusState`] message is set for `app` - the
 /// timing log ([`crate::timing_log::record_command`]) and the update-check
 /// writer (`skill_update_check::check_now`) both consult this before
@@ -63,6 +78,26 @@ pub fn data_folder_status(state: tauri::State<'_, DataFolderStatusState>) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixture_startup_refuses_newer_history_or_creates_stores_and_caches() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = dir.path().join("fixture");
+        std::fs::create_dir_all(fixture.join(".history")).unwrap();
+        std::fs::write(fixture.join(".history/schema_version"), b"2\n").unwrap();
+        let app = dir.path().join("app");
+        let data = dir.path().join("data");
+        let (message, store) = check_and_open_with_fixture(&app, &data, Some(&fixture));
+        assert!(message.unwrap().contains("folder is version 2"));
+        assert!(store.is_none());
+        assert!(!app.exists());
+        assert!(!data.exists());
+        assert_eq!(std::fs::read_dir(&fixture).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read_dir(fixture.join(".history")).unwrap().count(),
+            1
+        );
+    }
 
     #[test]
     fn newer_folder_startup_refuses_the_event_store_or_opens_an_incompatible_database() {

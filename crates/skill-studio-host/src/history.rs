@@ -152,8 +152,10 @@ impl HistoryOpener for SqliteHistoryOpener {
                 if !self.db_path.exists() {
                     return Ok(None);
                 }
-                drop(folder_guard);
-                Ok(Some(Box::new(SqliteHistoryStore::open(&self.db_path)?)))
+                Ok(Some(Box::new(SqliteHistoryStore::open_read_only(
+                    &self.db_path,
+                    folder_guard,
+                )?)))
             }
             HistoryAccess::ReadWrite => {
                 Ok(Some(Box::new(SqliteHistoryStore::open(&self.db_path)?)))
@@ -174,6 +176,21 @@ pub struct SqliteHistoryStore {
 }
 
 impl SqliteHistoryStore {
+    fn open_read_only(
+        db_path: &Path,
+        folder_guard: crate::DataFolderGuard,
+    ) -> Result<Self, CoreError> {
+        let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+        let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(sql_err)?;
+        Ok(Self {
+            conn,
+            root: parent.to_path_buf(),
+            backups_root: parent.join("backups"),
+            _folder_guard: folder_guard,
+        })
+    }
+
     fn open(db_path: &Path) -> Result<Self, CoreError> {
         let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
         let folder_guard = crate::lock_data_folders(&[parent])
@@ -996,6 +1013,38 @@ mod tests {
         assert!(store.is_none());
         assert!(!db_path.exists());
         assert!(!tmp.path().join("history").exists());
+    }
+
+    #[test]
+    fn events_read_preserves_unversioned_schema_or_migrates_history() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scope = scope_for(tmp.path());
+        let folder = tmp.path().join("history");
+        fs::create_dir(&folder).unwrap();
+        let path = folder.join("events.sqlite3");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA_SQL).unwrap();
+        conn.execute_batch("DROP TABLE materialized_disabled; DROP TABLE materialized_roots;")
+            .unwrap();
+        drop(conn);
+        let before = fs::read(&path).unwrap();
+        let store = SqliteHistoryOpener::new(&path)
+            .open(&scope, HistoryAccess::ReadIfExists)
+            .unwrap()
+            .unwrap();
+        assert!(store
+            .list(&EventFilter {
+                skill: None,
+                limit: 10,
+                after: None
+            })
+            .unwrap()
+            .is_empty());
+        assert!(!folder.join("schema_version").exists());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(fs::read_dir(&folder).unwrap().count(), 1);
+        drop(store);
+        assert_eq!(fs::read(&path).unwrap(), before);
     }
 
     #[test]

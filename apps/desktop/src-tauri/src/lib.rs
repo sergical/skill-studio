@@ -334,9 +334,12 @@ pub fn run() {
 
             // The version gate must run before the event-store opener or background writers.
             let (data_folder_message, event_store) = match app.path().app_data_dir() {
-                Ok(app_data) => skills::data_folder_status::check_and_open(
+                Ok(app_data) => skills::data_folder_status::check_and_open_with_fixture(
                     &app_data,
                     &skills::core_runtime::data_root(),
+                    std::env::var_os("SKILL_STUDIO_FIXTURE")
+                        .as_deref()
+                        .map(std::path::Path::new),
                 ),
                 Err(error) => (
                     Some(format!("Could not resolve the data folder: {error}")),
