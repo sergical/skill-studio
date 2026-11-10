@@ -90,3 +90,46 @@ fn cli_undo_and_restore_refuse_the_latest_park_or_unpark_or_revert_an_older_chan
             .contains("Keep this skill."));
     }
 }
+
+#[test]
+fn cli_history_and_restore_report_backup_expired_or_offer_a_missing_backup() {
+    let home = tempfile::tempdir().unwrap();
+    let (expired, live) = undo_fixtures::expired_backup(home.path());
+    let history = cli(home.path(), &["history"]);
+    let row = history["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == expired.0)
+        .unwrap();
+    assert_eq!(row["restore"]["restorable"], "backup_expired");
+    for arguments in [vec!["history"], vec!["restore", "--event-id", &expired.0]] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+            .args(arguments)
+            .args(["--home", home.path().to_str().unwrap()])
+            .env("HOME", home.path())
+            .env("SKILL_STUDIO_TELEMETRY", "0")
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(text.contains("Backup expired"), "{text}");
+    }
+    let restored = cli(home.path(), &["restore", "--event-id", &expired.0]);
+    assert_eq!(restored["status"], "error", "{restored}");
+    assert_eq!(
+        restored["errors"][0]["code"], "backup_expired",
+        "{restored}"
+    );
+    assert!(restored["errors"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("expired"));
+    assert_eq!(
+        std::fs::read(home.path().join(".agents/skills/alpha/SKILL.md")).unwrap(),
+        live
+    );
+}

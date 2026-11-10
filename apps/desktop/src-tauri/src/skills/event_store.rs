@@ -400,6 +400,28 @@ impl EventStore {
             .map_err(|e| format!("Failed to finish event {id}: {e}"))
     }
 
+    /// Runs the shared retention policy before the writer releases its lease.
+    /// Cleanup errors leave durable expiry records for the startup retry.
+    pub fn retain_backups(&self, guard: &skill_studio_core::ports::ExclusiveGuard) {
+        let Some(db_path) = self.conn.path() else {
+            return;
+        };
+        let opener = skill_studio_host::SqliteHistoryOpener::new(db_path)
+            .with_backup_roots(vec![self.app_data.join("backups")]);
+        if let Err(error) = opener.retain_backups(
+            guard,
+            chrono::Utc::now(),
+            skill_studio_core::backup_retention::BackupRetentionScope::All,
+        ) {
+            eprintln!("[backup_retention] cleanup deferred: {error}");
+        }
+        if let Err(error) =
+            skill_studio_core::journal::trim_backups(self, guard, chrono::Utc::now())
+        {
+            eprintln!("[backup_retention] plan cleanup deferred: {error}");
+        }
+    }
+
     /// Looks up one event row by id - used by callers (e.g.
     /// `restore_guard_for_explode`) that need to inspect an event before
     /// deciding whether to restore it.
@@ -573,6 +595,9 @@ impl EventStore {
         let target = self
             .get_event(target_id)?
             .ok_or_else(|| format!("Event {target_id} not found"))?;
+        if skill_studio_core::backup_retention::backup_is_expired(&target.payload) {
+            return Err(skill_studio_core::backup_retention::BACKUP_EXPIRED_REASON.to_owned());
+        }
         if target.reverted_by.is_some() {
             return Err(format!("Event {target_id} was already restored"));
         }

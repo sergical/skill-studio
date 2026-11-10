@@ -132,6 +132,9 @@ pub struct SkillEventDto {
     pub restorable: bool,
     /// False when force restore could cross an independent Copy boundary.
     pub force_restorable: bool,
+    /// Why Undo is unavailable when a completed backup has expired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore_unavailable_reason: Option<String>,
     pub reverted_by: Option<String>,
     /// Absolute path to this event's backup directory, for a "Reveal in
     /// Finder" action - `None` when the event backed up nothing.

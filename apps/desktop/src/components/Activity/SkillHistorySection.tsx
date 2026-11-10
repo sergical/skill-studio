@@ -163,6 +163,9 @@ function EventActions({
 
   return (
     <>
+      {event.restore_unavailable_reason && (
+        <span className="text-small text-text-muted">{event.restore_unavailable_reason}</span>
+      )}
       {event.backup_path && (
         <Button variant="link" className="h-auto shrink-0 p-0 text-small" onClick={handleReveal}>
           Reveal in Finder

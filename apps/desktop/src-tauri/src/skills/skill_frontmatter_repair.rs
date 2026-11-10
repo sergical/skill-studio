@@ -594,6 +594,9 @@ pub async fn apply_skill_frontmatter_repair(
                     |path, bytes| transaction.replace_bytes(path, bytes),
                 )
             };
+            if result.is_ok() {
+                store.retain_backups(write_guard.as_exclusive_guard());
+            }
             drop(transaction);
             drop(guard);
             let affected_projects: Vec<PathBuf> = deployment

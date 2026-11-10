@@ -57,3 +57,23 @@ works today. Make one explicit when you next change it.
 | Add Skill sheet submit    | `apps/desktop/src/components/AddSkill/AddSkillSheet.tsx`        | Form step, operation id, and trust prompt held in separate `useState` calls.                                                         |
 | Update check              | `apps/desktop/src-tauri/src/skills/skill_update_check.rs`       | Check results land in a shared store with no request generation.                                                                     |
 | Write lease               | `apps/desktop/src-tauri/src/skills/write_lease.rs`              | Held or free, tracked by lock files.                                                                                                 |
+
+## Backup expiry
+
+The constants `BACKUP_RETENTION_COUNT` (20) and `BACKUP_RETENTION_AGE` (30 days)
+live in core. A completed backup stays if it is among the newest 20 backups for
+its skill target, is younger than 30 days, belongs to that target's newest
+undoable event, or is needed by a pending or interrupted restore or plan.
+Only a backup outside all four protections expires. Unknown legacy targets and
+unfinished rows stay protected.
+
+Expiry does not change event or plan status. Event expiry clears `backup_dir`
+and records `backup_expired` in the same SQLite transaction that queues deletion.
+Plan expiry records the relative backup name in `expired_backups` through the
+journal's durable write before unlinking it. Reads return `backup_expired` even
+if cleanup has not yet finished. Startup retries the deletion under the target's
+write lease. Rows and expiry reasons stay in history.
+
+`history::tests::retention_crash_at_each_durable_step_preserves_files_and_recovery_or_exposes_a_partial_backup`
+and `journal::tests::completed_plan_retention_crash_at_every_durable_step_recovers_or_leaves_an_available_partial_backup`
+cut every filesystem mutation and flush, then run recovery.

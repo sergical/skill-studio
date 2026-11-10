@@ -85,6 +85,7 @@ reqwest = { version = "0.13.5", default-features = false, features = [
 telemetry = ["dep:sentry", "dep:reqwest"]
 
 [dev-dependencies]
+skill-studio-core = { path = "../skill-studio-core", features = ["testing"] }
 tempfile = "3"
 sentry = { version = "0.49", default-features = false, features = [
   "backtrace",

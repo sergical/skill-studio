@@ -2167,3 +2167,147 @@ mod tests {
             .expect("fsync a file reached through the alias");
     }
 }
+
+/// Cuts execution after a selected successful filesystem write or flush.
+/// Once cut, subsequent writes fail so unwind cleanup cannot simulate recovery.
+pub struct CrashFs {
+    inner: Arc<dyn ScopeFs>,
+    cut: u64,
+    calls: AtomicU64,
+    crashed: AtomicBool,
+}
+
+impl CrashFs {
+    /// A zero cut counts successful writes without interrupting them.
+    pub fn new(inner: Arc<dyn ScopeFs>, cut: u64) -> Self {
+        Self {
+            inner,
+            cut,
+            calls: AtomicU64::new(0),
+            crashed: AtomicBool::new(false),
+        }
+    }
+
+    /// Number of successful mutation or flush calls reached.
+    pub fn calls(&self) -> u64 {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    fn mutate(&self, run: impl FnOnce() -> std::io::Result<()>) -> std::io::Result<()> {
+        if self.crashed.load(Ordering::SeqCst) {
+            return Err(std::io::Error::other(
+                "filesystem unavailable after simulated crash",
+            ));
+        }
+        run()?;
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if call == self.cut {
+            self.crashed.store(true, Ordering::SeqCst);
+            panic!("simulated crash after durable filesystem step {call}");
+        }
+        Ok(())
+    }
+}
+impl ScopeFs for CrashFs {
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        self.inner.canonicalize(path)
+    }
+    fn symlink_metadata(&self, path: &Path) -> std::io::Result<FileFacts> {
+        self.inner.symlink_metadata(path)
+    }
+    fn read_link(&self, path: &Path) -> std::io::Result<PathBuf> {
+        self.inner.read_link(path)
+    }
+    fn read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntryFacts>> {
+        self.inner.read_dir(path)
+    }
+    fn ancestor_holds(&self, start: &Path, name: &str) -> std::io::Result<bool> {
+        crate::ports::ancestor_holds(self, start, name)
+    }
+    fn read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+        self.inner.read_capped(path, max_bytes)
+    }
+    fn read_prefix(&self, path: &Path, limit: u64) -> std::io::Result<(Vec<u8>, bool)> {
+        self.inner.read_prefix(path, limit)
+    }
+    fn write_atomic(
+        &self,
+        guard: &ExclusiveGuard,
+        path: &ScopedPath,
+        bytes: &[u8],
+    ) -> std::io::Result<()> {
+        self.mutate(|| self.inner.write_atomic(guard, path, bytes))
+    }
+    fn rename(
+        &self,
+        guard: &ExclusiveGuard,
+        from: &ScopedPath,
+        to: &ScopedPath,
+    ) -> std::io::Result<()> {
+        self.mutate(|| self.inner.rename(guard, from, to))
+    }
+    fn remove_file(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
+        self.mutate(|| self.inner.remove_file(guard, path))
+    }
+    fn create_dir_all(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
+        self.mutate(|| self.inner.create_dir_all(guard, path))
+    }
+    fn symlink(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        link: &ScopedPath,
+    ) -> std::io::Result<()> {
+        self.mutate(|| self.inner.symlink(guard, target, link))
+    }
+    fn symlink_relative(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        relative_target: &Path,
+        link: &ScopedPath,
+    ) -> std::io::Result<()> {
+        self.mutate(|| {
+            self.inner
+                .symlink_relative(guard, target, relative_target, link)
+        })
+    }
+    fn fsops_device_inode(&self, path: &Path) -> std::io::Result<(u64, u64)> {
+        self.inner.fsops_device_inode(path)
+    }
+    fn fsops_fsync_file(&self, path: &Path) -> std::io::Result<()> {
+        self.mutate(|| self.inner.fsops_fsync_file(path))
+    }
+    fn fsops_fsync_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.mutate(|| self.inner.fsops_fsync_dir(path))
+    }
+    fn fsops_create_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.mutate(|| self.inner.fsops_create_dir(path))
+    }
+    fn fsops_write_new_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        self.mutate(|| self.inner.fsops_write_new_file(path, bytes))
+    }
+    fn fsops_write_new_file_with_mode(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        mode: u32,
+    ) -> std::io::Result<()> {
+        self.mutate(|| self.inner.fsops_write_new_file_with_mode(path, bytes, mode))
+    }
+    fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        self.mutate(|| self.inner.fsops_rename(from, to))
+    }
+    fn fsops_symlink(&self, target: &Path, link: &Path) -> std::io::Result<()> {
+        self.mutate(|| self.inner.fsops_symlink(target, link))
+    }
+    fn fsops_remove_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.mutate(|| self.inner.fsops_remove_dir(path))
+    }
+    fn fsops_remove_file(&self, path: &Path) -> std::io::Result<()> {
+        self.mutate(|| self.inner.fsops_remove_file(path))
+    }
+    fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()> {
+        self.mutate(|| self.inner.fsops_exchange(a, b))
+    }
+}

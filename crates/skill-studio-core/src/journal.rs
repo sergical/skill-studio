@@ -7,7 +7,7 @@
 //! it verbatim rather than reimplementing the write order. [`reconcile`]
 //! resolves every plan a crash left `Pending` by undoing its recorded steps
 //! in reverse - or, for a plan with none, marking it `Failed` since nothing
-//! mutated anything yet. [`trim_backups`] enforces a size-and-age quota on
+//! mutated anything yet. [`trim_backups`] applies count, age, Undo and recovery protections to
 //! the backups plans keep for undo. Neither one ever deletes a plan row.
 //!
 //! [`PlanWriter`]'s `record_*` methods are how `crate::fsops`'s four
@@ -28,7 +28,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
@@ -198,7 +197,12 @@ impl Journal for FsJournal {
     ) -> Result<(), CoreError> {
         let mut record: PlanRecord = self.read_json(&self.plan_path(id))?;
         record.status = record.status.settle(status)?;
-        self.write_record(&record)
+        self.write_record(&record)?;
+        if status == PlanStatus::Done {
+            // The write has committed. Failed cleanup is retried at startup.
+            let _ = trim_backups(self, _guard, Utc::now());
+        }
+        Ok(())
     }
 
     fn all(&self) -> Result<Vec<PlanRecord>, CoreError> {
@@ -243,12 +247,32 @@ impl Journal for FsJournal {
         id: &PlanId,
         relative: &str,
     ) -> Result<(), CoreError> {
+        let mut record: PlanRecord = self.read_json(&self.plan_path(id))?;
+        match record.status {
+            PlanStatus::Pending | PlanStatus::Interrupted => {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "recovery still needs this plan's backups",
+                ))
+            }
+            PlanStatus::Done | PlanStatus::Failed | PlanStatus::Reversed => {}
+        }
+        if !record.expired_backups.iter().any(|name| name == relative) {
+            record.expired_backups.push(relative.to_owned());
+            self.write_record(&record)?;
+        }
         let path = self.backup_path(id, relative);
         match self.fs.fsops_remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(CoreError::io(path, e)),
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(CoreError::io(&path, error)),
         }
+        if let Some(parent) = path.parent() {
+            self.fs
+                .fsops_fsync_dir(parent)
+                .map_err(|error| CoreError::io(parent, error))?;
+        }
+        Ok(())
     }
 
     fn write_backup(
@@ -264,6 +288,13 @@ impl Journal for FsJournal {
     }
 
     fn read_backup(&self, id: &PlanId, relative: &str) -> Result<Vec<u8>, CoreError> {
+        let record: PlanRecord = self.read_json(&self.plan_path(id))?;
+        if record.expired_backups.iter().any(|name| name == relative) {
+            return Err(CoreError::new(
+                ErrorCode::BackupExpired,
+                crate::backup_retention::BACKUP_EXPIRED_REASON,
+            ));
+        }
         let path = self.backup_path(id, relative);
         self.fs
             .read_capped(&path, MAX_BACKUP_BYTES)
@@ -301,6 +332,7 @@ impl<'a> PlanWriter<'a> {
             label: label.into(),
             root,
             backups,
+            expired_backups: Vec::new(),
             steps: Vec::new(),
             status: PlanStatus::Pending,
         };
@@ -808,15 +840,6 @@ fn remove_tree(fs: &dyn ScopeFs, path: &Path) -> std::io::Result<()> {
     fs.fsops_remove_dir(path)
 }
 
-/// Size-and-age limit on the backups plans keep for undo.
-#[derive(Debug, Clone, Copy)]
-pub struct BackupQuota {
-    /// Total bytes every kept backup may sum to.
-    pub max_total_bytes: u64,
-    /// A backup older than this, regardless of total size, is trimmed.
-    pub max_age: Duration,
-}
-
 /// One backup [`trim_backups`] removed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrimmedBackup {
@@ -826,57 +849,73 @@ pub struct TrimmedBackup {
     pub relative: String,
 }
 
-/// Trims backups over `quota`, oldest first, using each backup's plan's
-/// `created_at` as its age. Age violations are removed first, then size
-/// violations, until both the age and the total-size budget hold; never
-/// touches a plan row, only the backup bytes [`Journal::remove_backup`]
-/// deletes.
+/// Expires completed plan backups only when count, age, newest undoable
+/// plan, and recovery protections all permit it. Pending and interrupted
+/// plans remain protected. Rows stay; expiry is durable before deletion.
 pub fn trim_backups(
     journal: &dyn Journal,
     guard: &ExclusiveGuard,
     now: DateTime<Utc>,
-    quota: &BackupQuota,
 ) -> Result<Vec<TrimmedBackup>, CoreError> {
-    let mut entries: Vec<(DateTime<Utc>, PlanId, PlanBackupEntry)> = journal
-        .all()?
-        .into_iter()
-        .flat_map(|plan| {
-            plan.backups
-                .into_iter()
-                .map(move |backup| (plan.created_at, plan.id.clone(), backup))
-        })
-        .collect();
-    entries.sort_by_key(|a| a.0);
-
+    use crate::backup_retention::{BACKUP_RETENTION_AGE, BACKUP_RETENTION_COUNT};
+    let mut plans = journal.all()?;
+    plans.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.id.cmp(&left.id))
+    });
+    let mut targets: std::collections::BTreeMap<PathBuf, Vec<(&PlanRecord, &PlanBackupEntry)>> =
+        std::collections::BTreeMap::new();
     let mut trimmed = Vec::new();
-    let mut kept = Vec::new();
-    for entry in entries {
-        let age = now.signed_duration_since(entry.0);
-        let over_age = age.to_std().is_ok_and(|d| d > quota.max_age);
-        if over_age {
-            journal.remove_backup(guard, &entry.1, &entry.2.relative)?;
-            trimmed.push(TrimmedBackup {
-                plan: entry.1,
-                relative: entry.2.relative,
-            });
-        } else {
-            kept.push(entry);
+    for plan in &plans {
+        match plan.status {
+            PlanStatus::Pending | PlanStatus::Interrupted => continue,
+            PlanStatus::Done | PlanStatus::Failed | PlanStatus::Reversed => {}
+        }
+        for backup in &plan.backups {
+            if !guard
+                .keys()
+                .iter()
+                .any(|key| backup.original.starts_with(&key.canonical_root))
+            {
+                continue;
+            }
+            if plan.expired_backups.contains(&backup.relative) {
+                journal.remove_backup(guard, &plan.id, &backup.relative)?;
+                continue;
+            }
+            let primary = plan.steps.iter().find_map(|step| match step {
+                PlanStep::Swap { path, .. } => Some(path),
+                _ => None,
+            }).or_else(|| plan.backups.first().map(|entry| &entry.original)).unwrap_or(&backup.original);
+            let target = crate::backup_retention::skill_target(primary);
+            targets.entry(target).or_default().push((plan, backup));
         }
     }
-
-    let mut total: u64 = kept.iter().map(|(_, _, backup)| backup.bytes).sum();
-    let mut i = 0;
-    while total > quota.max_total_bytes && i < kept.len() {
-        let (_, plan, backup) = kept[i].clone();
-        journal.remove_backup(guard, &plan, &backup.relative)?;
-        total -= backup.bytes;
-        trimmed.push(TrimmedBackup {
-            plan,
-            relative: backup.relative,
-        });
-        i += 1;
+    for backups in targets.values() {
+        let newest_undoable = backups
+            .iter()
+            .find(|(plan, _)| plan.status == PlanStatus::Done)
+            .map(|(plan, _)| &plan.id);
+        let mut completed = Vec::new();
+        for (plan, backup) in backups {
+            if !completed.contains(&plan.id) {
+                completed.push(plan.id.clone());
+            }
+            if completed.len() <= BACKUP_RETENTION_COUNT
+                || now.signed_duration_since(plan.created_at) < BACKUP_RETENTION_AGE
+                || newest_undoable == Some(&plan.id)
+            {
+                continue;
+            }
+            journal.remove_backup(guard, &plan.id, &backup.relative)?;
+            trimmed.push(TrimmedBackup {
+                plan: plan.id.clone(),
+                relative: backup.relative.clone(),
+            });
+        }
     }
-
     Ok(trimmed)
 }
 
@@ -886,12 +925,176 @@ mod tests {
     use crate::fsops::{self, Root};
     use crate::ports::{LeaseMode, LeaseProvider};
     use crate::testing::{FailingFs, FakeLease, FixtureBuilder};
+    use std::time::Duration;
 
     fn guard(lease: &FakeLease) -> ExclusiveGuard {
         let handle = lease
-            .acquire(&[], LeaseMode::Exclusive, Duration::from_secs(0))
+            .acquire(
+                &[crate::ports::LeaseKey {
+                    canonical_root: PathBuf::from("/root"),
+                }],
+                LeaseMode::Exclusive,
+                Duration::ZERO,
+            )
             .expect("acquire exclusive lease");
         ExclusiveGuard::from_handle(handle)
+    }
+
+    fn retention_fixture(
+        protection: &str,
+    ) -> (FsJournal, ExclusiveGuard, Arc<dyn ScopeFs>, Vec<PlanId>) {
+        use crate::backup_retention::{BACKUP_RETENTION_AGE, BACKUP_RETENTION_COUNT};
+        let fs: Arc<dyn ScopeFs> = Arc::new(
+            FixtureBuilder::new()
+                .dir("/journal")
+                .dir("/root")
+                .build_fs(),
+        );
+        let journal = journal_over(fs.clone());
+        let lease = FakeLease::default();
+        let guard = guard(&lease);
+        let now = Utc::now();
+        let mut ids = Vec::new();
+        for index in 0..BACKUP_RETENTION_COUNT + 2 {
+            let id = PlanId(format!("retention-{index:04}"));
+            let age = if protection == "recent" && index == 0 {
+                chrono::Duration::days(1)
+            } else {
+                BACKUP_RETENTION_AGE + chrono::Duration::days(1)
+            };
+            let plan = PlanWriter::begin(
+                &journal,
+                &guard,
+                id.clone(),
+                now - age + chrono::Duration::seconds(index as i64),
+                "retention",
+                PathBuf::from("/root"),
+                Vec::new(),
+            )
+            .unwrap();
+            plan.record_write_file(Path::new("/root/alpha/SKILL.md"), Some(b"backup bytes"))
+                .unwrap();
+            let status = match (protection, index) {
+                ("pending", 0) => PlanStatus::Pending,
+                ("interrupted", 0) => PlanStatus::Interrupted,
+                ("undoable", 0) => PlanStatus::Done,
+                _ => PlanStatus::Reversed,
+            };
+            if status != PlanStatus::Pending {
+                plan.finish(status).unwrap();
+            }
+            ids.push(id);
+        }
+        (journal, guard, fs, ids)
+    }
+
+    #[test]
+    fn completed_plan_retention_keeps_the_count_and_age_union_or_deletes_a_protected_backup() {
+        use crate::backup_retention::BACKUP_RETENTION_COUNT;
+        for protection in ["count", "recent", "undoable", "pending", "interrupted"] {
+            let (journal, guard, fs, ids) = retention_fixture(protection);
+            trim_backups(&journal, &guard, Utc::now()).unwrap();
+            let records = journal.all().unwrap();
+            let protected = if protection == "count" {
+                ids.len() - BACKUP_RETENTION_COUNT
+            } else {
+                0
+            };
+            let control = if protected == 0 { 1 } else { 0 };
+            let path = |index: usize| {
+                journal.backup_path(&ids[index], &records[index].backups[0].relative)
+            };
+            assert!(
+                fs.symlink_metadata(&path(protected)).is_ok(),
+                "{protection} must protect this backup"
+            );
+            assert!(
+                fs.symlink_metadata(&path(control)).is_err(),
+                "an old unprotected plan backup must expire"
+            );
+            assert_eq!(records.len(), ids.len(), "retention must keep plan rows");
+        }
+    }
+
+    fn crash_retention_plans() -> (Arc<dyn ScopeFs>, ExclusiveGuard) {
+        let fs: Arc<dyn ScopeFs> = Arc::new(
+            FixtureBuilder::new()
+                .dir("/journal")
+                .dir("/root")
+                .file("/root/SKILL.md", b"user file")
+                .build_fs(),
+        );
+        let journal = journal_over(fs.clone());
+        let guard = guard(&FakeLease::default());
+        for index in 0..crate::backup_retention::BACKUP_RETENTION_COUNT + 2 {
+            let plan = PlanWriter::begin(
+                &journal,
+                &guard,
+                PlanId(format!("crash-{index:04}")),
+                Utc::now(),
+                "plan",
+                PathBuf::from("/root"),
+                Vec::new(),
+            )
+            .unwrap();
+            plan.record_write_file(Path::new("/root/alpha/SKILL.md"), Some(b"backup bytes"))
+                .unwrap();
+            plan.finish(PlanStatus::Done).unwrap();
+        }
+        (fs, guard)
+    }
+
+    #[test]
+    fn completed_plan_retention_crash_at_every_durable_step_recovers_or_leaves_an_available_partial_backup(
+    ) {
+        use crate::testing::CrashFs;
+        let now =
+            Utc::now() + crate::backup_retention::BACKUP_RETENTION_AGE + chrono::Duration::days(1);
+        let (fs, guard) = crash_retention_plans();
+        let counted = Arc::new(CrashFs::new(fs, 0));
+        trim_backups(&journal_over(counted.clone()), &guard, now).unwrap();
+        let steps = counted.calls();
+        assert!(steps > 0);
+        for cut in 1..=steps {
+            let (fs, guard) = crash_retention_plans();
+            let before = tree_snapshot(fs.as_ref(), Path::new("/root"));
+            let crashing = journal_over(Arc::new(CrashFs::new(fs.clone(), cut)));
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| trim_backups(
+                    &crashing, &guard, now
+                )))
+                .is_err()
+            );
+            let recovered = journal_over(fs.clone());
+            for plan in recovered.all().unwrap() {
+                for backup in plan.backups {
+                    let result = recovered.read_backup(&plan.id, &backup.relative);
+                    if plan.expired_backups.contains(&backup.relative) {
+                        assert_eq!(result.unwrap_err().code, ErrorCode::BackupExpired);
+                    } else {
+                        assert_eq!(
+                            result.unwrap(),
+                            b"backup bytes",
+                            "cut {cut}: available backup is incomplete"
+                        );
+                    }
+                }
+            }
+            reconcile(&recovered, &guard, fs.as_ref()).unwrap();
+            trim_backups(&recovered, &guard, now).unwrap();
+            assert_eq!(
+                tree_snapshot(fs.as_ref(), Path::new("/root")),
+                before,
+                "cut {cut}: user files changed"
+            );
+            let remaining = recovered
+                .all()
+                .unwrap()
+                .iter()
+                .map(|plan| plan.backups.len() - plan.expired_backups.len())
+                .sum::<usize>();
+            assert_eq!(remaining, crate::backup_retention::BACKUP_RETENTION_COUNT);
+        }
     }
 
     fn journal_over(fs: Arc<dyn ScopeFs>) -> FsJournal {
@@ -1111,6 +1314,17 @@ mod tests {
         let g = guard(&lease);
 
         let id = PlanId("01PLANREMOVEBACKUP0000001".into());
+        let plan = PlanWriter::begin(
+            &journal,
+            &g,
+            id.clone(),
+            Utc::now(),
+            "completed backup",
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .unwrap();
+        plan.finish(PlanStatus::Done).unwrap();
         journal
             .write_backup(&g, &id, "skill/SKILL.md", b"backup bytes")
             .expect("write the backup");
@@ -1144,6 +1358,21 @@ mod tests {
         let g = guard(&lease);
 
         let id = PlanId("01PLANREMOVEBACKUPTWICE01".into());
+        let plan = PlanWriter::begin(
+            &journal,
+            &g,
+            id.clone(),
+            Utc::now(),
+            "completed backup",
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .unwrap();
+        plan.finish(PlanStatus::Done).unwrap();
+        journal
+            .write_backup(&g, &id, "never-written.bin", b"old")
+            .unwrap();
+        journal.remove_backup(&g, &id, "never-written.bin").unwrap();
         journal
             .remove_backup(&g, &id, "never-written.bin")
             .expect("removing a backup that was never written must be a no-op, not an error");
@@ -2605,121 +2834,5 @@ mod tests {
                 FileKind::Other => {}
             }
         }
-    }
-
-    /// Given a backup set with one entry older than the age quota, one
-    /// entry that pushes the kept total over the size quota, and one recent,
-    /// small entry that must survive, when `trim_backups` runs, then only
-    /// the survivor is left; on failure the panic names whichever stale or
-    /// oversized entry survived instead.
-    #[test]
-    fn a_backup_set_over_the_size_or_age_quota_is_trimmed_oldest_first_or_names_the_surviving_stale_entry(
-    ) {
-        let fs: Arc<dyn ScopeFs> = Arc::new(FixtureBuilder::new().dir("/journal").build_fs());
-        let journal = journal_over(fs.clone());
-        let lease = FakeLease::default();
-        let g = guard(&lease);
-        let now = Utc::now();
-
-        let stale_id = PlanId("01PLAN0000000000000000005".into());
-        write_backup(&fs, &stale_id, "stale.bin", b"01");
-        begin_with_backups(
-            &journal,
-            &g,
-            stale_id.clone(),
-            now - chrono::Duration::days(30),
-            vec![PlanBackupEntry {
-                original: PathBuf::from("/root/stale"),
-                relative: "stale.bin".into(),
-                bytes: 2,
-            }],
-        );
-
-        let oversized_id = PlanId("01PLAN0000000000000000006".into());
-        write_backup(&fs, &oversized_id, "big.bin", &[0u8; 100]);
-        begin_with_backups(
-            &journal,
-            &g,
-            oversized_id.clone(),
-            now - chrono::Duration::minutes(5),
-            vec![PlanBackupEntry {
-                original: PathBuf::from("/root/big"),
-                relative: "big.bin".into(),
-                bytes: 100,
-            }],
-        );
-
-        let survivor_id = PlanId("01PLAN0000000000000000007".into());
-        write_backup(&fs, &survivor_id, "small.bin", b"x");
-        begin_with_backups(
-            &journal,
-            &g,
-            survivor_id.clone(),
-            now - chrono::Duration::minutes(1),
-            vec![PlanBackupEntry {
-                original: PathBuf::from("/root/small"),
-                relative: "small.bin".into(),
-                bytes: 1,
-            }],
-        );
-
-        let quota = BackupQuota {
-            max_total_bytes: 10,
-            max_age: Duration::from_hours(1),
-        };
-        let trimmed = trim_backups(&journal, &g, now, &quota).expect("trim must run");
-        let trimmed_ids: Vec<&PlanId> = trimmed.iter().map(|t| &t.plan).collect();
-
-        assert!(
-            trimmed_ids.contains(&&stale_id),
-            "the entry over the age quota must be trimmed"
-        );
-        assert!(
-            trimmed_ids.contains(&&oversized_id),
-            "the entry that pushes the kept total over the size quota must be trimmed"
-        );
-        assert!(
-            !trimmed_ids.contains(&&survivor_id),
-            "surviving stale entry: {survivor_id:?} was trimmed but should have stayed within quota"
-        );
-        assert!(
-            fs.symlink_metadata(Path::new(&format!(
-                "/journal/plans/{}/backups/small.bin",
-                survivor_id.0
-            )))
-            .is_ok(),
-            "the survivor's bytes must remain on disk"
-        );
-    }
-
-    fn write_backup(fs: &Arc<dyn ScopeFs>, id: &PlanId, relative: &str, bytes: &[u8]) {
-        let dir = PathBuf::from(format!("/journal/plans/{}/backups", id.0));
-        let mut built = PathBuf::from("/journal");
-        for component in dir.strip_prefix("/journal").unwrap().components() {
-            built.push(component);
-            let _ = fs.fsops_create_dir(&built);
-        }
-        fs.fsops_write_new_file(&dir.join(relative), bytes)
-            .expect("write backup bytes");
-    }
-
-    fn begin_with_backups(
-        journal: &FsJournal,
-        g: &ExclusiveGuard,
-        id: PlanId,
-        created_at: DateTime<Utc>,
-        backups: Vec<PlanBackupEntry>,
-    ) {
-        let plan = PlanWriter::begin(
-            journal,
-            g,
-            id,
-            created_at,
-            "backup fixture",
-            PathBuf::from("/root"),
-            backups,
-        )
-        .expect("begin");
-        plan.finish(PlanStatus::Done).expect("finish");
     }
 }

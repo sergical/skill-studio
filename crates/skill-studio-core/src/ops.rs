@@ -4395,6 +4395,9 @@ fn restore_event_body(
         .get(&req.event_id)?
         .ok_or_else(|| CoreError::new(ErrorCode::InvalidRequest, "event not found"))?;
     match target.restore_capability() {
+        crate::dto::RestoreCapability::BackupExpired { .. } => {
+            return Err(CoreError::new(ErrorCode::BackupExpired, crate::backup_retention::BACKUP_EXPIRED_REASON));
+        }
         crate::dto::RestoreCapability::Reverted { .. } => {
             return Err(CoreError::new(
                 ErrorCode::AlreadyReverted,

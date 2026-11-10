@@ -181,3 +181,46 @@ pub fn parked_after_install(home: &Path, unpark: bool) -> EventId {
         parked.event_id
     }
 }
+
+pub fn expired_backup(home: &Path) -> (EventId, Vec<u8>) {
+    use skill_studio_core::backup_retention::{
+        BackupRetentionScope, BACKUP_RETENTION_AGE, BACKUP_RETENTION_COUNT,
+    };
+    use skill_studio_core::events::{EventDraft, EventKind, EventStatus};
+    use skill_studio_core::ports::{acquire_exclusive, HistoryAccess};
+    let rt = runtime(home);
+    let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+    let mut store = rt
+        .ports
+        .history
+        .open(&rt.scope, HistoryAccess::ReadWrite)
+        .unwrap()
+        .unwrap();
+    let target = home.join(".agents/skills/alpha");
+    let mut ids = Vec::new();
+    for index in 0..BACKUP_RETENTION_COUNT + 2 {
+        write_skill(home, "alpha", &format!("version {index}"));
+        let id = EventId::from_ulid(ulid::Ulid::new());
+        let manifest = store
+            .backup_paths(&guard, &id, std::slice::from_ref(&target))
+            .unwrap();
+        let fingerprint = manifest.entries[0].fingerprint.as_ref().unwrap().bare_hex();
+        store.record(&guard, &id, &EventDraft {
+            kind:EventKind::Update, skill:SkillName("alpha".into()), harness:None, scope:Some("global".into()), project_path:None,
+            payload:serde_json::json!({}), inverse:Some(serde_json::json!({"op":"restore_backup","path":target,"pre_fingerprint":fingerprint,"post_fingerprint":fingerprint})), backup_dir:Some(manifest.backup_dir),
+        }).unwrap();
+        store.finish(&guard, &id, EventStatus::Done, None).unwrap();
+        ids.push(id);
+    }
+    store
+        .retain_backups(
+            &guard,
+            chrono::Utc::now() + BACKUP_RETENTION_AGE + chrono::Duration::days(1),
+            BackupRetentionScope::All,
+        )
+        .unwrap();
+    (
+        ids.remove(0),
+        std::fs::read(target.join("SKILL.md")).unwrap(),
+    )
+}

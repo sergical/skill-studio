@@ -1045,6 +1045,10 @@ export interface SkillEventDto {
    * False when force restore could cross an independent Copy boundary.
    */
   force_restorable: boolean;
+  /**
+   * Why Undo is unavailable when a completed backup has expired.
+   */
+  restore_unavailable_reason?: string | null;
   reverted_by: string | null;
   /**
    * Absolute path to this event's backup directory, for a "Reveal in

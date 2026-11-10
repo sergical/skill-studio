@@ -89,7 +89,9 @@ pub fn dto_from_row(
     data_root: &Path,
     row: EventRow,
 ) -> SkillEventDto {
+    let expired = skill_studio_core::backup_retention::backup_is_expired(&row.payload);
     let restorable = row.restorable
+        && !expired
         && !is_agent_config_event(store, &row)
         && row.inverse.is_some()
         && row
@@ -123,6 +125,8 @@ pub fn dto_from_row(
         status: row.status,
         restorable,
         force_restorable,
+        restore_unavailable_reason: expired
+            .then(|| skill_studio_core::backup_retention::BACKUP_EXPIRED_REASON.to_owned()),
         reverted_by: row.reverted_by,
         backup_path,
     }
@@ -269,6 +273,9 @@ pub fn restore_event_with_runtime(
     let target = store
         .get(event_id)?
         .ok_or_else(|| format!("Event {event_id} not found"))?;
+    if skill_studio_core::backup_retention::backup_is_expired(&target.payload) {
+        return Err(skill_studio_core::backup_retention::BACKUP_EXPIRED_REASON.to_owned());
+    }
     skill_materialize::restore_guard_for_explode(store, &target, home)?;
     if target.kind == "make_independent_copy" {
         if force {
@@ -279,10 +286,9 @@ pub fn restore_event_with_runtime(
         }
         let write_lease = super::write_lease::WriteLease::default();
         let guard = write_lease.try_acquire(home)?;
-        return super::skill_independent_copy::restore_independent_copy(
-            store, home, &target, &guard,
-        )
-        .map(|_| ());
+        super::skill_independent_copy::restore_independent_copy(store, home, &target, &guard)?;
+        store.retain_backups(guard.as_exclusive_guard());
+        return Ok(());
     }
 
     // A row with a `backup_dir` is dispatched by which root actually has its
@@ -307,6 +313,7 @@ pub fn restore_event_with_runtime(
     let write_lease = super::write_lease::WriteLease::default();
     let _guard = write_lease.try_acquire(home)?;
     store.restore(event_id, force)?;
+    store.retain_backups(_guard.as_exclusive_guard());
     if target.kind == "explode_shared_dir" {
         if let Some(root) = target.payload.get("root").and_then(|v| v.as_str()) {
             store.unregister_materialized_root(Path::new(root))?;
@@ -447,6 +454,7 @@ pub async fn materialize_harness_root(
         let guard = locked_store(&event_store)?;
         let store = guard.as_ref().ok_or("Event store is unavailable")?;
         skill_materialize::explode_shared_dir(store, &root_path, &harness)?;
+        store.retain_backups(_guard.as_exclusive_guard());
         drop(guard);
 
         skill_refresh::request_snapshot_rebuild(&app);
@@ -534,6 +542,7 @@ pub async fn materialize_harness_root_then_disable(
                     project_path: deployment.project_path.as_deref(),
                 },
             )?;
+            store.retain_backups(_guard.as_exclusive_guard());
             drop(guard);
             skill_refresh::request_snapshot_rebuild(&app);
             Ok(())
@@ -647,6 +656,7 @@ pub async fn make_skill_independent_copy(
                 },
                 &write_guard,
             )?;
+            store.retain_backups(write_guard.as_exclusive_guard());
             drop(guard);
             let affected_projects: Vec<PathBuf> = project_path.iter().map(PathBuf::from).collect();
             if let Err(error) = skill_refresh::reconcile_skill_names_and_emit(
@@ -765,6 +775,7 @@ pub async fn repair_skill_link(
             }
             other => return Err(format!("Unknown repair action: {other}")),
         }
+        store.retain_backups(_guard.as_exclusive_guard());
         drop(guard);
 
         let normalized_link = normalize_link_path(&link);
