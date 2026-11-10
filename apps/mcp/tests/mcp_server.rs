@@ -21,8 +21,10 @@ use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use skill_studio_core::testing::fixtures;
 
-fn mcp_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_skill-studio-mcp")
+fn mcp_bin() -> PathBuf {
+    std::env::var_os("SKILL_STUDIO_TEST_MCP_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_skill-studio-mcp").into())
 }
 
 /// The CLI binary's path. Not a Cargo dependency of this crate (artifact
@@ -30,12 +32,15 @@ fn mcp_bin() -> &'static str {
 /// via `cargo build -p skill-studio-cli` and locates it next to this crate's
 /// own binary, under the shared workspace `target/` directory.
 fn cli_bin() -> PathBuf {
+    if let Some(binary) = std::env::var_os("SKILL_STUDIO_TEST_BINARY") {
+        return binary.into();
+    }
     let status = std::process::Command::new(env!("CARGO"))
         .args(["build", "-p", "skill-studio-cli", "--bin", "skill-studio"])
         .status()
         .expect("run cargo build -p skill-studio-cli");
     assert!(status.success(), "failed to build skill-studio-cli");
-    Path::new(mcp_bin())
+    Path::new(&mcp_bin())
         .parent()
         .unwrap()
         .join(if cfg!(windows) {
