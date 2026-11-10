@@ -645,6 +645,15 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
     }
     type SchemaFn = fn() -> schemars::Schema;
     let schemas: &[(&str, SchemaFn)] = &[
+        ("agent_off_request", || {
+            schemars::schema_for!(skill_studio_core::dto::AgentOffRequest)
+        }),
+        ("agent_off_outcome", || {
+            schemars::schema_for!(skill_studio_core::dto::AgentOffOutcome)
+        }),
+        ("agent_off_check", || {
+            schemars::schema_for!(skill_studio_core::dto::AgentOffCheck)
+        }),
         ("scan_request", || schemars::schema_for!(ScanRequest)),
         ("inventory", || schemars::schema_for!(Inventory)),
         ("diagnosis", || schemars::schema_for!(Diagnosis)),

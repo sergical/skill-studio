@@ -649,6 +649,7 @@ async fn the_unpark_tool_puts_a_parked_skill_and_its_link_back_or_names_the_enve
     let (_home_dir, home) = live_home();
     let park = run_cli(&[
         "park",
+        "turn_off_for_agent",
         "--home",
         home.to_str().unwrap(),
         "--deployment-id",
@@ -1030,6 +1031,7 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
 /// The tools an agent sees by default, read-only ones first. A change to
 /// this list changes what every client loads into context.
 const READ_TOOLS: &[&str] = &[
+    "turn_off_check",
     "scan",
     "diagnose",
     "skill_usage",

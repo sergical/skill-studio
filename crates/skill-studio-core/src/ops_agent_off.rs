@@ -36,6 +36,8 @@ const SPLIT_HARNESSES: [&str; 6] = [
     AgentId::GROK_BUILD,
 ];
 
+impl Outcome for AgentOffCheck {}
+
 impl Outcome for AgentOffOutcome {
     fn event_id(&self) -> Option<crate::identity::EventId> {
         Some(self.event_id.clone())

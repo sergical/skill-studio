@@ -65,6 +65,15 @@ fn dev_tools_enabled() -> bool {
     std::env::var("SKILL_STUDIO_MCP_DEV_TOOLS").is_ok_and(|value| value == "1")
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ConfirmAgentOffRequest {
+    deployment_id: skill_studio_core::identity::DeploymentId,
+    agent: skill_studio_core::identity::AgentId,
+    /// Confirm splitting the shared skill and stopping source updates for its copies.
+    #[serde(default)]
+    confirmed: bool,
+}
+
 /// The server. Holds the tool table and the use index behind
 /// `skill_usage`, which every clone shares and which loads on its first
 /// call. No `Runtime` is kept: each call builds its own.
@@ -524,7 +533,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Delete one copy of a skill, such as a duplicate or a broken copy. Undo with restore_event and the event_id from the result.",
+        description = "Remove a canonical shared .agents/skills copy owned by skills.sh, dotagents, Copy or Fork. Manual copies in agent folders and plugin copies return unsupported. Use scan to select the shared deployment_id. Undo with restore_event and the event_id from the result.",
         annotations(read_only_hint = false, destructive_hint = true)
     )]
     async fn remove(
@@ -584,6 +593,41 @@ impl SkillStudioServer {
             Ok(outcome)
         })
         .await
+    }
+
+    #[tool(
+        description = "Preview turning a shared skill off for one agent. Reports refusals and git status. Review this before confirming turn_off_for_agent; the split stops source updates for all copies. Writes nothing.",
+        annotations(read_only_hint = true)
+    )]
+    async fn turn_off_check(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::dto::AgentOffRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(Operation::TurnOffForAgent, false, &context, |rt, ctx| {
+            skill_studio_core::ops_agent_off::turn_off_check(rt, ctx, &req)
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Turn a shared skill off for one agent. Review turn_off_check, then set confirmed=true. Splits into agent copies and parks the chosen copy; stops source updates for the copies. Never writes agent configs. Undo with restore_event and event_id.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn turn_off_for_agent(
+        &self,
+        Parameters(req): Parameters<ConfirmAgentOffRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(Operation::TurnOffForAgent, req.confirmed, &context, |rt, ctx| {
+            if !req.confirmed {
+                return Err(CoreError::new(skill_studio_core::ErrorCode::InvalidRequest,
+                    "Review turn_off_check, then set confirmed=true. This splits the shared skill and stops source updates for the copies."));
+            }
+            skill_studio_core::ops_agent_off::turn_off_for_agent(rt, ctx, &skill_studio_core::dto::AgentOffRequest {
+                deployment_id: req.deployment_id, agent: req.agent,
+            })
+        }).await
     }
 
     #[tool(
