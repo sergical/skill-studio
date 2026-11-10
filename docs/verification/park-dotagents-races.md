@@ -23,3 +23,13 @@ library methods and binaries. CI does not use that local wrapper.
 
 The simplification pass renamed the private command-era helper to `unlist` and
 removed obsolete command comments. No `events.rs` changes.
+
+## Turn on failure after relisting
+
+| Issue | User flow                                                             | Expectation                                          | Proof (file::test or command)                                                          | Red before fix?                 | Measured numbers |
+| ----- | --------------------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------- | ---------------- |
+| #448  | Edit config after Turn on relists the skill, then fail the lock write | Keep the concurrent edit and return a conflict       | park_install_aware::failed_turn_on_keeps_an_edit_after_relisting_when_lock_write_fails | Yes; both lost the injected row | No timing claim  |
+| #448  | Edit config after relisting, then fail the folder move                | Same preservation through the caller's rollback path | park_install_aware::failed_turn_on_keeps_an_edit_after_relisting_when_move_fails       | Yes; both lost the injected row | No timing claim  |
+
+The follow-up simplification uses the existing `write_back` helper for all three
+Turn on writes. Core package tests, format, and clippy pass after that change.

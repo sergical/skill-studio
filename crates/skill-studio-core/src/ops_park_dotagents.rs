@@ -17,6 +17,12 @@ pub(crate) struct FileSnapshot {
     text: Option<String>,
 }
 
+/// A file write and the exact output required for its safe rollback.
+pub(crate) struct FileEdit {
+    before: FileSnapshot,
+    after: String,
+}
+
 /// A `name = "*"` entry that supplied the skill, found again by what it
 /// says rather than by position: entries move when the person edits the file.
 #[derive(Clone)]
@@ -42,7 +48,7 @@ struct Locked {
 
 /// What Park must undo in dotagents' files for one skill.
 pub(crate) struct DotagentsPark {
-    changes: RefCell<Vec<(FileSnapshot, String)>>,
+    changes: RefCell<Vec<FileEdit>>,
     /// `agents.toml`, or the file its link resolves to.
     pub(crate) config: PathBuf,
     /// `agents.lock`, or the file its link resolves to.
@@ -122,9 +128,9 @@ impl DotagentsPark {
         let changes = self.changes.borrow();
         let hash = |path: &Path| {
             let original = self.originals.iter().find(|file| file.path == path)?;
-            let change = changes.iter().find(|(before, _)| before.path == path);
+            let change = changes.iter().find(|edit| edit.before.path == path);
             let expected = match change {
-                Some((before, after)) if before.text == original.text => Some(after.as_str()),
+                Some(edit) if edit.before.text == original.text => Some(edit.after.as_str()),
                 Some(_) => return None,
                 None => original.text.as_deref(),
             };
@@ -792,13 +798,13 @@ fn write_park_file(
         .at(path));
     }
     write_text(rt, guard, path, &after)?;
-    plan.changes.borrow_mut().push((
-        FileSnapshot {
+    plan.changes.borrow_mut().push(FileEdit {
+        before: FileSnapshot {
             path: path.to_path_buf(),
             text: before,
         },
         after,
-    ));
+    });
     Ok(())
 }
 
@@ -834,35 +840,32 @@ pub(crate) fn restore_originals(
     guard: &ExclusiveGuard,
     plan: &DotagentsPark,
 ) -> Result<(), CoreError> {
-    for (before, expected) in plan.changes.borrow().iter().rev() {
-        if read_text(rt.ports.fs.as_ref(), &before.path)?.as_deref() != Some(expected) {
-            return Err(CoreError::new(
-                ErrorCode::DriftConflict,
-                "a file changed after Park wrote it; its backup is retained and the current file was kept",
-            ).at(&before.path));
-        }
-        restore_files(rt, guard, std::slice::from_ref(before))?;
-    }
-    Ok(())
+    restore_files(rt, guard, &plan.changes.borrow())
 }
 
 /// Writes every snapshot back and reports the first failure after trying all.
 pub(crate) fn restore_files(
     rt: &Runtime,
     guard: &ExclusiveGuard,
-    files: &[FileSnapshot],
+    files: &[FileEdit],
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
     let mut first_error = None;
-    for file in files {
-        let result =
+    for edit in files.iter().rev() {
+        let file = &edit.before;
+        let result = (|| {
+            if read_text(fs, &file.path)?.as_deref() != Some(edit.after.as_str()) {
+                return Err(CoreError::new(ErrorCode::DriftConflict,
+                    "a file changed after this operation wrote it; its backup is retained and the current file was kept").at(&file.path));
+            }
             crate::ports::confine_write_through(&rt.scope, fs, &file.path).and_then(|scoped| {
                 match &file.text {
                     Some(text) => fs.write_atomic(guard, &scoped, text.as_bytes()),
                     None => fs.remove_file(guard, &scoped),
                 }
                 .map_err(|e| CoreError::io(&file.path, e))
-            });
+            })
+        })();
         if let Err(e) = result {
             first_error.get_or_insert(e);
         }
@@ -1094,12 +1097,15 @@ pub(crate) fn turn_on(
     recorded: &RecordedDotagents,
     originals: &[FileSnapshot],
     skill: &SkillName,
-) -> Result<Vec<FileSnapshot>, CoreError> {
+) -> Result<Vec<FileEdit>, CoreError> {
     let mut changed = Vec::new();
     match turn_on_files(rt, guard, recorded, originals, skill, &mut changed) {
         Ok(()) => Ok(changed),
         Err(e) => {
-            let _ = restore_files(rt, guard, &changed);
+            if let Err(mut restore_error) = restore_files(rt, guard, &changed) {
+                restore_error.message = format!("{} {}", e.message, restore_error.message);
+                return Err(restore_error);
+            }
             Err(e)
         }
     }
@@ -1131,15 +1137,18 @@ fn write_back(
     path: &Path,
     current: Option<String>,
     text: &str,
-    changed: &mut Vec<FileSnapshot>,
+    changed: &mut Vec<FileEdit>,
 ) -> Result<(), CoreError> {
     if current.as_deref() == Some(text) {
         return Ok(());
     }
     write_text(rt, guard, path, text)?;
-    changed.push(FileSnapshot {
-        path: path.to_path_buf(),
-        text: current,
+    changed.push(FileEdit {
+        before: FileSnapshot {
+            path: path.to_path_buf(),
+            text: current,
+        },
+        after: text.to_string(),
     });
     Ok(())
 }
@@ -1150,7 +1159,7 @@ fn turn_on_files(
     recorded: &RecordedDotagents,
     originals: &[FileSnapshot],
     skill: &SkillName,
-    changed: &mut Vec<FileSnapshot>,
+    changed: &mut Vec<FileEdit>,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
     let after = recorded.after.as_ref();
@@ -1196,11 +1205,14 @@ fn turn_on_files(
             }
             if edited {
                 let rendered = render_checked(&recorded.config, &doc, current.contains("\r\n"))?;
-                write_text(rt, guard, &recorded.config, &rendered)?;
-                changed.push(FileSnapshot {
-                    path: recorded.config.clone(),
-                    text: Some(current),
-                });
+                write_back(
+                    rt,
+                    guard,
+                    &recorded.config,
+                    Some(current),
+                    &rendered,
+                    changed,
+                )?;
             }
         }
     }
@@ -1218,11 +1230,7 @@ fn turn_on_files(
                 write_back(rt, guard, lock, Some(current), original, changed)?;
             } else if let Some(lock_entry) = &recorded.lock_entry {
                 if let Some(text) = with_lock_entry(lock, &current, skill, lock_entry)? {
-                    write_text(rt, guard, lock, &text)?;
-                    changed.push(FileSnapshot {
-                        path: lock.clone(),
-                        text: Some(current),
-                    });
+                    write_back(rt, guard, lock, Some(current), &text, changed)?;
                 }
             }
         }
@@ -1240,11 +1248,7 @@ fn turn_on_files(
         if let Some(original) = wholesale {
             write_back(rt, guard, gitignore, current, original, changed)?;
         } else if let Some((text, before)) = ignore_merge {
-            write_text(rt, guard, gitignore, &text)?;
-            changed.push(FileSnapshot {
-                path: gitignore.clone(),
-                text: Some(before),
-            });
+            write_back(rt, guard, gitignore, Some(before), &text, changed)?;
         }
     }
     Ok(())
