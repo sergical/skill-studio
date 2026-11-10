@@ -9,7 +9,7 @@
 
 import { serve } from "@hono/node-server";
 
-import { createSkillsProxyApp, isSafeRawPathSegment } from "./skills-proxy-app";
+import { createSkillsProxyApp, isAllowedRawRequestTarget } from "./skills-proxy-app";
 
 const DEFAULT_PORT = 8787;
 const HOST = "127.0.0.1";
@@ -30,33 +30,6 @@ export function requireApiKey(env: NodeJS.ProcessEnv): string {
     );
   }
   return key;
-}
-
-/** Validates the unnormalized Node request target before Hono can route a normalized URL. */
-export function isAllowedRawRequestTarget(rawTarget: string | undefined): boolean {
-  if (!rawTarget) return false;
-
-  const queryStart = rawTarget.indexOf("?");
-  const rawPath = queryStart === -1 ? rawTarget : rawTarget.slice(0, queryStart);
-  const rawQuery = queryStart === -1 ? "" : rawTarget.slice(queryStart + 1);
-  try {
-    decodeURIComponent(rawQuery);
-  } catch {
-    return false;
-  }
-  const segments = rawPath.split("/");
-  if (segments[0] !== "" || segments.slice(1).some((segment) => !isSafeRawPathSegment(segment))) {
-    return false;
-  }
-
-  const isApiV1 = segments[1] === "api" && segments[2] === "v1";
-  if (!isApiV1) return true;
-
-  const isSkillsRoute = segments[3] === "skills";
-  const isListRoute = isSkillsRoute && segments.length === 4;
-  const isSearchRoute = isSkillsRoute && segments.length === 5 && segments[4] === "search";
-  const isDetailRoute = isSkillsRoute && segments.length === 7;
-  return isListRoute || isSearchRoute || isDetailRoute;
 }
 
 /** Builds the Hono app for `apiKey`, with no rate limiter and no cache - kept
