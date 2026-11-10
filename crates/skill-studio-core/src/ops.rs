@@ -5216,7 +5216,7 @@ fn report_failed_move(rt: &Runtime, ctx: &OpContext, deployment: &DeploymentId) 
     }) else {
         return;
     };
-    let (paths, copies) = crate::events::retained_move_data(rt.ports.fs.as_ref(), row);
+    let (paths, copies) = crate::events::retained_move_data(rt.ports.fs.as_ref(), &row.payload);
     if row.payload.get("quarantines").is_some() && !paths.is_empty() {
         let mut report = ctx
             .recovery

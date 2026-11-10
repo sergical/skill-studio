@@ -150,3 +150,39 @@ Shared-target stale builds occurred during verification. Workspace crates use
 `RUSTC_WORKSPACE_WRAPPER=/tmp/skill-studio-pr491-rustc`, a script that runs its
 arguments unchanged. Cargo gives these workspace artifacts a separate cache key
 inside the same shared target. No other Cargo process or target file was removed.
+
+## Recovery notice and Activity review fixes
+
+Desktop recovery keeps one persistent notice per record ID across refreshes.
+Acknowledgement dismisses that record's notice after the command succeeds.
+Activity uses the recovery path resolver to measure copies that still exist.
+A partial stage shows its current size. After publication, Activity finds the
+source and destination instead of showing the staging path removed by rename.
+An existing path whose size cannot be measured keeps an unknown size.
+
+Regressions use temporary folders and IPC fixtures, without sleeps:
+
+- `refresh twice then acknowledge removes the record notice or leaves duplicate persistent warnings`
+- `activity_after_partial_copy_measures_stage_or_reports_planned_source_size`
+- `activity_after_publication_lists_existing_copies_or_reports_renamed_stage`
+
+All three regressions failed with their corresponding fix removed and passed
+with the fixes restored. The partial-copy baseline reported 11 bytes instead
+of 5. The publication baseline kept one obsolete stage entry instead of the
+two existing paths. The frontend baseline added two notices for one record.
+
+Missing-item errors from shared Cargo artifacts survived two timestamp
+refreshes. Validation uses a pass-through compiler wrapper at
+`/tmp/pr491-review-rustc` to separate workspace cache keys within
+`/Users/sergiydybskiy/src/skill-studio/target`. No target files were deleted
+and no other Cargo process was stopped.
+
+Final validation passed: Rust formatting, workspace Clippy with all targets
+and features and warnings denied, the full desktop crate tests, the full core
+crate tests, frontend typecheck, lint, formatting, and all three recovery-hook
+tests. The desktop parity run first used another worktree's CLI binary; building
+this branch's CLI before the rerun resolved that schema mismatch.
+
+The post-green simplify-code pass found no worthwhile simplification. Scoped
+Rust regressions passed again through the compiled test binary, and frontend
+checks and hook tests passed again. Final diff review found no further changes.

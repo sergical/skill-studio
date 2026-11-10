@@ -469,7 +469,7 @@ pub fn recover_interrupted(
                         && row.payload.get("quarantines").is_some()))
         })
     {
-        let (paths, copies) = retained_move_data(fs, &row);
+        let (paths, copies) = retained_move_data(fs, &row.payload);
         report.retained_quarantines.extend(paths);
         report.retained_copies.extend(copies);
         report.interrupted.push(row.id);
@@ -483,12 +483,12 @@ pub fn recover_interrupted(
     Ok(report)
 }
 
-pub(crate) fn retained_move_data(
+/// Resolves existing move copies and measures their current sizes.
+pub fn retained_move_data(
     fs: &dyn ScopeFs,
-    row: &EventRecord,
+    payload: &serde_json::Value,
 ) -> (Vec<PathBuf>, Vec<crate::dto::RetainedCopy>) {
-    let mut paths: Vec<PathBuf> = row
-        .payload
+    let mut paths: Vec<PathBuf> = payload
         .get("quarantines")
         .and_then(serde_json::Value::as_array)
         .into_iter()
@@ -506,7 +506,7 @@ pub(crate) fn retained_move_data(
             ["from", "to"]
                 .into_iter()
                 .filter_map(|key| {
-                    row.payload
+                    payload
                         .get(key)
                         .and_then(serde_json::Value::as_str)
                         .map(PathBuf::from)
