@@ -46,6 +46,7 @@ describe("proxyGet", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://skills.sh/api/v1/skills?page=0", {
       headers: { Authorization: "Bearer sk-test" },
       signal: expect.any(AbortSignal),
+      redirect: "manual",
     });
     expect(result).toEqual({ status: 200, body: { data: [] } });
   });
@@ -88,6 +89,23 @@ describe("proxyGet", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Flow: skills.sh answers a proxied GET with a redirect.
+  // Expectation: the proxy returns 502 and never follows the Location.
+  // Failure: the bearer key or the response of another host reaches the app.
+  it.each([
+    new Response(null, { status: 302, headers: { Location: "https://evil.example/" } }),
+    Response.redirect("https://evil.example/", 307),
+  ])("refuses an upstream redirect instead of following it", async (redirect) => {
+    const fetchMock = vi.fn().mockResolvedValue(redirect);
+    const reportServerError = vi.fn();
+
+    const result = await proxyGet("sk-test", "/skills", "", fetchMock, reportServerError);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(result).toEqual({ status: 502, body: { error: "skills.sh redirected the request" } });
+    expect(reportServerError).toHaveBeenCalledOnce();
   });
 
   it("relays a non-2xx upstream response as-is", async () => {
@@ -144,7 +162,11 @@ describe("GET /api/v1/skills/:owner/:repo/:slug", () => {
     expect(response.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledWith(
       "https://skills.sh/api/v1/skills/org%20name/repo%2Btools/skill%25%40v1",
-      { headers: { Authorization: "Bearer sk-secret" }, signal: expect.any(AbortSignal) },
+      {
+        headers: { Authorization: "Bearer sk-secret" },
+        signal: expect.any(AbortSignal),
+        redirect: "manual",
+      },
     );
   });
 });
@@ -428,10 +450,11 @@ describe("reportServerError", () => {
 
 describe("non-GET requests to /api/v1/*", () => {
   it("rejects a write method with 405, without consulting the cache or calling upstream", async () => {
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ data: [] }));
     const cache = fakeCache();
+    const match = vi.spyOn(cache, "match");
     const app = createSkillsProxyApp({ apiKey: "sk-secret", fetch: fetchMock, cache });
-    await app.request("http://localhost/api/v1/skills?page=0");
+    expect((await app.request("http://localhost/api/v1/skills?page=0")).status).toBe(200);
 
     const response = await app.request("http://localhost/api/v1/skills?page=99", {
       method: "POST",
@@ -439,5 +462,73 @@ describe("non-GET requests to /api/v1/*", () => {
 
     expect(response.status).toBe(405);
     expect(fetchMock).toHaveBeenCalledOnce();
+    expect(match).toHaveBeenCalledOnce();
+  });
+});
+
+describe("proxy hardening", () => {
+  it("a proxy search emits one structured event without caller data", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    try {
+      const app = createSkillsProxyApp({
+        apiKey: "fixture-key",
+        fetch: async () => Response.json({ data: [] }),
+      });
+      await app.request("http://localhost/api/v1/skills/search?q=private-search", {
+        headers: { "CF-Connecting-IP": "203.0.113.1" },
+      });
+      expect(write).toHaveBeenCalledTimes(1);
+      const line = String(write.mock.calls[0][0]);
+      expect(JSON.parse(line)).toEqual({
+        event: "proxy_request",
+        method: "GET",
+        route: "search",
+        status: 200,
+        duration_ms: expect.any(Number),
+      });
+      expect(line).not.toMatch(/private-search|fixture-key|203\.0\.113\.1/);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  // Flow: a caller sends an invented HTTP method to the proxy.
+  // Expectation: the request log names it OTHER, from a fixed set of labels.
+  // Failure: a caller can write any text into the proxy's logs.
+  it("logs an unknown request method as OTHER instead of the caller's text", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    try {
+      const app = createSkillsProxyApp({ apiKey: "fixture-key", fetch: vi.fn() });
+      await app.request("http://localhost/api/v1/skills", { method: "INJECTEDLOGTEXT" });
+      const methods = write.mock.calls.map((call) => JSON.parse(String(call[0])).method);
+      expect(methods).toEqual(["OTHER"]);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("a malformed query is refused before cache and rate limiting instead of reaching upstream", async () => {
+    const fetchMock = vi.fn();
+    const limit = vi.fn();
+    const match = vi.fn();
+    const app = createSkillsProxyApp({
+      apiKey: "fixture",
+      fetch: fetchMock,
+      limiter: { limit },
+      cache: { match, put: vi.fn() },
+    });
+    const response = await app.request("http://localhost/api/v1/skills/search?q=%E0%A4%A");
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(limit).not.toHaveBeenCalled();
+    expect(match).not.toHaveBeenCalled();
+  });
+
+  it("a caller without an edge IP shares the unknown bucket instead of bypassing the limiter", async () => {
+    const limit = vi.fn().mockResolvedValue({ success: false });
+    const app = createSkillsProxyApp({ apiKey: "fixture", limiter: { limit } });
+    const response = await app.request("http://localhost/api/v1/skills");
+    expect(response.status).toBe(429);
+    expect(limit).toHaveBeenCalledWith({ key: "unknown" });
   });
 });
