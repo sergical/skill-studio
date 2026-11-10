@@ -967,28 +967,32 @@ fn reverse_steps(
                         // `previous_target`; one `fsops::link` minted points
                         // at `target`. A symlink with the same name shape
                         // but any other target is a user's own and stays.
-                        for entry in fs.read_dir(&parent)? {
-                            if entry.kind != FileKind::Symlink
-                                || !is_link_restore_temp_name(&entry.name, &temp_prefix)
-                            {
-                                continue;
-                            }
-                            let stale = parent.join(&entry.name);
-                            let points_at_ours = match fs.read_link(&stale) {
-                                Ok(current) => current == *previous_target || current == *target,
-                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-                                Err(e) => return Err(e),
-                            };
-                            if !points_at_ours {
-                                continue;
-                            }
-                            // Under the exclusive lease no other Skill Studio
-                            // process removes the entry between `read_dir` and here, so the
-                            // `NotFound` arm is defensive only.
-                            match fs.fsops_remove_file(&stale) {
-                                Ok(()) => {}
-                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                                Err(e) => return Err(e),
+                        if temporary.is_none() {
+                            for entry in fs.read_dir(&parent)? {
+                                if entry.kind != FileKind::Symlink
+                                    || !is_link_restore_temp_name(&entry.name, &temp_prefix)
+                                {
+                                    continue;
+                                }
+                                let stale = parent.join(&entry.name);
+                                let points_at_ours = match fs.read_link(&stale) {
+                                    Ok(current) => {
+                                        current == *previous_target || current == *target
+                                    }
+                                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                                    Err(e) => return Err(e),
+                                };
+                                if !points_at_ours {
+                                    continue;
+                                }
+                                // Under the exclusive lease no other Skill Studio
+                                // process removes the entry between `read_dir` and here, so the
+                                // `NotFound` arm is defensive only.
+                                match fs.fsops_remove_file(&stale) {
+                                    Ok(()) => {}
+                                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                                    Err(e) => return Err(e),
+                                }
                             }
                         }
                         let tmp_path = temporary.clone().unwrap_or_else(|| {
@@ -1080,21 +1084,24 @@ fn restore_file_from_backup(
     let parent = path.parent().unwrap_or(Path::new("/")).to_path_buf();
     let leaf = path.file_name().and_then(|s| s.to_str()).unwrap_or("write");
     let temp_prefix = format!(".{leaf}-");
-    for entry in fs.read_dir(&parent)? {
-        if entry.kind != FileKind::File || !is_file_restore_temp_name(&entry.name, &temp_prefix) {
-            continue;
-        }
-        let stale = parent.join(&entry.name);
-        let holds_backup = match fs.read_capped(&stale, u64::MAX) {
-            Ok(bytes) => bytes == backup,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => return Err(e),
-        };
-        if holds_backup {
-            match fs.fsops_remove_file(&stale) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+    if temporary.is_none() {
+        for entry in fs.read_dir(&parent)? {
+            if entry.kind != FileKind::File || !is_file_restore_temp_name(&entry.name, &temp_prefix)
+            {
+                continue;
+            }
+            let stale = parent.join(&entry.name);
+            let holds_backup = match fs.read_capped(&stale, u64::MAX) {
+                Ok(bytes) => bytes == backup,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
                 Err(e) => return Err(e),
+            };
+            if holds_backup {
+                match fs.fsops_remove_file(&stale) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
+                }
             }
         }
     }
@@ -3289,8 +3296,7 @@ mod tests {
     /// clears both and the restored link points at the previous target; on
     /// failure the tree diff names the leaked entry it left behind.
     #[test]
-    fn a_leaked_temp_link_under_the_same_prefix_is_cleared_by_a_fresh_process_retry_or_names_the_entry_it_left(
-    ) {
+    fn a_legacy_plan_clears_old_prefix_temps_on_retry_or_leaves_a_leak() {
         let fixture = FixtureBuilder::new()
             .dir("/journal")
             .dir("/root")
@@ -3351,6 +3357,16 @@ mod tests {
         )
         .expect("link");
         drop(plan);
+        let mut legacy: serde_json::Value = journal.read_json(&journal.plan_path(&id)).unwrap();
+        for step in legacy["steps"].as_array_mut().unwrap() {
+            step.as_object_mut().unwrap().shift_remove("temporary");
+        }
+        journal
+            .write_json(
+                &journal.plan_path(&id),
+                &serde_json::to_vec(&legacy).unwrap(),
+            )
+            .unwrap();
 
         // Simulates the leaked temp symlink a first reversal attempt left
         // behind after minting it but before the rename that would have
@@ -3704,5 +3720,77 @@ mod tests {
                 FileKind::Other => {}
             }
         }
+    }
+    #[test]
+    fn recorded_temp_file_keeps_a_matching_user_temp_or_deletes_unowned_bytes() {
+        let fs = FixtureBuilder::new()
+            .dir("/journal")
+            .file("/root/value", b"before")
+            .file("/root/.value-123-4.restore", b"before")
+            .build_fs();
+        let journal = journal_over(Arc::new(fs.clone()));
+        let guard = guard(&FakeLease::default());
+        let root = Root::open(&fs, PathBuf::from("/root")).unwrap();
+        let before = tree_snapshot(&fs, Path::new("/root"));
+        let plan = PlanWriter::begin(
+            &journal,
+            &guard,
+            PlanId("recorded-temp-file".into()),
+            Utc::now(),
+            "replace value",
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .unwrap();
+        fsops::write_file(
+            &root,
+            &plan,
+            Path::new("value"),
+            b"after",
+            &fsops::read_stamp(&fs, Path::new("/root/value")).unwrap(),
+        )
+        .unwrap();
+        drop(plan);
+        assert_eq!(reconcile(&journal, &guard, &fs).unwrap().reversed.len(), 1);
+        assert_eq!(
+            tree_snapshot(&fs, Path::new("/root")),
+            before,
+            "only the recorded temp belongs to this plan"
+        );
+    }
+
+    #[test]
+    fn recorded_temp_link_keeps_a_matching_user_link_or_deletes_an_unowned_entry() {
+        let fs = FixtureBuilder::new()
+            .dir("/journal")
+            .file("/root/old", b"old")
+            .file("/root/new", b"new")
+            .build_fs();
+        fs.fsops_symlink(Path::new("old"), Path::new("/root/current"))
+            .unwrap();
+        fs.fsops_symlink(Path::new("old"), Path::new("/root/.current-123-4"))
+            .unwrap();
+        let journal = journal_over(Arc::new(fs.clone()));
+        let guard = guard(&FakeLease::default());
+        let root = Root::open(&fs, PathBuf::from("/root")).unwrap();
+        let before = tree_snapshot(&fs, Path::new("/root"));
+        let plan = PlanWriter::begin(
+            &journal,
+            &guard,
+            PlanId("recorded-temp-link".into()),
+            Utc::now(),
+            "replace link",
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .unwrap();
+        fsops::link(&root, &plan, Path::new("current"), Path::new("new")).unwrap();
+        drop(plan);
+        assert_eq!(reconcile(&journal, &guard, &fs).unwrap().reversed.len(), 1);
+        assert_eq!(
+            tree_snapshot(&fs, Path::new("/root")),
+            before,
+            "only the recorded temp belongs to this plan"
+        );
     }
 }
