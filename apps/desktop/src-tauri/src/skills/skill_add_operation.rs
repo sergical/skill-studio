@@ -750,7 +750,7 @@ fn spawn_operation(app: AppHandle, state: AddSkillOperationState, operation_id: 
 
 /// Start a single-skill Add Skill operation. Returns the queued event before
 /// any `npx`, network, or large filesystem work.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn start_add_skill_operation(
     operation_id: String,
     request: AddSkillRequest,
@@ -771,7 +771,7 @@ pub fn start_add_skill_operation(
 }
 
 /// Start a batch Add Skill operation. Returns the queued event immediately.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn start_add_skills_operation(
     operation_id: String,
     request: AddSkillsRequest,
@@ -792,7 +792,7 @@ pub fn start_add_skills_operation(
 }
 
 /// Catch-up read for a listener that subscribed after start, or remounted.
-#[tauri::command]
+#[tauri::command(async)]
 // Tauri commands deserialize their arguments fresh per invocation, so `app`
 // can't be borrowed from the caller - it must be owned.
 #[allow(clippy::needless_pass_by_value)]
@@ -808,7 +808,7 @@ pub fn get_add_skill_operation(
 
 /// Request cancel. If mutation already finished, the worker still reports
 /// completed or failed rather than cancelled.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn cancel_add_skill_operation(
     operation_id: String,
     app: AppHandle,

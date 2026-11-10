@@ -396,6 +396,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            skills::background_work::get_background_status,
             skills::app_version::app_version,
             skills::data_folder_status::data_folder_status,
             // In-app update (unit 6.2)

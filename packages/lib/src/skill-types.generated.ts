@@ -32,6 +32,7 @@ export type HarnessId = "claude-code" | "codex" | "open-code" | "pi";
  * to hand-edit a `.jsonc` file rather than silently showing no disables.
  */
 export type OpencodeConfigKind = "json" | "jsonc";
+export type BackgroundWorker = "scan" | "invocations" | "update_check";
 /**
  * Agent target identifier
  */
@@ -704,6 +705,17 @@ export interface UpstreamAhead {
    * dotagents-only install has no lock-file `source` to compare.
    */
   owner_ids: string[];
+}
+export interface BackgroundStatus {
+  revision: number;
+  tasks: BackgroundTaskStatus[];
+}
+export interface BackgroundTaskStatus {
+  worker: BackgroundWorker;
+  running: boolean;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  last_error: string | null;
 }
 /**
  * Agent target with paths resolved

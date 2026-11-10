@@ -37,6 +37,7 @@ use skill_studio_lib::skills::skill_refresh::{DiscoverySourceSetting, SkillSnaps
 #[allow(dead_code)]
 struct WireTypes {
     skill_snapshot: SkillSnapshot,
+    background_status: skill_studio_lib::skills::background_work::BackgroundStatus,
     agent_target: AgentTarget,
     add_method_defaults: AddMethodDefaults,
     paginated_skills_response: PaginatedSkillsResponse,

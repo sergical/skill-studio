@@ -2705,7 +2705,7 @@ impl Drop for ForgetBatch<'_> {
 /// Asks the "Update all" batch `batch_id` to stop after the skill it is on. The
 /// skill in progress finishes; no later skill starts. It works before the
 /// batch has started.
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri's command extractor requires an owned `State<T>`.
 pub fn cancel_update_all(batch_id: String, state: tauri::State<UpdateAllCancelState>) {
     state.cancel(&batch_id);
