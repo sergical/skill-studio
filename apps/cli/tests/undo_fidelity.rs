@@ -158,3 +158,44 @@ fn cli_history_and_restore_refuse_unfinished_recovery_or_write_over_an_interrupt
     );
     assert_eq!(cli(home.path(), &["history"])["data"][0]["id"], event.0);
 }
+
+#[test]
+fn cli_history_and_restore_hash_the_whole_large_asset_or_miss_a_tail_edit() {
+    for (drift, failed) in [(false, false), (true, false), (false, true), (true, true)] {
+        let home = tempfile::tempdir().unwrap();
+        let (event, before, mut after) = undo_fixtures::large_asset_update(home.path());
+        if failed {
+            let conn = rusqlite::Connection::open(
+                home.path().join(".skill-studio/history/events.sqlite3"),
+            )
+            .unwrap();
+            conn.execute("UPDATE events SET status='failed' WHERE id=?1", [&event.0])
+                .unwrap();
+        }
+        let asset = home.path().join(".agents/skills/alpha/asset.bin");
+        if drift {
+            *after.last_mut().unwrap() = b'c';
+            std::fs::write(&asset, &after).unwrap();
+        }
+        let history = cli(home.path(), &["history"]);
+        assert_eq!(history["data"][0]["id"], event.0);
+        assert_eq!(
+            history["data"][0]["status"],
+            if failed { "failed" } else { "done" }
+        );
+        let result = cli(home.path(), &["restore", "--event-id", &event.0]);
+        if drift {
+            assert_eq!(result["errors"][0]["code"], "drift_conflict", "{result}");
+            assert!(
+                std::fs::read(&asset).unwrap() == after,
+                "refused Restore changed the large asset"
+            );
+        } else {
+            assert_eq!(result["status"], "ok", "{result}");
+            assert!(
+                std::fs::read(&asset).unwrap() == before,
+                "Restore did not recover the complete large asset"
+            );
+        }
+    }
+}

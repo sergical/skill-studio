@@ -1,0 +1,80 @@
+{
+  "program": "npx",
+  "args": [
+    "skills@1.7.0",
+    "update",
+    "trace-skill",
+    "--global"
+  ],
+  "exit_status": 0,
+  "cwd": "$HOME",
+  "recorded_cli_version": "1.7.0",
+  "source_type": "git",
+  "source_url": "https://github.com/skill-studio-trace/fixture.git",
+  "source_transport": {
+    "kind": "git-url-rewrite",
+    "local_url": "file://$HOME/sources/trace-repo"
+  },
+  "source_commit_before": "82d2bc49b57b14e190245b850dc8a79f1c0ae185",
+  "source_commit_after": "e15379a83d691954b418f8e661dc6b5016d2974d",
+  "files_before": [
+    {
+      "relative_path": "SKILL.md",
+      "content": "---\nname: trace-skill\ndescription: A recorded CLI fixture.\n---\nBody at v1.\n",
+      "mode": 420
+    },
+    {
+      "relative_path": "old.txt",
+      "content": "old notes\n",
+      "mode": 420
+    }
+  ],
+  "files_after": [
+    {
+      "relative_path": "SKILL.md",
+      "content": "---\nname: trace-skill\ndescription: A recorded CLI fixture.\n---\nBody at v2.\n",
+      "mode": 420
+    },
+    {
+      "relative_path": "new.txt",
+      "content": "new notes\n",
+      "mode": 420
+    }
+  ],
+  "links_before": {
+    ".claude/skills/trace-skill": "../../../../..$HOME/.agents/skills/trace-skill"
+  },
+  "links_after": {
+    ".claude/skills/trace-skill": "../../../../..$HOME/.agents/skills/trace-skill"
+  },
+  "lock_before": {
+    "version": 3,
+    "skills": {
+      "trace-skill": {
+        "source": "skill-studio-trace/fixture",
+        "sourceType": "github",
+        "sourceUrl": "https://github.com/skill-studio-trace/fixture.git",
+        "skillPath": "SKILL.md",
+        "skillFolderHash": "5ad1bae496557cee15020016bba91f5ceb9964100860cdb3604f984ffcbd1a2c",
+        "installedAt": "2026-11-10T10:43:39.132Z",
+        "updatedAt": "2026-11-10T10:43:39.132Z"
+      }
+    },
+    "dismissed": {}
+  },
+  "lock_after": {
+    "version": 3,
+    "skills": {
+      "trace-skill": {
+        "source": "skill-studio-trace/fixture",
+        "sourceType": "github",
+        "sourceUrl": "https://github.com/skill-studio-trace/fixture.git",
+        "skillPath": "SKILL.md",
+        "skillFolderHash": "bb8bdefb56ab49cb4f0f1f220150f0d86316052dd7145f3f8223fd38046f47da",
+        "installedAt": "2026-11-10T10:43:39.132Z",
+        "updatedAt": "2026-11-10T10:43:41.286Z"
+      }
+    },
+    "dismissed": {}
+  }
+}

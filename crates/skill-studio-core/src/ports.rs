@@ -219,6 +219,9 @@ impl ScopeFs for ScopedReads<'_> {
     fn read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
         self.inner.read_capped(path, max_bytes)
     }
+    fn open_file(&self, path: &Path) -> std::io::Result<OpenedFile> {
+        self.inner.open_file(path)
+    }
     fn read_prefix(&self, path: &Path, limit: u64) -> std::io::Result<(Vec<u8>, bool)> {
         self.inner.read_prefix(path, limit)
     }
@@ -302,6 +305,14 @@ impl ScopeFs for ScopedReads<'_> {
     }
 }
 
+/// One opened file and its length from the same handle.
+pub struct OpenedFile {
+    /// Length used in the content fingerprint's framing.
+    pub len: u64,
+    /// The owned byte stream; real hosts do not buffer the whole file.
+    pub reader: Box<dyn std::io::Read + Send>,
+}
+
 /// Filesystem access. Read calls take plain paths; write calls take a
 /// [`ScopedPath`] and an [`ExclusiveGuard`].
 pub trait ScopeFs: Send + Sync {
@@ -319,6 +330,15 @@ pub trait ScopeFs: Send + Sync {
     fn ancestor_holds(&self, start: &Path, name: &str) -> std::io::Result<bool>;
     /// Reads at most `max_bytes`. A larger file is an error, not a truncation.
     fn read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>>;
+    /// Opens a complete file for bounded-memory hashing. The default keeps
+    /// fixture adapters compatible; real hosts return an operating-system file.
+    fn open_file(&self, path: &Path) -> std::io::Result<OpenedFile> {
+        let bytes = self.read_capped(path, u64::MAX)?;
+        Ok(OpenedFile {
+            len: bytes.len() as u64,
+            reader: Box::new(std::io::Cursor::new(bytes)),
+        })
+    }
     /// Reads at most `limit` bytes and reports whether more bytes followed.
     /// Unlike [`Self::read_capped`], a file over the limit is not an error:
     /// the caller gets the first `limit` bytes and `true`.

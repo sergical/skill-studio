@@ -42,8 +42,8 @@ const UNIVERSAL_ROOT_RELATIVE: &str = ".agents/skills";
 /// Records every call's argv and cwd (`recorded`), so the parity test can
 /// assert the exact shape `update_cli_args_and_cwd` built without
 /// duplicating its own logic to predict it. This is a hand-built fixture
-/// trace, not one recorded from a real `npx` run (unit 5.4 owns recording
-/// one); see the crate-level report for that follow-up.
+/// trace used for fault injection. The recorded Skills CLI test below uses
+/// a separate spawner that replays the captured revisions.
 struct FakeNpxUpdateSpawner {
     home: PathBuf,
     revision: &'static str,
@@ -2760,5 +2760,280 @@ fn undo_removes_a_created_folder_after_it_becomes_readable_or_silently_leaves_an
         !gamma.exists(),
         "Undo reported success but left the folder it created"
     );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+struct FinalReadFailureSpawner {
+    delegate: FakeNpxUpdateSpawner,
+    fs: Arc<FailingFs>,
+}
+
+impl ProcessSpawner for FinalReadFailureSpawner {
+    fn run(
+        &self,
+        spec: &ProcessSpec,
+        cancel: &dyn CancelToken,
+    ) -> Result<ProcessOutput, skill_studio_core::CoreError> {
+        let output = self.delegate.run(spec, cancel)?;
+        self.fs.fail_next_read_capped();
+        Ok(output)
+    }
+}
+
+#[test]
+fn update_with_a_failed_final_read_keeps_a_failed_undoable_row_or_leaves_a_pending_write() {
+    let home = unique_temp_dir("update_final_read_failure");
+    seed_installed_skill(&home, "alpha", "v1");
+    let before = std::fs::read(dir_of(&home, "alpha").join("SKILL.md")).unwrap();
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(
+        &home,
+        fs.clone(),
+        Some(Arc::new(FinalReadFailureSpawner {
+            delegate: FakeNpxUpdateSpawner::new(home.clone(), "v2"),
+            fs,
+        })),
+    );
+    let error =
+        ops::update(&rt, &ctx(), &cli_request("alpha", InstallMethod::SkillsSh)).unwrap_err();
+    assert!(
+        error.message.contains("updated") && error.message.contains("verification"),
+        "{error}"
+    );
+    let events = ops::list_events(&rt, &ctx(), &ListEventsRequest::default()).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].status, "failed");
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: events[0].id.clone(),
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(dir_of(&home, "alpha").join("SKILL.md")).unwrap(),
+        before
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn a_second_process_updating_the_same_skill_gets_busy_with_pid_and_age_or_corrupts_the_folder() {
+    use std::io::{BufRead, Read, Write};
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+    const HOLDER_HOME: &str = "SKILL_STUDIO_UPDATE_LEASE_HOLDER_HOME";
+    if let Some(home) = std::env::var_os(HOLDER_HOME) {
+        let home = PathBuf::from(home);
+        let lease = FileLease::new(home.join(".leases"));
+        let _guard = lease
+            .acquire(
+                &[LeaseKey {
+                    canonical_root: home,
+                }],
+                LeaseMode::Exclusive,
+                Duration::ZERO,
+            )
+            .unwrap();
+        writeln!(std::io::stdout(), "ready").unwrap();
+        std::io::stdout().flush().unwrap();
+        let mut release = [0];
+        std::io::stdin().read_exact(&mut release).unwrap();
+        return;
+    }
+    let home = unique_temp_dir("update_two_processes");
+    seed_installed_skill(&home, "alpha", "v1");
+    let home = home.canonicalize().unwrap();
+    let file = dir_of(&home, "alpha").join("SKILL.md");
+    let before = std::fs::read(&file).unwrap();
+    let mut holder = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "a_second_process_updating_the_same_skill_gets_busy_with_pid_and_age_or_corrupts_the_folder", "--nocapture"])
+        .env(HOLDER_HOME, &home).env("HOME", &home)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    let mut stdout = std::io::BufReader::new(holder.stdout.take().unwrap());
+    loop {
+        let mut line = String::new();
+        assert_ne!(
+            stdout.read_line(&mut line).unwrap(),
+            0,
+            "holder exited before readiness"
+        );
+        if line.trim() == "ready" {
+            break;
+        }
+    }
+    let mut rt = runtime_for(&home, "v2");
+    rt.scope.raw.write_timeout_ms = 0;
+    let error =
+        ops::update(&rt, &ctx(), &cli_request("alpha", InstallMethod::SkillsSh)).unwrap_err();
+    holder.stdin.take().unwrap().write_all(b"x").unwrap();
+    assert!(holder.wait().unwrap().success());
+    assert_eq!(error.code, ErrorCode::ScopeBusy);
+    let busy = error.busy.expect("ScopeBusy names its holder and age");
+    assert_eq!(busy.pid, holder.id());
+
+    assert_eq!(std::fs::read(file).unwrap(), before);
+    assert!(!home.join(".history/events.sqlite3").exists());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+struct RecordedSkillsUpdate {
+    home: PathBuf,
+    trace: serde_json::Value,
+}
+
+fn write_recorded_files(root: &std::path::Path, files: &serde_json::Value) {
+    use std::os::unix::fs::PermissionsExt;
+    for file in files.as_array().unwrap() {
+        let path = root.join(file["relative_path"].as_str().unwrap());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, file["content"].as_str().unwrap()).unwrap();
+        let mode = u32::try_from(file["mode"].as_u64().unwrap()).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+}
+
+impl ProcessSpawner for RecordedSkillsUpdate {
+    fn run(
+        &self,
+        spec: &ProcessSpec,
+        _: &dyn CancelToken,
+    ) -> Result<ProcessOutput, skill_studio_core::CoreError> {
+        assert_eq!(spec.program, self.trace["program"].as_str().unwrap());
+        assert_eq!(serde_json::json!(spec.args), self.trace["args"]);
+        assert_eq!(spec.cwd.as_ref(), Some(&self.home));
+        let skill = self.trace["args"][2].as_str().unwrap();
+        let destination = dir_of(&self.home, skill);
+        std::fs::remove_dir_all(&destination).unwrap();
+        write_recorded_files(&destination, &self.trace["files_after"]);
+        std::fs::write(
+            self.home.join(".agents/.skill-lock.json"),
+            serde_json::to_vec(&self.trace["lock_after"]).unwrap(),
+        )
+        .unwrap();
+        Ok(ProcessOutput {
+            status: Some(i32::try_from(self.trace["exit_status"].as_i64().unwrap()).unwrap()),
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+        })
+    }
+}
+
+fn assert_recorded_files(root: &std::path::Path, expected: &serde_json::Value) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut actual = Vec::new();
+    for entry in walkdir_for_trace(root, root) {
+        actual.push(serde_json::json!({
+            "relative_path":entry.strip_prefix(root).unwrap(),
+            "content":std::fs::read_to_string(&entry).unwrap(),
+            "mode":std::fs::metadata(&entry).unwrap().permissions().mode() & 0o777,
+        }));
+    }
+    let mut expected = expected.as_array().unwrap().clone();
+    expected.sort_by_key(|file| file["relative_path"].as_str().unwrap().to_owned());
+    actual.sort_by_key(|file| file["relative_path"].as_str().unwrap().to_owned());
+    assert_eq!(actual, expected);
+}
+
+fn walkdir_for_trace(root: &std::path::Path, path: &std::path::Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(path).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            files.extend(walkdir_for_trace(root, &entry.path()));
+        } else {
+            assert!(
+                entry.file_type().unwrap().is_file(),
+                "unexpected entry under {}",
+                root.display()
+            );
+            files.push(entry.path());
+        }
+    }
+    files
+}
+
+#[test]
+fn recorded_skills_update_and_undo_match_both_revisions_or_leave_a_file_link_or_lock_row_behind() {
+    let trace: serde_json::Value = serde_json::from_str(include_str!(
+        "fixtures/cli_traces/skills_sh_update_global.trace.json"
+    ))
+    .unwrap();
+    assert_ne!(trace["source_commit_before"], trace["source_commit_after"]);
+    assert_ne!(trace["files_before"], trace["files_after"]);
+    let home = unique_temp_dir("recorded_skills_update");
+    let skill = trace["args"][2].as_str().unwrap();
+    let destination = dir_of(&home, skill);
+    write_recorded_files(&destination, &trace["files_before"]);
+    std::fs::write(
+        home.join(".agents/.skill-lock.json"),
+        serde_json::to_vec(&trace["lock_before"]).unwrap(),
+    )
+    .unwrap();
+    for (path, target) in trace["links_before"].as_object().unwrap() {
+        let path = home.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(
+            target
+                .as_str()
+                .unwrap()
+                .replace("$HOME", &home.to_string_lossy()),
+            path,
+        )
+        .unwrap();
+    }
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(Arc::new(RecordedSkillsUpdate {
+            home: home.clone(),
+            trace: trace.clone(),
+        })),
+    );
+    let result = ops::update(&rt, &ctx(), &cli_request(skill, InstallMethod::SkillsSh)).unwrap();
+    assert_recorded_files(&destination, &trace["files_after"]);
+    let lock = || {
+        serde_json::from_slice::<serde_json::Value>(
+            &std::fs::read(home.join(".agents/.skill-lock.json")).unwrap(),
+        )
+        .unwrap()
+    };
+    assert_eq!(lock(), trace["lock_after"]);
+    for (path, target) in trace["links_after"].as_object().unwrap() {
+        assert_eq!(
+            std::fs::read_link(home.join(path)).unwrap(),
+            PathBuf::from(
+                target
+                    .as_str()
+                    .unwrap()
+                    .replace("$HOME", &home.to_string_lossy())
+            )
+        );
+    }
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: result.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_recorded_files(&destination, &trace["files_before"]);
+    assert_eq!(lock(), trace["lock_before"]);
+    for (path, target) in trace["links_before"].as_object().unwrap() {
+        assert_eq!(
+            std::fs::read_link(home.join(path)).unwrap(),
+            PathBuf::from(
+                target
+                    .as_str()
+                    .unwrap()
+                    .replace("$HOME", &home.to_string_lossy())
+            )
+        );
+    }
     std::fs::remove_dir_all(home).unwrap();
 }

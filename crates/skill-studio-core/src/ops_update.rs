@@ -360,6 +360,8 @@ fn update_via_cli(
         )
     })?;
     let (args, cwd) = update_cli_args_and_cwd(req.method, &req.skill, &req.scope);
+    let cwd = cwd
+        .or_else(|| (req.method == InstallMethod::SkillsSh).then(|| rt.scope.home.lexical.clone()));
     let spec = crate::ports::ProcessSpec {
         program: "npx".to_string(),
         args,
@@ -888,13 +890,33 @@ fn update_body(
             &folders_before,
         );
     }
-    let tree_hash_after = crate::tree_hash::tree_hash(fs, &destination)?;
-    // The post-fingerprint the row records, not `None`: `restore_event`
-    // compares the live tree against this on undo (`expected =
-    // post.unwrap_or("absent")`), so leaving it `None` would tell undo the
-    // path was absent after this event and turn a plain restore into
-    // `DriftConflict` against the tree `update` just wrote.
-    let post_fingerprint = fingerprint_path(fs, &destination)?;
+    let tree_hash_after = crate::tree_hash::tree_hash(fs, &destination);
+    let post_fingerprint = fingerprint_path(fs, &destination);
+    let post_fingerprint = match post_fingerprint {
+        Ok(post) => post,
+        Err(error) => {
+            session.store.patch_inverse(
+                &session.guard,
+                &id,
+                serde_json::json!({
+                    "post_fingerprint": crate::events::UNREADABLE_FINGERPRINT,
+                }),
+            )?;
+            session
+                .store
+                .finish(&session.guard, &id, EventStatus::Failed, None)?;
+            return Err(update_verification_error(error, &destination));
+        }
+    };
+    let tree_hash_after = match tree_hash_after {
+        Ok(hash) => hash,
+        Err(error) => {
+            session
+                .store
+                .finish(&session.guard, &id, EventStatus::Failed, post_fingerprint)?;
+            return Err(update_verification_error(error, &destination));
+        }
+    };
     session
         .store
         .finish(&session.guard, &id, EventStatus::Done, post_fingerprint)?;
@@ -914,6 +936,12 @@ fn update_body(
         tree_hash_before,
         tree_hash_after,
     })
+}
+
+fn update_verification_error(error: CoreError, destination: &Path) -> CoreError {
+    CoreError::new(ErrorCode::Incomplete,
+        format!("Skill updated, but verification failed: {error}. The failed event keeps its Undo backup.")
+    ).at(destination)
 }
 
 /// What [`update_split_copies`] needs: the skill and scope its copies were

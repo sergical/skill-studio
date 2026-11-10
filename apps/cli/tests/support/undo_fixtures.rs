@@ -260,3 +260,47 @@ pub fn interrupted_plan_before_restore(home: &Path, foreign: &Path) -> EventId {
         .unwrap();
     event
 }
+
+pub fn large_asset_update(home: &Path) -> (EventId, Vec<u8>, Vec<u8>) {
+    use skill_studio_core::events::{EventDraft, EventKind, EventStatus};
+    use skill_studio_core::identity::Fingerprint;
+    use skill_studio_core::ports::{acquire_exclusive, HistoryAccess};
+    write_skill(home, "alpha", "A skill with a large asset.");
+    let target = home.join(".agents/skills/alpha");
+    let asset = target.join("asset.bin");
+    let size = usize::try_from(ops::SKILL_MD_MAX_BYTES).unwrap() + 1;
+    let before = vec![b'a'; size];
+    std::fs::write(&asset, &before).unwrap();
+    let rt = runtime(home);
+    let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+    let mut store = rt
+        .ports
+        .history
+        .open(&rt.scope, HistoryAccess::ReadWrite)
+        .unwrap()
+        .unwrap();
+    let id = EventId::from_ulid(ulid::Ulid::generate());
+    let manifest = store
+        .backup_paths(&guard, &id, std::slice::from_ref(&target))
+        .unwrap();
+    let pre = manifest.entries[0].fingerprint.as_ref().unwrap().bare_hex();
+    let mut after = before.clone();
+    after[size - 1] = b'b';
+    std::fs::write(&asset, &after).unwrap();
+    let post = skill_studio_host::hash_entry(&target).unwrap();
+    store.record(&guard, &id, &EventDraft {
+        kind: EventKind::Update, skill: SkillName("alpha".into()), harness: None,
+        scope: Some("global".into()), project_path: None, payload: serde_json::json!({}),
+        inverse: Some(serde_json::json!({"op":"restore_backup","path":target,"pre_fingerprint":pre,"post_fingerprint":post})),
+        backup_dir: Some(manifest.backup_dir),
+    }).unwrap();
+    store
+        .finish(
+            &guard,
+            &id,
+            EventStatus::Done,
+            Some(Fingerprint::parse(&post).unwrap()),
+        )
+        .unwrap();
+    (id, before, after)
+}
