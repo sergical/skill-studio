@@ -156,7 +156,7 @@ impl UndoMcp {
         loop {
             let line = self
                 .lines
-                .recv_timeout(Duration::from_secs(60))
+                .recv_timeout(Duration::from_mins(1))
                 .expect("MCP must answer the test request");
             let response: serde_json::Value = serde_json::from_str(&line).unwrap();
             if response["id"] == id {
