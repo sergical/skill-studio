@@ -1262,10 +1262,7 @@ fn process_entries(
                 let text = std::str::from_utf8(&bytes).ok()?;
                 serde_json::from_str::<ParkedOwner>(text.lines().nth(1)?).ok()
             });
-        let in_git_repo = parked_owner.as_ref().map_or_else(
-            || in_git_repo(cx.fs, cx.scope, &skill_dir),
-            |owner| owner.in_git_repo,
-        );
+        let in_git_repo = in_git_repo(cx.fs, cx.scope, &skill_dir);
         // Matches the variant, not merely "forced": the field means the
         // deployment sits in a `.skill-studio-disabled/` holding directory,
         // and a future forced reason must not claim that.
@@ -1631,7 +1628,6 @@ fn scan_targets(rt: &Runtime) -> Vec<ScanTarget> {
 struct ParkedOwner {
     kind: LifecycleOwnerKind,
     id: Option<OwnerId>,
-    in_git_repo: bool,
 }
 
 /// One target per parked slot directory (see [`crate::park_layout`]), each
@@ -5480,7 +5476,6 @@ pub(crate) fn park_found_copy(
             let owner = serde_json::to_string(&ParkedOwner {
                 kind: deployment.owner_kind,
                 id: deployment.owner_id.clone(),
-                in_git_repo: deployment.in_git_repo,
             })
             .map_err(|e| CoreError::io(&marker, std::io::Error::other(e)))?;
             write_marker(marker, &format!("{relative}\n{owner}"), true)?;

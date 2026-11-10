@@ -1385,6 +1385,10 @@ async fn mcp_park_scan_keeps_project_and_original_owner_or_names_the_lost_type()
         );
         assert_eq!(current["owner_id"], original["owner_id"]);
         assert_eq!(current["source_kind"], original["source_kind"]);
+        let physically_in_git = Path::new(current["path"].as_str().unwrap())
+            .ancestors()
+            .any(|path| path.join(".git").exists());
+        assert_eq!(current["in_git_repo"], serde_json::json!(physically_in_git));
         assert_eq!(current["parked_origin"]["scope"], original["root"]["scope"]);
     }
 }

@@ -1575,3 +1575,31 @@ fn copy_update_after_split_explains_the_skill_page_instead_of_an_absent_shared_c
     );
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn parked_scan_keeps_the_project_source_type_but_reports_the_current_git_location() {
+    let home = unique_temp_dir("park_physical_git");
+    let project = park_display::project(&home, "in_repo");
+    let rt = runtime(&home, std::slice::from_ref(&project));
+    let original = live_copy(&rt, "foo", &project.join(".agents/skills/foo"));
+    assert!(original.in_git_repo);
+    ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: original.id,
+        },
+    )
+    .unwrap();
+    let parked = parked_copy(&rt, "foo", &RootKind::Universal);
+    assert_eq!(parked.source_kind, original.source_kind);
+    let physically_in_git = parked
+        .path
+        .ancestors()
+        .any(|path| path.join(".git").exists());
+    assert_eq!(
+        parked.in_git_repo, physically_in_git,
+        "the Git flag describes the old location"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}

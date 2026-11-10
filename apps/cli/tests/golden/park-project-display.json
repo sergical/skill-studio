@@ -5,7 +5,8 @@
     "owner_id_matches_original": true,
     "project_matches_original": true,
     "watch_matches_scan": true,
-    "human": "foo  (1 copy)\n  - $PARKED  id $ID\n    parked from project $PROJECT; dotagents\n"
+    "human": "foo  (1 copy)\n  - $PARKED  id $ID\n    parked from project $PROJECT; dotagents\n",
+    "physical_git_location_matches": true
   },
   {
     "owner": "wildcard_dotagents",
@@ -13,7 +14,8 @@
     "owner_id_matches_original": true,
     "project_matches_original": true,
     "watch_matches_scan": true,
-    "human": "foo  (1 copy)\n  - $PARKED  id $ID\n    parked from project $PROJECT; dotagents wildcard\n"
+    "human": "foo  (1 copy)\n  - $PARKED  id $ID\n    parked from project $PROJECT; dotagents wildcard\n",
+    "physical_git_location_matches": true
   },
   {
     "owner": "in_repo",
@@ -21,6 +23,7 @@
     "owner_id_matches_original": true,
     "project_matches_original": true,
     "watch_matches_scan": true,
-    "human": "foo  (1 copy)\n  - $PARKED  id $ID\n    parked from project $PROJECT; in repo\n"
+    "human": "foo  (1 copy)\n  - $PARKED  id $ID\n    parked from project $PROJECT; in repo\n",
+    "physical_git_location_matches": true
   }
 ]
