@@ -1566,7 +1566,10 @@ fn with_lines_restored(
             (at, order, *line)
         })
         .collect();
-    let is_rule = |line: &&str| !line.is_empty() && !line.starts_with('#');
+    let is_rule = |line: &&str| {
+        let line = line.trim_end();
+        !line.is_empty() && !line.starts_with('#')
+    };
     for ((k, _), (at, _, _)) in missing.iter().zip(&inserts) {
         let before = stay[..*k].iter().rposition(is_rule);
         let after = stay[*k..].iter().position(is_rule).map(|i| i + k);

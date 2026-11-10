@@ -2151,7 +2151,7 @@ fn turn_on_keeps_an_entry_another_tool_added_while_dotagents_ran() {
 }
 
 #[test]
-fn turn_on_keeps_unrelated_wildcard_exclusion_added_during_remove() {
+fn turn_on_keeps_unrelated_exclusion_added_during_remove_or_erases_user_edit() {
     let manifest = format!(
         "{EXPLICIT_TOML}\n[[skills]]\nname = \"*\"\nsource = \"other/repo\"\nexclude = []\n"
     );
@@ -2223,6 +2223,26 @@ fn turn_on_refuses_changed_rule_anchors_or_overrides_external_negation() {
         assert!(!home.join(".agents/skills/foo").exists());
         std::fs::remove_dir_all(home).unwrap();
     }
+}
+
+#[test]
+fn turn_on_after_comment_edit_restores_rule_beside_whitespace_line_or_refuses_harmless_edit() {
+    let (home, stub) = dotagents_home("park_ignore_blank_spaces", EXPLICIT_TOML);
+    let ignore = home.join(".agents/.gitignore");
+    std::fs::write(&ignore, "# header\n/skills/foo\n   \n!/skills/foo/\n").unwrap();
+    let rt = runtime(&home, stub.clone(), true);
+    park_foo(&rt);
+    let parked = read(&ignore);
+    assert!(!parked.contains("/skills/foo\n"), "{parked}");
+    std::fs::write(&ignore, format!("{parked}# edited\n")).unwrap();
+
+    unpark_foo(&rt);
+
+    assert_eq!(
+        read(&ignore),
+        "# header\n/skills/foo\n   \n!/skills/foo/\n# edited\n"
+    );
+    std::fs::remove_dir_all(home).unwrap();
 }
 
 #[test]

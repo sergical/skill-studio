@@ -8,7 +8,7 @@ returned empty output.
 
 | Issue | User flow                                | Expectation              | Proof (file::test or command)                                                                        | Red before fix?          | Measured numbers |
 | ----- | ---------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------- | ------------------------ | ---------------- |
-| #418  | Turn on after another wildcard exclusion | Keep unrelated exclusion | park_install_aware::turn_on_keeps_unrelated_wildcard_exclusion_added_during_remove                   | Core test failed on base | Not measured     |
+| #418  | Turn on after another wildcard exclusion | Keep unrelated exclusion | park_install_aware::turn_on_keeps_unrelated_exclusion_added_during_remove_or_erases_user_edit        | Core test failed on base | Not measured     |
 | #418  | Turn on after ignore neighbours change   | Refuse before any write  | park_install_aware::turn_on_refuses_changed_rule_anchors_or_overrides_external_negation; CLI and MCP | Core test failed on base | Not measured     |
 
 ## Evidence for issue #418
