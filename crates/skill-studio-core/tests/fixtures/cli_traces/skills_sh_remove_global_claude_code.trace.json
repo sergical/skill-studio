@@ -23,11 +23,11 @@
     }
   ],
   "links_before": {
-    ".claude/skills/trace-skill": "../../../../..$HOME/.agents/skills/trace-skill"
+    ".claude/skills/trace-skill": "../../.agents/skills/trace-skill"
   },
   "links_after": {},
   "claude_code_link": true,
-  "claude_code_link_target": "../../../../..$HOME/.agents/skills/trace-skill",
+  "claude_code_link_target": "../../.agents/skills/trace-skill",
   "lock_before": {
     "version": 3,
     "skills": {
@@ -37,8 +37,8 @@
         "sourceUrl": "https://github.com/skill-studio-trace/fixture.git",
         "skillPath": "SKILL.md",
         "skillFolderHash": "bb8bdefb56ab49cb4f0f1f220150f0d86316052dd7145f3f8223fd38046f47da",
-        "installedAt": "2026-11-10T10:43:39.132Z",
-        "updatedAt": "2026-11-10T10:43:41.286Z"
+        "installedAt": "2026-11-10T11:02:11.494Z",
+        "updatedAt": "2026-11-10T11:02:13.848Z"
       }
     },
     "dismissed": {}

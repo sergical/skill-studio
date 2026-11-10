@@ -261,7 +261,7 @@ pub fn interrupted_plan_before_restore(home: &Path, foreign: &Path) -> EventId {
     event
 }
 
-pub fn large_asset_update(home: &Path) -> (EventId, Vec<u8>, Vec<u8>) {
+pub fn large_asset_update(home: &Path, failed: bool) -> (EventId, Vec<u8>, Vec<u8>) {
     use skill_studio_core::events::{EventDraft, EventKind, EventStatus};
     use skill_studio_core::identity::Fingerprint;
     use skill_studio_core::ports::{acquire_exclusive, HistoryAccess};
@@ -298,9 +298,125 @@ pub fn large_asset_update(home: &Path) -> (EventId, Vec<u8>, Vec<u8>) {
         .finish(
             &guard,
             &id,
-            EventStatus::Done,
+            if failed {
+                EventStatus::Failed
+            } else {
+                EventStatus::Done
+            },
             Some(Fingerprint::parse(&post).unwrap()),
         )
         .unwrap();
     (id, before, after)
+}
+
+struct RecordedUpdateCli {
+    home: PathBuf,
+    trace: serde_json::Value,
+}
+
+fn recorded_files(home: &Path, files: &serde_json::Value) {
+    use std::os::unix::fs::PermissionsExt;
+    let root = home.join(".agents/skills/trace-skill");
+    std::fs::create_dir_all(&root).unwrap();
+    for file in files.as_array().unwrap() {
+        let path = root.join(file["relative_path"].as_str().unwrap());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, file["content"].as_str().unwrap()).unwrap();
+        std::fs::set_permissions(
+            path,
+            std::fs::Permissions::from_mode(u32::try_from(file["mode"].as_u64().unwrap()).unwrap()),
+        )
+        .unwrap();
+    }
+}
+
+impl ProcessSpawner for RecordedUpdateCli {
+    fn run(
+        &self,
+        spec: &ProcessSpec,
+        _: &dyn CancelToken,
+    ) -> Result<ProcessOutput, skill_studio_core::CoreError> {
+        assert_eq!(serde_json::json!(spec.args), self.trace["args"]);
+        std::fs::remove_dir_all(self.home.join(".agents/skills/trace-skill")).unwrap();
+        recorded_files(&self.home, &self.trace["files_after"]);
+        std::fs::write(
+            self.home.join(".agents/.skill-lock.json"),
+            serde_json::to_vec(&self.trace["lock_after"]).unwrap(),
+        )
+        .unwrap();
+        Ok(ProcessOutput {
+            status: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+        })
+    }
+}
+
+pub fn recorded_update(home: &Path) -> (EventId, serde_json::Value) {
+    let trace:serde_json::Value=serde_json::from_str(include_str!("../../../../crates/skill-studio-core/tests/fixtures/cli_traces/skills_sh_update_global.trace.json")).unwrap();
+    recorded_files(home, &trace["files_before"]);
+    std::fs::write(
+        home.join(".agents/.skill-lock.json"),
+        serde_json::to_vec(&trace["lock_before"]).unwrap(),
+    )
+    .unwrap();
+    for (relative, target) in trace["links_before"].as_object().unwrap() {
+        let path = home.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(
+            target
+                .as_str()
+                .unwrap()
+                .replace("$HOME", &home.to_string_lossy()),
+            path,
+        )
+        .unwrap();
+    }
+    let mut rt = runtime(home);
+    rt.ports.spawner = Some(Arc::new(RecordedUpdateCli {
+        home: home.to_path_buf(),
+        trace: trace.clone(),
+    }));
+    let result = ops::update(
+        &rt,
+        &ctx(),
+        &UpdateRequest {
+            skill: SkillName("trace-skill".into()),
+            method: InstallMethod::SkillsSh,
+            scope: RootScope::Global,
+            files: Vec::new(),
+            source: Some("skill-studio-trace/fixture".into()),
+            ref_pin: None,
+        },
+    )
+    .unwrap();
+    (result.event_id, trace)
+}
+
+pub fn edit_recorded_lock(home: &Path, forced: bool) -> serde_json::Value {
+    let path = home.join(".agents/.skill-lock.json");
+    let mut lock: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    lock["skills"]["unrelated"] = lock["skills"]["trace-skill"].clone();
+    if forced {
+        lock["skills"]["trace-skill"]["skillFolderHash"] = serde_json::json!("a later user edit");
+    }
+    std::fs::write(path, serde_json::to_vec(&lock).unwrap()).unwrap();
+    lock
+}
+
+pub fn assert_recorded_lock(home: &Path, own: &serde_json::Value, unrelated: &serde_json::Value) {
+    let lock: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.join(".agents/.skill-lock.json")).unwrap())
+            .unwrap();
+    assert_eq!(&lock["skills"]["trace-skill"], own);
+    assert_eq!(&lock["skills"]["unrelated"], unrelated);
+}
+
+pub fn cli_binary() -> PathBuf {
+    std::env::var_os("SKILL_STUDIO_TEST_BINARY").map_or_else(
+        || PathBuf::from(env!("CARGO_BIN_EXE_skill-studio")),
+        PathBuf::from,
+    )
 }

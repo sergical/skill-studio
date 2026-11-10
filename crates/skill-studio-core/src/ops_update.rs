@@ -798,6 +798,26 @@ fn update_body(
     // destination stays first: its entry is the row's primary path, and
     // `restore_event` puts every other entry - `Dotagents`' `agents.toml`
     // and `agents.lock` - back beside it.
+    let mut lock_undo = if req.method == InstallMethod::SkillsSh {
+        let path = match &req.scope {
+            RootScope::Global => crate::lock_file::lock_file_path(&rt.scope.home.lexical),
+            RootScope::Project(project) => crate::lock_file::project_lock_file_path(&project.0),
+        };
+        let path = crate::ports::resolve_config_link(fs, &path)?;
+        Some(crate::lock_file::LockRowUndo {
+            previous: crate::lock_file::read_lock_entry_value(fs, &path, &req.skill.0)?,
+            path,
+            skill: req.skill.0.clone(),
+            version: if matches!(req.scope, RootScope::Global) {
+                3
+            } else {
+                1
+            },
+            expected: None,
+        })
+    } else {
+        None
+    };
     let mut backup_targets = vec![destination.clone()];
     let mut folders_before = Vec::new();
     if let Some(plan) = &dotagents {
@@ -824,6 +844,9 @@ fn update_body(
         .first()
         .and_then(|e| e.fingerprint.as_ref());
     let mut inverse = crate::events::restore_backup_inverse(&destination, pre_fingerprint, None);
+    if let Some(lock) = &lock_undo {
+        inverse["lock_row_undo"] = serde_json::json!(lock);
+    }
     if let Some(entry) = copy_registry
         .as_ref()
         .and_then(|read| read.undo_before_write(rt, &copy_registry_id(req, &destination)))
@@ -892,6 +915,17 @@ fn update_body(
     }
     let tree_hash_after = crate::tree_hash::tree_hash(fs, &destination);
     let post_fingerprint = fingerprint_path(fs, &destination);
+    let lock_result = lock_undo
+        .as_mut()
+        .map(|lock| {
+            lock.expected = crate::lock_file::read_lock_entry_value(fs, &lock.path, &lock.skill)?;
+            session.store.patch_inverse(
+                &session.guard,
+                &id,
+                serde_json::json!({"lock_row_undo":lock}),
+            )
+        })
+        .transpose();
     let post_fingerprint = match post_fingerprint {
         Ok(post) => post,
         Err(error) => {
@@ -905,16 +939,22 @@ fn update_body(
             session
                 .store
                 .finish(&session.guard, &id, EventStatus::Failed, None)?;
-            return Err(update_verification_error(error, &destination));
+            return Err(update_verification_error(&error, &destination));
         }
     };
+    if let Err(error) = lock_result {
+        session
+            .store
+            .finish(&session.guard, &id, EventStatus::Failed, post_fingerprint)?;
+        return Err(update_verification_error(&error, &destination));
+    }
     let tree_hash_after = match tree_hash_after {
         Ok(hash) => hash,
         Err(error) => {
             session
                 .store
                 .finish(&session.guard, &id, EventStatus::Failed, post_fingerprint)?;
-            return Err(update_verification_error(error, &destination));
+            return Err(update_verification_error(&error, &destination));
         }
     };
     session
@@ -938,7 +978,7 @@ fn update_body(
     })
 }
 
-fn update_verification_error(error: CoreError, destination: &Path) -> CoreError {
+fn update_verification_error(error: &CoreError, destination: &Path) -> CoreError {
     CoreError::new(ErrorCode::Incomplete,
         format!("Skill updated, but verification failed: {error}. The failed event keeps its Undo backup.")
     ).at(destination)

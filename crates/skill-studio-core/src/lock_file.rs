@@ -174,6 +174,95 @@ pub fn restore_lock_entry(
     write_lock_document(guard, fs, scope, path, &doc)
 }
 
+/// A single CLI-owned lock row before and after an update.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct LockRowUndo {
+    pub path: PathBuf,
+    pub skill: String,
+    pub version: u32,
+    pub previous: Option<serde_json::Value>,
+    pub expected: Option<serde_json::Value>,
+}
+
+impl LockRowUndo {
+    pub fn from_inverse(inverse: &serde_json::Value) -> Result<Option<Self>, CoreError> {
+        inverse
+            .get("lock_row_undo")
+            .map(|value| {
+                serde_json::from_value(value.clone()).map_err(|error| {
+                    CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        format!("invalid lock row inverse: {error}"),
+                    )
+                })
+            })
+            .transpose()
+    }
+
+    pub fn check(
+        &self,
+        fs: &dyn ScopeFs,
+        scope: &NormalizedScope,
+        force: bool,
+    ) -> Result<Option<serde_json::Value>, CoreError> {
+        crate::ports::confine_write_through(scope, fs, &self.path)?;
+        let current = read_lock_entry_value(fs, &self.path, &self.skill)?;
+        if !force && current != self.expected {
+            return Err(CoreError::new(
+                ErrorCode::DriftConflict,
+                "the skill's lock row changed since this event; pass force to restore anyway",
+            )
+            .at(&self.path));
+        }
+        Ok(current)
+    }
+
+    pub fn apply(
+        &self,
+        guard: &ExclusiveGuard,
+        fs: &dyn ScopeFs,
+        scope: &NormalizedScope,
+    ) -> Result<(), CoreError> {
+        let mut document: serde_json::Value = match fs.read_capped(&self.path, LOCK_FILE_MAX_BYTES)
+        {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|error| CoreError::new(ErrorCode::Io, error.to_string()).at(&self.path))?,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound && self.previous.is_none() =>
+            {
+                return Ok(())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                serde_json::json!({"version":self.version,"skills":{}})
+            }
+            Err(error) => return Err(CoreError::io(&self.path, error)),
+        };
+        let skills = document
+            .as_object_mut()
+            .ok_or_else(|| {
+                CoreError::new(ErrorCode::Io, "lock file is not a JSON object").at(&self.path)
+            })?
+            .entry("skills")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| {
+                CoreError::new(ErrorCode::Io, "lock skills is not a JSON object").at(&self.path)
+            })?;
+        if skills.get(&self.skill) == self.previous.as_ref() {
+            return Ok(());
+        }
+        match &self.previous {
+            Some(previous) => {
+                skills.insert(self.skill.clone(), previous.clone());
+            }
+            None => {
+                skills.shift_remove(&self.skill);
+            }
+        }
+        write_lock_document(guard, fs, scope, &self.path, &document)
+    }
+}
+
 /// Sets `skill_name`'s `skillFolderHash` in the lock file at `path`, keeping
 /// every other key as `npx skills` wrote it, so the update check sees the
 /// skill as current after a write that did not go through the CLI. A no-op
