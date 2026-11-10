@@ -140,37 +140,36 @@ fn retained_entries(
     root: &std::path::Path,
     depth: usize,
     protected: &[PathBuf],
-    entries: &mut Vec<PathBuf>,
+    visit: &mut dyn FnMut(PathBuf),
 ) {
-    for entry in fs.read_dir(root).unwrap_or_default() {
+    let _ = fs.visit_dir(root, &mut |entry| {
         if !matches!(
             entry.kind,
             FileKind::Dir | FileKind::File | FileKind::Symlink
         ) || entry.name == ".origin"
         {
-            continue;
+            return;
         }
         let path = root.join(entry.name);
         if protected.iter().any(|active| path.starts_with(active)) {
-            continue;
+            return;
         }
-        let children = if entry.kind == FileKind::Dir {
-            fs.read_dir(&path).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let mut has_children = false;
+        if depth > 0 && entry.kind == FileKind::Dir {
+            let _ = fs.visit_dir(&path, &mut |child| {
+                has_children |= child.kind == FileKind::Dir && !child.name.starts_with('.');
+            });
+        }
         if depth > 0
             && entry.kind == FileKind::Dir
             && fs.symlink_metadata(&path.join("SKILL.md")).is_err()
-            && children
-                .iter()
-                .any(|child| child.kind == FileKind::Dir && !child.name.starts_with('.'))
+            && has_children
         {
-            retained_entries(fs, &path, depth - 1, protected, entries);
+            retained_entries(fs, &path, depth - 1, protected, visit);
         } else {
-            entries.push(path);
+            visit(path);
         }
-    }
+    });
 }
 
 fn recorded_paths(
@@ -350,91 +349,8 @@ pub(crate) fn retained_state(
         }
     }
     let mut warnings = Vec::new();
-    let candidates: Vec<_> = roots
-        .into_iter()
-        .map(|(root, nested)| {
-            let mut entries = Vec::new();
-            let boundary = std::iter::once(home)
-                .chain(rt.scope.projects.iter().map(|project| &project.lexical))
-                .chain(rt.scope.data_root.iter())
-                .find(|boundary| root.starts_with(boundary))
-                .map_or_else(
-                    || {
-                        rt.scope
-                            .data_root
-                            .as_deref()
-                            .and_then(std::path::Path::parent)
-                            .unwrap_or(&root)
-                    },
-                    |path| path.as_path(),
-                );
-            if let Some(link) = root
-                .ancestors()
-                .take_while(|path| path.starts_with(boundary))
-                .find(|path| {
-                    fs.symlink_metadata(path)
-                        .is_ok_and(|facts| facts.kind == FileKind::Symlink)
-                })
-            {
-                warnings.push(violation(
-                    DoctorInvariant::QuarantineWithinCap,
-                    link.to_path_buf(),
-                    Severity::Warning,
-                    "retained root has a linked ancestor; skipped".into(),
-                ));
-                return (root, entries);
-            }
-            retained_entries(
-                fs,
-                &root,
-                if nested { 32 } else { 0 },
-                &protected,
-                &mut entries,
-            );
-            (root, entries)
-        })
-        .collect();
-    let paths: BTreeSet<_> = candidates
-        .iter()
-        .flat_map(|(_, entries)| entries.iter().cloned())
-        .collect();
-    if paths.is_empty() {
-        return warnings;
-    }
-    let mut records = std::collections::BTreeMap::new();
-    recorded_paths(&registry, None, &mut records);
-    let journal =
-        crate::journal::FsJournal::new(crate::ops_install::journal_root(home), rt.ports.fs.clone());
-    let Ok(plans) = journal.all() else {
-        return Vec::new();
-    };
-    for plan in plans {
-        for step in plan.steps {
-            if let PlanStep::Swap {
-                quarantined: Some(path),
-                ..
-            } = step
-            {
-                record_earliest_creation(&mut records, path, Some(plan.created_at));
-            }
-        }
-    }
-    match rt.ports.history.open(&rt.scope, HistoryAccess::Inspect) {
-        Ok(Some(store)) => {
-            let result =
-                read_retention_history(|after| store.doctor_retention(after), &paths, &mut records);
-            if let Err(error) = result {
-                return vec![violation(
-                    DoctorInvariant::QuarantineWithinCap,
-                    rt.scope.history_root.clone(),
-                    Severity::Error,
-                    format!("retention history could not be read: {error}"),
-                )];
-            }
-        }
-        Ok(None) => {}
-        Err(_) => return warnings,
-    }
+    let history = std::cell::OnceCell::new();
+    let mut history_reported = false;
     let now = rt.ports.clock.now();
     let parked_names: BTreeSet<_> = inventory
         .skills
@@ -447,52 +363,159 @@ pub(crate) fn retained_state(
         })
         .map(|skill| skill.name.0.clone())
         .collect();
-    for (root, entries) in candidates {
+    for (root, nested) in roots {
+        let boundary = std::iter::once(home)
+            .chain(rt.scope.projects.iter().map(|project| &project.lexical))
+            .chain(rt.scope.data_root.iter())
+            .find(|boundary| root.starts_with(boundary))
+            .map_or_else(
+                || {
+                    rt.scope
+                        .data_root
+                        .as_deref()
+                        .and_then(std::path::Path::parent)
+                        .unwrap_or(&root)
+                },
+                |path| path.as_path(),
+            );
+        if let Some(link) = root
+            .ancestors()
+            .take_while(|path| path.starts_with(boundary))
+            .find(|path| {
+                fs.symlink_metadata(path)
+                    .is_ok_and(|facts| facts.kind == FileKind::Symlink)
+            })
+        {
+            warnings.push(violation(
+                DoctorInvariant::QuarantineWithinCap,
+                link.to_path_buf(),
+                Severity::Warning,
+                "retained root has a linked ancestor; skipped".into(),
+            ));
+            continue;
+        }
+
         let mut per_skill = std::collections::BTreeMap::<String, usize>::new();
-        for path in entries {
-            let facts = fs.symlink_metadata(&path).ok();
-            let name = facts
-                .as_ref()
-                .filter(|facts| facts.kind == FileKind::Dir)
-                .and_then(|_| fs.read_capped(&path.join("SKILL.md"), 1024 * 1024).ok())
-                .and_then(|bytes| {
-                    crate::frontmatter::parse_frontmatter(&String::from_utf8_lossy(&bytes))
-                        .as_frontmatter()
-                        .and_then(|fm| fm.name.clone())
-                })
-                .unwrap_or_else(|| {
-                    path.file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned()
+        retained_entries(
+            fs,
+            &root,
+            if nested { 32 } else { 0 },
+            &protected,
+            &mut |path| {
+                let paths = BTreeSet::from([path.clone()]);
+                let mut records = std::collections::BTreeMap::new();
+                recorded_paths(&registry, None, &mut records);
+                records.retain(|key, _| paths.contains(key));
+                let journal = crate::journal::FsJournal::new(
+                    crate::ops_install::journal_root(home),
+                    rt.ports.fs.clone(),
+                );
+                let _ = journal.visit(&mut |plan| {
+                    for step in plan.steps {
+                        if let PlanStep::Swap {
+                            quarantined: Some(retained),
+                            ..
+                        } = step
+                        {
+                            if retained == path {
+                                record_earliest_creation(
+                                    &mut records,
+                                    retained,
+                                    Some(plan.created_at),
+                                );
+                            }
+                        }
+                    }
                 });
-            *per_skill.entry(name.clone()).or_default() += 1;
-            if root.ends_with("skills-trash") && parked_names.contains(&name) {
-                warnings.push(violation(
-                    DoctorInvariant::NoFolderInTwoStates,
-                    path.clone(),
-                    Severity::Warning,
-                    format!(
+                let store = history
+                    .get_or_init(|| rt.ports.history.open(&rt.scope, HistoryAccess::Inspect));
+                if let Err(error) = store {
+                    if !history_reported {
+                        warnings.push(violation(
+                            DoctorInvariant::QuarantineWithinCap,
+                            rt.scope.history_root.clone(),
+                            Severity::Error,
+                            format!("retention history could not be read: {error}"),
+                        ));
+                        history_reported = true;
+                    }
+                }
+                if let Ok(Some(store)) = store {
+                    if let Err(error) = read_retention_history(
+                        |after| store.doctor_retention(after),
+                        &paths,
+                        &mut records,
+                    ) {
+                        warnings.push(violation(
+                            DoctorInvariant::QuarantineWithinCap,
+                            rt.scope.history_root.clone(),
+                            Severity::Error,
+                            format!("retention history could not be read: {error}"),
+                        ));
+                    }
+                }
+                let metadata_path = path.join("SKILL.md");
+                let metadata = fs.symlink_metadata(&metadata_path).ok();
+                if metadata
+                    .as_ref()
+                    .is_some_and(|facts| facts.kind == FileKind::Symlink)
+                {
+                    warnings.push(violation(
+                        DoctorInvariant::QuarantineWithinCap,
+                        metadata_path.clone(),
+                        Severity::Warning,
+                        "retained SKILL.md is linked; target was not read".into(),
+                    ));
+                }
+                let facts = fs.symlink_metadata(&path).ok();
+                let name = facts
+                    .as_ref()
+                    .filter(|facts| facts.kind == FileKind::Dir)
+                    .filter(|_| {
+                        metadata
+                            .as_ref()
+                            .is_some_and(|facts| facts.kind == FileKind::File)
+                    })
+                    .and_then(|_| fs.read_capped(&metadata_path, 1024 * 1024).ok())
+                    .and_then(|bytes| {
+                        crate::frontmatter::parse_frontmatter(&String::from_utf8_lossy(&bytes))
+                            .as_frontmatter()
+                            .and_then(|fm| fm.name.clone())
+                    })
+                    .unwrap_or_else(|| {
+                        path.file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    });
+                *per_skill.entry(name.clone()).or_default() += 1;
+                if root.ends_with("skills-trash") && parked_names.contains(&name) {
+                    warnings.push(violation(
+                        DoctorInvariant::NoFolderInTwoStates,
+                        path.clone(),
+                        Severity::Warning,
+                        format!(
                         "`{name}` is parked and also retained in trash; check the copies' origins"
                     ),
-                ));
-            }
-            let modified = facts.and_then(|facts| facts.modified);
-            if let Some(created) = creation_time(records.get(&path), modified) {
-                if now.signed_duration_since(created)
-                    > chrono::Duration::days(RETAINED_ENTRY_MAX_AGE_DAYS)
-                {
-                    warnings.push(violation(DoctorInvariant::QuarantineWithinCap, path.clone(), Severity::Warning, format!("retained entry created at {} is older than {RETAINED_ENTRY_MAX_AGE_DAYS} days", created.to_rfc3339())));
+                    ));
                 }
-            } else if records.get(&path).is_some_and(Option::is_none) {
-                warnings.push(violation(
-                    DoctorInvariant::QuarantineWithinCap,
-                    path,
-                    Severity::Warning,
-                    "retained entry has an invalid recorded creation time".into(),
-                ));
-            }
-        }
+                let modified = facts.and_then(|facts| facts.modified);
+                if let Some(created) = creation_time(records.get(&path), modified) {
+                    if now.signed_duration_since(created)
+                        > chrono::Duration::days(RETAINED_ENTRY_MAX_AGE_DAYS)
+                    {
+                        warnings.push(violation(DoctorInvariant::QuarantineWithinCap, path.clone(), Severity::Warning, format!("retained entry created at {} is older than {RETAINED_ENTRY_MAX_AGE_DAYS} days", created.to_rfc3339())));
+                    }
+                } else if records.get(&path).is_some_and(Option::is_none) {
+                    warnings.push(violation(
+                        DoctorInvariant::QuarantineWithinCap,
+                        path,
+                        Severity::Warning,
+                        "retained entry has an invalid recorded creation time".into(),
+                    ));
+                }
+            },
+        );
         for (name, count) in per_skill {
             if count > QUARANTINE_RETENTION_CAP {
                 warnings.push(violation(DoctorInvariant::QuarantineWithinCap, root.clone(), Severity::Warning, format!("{count} retained entries for `{name}` exceed the per-skill cap of {QUARANTINE_RETENTION_CAP}")));
@@ -505,6 +528,235 @@ pub(crate) fn retained_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::ScopedPath;
+    use crate::ports::{DirEntryFacts, ExclusiveGuard, FileFacts};
+    use std::path::Path;
+
+    struct StreamingFs {
+        inner: std::sync::Arc<dyn crate::ports::ScopeFs>,
+        pending: std::sync::atomic::AtomicUsize,
+        plan_reads: std::sync::atomic::AtomicUsize,
+    }
+    impl crate::ports::ScopeFs for StreamingFs {
+        fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+            self.inner.canonicalize(path)
+        }
+        fn symlink_metadata(&self, path: &Path) -> std::io::Result<FileFacts> {
+            self.inner.symlink_metadata(path)
+        }
+        fn read_link(&self, path: &Path) -> std::io::Result<PathBuf> {
+            self.inner.read_link(path)
+        }
+        fn visit_dir(
+            &self,
+            path: &Path,
+            visit: &mut dyn FnMut(DirEntryFacts),
+        ) -> std::io::Result<()> {
+            self.inner.visit_dir(path, &mut |entry| {
+                if path.ends_with("skills-trash") {
+                    assert_eq!(
+                        self.pending.swap(1, std::sync::atomic::Ordering::SeqCst),
+                        0,
+                        "retained paths accumulated before inspection"
+                    );
+                }
+                visit(entry);
+            })
+        }
+        fn read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntryFacts>> {
+            {
+                assert!(
+                    !path.ends_with("skills-trash") && !path.ends_with("plans"),
+                    "inspection collected a complete directory"
+                );
+                self.inner.read_dir(path)
+            }
+        }
+        fn ancestor_holds(&self, start: &Path, name: &str) -> std::io::Result<bool> {
+            crate::ports::ancestor_holds(self, start, name)
+        }
+        fn read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+            {
+                if path.ends_with("SKILL.md") {
+                    self.pending.store(0, std::sync::atomic::Ordering::SeqCst);
+                }
+                if path.ends_with("plan.json") {
+                    self.plan_reads
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                self.inner.read_capped(path, max_bytes)
+            }
+        }
+        fn read_prefix(&self, path: &Path, limit: u64) -> std::io::Result<(Vec<u8>, bool)> {
+            self.inner.read_prefix(path, limit)
+        }
+        fn write_atomic(
+            &self,
+            guard: &ExclusiveGuard,
+            path: &ScopedPath,
+            bytes: &[u8],
+        ) -> std::io::Result<()> {
+            self.inner.write_atomic(guard, path, bytes)
+        }
+        fn rename(
+            &self,
+            guard: &ExclusiveGuard,
+            from: &ScopedPath,
+            to: &ScopedPath,
+        ) -> std::io::Result<()> {
+            self.inner.rename(guard, from, to)
+        }
+        fn remove_file(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
+            self.inner.remove_file(guard, path)
+        }
+        fn create_dir_all(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
+            self.inner.create_dir_all(guard, path)
+        }
+        fn symlink(
+            &self,
+            guard: &ExclusiveGuard,
+            target: &ScopedPath,
+            link: &ScopedPath,
+        ) -> std::io::Result<()> {
+            self.inner.symlink(guard, target, link)
+        }
+        fn symlink_relative(
+            &self,
+            guard: &ExclusiveGuard,
+            target: &ScopedPath,
+            relative_target: &Path,
+            link: &ScopedPath,
+        ) -> std::io::Result<()> {
+            self.inner
+                .symlink_relative(guard, target, relative_target, link)
+        }
+        fn fsops_device_inode(&self, path: &Path) -> std::io::Result<(u64, u64)> {
+            self.inner.fsops_device_inode(path)
+        }
+        fn fsops_fsync_file(&self, path: &Path) -> std::io::Result<()> {
+            self.inner.fsops_fsync_file(path)
+        }
+        fn fsops_fsync_dir(&self, path: &Path) -> std::io::Result<()> {
+            self.inner.fsops_fsync_dir(path)
+        }
+        fn fsops_create_dir(&self, path: &Path) -> std::io::Result<()> {
+            self.inner.fsops_create_dir(path)
+        }
+        fn fsops_write_new_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+            self.inner.fsops_write_new_file(path, bytes)
+        }
+        fn fsops_write_new_file_with_mode(
+            &self,
+            path: &Path,
+            bytes: &[u8],
+            mode: u32,
+        ) -> std::io::Result<()> {
+            self.inner.fsops_write_new_file_with_mode(path, bytes, mode)
+        }
+        fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            self.inner.fsops_rename(from, to)
+        }
+        fn fsops_symlink(&self, target: &Path, link: &Path) -> std::io::Result<()> {
+            self.inner.fsops_symlink(target, link)
+        }
+        fn fsops_remove_dir(&self, path: &Path) -> std::io::Result<()> {
+            self.inner.fsops_remove_dir(path)
+        }
+        fn fsops_remove_file(&self, path: &Path) -> std::io::Result<()> {
+            self.inner.fsops_remove_file(path)
+        }
+        fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()> {
+            self.inner.fsops_exchange(a, b)
+        }
+    }
+
+    #[test]
+    fn doctor_retention_inspects_each_entry_before_next_delivery_or_accumulates_paths_and_plans() {
+        let mut fixture = crate::testing::FixtureBuilder::new().dir("/home");
+        for n in 0..300 {
+            fixture = crate::testing::fixtures::skill(
+                fixture,
+                &format!("/home/.agents/skills-trash/copy-{n}"),
+                "alpha",
+            );
+        }
+        let fs = std::sync::Arc::new(StreamingFs {
+            inner: std::sync::Arc::new(fixture.build_fs()),
+            pending: std::sync::atomic::AtomicUsize::new(0),
+            plan_reads: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let rt = crate::ports::Runtime::new(
+            &crate::testing::golden::scope_for("streaming", std::path::Path::new("/home")),
+            crate::ports::Ports {
+                fs: fs.clone(),
+                clock: std::sync::Arc::new(crate::testing::FakeClock::at(0)),
+                ids: std::sync::Arc::new(crate::testing::FakeIds::default()),
+                leases: std::sync::Arc::new(crate::testing::FakeLease::default()),
+                history: std::sync::Arc::new(crate::testing::NoHistory),
+                sink: std::sync::Arc::new(crate::testing::RecordingSink::default()),
+                spawner: None,
+                discovery: None,
+                tools: None,
+                catalog: std::sync::Arc::new(crate::harness::HarnessCatalog::builtin()),
+                telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+            },
+        )
+        .unwrap();
+        let inventory = crate::ops::scan(
+            &rt,
+            &crate::testing::golden::ctx(),
+            &crate::dto::ScanRequest::default(),
+        )
+        .unwrap();
+        let report = retained_state(&rt, &inventory);
+        assert!(
+            report
+                .iter()
+                .any(|v| v.detail.contains("300 retained entries")),
+            "{report:?}"
+        );
+        assert_eq!(fs.pending.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn doctor_journal_delivers_each_plan_before_reading_next_or_loads_all_steps_and_backups() {
+        use crate::ports::Journal;
+        let mut fixture = crate::testing::FixtureBuilder::new().dir("/home/plans");
+        for n in 0..300 {
+            let root = format!("/home/plans/{n}");
+            let record = crate::ports::PlanRecord {
+                id: crate::identity::PlanId(n.to_string()),
+                created_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                label: "fixture".into(),
+                root: "/home".into(),
+                backups: Vec::new(),
+                steps: Vec::new(),
+                status: crate::ports::PlanStatus::Done,
+            };
+            fixture = fixture.dir(&root).file(
+                &format!("{root}/plan.json"),
+                &serde_json::to_vec(&record).unwrap(),
+            );
+        }
+        let fs = std::sync::Arc::new(StreamingFs {
+            inner: std::sync::Arc::new(fixture.build_fs()),
+            pending: std::sync::atomic::AtomicUsize::new(0),
+            plan_reads: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let journal = crate::journal::FsJournal::new("/home".into(), fs.clone());
+        let mut delivered = 0;
+        journal
+            .visit(&mut |_| {
+                delivered += 1;
+                assert_eq!(
+                    fs.plan_reads.load(std::sync::atomic::Ordering::SeqCst),
+                    delivered
+                );
+            })
+            .unwrap();
+        assert_eq!(delivered, 300);
+    }
+
     #[test]
     fn retention_age_prefers_recorded_creation_and_uses_mtime_only_without_a_record_or_resets_age_on_touch(
     ) {
@@ -584,7 +836,9 @@ mod tests {
         }
         let fs = builder.build_fs();
         let mut entries = Vec::new();
-        retained_entries(&fs, std::path::Path::new("/home"), 32, &[], &mut entries);
+        retained_entries(&fs, std::path::Path::new("/home"), 32, &[], &mut |path| {
+            entries.push(path);
+        });
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].components().count(), 35);
     }

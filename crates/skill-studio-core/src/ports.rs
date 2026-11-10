@@ -210,6 +210,9 @@ impl ScopeFs for ScopedReads<'_> {
     fn read_link(&self, path: &Path) -> std::io::Result<PathBuf> {
         self.inner.read_link(path)
     }
+    fn visit_dir(&self, path: &Path, visit: &mut dyn FnMut(DirEntryFacts)) -> std::io::Result<()> {
+        self.inner.visit_dir(path, visit)
+    }
     fn read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntryFacts>> {
         self.inner.read_dir(path)
     }
@@ -313,6 +316,13 @@ pub trait ScopeFs: Send + Sync {
     fn read_link(&self, path: &Path) -> std::io::Result<PathBuf>;
     /// Lists a directory. Order is unspecified; callers sort.
     fn read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntryFacts>>;
+    /// Visits entries without requiring a complete directory listing.
+    fn visit_dir(&self, path: &Path, visit: &mut dyn FnMut(DirEntryFacts)) -> std::io::Result<()> {
+        for entry in self.read_dir(path)? {
+            visit(entry);
+        }
+        Ok(())
+    }
     /// True when `start` or any ancestor of it inside the scope holds an entry
     /// named `name`. Walks up from `start` and stops at the scope root, so a
     /// repository outside the scope is not visible.
@@ -905,6 +915,14 @@ pub trait Journal: Send {
     ) -> Result<(), CoreError>;
     /// Every plan the journal holds, oldest first. Never filtered.
     fn all(&self) -> Result<Vec<PlanRecord>, CoreError>;
+    /// Visits one plan at a time for inspection.
+    fn visit(&self, visit: &mut dyn FnMut(PlanRecord)) -> Result<(), CoreError> {
+        for plan in self.all()? {
+            visit(plan);
+        }
+        Ok(())
+    }
+
     /// Rows still [`PlanStatus::Pending`], oldest first.
     fn pending(&self) -> Result<Vec<PlanRecord>, CoreError>;
     /// Removes one backup's bytes from disk. Never touches the plan row;

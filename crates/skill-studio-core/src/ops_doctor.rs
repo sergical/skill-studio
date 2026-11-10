@@ -25,17 +25,12 @@ use crate::doctor::{
 use crate::dto::{DoctorReport, DoctorRequest, DoctorViolation, ScanRequest};
 use crate::error::CoreError;
 use crate::journal::FsJournal;
-use crate::ops::{diagnose, Operation};
+use crate::ops::Operation;
 use crate::ops_install::journal_root;
 use crate::ports::{OpContext, Runtime};
 
 /// Runs the six `doctor` invariant checks over the whole scope and returns
 /// every violation found, with no repair attempted.
-///
-/// Preconditions: same as [`crate::ops::scan`] (shared lease, taken and
-/// released by [`diagnose`]'s own [`crate::ops::scan`] call - matching
-/// `ops::fix_skill`, this op reads `fs` directly afterward rather than
-/// holding a second lease of its own, since nothing here writes).
 pub fn doctor(
     rt: &Runtime,
     ctx: &OpContext,
@@ -50,7 +45,7 @@ fn doctor_body(
     _req: &DoctorRequest,
 ) -> Result<DoctorReport, CoreError> {
     ctx.checkpoint()?;
-    let diagnosis = diagnose(rt, ctx, &ScanRequest::default())?;
+    let diagnosis = crate::ops::diagnose_inspect(rt, ctx, &ScanRequest::default())?;
 
     let fs = rt.ports.fs.as_ref();
     let home = &rt.scope.home.lexical;

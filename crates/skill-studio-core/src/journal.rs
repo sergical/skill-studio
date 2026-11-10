@@ -201,30 +201,33 @@ impl Journal for FsJournal {
         self.write_record(&record)
     }
 
-    fn all(&self) -> Result<Vec<PlanRecord>, CoreError> {
+    fn visit(&self, visit: &mut dyn FnMut(PlanRecord)) -> Result<(), CoreError> {
         let plans_dir = self.root.join("plans");
-        let entries = match self.fs.read_dir(&plans_dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(CoreError::io(plans_dir, e)),
-        };
-        let mut records = Vec::new();
-        for entry in entries {
-            if entry.kind != FileKind::Dir {
-                continue;
+        let mut failure = None;
+        let result = self.fs.visit_dir(&plans_dir, &mut |entry| {
+            if entry.kind != FileKind::Dir || failure.is_some() {
+                return;
             }
-            let plan_path = plans_dir.join(&entry.name).join("plan.json");
-            // R9: `begin` writes `manifest.json` before `plan.json` (see its
-            // own doc), so a crash between the two leaves a plan dir with
-            // only a manifest. Nothing was ever `Pending` from this op's
-            // perspective - the plan row itself never landed - so skip it
-            // rather than failing every later `all()`/`reconcile` call on a
-            // dir this journal never finished creating.
-            if self.fs.symlink_metadata(&plan_path).is_err() {
-                continue;
+            let path = plans_dir.join(entry.name).join("plan.json");
+            if self.fs.symlink_metadata(&path).is_err() {
+                return;
             }
-            records.push(self.read_json::<PlanRecord>(&plan_path)?);
+            match self.read_json::<PlanRecord>(&path) {
+                Ok(plan) => visit(plan),
+                Err(error) => failure = Some(error),
+            }
+        });
+        match result {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(CoreError::io(plans_dir, error)),
+            Ok(()) => {}
         }
+        failure.map_or(Ok(()), Err)
+    }
+
+    fn all(&self) -> Result<Vec<PlanRecord>, CoreError> {
+        let mut records = Vec::new();
+        self.visit(&mut |plan| records.push(plan))?;
         records.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(records)
     }

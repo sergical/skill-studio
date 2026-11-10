@@ -68,7 +68,12 @@ impl ScopeFs for RealFs {
     }
 
     fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntryFacts>> {
-        let mut out = Vec::new();
+        let mut entries = Vec::new();
+        self.visit_dir(path, &mut |entry| entries.push(entry))?;
+        Ok(entries)
+    }
+
+    fn visit_dir(&self, path: &Path, visit: &mut dyn FnMut(DirEntryFacts)) -> io::Result<()> {
         for entry in fs::read_dir(path)? {
             let entry = entry?;
             let file_type = entry.file_type()?;
@@ -81,12 +86,12 @@ impl ScopeFs for RealFs {
             } else {
                 FileKind::Other
             };
-            out.push(DirEntryFacts {
+            visit(DirEntryFacts {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 kind,
             });
         }
-        Ok(out)
+        Ok(())
     }
 
     fn read_capped(&self, path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {

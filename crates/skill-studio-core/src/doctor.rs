@@ -309,26 +309,26 @@ pub fn check_quarantine_within_cap(fs: &dyn ScopeFs, home: &Path) -> Vec<DoctorV
 
 /// Invariant 6: the journal has no open plan at rest.
 pub fn check_journal_has_no_open_plan(journal: &dyn Journal) -> Vec<DoctorViolation> {
-    let pending = match journal.pending() {
-        Ok(pending) => pending,
-        Err(error) => {
-            return vec![DoctorViolation {
+    let mut violations = Vec::new();
+    let result = journal.visit(&mut |plan| {
+        if plan.status == crate::ports::PlanStatus::Pending {
+            violations.push(DoctorViolation {
                 invariant: DoctorInvariant::JournalHasNoOpenPlan,
                 skill: None,
-                path: error.path.clone().unwrap_or_default(),
-                message: format!("journal could not be read: {error}"),
-            }]
+                path: plan.root,
+                message: format!("plan {} ({}) is still open", plan.id.0, plan.label),
+            });
         }
-    };
-    pending
-        .into_iter()
-        .map(|plan| DoctorViolation {
+    });
+    if let Err(error) = result {
+        violations.push(DoctorViolation {
             invariant: DoctorInvariant::JournalHasNoOpenPlan,
             skill: None,
-            path: plan.root.clone(),
-            message: format!("plan {} ({}) is still open", plan.id.0, plan.label),
-        })
-        .collect()
+            path: error.path.clone().unwrap_or_default(),
+            message: format!("journal could not be read: {error}"),
+        });
+    }
+    violations
 }
 
 #[cfg(test)]

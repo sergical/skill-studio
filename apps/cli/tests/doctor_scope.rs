@@ -1,6 +1,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::process::Command;
 
+fn cli_bin() -> std::path::PathBuf {
+    std::env::var_os("SKILL_STUDIO_TEST_BINARY").map_or_else(
+        || env!("CARGO_BIN_EXE_skill-studio").into(),
+        std::path::PathBuf::from,
+    )
+}
+
 #[test]
 fn doctor_cli_warns_for_external_links_and_errors_for_broken_links_or_reports_a_healthy_scope() {
     let dir = tempfile::tempdir().unwrap();
@@ -17,7 +24,7 @@ fn doctor_cli_warns_for_external_links_and_errors_for_broken_links_or_reports_a_
     let link = root.join("dev-skill");
     std::os::unix::fs::symlink(&external, &link).unwrap();
     let run = |json: bool| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_skill-studio"));
+        let mut command = Command::new(cli_bin());
         command.args(["doctor", "--fixture", home.to_str().unwrap()]);
         if json {
             command.arg("--json");
@@ -85,7 +92,7 @@ fn doctor_live_home_reports_old_orphan_fork_and_preserves_active_base_or_skips_d
         .unwrap(),
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+    let output = Command::new(cli_bin())
         .args(["doctor", "--home", home.to_str().unwrap(), "--json"])
         .env("HOME", home)
         .env("SKILL_STUDIO_TELEMETRY", "0")
@@ -105,4 +112,75 @@ fn doctor_live_home_reports_old_orphan_fork_and_preserves_active_base_or_skips_d
             .any(|v| v["path"] == forks.join("active/base").to_str().unwrap()),
         "{envelope}"
     );
+}
+
+fn complete_tree(
+    root: &std::path::Path,
+) -> std::collections::BTreeMap<std::path::PathBuf, (u64, Vec<u8>)> {
+    fn walk(
+        root: &std::path::Path,
+        path: &std::path::Path,
+        out: &mut std::collections::BTreeMap<std::path::PathBuf, (u64, Vec<u8>)>,
+    ) {
+        let facts = std::fs::symlink_metadata(path).unwrap();
+        let bytes = if facts.is_file() {
+            std::fs::read(path).unwrap()
+        } else if facts.file_type().is_symlink() {
+            std::fs::read_link(path)
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec()
+        } else {
+            Vec::new()
+        };
+        out.insert(
+            path.strip_prefix(root).unwrap().to_path_buf(),
+            (facts.len(), bytes),
+        );
+        if facts.is_dir() {
+            for entry in std::fs::read_dir(path).unwrap() {
+                walk(root, &entry.unwrap().path(), out);
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(root, root, &mut out);
+    out
+}
+
+#[test]
+fn doctor_cli_preserves_empty_and_populated_trees_or_creates_lease_files() {
+    for populated in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        if populated {
+            std::fs::create_dir_all(home.join(".agents/skills/alpha")).unwrap();
+            std::fs::write(
+                home.join(".agents/skills/alpha/SKILL.md"),
+                "---\nname: alpha\ndescription: fixture\n---\n",
+            )
+            .unwrap();
+            std::fs::create_dir_all(home.join(".history/leases")).unwrap();
+            std::fs::write(
+                home.join(".history/leases/sentinel"),
+                "retained lease bytes",
+            )
+            .unwrap();
+        }
+        let before = complete_tree(dir.path());
+        let output = Command::new(cli_bin())
+            .args(["doctor", "--fixture", home.to_str().unwrap(), "--json"])
+            .env("HOME", &home)
+            .env("SKILL_STUDIO_TELEMETRY", "0")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(before, complete_tree(dir.path()));
+    }
 }

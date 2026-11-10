@@ -165,3 +165,147 @@ fn doctor_pending_report_caps_examples_and_counts_all_or_returns_every_pending_e
         .contains("4097 history events still pending"));
     assert_eq!(problems[0].detail.matches("(park)").count(), 20);
 }
+
+fn complete_tree(
+    root: &std::path::Path,
+) -> std::collections::BTreeMap<std::path::PathBuf, (u64, Vec<u8>)> {
+    fn walk(
+        root: &std::path::Path,
+        path: &std::path::Path,
+        out: &mut std::collections::BTreeMap<std::path::PathBuf, (u64, Vec<u8>)>,
+    ) {
+        let facts = std::fs::symlink_metadata(path).unwrap();
+        let bytes = if facts.is_file() {
+            std::fs::read(path).unwrap()
+        } else if facts.file_type().is_symlink() {
+            std::fs::read_link(path)
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec()
+        } else {
+            Vec::new()
+        };
+        out.insert(
+            path.strip_prefix(root).unwrap().to_path_buf(),
+            (facts.len(), bytes),
+        );
+        if facts.is_dir() {
+            for entry in std::fs::read_dir(path).unwrap() {
+                walk(root, &entry.unwrap().path(), out);
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(root, root, &mut out);
+    out
+}
+
+#[test]
+fn doctor_retention_counts_copies_with_wal_or_skips_filesystem_checks_when_history_is_busy() {
+    assert_doctor_retention_counts_copies_without_history(true);
+}
+
+#[test]
+fn doctor_retention_counts_copies_with_corrupt_history_or_skips_filesystem_checks_after_database_errors(
+) {
+    assert_doctor_retention_counts_copies_without_history(false);
+}
+
+fn assert_doctor_retention_counts_copies_without_history(wal: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let trash = home.join(".agents/skills-trash");
+    for n in 0..21 {
+        let copy = trash.join(format!("copy-{n}"));
+        std::fs::create_dir_all(&copy).unwrap();
+        std::fs::write(
+            copy.join("SKILL.md"),
+            "---\nname: distinctive-retained-name\ndescription: fixture\n---\n",
+        )
+        .unwrap();
+    }
+    let scope = RuntimeScope::fixture(&home);
+    std::fs::create_dir_all(&scope.history_root).unwrap();
+    let db = scope.history_root.join("events.sqlite3");
+    std::fs::write(&db, b"corrupt database").unwrap();
+    if wal {
+        std::fs::write(db.with_extension("sqlite3-wal"), b"busy").unwrap();
+    }
+    let ports = skill_studio_host::default_ports_with_history(
+        home.join(".history/leases"),
+        Arc::new(HarnessCatalog::builtin()),
+        db,
+    );
+    let rt = Runtime::new(&scope, ports).unwrap();
+    let before = complete_tree(dir.path());
+    let report = ops::doctor(
+        &rt,
+        &OpContext::uncancellable(CorrelationId("retention".into())),
+        &DoctorRequest {},
+    )
+    .unwrap();
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.detail.contains("21 retained entries")),
+        "{report:?}"
+    );
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.detail.contains("history") && v.detail.contains("could not be read")),
+        "{report:?}"
+    );
+    assert_eq!(before, complete_tree(dir.path()));
+}
+
+#[test]
+fn doctor_retention_reports_linked_metadata_without_external_grouping_or_reads_outside_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let outside = dir.path().join("SKILL.md");
+    std::fs::write(
+        &outside,
+        "---\nname: distinctive-outside-name\ndescription: fixture\n---\n",
+    )
+    .unwrap();
+    for n in 0..21 {
+        let copy = home.join(".agents/skills-trash").join(format!("copy-{n}"));
+        std::fs::create_dir_all(&copy).unwrap();
+        std::os::unix::fs::symlink(&outside, copy.join("SKILL.md")).unwrap();
+    }
+    let scope = RuntimeScope::fixture(&home);
+    let rt = Runtime::new(
+        &scope,
+        skill_studio_host::default_ports_with_history(
+            home.join(".history/leases"),
+            Arc::new(HarnessCatalog::builtin()),
+            scope.history_root.join("events.sqlite3"),
+        ),
+    )
+    .unwrap();
+    let report = ops::doctor(
+        &rt,
+        &OpContext::uncancellable(CorrelationId("linked".into())),
+        &DoctorRequest {},
+    )
+    .unwrap();
+    assert_eq!(
+        report
+            .violations
+            .iter()
+            .filter(|v| v.detail.contains("retained SKILL.md is linked"))
+            .count(),
+        21
+    );
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.detail.contains("distinctive-outside-name")),
+        "{report:?}"
+    );
+}

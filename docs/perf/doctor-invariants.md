@@ -66,9 +66,9 @@ Top five after leaf frames, 1695 samples:
 | `__getdirentries64`                 |     109 |
 
 The shared-lease path accounts for 143 `ftruncate` samples in the before
-profile and 5 in the after profile. Its code is unchanged between these
-builds. This variation is a reason to keep the tail provisional. The lease
-owner can check it in the quiet rerun; this change does not alter that path.
+profile and 5 in the after profile. Those measured builds used the shared-lease path. Current Doctor uses the
+inspection path described below, so these historical measurements need a new
+quiet run.
 
 Regenerate an interactive profile from each raw recording:
 
@@ -79,3 +79,15 @@ samply load docs/perf/doctor-profile/after.json.gz
 
 The tables above retain the concise profile summary. The raw recordings remain
 available for analysis; generated exports stay outside version control.
+
+Doctor scans without acquiring a filesystem lease. It creates no lease directory
+and does not truncate existing lock files. Like other filesystem inspection,
+concurrent mutations can change the state during the pass.
+
+Retention inspects one candidate at a time and visits one journal plan at a time.
+Only per-skill counts and the current candidate's timestamps are retained.
+History pages remain capped at 256 rows. This bounds working storage at the
+cost of rereading history and journal plans for each retained candidate.
+Unavailable history produces a finding; filesystem counts and available age
+checks still run. Linked SKILL.md metadata produces a finding without reading
+the target.
