@@ -53,7 +53,14 @@ export async function proxyGet(
     const response = await fetchImpl(upstreamUrl(path, search), {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: controller.signal,
+      redirect: "manual",
     });
+    if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+      reportServerError?.(new Error(`skills.sh answered ${response.status} with a redirect`), {
+        kind: "upstream",
+      });
+      return { status: 502, body: { error: "skills.sh redirected the request" } };
+    }
     const body = await response.json().catch((error) => {
       if (controller.signal.aborted) throw error;
       if (response.status < 500) {
@@ -85,6 +92,12 @@ export async function proxyGet(
   } finally {
     clearTimeout(timer);
   }
+}
+
+const LOGGED_METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
+
+function methodLabel(method: string): string {
+  return LOGGED_METHODS.has(method) ? method : "OTHER";
 }
 
 /** True only when no decoding layer turns a path segment into traversal or a separator. */
@@ -269,7 +282,7 @@ export function createSkillsProxyApp({
               ? "detail"
               : "other";
     process.stdout.write(
-      `${JSON.stringify({ event: "proxy_request", method: c.req.method, route, status: c.res.status, duration_ms: ms })}\n`,
+      `${JSON.stringify({ event: "proxy_request", method: methodLabel(c.req.method), route, status: c.res.status, duration_ms: ms })}\n`,
     );
   });
 

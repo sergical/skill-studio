@@ -46,6 +46,7 @@ describe("proxyGet", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://skills.sh/api/v1/skills?page=0", {
       headers: { Authorization: "Bearer sk-test" },
       signal: expect.any(AbortSignal),
+      redirect: "manual",
     });
     expect(result).toEqual({ status: 200, body: { data: [] } });
   });
@@ -88,6 +89,23 @@ describe("proxyGet", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Flow: skills.sh answers a proxied GET with a redirect.
+  // Expectation: the proxy returns 502 and never follows the Location.
+  // Failure: the bearer key or the response of another host reaches the app.
+  it.each([
+    new Response(null, { status: 302, headers: { Location: "https://evil.example/" } }),
+    Response.redirect("https://evil.example/", 307),
+  ])("refuses an upstream redirect instead of following it", async (redirect) => {
+    const fetchMock = vi.fn().mockResolvedValue(redirect);
+    const reportServerError = vi.fn();
+
+    const result = await proxyGet("sk-test", "/skills", "", fetchMock, reportServerError);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(result).toEqual({ status: 502, body: { error: "skills.sh redirected the request" } });
+    expect(reportServerError).toHaveBeenCalledOnce();
   });
 
   it("relays a non-2xx upstream response as-is", async () => {
@@ -144,7 +162,11 @@ describe("GET /api/v1/skills/:owner/:repo/:slug", () => {
     expect(response.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledWith(
       "https://skills.sh/api/v1/skills/org%20name/repo%2Btools/skill%25%40v1",
-      { headers: { Authorization: "Bearer sk-secret" }, signal: expect.any(AbortSignal) },
+      {
+        headers: { Authorization: "Bearer sk-secret" },
+        signal: expect.any(AbortSignal),
+        redirect: "manual",
+      },
     );
   });
 });
@@ -465,6 +487,21 @@ describe("proxy hardening", () => {
         duration_ms: expect.any(Number),
       });
       expect(line).not.toMatch(/private-search|fixture-key|203\.0\.113\.1/);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  // Flow: a caller sends an invented HTTP method to the proxy.
+  // Expectation: the request log names it OTHER, from a fixed set of labels.
+  // Failure: a caller can write any text into the proxy's logs.
+  it("logs an unknown request method as OTHER instead of the caller's text", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    try {
+      const app = createSkillsProxyApp({ apiKey: "fixture-key", fetch: vi.fn() });
+      await app.request("http://localhost/api/v1/skills", { method: "INJECTEDLOGTEXT" });
+      const methods = write.mock.calls.map((call) => JSON.parse(String(call[0])).method);
+      expect(methods).toEqual(["OTHER"]);
     } finally {
       write.mockRestore();
     }
