@@ -59,7 +59,16 @@ export function useSkillBulkActions(
     action: BulkAction,
     plan: BulkPlan,
     forkNames: ReadonlySet<string> = new Set(),
+    approvedEdits: InstalledSkill[] = [],
   ) => {
+    if (action.kind === "update") {
+      const edited = await skillsWithLocalEdits(plan.applicable, skillLocalEdits);
+      if (edited.some((skill) => !approvedEdits.includes(skill))) {
+        setProgress(null);
+        setPending({ plan, edited });
+        return;
+      }
+    }
     setProgress(bulkProgressLabel(action, 1, plan.applicable.length));
     let result: BulkRunResult;
     try {
@@ -119,11 +128,11 @@ export function useSkillBulkActions(
           ...skipped.map((skill) => ({ skill, reason: "edited copy skipped" })),
         ],
       };
-      void execute(updateAction, plan, forkNames);
+      void execute(updateAction, plan, forkNames, pending.edited);
     },
     overwrite: () => {
       setPending(null);
-      void execute(updateAction, pending.plan);
+      void execute(updateAction, pending.plan, new Set(), pending.edited);
     },
     cancel: () => setPending(null),
   };

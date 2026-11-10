@@ -30,14 +30,9 @@
 //!   this reuses `fsops::swap`'s own quarantine convention instead of
 //!   widening the primitive; see the unit's PR body for that deviation.
 //!
-//! `SkillsSh` re-runs `npx skills update <name>` and `Dotagents` re-runs
-//! `npx -y @sentry/dotagents install`, in place over the existing
-//! destination - not staged, for the same reason `ops_install`'s own CLI
-//! methods are not: redirecting the CLI into a temporary home to force a
-//! stage-and-swap would fight its own layout assumptions (see the shared
-//! brief's Correction section, and `ops_install`'s module doc). The journal
-//! row's backup of the destination, taken before this call, is what stands
-//! in for the "old tree" a crash mid-CLI-call would otherwise lose.
+//! `SkillsSh` runs in a disposable home. Atomic swaps install its result and
+//! retain each displaced shared or agent tree in quarantine. Undo also holds
+//! backups of every independent agent tree. `Dotagents` still runs in place.
 //!
 //! `Dotagents` never uses `dotagents add`: in dotagents 3.1.0 `add` looks
 //! for plugins before skills and fails on a repo whose marketplace lists
@@ -387,6 +382,138 @@ fn update_via_cli(
     Ok(())
 }
 
+fn update_files(
+    fs: &dyn ScopeFs,
+    root: &Path,
+    relative: &Path,
+    files: &mut Vec<crate::dto::InstallFile>,
+) -> Result<(), CoreError> {
+    for entry in fs
+        .read_dir(&root.join(relative))
+        .map_err(|e| CoreError::io(root, e))?
+    {
+        let relative = relative.join(entry.name);
+        let path = root.join(&relative);
+        match entry.kind {
+            crate::ports::FileKind::Dir => update_files(fs, root, &relative, files)?,
+            crate::ports::FileKind::File => files.push(crate::dto::InstallFile {
+                relative_path: relative,
+                contents: fs
+                    .read_capped(&path, 64 * 1024 * 1024)
+                    .map_err(|e| CoreError::io(&path, e))?,
+                mode: fs
+                    .symlink_metadata(&path)
+                    .map_err(|e| CoreError::io(&path, e))?
+                    .mode,
+            }),
+            _ => {
+                return Err(CoreError::new(
+                    ErrorCode::Unsupported,
+                    "update staging requires regular files",
+                )
+                .at(path))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn update_skills_sh_staged(
+    rt: &Runtime,
+    ctx: &OpContext,
+    session: &MutationSession,
+    req: &UpdateRequest,
+    destination: &Path,
+) -> Result<(), CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let stage = ops_install::journal_root(&rt.scope.home.lexical)
+        .join(format!("cli-{}", rt.ports.ids.next_event_id().0));
+    let staged_root = stage.join(UNIVERSAL_ROOT_RELATIVE);
+    crate::ops::ensure_dir_all(rt, session, fs, &staged_root)?;
+    let mut files = Vec::new();
+    update_files(fs, destination, Path::new(""), &mut files)?;
+    update_copy(rt, &session.guard, &staged_root, &req.skill, &files)?;
+    let root = ops_install::scope_root(rt, &req.scope);
+    for name in [".agents/.skill-lock.json", "skills-lock.json"] {
+        let source = root.join(name);
+        if let Ok(bytes) = fs.read_capped(&source, 8 * 1024 * 1024) {
+            let target = stage.join(name);
+            let scoped = crate::ports::confine(&rt.scope, fs, &target)?;
+            fs.write_atomic(&session.guard, &scoped, &bytes)
+                .map_err(|e| CoreError::io(&target, e))?;
+        }
+    }
+    let spawner = rt
+        .ports
+        .spawner
+        .as_ref()
+        .ok_or_else(|| CoreError::new(ErrorCode::Unsupported, "missing process spawner"))?;
+    let (args, _) = update_cli_args_and_cwd(req.method, &req.skill, &req.scope);
+    let output = spawner.run(
+        &crate::ports::ProcessSpec {
+            program: "npx".into(),
+            args,
+            cwd: Some(stage.clone()),
+            env: crate::skills_cli_agents::cli_environment(&stage, &stage.join(".codex")),
+            timeout_ms: 120_000,
+        },
+        ctx.cancel.as_ref(),
+    )?;
+    if output.status != Some(0) {
+        return Err(cli_failure("skills update", &output));
+    }
+    files.clear();
+    update_files(
+        fs,
+        &staged_root.join(&req.skill.0),
+        Path::new(""),
+        &mut files,
+    )?;
+    // Each swap renames the live tree into quarantine, capturing late external writes too.
+    update_copy(
+        rt,
+        &session.guard,
+        destination.parent().ok_or_else(|| {
+            CoreError::new(ErrorCode::InvalidRequest, "destination has no parent")
+        })?,
+        &req.skill,
+        &files,
+    )?;
+    for dir in crate::ops::harness_own_skill_roots(rt, &req.scope) {
+        let live = dir.join(&req.skill.0);
+        if fs
+            .symlink_metadata(&live)
+            .is_ok_and(|facts| facts.kind == crate::ports::FileKind::Dir)
+        {
+            update_copy(rt, &session.guard, &dir, &req.skill, &files)?;
+        } else if fs.symlink_metadata(&live).is_err() {
+            if let Ok(relative) = dir.strip_prefix(&root) {
+                let staged_agent = stage.join(relative).join(&req.skill.0);
+                if fs
+                    .symlink_metadata(&staged_agent)
+                    .is_ok_and(|facts| facts.kind == crate::ports::FileKind::Dir)
+                {
+                    let mut agent_files = Vec::new();
+                    update_files(fs, &staged_agent, Path::new(""), &mut agent_files)?;
+                    crate::ops::ensure_dir_all(rt, session, fs, &dir)?;
+                    update_copy(rt, &session.guard, &dir, &req.skill, &agent_files)?;
+                }
+            }
+        }
+    }
+    for name in [".agents/.skill-lock.json", "skills-lock.json"] {
+        let source = stage.join(name);
+        if let Ok(bytes) = fs.read_capped(&source, 8 * 1024 * 1024) {
+            let target = root.join(name);
+            let scoped = crate::ports::confine(&rt.scope, fs, &target)?;
+            fs.write_atomic(&session.guard, &scoped, &bytes)
+                .map_err(|e| CoreError::io(&target, e))?;
+        }
+    }
+    crate::ops_remove::remove_tree_best_effort(fs, &stage);
+    Ok(())
+}
+
 /// The harness skills directories that already hold `<skill>` (as anything,
 /// links included) before the CLI runs.
 fn harness_dirs_holding(rt: &Runtime, scope: &RootScope, skill: &SkillName) -> Vec<PathBuf> {
@@ -611,6 +738,10 @@ fn update_write(
     dotagents: Option<&DotagentsPlan>,
 ) -> Result<Option<serde_json::Value>, CoreError> {
     let fs = rt.ports.fs.as_ref();
+    if req.method == InstallMethod::SkillsSh {
+        update_skills_sh_staged(rt, ctx, session, req, destination)?;
+        return Ok(None);
+    }
     match req.method {
         InstallMethod::Copy => {
             update_copy(rt, &session.guard, universal_root, &req.skill, &req.files)?;
@@ -796,7 +927,18 @@ fn update_body(
     // `restore_event` puts every other entry - `Dotagents`' `agents.toml`
     // and `agents.lock` - back beside it.
     let mut backup_targets = vec![destination.clone()];
-    let mut folders_before = Vec::new();
+    let mut folders_before = skill_folder_names(fs, &universal_root)?;
+    if req.method == InstallMethod::SkillsSh {
+        backup_targets.extend(
+            crate::ops::harness_own_skill_roots(rt, &req.scope)
+                .into_iter()
+                .map(|dir| dir.join(&req.skill.0))
+                .filter(|path| {
+                    fs.symlink_metadata(path)
+                        .is_ok_and(|facts| facts.kind == crate::ports::FileKind::Dir)
+                }),
+        );
+    }
     if let Some(plan) = &dotagents {
         backup_targets.push(plan.config.clone());
         backup_targets.push(plan.lock.clone());
@@ -875,7 +1017,7 @@ fn update_body(
             serde_json::json!({ "registry_undo": [entry] }),
         );
     }
-    if dotagents.is_some() {
+    if dotagents.is_some() || req.method == InstallMethod::SkillsSh {
         // Best-effort like the registry patch above: the install already
         // wrote, so the row must still finish for undo to find it.
         let _ = record_dotagents_side_effects(

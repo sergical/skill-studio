@@ -50,12 +50,12 @@ const updates = ["alpha", "beta"].map((name) => {
   });
 });
 
-function SelectionUpdate() {
+function SelectionUpdate({ skills = updates }: { skills?: typeof updates }) {
   const [finished, setFinished] = useState(false);
   const { run, updatePrompt } = useSkillBulkActions(() => setFinished(true));
   return (
     <>
-      <Button onClick={() => void run({ kind: "update" }, updates)}>Update selection</Button>
+      <Button onClick={() => void run({ kind: "update" }, skills)}>Update selection</Button>
       {finished && <p role="status">Finished</p>}
       <UpdateOverwritesEditsDialog
         skillNames={updatePrompt?.skillNames ?? []}
@@ -296,5 +296,53 @@ it("Home confirmation checks targets again or overwrites edits made while the di
   await waitFor(() => expect(checks).toBe(2));
   await screen.findByRole("alertdialog");
   expect(screen.getByText(/beta cannot be forked here/)).toBeTruthy();
+  expect(writes).toEqual([]);
+});
+
+it("Selection confirmation rechecks retained targets or overwrites gamma edited while the dialog was open", async () => {
+  let checks = 0;
+  const writes: string[] = [];
+  const gamma = skill({
+    ...updates[0],
+    name: "gamma",
+    deployments: updates[0].deployments.map((copy) => ({
+      ...copy,
+      id: "gamma-copy",
+      owner_id: "owner:v1/global/gamma",
+      path: "/fixture/.agents/skills/gamma",
+    })),
+    update_owner_ids: ["owner:v1/global/gamma"],
+    update_owners: [
+      { owner_id: "owner:v1/global/gamma", latest_commit: "new", latest_commit_at: null },
+    ],
+  });
+  mockIPC((command, args) => {
+    if (command === "skill_local_edits") {
+      checks++;
+      if (checks === 1)
+        return [
+          { checked: true, edited: true },
+          { checked: true, edited: true },
+          { checked: true, edited: false },
+        ];
+      expect(args).toEqual({
+        targets: [{ owner_id: "owner:v1/global/alpha" }, { owner_id: "owner:v1/global/gamma" }],
+      });
+      return [
+        { checked: true, edited: true },
+        { checked: true, edited: true },
+      ];
+    }
+    writes.push(command);
+    throw new Error(`unexpected ${command}`);
+  });
+  const user = userEvent.setup();
+  render(<SelectionUpdate skills={[...updates, gamma]} />);
+  await user.click(screen.getByRole("button", { name: "Update selection" }));
+  await screen.findByRole("alertdialog");
+  await user.click(screen.getByRole("button", { name: "Fork eligible and skip others" }));
+  await waitFor(() => expect(checks).toBe(2));
+  await screen.findByRole("alertdialog");
+  expect(screen.getByText(/alpha, gamma/)).toBeTruthy();
   expect(writes).toEqual([]);
 });

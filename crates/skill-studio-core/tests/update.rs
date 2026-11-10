@@ -2723,3 +2723,47 @@ fn update_all_reports_skills_a_finished_dotagents_install_covered_after_cancel_o
 
     std::fs::remove_dir_all(&home).ok();
 }
+
+#[test]
+fn skills_sh_overwrite_undo_restores_shared_and_agent_trees_or_loses_unique_agent_edits() {
+    let home = unique_temp_dir("overwrite_agent_undo");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "shared edit");
+    let shared = dir_of(&home, "delta");
+    let agent = home.join(".codex/skills/delta");
+    std::fs::create_dir_all(&agent).unwrap();
+    std::fs::write(agent.join("SKILL.md"), "unique agent edit").unwrap();
+    std::fs::write(agent.join("agent-only.txt"), "agent extra").unwrap();
+    let before = std::fs::read(shared.join("SKILL.md")).unwrap();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(Arc::new(
+            FakeNpxUpdateSpawner::new(home.clone(), "v2").copying_into(&[".codex/skills"]),
+        )),
+    );
+    let outcome = ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh)).unwrap();
+    assert_ne!(
+        std::fs::read_to_string(agent.join("SKILL.md")).unwrap(),
+        "unique agent edit"
+    );
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(shared.join("SKILL.md")).unwrap(), before);
+    assert_eq!(
+        std::fs::read_to_string(agent.join("SKILL.md")).unwrap(),
+        "unique agent edit"
+    );
+    assert_eq!(
+        std::fs::read_to_string(agent.join("agent-only.txt")).unwrap(),
+        "agent extra"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}

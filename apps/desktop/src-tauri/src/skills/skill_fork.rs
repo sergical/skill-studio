@@ -49,7 +49,7 @@ use skill_studio_core::lock_file;
 /// builders) - `ops::update`'s own dotagents argv now lives in
 /// `ops_update::update_cli_args_and_cwd` instead.
 pub trait LedgerTool {
-    fn remove(&self, tool: OriginTool, name: &str) -> Result<(), String>;
+    fn remove(&self, home: &Path, tool: OriginTool, name: &str) -> Result<(), String>;
     fn reinstall(&self, rec: &ForkRecord, name: &str) -> Result<(), String>;
 }
 
@@ -267,8 +267,84 @@ fn run_npx_with_spawner(
     }
 }
 
+fn run_npx_in_home(
+    spawner: &dyn skill_studio_core::ports::ProcessSpawner,
+    args: &[String],
+    home: &Path,
+) -> Result<(), String> {
+    let output = spawner
+        .run(
+            &skill_studio_core::ports::ProcessSpec {
+                program: "npx".into(),
+                args: args.to_vec(),
+                cwd: Some(home.to_path_buf()),
+                env: skill_studio_core::skills_cli_agents::cli_env_pins(home, &home.join(".codex"))
+                    .into_iter()
+                    .chain([
+                        ("HOME".into(), home.to_string_lossy().into_owned()),
+                        (
+                            "DOTAGENTS_HOME".into(),
+                            home.join(".agents").to_string_lossy().into_owned(),
+                        ),
+                        ("XDG_STATE_HOME".into(), String::new()),
+                    ])
+                    .collect(),
+                timeout_ms: NPX_TIMEOUT_MS,
+            },
+            &skill_studio_core::ports::NeverCancel,
+        )
+        .map_err(|e| e.to_string())?;
+    if output.status == Some(0) {
+        Ok(())
+    } else {
+        Err(output.stderr)
+    }
+}
+
+fn detach_ledger(
+    ledger: &dyn LedgerTool,
+    home: &Path,
+    tool: OriginTool,
+    name: &str,
+) -> Result<(), String> {
+    // The removal CLI sees only a disposable home. It never receives live skill paths.
+    let isolated = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let agents = isolated.path().join(".agents");
+    fs::create_dir_all(agents.join("skills").join(name)).map_err(|e| e.to_string())?;
+    let files = [
+        ".skill-lock.json",
+        "agents.toml",
+        "agents.lock",
+        ".gitignore",
+    ];
+    for file in files {
+        let source = home.join(".agents").join(file);
+        if source.exists() {
+            fs::copy(&source, agents.join(file)).map_err(|e| e.to_string())?;
+        }
+    }
+    ledger.remove(isolated.path(), tool, name)?;
+    for file in files {
+        let source = agents.join(file);
+        if source.exists() {
+            let destination = fs::canonicalize(home.join(".agents").join(file))
+                .unwrap_or_else(|_| home.join(".agents").join(file));
+            let mut staged = tempfile::NamedTempFile::new_in(
+                destination
+                    .parent()
+                    .ok_or("Ledger has no parent directory")?,
+            )
+            .map_err(|e| e.to_string())?;
+            std::io::Write::write_all(&mut staged, &fs::read(source).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+            staged.persist(destination).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 impl LedgerTool for RealLedgerTool {
-    fn remove(&self, tool: OriginTool, name: &str) -> Result<(), String> {
+    fn remove(&self, home: &Path, tool: OriginTool, name: &str) -> Result<(), String> {
         let args = match tool {
             OriginTool::Dotagents => dotagents_remove_args(name, InstallScope::Global),
             // Fork only ever applies to a global-scope skill (see
@@ -276,7 +352,10 @@ impl LedgerTool for RealLedgerTool {
             // target the global scope.
             OriginTool::SkillsSh => skills_sh_remove_args_for_scope(name, InstallScope::Global),
         };
-        run_npx(&args, None)
+        let search = skill_studio_host::LoginShellToolLookup::new();
+        let spawner =
+            skill_studio_host::RealProcessSpawner::with_search_path(search.dirs().to_vec());
+        run_npx_in_home(&spawner, &args, home)
     }
 
     fn reinstall(&self, rec: &ForkRecord, name: &str) -> Result<(), String> {
@@ -1190,7 +1269,7 @@ fn fork_skill_with_storage(
             ForkRecoveryRollback::KeepComplete,
         ));
     }
-    if let Err(error) = ledger.remove(origin.tool, name) {
+    if let Err(error) = detach_ledger(ledger, home, origin.tool, name) {
         return Err(rollback_fork_before_detach(
             storage,
             guard,
@@ -1885,7 +1964,7 @@ mod tests {
     }
 
     impl LedgerTool for FakeLedger {
-        fn remove(&self, tool: OriginTool, name: &str) -> Result<(), String> {
+        fn remove(&self, _home: &Path, tool: OriginTool, name: &str) -> Result<(), String> {
             self.remove_calls
                 .lock()
                 .unwrap()
@@ -2506,7 +2585,7 @@ mod tests {
         write_file(&copy.join("SKILL.md"), "independent Codex edit");
         struct RemovingBoth(Vec<PathBuf>);
         impl LedgerTool for RemovingBoth {
-            fn remove(&self, _: OriginTool, _: &str) -> Result<(), String> {
+            fn remove(&self, _home: &Path, _: OriginTool, _: &str) -> Result<(), String> {
                 for path in &self.0 {
                     fs::remove_dir_all(path).unwrap();
                 }
@@ -2585,7 +2664,7 @@ mod tests {
         }
         struct RemovingBoth(Vec<PathBuf>);
         impl LedgerTool for RemovingBoth {
-            fn remove(&self, _: OriginTool, _: &str) -> Result<(), String> {
+            fn remove(&self, _home: &Path, _: OriginTool, _: &str) -> Result<(), String> {
                 for path in &self.0 {
                     fs::remove_dir_all(path).unwrap();
                 }
@@ -2622,6 +2701,62 @@ mod tests {
     }
 
     #[test]
+    fn fork_detaches_in_isolation_preserving_late_writes_or_removal_loses_unsnapshotted_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let data = tmp.path().join("data");
+        seed_dotagents_ledger(
+            &home,
+            "find-bugs",
+            "owner/repo",
+            "skills/find-bugs",
+            &"a".repeat(40),
+        );
+        let shared = home.join(".agents/skills/find-bugs");
+        write_file(&shared.join("SKILL.md"), "original");
+        struct LateWriter(PathBuf);
+        impl LedgerTool for LateWriter {
+            fn remove(&self, isolated: &Path, _: OriginTool, name: &str) -> Result<(), String> {
+                write_file(
+                    &self.0.join(".agents/skills").join(name).join("SKILL.md"),
+                    "late shared edit",
+                );
+                write_file(
+                    &self.0.join(".codex/skills").join(name).join("SKILL.md"),
+                    "late agent edit",
+                );
+                fs::remove_dir_all(isolated.join(".agents/skills").join(name)).unwrap();
+                Ok(())
+            }
+            fn reinstall(&self, _: &ForkRecord, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let lookup = NeverCalledLookup;
+        fork_skill_with(
+            &test_guard(&home),
+            &home,
+            &data,
+            "find-bugs",
+            &shared,
+            &LateWriter(home.clone()),
+            &FakeFetch {
+                files: vec![("SKILL.md", "upstream")],
+            },
+            &lookup,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(shared.join("SKILL.md")).unwrap(),
+            "late shared edit"
+        );
+        assert_eq!(
+            fs::read_to_string(home.join(".codex/skills/find-bugs/SKILL.md")).unwrap(),
+            "late agent edit"
+        );
+    }
+
+    #[test]
     fn fork_restores_the_folder_when_removal_deleted_it() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
@@ -2638,21 +2773,17 @@ mod tests {
 
         // A ledger tool whose `remove` actually deletes the directory, like
         // a real `dotagents remove` / `npx skills remove` would.
-        struct DeletingLedger {
-            skill_dir: PathBuf,
-        }
+        struct DeletingLedger;
         impl LedgerTool for DeletingLedger {
-            fn remove(&self, _tool: OriginTool, _name: &str) -> Result<(), String> {
-                fs::remove_dir_all(&self.skill_dir).unwrap();
+            fn remove(&self, home: &Path, _tool: OriginTool, _name: &str) -> Result<(), String> {
+                fs::remove_dir_all(home.join(".agents/skills").join(_name)).unwrap();
                 Ok(())
             }
             fn reinstall(&self, _rec: &ForkRecord, _name: &str) -> Result<(), String> {
                 Ok(())
             }
         }
-        let ledger = DeletingLedger {
-            skill_dir: home.join(".agents/skills/find-bugs"),
-        };
+        let ledger = DeletingLedger;
 
         let fetch = FakeFetch {
             files: vec![("SKILL.md", "upstream body")],
