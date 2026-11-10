@@ -75,7 +75,7 @@ interface UseLocationActionsResult {
   closeSplitRequest: () => void;
   /** Set while a "Turn off for <Agent>" action is pending its confirm. */
   turnOffRequest: TurnOffAction | null;
-  closeTurnOffRequest: () => void;
+  closeTurnOffRequest: (turnedOff?: boolean) => void;
 }
 
 type SplitLocationRequest = Omit<Extract<LocationAction, { kind: "split" }>, "kind">;
@@ -154,7 +154,10 @@ export function useLocationActions(
   } | null>(null);
   const [pluginUninstallRequest, setPluginUninstallRequest] = useState<Deployment | null>(null);
   const [splitRequest, setSplitRequest] = useState<SplitLocationRequest | null>(null);
-  const [turnOffRequest, setTurnOffRequest] = useState<TurnOffAction | null>(null);
+  const [turnOffRequest, setTurnOffRequest] = useState<{
+    action: TurnOffAction;
+    settle: (turnedOff: boolean) => void;
+  } | null>(null);
 
   /** Resolves `true` when `fn` succeeded, `false` after showing its error toast. Never rejects. */
   const runWithErrorToast = <T = void>(
@@ -290,8 +293,7 @@ export function useLocationActions(
         });
         return Promise.resolve(true);
       case "turn-off-agent":
-        setTurnOffRequest(action);
-        return Promise.resolve(true);
+        return new Promise((settle) => setTurnOffRequest({ action, settle }));
       case "remove-scope":
         setRemoveRequest({ scopeLabel: action.scopeLabel, projectPath: action.projectPath });
         return Promise.resolve(true);
@@ -360,8 +362,11 @@ export function useLocationActions(
     closeLeftBehindRequest: () => setLeftBehindRequest(null),
     splitRequest,
     closeSplitRequest: () => setSplitRequest(null),
-    turnOffRequest,
-    closeTurnOffRequest: () => setTurnOffRequest(null),
+    turnOffRequest: turnOffRequest?.action ?? null,
+    closeTurnOffRequest: (turnedOff = false) => {
+      turnOffRequest?.settle(turnedOff);
+      setTurnOffRequest(null);
+    },
   };
 }
 

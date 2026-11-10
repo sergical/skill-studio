@@ -3,6 +3,7 @@ import { page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { deployment, skill } from "../../dev/harness/skill-fixture";
+import { perSkillLinkDeployment, universalDeployment } from "../../dev/harness/scanned-deployment";
 import { SkillLocationsCard } from "./SkillLocationsCard";
 import "../../App.css";
 
@@ -62,4 +63,33 @@ it("project park confirmation keeps the switch disabled until the snapshot inste
   await expect.element(page.getByRole("alertdialog")).not.toBeInTheDocument();
   await expect.element(toggle).toHaveAttribute("aria-checked", "false");
   await expect.element(toggle).toHaveAttribute("aria-disabled", "true");
+});
+
+it("cancelling Turn off for one agent puts the switch back on and enabled instead of leaving it off while the agent still reads the skill", async () => {
+  mockIPC((command) => {
+    if (command === "turn_off_check") return { refusal: null, git_tracked: null, project: null };
+    throw new Error(`unexpected ${command}`);
+  });
+  const universal = "/fixture/.agents/skills/demo";
+  await render(
+    <SkillLocationsCard
+      skill={skill({
+        name: "demo",
+        deployments: [
+          universalDeployment({ universalPath: universal }),
+          perSkillLinkDeployment({
+            agent: "Claude Code",
+            path: "/fixture/.claude/skills/demo",
+            universalPath: universal,
+          }),
+        ],
+      })}
+    />,
+  );
+  const toggle = page.getByRole("switch", { name: "Global · Claude Code" });
+  await toggle.click();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  await expect.element(toggle).toHaveAttribute("aria-checked", "true");
+  await expect.element(toggle).not.toHaveAttribute("aria-disabled", "true");
 });

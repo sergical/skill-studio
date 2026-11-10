@@ -203,7 +203,8 @@ export function SkillLocationsCard({ skill, onCompareCopies }: SkillLocationsCar
         <TurnOffForAgentDialog
           skillName={skill.name}
           request={actions.turnOffRequest}
-          onClose={actions.closeTurnOffRequest}
+          onClose={() => actions.closeTurnOffRequest()}
+          onTurnedOff={() => actions.closeTurnOffRequest(true)}
           onOffEverywhere={({ shared, scopeLabel, projectPath }) => {
             actions.closeTurnOffRequest();
             void actions.run({ kind: "park", deployment: shared, scopeLabel, projectPath });
