@@ -107,6 +107,16 @@ esac
                 }
             }
             assert_eq!(result["status"], "ok", "{surface} {operation}: {result}");
+            assert_eq!(
+                result["data"]["skill"], "gamma",
+                "{surface} {operation}: {result}"
+            );
+            if operation == "add" {
+                assert_eq!(
+                    result["data"]["harness_results"][0]["harness"], "universal",
+                    "{surface}: {result}"
+                );
+            }
         }
         assert!(!outside.path().join(".agents/skills/gamma").exists());
     }
