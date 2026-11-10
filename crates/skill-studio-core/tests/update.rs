@@ -1429,11 +1429,11 @@ impl skill_studio_core::ports::HistoryStore for PatchlessStore {
     ) -> Result<Vec<skill_studio_core::events::EventRecord>, skill_studio_core::CoreError> {
         self.0.pending()
     }
-    fn completed_lock_captures(
+    fn retained_lock_captures(
         &self,
     ) -> Result<Vec<skill_studio_core::events::EventRecord>, skill_studio_core::error::CoreError>
     {
-        self.0.completed_lock_captures()
+        self.0.retained_lock_captures()
     }
     fn held_restore_claims(
         &self,
@@ -2834,9 +2834,99 @@ fn covered_lock_restore_race(mode: u8) {
     let other = home.join(UNIVERSAL_ROOT_RELATIVE).join("other/SKILL.md");
     let event_id = result.items[1].outcome.as_ref().unwrap().event_id.clone();
     assert_ne!(event_id, result.items[0].outcome.as_ref().unwrap().event_id);
+    let events = ops::list_events(&rt, &ctx(), &Default::default()).unwrap();
+    assert_eq!(events.len(), 2, "history exposes a whole-scope Undo");
+    let recovery_id = skill_studio_core::identity::EventId(
+        rt.ports
+            .history
+            .open(
+                &rt.scope,
+                skill_studio_core::ports::HistoryAccess::ReadIfExists,
+            )
+            .unwrap()
+            .unwrap()
+            .get(&events[0].id)
+            .unwrap()
+            .unwrap()
+            .payload["covered_by_install"]
+            .as_str()
+            .unwrap()
+            .to_string(),
+    );
+    for force in [false, true] {
+        assert_eq!(
+            ops::restore_event(
+                &rt,
+                &ctx(),
+                &RestoreRequest {
+                    event_id: recovery_id.clone(),
+                    force
+                }
+            )
+            .unwrap_err()
+            .code,
+            ErrorCode::Unsupported
+        );
+    }
+
+    if mode == 13 {
+        let mut next = event_id;
+        for _ in 0..32 {
+            next = ops::restore_event(
+                &rt,
+                &ctx(),
+                &RestoreRequest {
+                    event_id: next,
+                    force: false,
+                },
+            )
+            .unwrap()
+            .restore_event_id;
+        }
+        let before = std::fs::read(&other).unwrap();
+        let error = ops::restore_event(
+            &rt,
+            &ctx(),
+            &RestoreRequest {
+                event_id: next.clone(),
+                force: false,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::DriftConflict);
+        assert_eq!(
+            std::fs::read(&other).unwrap(),
+            before,
+            "capture cap changed the folder before refusing"
+        );
+        let report = ops::doctor(&rt, &ctx(), &skill_studio_core::dto::DoctorRequest {}).unwrap();
+        let retained: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| {
+                v.invariant == skill_studio_core::doctor::DoctorInvariant::RetainedLockCapture
+            })
+            .collect();
+        assert_eq!(retained.len(), 32);
+        assert_eq!(error.path.as_ref(), Some(&retained[0].path));
+        std::fs::remove_file(&retained[0].path).unwrap();
+        ops::restore_event(
+            &rt,
+            &ctx(),
+            &RestoreRequest {
+                event_id: next,
+                force: false,
+            },
+        )
+        .unwrap();
+        std::fs::remove_dir_all(home).unwrap();
+        return;
+    }
     if mode == 10 {
         std::fs::remove_file(&lock).unwrap();
     }
+    let recovery_writer = (mode == 7)
+        .then(|| Mutex::new(std::fs::OpenOptions::new().write(true).open(&lock).unwrap()));
     let hooked_fs = Arc::new(edit_on_exchange::EditOnExchange {
         late_write: mode == 9,
         captured_reads: Default::default(),
@@ -2947,7 +3037,23 @@ fn covered_lock_restore_race(mode: u8) {
                 drop(history);
                 std::fs::write(&captured, expected).unwrap();
                 drop(MutationSession::begin(&rt, &ctx()).unwrap());
-                assert!(!captured.exists(), "unchanged capture was not cleaned up");
+                assert!(
+                    captured.exists(),
+                    "cleanup unlinked a capture with an open writer"
+                );
+                use std::io::{Seek, SeekFrom, Write};
+                let mut writer = hooked_fs.writer.as_ref().unwrap().lock().unwrap();
+                writer.seek(SeekFrom::Start(0)).unwrap();
+                writer.set_len(0).unwrap();
+                writer.write_all(b"late write after cleanup").unwrap();
+                assert_eq!(
+                    std::fs::read(&captured).unwrap(),
+                    b"late write after cleanup"
+                );
+                assert_eq!(
+                    MutationSession::begin(&rt, &ctx()).err().unwrap().code,
+                    ErrorCode::DriftConflict
+                );
             } else {
                 let doc: toml::Value =
                     toml::from_str(&std::fs::read_to_string(&lock).unwrap()).unwrap();
@@ -3012,6 +3118,30 @@ fn covered_lock_restore_race(mode: u8) {
                 .unwrap()
                 .reverted_by
                 .is_none());
+            use std::io::{Seek, SeekFrom, Write};
+            let captured =
+                PathBuf::from(restore.payload["displaced_agents_lock"].as_str().unwrap());
+            let original = std::fs::read(&captured).unwrap();
+            {
+                let mut writer = recovery_writer.as_ref().unwrap().lock().unwrap();
+                writer.seek(SeekFrom::Start(0)).unwrap();
+                writer.set_len(0).unwrap();
+                writer
+                    .write_all(b"descriptor write after recovery")
+                    .unwrap();
+            }
+            assert_eq!(
+                MutationSession::begin(&rt, &ctx())
+                    .err()
+                    .expect("recovered capture stopped being tracked")
+                    .code,
+                ErrorCode::DriftConflict
+            );
+            assert_eq!(
+                std::fs::read(&captured).unwrap(),
+                b"descriptor write after recovery"
+            );
+            std::fs::write(&captured, original).unwrap();
             ops::restore_event(
                 &rt,
                 &ctx(),
@@ -3261,7 +3391,7 @@ fn update_all_undo_in_either_order_restores_only_own_folder_and_row_or_reverts_a
 }
 
 #[test]
-fn covered_undo_after_publication_recovers_and_allows_next_mutation_or_blocks_on_own_lock() {
+fn covered_undo_after_publication_recovery_tracks_late_descriptor_write_or_ignores_drift() {
     covered_lock_restore_race(7);
 }
 
@@ -3271,7 +3401,7 @@ fn covered_undo_after_publication_preserves_external_edit_as_drift_or_accepts_ch
 }
 
 #[test]
-fn covered_undo_late_descriptor_write_blocks_next_mutation_or_silently_loses_edit() {
+fn covered_undo_after_cleanup_retains_late_descriptor_write_or_loses_other_writer_edits() {
     covered_lock_restore_race(9);
 }
 #[test]
@@ -3285,4 +3415,14 @@ fn covered_undo_staging_failure_syncs_rollback_or_loses_lock_after_crash() {
 #[test]
 fn covered_undo_failed_rollback_retains_recovery_claim_or_strands_missing_lock() {
     covered_lock_restore_race(12);
+}
+
+#[test]
+fn update_all_history_exposes_only_per_skill_undo_or_offers_whole_scope_restore() {
+    covered_lock_restore_race(0);
+}
+
+#[test]
+fn covered_undo_at_capture_cap_reports_oldest_file_before_writing_or_grows_without_bound() {
+    covered_lock_restore_race(13);
 }

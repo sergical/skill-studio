@@ -255,18 +255,16 @@ fn set_post_fingerprint(
 
 impl HistoryStore for SqliteHistoryStore {
     fn list(&self, filter: &EventFilter) -> Result<Vec<EventRecord>, CoreError> {
-        let mut clauses = Vec::new();
+        let mut clauses =
+            vec!["COALESCE(json_extract(payload, '$.full_install_recovery'), 0) != 1"];
         if filter.skill.is_some() {
             clauses.push("skill = ?");
         }
         if filter.after.is_some() {
             clauses.push("(ts, rowid) < (SELECT ts, rowid FROM events WHERE id = ?)");
         }
-        let mut sql = String::from("SELECT * FROM events");
-        if !clauses.is_empty() {
-            sql.push_str(" WHERE ");
-            sql.push_str(&clauses.join(" AND "));
-        }
+        let mut sql = String::from("SELECT * FROM events WHERE ");
+        sql.push_str(&clauses.join(" AND "));
         // `ts DESC` first, `rowid DESC` only as a tiebreaker: legacy rows the
         // desktop's `EventStore::import_legacy_events` imports get appended
         // at the end of the table (highest `rowid`) regardless of their
@@ -529,8 +527,8 @@ impl HistoryStore for SqliteHistoryStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)
     }
 
-    fn completed_lock_captures(&self) -> Result<Vec<EventRecord>, CoreError> {
-        let mut stmt = self.conn.prepare("SELECT * FROM events WHERE status = 'done' AND kind = 'restore' AND json_type(payload, '$.agents_lock_publication') = 'object' ORDER BY rowid ASC").map_err(sql_err)?;
+    fn retained_lock_captures(&self) -> Result<Vec<EventRecord>, CoreError> {
+        let mut stmt = self.conn.prepare("SELECT * FROM events WHERE kind = 'restore' AND json_type(payload, '$.displaced_agents_lock') = 'text' ORDER BY rowid ASC").map_err(sql_err)?;
         let rows = stmt.query_map([], row_from).map_err(sql_err)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)
     }

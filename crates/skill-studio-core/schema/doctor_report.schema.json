@@ -78,6 +78,11 @@
           "description": "6. The journal has no open plan at rest.",
           "type": "string",
           "const": "journal_has_no_open_plan"
+        },
+        {
+          "description": "Retained lock captures require manual review before deletion.",
+          "type": "string",
+          "const": "retained_lock_capture"
         }
       ]
     }

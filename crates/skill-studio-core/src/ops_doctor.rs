@@ -63,7 +63,7 @@ fn doctor_body(
 
     let journal = FsJournal::new(journal_root(home), rt.ports.fs.clone());
 
-    let violations: Vec<DoctorViolation> = check_link_resolves_in_root(&diagnosis)
+    let mut violations: Vec<DoctorViolation> = check_link_resolves_in_root(&diagnosis)
         .into_iter()
         .chain(check_registry_entry_has_folder(fs, home))
         .chain(check_lockfile_entry_has_folder(
@@ -84,6 +84,19 @@ fn doctor_body(
         })
         .collect();
 
+    if let Some(store) = rt
+        .ports
+        .history
+        .open(&rt.scope, crate::ports::HistoryAccess::ReadIfExists)?
+    {
+        for path in crate::ops_dotagents_history::retained_captures(fs, store.as_ref())? {
+            violations.push(DoctorViolation {
+                invariant: crate::doctor::DoctorInvariant::RetainedLockCapture,
+                path,
+                detail: "Retained agents.lock capture, oldest first. Inspect before deleting; an open writer can still write here.".into(),
+            });
+        }
+    }
     ctx.take_timing();
     Ok(DoctorReport {
         violations,

@@ -1646,7 +1646,8 @@ export interface DoctorViolation {
     | "lockfile_entry_has_folder"
     | "no_folder_in_two_states"
     | "quarantine_within_cap"
-    | "journal_has_no_open_plan";
+    | "journal_has_no_open_plan"
+    | "retained_lock_capture";
   /**
    * Path of the offending entry, when the invariant names one.
    */

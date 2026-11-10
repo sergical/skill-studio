@@ -64,9 +64,12 @@ missing, and recovery accepted a replacement without reporting a conflict.
 The Undo-order case restored another skill. The tests use fixture homes and
 filesystem callbacks, with no sleeps or wall-clock gates.
 
-Completed Restore rows keep the captured lock's identity and bytes until the
-next mutation checks it. A late write through an old descriptor returns
-DriftConflict with the retained path. An unchanged capture is then removed.
+Every Restore row keeps the captured lock's identity and bytes across recovery
+and claim release. Each mutation checks the capture. A late write through an
+old descriptor returns DriftConflict with the retained path. Captures remain
+on disk, including unchanged captures. Doctor reports retained paths oldest
+first. New lock restores stop at 32 captures before writing. The user can
+inspect and delete retained files after their writers close.
 Rollback links sync the parent directory. Commit errors keep the pending
 Restore and its claim for recovery. Force Undo can journal an absent original
 lock and publish the saved row into the empty name.

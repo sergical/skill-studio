@@ -269,6 +269,7 @@ pub fn restore_event_with_runtime(
     let target = store
         .get(event_id)?
         .ok_or_else(|| format!("Event {event_id} not found"))?;
+    store.check_user_restore(&target)?;
     skill_materialize::restore_guard_for_explode(store, &target, home)?;
     if target.kind == "make_independent_copy" {
         if force {

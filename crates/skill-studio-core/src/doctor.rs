@@ -71,6 +71,8 @@ pub enum DoctorInvariant {
     QuarantineWithinCap,
     /// 6. The journal has no open plan at rest.
     JournalHasNoOpenPlan,
+    /// Retained lock captures require manual review before deletion.
+    RetainedLockCapture,
 }
 
 /// One violation of a doctor invariant, named with the offending path so a

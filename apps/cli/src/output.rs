@@ -137,6 +137,7 @@ fn doctor_check_words(invariant: DoctorInvariant) -> &'static str {
         DoctorInvariant::NoFolderInTwoStates => "folder is in two states at once",
         DoctorInvariant::QuarantineWithinCap => "recovery folder is over its limit",
         DoctorInvariant::JournalHasNoOpenPlan => "history has an unfinished change",
+        DoctorInvariant::RetainedLockCapture => "a retained lock file needs review before deletion",
     }
 }
 

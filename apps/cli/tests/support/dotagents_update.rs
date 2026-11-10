@@ -70,6 +70,12 @@ pub fn covered_update(surface: &str) {
         std::fs::read_to_string(home.path().join("installs")).unwrap(),
         "install\n"
     );
+    let events = call(&["events"], "list_events", json!({}));
+    assert_eq!(
+        events.as_array().unwrap().len(),
+        2,
+        "history exposes a whole-scope Undo"
+    );
     call(
         &["restore", "--event-id", covered],
         "restore_event",

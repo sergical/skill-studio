@@ -4316,13 +4316,21 @@ pub fn restore_event(
 /// Follows `target_event` links through `Restore` rows. An old restore of a
 /// `harness_disable` or `harness_enable` event would rewrite an agent config
 /// file from a backup, so the whole chain is refused like the event itself.
-fn restore_chain_ends_at_harness_event(
+fn restore_chain_is_internal(
     store: &dyn crate::ports::HistoryStore,
     start: &crate::events::EventRecord,
 ) -> Result<bool, CoreError> {
     let mut current = start.clone();
     // A chain cannot be longer than the table; the cap only stops a cycle.
     for _ in 0..64 {
+        if current
+            .payload
+            .get("full_install_recovery")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        {
+            return Ok(true);
+        }
         match current.kind() {
             Some(
                 crate::events::EventKind::HarnessDisable | crate::events::EventKind::HarnessEnable,
@@ -4390,7 +4398,7 @@ fn restore_event_body(
         }
         crate::dto::RestoreCapability::Yes => {}
     }
-    if restore_chain_ends_at_harness_event(&*session.store, &target)? {
+    if restore_chain_is_internal(&*session.store, &target)? {
         return Err(CoreError::new(
             ErrorCode::Unsupported,
             "this event cannot be restored",
@@ -4492,6 +4500,15 @@ fn restore_event_body(
         crate::ops_install::check_registry_drift(fs, inverse)?;
     }
     let lock_restore = crate::ops_dotagents_history::prepare_restore(fs, inverse, req.force)?;
+    if lock_restore
+        .as_ref()
+        .is_some_and(|restore| restore.needs_write)
+    {
+        let captures = crate::ops_dotagents_history::retained_captures(fs, session.store.as_ref())?;
+        if captures.len() >= crate::ops_dotagents_history::LOCK_CAPTURE_LIMIT {
+            return Err(CoreError::new(ErrorCode::DriftConflict, "retained agents.lock capture limit reached; inspect the oldest file and delete it only after its writers have closed").at(&captures[0]));
+        }
+    }
     let lock_scoped = lock_restore
         .as_ref()
         .map(|restore| crate::ports::confine_write_through(&rt.scope, fs, &restore.path))

@@ -318,11 +318,7 @@ pub(crate) fn check_completed_capture(
             .at(&displaced));
         }
     }
-    verify_capture(fs, &displaced, &saved.captured)?;
-    fs.fsops_remove_file(&displaced)
-        .map_err(|e| CoreError::io(&displaced, e))?;
-    fs.fsops_fsync_dir(displaced.parent().ok_or_else(|| invalid_lock(&displaced))?)
-        .map_err(|e| CoreError::io(&displaced, e))
+    verify_capture(fs, &displaced, &saved.captured)
 }
 
 pub(crate) fn recover_capture(
@@ -430,4 +426,28 @@ fn verify_capture(fs: &dyn ScopeFs, displaced: &Path, captured: &[u8]) -> Result
         .at(displaced));
     }
     Ok(())
+}
+
+pub(crate) const LOCK_CAPTURE_LIMIT: usize = 32;
+
+pub(crate) fn retained_captures(
+    fs: &dyn ScopeFs,
+    store: &dyn crate::ports::HistoryStore,
+) -> Result<Vec<PathBuf>, CoreError> {
+    let mut paths = Vec::new();
+    for event in store.retained_lock_captures()? {
+        if let Some(path) = event
+            .payload
+            .get("displaced_agents_lock")
+            .and_then(serde_json::Value::as_str)
+        {
+            let path = PathBuf::from(path);
+            match fs.symlink_metadata(&path) {
+                Ok(_) => paths.push(path),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(CoreError::io(&path, e)),
+            }
+        }
+    }
+    Ok(paths)
 }

@@ -646,8 +646,8 @@ pub trait HistoryStore: Send {
     ) -> Result<bool, CoreError>;
     /// Rows still `pending`; only a crash leaves one behind.
     fn pending(&self) -> Result<Vec<EventRecord>, CoreError>;
-    /// Completed restores whose captured lock still needs a drift check.
-    fn completed_lock_captures(&self) -> Result<Vec<EventRecord>, CoreError>;
+    /// All restores with a retained lock path, independent of status or claim.
+    fn retained_lock_captures(&self) -> Result<Vec<EventRecord>, CoreError>;
     /// Claims that `pending` or `interrupted` restore rows still hold on
     /// their targets, oldest restore first. An older build or the desktop
     /// startup pass can leave one behind. Reads raw ids, target kind, and optional

@@ -423,11 +423,11 @@ impl EventStore {
     pub fn list(&self, limit: usize, skill: Option<&str>) -> Result<Vec<EventRow>, String> {
         let mut stmt = if skill.is_some() {
             self.conn.prepare(
-                "SELECT * FROM events WHERE skill = ?1 ORDER BY ts DESC, rowid DESC LIMIT ?2",
+                "SELECT * FROM events WHERE skill = ?1 AND COALESCE(json_extract(payload, '$.full_install_recovery'), 0) != 1 ORDER BY ts DESC, rowid DESC LIMIT ?2",
             )
         } else {
             self.conn
-                .prepare("SELECT * FROM events ORDER BY ts DESC, rowid DESC LIMIT ?1")
+                .prepare("SELECT * FROM events WHERE COALESCE(json_extract(payload, '$.full_install_recovery'), 0) != 1 ORDER BY ts DESC, rowid DESC LIMIT ?1")
         }
         .map_err(|e| format!("Failed to prepare event list query: {e}"))?;
 
@@ -557,6 +557,31 @@ impl EventStore {
             .collect()
     }
 
+    pub(crate) fn check_user_restore(&self, start: &EventRow) -> Result<(), String> {
+        let mut current = start.clone();
+        for _ in 0..64 {
+            if current
+                .payload
+                .get("full_install_recovery")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                return Err("Internal recovery backups cannot be restored from history".into());
+            }
+            if current.kind != "restore" {
+                return Ok(());
+            }
+            let Some(id) = current.payload.get("target_event").and_then(Value::as_str) else {
+                return Ok(());
+            };
+            let Some(next) = self.get(id)? else {
+                return Ok(());
+            };
+            current = next;
+        }
+        Err("Restore chain exceeds the history limit".into())
+    }
+
     /// Undoes event `target_id`. Returns the id of the `restore` event
     /// created to do it. See the module header for the drift-guard and
     /// restore-of-restore design.
@@ -573,6 +598,7 @@ impl EventStore {
         let target = self
             .get_event(target_id)?
             .ok_or_else(|| format!("Event {target_id} not found"))?;
+        self.check_user_restore(&target)?;
         if target.reverted_by.is_some() {
             return Err(format!("Event {target_id} was already restored"));
         }
@@ -1507,6 +1533,50 @@ mod tests {
             inverse,
             backup_dir,
             restorable: true,
+        }
+    }
+
+    #[test]
+    fn covered_update_history_hides_recovery_backup_or_exposes_whole_scope_undo() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(dir.path());
+        let mut recovery_id = String::new();
+        for recovery in [false, true] {
+            let event = draft(
+                "update",
+                "alpha",
+                serde_json::json!({"full_install_recovery": recovery}),
+                None,
+                None,
+            );
+            let id = allocate_id();
+            store.record(&id, &event).unwrap();
+            store.finish(&id, EventStatus::Done).unwrap();
+            if recovery {
+                recovery_id = id;
+            }
+        }
+        assert_eq!(store.list(100, None).unwrap().len(), 1);
+        assert_eq!(store.list(100, Some("alpha")).unwrap().len(), 1);
+        let redo_id = allocate_id();
+        store
+            .record(
+                &redo_id,
+                &draft(
+                    "restore",
+                    "alpha",
+                    serde_json::json!({"target_event": recovery_id}),
+                    None,
+                    None,
+                ),
+            )
+            .unwrap();
+        store.finish(&redo_id, EventStatus::Done).unwrap();
+        for force in [false, true] {
+            assert!(store
+                .restore(&redo_id, force)
+                .unwrap_err()
+                .contains("Internal recovery"));
         }
     }
 
