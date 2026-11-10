@@ -51,6 +51,7 @@ struct Document {
 pub(crate) struct ProbeCache {
     file: Option<PathBuf>,
     entries: Vec<Entry>,
+    dirty: bool,
 }
 impl ProbeCache {
     pub(crate) fn load(file: PathBuf) -> Self {
@@ -70,6 +71,7 @@ impl ProbeCache {
         Self {
             file: Some(file),
             entries,
+            dirty: false,
         }
     }
     pub(crate) fn get(&self, key: &ProbeKey) -> Option<ProcessOutput> {
@@ -90,6 +92,12 @@ impl ProbeCache {
         if self.entries.len() > MAX_ENTRIES {
             self.entries.remove(0);
         }
+        self.dirty = true;
+    }
+    fn flush(&mut self) {
+        if !self.dirty {
+            return;
+        }
         let Some(file) = &self.file else {
             return;
         };
@@ -106,9 +114,17 @@ impl ProbeCache {
         }) else {
             return;
         };
-        let _ = write_cache(file, &bytes);
+        if write_cache(file, &bytes).is_ok() {
+            self.dirty = false;
+        }
     }
 }
+impl Drop for ProbeCache {
+    fn drop(&mut self) {
+        self.flush();
+    }
+}
+
 fn cacheable(output: &ProcessOutput) -> bool {
     !output.timed_out
         && output.status == Some(0)
@@ -191,6 +207,7 @@ mod tests {
         let file = dir.path().join("cache.json");
         let mut cache = ProbeCache::load(file.clone());
         cache.put(key.clone(), &output());
+        drop(cache);
         let reopened = ProbeCache::load(file);
         assert_eq!(reopened.get(&key), Some(output()));
         std::fs::hard_link(&path, &alias).unwrap();
@@ -239,6 +256,29 @@ mod tests {
             let mut cache = ProbeCache::default();
             cache.put(key.clone(), &failed);
             assert!(cache.get(&key).is_none());
+        }
+    }
+    #[test]
+    fn a_detection_batch_persists_once_when_the_spawner_finishes_or_rewrites_for_every_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("cache.json");
+        let mut cache = ProbeCache::load(file.clone());
+        let mut keys = Vec::new();
+        for name in ["claude", "codex", "pi"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, b"executable").unwrap();
+            let key = ProbeKey::read(&path).unwrap();
+            cache.put(key.clone(), &output());
+            keys.push(key);
+            assert!(
+                !file.exists(),
+                "rewrote the cache before detection finished"
+            );
+        }
+        drop(cache);
+        let reopened = ProbeCache::load(file);
+        for key in keys {
+            assert_eq!(reopened.get(&key), Some(output()));
         }
     }
 }
