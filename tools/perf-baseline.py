@@ -7,6 +7,7 @@ from pathlib import Path
 import platform
 import re
 import select
+import shutil
 import statistics
 import subprocess
 import tempfile
@@ -83,7 +84,9 @@ def mcp_samples(binary, env, runs):
             reply = response()
             samples.append((time.perf_counter_ns() - start) / 1e6)
             assert reply["id"] == i + 2 and "result" in reply, reply
-            statuses.append(reply["result"])
+            result = reply["result"]
+            envelope = result["structuredContent"]
+            statuses.append({"status": envelope["status"], "skills": len(envelope.get("data", {}).get("skills", [])), "is_error": result.get("isError", False)})
         return samples, statuses
     finally:
         child.stdin.close()
@@ -102,8 +105,19 @@ def main():
     if args.runs < 10:
         parser.error("at least 10 samples are required")
     target = Path(os.environ["CARGO_TARGET_DIR"]) / "release"
+    with tempfile.TemporaryDirectory(prefix="skill-perf-binaries-") as temp:
+        binaries = Path(temp)
+        (binaries / "examples").mkdir()
+        build_and_run(args, target, binaries)
+
+
+def build_and_run(args, target, binaries):
     subprocess.run(["cargo", "build", "--release", "--all-features", "-p", "skill-studio-core", "--example", "perf_baseline", "-p", "skill-studio-cli"], check=True)
+    for executable in ["skill-studio", "examples/perf_baseline"]:
+        shutil.copy2(target / executable, binaries / executable)
     subprocess.run(["cargo", "build", "--release", "--all-features", "-p", "skill-studio", "--example", "perf_snapshot"], check=True)
+    shutil.copy2(target / "examples/perf_snapshot", binaries / "examples/perf_snapshot")
+    target = binaries
     mac = platform.system() == "Darwin"
     report = {"git_sha": command(["git", "rev-parse", "HEAD"]),
               "dirty": bool(command(["git", "status", "--porcelain"])),
@@ -128,7 +142,7 @@ def main():
                 metrics[f"cli_{verb}_peak_rss_bytes"] = distribution([s[1] for s in samples])
             mcp_times, mcp_results = mcp_samples(target / "skill-studio", env, args.runs)
             metrics["mcp_scan_round_trip_ms"] = distribution(mcp_times)
-            outcomes["mcp_scan_is_error"] = [r.get("isError", False) for r in mcp_results]
+            outcomes["mcp_scan"] = mcp_results
             registry = home / ".agents/skill-studio.json"
             registry.write_text(json.dumps({"projects": {"added": projects}}))
             desktop = json.loads(command([str(target / "examples/perf_snapshot")], env=env))

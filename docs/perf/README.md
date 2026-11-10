@@ -44,5 +44,9 @@ available lifecycle guidance is `docs/action-map/lifecycle-states.md`.
 
 CLI measurements use a 60-second read budget so large fixtures can complete.
 MCP and desktop use their default read budget. The JSON records CLI status,
-MCP error flags, and the desktop skill count. Check these fields before comparing
+MCP status and skill counts, and the desktop skill count. Check these fields before comparing
 results. A partial scan is not a complete inventory benchmark.
+
+The runner copies each executable out of the shared target folder before it
+measures it. Other worktrees can then build without replacing that executable
+during the sample run. Timing still includes contention from other processes.
