@@ -33,3 +33,9 @@ removed obsolete command comments. No `events.rs` changes.
 
 The follow-up simplification uses the existing `write_back` helper for all three
 Turn on writes. Core package tests, format, and clippy pass after that change.
+
+Final guard proof: with the rollback comparison removed, the post-write drift
+test failed and the injected concurrent comment was absent from agents.toml.
+Restoring the guard made the exact test pass. The ignore-rule reorder case was
+also checked against origin/main and already passed, so that added test was
+removed. Every remaining new race test fails without its fix.
