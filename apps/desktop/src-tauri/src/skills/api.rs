@@ -779,7 +779,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut registry = skill_fork_registry::read_fork_registry(tmp.path()).unwrap();
         registry.server_url = Some("http://localhost:9999/".to_string());
-        skill_fork_registry::write_fork_registry(tmp.path(), &registry).unwrap();
+        skill_fork_registry::write_fork_registry(tmp.path(), &mut registry).unwrap();
 
         let access = resolve_skills_sh_access(tmp.path()).unwrap();
         assert_eq!(
@@ -796,7 +796,7 @@ mod tests {
         let mut registry = skill_fork_registry::read_fork_registry(tmp.path()).unwrap();
         registry.skills_sh_api_key = Some("sk-test-key".to_string());
         registry.server_url = Some("http://localhost:9999".to_string());
-        skill_fork_registry::write_fork_registry(tmp.path(), &registry).unwrap();
+        skill_fork_registry::write_fork_registry(tmp.path(), &mut registry).unwrap();
 
         let access = resolve_skills_sh_access(tmp.path()).unwrap();
         assert_eq!(
@@ -812,7 +812,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut registry = skill_fork_registry::read_fork_registry(tmp.path()).unwrap();
         registry.skills_sh_api_key = Some("   ".to_string());
-        skill_fork_registry::write_fork_registry(tmp.path(), &registry).unwrap();
+        skill_fork_registry::write_fork_registry(tmp.path(), &mut registry).unwrap();
 
         let access = resolve_skills_sh_access(tmp.path()).unwrap();
         assert_eq!(

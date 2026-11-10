@@ -14,8 +14,6 @@ use std::time::Duration;
 use skill_studio_core::ports::{ExclusiveGuard, LeaseKey, LeaseMode, LeaseProvider};
 use skill_studio_host::FileLease;
 
-use super::core_runtime;
-
 thread_local! {
     /// Leases over the home the current thread holds, write or scan. The
     /// guards are `!Send` (they own a `Box<dyn LeaseHandle>`), so each drops
@@ -90,7 +88,7 @@ pub struct WriteLease {
 impl Default for WriteLease {
     fn default() -> Self {
         WriteLease {
-            lease: FileLease::new(core_runtime::data_root().join("leases")),
+            lease: FileLease::new(super::skill_fork_registry::registry_lease_root()),
             wait: SCAN_WAIT,
             scan_wait: SCAN_READ_WAIT,
         }
@@ -231,14 +229,20 @@ mod tests {
     fn a_command_holding_the_root_lease_can_write_the_fork_registry_or_names_the_self_deadlock() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
+        let _lease_root = super::super::skill_fork_registry::registry_lease_root_for_test(
+            home.join(".test-leases"),
+        );
         std::fs::create_dir_all(&home).unwrap();
 
         let write_lease = WriteLease::default();
         let guard = write_lease.try_acquire(&home).unwrap();
 
-        let registry = super::super::skill_fork_registry::ForkRegistry::default();
-        let result =
-            super::super::skill_fork_registry::write_fork_registry_locked(&guard, &home, &registry);
+        let mut registry = super::super::skill_fork_registry::ForkRegistry::default();
+        let result = super::super::skill_fork_registry::write_fork_registry_locked(
+            &guard,
+            &home,
+            &mut registry,
+        );
         assert!(
             result.is_ok(),
             "writing the fork registry while the caller holds the root's write lease must \

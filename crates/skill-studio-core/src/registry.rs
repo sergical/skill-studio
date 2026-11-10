@@ -10,8 +10,9 @@
 //! distinct from any schema-format version field a document also carries
 //! (the desktop's `ForkRegistry.version`, for example, marks a schema
 //! migration and is set explicitly by the code that performs it) - this one
-//! exists only so a lease loser can tell its in-memory copy went stale, per
-//! `docs/action-map/harnesses/shared-root.md`, "What is not there yet".
+//! is checked under the lease. A stale snapshot fails with
+//! [`ErrorCode::StaleProposal`]. A successful write advances the stored
+//! counter and the caller's counter by one.
 
 use std::path::Path;
 
@@ -64,9 +65,10 @@ pub(crate) fn home_only_scope(home: &Path, fs: &dyn ScopeFs) -> Result<Normalize
     NormalizedScope::normalize(&raw, fs)
 }
 
-/// Takes the exclusive lease over `home`, bumps `document`'s write counter
-/// by one, and writes it as pretty JSON to `path` (which must sit directly
-/// under `home`), creating `path`'s parent directory first if needed.
+/// Takes the exclusive lease over `home` and rejects a stale write version.
+/// Writes `document` as pretty JSON to `path` under `home`, creating the
+/// parent directory if needed. A successful write advances the document's
+/// counter by one. An error leaves its input counter unchanged.
 pub fn write_registry_document<T: RegistryDocument>(
     leases: &dyn LeaseProvider,
     fs: &dyn ScopeFs,
@@ -93,23 +95,53 @@ pub fn write_registry_document_locked<T: RegistryDocument>(
     document: &mut T,
 ) -> Result<(), CoreError> {
     let scope = home_only_scope(home, fs)?;
-
     if let Some(parent) = path.parent() {
         let scoped_parent = confine(&scope, fs, parent)?;
         fs.create_dir_all(guard, &scoped_parent)
-            .map_err(|e| CoreError::io(parent, e))?;
+            .map_err(|error| CoreError::io(parent, error))?;
     }
-
-    document.set_write_version(document.write_version() + 1);
-    let bytes = serde_json::to_vec_pretty(document).map_err(|e| {
-        CoreError::new(
-            ErrorCode::Io,
-            format!("failed to serialize registry document: {e}"),
-        )
-        .at(path)
-    })?;
-
     let scoped = confine(&scope, fs, path)?;
-    fs.write_atomic(guard, &scoped, &bytes)
-        .map_err(|e| CoreError::io(path, e))
+    let current_version = match fs.read_capped(path, u64::MAX) {
+        Ok(bytes) => serde_json::from_slice::<T>(&bytes)
+            .map_err(|_| {
+                CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "registry document is malformed; refusing to overwrite it",
+                )
+                .at(path)
+            })?
+            .write_version(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => return Err(CoreError::io(path, error)),
+    };
+    let read_version = document.write_version();
+    if read_version != current_version {
+        return Err(CoreError::new(
+            ErrorCode::StaleProposal,
+            format!(
+                "stale registry write_version {read_version}; current version {current_version}"
+            ),
+        )
+        .at(path));
+    }
+    let next_version = current_version.checked_add(1).ok_or_else(|| {
+        CoreError::new(ErrorCode::InvalidRequest, "registry write_version overflow").at(path)
+    })?;
+    document.set_write_version(next_version);
+    let written = serde_json::to_vec_pretty(&*document)
+        .map_err(|error| {
+            CoreError::new(
+                ErrorCode::Io,
+                format!("failed to serialize registry document: {error}"),
+            )
+            .at(path)
+        })
+        .and_then(|bytes| {
+            fs.write_atomic(guard, &scoped, &bytes)
+                .map_err(|error| CoreError::io(path, error))
+        });
+    if written.is_err() {
+        document.set_write_version(read_version);
+    }
+    written
 }
