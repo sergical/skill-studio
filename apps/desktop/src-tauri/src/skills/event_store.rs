@@ -33,6 +33,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use skill_studio_core::events::EventStatus as CoreEventStatus;
 
 use super::skill_md_write::{begin_skill_md_write_transaction, SkillMdWriteTransaction};
 
@@ -370,15 +371,33 @@ impl EventStore {
         Ok(())
     }
 
-    /// Marks `id` as `done` or `failed`.
+    /// Settles `id` as `done` or `failed` under the shared row lifecycle in
+    /// `skill_studio_core::events::EventStatus::settle`.
     pub fn finish(&self, id: &str, status: EventStatus) -> Result<(), String> {
-        self.conn
-            .execute(
-                "UPDATE events SET status = ?1 WHERE id = ?2",
-                params![status.as_str(), id],
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("Failed to start finishing event {id}: {e}"))?;
+        let current: String = tx
+            .query_row(
+                "SELECT status FROM events WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
             )
-            .map_err(|e| format!("Failed to update event {id}: {e}"))?;
-        Ok(())
+            .optional()
+            .map_err(|e| format!("Failed to read event {id}: {e}"))?
+            .ok_or_else(|| format!("No event {id} to finish"))?;
+        let settled = CoreEventStatus::parse(&current)
+            .ok_or_else(|| format!("Event {id} has unknown status {current}"))?
+            .settle(status.into())
+            .map_err(|e| format!("Event {id}: {}", e.message))?;
+        tx.execute(
+            "UPDATE events SET status = ?1 WHERE id = ?2",
+            params![settled.as_str(), id],
+        )
+        .map_err(|e| format!("Failed to update event {id}: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("Failed to finish event {id}: {e}"))
     }
 
     /// Looks up one event row by id - used by callers (e.g.
@@ -1337,11 +1356,11 @@ pub enum EventStatus {
     Failed,
 }
 
-impl EventStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            EventStatus::Done => "done",
-            EventStatus::Failed => "failed",
+impl From<EventStatus> for CoreEventStatus {
+    fn from(status: EventStatus) -> Self {
+        match status {
+            EventStatus::Done => CoreEventStatus::Done,
+            EventStatus::Failed => CoreEventStatus::Failed,
         }
     }
 }
@@ -1555,6 +1574,48 @@ mod tests {
             skill_studio_core::ports::PlanStatus::Reversed,
             "row must be left Reversed, naming the plan otherwise left open"
         );
+    }
+
+    /// Event history: a row settles once. Startup recovery may settle an
+    /// `interrupted` row, and may rerun, but a `done` row must not turn
+    /// `failed` later.
+    /// Fails if a second `finish` overwrites a settled status (History would
+    /// show a finished install as failed) or if recovery cannot settle an
+    /// interrupted row.
+    #[test]
+    fn an_event_settles_once_and_recovery_settles_interrupted_rows_or_names_the_overwrite() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(tmp.path());
+        let status_of = |id: &str| store.get(id).unwrap().unwrap().status;
+
+        let done = allocate_id();
+        store
+            .record(
+                &done,
+                &draft("install", "alpha", serde_json::json!({}), None, None),
+            )
+            .unwrap();
+        store.finish(&done, EventStatus::Done).unwrap();
+        store
+            .finish(&done, EventStatus::Done)
+            .expect("a rerun recovery settles the same status again");
+        let second = store.finish(&done, EventStatus::Failed);
+        assert!(second.is_err(), "a settled row accepted a second finish");
+        assert_eq!(status_of(&done), "done");
+
+        let interrupted = allocate_id();
+        store
+            .record(
+                &interrupted,
+                &draft("install", "beta", serde_json::json!({}), None, None),
+            )
+            .unwrap();
+        store.reconcile_at_startup().unwrap();
+        assert_eq!(status_of(&interrupted), "interrupted");
+        store.finish(&interrupted, EventStatus::Failed).unwrap();
+        assert_eq!(status_of(&interrupted), "failed");
+
+        assert!(store.finish("no-such-event", EventStatus::Done).is_err());
     }
 
     #[test]

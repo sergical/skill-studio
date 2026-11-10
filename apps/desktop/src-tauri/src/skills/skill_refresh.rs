@@ -52,6 +52,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// transcript writes doesn't reparse and re-emit on every debounce tick.
 const INVOCATIONS_REBUILD_INTERVAL: Duration = Duration::from_secs(5);
 
+/// How long the loop waits after a failed rebuild before it tries again, so a
+/// persistent failure does not rescan on every `POLL_INTERVAL` tick.
+const FAILED_REBUILD_RETRY: Duration = Duration::from_secs(5);
+
 /// Everything the frontend needs about installed skills, discovered
 /// projects, and invocation history, built together in one background pass.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1195,6 +1199,7 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
     run_startup_doctor_pass(&app);
 
     let mut last_invocations_rebuild = Instant::now();
+    let mut retry_not_before: Option<Instant> = None;
 
     loop {
         match rx.recv_timeout(POLL_INTERVAL) {
@@ -1240,38 +1245,106 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
 
+        let now = Instant::now();
+        let has_snapshot = state.snapshot.read().is_ok_and(|guard| guard.is_some());
         let skills_dirty = state.skills_dirty.load(Ordering::SeqCst);
         let invocations_dirty = state.invocations_dirty.load(Ordering::SeqCst);
+        let step = next_refresh_step(RefreshTick {
+            has_snapshot,
+            skills_dirty,
+            invocations_dirty,
+            invocations_due: now.duration_since(last_invocations_rebuild)
+                > INVOCATIONS_REBUILD_INTERVAL,
+            hour_stale: state.is_hour_stale(Utc::now()),
+            retry_due: retry_not_before.is_none_or(|at| now >= at),
+        });
 
-        if skills_dirty {
-            // Clear the flags before rebuilding so an event that arrives
-            // mid-rebuild sets them again rather than being lost.
-            state.skills_dirty.store(false, Ordering::SeqCst);
-            state.invocations_dirty.store(false, Ordering::SeqCst);
-            match rebuild_snapshot_now(&app, &state) {
-                Ok(_) => {
-                    last_invocations_rebuild = Instant::now();
-                    reconcile_watchers_from_snapshot(&home, &state, &mut debouncer, &mut watched);
+        let failed = match step {
+            RefreshStep::Idle => continue,
+            RefreshStep::Full => {
+                // Clear the flags before rebuilding so an event that arrives
+                // mid-rebuild sets them again rather than being lost.
+                state.skills_dirty.store(false, Ordering::SeqCst);
+                state.invocations_dirty.store(false, Ordering::SeqCst);
+                match rebuild_snapshot_now(&app, &state) {
+                    Ok(_) => {
+                        reconcile_watchers_from_snapshot(
+                            &home,
+                            &state,
+                            &mut debouncer,
+                            &mut watched,
+                        );
+                        false
+                    }
+                    Err(e) => {
+                        eprintln!("skill refresh: full rebuild failed: {e}");
+                        state.skills_dirty.fetch_or(skills_dirty, Ordering::SeqCst);
+                        state
+                            .invocations_dirty
+                            .fetch_or(invocations_dirty, Ordering::SeqCst);
+                        true
+                    }
                 }
-                Err(e) => eprintln!("skill refresh: full rebuild failed: {e}"),
             }
-        } else if invocations_dirty
-            && last_invocations_rebuild.elapsed() > INVOCATIONS_REBUILD_INTERVAL
-        {
-            state.invocations_dirty.store(false, Ordering::SeqCst);
-            if let Err(e) = rebuild_invocations_only(&app, &state) {
-                eprintln!("skill refresh: invocations-only rebuild failed: {e}");
+            RefreshStep::InvocationsOnly => {
+                state.invocations_dirty.store(false, Ordering::SeqCst);
+                rebuild_invocations_only(&app, &state).is_err_and(|e| {
+                    eprintln!("skill refresh: invocations-only rebuild failed: {e}");
+                    state.invocations_dirty.store(true, Ordering::SeqCst);
+                    true
+                })
             }
-            last_invocations_rebuild = Instant::now();
-        } else if state.is_hour_stale(Utc::now()) {
             // Nothing on disk changed, but the wall clock crossed an hour
             // boundary: the rolling invocation windows need recomputing even
             // though `skills`/`projects` don't.
-            if let Err(e) = rebuild_invocations_only(&app, &state) {
+            RefreshStep::HourlyWindows => rebuild_invocations_only(&app, &state).is_err_and(|e| {
                 eprintln!("skill refresh: hourly rebuild failed: {e}");
-            }
-            last_invocations_rebuild = Instant::now();
-        }
+                true
+            }),
+        };
+        last_invocations_rebuild = Instant::now();
+        retry_not_before = failed.then(|| last_invocations_rebuild + FAILED_REBUILD_RETRY);
+    }
+}
+
+/// The inputs one refresh-loop tick reads before it picks a [`RefreshStep`].
+#[derive(Debug, Clone, Copy)]
+struct RefreshTick {
+    has_snapshot: bool,
+    skills_dirty: bool,
+    invocations_dirty: bool,
+    /// `INVOCATIONS_REBUILD_INTERVAL` has passed since the last rebuild.
+    invocations_due: bool,
+    hour_stale: bool,
+    /// No failed rebuild is waiting out `FAILED_REBUILD_RETRY`.
+    retry_due: bool,
+}
+
+/// The one rebuild the refresh loop runs on a tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshStep {
+    Idle,
+    /// Rescan every skill root, then rebuild invocations.
+    Full,
+    /// Reparse changed transcripts against the current skill list.
+    InvocationsOnly,
+    /// Recompute the rolling invocation windows after an hour boundary.
+    HourlyWindows,
+}
+
+/// Picks the loop's next rebuild. A missing snapshot asks for a full rebuild,
+/// because the invocation steps have no skill list to count against.
+fn next_refresh_step(tick: RefreshTick) -> RefreshStep {
+    if !tick.retry_due {
+        RefreshStep::Idle
+    } else if tick.skills_dirty || !tick.has_snapshot {
+        RefreshStep::Full
+    } else if tick.invocations_dirty && tick.invocations_due {
+        RefreshStep::InvocationsOnly
+    } else if tick.hour_stale {
+        RefreshStep::HourlyWindows
+    } else {
+        RefreshStep::Idle
     }
 }
 
@@ -4081,6 +4154,87 @@ mod tests {
             cache_path: PathBuf::from("/dev/null"),
             runs_root: PathBuf::from("/dev/null"),
             update_check_path: PathBuf::from("/dev/null"),
+        }
+    }
+
+    fn quiet_tick() -> RefreshTick {
+        RefreshTick {
+            has_snapshot: true,
+            skills_dirty: false,
+            invocations_dirty: false,
+            invocations_due: true,
+            hour_stale: false,
+            retry_due: true,
+        }
+    }
+
+    /// Refresh loop: each tick picks one rebuild. Fails if a missing snapshot
+    /// runs the cheap hourly step (the old 200 ms loop that never built the
+    /// list), if a failed rebuild retries before its backoff, or if a skill
+    /// change waits behind an invocation or hourly rebuild.
+    #[test]
+    fn each_refresh_tick_picks_the_rebuild_its_state_needs_or_names_the_wrong_step() {
+        let cases = [
+            ("nothing changed", quiet_tick(), RefreshStep::Idle),
+            (
+                "a skill folder changed",
+                RefreshTick {
+                    skills_dirty: true,
+                    invocations_dirty: true,
+                    hour_stale: true,
+                    ..quiet_tick()
+                },
+                RefreshStep::Full,
+            ),
+            (
+                "no snapshot was ever built",
+                RefreshTick {
+                    has_snapshot: false,
+                    hour_stale: true,
+                    ..quiet_tick()
+                },
+                RefreshStep::Full,
+            ),
+            (
+                "a failed rebuild is still backing off",
+                RefreshTick {
+                    skills_dirty: true,
+                    has_snapshot: false,
+                    retry_due: false,
+                    ..quiet_tick()
+                },
+                RefreshStep::Idle,
+            ),
+            (
+                "a transcript changed",
+                RefreshTick {
+                    invocations_dirty: true,
+                    hour_stale: true,
+                    ..quiet_tick()
+                },
+                RefreshStep::InvocationsOnly,
+            ),
+            (
+                "a transcript changed inside the throttle window",
+                RefreshTick {
+                    invocations_dirty: true,
+                    invocations_due: false,
+                    ..quiet_tick()
+                },
+                RefreshStep::Idle,
+            ),
+            (
+                "the hour turned over",
+                RefreshTick {
+                    hour_stale: true,
+                    invocations_due: false,
+                    ..quiet_tick()
+                },
+                RefreshStep::HourlyWindows,
+            ),
+        ];
+        for (situation, tick, expected) in cases {
+            assert_eq!(next_refresh_step(tick), expected, "{situation}: {tick:?}");
         }
     }
 

@@ -214,6 +214,43 @@ enum JsonColumn {
     Inverse,
 }
 
+/// Adds `post_fingerprint` to an event's `inverse` JSON, inside the same
+/// transaction as the status change so a crash never leaves a `done` row
+/// whose inverse lacks it.
+fn set_post_fingerprint(
+    conn: &rusqlite::Connection,
+    id: &EventId,
+    fingerprint: &Fingerprint,
+) -> Result<(), CoreError> {
+    let inverse_str: Option<String> = conn
+        .query_row(
+            "SELECT inverse FROM events WHERE id = ?1",
+            params![id.0],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql_err)?
+        .flatten();
+    let Some(inverse_str) = inverse_str else {
+        return Ok(());
+    };
+    let mut value: serde_json::Value =
+        serde_json::from_str(&inverse_str).unwrap_or(serde_json::Value::Null);
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "post_fingerprint".to_string(),
+            serde_json::Value::String(fingerprint.bare_hex().to_string()),
+        );
+        let updated = serde_json::to_string(&value).map_err(json_err)?;
+        conn.execute(
+            "UPDATE events SET inverse = ?1 WHERE id = ?2",
+            params![updated, id.0],
+        )
+        .map_err(sql_err)?;
+    }
+    Ok(())
+}
+
 impl HistoryStore for SqliteHistoryStore {
     fn list(&self, filter: &EventFilter) -> Result<Vec<EventRecord>, CoreError> {
         let mut clauses = Vec::new();
@@ -397,45 +434,38 @@ impl HistoryStore for SqliteHistoryStore {
         status: EventStatus,
         post_fingerprint: Option<Fingerprint>,
     ) -> Result<(), CoreError> {
-        self.conn
-            .execute(
-                "UPDATE events SET status = ?1 WHERE id = ?2",
-                params![status.as_str(), id.0],
-            )
-            .map_err(sql_err)?;
-
-        let Some(fingerprint) = post_fingerprint else {
-            return Ok(());
-        };
-        let inverse_str: Option<String> = self
-            .conn
+        let tx = self.conn.transaction().map_err(sql_err)?;
+        let current: Option<String> = tx
             .query_row(
-                "SELECT inverse FROM events WHERE id = ?1",
+                "SELECT status FROM events WHERE id = ?1",
                 params![id.0],
                 |row| row.get(0),
             )
             .optional()
-            .map_err(sql_err)?
-            .flatten();
-        let Some(inverse_str) = inverse_str else {
-            return Ok(());
+            .map_err(sql_err)?;
+        let Some(current) = current else {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                format!("no event {} to finish", id.0),
+            ));
         };
-        let mut value: serde_json::Value =
-            serde_json::from_str(&inverse_str).unwrap_or(serde_json::Value::Null);
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert(
-                "post_fingerprint".to_string(),
-                serde_json::Value::String(fingerprint.bare_hex().to_string()),
-            );
-            let updated = serde_json::to_string(&value).map_err(json_err)?;
-            self.conn
-                .execute(
-                    "UPDATE events SET inverse = ?1 WHERE id = ?2",
-                    params![updated, id.0],
-                )
-                .map_err(sql_err)?;
+        let current = EventStatus::parse(&current).ok_or_else(|| {
+            CoreError::new(
+                ErrorCode::Io,
+                format!("event {} has unknown status {current}", id.0),
+            )
+        })?;
+        let status = current.settle(status)?;
+        tx.execute(
+            "UPDATE events SET status = ?1 WHERE id = ?2",
+            params![status.as_str(), id.0],
+        )
+        .map_err(sql_err)?;
+
+        if let Some(fingerprint) = post_fingerprint {
+            set_post_fingerprint(&tx, id, &fingerprint)?;
         }
-        Ok(())
+        tx.commit().map_err(sql_err)
     }
 
     fn patch_payload(
@@ -492,6 +522,18 @@ impl HistoryStore for SqliteHistoryStore {
         let mut stmt = self
             .conn
             .prepare("SELECT * FROM events WHERE status = 'pending' ORDER BY rowid ASC")
+            .map_err(sql_err)?;
+        let rows = stmt.query_map([], row_from).map_err(sql_err)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)
+    }
+
+    fn interrupted_restores(&self) -> Result<Vec<EventRecord>, CoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT * FROM events WHERE status = 'interrupted' AND kind = 'restore' \
+                 ORDER BY rowid ASC",
+            )
             .map_err(sql_err)?;
         let rows = stmt.query_map([], row_from).map_err(sql_err)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)

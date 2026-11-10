@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::dto::{DriftState, EventDto, RestoreCapability};
-use crate::error::CoreError;
+use crate::error::{CoreError, ErrorCode};
 use crate::identity::{AgentId, EventId, Fingerprint, SkillName};
 use crate::ports::{CoreNotice, EventSink, ExclusiveGuard, FileKind, HistoryStore, ScopeFs};
 
@@ -156,6 +156,32 @@ impl EventStatus {
             EventStatus::Done => "done",
             EventStatus::Failed => "failed",
             EventStatus::Interrupted => "interrupted",
+        }
+    }
+
+    /// The row lifecycle, shared by every store that writes the `events`
+    /// table: a `Pending` row settles into any other status, and startup
+    /// recovery may settle an `Interrupted` row into `Done` or `Failed` once
+    /// it resolves the files. Settling to the current status is a no-op, so a
+    /// rerun recovery is safe. Anything else, such as `Done` into `Failed`,
+    /// is an error and the row keeps its status.
+    pub fn settle(self, to: EventStatus) -> Result<EventStatus, CoreError> {
+        use EventStatus::{Done, Failed, Interrupted, Pending};
+        match (self, to) {
+            (_, Pending) => Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "finish must not set pending",
+            )),
+            (from, to) if from == to => Ok(to),
+            (Pending, to) | (Interrupted, to @ (Done | Failed)) => Ok(to),
+            (from, to) => Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                format!(
+                    "an event already {} cannot become {}",
+                    from.as_str(),
+                    to.as_str()
+                ),
+            )),
         }
     }
 
@@ -377,7 +403,8 @@ pub struct RecoveryReport {
     pub completed: Vec<EventId>,
 }
 
-/// Flips every `pending` row to `interrupted`.
+/// Flips every `pending` row to `interrupted`, and releases the revert
+/// claim every interrupted restore row still holds on its target.
 ///
 /// Ports the desktop's `reconcile_at_startup`
 /// (`apps/desktop/src-tauri/src/skills/event_store.rs`) byte-for-byte in
@@ -398,9 +425,15 @@ pub fn recover_interrupted(
 ) -> Result<RecoveryReport, CoreError> {
     let _ = fs;
     let mut report = RecoveryReport::default();
+    // The release comes first: a crash between the two writes leaves the row
+    // `pending`, so the next pass runs both again.
     for row in store.pending()? {
+        release_restore_claim(guard, store, &row)?;
         store.finish(guard, &row.id, EventStatus::Interrupted, None)?;
         report.interrupted.push(row.id);
+    }
+    for row in store.interrupted_restores()? {
+        release_restore_claim(guard, store, &row)?;
     }
     if !report.interrupted.is_empty() {
         sink.notify(CoreNotice::Recovered {
@@ -408,6 +441,32 @@ pub fn recover_interrupted(
         });
     }
     Ok(report)
+}
+
+/// A restore claims its target before it mutates. A restore that never
+/// finished would otherwise leave its target shown as reverted, with no way
+/// to restore it again. The release clears only a claim this row holds, and
+/// a retry's drift check guards the files. The desktop resumes restores of
+/// `make_independent_copy` itself, so their claims stay.
+fn release_restore_claim(
+    guard: &ExclusiveGuard,
+    store: &mut dyn HistoryStore,
+    row: &EventRecord,
+) -> Result<(), CoreError> {
+    if EventKind::parse(&row.kind) != Some(EventKind::Restore) {
+        return Ok(());
+    }
+    let Some(target) = row.payload.get("target_event").and_then(|v| v.as_str()) else {
+        return Ok(());
+    };
+    let target = EventId(target.to_string());
+    let resumed_by_desktop = store
+        .get(&target)?
+        .is_some_and(|t| EventKind::parse(&t.kind) == Some(EventKind::MakeIndependentCopy));
+    if !resumed_by_desktop {
+        store.release_revert(guard, &target, &row.id)?;
+    }
+    Ok(())
 }
 
 /// Content fingerprint for one path via [`ScopeFs`], tag+length framed
@@ -857,5 +916,35 @@ mod tests {
             parse_restore_remove_links(&inverse),
             [(PathBuf::from("/l"), PathBuf::from("../t"))]
         );
+    }
+
+    /// Event history: every move a history row can make. Fails if a settled
+    /// row changes status (History would show a finished install as failed),
+    /// if recovery cannot settle an `Interrupted` row, or if a rerun of the
+    /// same settle errors.
+    #[test]
+    fn an_event_row_only_moves_along_its_lifecycle_or_names_the_illegal_move() {
+        use EventStatus::{Done, Failed, Interrupted, Pending};
+        let all = [Pending, Done, Failed, Interrupted];
+        let legal = [
+            (Pending, Done),
+            (Pending, Failed),
+            (Pending, Interrupted),
+            (Interrupted, Done),
+            (Interrupted, Failed),
+            (Done, Done),
+            (Failed, Failed),
+            (Interrupted, Interrupted),
+        ];
+        for from in all {
+            for to in all {
+                let result = from.settle(to);
+                if legal.contains(&(from, to)) {
+                    assert_eq!(result.ok(), Some(to), "{from:?} -> {to:?} must be legal");
+                } else {
+                    assert!(result.is_err(), "{from:?} -> {to:?} must be refused");
+                }
+            }
+        }
     }
 }

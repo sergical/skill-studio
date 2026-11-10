@@ -638,6 +638,105 @@ fn a_crashed_pending_row_is_marked_interrupted_idempotently() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// Flow: the app dies during a restore, after the restore claimed its
+/// target. Expect the next mutation session to release the claim, both for a
+/// restore row still `pending` and for one an older build already marked
+/// `interrupted`, so the user can restore the target again. A restore of an
+/// independent copy keeps its claim, because desktop startup resumes it.
+/// Failure: the target stays shown as reverted by a restore that never
+/// finished, or the copy restore loses the claim it resumes under.
+#[test]
+fn a_restore_cut_off_by_a_crash_releases_its_target_claim_or_the_target_stays_reverted() {
+    use skill_studio_core::events::{EventDraft, EventKind, EventStatus};
+    use skill_studio_core::identity::SkillName;
+    use skill_studio_core::ports::{acquire_exclusive, HistoryAccess};
+
+    let home = unique_temp_dir("crashed_restore_claim");
+    repairable_home(&home);
+    let rt = runtime_for(&home);
+    let draft = |kind, payload| EventDraft {
+        kind,
+        skill: SkillName("zeta-bad".into()),
+        harness: None,
+        scope: None,
+        project_path: None,
+        payload,
+        inverse: None,
+        backup_dir: None,
+    };
+
+    let (pending_case, interrupted_case, copy_case) = {
+        let mut store = rt
+            .ports
+            .history
+            .open(&rt.scope, HistoryAccess::ReadWrite)
+            .unwrap()
+            .unwrap();
+        let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+        let mut crashed_restore = |target_kind: EventKind, leave_interrupted: bool| {
+            let target = rt.ports.ids.next_event_id();
+            store
+                .record(&guard, &target, &draft(target_kind, serde_json::json!({})))
+                .unwrap();
+            store
+                .finish(&guard, &target, EventStatus::Done, None)
+                .unwrap();
+            let restore = rt.ports.ids.next_event_id();
+            assert!(store.claim_revert(&guard, &target, &restore).unwrap());
+            store
+                .record(
+                    &guard,
+                    &restore,
+                    &draft(
+                        EventKind::Restore,
+                        serde_json::json!({ "target_event": target.0 }),
+                    ),
+                )
+                .unwrap();
+            if leave_interrupted {
+                store
+                    .finish(&guard, &restore, EventStatus::Interrupted, None)
+                    .unwrap();
+            }
+            target
+        };
+        (
+            crashed_restore(EventKind::Remove, false),
+            crashed_restore(EventKind::Remove, true),
+            crashed_restore(EventKind::MakeIndependentCopy, false),
+        )
+    };
+
+    let session = skill_studio_core::ports::MutationSession::begin(&rt, &ctx()).unwrap();
+    session.finish(&rt, &ctx());
+
+    let store = rt
+        .ports
+        .history
+        .open(&rt.scope, HistoryAccess::ReadWrite)
+        .unwrap()
+        .unwrap();
+    for (case, target) in [("pending", pending_case), ("interrupted", interrupted_case)] {
+        assert_eq!(
+            store.get(&target).unwrap().unwrap().reverted_by,
+            None,
+            "a {case} restore row still holds its target claim"
+        );
+    }
+    assert!(
+        store
+            .get(&copy_case)
+            .unwrap()
+            .unwrap()
+            .reverted_by
+            .is_some(),
+        "an independent-copy restore lost the claim desktop startup resumes under"
+    );
+    assert!(store.pending().unwrap().is_empty());
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
 /// An error `preview_frontmatter_repair` returns after its nested `scan`
 /// must never leave that nested scan's `OpTiming` on `ctx`: a reader would
 /// see `timings.op == "scan"` under an envelope whose `operation` says

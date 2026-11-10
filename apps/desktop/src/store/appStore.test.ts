@@ -9,7 +9,6 @@ import { useAppStore } from "./appStore";
 beforeEach(() => {
   useAppStore.setState({
     selectedSkillPaths: new Set(),
-    selectionMode: false,
     activeView: { kind: "home" },
     skillListFilter: { scope: "all", query: "" },
   });
@@ -46,39 +45,27 @@ describe("skill selection", () => {
 });
 
 describe("selection mode", () => {
-  it("enterSelectionMode turns the table's checkboxes on", () => {
-    useAppStore.getState().enterSelectionMode();
-    expect(useAppStore.getState().selectionMode).toBe(true);
-  });
-
-  it("toggling two paths while in selection mode selects both", () => {
-    useAppStore.getState().enterSelectionMode();
+  it("toggling two paths selects both", () => {
     useAppStore.getState().toggleSkillSelection("/a");
     useAppStore.getState().toggleSkillSelection("/b");
     expect(useAppStore.getState().selectedSkillPaths).toEqual(new Set(["/a", "/b"]));
   });
 
-  it("exitSelectionMode clears both the mode and the selection", () => {
-    useAppStore.getState().enterSelectionMode();
+  it("clearSkillSelection leaves nothing selected", () => {
     useAppStore.getState().toggleSkillSelection("/a");
-    useAppStore.getState().exitSelectionMode();
-    expect(useAppStore.getState().selectionMode).toBe(false);
+    useAppStore.getState().clearSkillSelection();
     expect(useAppStore.getState().selectedSkillPaths).toEqual(new Set());
   });
 
   it("leaving the list view ends selection mode", () => {
-    useAppStore.getState().enterSelectionMode();
     useAppStore.getState().toggleSkillSelection("/a");
     useAppStore.getState().setActiveView({ kind: "home" });
-    expect(useAppStore.getState().selectionMode).toBe(false);
     expect(useAppStore.getState().selectedSkillPaths).toEqual(new Set());
   });
 
   it("opening a skill ends selection mode", () => {
-    useAppStore.getState().enterSelectionMode();
     useAppStore.getState().toggleSkillSelection("/a");
     useAppStore.getState().openSkill("find-bugs");
-    expect(useAppStore.getState().selectionMode).toBe(false);
     expect(useAppStore.getState().selectedSkillPaths).toEqual(new Set());
   });
 });
@@ -117,10 +104,9 @@ describe("skillListFilter", () => {
     expect(useAppStore.getState().skillListFilter.query).toBe("regression");
   });
 
-  it("changing scope clears selection mode and paths together", () => {
+  it("changing scope clears the selection", () => {
     useAppStore.setState({
       skillListFilter: { scope: "global", query: "find" },
-      selectionMode: true,
       selectedSkillPaths: new Set(["/global/find-bugs"]),
     });
 
@@ -128,14 +114,12 @@ describe("skillListFilter", () => {
 
     const state = useAppStore.getState();
     expect(state.skillListFilter).toEqual({ scope: { project: "/repo" }, query: "find" });
-    expect(state.selectionMode).toBe(false);
     expect(state.selectedSkillPaths).toEqual(new Set());
   });
 
   it("keeps selection for query and other unrelated filter changes", () => {
     useAppStore.setState({
       skillListFilter: { scope: "global", query: "" },
-      selectionMode: true,
       selectedSkillPaths: new Set(["/global/find-bugs"]),
     });
 
@@ -143,7 +127,6 @@ describe("skillListFilter", () => {
 
     const state = useAppStore.getState();
     expect(state.skillListFilter).toEqual({ scope: "global", query: "find", source: "manual" });
-    expect(state.selectionMode).toBe(true);
     expect(state.selectedSkillPaths).toEqual(new Set(["/global/find-bugs"]));
   });
 
@@ -159,14 +142,12 @@ describe("skillListFilter", () => {
   it("resetting a scoped filter also clears its stale selection", () => {
     useAppStore.setState({
       skillListFilter: { scope: "parked", query: "" },
-      selectionMode: true,
       selectedSkillPaths: new Set(["/parked/find-bugs"]),
     });
 
     useAppStore.getState().resetSkillListFilter();
 
     expect(useAppStore.getState().skillListFilter).toEqual({ scope: "all", query: "" });
-    expect(useAppStore.getState().selectionMode).toBe(false);
     expect(useAppStore.getState().selectedSkillPaths).toEqual(new Set());
   });
 });

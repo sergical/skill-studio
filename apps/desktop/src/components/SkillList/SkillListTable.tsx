@@ -177,13 +177,8 @@ export function SkillListTable({
     collapsedGroups.has(group) ? [] : buckets[group].map((skill) => skill.name),
   );
 
-  const {
-    selectedPaths,
-    selectSkills,
-    exitSelectionMode,
-    syncSelectionMode,
-    handleRowCheckboxClick,
-  } = useSkillListSelection(rows, rowPath);
+  const { selectedPaths, selectSkills, clearSkillSelection, handleRowCheckboxClick } =
+    useSkillListSelection(rows, rowPath);
   const {
     handleAct,
     pendingLabelFor,
@@ -264,14 +259,13 @@ export function SkillListTable({
       const next = new Set(selectedPaths);
       next.add(path);
       selectSkills([...next]);
-      syncSelectionMode(next.size);
     },
     onMenu: (_key, rowEl) => {
       const triggers = rowEl.querySelectorAll<HTMLElement>('[data-slot="dropdown-menu-trigger"]');
       triggers[triggers.length - 1]?.click();
     },
     onEscape: () => {
-      if (selectedPaths.size > 0) exitSelectionMode();
+      if (selectedPaths.size > 0) clearSkillSelection();
     },
     onCollapseGroup: (groupId) =>
       setCollapsedGroups((prev) =>
@@ -405,10 +399,10 @@ export function SkillListTable({
           {selectedPaths.size > 0 && (
             <SkillListSelectionBar
               selectedSkills={rows.filter((skill) => selectedPaths.has(rowPath(skill) ?? ""))}
-              onCancel={exitSelectionMode}
+              onCancel={clearSkillSelection}
               onActionFinished={(hadFailures) => {
                 // A failure keeps the selection so the user can retry.
-                if (!hadFailures) exitSelectionMode();
+                if (!hadFailures) clearSkillSelection();
               }}
             />
           )}

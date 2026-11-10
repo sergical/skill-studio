@@ -327,7 +327,7 @@ export function InstalledSkillLifecycleActions({
 
       {updateDialog}
 
-      <AlertDialog open={showRemoveConfirm} onOpenChange={setShowRemoveConfirm}>
+      <AlertDialog open={showRemoveConfirm} busy={isRemoving} onOpenChange={setShowRemoveConfirm}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {skill.name}?</AlertDialogTitle>
