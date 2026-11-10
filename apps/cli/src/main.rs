@@ -920,7 +920,7 @@ fn run_capabilities(
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
     let harnesses = match harnesses
         .into_iter()
-        .map(|h| AgentId::parse(&h))
+        .map(|h| AgentId::parse_harness(&h))
         .collect::<Result<Vec<_>, _>>()
     {
         Ok(harnesses) => harnesses,

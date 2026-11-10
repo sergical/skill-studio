@@ -24,6 +24,7 @@ fn mcp(home: &std::path::Path, tool: &str, arguments: &Value) -> Value {
         .env("HOME", home)
         .env("SKILL_STUDIO_HOME", home)
         .env("SKILL_STUDIO_TELEMETRY", "0")
+        .env("SKILL_STUDIO_MCP_DEV_TOOLS", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -203,5 +204,26 @@ fn remove_manual_agent_copy_is_unsupported_on_cli_and_mcp_and_keeps_the_bytes() 
             std::fs::read_to_string(skill.join("SKILL.md")).unwrap(),
             body
         );
+    }
+}
+
+#[test]
+fn capabilities_accepts_both_opencode_spellings_and_returns_the_same_agent_id() {
+    let home = tempfile::tempdir().unwrap();
+    for spelling in ["opencode", "open-code"] {
+        let from_cli = cli(home.path(), &["capabilities", "--harness", spelling]);
+        let from_mcp = mcp(
+            home.path(),
+            "capabilities",
+            &json!({"harnesses":[spelling],"observe":false,"tools":[]}),
+        )["result"]["structuredContent"]
+            .clone();
+        for result in [from_cli, from_mcp] {
+            assert_eq!(result["status"], "ok", "{spelling}: {result}");
+            assert_eq!(
+                result["data"]["harnesses"][0]["harness"], "open-code",
+                "{spelling}: {result}"
+            );
+        }
     }
 }
