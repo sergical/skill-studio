@@ -3679,8 +3679,13 @@ fn harnesses_body(
     };
     let harnesses = builtin_adapters()
         .iter()
-        .map(|adapter| adapter.detect(&ports))
-        .collect();
+        .map(|adapter| {
+            ctx.checkpoint()?;
+            let detected = adapter.detect_with_cancel(&ports, ctx.cancel.as_ref());
+            ctx.checkpoint()?;
+            Ok(detected)
+        })
+        .collect::<Result<Vec<_>, CoreError>>()?;
     let detect_step = crate::timing::step(clock, "detect_harnesses", step_start);
     ctx.record_timing(crate::timing::op_timing(
         clock,

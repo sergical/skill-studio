@@ -1,10 +1,12 @@
 //! [`ProcessSpawner`] over the real OS process, for the `harnesses` op's
 //! `--version` probe and the desktop's `npx`/`git` mutations.
 
+use crate::probe_cache::{ProbeCache, ProbeKey};
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -65,10 +67,6 @@ const KILLED_READER_GRACE: Duration = Duration::from_millis(250);
 /// Runs a child process with `std::process::Command` and waits for it to
 /// exit, killing it if it outlives `ProcessSpec::timeout_ms`.
 ///
-/// Cancellation via `CancelToken` is not enforced yet: `NeverCancel` is the
-/// only token any caller passes today. Caching the result by the
-/// executable's path, size, and mtime is a named follow-up in
-/// `docs/action-map/harnesses/harness-detection.md`, not this type.
 pub struct RealProcessSpawner {
     /// Directories searched to resolve a bare `ProcessSpec::program` and
     /// prepended to the child's `PATH`, ahead of this process's own. Empty
@@ -81,15 +79,26 @@ pub struct RealProcessSpawner {
     /// can be found.
     search_dirs: Vec<PathBuf>,
     isolated_home: Option<PathBuf>,
+    clock: Arc<dyn skill_studio_core::ports::Clock>,
+    probes: Mutex<ProbeCache>,
 }
 
 impl RealProcessSpawner {
-    /// Builds the spawner. Stateless: every call spawns fresh.
+    /// Builds the spawner with an in-memory version-probe cache.
     pub fn new() -> Self {
         RealProcessSpawner {
             search_dirs: Vec::new(),
             isolated_home: None,
+            clock: Arc::new(crate::clock::SystemClock::new()),
+            probes: Mutex::new(ProbeCache::default()),
         }
+    }
+
+    /// Reuses version probes across instances through an app-owned cache file.
+    #[must_use]
+    pub fn with_probe_cache(mut self, path: PathBuf) -> Self {
+        self.probes = Mutex::new(ProbeCache::load(path));
+        self
     }
 
     /// As [`RealProcessSpawner::new`], but resolving a bare `program` name
@@ -101,7 +110,7 @@ impl RealProcessSpawner {
     pub fn with_search_path(search_dirs: Vec<PathBuf>) -> Self {
         RealProcessSpawner {
             search_dirs,
-            isolated_home: None,
+            ..Self::new()
         }
     }
 
@@ -253,6 +262,11 @@ fn broken_node_reason(node: &Path, path: &OsString) -> Option<String> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let mut child = spawn_retrying_busy(&mut command).ok()?;
     let stderr_reader = child.stderr.take().map(spawn_drain::<ChildStderr>);
     let start = Instant::now();
@@ -263,16 +277,19 @@ fn broken_node_reason(node: &Path, path: &OsString) -> Option<String> {
                 std::thread::sleep(POLL_INTERVAL);
             }
             _ => {
+                #[cfg(unix)]
+                let _ = kill_process_group(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = join_killed_reader(stderr_reader);
                 return None;
             }
         }
     };
+    let (_, stderr) = readers_after_exit(child.id(), None, stderr_reader);
     if status.success() {
         return None;
     }
-    let stderr = stderr_reader.and_then(|h| h.join().ok())?;
     String::from_utf8_lossy(&stderr)
         .lines()
         .find(|line| line.contains("Library not loaded"))
@@ -316,7 +333,7 @@ fn spawn_drain<R: Read + Send + 'static>(pipe: R) -> JoinHandle<Vec<u8>> {
 #[cfg(unix)]
 fn kill_process_group(pid: u32) -> bool {
     let group = format!("-{pid}");
-    std::process::Command::new("kill")
+    std::process::Command::new("/bin/kill")
         .args(["-s", "KILL", "--", &group])
         .status()
         .is_ok_and(|status| status.success())
@@ -342,13 +359,59 @@ fn join_killed_reader(handle: Option<JoinHandle<Vec<u8>>>) -> Vec<u8> {
     }
 }
 
+fn readers_after_exit(
+    pid: u32,
+    stdout: Option<JoinHandle<Vec<u8>>>,
+    stderr: Option<JoinHandle<Vec<u8>>>,
+) -> (Vec<u8>, Vec<u8>) {
+    let finished = || {
+        stdout.as_ref().is_none_or(JoinHandle::is_finished)
+            && stderr.as_ref().is_none_or(JoinHandle::is_finished)
+    };
+    let deadline = Instant::now() + KILLED_READER_GRACE;
+    while !finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    if !finished() {
+        #[cfg(unix)]
+        let _ = kill_process_group(pid);
+    }
+    (join_killed_reader(stdout), join_killed_reader(stderr))
+}
+
 impl ProcessSpawner for RealProcessSpawner {
     fn run(
         &self,
         spec: &ProcessSpec,
-        _cancel: &dyn CancelToken,
+        cancel: &dyn CancelToken,
     ) -> Result<ProcessOutput, CoreError> {
+        if cancel.is_cancelled() {
+            return Err(CoreError::new(
+                skill_studio_core::ErrorCode::Cancelled,
+                "process cancelled",
+            ));
+        }
         let program = self.resolve_program(&spec.program);
+        let probe_key = if spec.args == ["--version"] && spec.cwd.is_none() && spec.env.is_empty() {
+            let path = if program.is_absolute() {
+                Some(program.clone())
+            } else {
+                std::env::split_paths(&self.effective_path(spec))
+                    .map(|dir| dir.join(&program))
+                    .find(|path| is_executable_file(path))
+            };
+            path.and_then(|path| ProbeKey::read(&path))
+        } else {
+            None
+        };
+        if let Some(output) = probe_key.as_ref().and_then(|key| {
+            self.probes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(key)
+        }) {
+            return Ok(output);
+        }
         let mut command = std::process::Command::new(&program);
         command.args(&spec.args);
         if let Some(cwd) = &spec.cwd {
@@ -380,6 +443,7 @@ impl ProcessSpawner for RealProcessSpawner {
             // `child.kill()` isn't enough.
             command.process_group(0);
         }
+        let start = self.clock.monotonic();
         let mut child = spawn_retrying_busy(&mut command)
             .map_err(|e| CoreError::io(Path::new(&spec.program), e))?;
 
@@ -391,52 +455,41 @@ impl ProcessSpawner for RealProcessSpawner {
             child.stderr.take().map(spawn_drain::<ChildStderr>);
 
         let deadline = Duration::from_millis(spec.timeout_ms);
-        let start = Instant::now();
         let exit_status = loop {
+            if cancel.is_cancelled() {
+                break Err(CoreError::new(
+                    skill_studio_core::ErrorCode::Cancelled,
+                    "process cancelled",
+                ));
+            }
+            if self.clock.monotonic().saturating_sub(start) >= deadline {
+                break Ok(None);
+            }
             match child.try_wait() {
-                Ok(Some(status)) => break Some(status),
-                Ok(None) if start.elapsed() >= deadline => break None,
+                Ok(Some(status)) => break Ok(Some(status)),
                 Ok(None) => std::thread::sleep(POLL_INTERVAL),
-                Err(e) => return Err(CoreError::io(Path::new(&spec.program), e)),
+                Err(e) => break Err(CoreError::io(Path::new(&spec.program), e)),
             }
         };
-
-        let Some(status) = exit_status else {
-            // The child outlived its deadline: kill and reap its whole
-            // process group (not just the direct child - see
-            // `kill_process_group`), then report `timed_out` rather than
-            // guess at output the process never finished writing. The
-            // reader-thread joins are bounded (`join_killed_reader`): the
-            // group kill should close every pipe write end almost at once,
-            // but nothing here should be able to block `run` forever.
-            #[cfg(unix)]
-            let _ = kill_process_group(child.id());
-            // Always also kill the direct child: if the group kill above
-            // failed for any reason, this still guarantees `child.wait()`
-            // below can't block for the rest of the deadline-less sleep.
-            let _ = child.kill();
-            let _ = child.wait();
-            let stdout = join_killed_reader(stdout_reader);
-            let stderr = join_killed_reader(stderr_reader);
-            return Ok(self.describe_failed_npx(
-                spec,
-                &program,
-                ProcessOutput {
+        let status = match exit_status {
+            Ok(Some(status)) => status,
+            stopped => {
+                #[cfg(unix)]
+                let _ = kill_process_group(child.id());
+                let _ = child.kill();
+                let _ = child.wait();
+                let stdout = join_killed_reader(stdout_reader);
+                let stderr = join_killed_reader(stderr_reader);
+                return stopped.map(|_| ProcessOutput {
                     status: None,
                     stdout: String::from_utf8_lossy(&stdout).into_owned(),
                     stderr: String::from_utf8_lossy(&stderr).into_owned(),
                     timed_out: true,
-                },
-            ));
+                });
+            }
         };
-
-        let stdout = stdout_reader
-            .and_then(|h| h.join().ok())
-            .unwrap_or_default();
-        let stderr = stderr_reader
-            .and_then(|h| h.join().ok())
-            .unwrap_or_default();
-        Ok(self.describe_failed_npx(
+        let (stdout, stderr) = readers_after_exit(child.id(), stdout_reader, stderr_reader);
+        let output = self.describe_failed_npx(
             spec,
             &program,
             ProcessOutput {
@@ -445,7 +498,17 @@ impl ProcessSpawner for RealProcessSpawner {
                 stderr: String::from_utf8_lossy(&stderr).into_owned(),
                 timed_out: false,
             },
-        ))
+        );
+        if let Some(key) = probe_key {
+            // A binary replaced during the probe must not populate the old fingerprint.
+            if key.is_current() {
+                self.probes
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .put(key, &output);
+            }
+        }
+        Ok(output)
     }
 }
 
@@ -456,6 +519,191 @@ mod tests {
 
     fn write_script(path: &Path, body: &str) {
         crate::test_scripts::write_fake_executable(path, body);
+    }
+
+    #[test]
+    fn unchanged_version_probe_runs_once_or_repeats_the_process() {
+        let tmp = tempfile::tempdir().unwrap();
+        let program = tmp.path().join("probe");
+        write_script(&program, "echo called >> \"$0.calls\"; echo 1.2.3");
+        let spec = ProcessSpec {
+            program: program.display().to_string(),
+            args: vec!["--version".into()],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+        };
+        let spawner = RealProcessSpawner::new();
+        let first = spawner.run(&spec, &NeverCancel).unwrap();
+        let second = spawner.run(&spec, &NeverCancel).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("probe.calls"))
+                .unwrap()
+                .lines()
+                .count(),
+            1,
+            "unchanged version probe ran twice"
+        );
+    }
+
+    #[test]
+    fn version_cache_survives_a_new_spawner_or_probes_again_on_the_next_launch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let program = tmp.path().join("probe");
+        write_script(&program, "echo called >> \"$0.calls\"; echo 1.2.3");
+        let spec = ProcessSpec {
+            program: program.display().to_string(),
+            args: vec!["--version".into()],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+        };
+        let cache = tmp.path().join("app-cache/version-probes.json");
+        let first = RealProcessSpawner::new()
+            .with_probe_cache(cache.clone())
+            .run(&spec, &NeverCancel)
+            .unwrap();
+        let second = RealProcessSpawner::new()
+            .with_probe_cache(cache)
+            .run(&spec, &NeverCancel)
+            .unwrap();
+        assert_eq!(first, second);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("probe.calls"))
+                .unwrap()
+                .lines()
+                .count(),
+            1,
+            "new spawner did not reuse the persisted probe"
+        );
+        let ordinary = ProcessSpec {
+            args: Vec::new(),
+            ..spec
+        };
+        let spawner = RealProcessSpawner::new();
+        spawner.run(&ordinary, &NeverCancel).unwrap();
+        spawner.run(&ordinary, &NeverCancel).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("probe.calls"))
+                .unwrap()
+                .lines()
+                .count(),
+            3,
+            "ordinary commands must run every time"
+        );
+    }
+
+    #[test]
+    fn cancelling_detection_reaches_the_version_probe_and_returns_cancelled_or_reports_success() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct Cancellation(Arc<AtomicBool>);
+        impl CancelToken for Cancellation {
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+        struct CancelProbe(Arc<AtomicBool>);
+        impl ProcessSpawner for CancelProbe {
+            fn run(
+                &self,
+                _: &ProcessSpec,
+                cancel: &dyn CancelToken,
+            ) -> Result<ProcessOutput, CoreError> {
+                self.0.store(true, Ordering::SeqCst);
+                assert!(
+                    cancel.is_cancelled(),
+                    "detection replaced its caller's cancellation token"
+                );
+                Err(CoreError::new(
+                    skill_studio_core::ErrorCode::Cancelled,
+                    "cancelled",
+                ))
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        write_script(&bin.join("claude"), "echo 1.2.3");
+        let flag = Arc::new(AtomicBool::new(false));
+        let scope = skill_studio_core::RuntimeScope::fixture(&home);
+        let mut ports = crate::default_ports(
+            tmp.path().join("leases"),
+            Arc::new(skill_studio_core::harness::HarnessCatalog::builtin()),
+        );
+        ports.tools = Some(Arc::new(crate::PathToolLookup::with_search_dirs(vec![bin])));
+        ports.spawner = Some(Arc::new(CancelProbe(flag.clone())));
+        let rt = skill_studio_core::ports::Runtime::new(&scope, ports).unwrap();
+        let context = skill_studio_core::ports::OpContext::with_cancel(
+            skill_studio_core::identity::CorrelationId("cancel".into()),
+            Arc::new(Cancellation(flag)),
+        );
+        let result = skill_studio_core::ops::harnesses(
+            &rt,
+            &context,
+            &skill_studio_core::dto::HarnessesRequest {},
+        );
+        assert!(
+            matches!(result, Err(ref error) if error.code == skill_studio_core::ErrorCode::Cancelled),
+            "{result:?}"
+        );
+    }
+
+    struct CancelWhenReady(PathBuf);
+    impl CancelToken for CancelWhenReady {
+        fn is_cancelled(&self) -> bool {
+            self.0.exists()
+        }
+    }
+
+    #[test]
+    fn cancel_after_child_readiness_stops_the_probe_or_returns_a_normal_exit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ready = tmp.path().join("ready");
+        let spec = ProcessSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "echo ready > \"$1\"; exec /bin/sleep 2".into(),
+                "probe".into(),
+                ready.display().to_string(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+        };
+        let result = RealProcessSpawner::new().run(&spec, &CancelWhenReady(ready));
+        assert!(
+            matches!(result, Err(ref e) if e.code == skill_studio_core::ErrorCode::Cancelled),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn normal_exit_releases_inherited_pipes_before_the_test_releases_the_descendant_or_hangs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ready = tmp.path().join("ready");
+        let release = tmp.path().join("release");
+        let spec = ProcessSpec {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "(echo ready > \"$1\"; while [ ! -f \"$2\" ]; do /bin/sleep 0.01; done) & while [ ! -f \"$1\" ]; do /bin/sleep 0.01; done; echo parent-done".into(), "probe".into(), ready.display().to_string(), release.display().to_string()],
+            cwd: None, env: Vec::new(), timeout_ms: 30_000,
+        };
+        let (send, recv) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            send.send(RealProcessSpawner::new().run(&spec, &NeverCancel))
+        });
+        let result = recv.recv_timeout(Duration::from_secs(15));
+        std::fs::write(release, b"release").unwrap();
+        worker.join().unwrap().ok();
+        let output = result
+            .expect("normal exit waited for the descendant's release")
+            .unwrap();
+        assert_eq!(output.status, Some(0));
+        assert!(!output.timed_out);
+        assert!(output.stdout.contains("parent-done"), "{output:?}");
     }
 
     /// `a_busy_executable_is_retried_until_free_or_the_busy_error_surfaces_after_the_cap`:
@@ -574,29 +822,23 @@ mod tests {
         assert!(!output.timed_out);
     }
 
-    /// `a_hung_version_probe_times_out_and_is_killed_or_names_the_probe_that_hangs`:
-    /// a real child that records its pid and then `exec`s `sleep 30` - a
-    /// mock spawner can't prove a real OS process gets killed, so this test
-    /// pays for a real spawn - must come back as `timed_out`, and the pid it
-    /// recorded must be gone once `run` returns (`kill -0` fails), which
-    /// proves the child was killed and reaped rather than left running.
-    /// The deadline is generous so the shell has time to write its pid;
-    /// nothing asserts an elapsed-time bound, so a slow CI runner still
-    /// gets a correct verdict.
     #[test]
     fn a_hung_version_probe_times_out_and_is_killed_or_names_the_probe_that_hangs() {
         let tmp = tempfile::tempdir().unwrap();
         let pid_file = tmp.path().join("pid");
-        let spawner = RealProcessSpawner::new();
+        let spawner = RealProcessSpawner {
+            clock: Arc::new(ReadyClock(pid_file.clone())),
+            ..RealProcessSpawner::new()
+        };
         let spec = ProcessSpec {
-            program: "sh".into(),
+            program: "/bin/sh".into(),
             args: vec![
                 "-c".into(),
                 format!("echo $$ > '{}'; exec sleep 30", pid_file.display()),
             ],
             cwd: None,
             env: Vec::new(),
-            timeout_ms: 5_000,
+            timeout_ms: 30_000,
         };
 
         let output = spawner.run(&spec, &NeverCancel).unwrap();
@@ -611,7 +853,7 @@ mod tests {
             !pid.is_empty(),
             "the child never recorded its pid, so the kill cannot be checked"
         );
-        let still_alive = std::process::Command::new("kill")
+        let still_alive = std::process::Command::new("/bin/kill")
             .args(["-0", pid])
             .status()
             .unwrap()
@@ -717,55 +959,66 @@ mod tests {
         );
     }
 
-    /// `a_timed_out_childs_grandchild_that_inherited_the_pipe_is_still_killed_or_names_the_orphan_left_running`:
-    /// the child backgrounds a grandchild that inherits the stdout pipe's
-    /// write end and holds it open for 30s, then the child itself blocks
-    /// past a 500ms deadline. A lone `child.kill()` (the direct child only)
-    /// leaves the grandchild running with the pipe open, so the old
-    /// unbounded `JoinHandle::join()` on the reader thread never sees EOF
-    /// and `run` never returns. Fails (red) on that: `run` hangs well past
-    /// the grandchild's own 30s sleep instead of returning near the
-    /// deadline, and the grandchild's pid is still alive afterward.
+    struct ReadyClock(PathBuf);
+    impl skill_studio_core::ports::Clock for ReadyClock {
+        fn now(&self) -> chrono::DateTime<chrono::Utc> {
+            chrono::Utc::now()
+        }
+        fn monotonic(&self) -> Duration {
+            if std::fs::read_to_string(&self.0).is_ok_and(|pid| pid.trim().parse::<u32>().is_ok()) {
+                Duration::from_secs(31)
+            } else {
+                Duration::ZERO
+            }
+        }
+    }
+
+    fn process_running(pid: u32) -> bool {
+        let pid = sysinfo::Pid::from_u32(pid);
+        let mut system = sysinfo::System::new();
+        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+        system.process(pid).is_some_and(|p| {
+            !matches!(
+                p.status(),
+                sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
+            )
+        })
+    }
+
     #[test]
     fn a_timed_out_childs_grandchild_that_inherited_the_pipe_is_still_killed_or_names_the_orphan_left_running(
     ) {
         let tmp = tempfile::tempdir().unwrap();
-        let grandchild_pid_file = tmp.path().join("grandchild_pid");
-        let spawner = RealProcessSpawner::new();
-        let spec = ProcessSpec {
-            program: "sh".into(),
-            args: vec![
-                "-c".into(),
-                format!(
-                    "sh -c 'echo $$ > \"{}\"; exec sleep 30' & sleep 30",
-                    grandchild_pid_file.display()
-                ),
-            ],
-            cwd: None,
-            env: Vec::new(),
-            timeout_ms: 5_000,
+        let pid_file = tmp.path().join("grandchild_pid");
+        let release = tmp.path().join("release");
+        let spawner = RealProcessSpawner {
+            clock: Arc::new(ReadyClock(pid_file.clone())),
+            ..RealProcessSpawner::new()
         };
-
-        let output = spawner.run(&spec, &NeverCancel).unwrap();
-
-        assert!(
-            output.timed_out,
-            "a child whose grandchild holds the pipe open must still report timed_out, got {output:?}"
-        );
-        let grandchild_pid = std::fs::read_to_string(&grandchild_pid_file).unwrap_or_default();
-        let grandchild_pid = grandchild_pid.trim();
-        assert!(
-            !grandchild_pid.is_empty(),
-            "the backgrounded grandchild never recorded its pid"
-        );
-        let grandchild_alive = std::process::Command::new("kill")
-            .args(["-0", grandchild_pid])
-            .status()
-            .unwrap()
-            .success();
-        assert!(
-            !grandchild_alive,
-            "the grandchild (pid {grandchild_pid}) survived the timeout - only the direct child was killed"
-        );
+        let spec = ProcessSpec {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), r#"/bin/sh -c 'echo $$ > "$1"; while [ ! -f "$2" ]; do /bin/sleep 0.01; done' grandchild "$1" "$2" & wait"#.into(), "probe".into(), pid_file.display().to_string(), release.display().to_string()],
+            cwd: None, env: Vec::new(), timeout_ms: 30_000,
+        };
+        let (send, recv) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || send.send(spawner.run(&spec, &NeverCancel)));
+        let result = recv.recv_timeout(Duration::from_secs(15));
+        let pid = std::fs::read_to_string(&pid_file)
+            .unwrap_or_default()
+            .trim()
+            .parse::<u32>();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while pid.as_ref().is_ok_and(|pid| process_running(*pid)) && Instant::now() < deadline {
+            std::thread::sleep(POLL_INTERVAL);
+        }
+        let alive = pid.as_ref().is_ok_and(|pid| process_running(*pid));
+        std::fs::write(release, b"release").unwrap();
+        worker.join().unwrap().ok();
+        let output = result
+            .expect("logical deadline waited for the test's release")
+            .unwrap();
+        assert!(output.timed_out, "{output:?}");
+        assert!(pid.is_ok(), "grandchild did not signal readiness");
+        assert!(!alive, "the grandchild survived the group kill");
     }
 }
