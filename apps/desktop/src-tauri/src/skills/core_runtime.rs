@@ -216,7 +216,7 @@ mod probe_cache_tests {
         let program = bin.join("claude");
         std::fs::write(
             &program,
-            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo called >> \"$0.calls\"; fi\necho 1.2.3\n",
+            "#!/usr/bin/python3\nimport sys\nif sys.argv[1:] == ['--version']:\n    with open(sys.argv[0] + '.calls', 'a') as f: f.write('called\\n')\nprint('1.2.3')\n",
         )
         .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();

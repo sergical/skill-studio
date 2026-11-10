@@ -284,7 +284,7 @@ fn broken_node_reason(node: &Path, path: &OsString) -> Option<String> {
             }
             _ => {
                 #[cfg(unix)]
-                let _ = kill_process_group(child.id());
+                let _ = kill_process_tree(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = join_killed_reader(stderr_reader, KILLED_READER_GRACE);
@@ -384,6 +384,56 @@ fn kill_process_group(pid: u32) -> bool {
         .args(["-s", "KILL", "--", &group])
         .status()
         .is_ok_and(|status| status.success())
+}
+
+#[cfg(unix)]
+fn kill_process_tree(pid: u32) -> bool {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let Ok(mut system) = System::new() else {
+        let _ = kill_process_group(pid);
+        return false;
+    };
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().without_tasks(),
+    );
+    let mut descendants = vec![Pid::from_u32(pid)];
+    let mut index = 0;
+    while index < descendants.len() {
+        let parent = descendants[index];
+        for process in system.processes().values() {
+            if process.parent() == Some(parent) && !descendants.contains(&process.pid()) {
+                descendants.push(process.pid());
+            }
+        }
+        index += 1;
+    }
+    for child in descendants.iter().rev() {
+        if let Some(process) = system.process(*child) {
+            process.kill();
+        }
+    }
+    let _ = kill_process_group(pid);
+    for _ in 0..100 {
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&descendants),
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+        if descendants.iter().all(|pid| {
+            system.process(*pid).is_none_or(|process| {
+                matches!(
+                    process.status(),
+                    sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
+                )
+            })
+        }) {
+            return true;
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    false
 }
 
 // A descendant can start a new session and retain the write end after a group kill.
@@ -518,11 +568,17 @@ impl ProcessSpawner for RealProcessSpawner {
             Ok(Some(status)) => status,
             stopped => {
                 #[cfg(unix)]
-                let _ = kill_process_group(child.id());
+                let tree_stopped = kill_process_tree(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
                 let stdout = join_killed_reader(stdout_reader, self.reader_grace);
                 let stderr = join_killed_reader(stderr_reader, self.reader_grace);
+                if !tree_stopped {
+                    return Err(CoreError::new(
+                        skill_studio_core::ErrorCode::Io,
+                        "probe process tree did not stop",
+                    ));
+                }
                 return stopped.map(|_| ProcessOutput {
                     status: None,
                     stdout: String::from_utf8_lossy(&stdout).into_owned(),
@@ -592,26 +648,37 @@ mod tests {
         }
     }
 
+    struct ProbeFixture {
+        pid: PathBuf,
+        release: PathBuf,
+    }
+    impl Drop for ProbeFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.release, b"release");
+            if let Ok(pid) = std::fs::read_to_string(&self.pid)
+                .unwrap_or_default()
+                .trim()
+                .parse::<u32>()
+            {
+                let _ = kill_process_tree(pid);
+            }
+        }
+    }
+
     #[test]
-    fn cancelling_an_escaping_grandchild_joins_the_reader_and_closes_its_pipe_or_leaks_a_thread() {
+    fn cancelling_an_escaping_grandchild_stops_it_or_leaves_the_probe_running() {
         let tmp = tempfile::tempdir().unwrap();
-        let ready = tmp.path().join("ready");
-        let closed = tmp.path().join("closed");
-        let release = tmp.path().join("release");
+        let fixture = ProbeFixture {
+            pid: tmp.path().join("ready"),
+            release: tmp.path().join("release"),
+        };
         let script = r"import os, sys, time
 if os.fork() == 0:
     os.setsid()
     with open(sys.argv[1], 'w') as f:
         f.write(str(os.getpid()))
-    while not os.path.exists(sys.argv[3]):
+    while not os.path.exists(sys.argv[2]):
         time.sleep(0.01)
-    outcome = 'open'
-    try:
-        os.write(1, b'probe')
-    except BrokenPipeError:
-        outcome = 'closed'
-    with open(sys.argv[2], 'w') as f:
-        f.write(outcome)
     os._exit(0)
 while True:
     time.sleep(1)
@@ -621,9 +688,8 @@ while True:
             args: vec![
                 "-c".into(),
                 script.into(),
-                ready.display().to_string(),
-                closed.display().to_string(),
-                release.display().to_string(),
+                fixture.pid.display().to_string(),
+                fixture.release.display().to_string(),
             ],
             cwd: None,
             env: Vec::new(),
@@ -633,30 +699,59 @@ while True:
             reader_grace: Duration::ZERO,
             ..RealProcessSpawner::new()
         };
-        let result = spawner.run(&spec, &CancelWhenReady(ready));
+        let result = spawner.run(&spec, &CancelWhenReady(fixture.pid.clone()));
+        let pid = std::fs::read_to_string(&fixture.pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let alive = process_running(pid);
+        drop(fixture);
         assert!(
             matches!(result, Err(error) if error.code == skill_studio_core::ErrorCode::Cancelled)
         );
-        std::fs::write(release, b"release").unwrap();
-        let outcome = loop {
-            if let Ok(outcome) = std::fs::read_to_string(&closed) {
-                if !outcome.is_empty() {
-                    break outcome;
-                }
-            }
-            std::thread::sleep(POLL_INTERVAL);
+        assert!(!alive, "escaped descendant survived cancellation");
+    }
+
+    #[test]
+    fn replacing_a_shell_launchers_backend_under_the_same_path_returns_the_new_version_or_reuses_stale_output(
+    ) {
+        let home = tempfile::tempdir().unwrap();
+        let launcher = home.path().join("launcher");
+        let backend = home.path().join("backend");
+        write_script(&launcher, "exec backend --version");
+        let spec = ProcessSpec {
+            program: launcher.display().to_string(),
+            args: vec!["--version".into()],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
         };
-        assert_eq!(
-            outcome, "closed",
-            "probe returned with a blocked reader still holding the pipe"
-        );
+        for version in ["1.2.3", "4.5.6"] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(&backend, format!("#!/bin/sh\necho {version}\n")).unwrap();
+            std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let spawner =
+                RealProcessSpawner::for_home(home.path(), vec![home.path().to_path_buf()]);
+            assert_eq!(
+                spawner.run(&spec, &NeverCancel).unwrap().stdout.trim(),
+                version,
+                "shell launcher reused the replaced backend's version"
+            );
+        }
+    }
+
+    fn write_program(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, "#!/usr/bin/python3\nimport sys\nwith open(sys.argv[0] + '.calls', 'a') as f: f.write('called\\n')\nprint('1.2.3')\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[test]
     fn unchanged_version_probe_runs_once_or_repeats_the_process() {
         let tmp = tempfile::tempdir().unwrap();
         let program = tmp.path().join("probe");
-        write_script(&program, "echo called >> \"$0.calls\"; echo 1.2.3");
+        write_program(&program);
         let spec = ProcessSpec {
             program: program.display().to_string(),
             args: vec!["--version".into()],
@@ -682,7 +777,7 @@ while True:
     fn version_cache_survives_a_new_spawner_or_probes_again_on_the_next_launch() {
         let tmp = tempfile::tempdir().unwrap();
         let program = tmp.path().join("probe");
-        write_script(&program, "echo called >> \"$0.calls\"; echo 1.2.3");
+        write_program(&program);
         let spec = ProcessSpec {
             program: program.display().to_string(),
             args: vec!["--version".into()],
@@ -832,7 +927,7 @@ while True:
                 .run(&spec, &NeverCancel),
             )
         });
-        let result = recv.recv();
+        let result = recv.recv_timeout(Duration::from_secs(30));
         std::fs::write(release, b"release").unwrap();
         worker.join().unwrap().ok();
         let output = result
@@ -1137,18 +1232,19 @@ while True:
             args: vec!["-c".into(), r#"/bin/sh -c 'echo $$ > "$1"; while [ ! -f "$2" ]; do /bin/sleep 0.01; done' grandchild "$1" "$2" & wait"#.into(), "probe".into(), pid_file.display().to_string(), release.display().to_string()],
             cwd: None, env: Vec::new(), timeout_ms: 30_000,
         };
+        let fixture = ProbeFixture {
+            pid: pid_file.clone(),
+            release,
+        };
         let (send, recv) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || send.send(spawner.run(&spec, &NeverCancel)));
-        let result = recv.recv();
+        let result = recv.recv_timeout(Duration::from_secs(30));
         let pid = std::fs::read_to_string(&pid_file)
             .unwrap_or_default()
             .trim()
             .parse::<u32>();
-        while pid.as_ref().is_ok_and(|pid| process_running(*pid)) {
-            std::thread::sleep(POLL_INTERVAL);
-        }
         let alive = pid.as_ref().is_ok_and(|pid| process_running(*pid));
-        std::fs::write(release, b"release").unwrap();
+        drop(fixture);
         worker.join().unwrap().ok();
         let output = result
             .expect("logical deadline waited for the test's release")

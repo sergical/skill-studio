@@ -35,7 +35,7 @@ impl ProbeKey {
         let path = std::path::absolute(path).ok()?;
         let target = std::fs::canonicalize(&path).ok()?;
         let facts = std::fs::metadata(&target).ok()?;
-        if !facts.is_file() {
+        if !facts.is_file() || is_shell_launcher(&target)? {
             return None;
         }
         let modified = facts.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
@@ -52,6 +52,28 @@ impl ProbeKey {
             modified_nanos: modified.subsec_nanos(),
         })
     }
+}
+fn is_shell_launcher(path: &Path) -> Option<bool> {
+    let mut header = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(256)
+        .read_to_end(&mut header)
+        .ok()?;
+    let header = String::from_utf8_lossy(&header);
+    let Some(shebang) = header
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("#!"))
+    else {
+        return Some(false);
+    };
+    Some(shebang.split_whitespace().any(|word| {
+        matches!(
+            Path::new(word).file_name().and_then(|name| name.to_str()),
+            Some("sh" | "bash" | "zsh" | "dash" | "ksh" | "mksh" | "ash" | "fish" | "csh" | "tcsh")
+        )
+    }))
 }
 #[derive(Serialize, Deserialize)]
 struct Entry {
@@ -155,6 +177,32 @@ fn write_cache(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shell_launchers_bypass_cache_while_symlinked_programs_keep_keys_or_cache_obsolete_backends()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("program");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&program, &link).unwrap();
+        for header in [
+            "#!/bin/sh",
+            "#!/usr/bin/env -S bash",
+            "#!/bin/zsh",
+            "#!/bin/dash",
+        ] {
+            std::fs::write(&program, format!("{header}\nexec backend --version\n")).unwrap();
+            assert!(
+                ProbeKey::read(&link).is_none(),
+                "shell launcher received a cache key: {header}"
+            );
+        }
+        std::fs::write(&program, "#!/usr/bin/env node\nconsole.log('1.2.3')\n").unwrap();
+        assert!(
+            ProbeKey::read(&link).is_some(),
+            "symlinked program lost its cache key"
+        );
+    }
+
     fn output() -> ProcessOutput {
         ProcessOutput {
             status: Some(0),

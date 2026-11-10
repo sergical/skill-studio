@@ -191,7 +191,7 @@ fn repeated_detection_on_cli_and_mcp_reuses_unchanged_versions_or_spawns_twice()
         let program = bin.join("claude");
         std::fs::write(
             &program,
-            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo called >> \"$0.calls\"; fi\necho 1.2.3\n",
+            "#!/usr/bin/python3\nimport sys\nif sys.argv[1:] == ['--version']:\n    with open(sys.argv[0] + '.calls', 'a') as f: f.write('called\\n')\nprint('1.2.3')\n",
         )
         .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -200,10 +200,13 @@ fn repeated_detection_on_cli_and_mcp_reuses_unchanged_versions_or_spawns_twice()
             .unwrap()
             .status
             .success());
-        let env = vec![(
+        let mut env = vec![(
             "PATH".to_string(),
             format!("{}:/usr/bin:/bin", bin.display()),
         )];
+        if let Ok(developer_dir) = std::env::var("DEVELOPER_DIR") {
+            env.push(("DEVELOPER_DIR".into(), developer_dir));
+        }
         for _ in 0..2 {
             if surface == "cli" {
                 cli_with_env(home.path(), &["harnesses"], &env);
