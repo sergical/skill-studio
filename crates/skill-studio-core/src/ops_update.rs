@@ -437,17 +437,23 @@ fn remove_links_the_cli_added(
     Ok(())
 }
 
+struct UpdatedCopy {
+    content_hash: String,
+    fingerprint: Option<crate::identity::Fingerprint>,
+}
+
 /// `Copy`: stages `files` under [`ops_install::journal_root`], then swaps it
 /// into `<universal_root>/<skill>`, quarantining whatever already sat there
 /// - see the module doc for why `QUARANTINE_DIR_NAME`, not the desktop's
 ///   `skills-trash`.
 fn update_copy(
     rt: &Runtime,
+    ctx: &OpContext,
     guard: &ExclusiveGuard,
     universal_root: &Path,
     skill: &SkillName,
     files: &[crate::dto::InstallFile],
-) -> Result<(), CoreError> {
+) -> Result<UpdatedCopy, CoreError> {
     let fs = rt.ports.fs.clone();
     ops_install::ensure_journal_root(rt, guard, fs.as_ref())?;
     let journal_root = ops_install::journal_root(&rt.scope.home.lexical);
@@ -477,6 +483,8 @@ fn update_copy(
         .collect();
     let staged = fsops::stage_files(&root, &plan, &contents)
         .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
+    let hash = crate::ops::skill_content_hash(fs.as_ref(), ctx, staged.path())?;
+    let fingerprint = fingerprint_path(fs.as_ref(), staged.path())?;
     let final_name = Path::new(&skill.0);
     // Same directory the doctor prune and check sweep, not a
     // update-specific name: a quarantine folder the prune never sees would
@@ -486,7 +494,10 @@ fn update_copy(
         .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
     plan.finish(PlanStatus::Done)
         .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()))?;
-    Ok(())
+    Ok(UpdatedCopy {
+        content_hash: hash,
+        fingerprint,
+    })
 }
 
 /// `Copy` only: both registry documents `write_copy_registry` will later
@@ -613,7 +624,14 @@ fn update_write(
     let fs = rt.ports.fs.as_ref();
     match req.method {
         InstallMethod::Copy => {
-            update_copy(rt, &session.guard, universal_root, &req.skill, &req.files)?;
+            update_copy(
+                rt,
+                ctx,
+                &session.guard,
+                universal_root,
+                &req.skill,
+                &req.files,
+            )?;
             let content_hash = crate::ops::skill_content_hash(fs, ctx, destination)?;
             let read = copy_registry.ok_or_else(|| {
                 CoreError::new(
@@ -1060,11 +1078,7 @@ fn update_split_copies_body(
         return Ok(outcome);
     };
     let id = rt.ports.ids.next_event_id();
-    let mut backup_targets: Vec<PathBuf> =
-        candidates.iter().map(|(_, path, _)| path.clone()).collect();
-    if req.scope == RootScope::Global && req.lock_folder_hash.is_some() {
-        backup_targets.push(crate::lock_file::lock_file_path(home));
-    }
+    let backup_targets: Vec<PathBuf> = candidates.iter().map(|(_, path, _)| path.clone()).collect();
     let manifest = session
         .store
         .backup_paths(&session.guard, &id, &backup_targets)?;
@@ -1104,14 +1118,17 @@ fn update_split_copies_body(
             backup_dir: Some(manifest.backup_dir),
         },
     )?;
+    let mut expected_posts = BTreeMap::new();
+    let mut lock_undo = None;
     for (copy_id, path, recorded_hash) in &candidates {
         match update_one_split_copy(rt, ctx, &session.guard, req, path, recorded_hash) {
-            Ok(Ok(new_hash)) => {
+            Ok(Ok(updated)) => {
+                expected_posts.insert(path.clone(), updated.fingerprint);
                 if let Some(row) = document
                     .get_mut("copies")
                     .and_then(|copies| copies.get_mut(copy_id))
                 {
-                    row["content_hash"] = serde_json::Value::String(new_hash);
+                    row["content_hash"] = serde_json::Value::String(updated.content_hash);
                 }
                 outcome.updated.push(path.clone());
             }
@@ -1146,27 +1163,21 @@ fn update_split_copies_body(
     // so a partial update keeps offering Update.
     if result.is_ok() && outcome.refused.is_empty() && !outcome.updated.is_empty() {
         if let (Some(hash), RootScope::Global) = (&req.lock_folder_hash, &req.scope) {
-            result = crate::lock_file::set_skill_folder_hash(
+            let path = crate::lock_file::lock_file_path(home);
+            result = crate::lock_file::set_skill_folder_hash_with_undo(
                 &session.guard,
                 fs,
                 &rt.scope,
-                &crate::lock_file::lock_file_path(home),
+                &path,
                 &req.skill.0,
                 hash,
-            );
+            )
+            .map(|edit| {
+                lock_undo = edit;
+            });
         }
     }
-    let lock_path = crate::lock_file::lock_file_path(home);
-    let changed_paths: Vec<_> = backup_targets
-        .iter()
-        .filter(|path| {
-            outcome.updated.contains(path)
-                || (**path == lock_path
-                    && outcome.refused.is_empty()
-                    && !outcome.updated.is_empty())
-        })
-        .cloned()
-        .collect();
+    let changed_paths = outcome.updated.clone();
     session.store.patch_payload(
         &session.guard,
         &id,
@@ -1187,14 +1198,15 @@ fn update_split_copies_body(
     let mut final_inverse = crate::events::restore_backup_inverse(primary, pre, None);
     final_inverse["restore_paths"] = serde_json::json!(changed_paths);
     final_inverse["registry_undo"] = serde_json::json!(registry_after);
+    final_inverse["lock_row_undo"] = serde_json::json!(lock_undo);
     let secondary_post = changed_paths
         .iter()
         .skip(1)
-        .map(|path| (path.clone(), fingerprint_path(fs, path)))
+        .map(|path| (path.clone(), Ok(expected_posts[path].clone())))
         .collect::<Vec<_>>();
     let patch = crate::events::with_secondary_post(final_inverse, &secondary_post);
     session.store.patch_inverse(&session.guard, &id, patch)?;
-    let post = fingerprint_path(fs, primary)?;
+    let post = expected_posts[primary].clone();
     session.store.finish(
         &session.guard,
         &id,
@@ -1218,7 +1230,7 @@ fn update_one_split_copy(
     req: &SplitCopiesUpdate,
     path: &Path,
     recorded_hash: &str,
-) -> Result<Result<String, String>, CoreError> {
+) -> Result<Result<UpdatedCopy, String>, CoreError> {
     let fs = rt.ports.fs.as_ref();
     if crate::ops::skill_content_hash(fs, ctx, path)? != recorded_hash {
         return Ok(Err(
@@ -1228,8 +1240,9 @@ fn update_one_split_copy(
     let Some(root) = path.parent() else {
         return Ok(Err("this copy has no parent folder".to_string()));
     };
-    update_copy(rt, guard, root, &req.skill, &req.files)?;
-    Ok(Ok(crate::ops::skill_content_hash(fs, ctx, path)?))
+    Ok(Ok(update_copy(
+        rt, ctx, guard, root, &req.skill, &req.files,
+    )?))
 }
 
 /// Runs [`update`] once per entry in `requests`, each its own journal row

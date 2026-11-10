@@ -4498,6 +4498,21 @@ fn restore_event_body(
             }
         }
         crate::ops_install::check_registry_drift(fs, inverse)?;
+        if let Some(edit) = inverse.get("lock_row_undo").filter(|v| !v.is_null()) {
+            let lock = crate::lock_file::lock_file_path(&rt.scope.home.lexical);
+            let live = crate::lock_file::read_lock_entry_value(
+                fs,
+                &lock,
+                edit["skill"].as_str().unwrap_or_default(),
+            )?;
+            if live.as_ref().unwrap_or(&serde_json::Value::Null) != &edit["expected"] {
+                return Err(CoreError::new(
+                    ErrorCode::DriftConflict,
+                    "the updated lock row changed; pass force to restore anyway",
+                )
+                .at(lock));
+            }
+        }
     }
     let mut write_back_plans: Vec<(PathBuf, RestorePlan)> = Vec::new();
     if !write_back.is_empty() {
@@ -4738,6 +4753,17 @@ fn restore_event_body(
             ));
         }
         restore_inverse["registry_undo"] = serde_json::json!(mirror);
+    }
+    if let Some(edit) = inverse.get("lock_row_undo").filter(|v| !v.is_null()) {
+        let lock = crate::lock_file::lock_file_path(&rt.scope.home.lexical);
+        let live = crate::lock_file::read_lock_entry_value(
+            fs,
+            &lock,
+            edit["skill"].as_str().unwrap_or_default(),
+        )?;
+        restore_inverse["lock_row_undo"] = serde_json::json!({
+            "skill": edit["skill"], "previous": live, "expected": edit["previous"]
+        });
     }
     let draft = crate::events::EventDraft {
         kind: crate::events::EventKind::Restore,
@@ -5058,9 +5084,15 @@ fn restore_event_body(
         }
     }
 
-    // An install's registry writes (`copies` entries, saved preferences),
-    // put back the same best-effort way as the lock row above.
+    if let Some(edit) = inverse.get("lock_row_undo").filter(|v| !v.is_null()) {
+        if crate::lock_file::restore_updated_row(&session.guard, fs, &rt.scope, edit, req.force)
+            .is_err()
+        {
+            unrestored.push(crate::lock_file::lock_file_path(&rt.scope.home.lexical));
+        }
+    }
     if let Err(error) = crate::ops_install::restore_registry(&session.guard, fs, inverse) {
+        unrestored.push(crate::ops_install::registry_path(&rt.scope.home.lexical));
         let _ = session.store.patch_payload(
             &session.guard,
             &restore_id,

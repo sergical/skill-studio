@@ -10,6 +10,7 @@ pub struct EditOnRead {
     pub backups: PathBuf,
     pub bytes: Vec<u8>,
     pub reads: AtomicUsize,
+    pub after_v2: Option<PathBuf>,
 }
 impl ScopeFs for EditOnRead {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
@@ -31,7 +32,14 @@ impl ScopeFs for EditOnRead {
         RealFs::new().read_capped(path, max_bytes)
     }
     fn read_prefix(&self, path: &Path, limit: u64) -> io::Result<(Vec<u8>, bool)> {
-        if path == self.path
+        if self.after_v2.as_ref().is_some_and(|gate| {
+            std::fs::read_to_string(gate).is_ok_and(|text| text.contains("Body at v2"))
+        }) && self.reads.fetch_add(1, Ordering::SeqCst) == 0
+        {
+            std::fs::write(&self.path, &self.bytes)?;
+        }
+        if self.after_v2.is_none()
+            && path == self.path
             && std::fs::read_dir(&self.backups)?.count() >= 2
             && self.reads.fetch_add(1, Ordering::SeqCst) == 0
         {

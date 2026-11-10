@@ -396,7 +396,7 @@ fn updating_split_copies_records_an_undo_that_restores_files_and_registry_or_lea
     let lock_path = home.join(".agents/.skill-lock.json");
     let updated_lock = std::fs::read(&lock_path).unwrap();
     let mut other_install = read_lock(&home);
-    other_install["another_install"] = serde_json::json!(true);
+    other_install["skills"]["gamma"]["skillFolderHash"] = serde_json::json!("edited");
     std::fs::write(&lock_path, other_install.to_string()).unwrap();
     let refused = ops::restore_event(&rt, &ctx(), &restore).unwrap_err();
     assert_eq!(
@@ -445,6 +445,7 @@ fn split_update_then_undo_keeps_a_copy_edited_after_backup_or_overwrites_the_ref
         backups: home.join(".history/backups"),
         bytes: edited.clone(),
         reads: Default::default(),
+        after_v2: None,
     };
     let rt = runtime_with(&home, Arc::new(fs));
     let outcome = ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
@@ -496,5 +497,130 @@ fn split_update_undo_redo_allows_the_next_update_or_the_registry_hash_refuses_un
         "redo left stale registry hashes: {next:?}"
     );
     assert_eq!(next.updated.len(), 3);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn split_update_undo_refuses_an_edit_while_other_copies_finish_or_overwrites_user_bytes() {
+    let home = split_home("split_late_edit");
+    let path = copy_of(&home, ".claude/skills").join("SKILL.md");
+    let edited = skill_md("editor");
+    let fs = edit_on_read::EditOnRead {
+        path: path.clone(),
+        backups: home.join(".history/backups"),
+        bytes: edited.clone(),
+        reads: Default::default(),
+        after_v2: Some(path.clone()),
+    };
+    let rt = runtime_with(&home, Arc::new(fs));
+    assert_eq!(
+        ops::update_split_copies(&rt, &ctx(), &v2())
+            .unwrap()
+            .updated
+            .len(),
+        3
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        edited,
+        "late edit was not injected"
+    );
+    let error = ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: latest_update(&rt),
+            force: false,
+        },
+    )
+    .expect_err("Undo overwrote a late user edit");
+    assert_eq!(
+        error.code,
+        skill_studio_core::error::ErrorCode::DriftConflict
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), edited);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn split_update_undo_preserves_an_install_added_during_update_or_deletes_its_lock_row() {
+    let home = split_home("split_concurrent_install");
+    let mut installed = lock_doc();
+    installed["skills"]["other"] =
+        serde_json::json!({"source": "other/repo", "skillFolderHash": "other-hash"});
+    let fs = edit_on_read::EditOnRead {
+        path: home.join(".agents/.skill-lock.json"),
+        backups: home.join(".history/backups"),
+        bytes: serde_json::to_vec(&installed).unwrap(),
+        reads: Default::default(),
+        after_v2: Some(copy_of(&home, ".claude/skills").join("SKILL.md")),
+    };
+    let rt = runtime_with(&home, Arc::new(fs));
+    ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+    assert_eq!(
+        read_lock(&home)["skills"]["other"],
+        installed["skills"]["other"]
+    );
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: latest_update(&rt),
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        read_lock(&home),
+        installed,
+        "Undo deleted another install's lock row"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn split_update_undo_reports_registry_write_failure_and_force_retry_finishes_or_reports_false_success(
+) {
+    let home = split_home("split_registry_retry");
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+    let mut request = v2();
+    request.lock_folder_hash = None;
+    ops::update_split_copies(&rt, &ctx(), &request).unwrap();
+    let event_id = latest_update(&rt);
+    let failing = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let failed_rt = runtime_with(&home, failing.clone());
+    failing.fail_next_write_atomic();
+    let error = ops::restore_event(
+        &failed_rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: event_id.clone(),
+            force: false,
+        },
+    )
+    .expect_err("Undo reported success after the registry write failed");
+    assert_eq!(error.code, skill_studio_core::error::ErrorCode::Io);
+    let events = ops::list_events(&rt, &ctx(), &Default::default()).unwrap();
+    assert!(events
+        .iter()
+        .any(|e| e.kind == "restore" && e.status == "failed"));
+    for dir in HARNESS_DIRS {
+        assert_eq!(revision_of(&copy_of(&home, dir)), Some("v1"));
+    }
+    let undo = ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id,
+            force: true,
+        },
+    )
+    .unwrap();
+    let next = ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+    assert!(
+        next.refused.is_empty(),
+        "retry left stale registry hashes: {next:?}"
+    );
+    assert!(!undo.restore_event_id.0.is_empty());
     std::fs::remove_dir_all(home).unwrap();
 }

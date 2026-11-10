@@ -186,9 +186,20 @@ pub fn set_skill_folder_hash(
     skill_name: &str,
     hash: &str,
 ) -> Result<(), CoreError> {
+    set_skill_folder_hash_with_undo(guard, fs, scope, path, skill_name, hash).map(|_| ())
+}
+
+pub(crate) fn set_skill_folder_hash_with_undo(
+    guard: &ExclusiveGuard,
+    fs: &dyn ScopeFs,
+    scope: &NormalizedScope,
+    path: &Path,
+    skill_name: &str,
+    hash: &str,
+) -> Result<Option<serde_json::Value>, CoreError> {
     let bytes = match fs.read_capped(path, LOCK_FILE_MAX_BYTES) {
         Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(CoreError::io(path, e)),
     };
     let mut doc: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
@@ -199,13 +210,18 @@ pub fn set_skill_folder_hash(
         .and_then(|skills| skills.get_mut(skill_name))
         .and_then(serde_json::Value::as_object_mut)
     else {
-        return Ok(());
+        return Ok(None);
     };
+    let previous = serde_json::Value::Object(row.clone());
     row.insert(
         "skillFolderHash".to_string(),
         serde_json::Value::String(hash.to_string()),
     );
-    write_lock_document(guard, fs, scope, path, &doc)
+    let expected = serde_json::Value::Object(row.clone());
+    write_lock_document(guard, fs, scope, path, &doc)?;
+    Ok(Some(
+        serde_json::json!({ "skill": skill_name, "previous": previous, "expected": expected }),
+    ))
 }
 
 /// Serializes `doc` the way `npx skills` does and writes it atomically.
@@ -345,6 +361,41 @@ fn newest_modified(fs: &dyn ScopeFs, dir: &Path) -> Option<chrono::DateTime<chro
         newest = newest.max(modified);
     }
     newest
+}
+
+pub(crate) fn restore_updated_row(
+    guard: &ExclusiveGuard,
+    fs: &dyn ScopeFs,
+    scope: &NormalizedScope,
+    edit: &serde_json::Value,
+    force: bool,
+) -> Result<(), CoreError> {
+    let path = lock_file_path(&scope.home.lexical);
+    let skill = edit["skill"]
+        .as_str()
+        .ok_or_else(|| CoreError::new(ErrorCode::InvalidRequest, "missing lock skill"))?;
+    let bytes = fs
+        .read_capped(&path, LOCK_FILE_MAX_BYTES)
+        .map_err(|e| CoreError::io(&path, e))?;
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()))?;
+    let rows = doc
+        .get_mut("skills")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| CoreError::new(ErrorCode::Io, "missing lock rows"))?;
+    if !force && rows.get(skill).unwrap_or(&serde_json::Value::Null) != &edit["expected"] {
+        return Err(CoreError::new(
+            ErrorCode::DriftConflict,
+            "the updated lock row changed; pass force to restore anyway",
+        )
+        .at(&path));
+    }
+    if edit["previous"].is_null() {
+        rows.remove(skill);
+    } else {
+        rows.insert(skill.to_string(), edit["previous"].clone());
+    }
+    write_lock_document(guard, fs, scope, &path, &doc)
 }
 
 #[cfg(test)]
