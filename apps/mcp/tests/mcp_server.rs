@@ -649,7 +649,6 @@ async fn the_unpark_tool_puts_a_parked_skill_and_its_link_back_or_names_the_enve
     let (_home_dir, home) = live_home();
     let park = run_cli(&[
         "park",
-        "turn_off_for_agent",
         "--home",
         home.to_str().unwrap(),
         "--deployment-id",
@@ -1049,6 +1048,7 @@ const WRITE_TOOLS: &[&str] = &[
     "remove",
     "add",
     "park",
+    "turn_off_for_agent",
     "split",
     "unpark",
 ];

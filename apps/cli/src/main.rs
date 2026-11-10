@@ -2131,10 +2131,10 @@ fn run_turn_off(
     use skill_studio_core::dto::{AgentOffCheck, AgentOffOutcome, AgentOffRequest};
     use skill_studio_core::ops_agent_off;
     let operation = Operation::TurnOffForAgent;
-    let rt = if mode != TurnOffMode::Apply {
-        build_runtime::<AgentOffCheck>(scope, operation, json)
-    } else {
+    let rt = if mode == TurnOffMode::Apply {
         build_runtime_write::<AgentOffOutcome>(scope, operation, json)
+    } else {
+        build_runtime::<AgentOffCheck>(scope, operation, json)
     };
     let rt = match rt {
         Ok(rt) => rt,
