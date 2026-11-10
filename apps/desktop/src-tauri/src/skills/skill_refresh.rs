@@ -221,22 +221,13 @@ fn hour_key(now: DateTime<Utc>) -> (NaiveDate, u32) {
 pub fn init(app: &AppHandle) -> SkillRefreshState {
     let writable = super::data_folder_status::data_folder_writable(app);
     let cache_path = invocation_cache_path(app);
-    let invocation_index = if writable {
-        // Best-effort cleanup of the pre-rename cache file this replaced; a
-        // fresh index is rebuilt from the transcripts either way, so a
-        // failure here (e.g. it never existed) is not worth surfacing.
-        let _ = std::fs::remove_file(cache_path.with_file_name("skill-invocations.json"));
-        SkillInvocationIndex::load_or_empty(&cache_path)
-    } else {
-        SkillInvocationIndex::default()
-    };
 
     let state = SkillRefreshState {
         snapshot: Arc::new(RwLock::new(None)),
         rebuild_lock: Arc::new(Mutex::new(())),
         skills_dirty: Arc::new(AtomicBool::new(false)),
         invocations_dirty: Arc::new(AtomicBool::new(false)),
-        invocation_index: Arc::new(Mutex::new(invocation_index)),
+        invocation_index: Arc::new(Mutex::new(SkillInvocationIndex::default())),
         last_built_hour: Arc::new(Mutex::new(None)),
         cache_path,
         runs_root: app
@@ -255,10 +246,32 @@ pub fn init(app: &AppHandle) -> SkillRefreshState {
     if writable {
         let app_handle = app.clone();
         let loop_state = state.clone();
-        std::thread::spawn(move || run_refresh_loop(app_handle, loop_state));
+        spawn_refresh_initialization(
+            loop_state,
+            |path| {
+                let _ = std::fs::remove_file(path.with_file_name("skill-invocations.json"));
+                SkillInvocationIndex::load_or_empty(path)
+            },
+            move |state| run_refresh_loop(app_handle, state),
+        );
     }
 
     state
+}
+
+fn spawn_refresh_initialization(
+    state: SkillRefreshState,
+    load: impl FnOnce(&Path) -> SkillInvocationIndex + Send + 'static,
+    run: impl FnOnce(SkillRefreshState) + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let index = load(&state.cache_path);
+        *state
+            .invocation_index
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = index;
+        run(state);
+    })
 }
 
 /// Instant read of the current snapshot from managed state.
@@ -1173,9 +1186,9 @@ pub(crate) fn rebuild_invocations_at(
         .map_err(|e| format!("invocation index lock poisoned: {e}"))?;
     before_indexing();
     let report = invocation_index.refresh(home, &sources);
-    if let Err(e) = invocation_index.save(&state.cache_path) {
-        eprintln!("skill refresh: failed to save invocation cache: {e}");
-    }
+    let persistence = invocation_index
+        .save(&state.cache_path)
+        .map_err(|error| format!("failed to save invocation cache: {error}"));
 
     // Captured once and threaded through stats/heatmap/scanned_at/mark_built_at
     // below, so a rebuild that straddles an hour boundary doesn't record the
@@ -1203,11 +1216,11 @@ pub(crate) fn rebuild_invocations_at(
             .read()
             .map_err(|e| format!("snapshot lock poisoned: {e}"))?;
         let Some(snapshot) = guard.as_ref() else {
-            return Ok(()); // the snapshot was cleared between the two reads above
+            return persistence; // the snapshot was cleared between the two reads above
         };
         if snapshot.revision != revision {
             state.invocations_dirty.store(true, Ordering::SeqCst);
-            return Ok(());
+            return persistence;
         }
         let mut built = snapshot.clone();
         built.invocations = invocations;
@@ -1218,7 +1231,7 @@ pub(crate) fn rebuild_invocations_at(
     let built = store_skill_snapshot(state, built)?;
     publish(&built)?;
     state.mark_built_at(now);
-    Ok(())
+    persistence
 }
 
 /// True when `path` is inside `snapshot`: it canonicalizes to the same path
@@ -4488,6 +4501,79 @@ mod tests {
             runs_root: PathBuf::from("/dev/null"),
             update_check_path: PathBuf::from("/dev/null"),
         }
+    }
+
+    #[test]
+    fn startup_returns_with_empty_state_before_cache_load_or_blocks_setup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut state = fixture_state();
+        state.cache_path = tmp.path().join("invocations.json");
+        let setup_thread = std::thread::current().id();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (ran_tx, ran_rx) = mpsc::channel();
+        let worker = spawn_refresh_initialization(
+            state.clone(),
+            move |_| {
+                assert_ne!(std::thread::current().id(), setup_thread);
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                SkillInvocationIndex::default()
+            },
+            move |_| ran_tx.send(()).unwrap(),
+        );
+        entered_rx.recv().unwrap();
+        assert!(state.snapshot.read().unwrap().is_none());
+        assert!(state.invocation_index.try_lock().is_ok());
+        assert!(ran_rx.try_recv().is_err());
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+        ran_rx.recv().unwrap();
+    }
+
+    #[test]
+    fn invocation_refresh_publishes_results_and_failure_when_cache_write_fails_or_reports_healthy()
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let blocked = tmp.path().join("blocked");
+        std::fs::write(&blocked, "not a directory").unwrap();
+        let mut state = fixture_state();
+        state.cache_path = blocked.join("invocations.json");
+        store_skill_snapshot(&state, fixture_snapshot(&home)).unwrap();
+        let background = super::super::background_work::BackgroundState::default();
+        let events = Mutex::new(Vec::new());
+        let mut published = None;
+        let result = background.run(
+            super::super::background_work::BackgroundWorker::Invocations,
+            || {
+                rebuild_invocations_at(
+                    &home,
+                    &state,
+                    || {},
+                    |snapshot| {
+                        published = Some(snapshot.clone());
+                        Ok(())
+                    },
+                )
+            },
+            |status| events.lock().unwrap().push(status.clone()),
+        );
+        assert!(result
+            .unwrap_err()
+            .contains("failed to save invocation cache"));
+        let published = published.unwrap();
+        assert_eq!(published.revision, 2);
+        assert_eq!(state.snapshot.read().unwrap().as_ref().unwrap().revision, 2);
+        let events = events.lock().unwrap();
+        let finished = &events.last().unwrap().tasks[1];
+        assert!(!finished.running);
+        assert!(finished
+            .last_error
+            .as_ref()
+            .unwrap()
+            .contains("failed to save invocation cache"));
     }
 
     fn quiet_tick() -> RefreshTick {

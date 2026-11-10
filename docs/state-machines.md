@@ -74,3 +74,12 @@ stored as a second flag. A successful finish clears the last error.
 `overlapping_runs_keep_the_worker_running_until_both_finish_or_hide_the_remaining_scan`
 and `background_failure_exposes_its_run_and_error_and_a_later_success_clears_it_or_leaves_stale_health`
 cover these moves. Each update advances the status revision.
+
+Unreadable update sources keep cached owners under the affected roots and finish
+with an error. Invocation cache write failures publish usable memory results and
+finish with an error. Startup begins with an empty snapshot and invocation index;
+the refresh thread loads the cache before its first scan.
+`unreadable_sources_keep_cached_owners_and_report_failure_or_erase_commits`,
+`invocation_refresh_publishes_results_and_failure_when_cache_write_fails_or_reports_healthy`,
+and `startup_returns_with_empty_state_before_cache_load_or_blocks_setup` guard
+these failure and startup paths.

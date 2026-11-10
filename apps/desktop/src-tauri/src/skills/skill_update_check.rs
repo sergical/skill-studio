@@ -979,6 +979,7 @@ struct Sources {
     /// lock, ledger, or fork registry file exists but could not be read. Both
     /// lists may miss that root's skills, so its notes must not be pruned.
     failed_roots: Vec<String>,
+    errors: Vec<String>,
 }
 
 impl Sources {
@@ -1052,13 +1053,14 @@ impl Sources {
 /// and plugin skills have no ledger entry, so they're never candidates.
 fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
     let mut failed_roots: Vec<String> = Vec::new();
+    let mut errors = Vec::new();
     // A fork's `base_commit` is the pinned "installed" side of the compare -
     // exactly the shape `CandidateKind::Dotagents` already models - and a
     // fork wins over a same-named ledger entry, same as dotagents wins over
     // skills.sh: it's the more specific, more recently established source.
     let mut registry_failed = false;
     let fork_registry = super::skill_fork_registry::read_fork_registry(home).unwrap_or_else(|e| {
-        eprintln!("skill fork registry: {e}");
+        errors.push(format!("Failed to read update sources: {e}"));
         failed_roots.push("owner:v1/global/".to_string());
         registry_failed = true;
         Default::default()
@@ -1086,6 +1088,12 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
     for ledger in load_ownership_ledgers(home, project_paths) {
         if ledger.lock_failed || ledger.ledger_failed {
             failed_roots.push(owner_id_for(&ledger, ""));
+            errors.push(format!(
+                "Failed to read update sources under {} (skills lock: {}, ownership ledger: {})",
+                ledger.agents_dir.display(),
+                ledger.lock_failed,
+                ledger.ledger_failed,
+            ));
         }
         let owner_id = |name: &str| owner_id_for(&ledger, name);
         let global_fork = ledger.scope == InstallScope::Global;
@@ -1189,6 +1197,7 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
         fork_candidates,
         resolved_owners,
         failed_roots,
+        errors,
     }
 }
 
@@ -1324,6 +1333,7 @@ struct UpdateCheckOutcome {
     store: UpdateCheckStore,
     persistence_error: Option<String>,
     fork_errors: Vec<String>,
+    source_errors: Vec<String>,
 }
 
 /// Build owner candidates, optionally filter by owner ID, check them in a
@@ -1414,13 +1424,19 @@ fn run_update_check_impl(
     let computed = computed
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let owners = if only_owner_ids.is_some() {
+    let mut owners = if only_owner_ids.is_some() {
         let mut merged = previous.owners.clone();
         merged.extend(computed);
         merged
     } else {
         computed
     };
+
+    for (id, cached) in &previous.owners {
+        if sources.in_failed_root(id) {
+            owners.entry(id.clone()).or_insert_with(|| cached.clone());
+        }
+    }
 
     let upstream_ahead = match upstream_ahead {
         Some(fresh) if gh_status == GhStatus::Ok => fresh,
@@ -1439,6 +1455,7 @@ fn run_update_check_impl(
         store,
         persistence_error,
         fork_errors: Vec::new(),
+        source_errors: sources.errors,
     }
 }
 
@@ -1511,6 +1528,7 @@ fn run_update_check_with_forks(
         upstream_ahead,
     );
     outcome.fork_errors = fork_errors;
+    outcome.source_errors.extend(sources.errors);
     outcome
 }
 
@@ -1537,6 +1555,7 @@ fn write_gh_missing_store(
         store,
         persistence_error,
         fork_errors: Vec::new(),
+        source_errors: sources.errors,
     }
 }
 
@@ -1616,6 +1635,7 @@ fn update_check_result(outcome: &UpdateCheckOutcome) -> Result<UpdateCheckSummar
     }
     errors.extend(outcome.persistence_error.iter().cloned());
     errors.extend(outcome.fork_errors.iter().cloned());
+    errors.extend(outcome.source_errors.iter().cloned());
     errors.sort();
     errors.dedup();
     if errors.is_empty() {
@@ -2591,6 +2611,94 @@ resolved_commit = "{commit}"
             Some(previous_latest.as_str())
         );
         assert_eq!(state.error.as_deref(), Some("network unreachable"));
+    }
+
+    #[test]
+    fn unreadable_sources_keep_cached_owners_and_report_failure_or_erase_commits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_data = tmp.path().join("data");
+        let commit = "a".repeat(40);
+        write_agents_lock(
+            &home,
+            "find-bugs",
+            "getsentry/find-bugs",
+            "skills/find-bugs",
+            &commit,
+        );
+
+        let previous_latest = "b".repeat(40);
+        let seeded = UpdateCheckStore {
+            version: update_store_version(),
+            checked_at: Some("2026-01-01T00:00:00Z".to_string()),
+            gh_status: GhStatus::Ok,
+            owners: BTreeMap::from([(
+                "owner:v1/global/find-bugs".to_string(),
+                SkillUpdateState {
+                    repo: "getsentry/find-bugs".to_string(),
+                    path: "skills/find-bugs".to_string(),
+                    installed_commit: Some(commit.clone()),
+                    latest_commit: Some(previous_latest.clone()),
+                    latest_commit_at: Some("2026-01-01T00:00:00Z".to_string()),
+                    checked_at: "2026-01-01T00:00:00Z".to_string(),
+                    error: None,
+                },
+            )]),
+            upstream_ahead: BTreeMap::new(),
+            legacy_skills: BTreeMap::new(),
+        };
+        write_store(&app_data, &seeded).unwrap();
+
+        for source in ["skill-studio.json", "agents.lock"] {
+            write_store(&app_data, &seeded).unwrap();
+            let source_path = home.join(".agents").join(source);
+            let original = std::fs::read(&source_path).ok();
+            std::fs::write(&source_path, "malformed").unwrap();
+            let lookup = FakeLookup::default();
+            let background = super::super::background_work::BackgroundState::default();
+            let events = Mutex::new(Vec::new());
+            let result = background.run(
+                super::super::background_work::BackgroundWorker::UpdateCheck,
+                || {
+                    update_check_result(&run_update_check_impl(
+                        &home,
+                        &[],
+                        &app_data,
+                        &lookup,
+                        &UnusedTreeLookup,
+                        None,
+                        None,
+                    ))
+                },
+                |status| events.lock().unwrap().push(status.clone()),
+            );
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("Failed to read update sources"),
+                "{source}"
+            );
+            let store = read_update_check_store(&app_data);
+            let owner = store.owners.get("owner:v1/global/find-bugs").unwrap();
+            assert_eq!(
+                owner.latest_commit.as_deref(),
+                Some(previous_latest.as_str()),
+                "{source}"
+            );
+            let events = events.lock().unwrap();
+            let finished = &events.last().unwrap().tasks[2];
+            assert!(!finished.running);
+            assert!(finished
+                .last_error
+                .as_ref()
+                .unwrap()
+                .contains("Failed to read update sources"));
+            if let Some(original) = original {
+                std::fs::write(&source_path, original).unwrap();
+            } else {
+                std::fs::remove_file(&source_path).unwrap();
+            }
+        }
     }
 
     /// Flow: a skill upgraded since the previous check (its `agents.lock`
