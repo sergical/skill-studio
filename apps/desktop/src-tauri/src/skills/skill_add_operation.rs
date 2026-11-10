@@ -1319,7 +1319,7 @@ mod tests {
             registry.preferred_editor = Some("Cursor".to_string());
             writer_ready.wait();
             writer_release.wait();
-            super::super::skill_fork_registry::write_fork_registry(&writer_home, &registry)
+            super::super::skill_fork_registry::write_fork_registry(&writer_home, &mut registry)
                 .unwrap();
         });
         ready.wait();

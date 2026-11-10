@@ -151,7 +151,7 @@ fn save_harnesses_choice_at(
     let mut registry = super::skill_fork_registry::read_fork_registry(home)?;
     registry.harnesses = Some(choice);
     registry.telemetry_enabled = telemetry_enabled;
-    super::skill_fork_registry::write_fork_registry_locked(&guard, home, &registry)?;
+    super::skill_fork_registry::write_fork_registry_locked(&guard, home, &mut registry)?;
     consent.set(skill_studio_host::telemetry::resolve_consent(
         env_override,
         telemetry_enabled,
@@ -282,7 +282,7 @@ mod tests {
             search_project_folders: true,
             saved_at: "2026-09-18T00:00:00Z".to_string(),
         });
-        super::super::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+        super::super::skill_fork_registry::write_fork_registry(&home, &mut registry).unwrap();
 
         let reloaded = super::super::skill_fork_registry::read_fork_registry(&home).unwrap();
         assert_eq!(

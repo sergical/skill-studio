@@ -350,16 +350,14 @@ fn drop_home_directory_from_batch(paths: Vec<String>, home: &Path) -> Vec<String
 fn update_registry_section<T: Clone + PartialEq>(
     home: &Path,
     section: fn(&mut ForkRegistry) -> &mut T,
-    change: impl FnOnce(&mut T),
+    mut change: impl FnMut(&mut T),
 ) -> Result<(T, bool), String> {
-    let mut registry = super::skill_fork_registry::read_fork_registry(home)?;
-    let before = section(&mut registry).clone();
-    change(section(&mut registry));
-    let changed = *section(&mut registry) != before;
-    if changed {
-        super::skill_fork_registry::write_fork_registry(home, &registry)?;
-    }
-    Ok((section(&mut registry).clone(), changed))
+    super::skill_fork_registry::update_fork_registry(home, |registry| {
+        let before = section(registry).clone();
+        change(section(registry));
+        let changed = *section(registry) != before;
+        (section(registry).clone(), changed)
+    })
 }
 
 /// The saved project lists, straight off disk - unlike the other three
@@ -413,7 +411,7 @@ pub async fn register_skill_projects(
         let (projects, changed) = update_registry_section(
             &home,
             |registry| &mut registry.projects,
-            |tracked| tracked.track(to_save),
+            |tracked| tracked.track(to_save.clone()),
         )?;
         if changed {
             state.mark_skills_dirty();
@@ -494,7 +492,7 @@ pub async fn import_tracked_projects(
             &home,
             |registry| &mut registry.projects,
             |tracked| {
-                tracked.track(added.into_iter().map(PathBuf::from));
+                tracked.track(added.iter().map(|path| PathBuf::from(path.as_str())));
                 for path in &excluded {
                     tracked.untrack(Path::new(path));
                 }
@@ -2752,13 +2750,13 @@ mod tests {
         let mut registry = super::super::skill_fork_registry::read_fork_registry(home).unwrap();
         registry.projects.added = added.to_vec();
         registry.projects.excluded = excluded.to_vec();
-        super::super::skill_fork_registry::write_fork_registry(home, &registry).unwrap();
+        super::super::skill_fork_registry::write_fork_registry(home, &mut registry).unwrap();
     }
 
     /// `update_registry_section` on the `projects` field.
     fn update_tracked_projects(
         home: &Path,
-        change: impl FnOnce(&mut TrackedProjects),
+        change: impl FnMut(&mut TrackedProjects),
     ) -> Result<(TrackedProjects, bool), String> {
         update_registry_section(home, |registry| &mut registry.projects, change)
     }
@@ -3592,7 +3590,7 @@ mod tests {
             },
         );
         registry.projects.added = vec![project.clone()];
-        super::super::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+        super::super::skill_fork_registry::write_fork_registry(&home, &mut registry).unwrap();
 
         let mut invocation_index = SkillInvocationIndex::default();
         let cache_path = tmp.path().join("cache.json");
@@ -4171,7 +4169,7 @@ mod tests {
         update_tracked_projects(&home, |tracked| tracked.track([project.clone()])).unwrap();
 
         let (_, changed) =
-            update_tracked_projects(&home, |tracked| tracked.track([project])).unwrap();
+            update_tracked_projects(&home, |tracked| tracked.track([project.clone()])).unwrap();
 
         assert!(!changed);
     }
@@ -5674,7 +5672,7 @@ mod tests {
                 }
             }),
         );
-        super::super::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+        super::super::skill_fork_registry::write_fork_registry(&home, &mut registry).unwrap();
 
         let mut invocation_index = SkillInvocationIndex::default();
         let (snapshot, _report) = build_snapshot(
