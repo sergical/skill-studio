@@ -2775,8 +2775,8 @@ mod tests {
         // a real `dotagents remove` / `npx skills remove` would.
         struct DeletingLedger;
         impl LedgerTool for DeletingLedger {
-            fn remove(&self, home: &Path, _tool: OriginTool, _name: &str) -> Result<(), String> {
-                fs::remove_dir_all(home.join(".agents/skills").join(_name)).unwrap();
+            fn remove(&self, home: &Path, _tool: OriginTool, name: &str) -> Result<(), String> {
+                fs::remove_dir_all(home.join(".agents/skills").join(name)).unwrap();
                 Ok(())
             }
             fn reinstall(&self, _rec: &ForkRecord, _name: &str) -> Result<(), String> {
