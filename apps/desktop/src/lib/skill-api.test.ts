@@ -65,7 +65,6 @@ const EXPECTED_WRAPPER_COMMANDS = {
   getBackgroundStatus: {
     kind: "command",
     command: "get_background_status",
-    registeredInLibRs: true,
   },
   onBackgroundStatus: { kind: "event", event: "skills://background-status" },
   getDiscoverySources: {
