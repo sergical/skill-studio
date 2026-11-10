@@ -202,7 +202,6 @@ function AppView({ runId, announce, undoFocusRef }: AppViewProps) {
     return () => timers.forEach((t) => window.clearTimeout(t));
   }, [runId]);
 
-  let seen = 0;
   return (
     <div {...stylex.props(styles.app)}>
       <div {...stylex.props(styles.appHead)}>
@@ -210,8 +209,9 @@ function AppView({ runId, announce, undoFocusRef }: AppViewProps) {
         <span {...stylex.props(styles.appCount)}>{unusedCount - parked} to review</span>
       </div>
       <ul {...stylex.props(styles.appList)}>
-        {appRows.map((row) => {
-          const isParked = row.unused && seen++ < parked;
+        {appRows.map((row, index) => {
+          const unusedBefore = appRows.slice(0, index).filter((item) => item.unused).length;
+          const isParked = row.unused && unusedBefore < parked;
           return (
             <li key={row.name} {...stylex.props(styles.appRow, isParked && styles.appRowParked)}>
               <span
