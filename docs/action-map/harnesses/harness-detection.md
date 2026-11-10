@@ -106,3 +106,9 @@ Both are in the app's agent list for install targets but are not first-class Act
 - OpenCode rows marked "confirm v2" need the v2 docs page from sources.md.
 - Grok Build binary name and config folder.
 - The Codex desktop version signal when Codex ships as a standalone app rather than inside ChatGPT.app.
+
+## Current process adapter
+
+`RealProcessSpawner` forwards cancellation and kills the probe's process group when execution stops. Reader waits are bounded after timeout and normal exit. Version probes use the two-second execution budget from core.
+
+Successful `--version` output is cached by invocation path, resolved target, size, and mtime. Keeping the invocation path preserves shim names. Retargeting a shim invalidates its entry even when size and mtime match. Failed and timed-out probes are retried. The default cache stays in memory. `with_probe_cache` opts into a bounded app-owned cache file; it writes no agent folder.
