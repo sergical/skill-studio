@@ -436,7 +436,8 @@ pub fn recover_interrupted(
     let mut report = RecoveryReport::default();
     // The releases come first: a crash before the flip leaves the row
     // `pending`, so the next pass flips it.
-    for row in store.retained_lock_captures()? {
+    for mut row in store.retained_lock_captures()? {
+        crate::ops_dotagents_history::journal_capture(fs, guard, store, &mut row)?;
         crate::ops_dotagents_history::check_completed_capture(fs, &row)?;
     }
     let pending = store.pending()?;

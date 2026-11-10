@@ -537,7 +537,7 @@ impl HistoryStore for SqliteHistoryStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT r.id, t.id, t.kind, json_extract(r.payload, '$.displaced_agents_lock'), json_extract(r.inverse, '$.dotagents_lock_undo.path'), json_extract(r.payload, '$.agents_lock_publication') FROM events r \
+                "SELECT r.id, t.id, t.kind, json_extract(r.payload, '$.displaced_agents_lock'), COALESCE(json_extract(r.payload, '$.agents_lock_destination'), json_extract(r.inverse, '$.dotagents_lock_undo.path')), json_extract(r.payload, '$.agents_lock_publication') FROM events r \
                  JOIN events t ON t.reverted_by = r.id \
                    AND t.id = json_extract(r.payload, '$.target_event') \
                  WHERE r.kind = 'restore' AND r.status IN ('pending', 'interrupted') \

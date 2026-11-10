@@ -2806,6 +2806,13 @@ fn update_all_reports_skills_a_finished_dotagents_install_covered_after_cancel_o
 mod edit_on_exchange;
 
 fn covered_lock_restore_race(mode: u8) {
+    let unpublished_writer = mode == 14;
+    let symlink_lock = mode == 15 || mode == 16;
+    let mode = match mode {
+        14 | 16 => 3,
+        15 => 0,
+        _ => mode,
+    };
     let recreate = mode == 1;
     let home = unique_temp_dir("update_all_dotagents_undo_one");
     std::fs::create_dir_all(&home).unwrap();
@@ -2925,7 +2932,13 @@ fn covered_lock_restore_race(mode: u8) {
     if mode == 10 {
         std::fs::remove_file(&lock).unwrap();
     }
-    let recovery_writer = (mode == 7)
+    if symlink_lock {
+        let target = home.join("dotfiles/agents.lock");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::rename(&lock, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &lock).unwrap();
+    }
+    let recovery_writer = (mode == 7 || unpublished_writer)
         .then(|| Mutex::new(std::fs::OpenOptions::new().write(true).open(&lock).unwrap()));
     let hooked_fs = Arc::new(edit_on_exchange::EditOnExchange {
         late_write: mode == 9,
@@ -2938,7 +2951,11 @@ fn covered_lock_restore_race(mode: u8) {
             1 => lock.clone(),
             _ => PathBuf::new(),
         },
-        path: lock.clone(),
+        path: if symlink_lock {
+            std::fs::canonicalize(&lock).unwrap()
+        } else {
+            lock.clone()
+        },
         bytes: lock_text("external-delta", "new-other").into_bytes(),
         reads: Default::default(),
         writer: (mode == 2 || mode == 6 || mode == 9)
@@ -3224,6 +3241,11 @@ fn covered_lock_restore_race(mode: u8) {
             assert!(std::fs::read_to_string(&lock)
                 .unwrap()
                 .contains("new-other"));
+            if unpublished_writer {
+                let replacement = lock.with_extension("replacement");
+                std::fs::write(&replacement, std::fs::read(&lock).unwrap()).unwrap();
+                std::fs::rename(replacement, &lock).unwrap();
+            }
             ops::restore_event(
                 &rt,
                 &ctx(),
@@ -3242,6 +3264,23 @@ fn covered_lock_restore_race(mode: u8) {
             assert_eq!(
                 doc["skills"]["delta"]["resolved_commit"].as_str(),
                 Some("new-delta")
+            );
+        }
+        if unpublished_writer {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut writer = recovery_writer.as_ref().unwrap().lock().unwrap();
+            writer.seek(SeekFrom::Start(0)).unwrap();
+            writer.set_len(0).unwrap();
+            writer.write_all(b"late unpublished capture write").unwrap();
+            let error = MutationSession::begin(&rt, &ctx())
+                .err()
+                .expect("unpublished capture escaped drift checks");
+            assert_eq!(error.code, ErrorCode::DriftConflict);
+            let capture = error.path.unwrap();
+            assert!(error.message.contains(capture.to_str().unwrap()));
+            assert_eq!(
+                std::fs::read(capture).unwrap(),
+                b"late unpublished capture write"
             );
         }
         std::fs::remove_dir_all(home).unwrap();
@@ -3284,7 +3323,40 @@ fn covered_lock_restore_race(mode: u8) {
         std::fs::remove_dir_all(home).unwrap();
         return;
     }
-    restored.unwrap();
+    let restored = restored.unwrap();
+    if symlink_lock {
+        drop(MutationSession::begin(&rt, &ctx()).unwrap());
+        assert!(std::fs::symlink_metadata(&lock)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let session = MutationSession::begin(&rt, &ctx()).unwrap();
+        let mut store = rt
+            .ports
+            .history
+            .open(
+                &rt.scope,
+                skill_studio_core::ports::HistoryAccess::ReadWrite,
+            )
+            .unwrap()
+            .unwrap();
+        let event = store.get(&restored.restore_event_id).unwrap().unwrap();
+        let capture = PathBuf::from(event.payload["displaced_agents_lock"].as_str().unwrap());
+        store
+            .patch_payload(
+                &session.guard,
+                &event.id,
+                serde_json::json!({"agents_lock_destination": null}),
+            )
+            .unwrap();
+        drop(store);
+        drop(session);
+        let error = MutationSession::begin(&rt, &ctx()).err().unwrap();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert_eq!(error.path.as_ref(), Some(&capture));
+        std::fs::remove_file(capture).unwrap();
+        drop(MutationSession::begin(&rt, &ctx()).unwrap());
+    }
     let document: toml::Value = toml::from_str(&std::fs::read_to_string(&lock).unwrap()).unwrap();
     assert_eq!(
         document["skills"]["delta"]["resolved_commit"].as_str(),
@@ -3425,4 +3497,16 @@ fn update_all_history_exposes_only_per_skill_undo_or_offers_whole_scope_restore(
 #[test]
 fn covered_undo_at_capture_cap_reports_oldest_file_before_writing_or_grows_without_bound() {
     covered_lock_restore_race(13);
+}
+
+#[test]
+fn covered_undo_capture_crash_recovery_detects_late_descriptor_write_or_skips_unpublished_capture()
+{
+    covered_lock_restore_race(14);
+}
+
+#[test]
+fn covered_undo_after_lock_symlink_conversion_allows_next_mutation_or_blocks_on_capture_path() {
+    covered_lock_restore_race(15);
+    covered_lock_restore_race(16);
 }

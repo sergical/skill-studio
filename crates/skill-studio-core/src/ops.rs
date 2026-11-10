@@ -5063,7 +5063,7 @@ fn restore_event_body(
             session.store.patch_payload(
                 &session.guard,
                 &restore_id,
-                serde_json::json!({ "displaced_agents_lock": displaced }),
+                serde_json::json!({ "displaced_agents_lock": displaced, "agents_lock_destination": scoped.as_path() }),
             )?;
             crate::ops_dotagents_history::commit_restore(
                 rt,

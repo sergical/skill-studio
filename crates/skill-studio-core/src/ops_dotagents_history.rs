@@ -174,6 +174,14 @@ pub(crate) fn commit_restore(
             )
             .map_err(|e| CoreError::io(displaced.as_path(), e))?
         };
+        if !absent {
+            store.patch_payload(guard, event_id, serde_json::json!({
+                "agents_lock_capture": {
+                    "captured": captured,
+                    "captured_identity": fs.fsops_device_inode(displaced.as_path()).map_err(|e| CoreError::io(displaced.as_path(), e))?,
+                }
+            }))?;
+        }
         let mut doc = parse_document(&captured, displaced.as_path())?;
         let undo = &restore.request;
         if row(&doc, &undo.skill, &undo.path)? != undo.expected {
@@ -262,18 +270,71 @@ pub(crate) fn commit_restore(
     Ok(())
 }
 
+pub(crate) fn journal_capture(
+    fs: &dyn ScopeFs,
+    guard: &crate::ports::ExclusiveGuard,
+    store: &mut dyn crate::ports::HistoryStore,
+    event: &mut crate::events::EventRecord,
+) -> Result<(), CoreError> {
+    if event.payload.get("agents_lock_capture").is_some() {
+        return Ok(());
+    }
+    let Some(path) = event
+        .payload
+        .get("displaced_agents_lock")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(());
+    };
+    match fs.symlink_metadata(Path::new(path)) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(CoreError::io(path, e)),
+        Ok(_) => {}
+    }
+    let baseline = if let Some(publication) = event.payload.get("agents_lock_publication") {
+        serde_json::json!({"captured": publication["captured"], "captured_identity": publication["captured_identity"]})
+    } else {
+        serde_json::json!({
+            "captured": fs.read_capped(Path::new(path), crate::dotagents_ledger::DOTAGENTS_FILE_MAX_BYTES).map_err(|e| CoreError::io(path, e))?,
+            "captured_identity": fs.fsops_device_inode(Path::new(path)).map_err(|e| CoreError::io(path, e))?,
+        })
+    };
+    store.patch_payload(
+        guard,
+        &event.id,
+        serde_json::json!({"agents_lock_capture": baseline}),
+    )?;
+    event.payload["agents_lock_capture"] = baseline;
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct LockCapture {
+    captured: Vec<u8>,
+    captured_identity: Option<(u64, u64)>,
+}
+
+fn lock_destination<'a>(event: &'a crate::events::EventRecord, fallback: &'a Path) -> &'a Path {
+    event
+        .payload
+        .get("agents_lock_destination")
+        .and_then(serde_json::Value::as_str)
+        .map_or(fallback, Path::new)
+}
+
 pub(crate) fn check_completed_capture(
     fs: &dyn ScopeFs,
     event: &crate::events::EventRecord,
 ) -> Result<(), CoreError> {
     let Some(value) = event
         .payload
-        .get("agents_lock_publication")
+        .get("agents_lock_capture")
+        .or_else(|| event.payload.get("agents_lock_publication"))
         .filter(|v| !v.is_null())
     else {
         return Ok(());
     };
-    let saved: LockPublication = serde_json::from_value(value.clone())
+    let saved: LockCapture = serde_json::from_value(value.clone())
         .map_err(|_| invalid_lock(Path::new("agents.lock")))?;
     let displaced = event
         .payload
@@ -281,6 +342,11 @@ pub(crate) fn check_completed_capture(
         .and_then(serde_json::Value::as_str)
         .map(PathBuf::from)
         .ok_or_else(|| invalid_lock(Path::new("agents.lock")))?;
+    match fs.symlink_metadata(&displaced) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(CoreError::io(&displaced, e)),
+        Ok(_) => {}
+    }
     let undo: LockRowUndo = serde_json::from_value(
         event
             .inverse
@@ -291,16 +357,10 @@ pub(crate) fn check_completed_capture(
     )
     .map_err(|_| invalid_lock(&displaced))?;
     if displaced
-        != undo
-            .path
+        != lock_destination(event, &undo.path)
             .with_file_name(format!(".agents-lock-before-restore-{}", event.id.0))
     {
         return Err(invalid_lock(&displaced));
-    }
-    match fs.symlink_metadata(&displaced) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(CoreError::io(&displaced, e)),
-        Ok(_) => {}
     }
     if let Some(identity) = saved.captured_identity {
         if fs
@@ -346,7 +406,7 @@ pub(crate) fn recover_capture(
         fs,
         &event.id,
         Some(&displaced),
-        Some(&undo.path),
+        Some(lock_destination(event, &undo.path)),
         event.payload.get("agents_lock_publication"),
     )
 }
@@ -362,13 +422,13 @@ pub(crate) fn recover_displaced(
         return Ok(());
     };
     let path = path.ok_or_else(|| invalid_lock(displaced))?;
-    if displaced != path.with_file_name(format!(".agents-lock-before-restore-{}", id.0)) {
-        return Err(invalid_lock(displaced));
-    }
     match fs.symlink_metadata(displaced) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(CoreError::io(displaced, e)),
         Ok(_) => {}
+    }
+    if displaced != path.with_file_name(format!(".agents-lock-before-restore-{}", id.0)) {
+        return Err(invalid_lock(displaced));
     }
     if let Some(value) = publication {
         let saved: LockPublication =
