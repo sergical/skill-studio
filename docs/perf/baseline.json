@@ -497,5 +497,10 @@
         }
       }
     }
-  }
+  },
+  "status": "provisional: recorded under load",
+  "limitations": [
+    "The initial command reused a CLI binary from the shared target; the corrected command explicitly builds it. These CLI samples must be replaced.",
+    "Per-sample load average and cargo/rustc process counts were not captured in this initial run."
+  ]
 }

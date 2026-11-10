@@ -122,7 +122,7 @@ def main():
 
 
 def build_and_run(args, target, binaries):
-    subprocess.run(["cargo", "build", "--release", "--all-features", "-p", "skill-studio-core", "--example", "perf_baseline", "-p", "skill-studio-cli"], check=True)
+    subprocess.run(["cargo", "build", "--release", "--all-features", "-p", "skill-studio-core", "--example", "perf_baseline", "-p", "skill-studio-cli", "--bin", "skill-studio"], check=True)
     for executable in ["skill-studio", "examples/perf_baseline"]:
         shutil.copy2(target / executable, binaries / executable)
     subprocess.run(["cargo", "build", "--release", "--all-features", "-p", "skill-studio", "--example", "perf_snapshot"], check=True)

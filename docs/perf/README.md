@@ -1,5 +1,7 @@
 # Performance measurements
 
+The current local baseline is provisional: recorded under load. The initial CLI samples reused a shared binary and need replacement. Sample-level load context and a final quiet baseline are pending.
+
 Run `pnpm run perf:baseline` from the repository root. Set `CARGO_TARGET_DIR`
 to the shared build folder first. The command builds release executables and
 creates temporary homes with 20, 378, and 5,000 skills. It deletes these homes

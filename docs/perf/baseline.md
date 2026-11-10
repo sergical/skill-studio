@@ -1,5 +1,7 @@
 # Performance baseline
 
+Status: provisional: recorded under load. The initial command reused a CLI binary from the shared target. These CLI samples will be replaced. Per-sample load context was not captured.
+
 Commit: `c205022785ad40db6530dedc99b542d16630a326`. Dirty: False.
 
 Hardware: Apple M3 Max; 36 GiB RAM.
