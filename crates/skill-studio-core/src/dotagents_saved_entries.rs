@@ -25,7 +25,13 @@ enum EntryKind {
 #[serde(rename_all = "snake_case")]
 enum EntryPostState {
     Unrecorded,
-    Recorded(Option<String>),
+    Recorded(SlotBytes),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SlotBytes {
+    text: String,
+    header_offset: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,7 +39,8 @@ struct SavedEntry {
     path: PathBuf,
     kind: EntryKind,
     skill: String,
-    previous: Option<String>,
+    previous: SlotBytes,
+    shared_prefix: Option<String>,
     previous_file_absent: bool,
     expected: EntryPostState,
     preceding: Option<String>,
@@ -47,6 +54,7 @@ pub(crate) struct PreparedEntries {
 
 struct Header {
     start: usize,
+    raw_start: usize,
     key: String,
     owned: bool,
 }
@@ -101,6 +109,7 @@ fn collect_headers(
     {
         headers.push(Header {
             start,
+            raw_start: table.span().map_or(start, |span| span.start),
             key: format!("{path:?}"),
             owned,
         });
@@ -139,7 +148,12 @@ fn parse_headers(
             .map(|line| {
                 let key = line.trim_end_matches(['\r', '\n']).to_string();
                 let owned = key == format!("/skills/{skill}") || key == format!("/skills/{skill}/");
-                let header = Header { start, key, owned };
+                let header = Header {
+                    start,
+                    raw_start: start,
+                    key,
+                    owned,
+                };
                 start += line.len();
                 header
             })
@@ -217,12 +231,15 @@ impl SavedEntries {
         };
         let dir = crate::dotagents_ledger::dotagents_dir(&rt.scope.home.lexical, project);
         let mut files = Vec::new();
-        for (name, kind) in [
-            ("agents.toml", EntryKind::Manifest),
-            ("agents.lock", EntryKind::Lock),
-            (".gitignore", EntryKind::Ignore),
-        ] {
-            let path = crate::ports::resolve_config_link(rt.ports.fs.as_ref(), &dir.join(name))?;
+        let mut paths = vec![
+            (dir.join("agents.toml"), EntryKind::Manifest),
+            (dir.join("agents.lock"), EntryKind::Lock),
+        ];
+        if let Some(project) = project {
+            paths.push((project.join(".agents/.gitignore"), EntryKind::Ignore));
+        }
+        for (path, kind) in paths {
+            let path = crate::ports::resolve_config_link(rt.ports.fs.as_ref(), &path)?;
             crate::ports::confine_write_through(&rt.scope, rt.ports.fs.as_ref(), &path)?;
             let text = read_text(rt.ports.fs.as_ref(), &path)?;
             let headers = parse_headers(&text, &path, kind, skill)?;
@@ -249,7 +266,14 @@ impl SavedEntries {
                 path,
                 kind,
                 skill: skill.into(),
-                previous: Some(text[range.clone()].to_string()),
+                previous: SlotBytes {
+                    text: text[range.clone()].to_string(),
+                    header_offset: headers
+                        .iter()
+                        .find(|header| header.owned)
+                        .map(|header| header.raw_start - range.start),
+                },
+                shared_prefix: None,
                 previous_file_absent: false,
                 expected: EntryPostState::Unrecorded,
                 preceding,
@@ -262,10 +286,44 @@ impl SavedEntries {
         for entry in &mut self.files {
             let text = read_text(fs, &entry.path)?;
             let headers = parse_headers(&text, &entry.path, entry.kind, &entry.skill)?;
-            entry.expected = EntryPostState::Recorded(
-                owned_range(&headers, text.len(), &entry.path)?
-                    .map(|range| text[range].to_string()),
-            );
+            let range = owned_range(&headers, text.len(), &entry.path)?;
+            let expected = if let Some(range) = range {
+                SlotBytes {
+                    text: text[range.clone()].to_string(),
+                    header_offset: headers
+                        .iter()
+                        .find(|header| header.owned)
+                        .map(|header| header.raw_start - range.start),
+                }
+            } else {
+                let prefix_len = entry.previous.header_offset.unwrap_or(0);
+                let prefix = &entry.previous.text[..prefix_len];
+                let retained = if prefix.is_empty() {
+                    None
+                } else {
+                    let mut matches = text.match_indices(prefix);
+                    matches
+                        .next()
+                        .filter(|_| matches.next().is_none())
+                        .map(|(position, _)| position + prefix.len())
+                };
+                let gap = if let Some(position) = retained {
+                    entry.shared_prefix = Some(prefix.to_string());
+                    entry.previous.text.drain(..prefix_len);
+                    entry.previous.header_offset = Some(0);
+                    text[position..]
+                        .chars()
+                        .take_while(|ch| ch.is_whitespace())
+                        .collect()
+                } else {
+                    String::new()
+                };
+                SlotBytes {
+                    text: gap,
+                    header_offset: None,
+                }
+            };
+            entry.expected = EntryPostState::Recorded(expected);
         }
         Ok(())
     }
@@ -307,50 +365,69 @@ pub(crate) fn prepare_saved_entry_restore(
         let text = read_text(rt.ports.fs.as_ref(), &entry.path)?;
         let headers = parse_headers(&text, &entry.path, entry.kind, &entry.skill)?;
         let range = owned_range(&headers, text.len(), &entry.path)?;
-        let current = range.as_ref().map(|range| text[range.clone()].to_string());
         let EntryPostState::Recorded(expected) = &entry.expected else {
             return Err(CoreError::new(ErrorCode::Incomplete, "Dotagents Remove did not record its final ledger state. Undo cannot safely restore the saved entries.").at(&entry.path));
         };
-        if &current != expected {
-            return Err(conflict(&entry.path));
-        }
-        let mut merged = text.clone();
-        let destination = if let Some(range) = range {
-            range
-        } else {
-            let anchor = |key: &str| -> Result<usize, CoreError> {
-                let mut matches = headers.iter().filter(|header| header.key == key);
-                let first = matches.next().ok_or_else(|| conflict(&entry.path))?;
-                if matches.next().is_some() {
-                    return Err(conflict(&entry.path));
-                }
-                Ok(first.start)
-            };
-            let preceding = entry.preceding.as_deref().map(anchor).transpose()?;
-            let following = entry.following.as_deref().map(anchor).transpose()?;
-            if preceding
-                .zip(following)
-                .is_some_and(|(before, after)| before >= after)
-            {
+        let anchor = |key: &str| -> Result<usize, CoreError> {
+            let mut matches = headers.iter().filter(|header| header.key == key);
+            let first = matches.next().ok_or_else(|| conflict(&entry.path))?;
+            if matches.next().is_some() {
                 return Err(conflict(&entry.path));
             }
-            let start = following.unwrap_or_else(|| {
-                if preceding.is_some() {
-                    text.len()
-                } else {
-                    headers.first().map_or(text.len(), |header| header.start)
-                }
-            });
-            start..start
+            Ok(first.start)
         };
-        let replacement = entry.previous.as_deref().unwrap_or("");
-        if !replacement.is_empty()
-            && destination.start > 0
-            && !merged[..destination.start].ends_with('\n')
+        let preceding = entry.preceding.as_deref().map(anchor).transpose()?;
+        let following = entry.following.as_deref().map(anchor).transpose()?;
+        if preceding
+            .zip(following)
+            .is_some_and(|(before, after)| before >= after)
         {
             return Err(conflict(&entry.path));
         }
-        merged.replace_range(destination, replacement);
+        let start = match (range.as_ref(), expected.header_offset) {
+            (Some(_), Some(offset)) => headers
+                .iter()
+                .find(|header| header.owned)
+                .and_then(|header| header.raw_start.checked_sub(offset))
+                .ok_or_else(|| conflict(&entry.path))?,
+            (None, None) => {
+                if let Some(prefix) = &entry.shared_prefix {
+                    let mut matches = text.match_indices(prefix);
+                    let (position, _) = matches.next().ok_or_else(|| conflict(&entry.path))?;
+                    if matches.next().is_some() {
+                        return Err(conflict(&entry.path));
+                    }
+                    position + prefix.len()
+                } else {
+                    following.unwrap_or_else(|| {
+                        if preceding.is_some() {
+                            text.len()
+                        } else {
+                            headers
+                                .iter()
+                                .find(|header| header.key != "[\"skills\"]")
+                                .map_or(text.len(), |header| header.start)
+                        }
+                    })
+                }
+            }
+            _ => return Err(conflict(&entry.path)),
+        };
+        let end = start
+            .checked_add(expected.text.len())
+            .ok_or_else(|| conflict(&entry.path))?;
+        if text.get(start..end) != Some(expected.text.as_str())
+            || preceding.is_some_and(|position| position >= start)
+            || following.is_some_and(|position| position < end)
+        {
+            return Err(conflict(&entry.path));
+        }
+        let mut merged = text.clone();
+        let replacement = &entry.previous.text;
+        if !replacement.is_empty() && start > 0 && !merged[..start].ends_with('\n') {
+            return Err(conflict(&entry.path));
+        }
+        merged.replace_range(start..end, replacement);
         parse_headers(&merged, &entry.path, entry.kind, &entry.skill)?;
         let desired = if merged.is_empty() && entry.previous_file_absent {
             None
@@ -359,8 +436,8 @@ pub(crate) fn prepare_saved_entry_restore(
         };
         files.push((entry.path.clone(), desired));
         entry.previous_file_absent = current_absent;
-        entry.expected = EntryPostState::Recorded(entry.previous.clone());
-        entry.previous = current;
+        let previous = std::mem::replace(&mut entry.previous, expected.clone());
+        entry.expected = EntryPostState::Recorded(previous);
     }
     Ok(PreparedEntries {
         files,

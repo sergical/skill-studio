@@ -267,7 +267,13 @@ fn cli_dotagents_remove_undo_refuses_a_changed_slot_when_forced_or_replaces_anot
                 "{result}"
             );
             assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
-            assert_eq!(std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink(), link);
+            assert_eq!(
+                std::fs::symlink_metadata(&path)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+                link
+            );
             assert!(!home.path().join(".agents/skills/alpha").exists());
         }
     }

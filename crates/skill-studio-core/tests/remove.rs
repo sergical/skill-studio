@@ -199,16 +199,6 @@ impl ProcessSpawner for FakeNpxSpawner {
             {
                 std::fs::remove_file(&agents_lock_path).ok();
                 std::fs::remove_file(cwd.join(".agents").join("agents.toml")).ok();
-                let ignore = cwd.join(".agents/.gitignore");
-                if let Ok(text) = std::fs::read_to_string(&ignore) {
-                    let remaining: String = text
-                        .split_inclusive('\n')
-                        .filter(|line| {
-                            line.trim_end_matches(['\r', '\n']) != format!("/skills/{name}")
-                        })
-                        .collect();
-                    std::fs::write(ignore, remaining).unwrap();
-                }
             }
             if self.fail_after_clearing.swap(false, Ordering::SeqCst) {
                 return Ok(ProcessOutput {
@@ -2460,7 +2450,7 @@ fn dotagents_remove_undo_restores_saved_entry_bytes_and_keeps_a_later_skill_or_l
     let later_lock = "# beta lock stays exact\n[skills.beta]\nsource = 'owner/beta'\nresolved_commit = 'newer-beta'\n";
     std::fs::write(&config, later_declaration).unwrap();
     std::fs::write(&lock, later_lock).unwrap();
-    std::fs::write(&ignore, "/skills/beta\n").unwrap();
+    std::fs::write(&ignore, "/skills/alpha\r\n/skills/beta\n").unwrap();
     let restored = ops::restore_event(
         &rt,
         &ctx(),
@@ -2478,7 +2468,10 @@ fn dotagents_remove_undo_restores_saved_entry_bytes_and_keeps_a_later_skill_or_l
         std::fs::read_to_string(&lock).unwrap(),
         format!("{locked}{later_lock}")
     );
-    assert_eq!(std::fs::read_to_string(&ignore).unwrap(), "/skills/alpha\r\n/skills/beta\n");
+    assert_eq!(
+        std::fs::read_to_string(&ignore).unwrap(),
+        "/skills/alpha\r\n/skills/beta\n"
+    );
     ops::restore_event(
         &rt,
         &ctx(),
@@ -2490,7 +2483,10 @@ fn dotagents_remove_undo_restores_saved_entry_bytes_and_keeps_a_later_skill_or_l
     .unwrap();
     assert_eq!(std::fs::read_to_string(&config).unwrap(), later_declaration);
     assert_eq!(std::fs::read_to_string(&lock).unwrap(), later_lock);
-    assert_eq!(std::fs::read_to_string(&ignore).unwrap(), "/skills/beta\n");
+    assert_eq!(
+        std::fs::read_to_string(&ignore).unwrap(),
+        "/skills/alpha\r\n/skills/beta\n"
+    );
 }
 
 #[test]
@@ -2546,13 +2542,18 @@ fn dotagents_remove_undo_refuses_a_changed_entry_even_when_forced_or_clobbers_it
                 (&config, &lock)
             };
             let name = if link { "beta" } else { "alpha" };
-            let newer = if lock_conflict { format!("[skills.{name}]\nsource = 'somebody/new'\n") }
-                else { format!("[[skills]]\nname = '{name}'\nsource = 'somebody/new'\n") };
+            let newer = if lock_conflict {
+                format!("[skills.{name}]\nsource = 'somebody/new'\n")
+            } else {
+                format!("[[skills]]\nname = '{name}'\nsource = 'somebody/new'\n")
+            };
             if link {
                 let other = changed.with_extension("later");
                 std::fs::write(&other, &newer).unwrap();
                 std::os::unix::fs::symlink(&other, changed).unwrap();
-            } else { std::fs::write(changed, &newer).unwrap(); }
+            } else {
+                std::fs::write(changed, &newer).unwrap();
+            }
             let before = ops::list_events(
                 &rt,
                 &ctx(),
@@ -2574,7 +2575,13 @@ fn dotagents_remove_undo_refuses_a_changed_entry_even_when_forced_or_clobbers_it
             assert_eq!(error.code, skill_studio_core::ErrorCode::DriftConflict);
             assert!(error.message.contains("Dotagents"), "{error}");
             assert_eq!(std::fs::read_to_string(changed).unwrap(), newer);
-            assert_eq!(std::fs::symlink_metadata(changed).unwrap().file_type().is_symlink(), link);
+            assert_eq!(
+                std::fs::symlink_metadata(changed)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+                link
+            );
             assert!(!untouched.exists());
             assert!(!home.join(".agents/skills/alpha").exists());
             let after = ops::list_events(
@@ -2601,4 +2608,199 @@ fn dotagents_remove_undo_refuses_a_changed_entry_even_when_forced_or_clobbers_it
             );
         }
     }
+}
+
+#[test]
+fn recorded_dotagents_remove_undo_keeps_retained_comments_and_empty_lock_tables_or_duplicates_saved_bytes(
+) {
+    struct RecordedRemove(PathBuf);
+    impl ProcessSpawner for RecordedRemove {
+        fn run(
+            &self,
+            spec: &ProcessSpec,
+            _: &dyn CancelToken,
+        ) -> Result<ProcessOutput, skill_studio_core::CoreError> {
+            assert!(spec.args.iter().any(|arg| arg == "remove"));
+            std::fs::remove_dir_all(self.0.join(".agents/skills/alpha")).unwrap();
+            std::fs::write(
+                self.0.join(".agents/agents.toml"),
+                include_str!("fixtures/dotagents-remove-3.0.1/after-agents.toml"),
+            )
+            .unwrap();
+            std::fs::write(
+                self.0.join(".agents/agents.lock"),
+                include_str!("fixtures/dotagents-remove-3.0.1/after-agents.lock"),
+            )
+            .unwrap();
+            Ok(ProcessOutput {
+                status: Some(0),
+                stdout: String::new(),
+                stderr: String::new(),
+                timed_out: false,
+            })
+        }
+    }
+    for later in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let rt = runtime_with(
+            home.path(),
+            Arc::new(RealFs::new()),
+            Some(Arc::new(RecordedRemove(home.path().to_path_buf()))),
+        );
+        let deployment_id =
+            setup_owner_kind(&rt, home.path(), LifecycleOwnerKind::Dotagents, "alpha");
+        let config = home.path().join(".agents/agents.toml");
+        let lock = home.path().join(".agents/agents.lock");
+        let before_config = include_str!("fixtures/dotagents-remove-3.0.1/before-agents.toml");
+        let before_lock = include_str!("fixtures/dotagents-remove-3.0.1/before-agents.lock");
+        std::fs::write(&config, before_config).unwrap();
+        std::fs::write(&lock, before_lock).unwrap();
+        let removed = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+        let later_config = if later {
+            "# untouched beta\n[[skills]]\nname = 'beta'\nsource = 'owner/beta'\n"
+        } else {
+            ""
+        };
+        let later_lock = if later {
+            "# untouched beta lock\n[skills.beta]\nsource = 'owner/beta'\n"
+        } else {
+            ""
+        };
+        let after_config = format!(
+            "{}{later_config}",
+            include_str!("fixtures/dotagents-remove-3.0.1/after-agents.toml")
+        );
+        let after_lock = format!(
+            "{}{later_lock}",
+            include_str!("fixtures/dotagents-remove-3.0.1/after-agents.lock")
+        );
+        std::fs::write(&config, &after_config).unwrap();
+        std::fs::write(&lock, &after_lock).unwrap();
+        let restored = ops::restore_event(
+            &rt,
+            &ctx(),
+            &RestoreRequest {
+                event_id: removed.event_id,
+                force: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&config).unwrap(),
+            format!("{before_config}{later_config}")
+        );
+        let (_, saved_lock) = before_lock.split_once("# exact alpha lock").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&lock).unwrap(),
+            format!(
+                "{}# exact alpha lock{saved_lock}{later_lock}",
+                include_str!("fixtures/dotagents-remove-3.0.1/after-agents.lock")
+            )
+        );
+        ops::restore_event(
+            &rt,
+            &ctx(),
+            &RestoreRequest {
+                event_id: restored.restore_event_id,
+                force: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), after_config);
+        assert_eq!(std::fs::read_to_string(&lock).unwrap(), after_lock);
+        assert!(!home.path().join(".agents/skills/alpha").exists());
+    }
+}
+
+#[test]
+fn project_dotagents_remove_undo_restores_the_managed_ignore_entry_or_edits_the_root_ignore_file() {
+    struct ProjectRemove(PathBuf);
+    impl ProcessSpawner for ProjectRemove {
+        fn run(
+            &self,
+            spec: &ProcessSpec,
+            _: &dyn CancelToken,
+        ) -> Result<ProcessOutput, skill_studio_core::CoreError> {
+            assert!(spec.args.iter().any(|arg| arg == "remove"));
+            assert!(spec.args.iter().any(|arg| arg == "--project"));
+            std::fs::remove_dir_all(self.0.join(".agents/skills/alpha")).unwrap();
+            std::fs::write(
+                self.0.join("agents.toml"),
+                include_str!("fixtures/dotagents-remove-3.0.1/after-agents.toml"),
+            )
+            .unwrap();
+            std::fs::write(
+                self.0.join("agents.lock"),
+                include_str!("fixtures/dotagents-remove-3.0.1/after-agents.lock"),
+            )
+            .unwrap();
+            std::fs::write(self.0.join(".agents/.gitignore"), "/skills/beta\n").unwrap();
+            Ok(ProcessOutput {
+                status: Some(0),
+                stdout: String::new(),
+                stderr: String::new(),
+                timed_out: false,
+            })
+        }
+    }
+    let home = tempfile::tempdir().unwrap();
+    let project = home.path().join("project");
+    write_manual_universal_skill(&project, "alpha");
+    for (name, bytes) in [
+        (
+            "agents.toml",
+            include_str!("fixtures/dotagents-remove-3.0.1/before-agents.toml"),
+        ),
+        (
+            "agents.lock",
+            include_str!("fixtures/dotagents-remove-3.0.1/before-agents.lock"),
+        ),
+        (".gitignore", "agents.lock\n.agents/.gitignore\n"),
+        (".agents/.gitignore", "/skills/alpha\r\n/skills/beta\n"),
+    ] {
+        std::fs::write(project.join(name), bytes).unwrap();
+    }
+    let mut scope = RuntimeScope::fixture(home.path());
+    scope.projects = skill_studio_core::scope::ProjectSelection::Explicit {
+        paths: vec![project.clone()],
+    };
+    let mut ports = runtime_for(home.path()).ports.clone();
+    ports.spawner = Some(Arc::new(ProjectRemove(project.clone())));
+    let rt = Runtime::new(&scope, ports).unwrap();
+    let deployment_id = resolve_deployment_id(&rt, "alpha");
+    let removed = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+    let restored = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: removed.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.join(".agents/.gitignore")).unwrap(),
+        "/skills/alpha\r\n/skills/beta\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join(".gitignore")).unwrap(),
+        "agents.lock\n.agents/.gitignore\n"
+    );
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: restored.restore_event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.join(".agents/.gitignore")).unwrap(),
+        "/skills/beta\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join(".gitignore")).unwrap(),
+        "agents.lock\n.agents/.gitignore\n"
+    );
 }
