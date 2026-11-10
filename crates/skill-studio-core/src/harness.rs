@@ -1211,11 +1211,20 @@ fn probe_version(
     (version, infer_install_method(ports.fs, path))
 }
 
+/// Only `installMethod`; serde skips every other field in `.claude.json`
+/// without keeping its value.
+#[derive(serde::Deserialize)]
+struct ClaudeConfig {
+    #[serde(rename = "installMethod")]
+    install_method: Option<String>,
+}
+
 fn read_claude_install_method(fs: &dyn ScopeFs, home: &Path) -> Option<DetectedString> {
     let path = home.join(".claude.json");
     let bytes = fs.read_capped(&path, 1024 * 1024).ok()?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    let method = value.get("installMethod")?.as_str()?.trim();
+    let config: ClaudeConfig = serde_json::from_slice(&bytes).ok()?;
+    let method = config.install_method?;
+    let method = method.trim();
     if method.is_empty() {
         return None;
     }
