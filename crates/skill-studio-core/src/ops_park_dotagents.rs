@@ -5,19 +5,21 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
-use crate::dto::DeploymentDto;
+use crate::dto::{DeploymentDto, ScanRequest};
 use crate::error::{CoreError, ErrorCode};
 use crate::identity::{LifecycleOwnerKind, RootScope, SkillName};
 use crate::ports::{ExclusiveGuard, OpContext, Runtime, ScopeFs};
 
 /// A file's text before an edit, to write back when a later step fails.
 /// `None` text means the file did not exist.
+#[derive(Clone)]
 pub(crate) struct FileSnapshot {
     path: PathBuf,
     text: Option<String>,
 }
 
 /// A file write and the exact output required for its safe rollback.
+#[derive(Clone)]
 pub(crate) struct FileEdit {
     before: FileSnapshot,
     after: String,
@@ -578,6 +580,7 @@ fn refuse_nested_project(
 /// is not its own git root, where dotagents would use a different manifest.
 pub(crate) fn plan_park(
     rt: &Runtime,
+    ctx: &OpContext,
     guard: &ExclusiveGuard,
     deployment: &DeploymentDto,
     skill: &SkillName,
@@ -595,14 +598,41 @@ pub(crate) fn plan_park(
     for path in [&config, &lock, &gitignore] {
         recovered |= recover_rollback(rt, guard, path)?;
     }
-    if !recovered
-        && !matches!(
-            deployment.owner_kind,
-            LifecycleOwnerKind::Dotagents
-                | LifecycleOwnerKind::WildcardDotagents
-                | LifecycleOwnerKind::Ambiguous
-        )
-    {
+    let fresh;
+    let deployment = if recovered {
+        fresh = crate::ops::scan_inner(
+            rt,
+            ctx,
+            &ScanRequest {
+                skills: vec![skill.clone()],
+                timings: false,
+            },
+        )?;
+        fresh
+            .skills
+            .iter()
+            .flat_map(|skill| &skill.deployments)
+            .find(|candidate| {
+                candidate.id == deployment.id
+                    && candidate.path == deployment.path
+                    && candidate.destination == deployment.destination
+            })
+            .ok_or_else(|| {
+                CoreError::new(
+                    ErrorCode::DriftConflict,
+                    "the selected deployment changed during rollback recovery; scan and try again",
+                )
+                .at(&deployment.path)
+            })?
+    } else {
+        deployment
+    };
+    if !matches!(
+        deployment.owner_kind,
+        LifecycleOwnerKind::Dotagents
+            | LifecycleOwnerKind::WildcardDotagents
+            | LifecycleOwnerKind::Ambiguous
+    ) {
         return Ok(None);
     }
     let Some((original_config, doc)) = read_manifest(fs, &config)? else {
@@ -855,9 +885,19 @@ pub(crate) fn prepare_originals(
     guard: &ExclusiveGuard,
     plan: &DotagentsPark,
 ) -> Result<(), CoreError> {
-    let mut files = plan.changes.borrow_mut();
+    prepare_files(rt, guard, &mut plan.changes.borrow_mut())
+}
+
+fn prepare_files(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    files: &mut [FileEdit],
+) -> Result<(), CoreError> {
     for edit in files.iter_mut().rev() {
         if let Some(recovery) = &edit.recovery {
+            if recovery.to_string_lossy().ends_with("-rollback-staging") {
+                continue;
+            }
             let retained =
                 available_recovery_path(rt, &edit.before.path, Some(&edit.after), Some(recovery))?;
             let pending = PathBuf::from(format!("{}-rollback-staging", retained.display()));
@@ -895,6 +935,8 @@ pub(crate) fn restore_files(
     files: &[FileEdit],
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
+    let mut files = files.to_vec();
+    prepare_files(rt, guard, &mut files)?;
     let mut first_error = None;
     for edit in files.iter().rev() {
         let file = &edit.before;

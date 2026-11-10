@@ -2566,6 +2566,55 @@ fn failed_park_then_retry_requires_recovery_or_turn_on_loses_management() {
 }
 
 #[test]
+fn park_independent_copy_after_bar_rollback_preserves_universal_management_or_recovery_unlists_foo()
+{
+    let (home, stub) = dotagents_home("park_independent_after_recovery", EXPLICIT_TOML);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    let independent = home.join(".codex/skills/foo");
+    write_skill(&independent, "foo");
+    let armed = fs.clone();
+    let child_home = home.clone();
+    fs.before_write_once(stub.lock_path(), move || {
+        armed.after_rename_once(
+            child_home.join(".agents/skills-parked/universal/bar"),
+            || panic!("injected crash after folder rollback"),
+        );
+        Err(std::io::Error::other("injected lock failure"))
+    });
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ops::park(
+            &rt,
+            &ctx(),
+            &ParkRequest {
+                deployment_id: live_copy(&rt, "bar").id,
+            },
+        )
+        .unwrap();
+    }));
+    assert!(crashed.is_err());
+    assert!(recovery_files(&home)
+        .iter()
+        .any(|path| path.to_string_lossy().ends_with("-rollback-staging")));
+    let selected = copies(&rt, "foo")
+        .into_iter()
+        .find(|copy| copy.path == independent)
+        .unwrap();
+    ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: selected.id,
+        },
+    )
+    .unwrap();
+    assert!(!independent.exists());
+    assert!(stub.skill_dir("foo").join("SKILL.md").is_file());
+    assert!(read(&stub.toml_path()).contains("name = \"foo\""));
+    assert!(read(&stub.lock_path()).contains("[skills.foo]"));
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn failed_turn_on_then_rollback_crash_retry_park_turn_on_restores_management_or_stale_rollback_unlists_skill(
 ) {
     let (home, stub) = dotagents_home("turn_on_rollback_crash_retry", EXPLICIT_TOML);
@@ -2609,6 +2658,64 @@ fn failed_turn_on_then_rollback_crash_retry_park_turn_on_restores_management_or_
     std::fs::remove_dir_all(home).unwrap();
 }
 
+#[test]
+fn turn_on_crash_before_drift_check_requires_recovery_or_retry_accepts_concurrent_edit() {
+    let (home, stub) = dotagents_home("turn_on_intent_crash_drift", EXPLICIT_TOML);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    park_foo(&rt);
+    let armed = fs.clone();
+    let child_home = home.clone();
+    let config = stub.toml_path();
+    let parked_config = read(&config);
+    fs.before_write_once(stub.lock_path(), move || {
+        std::fs::write(&config, read(&config) + "# concurrent edit\n")?;
+        let recovery = recovery_files(&child_home)
+            .into_iter()
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(".agents.toml-park-recovery-")
+                    && read(path) == parked_config
+            })
+            .unwrap();
+        armed.after_rename_once(recovery, || panic!("injected crash after rollback intent"));
+        Err(std::io::Error::other("injected lock failure"))
+    });
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = ops::unpark(
+            &rt,
+            &ctx(),
+            &UnparkRequest {
+                deployment_id: parked_copy(&rt, "foo").id,
+            },
+        );
+    }));
+    assert!(
+        crashed.is_err(),
+        "rollback must persist intent before checking drift"
+    );
+    let rt = runtime(&home, stub.clone(), true);
+    for _ in 0..100 {
+        rt.ports.ids.next_event_id();
+    }
+    let current = read(&stub.toml_path());
+    let error = ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked_copy(&rt, "foo").id,
+        },
+    )
+    .expect_err("a fresh runtime must require explicit recovery");
+    assert_eq!(error.code, skill_studio_core::ErrorCode::DriftConflict);
+    assert_eq!(read(&stub.toml_path()), current);
+    assert!(current.contains("# concurrent edit"));
+    assert!(!stub.skill_dir("foo").exists());
+    assert!(parked_copy(&rt, "foo").path.join("SKILL.md").is_file());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
 fn assert_failed_turn_on_keeps_a_concurrent_edit(fail_move: bool) {
     let (home, stub) = dotagents_home("turn_on_rollback_drift", EXPLICIT_TOML);
     let (rt, fs) = fault_runtime(&home, stub.clone());
@@ -2648,6 +2755,29 @@ fn assert_failed_turn_on_keeps_a_concurrent_edit(fail_move: bool) {
     );
     assert!(parked_copy(&rt, "foo").path.join("SKILL.md").is_file());
     assert!(!stub.skill_dir("foo").exists());
+    let current = read(&stub.toml_path());
+    let error = ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked_copy(&rt, "foo").id,
+        },
+    )
+    .expect_err("retry must require explicit rollback recovery");
+    assert_eq!(error.code, skill_studio_core::ErrorCode::DriftConflict);
+    assert_eq!(read(&stub.toml_path()), current);
+    assert!(!stub.skill_dir("foo").exists());
+    let pending = recovery_files(&home)
+        .into_iter()
+        .find(|path| path.to_string_lossy().ends_with("-rollback-staging"))
+        .expect("Turn on must retain rollback intent before checking drift");
+    assert!(!read(&pending).contains("name = \"foo\""));
+    std::fs::write(
+        stub.toml_path(),
+        read(&pending) + "\n[[skills]]\nname = \"extra\"\nsource = \"owner/extra\"\n",
+    )
+    .unwrap();
+    std::fs::remove_file(pending).unwrap();
     unpark_foo(&rt);
     assert!(stub.skill_dir("foo").join("SKILL.md").is_file());
     assert!(read(&stub.toml_path()).contains("name = \"extra\""));
@@ -2655,12 +2785,12 @@ fn assert_failed_turn_on_keeps_a_concurrent_edit(fail_move: bool) {
 }
 
 #[test]
-fn failed_turn_on_keeps_an_edit_after_relisting_when_lock_write_fails() {
+fn turn_on_after_lock_write_failure_requires_explicit_recovery_or_silently_retries_drift() {
     assert_failed_turn_on_keeps_a_concurrent_edit(false);
 }
 
 #[test]
-fn failed_turn_on_keeps_an_edit_after_relisting_when_move_fails() {
+fn turn_on_after_move_failure_requires_explicit_recovery_or_silently_retries_drift() {
     assert_failed_turn_on_keeps_a_concurrent_edit(true);
 }
 
