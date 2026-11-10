@@ -96,10 +96,18 @@ afterEach(() => {
 
 it.each(
   ["Home", "Selection"].flatMap((surface) =>
-    [true, false].flatMap((skip) => ["{Enter}", " "].map((key) => ({ surface, skip, key }))),
+    [true, false].flatMap((skip) =>
+      ["{Enter}", " "].map((key) => ({
+        surface,
+        skip,
+        key,
+        choice: skip ? "skip" : "overwrite",
+        keyName: key === " " ? "Space" : "Enter",
+      })),
+    ),
   ),
 )(
-  "$surface mixed edited Update keeps Fork and keyboard $skip choice or overwrites unforkable edits without a choice",
+  "$surface mixed edited Update can fork and $choice others with $keyName or loses the edit choice",
   async ({ surface, skip, key }) => {
     const forkTargets: unknown[] = [];
     const updateTargets: unknown[] = [];

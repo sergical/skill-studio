@@ -27,20 +27,16 @@ const NOT_CHECKED: LocalEditsDto = LocalEditsDto {
     checked: false,
 };
 
-/// The verdict for the deployment an update would replace.
-fn deployment_local_edits(
+fn folder_local_edits(
     fs: &dyn ScopeFs,
     lock: Option<&SkillLockFile>,
     skill_name: &str,
-    deployment: &Deployment,
+    path: &Path,
 ) -> LocalEditsDto {
-    if deployment.owner_kind != LifecycleOwnerKind::SkillsSh || deployment.scope != "global" {
-        return NOT_CHECKED;
-    }
     let Some(lock) = lock else {
         return NOT_CHECKED;
     };
-    match lock_file::local_edits(fs, lock, skill_name, Path::new(&deployment.path)) {
+    match lock_file::local_edits(fs, lock, skill_name, path) {
         LocalEdits::Unedited => LocalEditsDto {
             edited: false,
             checked: true,
@@ -63,15 +59,30 @@ fn update_local_edits(
     deployment: &Deployment,
     deployments: &[Deployment],
 ) -> LocalEditsDto {
-    let Some(owner_id) = deployment.owner_id.as_deref() else {
-        return deployment_local_edits(fs, lock, skill_name, deployment);
-    };
-    let mut verdict = NOT_CHECKED;
-    for copy in deployments
-        .iter()
-        .filter(|copy| copy.owner_id.as_deref() == Some(owner_id) && !copy.is_symlink)
-    {
-        let checked = deployment_local_edits(fs, lock, skill_name, copy);
+    if deployment.owner_kind != LifecycleOwnerKind::SkillsSh || deployment.scope != "global" {
+        return NOT_CHECKED;
+    }
+    let mut verdict = folder_local_edits(fs, lock, skill_name, Path::new(&deployment.path));
+    for copy in deployments {
+        if copy.path == deployment.path
+            || copy.scope != "global"
+            || copy.is_symlink
+            || copy.plugin.is_some()
+        {
+            continue;
+        }
+        let same_owner = deployment
+            .owner_id
+            .as_deref()
+            .is_some_and(|owner| copy.owner_id.as_deref() == Some(owner));
+        // A copy-mode edit loses its inferred owner, but the skills CLI can still replace that folder.
+        let unclaimed_agent_copy = copy.owner_id.is_none()
+            && copy.owner_kind == LifecycleOwnerKind::Manual
+            && copy.destination == super::skill_deployment::SkillDestination::PerHarness;
+        if !same_owner && !unclaimed_agent_copy {
+            continue;
+        }
+        let checked = folder_local_edits(fs, lock, skill_name, Path::new(&copy.path));
         verdict.edited |= checked.edited;
         verdict.checked |= checked.checked;
     }
@@ -138,18 +149,49 @@ mod tests {
         let hash = skill_studio_core::tree_hash::tree_hash_ignoring_junk(&real_fs, &canonical_path)
             .unwrap();
         let lock: SkillLockFile = serde_json::from_value(serde_json::json!({"version":3,"skills":{"sample":{"source":"owner/repo","sourceType":"github","sourceUrl":"https://github.com/owner/repo","skillFolderHash":hash,"installedAt":"2020-01-01T00:00:00Z","updatedAt":"2020-01-01T00:00:00Z"}}})).unwrap();
-        let canonical = Deployment {
-            path: canonical_path.to_string_lossy().into_owned(),
-            scope: "global".to_string(),
-            owner_kind: LifecycleOwnerKind::SkillsSh,
-            owner_id: Some("owner:v1/global/sample".to_string()),
-            ..Default::default()
-        };
-        let copy = Deployment {
-            path: copy_path.to_string_lossy().into_owned(),
-            ..canonical.clone()
-        };
+        fs::write(
+            home.path().join(".agents/.skill-lock.json"),
+            serde_json::to_vec(&lock).unwrap(),
+        )
+        .unwrap();
         fs::write(copy_path.join("SKILL.md"), b"my edit").unwrap();
+        let ports = skill_studio_host::default_ports(
+            home.path().join(".leases"),
+            std::sync::Arc::new(skill_studio_core::harness::HarnessCatalog::builtin()),
+        );
+        let runtime = skill_studio_core::ports::Runtime::new(
+            &skill_studio_core::scope::RuntimeScope::fixture(home.path()),
+            ports,
+        )
+        .unwrap();
+        let inventory = skill_studio_core::ops::scan(
+            &runtime,
+            &skill_studio_core::testing::golden::ctx(),
+            &Default::default(),
+        )
+        .unwrap();
+        let assembled =
+            super::super::skill_assembly::assemble_installed_skills(&inventory.skills, &lock);
+        let installed = assembled
+            .iter()
+            .find(|skill| skill.name == "sample")
+            .unwrap();
+        let canonical = installed
+            .deployments
+            .iter()
+            .find(|copy| {
+                copy.destination == super::super::skill_deployment::SkillDestination::Universal
+            })
+            .unwrap()
+            .clone();
+        let copy = installed
+            .deployments
+            .iter()
+            .find(|copy| {
+                copy.destination == super::super::skill_deployment::SkillDestination::PerHarness
+            })
+            .unwrap()
+            .clone();
         let verdict = update_local_edits(
             &real_fs,
             Some(&lock),
@@ -159,7 +201,9 @@ mod tests {
         );
         assert!(
             verdict.edited && verdict.checked,
-            "the edited per-agent folder was not checked"
+            "the edited per-agent folder was not checked: {:?}, {:?}",
+            copy.owner_kind,
+            copy.owner_id
         );
         fs::write(copy_path.join("SKILL.md"), b"original skill").unwrap();
         let foreign = Deployment {
