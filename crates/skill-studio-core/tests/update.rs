@@ -57,6 +57,7 @@ struct FakeNpxUpdateSpawner {
     /// Skill folders a `dotagents install` adds beside the declared ones,
     /// as it does for an entry another machine declared.
     installs_new: Vec<&'static str>,
+    lock_after: Option<&'static str>,
 }
 
 impl FakeNpxUpdateSpawner {
@@ -68,6 +69,7 @@ impl FakeNpxUpdateSpawner {
             links_into: Vec::new(),
             copies_into: Vec::new(),
             installs_new: Vec::new(),
+            lock_after: None,
         }
     }
 
@@ -108,7 +110,11 @@ impl ProcessSpawner for FakeNpxUpdateSpawner {
             } else {
                 cwd.join(".agents")
             };
-            std::fs::write(lock_dir.join("agents.lock"), "# rewritten by install\n").unwrap();
+            std::fs::write(
+                lock_dir.join("agents.lock"),
+                self.lock_after.unwrap_or("# rewritten by install\n"),
+            )
+            .unwrap();
             // Only declared entries are refreshed, so a folder `agents.toml`
             // does not name stays as it was.
             let declared = std::fs::read_to_string(lock_dir.join("agents.toml")).unwrap();
@@ -2068,14 +2074,8 @@ fn forced_undo_replaces_a_linked_extra_file_with_a_plain_file_or_writes_into_the
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// `update_all_runs_one_dotagents_install_per_scope_and_shares_its_event_or_names_the_extra_install`:
-/// two dotagents skills in the global scope need one `dotagents install`,
-/// since it refreshes every declared folder. Fails when the spawner is called
-/// twice, or when the second item gets its own journal row (its undo is the
-/// first row's).
 #[test]
-fn update_all_runs_one_dotagents_install_per_scope_and_shares_its_event_or_names_the_extra_install()
-{
+fn update_all_runs_one_dotagents_install_with_separate_skill_events_or_shares_an_undo() {
     let home = unique_temp_dir("update_all_dotagents_once");
     std::fs::create_dir_all(&home).unwrap();
     seed_installed_skill(&home, "delta", "v1");
@@ -2096,7 +2096,7 @@ fn update_all_runs_one_dotagents_install_per_scope_and_shares_its_event_or_names
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     let first = result.items[0].outcome.as_ref().unwrap();
     let second = result.items[1].outcome.as_ref().unwrap();
-    assert_eq!(second.event_id, first.event_id);
+    assert_ne!(second.event_id, first.event_id);
     assert_eq!(second.skill.0, "other");
     assert_ne!(second.tree_hash_before, second.tree_hash_after);
 
@@ -2196,13 +2196,8 @@ fn update_all_reports_an_undeclared_dotagents_folder_as_an_error_after_a_declare
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// Flow: update-all with A unpinned, B pinned, C unpinned in one scope.
-/// Expectation: C reports B's event id, since B's install ran after A's and
-/// refreshed C's folder.
-/// A failure means C points at A's journal row, so undoing C restores the
-/// wrong files.
 #[test]
-fn update_all_shares_the_latest_dotagents_install_event_with_a_later_covered_skill() {
+fn update_all_records_a_covered_skill_against_the_latest_install_or_reuses_another_skill_event() {
     let home = unique_temp_dir("update_all_dotagents_latest_event");
     std::fs::create_dir_all(&home).unwrap();
     for name in ["alpha", "beta", "gamma"] {
@@ -2225,7 +2220,11 @@ fn update_all_shares_the_latest_dotagents_install_event_with_a_later_covered_ski
     assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
     let event = |i: usize| result.items[i].outcome.as_ref().unwrap().event_id.clone();
     assert_ne!(event(0), event(1));
-    assert_eq!(event(2), event(1));
+    assert_ne!(event(2), event(1));
+    let session = MutationSession::begin(&rt, &ctx()).unwrap();
+    let covered = session.store.get(&event(2)).unwrap().unwrap();
+    assert_eq!(covered.skill.0, "gamma");
+    assert_eq!(covered.payload["covered_by_install"], event(1).0);
 
     std::fs::remove_dir_all(&home).ok();
 }
@@ -2562,45 +2561,114 @@ fn update_all_runs_one_dotagents_install_in_each_scope() {
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// Flow: update-all covers a second dotagents skill with the first install,
-/// then the shared event is undone.
-/// Expectation: the covered skill's folder is back at its old content.
-/// A failure means the shared row did not back up the covered folder.
 #[test]
-fn undoing_the_shared_dotagents_event_restores_the_covered_skill_folder() {
-    let home = unique_temp_dir("update_all_dotagents_undo_shared");
+fn undoing_one_covered_dotagents_skill_restores_its_folder_and_lock_row_or_reverts_another_skill() {
+    let home = unique_temp_dir("update_all_dotagents_undo_one");
     std::fs::create_dir_all(&home).unwrap();
     seed_installed_skill(&home, "delta", "v1");
     seed_installed_skill(&home, "other", "v1");
     seed_dotagents_files(&home, DECLARED_TOML);
-    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let lock = home.join(".agents/agents.lock");
+    let lock_text = |delta: &str, other: &str| {
+        format!(
+        "version = 1\nskills = {{ delta = {{ source = \"o/r\", resolved_commit = \"{delta}\" }}, other = {{ source = \"o/r\", resolved_commit = \"{other}\" }} }}\n"
+    )
+    };
+    std::fs::write(&lock, lock_text("old-delta", "old-other")).unwrap();
+    let mut fake = FakeNpxUpdateSpawner::new(home.clone(), "v2");
+    fake.lock_after = Some("version = 1\n[skills.delta]\nsource = \"o/r\"\nresolved_commit = \"new-delta\"\n[skills.other]\nsource = \"o/r\"\nresolved_commit = \"new-other\"\n");
+    let spawner = Arc::new(fake);
     let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
-
     let requests = vec![
         cli_request("delta", InstallMethod::Dotagents),
         cli_request("other", InstallMethod::Dotagents),
     ];
     let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+    let delta = home.join(UNIVERSAL_ROOT_RELATIVE).join("delta/SKILL.md");
     let other = home.join(UNIVERSAL_ROOT_RELATIVE).join("other/SKILL.md");
+    let event_id = result.items[1].outcome.as_ref().unwrap().event_id.clone();
+    assert_ne!(event_id, result.items[0].outcome.as_ref().unwrap().event_id);
+    std::fs::write(&lock, lock_text("external-delta", "drift-other")).unwrap();
+    let error = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: event_id.clone(),
+            force: false,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::DriftConflict);
     assert!(std::fs::read_to_string(&other)
         .unwrap()
         .contains("Body at v2"));
-
-    let event_id = result.items[1].outcome.as_ref().unwrap().event_id.clone();
+    std::fs::write(&lock, lock_text("external-delta", "new-other")).unwrap();
+    let mut target = event_id;
+    for (revision, commit) in [
+        ("v1", "old-other"),
+        ("v2", "new-other"),
+        ("v1", "old-other"),
+    ] {
+        let restored = ops::restore_event(
+            &rt,
+            &ctx(),
+            &RestoreRequest {
+                event_id: target,
+                force: false,
+            },
+        )
+        .unwrap();
+        assert!(std::fs::read_to_string(&other)
+            .unwrap()
+            .contains(&format!("Body at {revision}")));
+        assert!(std::fs::read_to_string(&delta)
+            .unwrap()
+            .contains("Body at v2"));
+        let document: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&lock).unwrap()).unwrap();
+        assert_eq!(
+            document["skills"]["other"]["resolved_commit"].as_str(),
+            Some(commit)
+        );
+        assert_eq!(
+            document["skills"]["delta"]["resolved_commit"].as_str(),
+            Some("external-delta")
+        );
+        target = restored.restore_event_id;
+    }
+    std::fs::write(&lock, lock_text("external-delta", "force-drift-other")).unwrap();
+    let forced = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: target,
+            force: true,
+        },
+    )
+    .unwrap();
     ops::restore_event(
         &rt,
         &ctx(),
         &RestoreRequest {
-            event_id,
+            event_id: forced.restore_event_id,
             force: false,
         },
     )
-    .unwrap_or_else(|e| panic!("undo of the shared event must succeed: {e}"));
-
+    .unwrap();
+    let document: toml::Value = toml::from_str(&std::fs::read_to_string(&lock).unwrap()).unwrap();
+    assert_eq!(
+        document["skills"]["other"]["resolved_commit"].as_str(),
+        Some("force-drift-other")
+    );
+    assert_eq!(
+        document["skills"]["delta"]["resolved_commit"].as_str(),
+        Some("external-delta")
+    );
     assert!(std::fs::read_to_string(&other)
         .unwrap()
         .contains("Body at v1"));
-
     std::fs::remove_dir_all(&home).ok();
 }
 

@@ -3,6 +3,9 @@
 #[path = "support/headless.rs"]
 mod headless;
 
+#[path = "support/dotagents_update.rs"]
+mod dotagents_update;
+
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -103,6 +106,13 @@ impl Fixture {
 }
 
 fn exercise(flow: &str, surface: Surface) {
+    if flow == "Undo covered update" {
+        dotagents_update::covered_update(match surface {
+            Surface::Cli => "cli",
+            Surface::Mcp => "mcp",
+        });
+        return;
+    }
     let f = Fixture::new(surface);
     let installed = f.install("gamma");
     assert_eq!(
@@ -321,6 +331,7 @@ executable_coverage! {
     "Install" => (cli_install_writes_gamma_or_names_the_missing_bytes, mcp_install_writes_gamma_or_names_the_missing_bytes),
     "Update one" => (cli_update_replaces_gamma_bytes_or_names_the_stale_copy, mcp_update_replaces_gamma_bytes_or_names_the_stale_copy),
     "Update all" => (cli_update_all_replaces_each_copy_or_names_the_stale_skill, mcp_update_all_replaces_each_copy_or_names_the_stale_skill),
+    "Undo covered update" => (cli_covered_dotagents_undo_restores_one_skill_or_reverts_both, mcp_covered_dotagents_undo_restores_one_skill_or_reverts_both),
     "Park / unpark" => (cli_park_unpark_moves_and_restores_gamma_or_names_the_wrong_path, mcp_park_unpark_moves_and_restores_gamma_or_names_the_wrong_path),
     "Park for every agent" => (cli_park_all_removes_and_restores_shared_bytes_or_names_the_wrong_path, mcp_park_all_removes_and_restores_shared_bytes_or_names_the_wrong_path),
     "Turn off for one agent" => (cli_agent_off_parks_codex_and_keeps_cursor_or_names_the_wrong_agent, mcp_agent_off_parks_codex_and_keeps_cursor_or_names_the_wrong_agent),

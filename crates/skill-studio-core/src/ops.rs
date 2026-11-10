@@ -4491,6 +4491,11 @@ fn restore_event_body(
         }
         crate::ops_install::check_registry_drift(fs, inverse)?;
     }
+    let lock_restore = crate::ops_dotagents_history::prepare_restore(fs, inverse, req.force)?;
+    let lock_scoped = lock_restore
+        .as_ref()
+        .map(|restore| crate::ports::confine_write_through(&rt.scope, fs, &restore.path))
+        .transpose()?;
     let mut write_back_plans: Vec<(PathBuf, RestorePlan)> = Vec::new();
     if !write_back.is_empty() {
         let backup_dir = target.backup_dir.as_deref().ok_or_else(|| {
@@ -4692,7 +4697,7 @@ fn restore_event_body(
         })
         .cloned()
         .collect();
-    let restore_inverse = crate::events::with_write_back(
+    let mut restore_inverse = crate::events::with_write_back(
         crate::events::restore_backup_inverse_with_links(
             &path,
             restore_pre_fingerprint.as_ref(),
@@ -4701,6 +4706,9 @@ fn restore_event_body(
         ),
         &removed_copies,
     );
+    if let Some(restore) = &lock_restore {
+        restore_inverse["dotagents_lock_undo"] = serde_json::json!(&restore.inverse);
+    }
     let draft = crate::events::EventDraft {
         kind: crate::events::EventKind::Restore,
         skill: target.skill.clone(),
@@ -5028,6 +5036,14 @@ fn restore_event_body(
             &restore_id,
             serde_json::json!({ "registry_restore_error": error.message }),
         );
+    }
+
+    if let (Some(restore), Some(scoped)) = (&lock_restore, &lock_scoped) {
+        if let Some(bytes) = &restore.bytes {
+            if fs.write_atomic(&session.guard, scoped, bytes).is_err() {
+                unrestored.push(restore.path.clone());
+            }
+        }
     }
 
     if !unrestored.is_empty() {

@@ -50,6 +50,7 @@ pub mod ops;
 pub mod ops_agent_off;
 mod ops_discard;
 mod ops_doctor;
+mod ops_dotagents_history;
 mod ops_install;
 mod ops_install_cli;
 mod ops_park_dotagents;
