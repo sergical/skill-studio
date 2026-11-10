@@ -2530,7 +2530,7 @@ fn dotagents_remove_undo_preserves_edited_neighbors_or_reformats_other_saved_ent
 
 #[test]
 fn dotagents_remove_undo_refuses_a_changed_entry_even_when_forced_or_clobbers_its_new_place() {
-    for lock_conflict in [false, true] {
+    for (lock_conflict, link) in [(false, false), (true, false), (false, true), (true, true)] {
         for force in [false, true] {
             let home = unique_temp_dir("dotagents_saved_slot_conflict");
             std::fs::create_dir_all(&home).unwrap();
@@ -2545,12 +2545,14 @@ fn dotagents_remove_undo_refuses_a_changed_entry_even_when_forced_or_clobbers_it
             } else {
                 (&config, &lock)
             };
-            let newer = if lock_conflict {
-                "[skills.alpha]\nsource = 'somebody/new'\n"
-            } else {
-                "[[skills]]\nname = 'alpha'\nsource = 'somebody/new'\n"
-            };
-            std::fs::write(changed, newer).unwrap();
+            let name = if link { "beta" } else { "alpha" };
+            let newer = if lock_conflict { format!("[skills.{name}]\nsource = 'somebody/new'\n") }
+                else { format!("[[skills]]\nname = '{name}'\nsource = 'somebody/new'\n") };
+            if link {
+                let other = changed.with_extension("later");
+                std::fs::write(&other, &newer).unwrap();
+                std::os::unix::fs::symlink(&other, changed).unwrap();
+            } else { std::fs::write(changed, &newer).unwrap(); }
             let before = ops::list_events(
                 &rt,
                 &ctx(),
@@ -2572,6 +2574,7 @@ fn dotagents_remove_undo_refuses_a_changed_entry_even_when_forced_or_clobbers_it
             assert_eq!(error.code, skill_studio_core::ErrorCode::DriftConflict);
             assert!(error.message.contains("Dotagents"), "{error}");
             assert_eq!(std::fs::read_to_string(changed).unwrap(), newer);
+            assert_eq!(std::fs::symlink_metadata(changed).unwrap().file_type().is_symlink(), link);
             assert!(!untouched.exists());
             assert!(!home.join(".agents/skills/alpha").exists());
             let after = ops::list_events(

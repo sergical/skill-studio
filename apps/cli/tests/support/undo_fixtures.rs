@@ -482,16 +482,16 @@ pub fn assert_dotagents_saved_entries(home: &Path, later: bool, restored: bool) 
     assert_eq!(home.join(".agents/skills/alpha").exists(), restored);
 }
 
-pub fn conflict_dotagents_slot(home: &Path, lock: bool) -> (PathBuf, String) {
-    let path = home
-        .join(".agents")
-        .join(if lock { "agents.lock" } else { "agents.toml" });
-    let newer = if lock {
-        "[skills.alpha]\nsource = 'new-owner/new-entry'\n"
-    } else {
-        "[[skills]]\nname = 'alpha'\nsource = 'new-owner/new-entry'\n"
-    }
-    .to_string();
-    std::fs::write(&path, &newer).unwrap();
+pub fn conflict_dotagents_slot(home: &Path, lock: bool, link: bool) -> (PathBuf, String) {
+    let path = home.join(".agents").join(if lock { "agents.lock" } else { "agents.toml" });
+    let name = if link { "beta" } else { "alpha" };
+    let newer = if lock { format!("[skills.{name}]\nsource = 'new-owner/new-entry'\n") }
+        else { format!("[[skills]]\nname = '{name}'\nsource = 'new-owner/new-entry'\n") };
+    if link {
+        std::fs::remove_file(&path).unwrap();
+        let other = path.with_extension("later");
+        std::fs::write(&other, &newer).unwrap();
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+    } else { std::fs::write(&path, &newer).unwrap(); }
     (path, newer)
 }

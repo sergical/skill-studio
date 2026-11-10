@@ -248,10 +248,10 @@ fn cli_history_and_dotagents_remove_undo_restore_exact_saved_entries_or_erase_a_
 
 #[test]
 fn cli_dotagents_remove_undo_refuses_a_changed_slot_when_forced_or_replaces_another_entry() {
-    for lock in [false, true] {
+    for (lock, link) in [(false, false), (true, false), (false, true), (true, true)] {
         let home = tempfile::tempdir().unwrap();
         let event = undo_fixtures::removed_dotagents(home.path(), true);
-        let (path, newer) = undo_fixtures::conflict_dotagents_slot(home.path(), lock);
+        let (path, newer) = undo_fixtures::conflict_dotagents_slot(home.path(), lock, link);
         for force in [false, true] {
             let mut args = vec!["restore", "--event-id", &event.0];
             if force {
@@ -267,6 +267,7 @@ fn cli_dotagents_remove_undo_refuses_a_changed_slot_when_forced_or_replaces_anot
                 "{result}"
             );
             assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
+            assert_eq!(std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink(), link);
             assert!(!home.path().join(".agents/skills/alpha").exists());
         }
     }
