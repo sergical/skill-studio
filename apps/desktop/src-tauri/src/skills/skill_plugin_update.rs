@@ -749,14 +749,32 @@ fn wanted_remote_sources(
 /// a missing manifest counts as "no version" only when the commit itself is
 /// readable, since GitHub also answers 404 for a private repo.
 pub fn refresh_plugin_versions_with(home: &Path, app_data: &Path, remote_api: &dyn PluginRemote) {
+    refresh_plugin_versions_selected_with(home, app_data, remote_api, None);
+}
+
+fn refresh_plugin_versions_selected_with(
+    home: &Path,
+    app_data: &Path,
+    remote_api: &dyn PluginRemote,
+    plugin_id: Option<&str>,
+) {
     let plugins_dir = home.join(".claude").join("plugins");
     let installed_ids: Vec<String> =
         std::fs::read_to_string(plugins_dir.join("installed_plugins.json"))
-            .map(|installed| parse_installs(&installed).into_keys().collect())
+            .map(|installed| {
+                parse_installs(&installed)
+                    .into_keys()
+                    .filter(|id| plugin_id.is_none_or(|selected| id == selected))
+                    .collect()
+            })
             .unwrap_or_default();
     let path = plugin_versions_path(app_data);
     let previous = read_plugin_versions(&path);
-    let mut next = PluginVersionCache::default();
+    let mut next = if plugin_id.is_some() {
+        previous.clone()
+    } else {
+        PluginVersionCache::default()
+    };
     refresh_catalogs(
         &plugins_dir,
         &installed_ids,
@@ -862,30 +880,37 @@ pub fn refresh_plugin_versions(
     let _guard = REFRESH_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    run_refresh(home, app_data, gh_bin, timeout);
+    run_refresh(home, app_data, gh_bin, timeout, None);
 }
 
 /// [`refresh_plugin_versions`], skipped while another refresh runs: a waiting
 /// caller could sit behind a background check for its full timeout.
 /// Returns false when it skipped.
-pub fn try_refresh_plugin_versions(
+pub fn try_refresh_plugin_version(
     home: &Path,
     app_data: &Path,
     gh_bin: &Path,
     timeout: std::time::Duration,
+    plugin_id: &str,
 ) -> bool {
     let _guard = match REFRESH_LOCK.try_lock() {
         Ok(guard) => guard,
         Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
         Err(std::sync::TryLockError::WouldBlock) => return false,
     };
-    run_refresh(home, app_data, gh_bin, timeout);
+    run_refresh(home, app_data, gh_bin, timeout, Some(plugin_id));
     true
 }
 
-fn run_refresh(home: &Path, app_data: &Path, gh_bin: &Path, timeout: std::time::Duration) {
+fn run_refresh(
+    home: &Path,
+    app_data: &Path,
+    gh_bin: &Path,
+    timeout: std::time::Duration,
+    plugin_id: Option<&str>,
+) {
     let control = AddOperationControl::new(Arc::new(AtomicBool::new(false)), timeout);
-    refresh_plugin_versions_with(home, app_data, &GhRemote(gh_bin, control));
+    refresh_plugin_versions_selected_with(home, app_data, &GhRemote(gh_bin, control), plugin_id);
 }
 
 fn read_marketplace(plugins_dir: &Path, marketplace: &str) -> Option<String> {
@@ -1054,18 +1079,20 @@ mod tests {
             let _held = REFRESH_LOCK
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            assert!(!try_refresh_plugin_versions(
+            assert!(!try_refresh_plugin_version(
                 home.path(),
                 app_data.path(),
                 gh,
-                timeout
+                timeout,
+                "sentry@claude-plugins-official"
             ));
         }
-        assert!(try_refresh_plugin_versions(
+        assert!(try_refresh_plugin_version(
             home.path(),
             app_data.path(),
             gh,
-            timeout
+            timeout,
+            "sentry@claude-plugins-official"
         ));
     }
 
@@ -1701,6 +1728,49 @@ mod tests {
     }
     fn missing() -> ManifestFetch {
         ManifestFetch::Missing
+    }
+
+    #[test]
+    fn updating_one_plugin_only_fetches_that_plugin_and_keeps_other_cached_versions() {
+        let home = tempfile::tempdir().unwrap();
+        let app_data = tempfile::tempdir().unwrap();
+        write_fixture(
+            home.path(),
+            r#"{"plugins":{"sentry@claude-plugins-official":[{"scope":"user"}],"figma@claude-plugins-official":[{"scope":"user"}]}}"#,
+            Some(
+                r#"{"plugins":[{"name":"sentry","source":{"source":"url","url":"https://github.com/o/sentry","sha":"aa11"}},{"name":"figma","source":{"source":"url","url":"https://github.com/o/figma","sha":"bb22"}}]}"#,
+            ),
+        );
+        let mut previous = PluginVersionCache::default();
+        previous.entries.insert(
+            "unrelated-cached-source".to_string(),
+            CachedPluginVersion {
+                version: Some("2.0.0".to_string()),
+            },
+        );
+        write_plugin_versions(&plugin_versions_path(app_data.path()), &previous).unwrap();
+        let remote = FakeRemote {
+            manifests: vec![
+                ("repos/o/sentry/", sentry_content),
+                ("repos/o/figma/", nameonly_content),
+            ],
+            ..Default::default()
+        };
+        refresh_plugin_versions_selected_with(
+            home.path(),
+            app_data.path(),
+            &remote,
+            Some("sentry@claude-plugins-official"),
+        );
+        assert_eq!(
+            remote.manifest_calls.borrow().as_slice(),
+            ["repos/o/sentry/contents/.claude-plugin/plugin.json?ref=aa11"]
+        );
+        let cache = read_plugin_versions(&plugin_versions_path(app_data.path()));
+        assert_eq!(
+            cache.entries.get("unrelated-cached-source"),
+            previous.entries.get("unrelated-cached-source")
+        );
     }
 
     #[test]

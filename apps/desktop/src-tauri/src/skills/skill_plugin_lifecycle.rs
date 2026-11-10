@@ -71,6 +71,7 @@ pub struct PluginUpdateResult {
     pub outcome: String,
     /// The CLI's own `message` (or `reason`) for the outcome, when it gave one.
     pub message: Option<String>,
+    pub marketplace_refreshed: bool,
 }
 
 /// True for `<plugin>@<marketplace>`, both halves non-empty and built only
@@ -132,7 +133,7 @@ fn update_error(plugin_id: &str, scope: &str, cwd: Option<&Path>, message: Strin
             .map(|dir| format!("cd {} && ", shell_quote(&dir.to_string_lossy())))
             .unwrap_or_default();
         format!(
-            "This update runs a command from the plugin's marketplace that needs your OK. Run `{cd}claude plugin update {plugin_id} -s {scope}` in a terminal to review it."
+            "This update runs a command from the plugin's marketplace that needs your OK. Run {cd}claude plugin update {plugin_id} -s {scope} in a terminal to review it."
         )
     } else {
         friendly_error(message)
@@ -203,6 +204,7 @@ fn parse_update_outcome(stdout: &[u8]) -> Result<PluginUpdateResult, String> {
         return Ok(PluginUpdateResult {
             outcome: "updated".to_string(),
             message: None,
+            marketplace_refreshed: false,
         });
     };
     let text_field = |name: &str| {
@@ -220,6 +222,7 @@ fn parse_update_outcome(stdout: &[u8]) -> Result<PluginUpdateResult, String> {
     Ok(PluginUpdateResult {
         outcome: text_field("updateOutcome").unwrap_or_else(|| "updated".to_string()),
         message: text_field("message").or_else(|| text_field("reason")),
+        marketplace_refreshed: false,
     })
 }
 
@@ -235,6 +238,16 @@ pub fn update_plugin_with(
     plugin_id: &str,
     scope: &str,
     project_path: Option<&Path>,
+) -> Result<PluginUpdateResult, String> {
+    update_plugin_inner(runner, plugin_id, scope, project_path, true)
+}
+
+fn update_plugin_inner(
+    runner: &dyn CommandRunner,
+    plugin_id: &str,
+    scope: &str,
+    project_path: Option<&Path>,
+    refresh: bool,
 ) -> Result<PluginUpdateResult, String> {
     require_valid_plugin_id(plugin_id)?;
     match scope {
@@ -256,20 +269,25 @@ pub fn update_plugin_with(
             dir.display()
         ));
     }
-    let refresh_error = plugin_id.split_once('@').and_then(|(_, marketplace)| {
-        runner
-            .run(
-                CLAUDE_CLI,
-                &plugin_marketplace_update_args(marketplace),
-                None::<&Path>,
-            )
-            .err()
-            .map(|message| (marketplace, friendly_error(message)))
-    });
+    let refresh_error = if refresh {
+        plugin_id.split_once('@').and_then(|(_, marketplace)| {
+            runner
+                .run(
+                    CLAUDE_CLI,
+                    &plugin_marketplace_update_args(marketplace),
+                    None::<&Path>,
+                )
+                .err()
+                .map(|message| (marketplace, friendly_error(message)))
+        })
+    } else {
+        None
+    };
     let stdout = runner
         .run_output(CLAUDE_CLI, &plugin_update_args(plugin_id, scope), cwd)
         .map_err(|message| update_error(plugin_id, scope, cwd, message))?;
     let mut result = parse_update_outcome(&stdout)?;
+    result.marketplace_refreshed = refresh && refresh_error.is_none();
     if let (Some((marketplace, error)), "up_to_date") = (refresh_error, result.outcome.as_str()) {
         result.outcome = "marketplace_stale".to_string();
         result.message = Some(format!(
@@ -277,6 +295,15 @@ pub fn update_plugin_with(
         ));
     }
     Ok(result)
+}
+
+pub fn update_plugin_without_refresh_with(
+    runner: &dyn CommandRunner,
+    plugin_id: &str,
+    scope: &str,
+    project_path: Option<&Path>,
+) -> Result<PluginUpdateResult, String> {
+    update_plugin_inner(runner, plugin_id, scope, project_path, false)
 }
 
 #[cfg(test)]
@@ -574,6 +601,7 @@ mod tests {
             PluginUpdateResult {
                 outcome: "skipped".to_string(),
                 message: Some("Pinned to 1.0.0".to_string()),
+                marketplace_refreshed: true,
             }
         );
     }
@@ -642,7 +670,7 @@ mod tests {
         let err = update_plugin_with(&runner, "codex@anthropics", "user", None).unwrap_err();
         assert_eq!(
             err,
-            "This update runs a command from the plugin's marketplace that needs your OK. Run `claude plugin update codex@anthropics -s user` in a terminal to review it."
+            "This update runs a command from the plugin's marketplace that needs your OK. Run claude plugin update codex@anthropics -s user in a terminal to review it."
         );
     }
 
@@ -663,7 +691,7 @@ mod tests {
         let quoted = format!("'{}/it'\\''s app'", parent.path().display());
         assert!(
             err.contains(&format!(
-                "Run `cd {quoted} && claude plugin update codex@anthropics -s project`"
+                "Run cd {quoted} && claude plugin update codex@anthropics -s project"
             )),
             "{err}"
         );
@@ -700,5 +728,25 @@ mod tests {
         };
         let err = update_plugin_with(&runner, "codex@anthropics", "user", None).unwrap_err();
         assert_eq!(err, "Plugin not found");
+    }
+
+    #[test]
+    fn project_confirmation_hint_keeps_a_backtick_in_the_quoted_path_without_markdown_delimiters() {
+        let message = update_error(
+            "demo@market",
+            "project",
+            Some(Path::new("/project`copy")),
+            "Pass --yes".to_string(),
+        );
+        assert_eq!(message, "This update runs a command from the plugin's marketplace that needs your OK. Run cd '/project`copy' && claude plugin update demo@market -s project in a terminal to review it.");
+    }
+
+    #[test]
+    fn a_batch_with_a_refreshed_marketplace_runs_only_the_plugin_update_or_refreshes_it_twice() {
+        let runner = FakeRunner::default();
+        update_plugin_without_refresh_with(&runner, "demo@market", "user", None).unwrap();
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, plugin_update_args("demo@market", "user"));
     }
 }

@@ -18,7 +18,6 @@ import type {
   AppVersion,
   BulkTargetResult,
   DiscoverySourceSetting,
-  ImportResult,
   FixSkillOutcome,
   ForkRecord,
   FrontmatterRepairApplyMode,
@@ -34,8 +33,6 @@ import type {
   LifecycleTarget,
   InvocationPolicy,
   InvocationTarget,
-  PackImportPreflightResult,
-  PackImportRequest,
   PaginatedSkillsResponse,
   ProjectFolder,
   PullResult,
@@ -476,33 +473,6 @@ export async function unforkSkill(target: LifecycleTarget): Promise<void> {
 }
 
 // ============================================================================
-// Share Packs API
-// ============================================================================
-
-/**
- * Preflight and import a pack from a GitHub repo or local folder. Remote
- * repository identities pause for explicit trust before any install.
- */
-export async function importSkillPack(
-  request: PackImportRequest,
-): Promise<PackImportPreflightResult> {
-  return callCommand("import_skill_pack", { request });
-}
-
-/** Confirm the exact repository list returned by pack import preflight. */
-export async function confirmSkillPackTrust(
-  confirmationToken: string,
-  request: PackImportRequest,
-): Promise<ImportResult> {
-  return callCommand("confirm_skill_pack_trust", { confirmationToken, request });
-}
-
-/** Consume a pending pack trust prompt and remove its unchanged local snapshot. */
-export async function abandonPackImportTrust(confirmationToken: string): Promise<boolean> {
-  return callCommand("abandon_pack_import_trust", { confirmationToken });
-}
-
-// ============================================================================
 // Add Skill API
 // ============================================================================
 
@@ -759,6 +729,7 @@ export async function setPluginEnabled(
 
 /** What `claude plugin update --json` reported for one install. */
 export interface PluginUpdateResult {
+  marketplace_refreshed?: boolean;
   /** The CLI's `updateOutcome`: `updated`, `up_to_date`, or another value such as `skipped`. */
   outcome: string;
   /** The CLI's own message or reason for the outcome, when it gave one. */
@@ -777,8 +748,11 @@ export async function updatePlugin(
   harness: string,
   scope: string,
   projectPath: string | null,
+  skipMarketplaceRefresh = false,
 ): Promise<PluginUpdateResult> {
-  return callCommand("update_plugin", { pluginId, harness, scope, projectPath });
+  const request = { pluginId, harness, scope, projectPath };
+  if (skipMarketplaceRefresh) Object.assign(request, { skipMarketplaceRefresh: true });
+  return callCommand("update_plugin", request);
 }
 
 /**
