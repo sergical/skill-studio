@@ -414,8 +414,6 @@ pub fn assert_recorded_lock(home: &Path, own: &serde_json::Value, unrelated: &se
     assert_eq!(&lock["skills"]["unrelated"], unrelated);
 }
 
-
-
 const DOTAGENTS_DECLARATION: &str = include_str!(
     "../../../../crates/skill-studio-core/tests/fixtures/dotagents-remove-3.0.1/before-agents.toml"
 );
