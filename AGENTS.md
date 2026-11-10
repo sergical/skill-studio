@@ -101,24 +101,28 @@ rules are firm:
   [build]
   build-dir = "{cargo-cache-home}/build/{workspace-path-hash}"
   incremental = false
-  
   [profile.test]
   debug = false
   ```
 
-  Intermediate files go to `~/.cargo/build/<hash>/`, one folder per worktree.
-  Final binaries (`target/debug/skill-studio`) stay in `target/`. Do not set
-  `CARGO_TARGET_DIR`, `CARGO_BUILD_BUILD_DIR`, or `--target-dir`. A worktree
-  costs about 4 to 5 GB.
+  Intermediate files go to `~/.cargo/build/<xx>/<hash>/`, one folder per
+  worktree, about 4 to 5 GB each. Final binaries (`target/debug/skill-studio`)
+  stay in the worktree's own `target/` (107 MB measured) and go with
+  `git worktree remove`. Do not set `CARGO_BUILD_BUILD_DIR` or `--target-dir`,
+  and do not set `CARGO_TARGET_DIR` except for `pnpm run perf:baseline` (see
+  `docs/perf/README.md`): worktrees that share a `target/` overwrite each
+  other's final binaries.
 
 - **Delete old build folders automatically.** Cargo never deletes them.
-  `tools/cargo-build-gc.sh` deletes whole worktree folders, least recently
-  built first, above a 40 GB total, below 30 GB free disk, or after 3 days. It
-  never runs while `cargo` or `rustc` runs. Run it every 15 minutes with
-  launchd (macOS):
+  `tools/cargo-build-gc.pl` deletes whole worktree folders under
+  `~/.cargo/build/`, least recently used first, above a 40 GB total, below
+  30 GB free disk, or after 3 days. It skips a folder while Cargo holds its
+  lock or a process runs from it (Cargo releases the lock before it runs test
+  binaries), and holds the lock while it moves the folder away. Run it every 15
+  minutes with launchd (macOS):
 
   ```bash
-  install -m 755 tools/cargo-build-gc.sh ~/.local/bin/cargo-build-gc
+  install -m 755 tools/cargo-build-gc.pl ~/.local/bin/cargo-build-gc
   # LaunchAgent: ProgramArguments ~/.local/bin/cargo-build-gc, StartInterval 900
   ```
 
