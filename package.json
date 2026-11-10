@@ -26,7 +26,8 @@
     "knip": "knip",
     "clean:target": "sh tools/clean-target.sh",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run doctor && pnpm run knip && pnpm run test && pnpm --filter skill-studio run types:check && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
-    "doctor": "react-doctor apps/desktop -y --no-score --no-supply-chain --blocking warning"
+    "doctor": "react-doctor apps/desktop -y --no-score --no-supply-chain --blocking warning",
+    "perf:baseline": "python3 tools/perf-baseline.py"
   },
   "devDependencies": {
     "@oxlint/plugins": "^1.87.0",
