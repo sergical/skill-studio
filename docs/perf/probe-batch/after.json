@@ -1,0 +1,293 @@
+{
+  "status": "provisional: recorded under load",
+  "source_git_sha": "b8f3d749cdc5bb75a853ba6fd3018267a84518bc",
+  "recorded_at_utc": "2026-11-10T09:20:30.181152+00:00",
+  "hardware": {
+    "cpu": "Apple M3 Max",
+    "memory_bytes": 38654705664,
+    "macos": "26.7"
+  },
+  "binary_sha256": "c68a3f79fc04bfbaacded70bcc90b7423e718f0dcb9a13020697a03665eacbd2",
+  "fixture": "six native version executables, empty agent config/session roots; new runtime and spawner each sample",
+  "includes_login_shell": false,
+  "cache_identity": "invocation path, resolved target, size, exact mtime",
+  "percentile": "nearest rank",
+  "metrics": [
+    {
+      "metric": "uncached initial",
+      "n": 10,
+      "median_ms": 93.99572900000001,
+      "p95_ms": 144.115084,
+      "max_ms": 144.115084,
+      "samples": [
+        {
+          "elapsed_ms": 91.9385,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 94.387166,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 144.115084,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 96.162166,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 91.669375,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 87.27250000000001,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 94.37741700000001,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 93.614041,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 99.399958,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 90.12329199999999,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        }
+      ]
+    },
+    {
+      "metric": "uncached repeat",
+      "n": 10,
+      "median_ms": 89.96729149999999,
+      "p95_ms": 119.6845,
+      "max_ms": 119.6845,
+      "samples": [
+        {
+          "elapsed_ms": 90.79654199999999,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 95.051375,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 88.672541,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 88.387042,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 92.012541,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 119.6845,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 87.81400000000001,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 88.01287500000001,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 94.00125,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 89.138041,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        }
+      ]
+    },
+    {
+      "metric": "persistent miss",
+      "n": 10,
+      "median_ms": 97.339604,
+      "p95_ms": 99.126084,
+      "max_ms": 99.126084,
+      "samples": [
+        {
+          "elapsed_ms": 92.90275000000001,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 87.89125,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 91.993417,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 99.126084,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 95.721292,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 98.33512499999999,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 96.344083,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 98.456541,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 98.561792,
+          "load_average": "{ 10.06 9.31 8.54 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 98.4405,
+          "load_average": "{ 9.58 9.22 8.51 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        }
+      ]
+    },
+    {
+      "metric": "persistent hit",
+      "n": 10,
+      "median_ms": 1.9971245,
+      "p95_ms": 2.5691249999999997,
+      "max_ms": 2.5691249999999997,
+      "samples": [
+        {
+          "elapsed_ms": 2.5691249999999997,
+          "load_average": "{ 9.58 9.22 8.51 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 2.352208,
+          "load_average": "{ 9.58 9.22 8.51 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 1.987416,
+          "load_average": "{ 9.58 9.22 8.51 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 2.4406250000000003,
+          "load_average": "{ 9.58 9.22 8.51 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 2.502292,
+          "load_average": "{ 9.58 9.22 8.51 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 1.9,
+          "load_average": "{ 9.58 9.22 8.51 }",
+          "cargo_processes": 7,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 1.1645830000000001,
+          "load_average": "{ 9.58 9.22 8.51 }",
+          "cargo_processes": 6,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 1.0665,
+          "load_average": "{ 9.58 9.22 8.51 }",
+          "cargo_processes": 6,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 1.188375,
+          "load_average": "{ 9.58 9.22 8.51 }",
+          "cargo_processes": 6,
+          "rustc_processes": 0
+        },
+        {
+          "elapsed_ms": 2.006833,
+          "load_average": "{ 9.58 9.22 8.51 }",
+          "cargo_processes": 5,
+          "rustc_processes": 0
+        }
+      ]
+    }
+  ]
+}

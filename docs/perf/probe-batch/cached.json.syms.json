@@ -1,0 +1,1255 @@
+{
+  "string_table": [
+    "UNKNOWN",
+    "start",
+    "perf_detection::main",
+    "main",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/performance-process-probes/crates/skill-studio-host/examples/perf_detection.rs",
+    "perf_detection::sample",
+    "sample",
+    "perf_detection::sample::{{closure}}",
+    "{closure#0}",
+    "std::rt::lang_start::{{closure}}",
+    "{closure#0}<()>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/rt.rs",
+    "std::sys::backtrace::__rust_begin_short_backtrace",
+    "call_once<fn(), ()>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/ops/function.rs",
+    "_rust_begin_short_backtrace<fn(), ()>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/backtrace.rs",
+    "serde_json::de::from_trait",
+    "deserialize<&mut serde_json::de::Deserializer<serde_json::read::SliceRead>>",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/performance-process-probes/crates/skill-studio-host/src/probe_cache.rs",
+    "from_trait<serde_json::read::SliceRead, skill_studio_host::probe_cache::Document>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.154/src/de.rs",
+    "<core::marker::PhantomData<T> as serde_core::de::DeserializeSeed>::deserialize",
+    "deserialize<u32, &mut serde_json::de::Deserializer<serde_json::read::SliceRead>>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.229/src/de/mod.rs",
+    "<&mut serde_json::de::Deserializer<R> as serde_core::de::Deserializer>::deserialize_struct",
+    "next_value_seed<serde_json::read::SliceRead, core::marker::PhantomData<u32>>",
+    "next_value<serde_json::de::MapAccess<serde_json::read::SliceRead>, u32>",
+    "visit_map<serde_json::de::MapAccess<serde_json::read::SliceRead>>",
+    "deserialize_struct<serde_json::read::SliceRead, skill_studio_host::probe_cache::_::{impl#0}::deserialize::__Visitor>",
+    "std::thread::lifecycle::spawn_unchecked",
+    "spawn_unchecked<skill_studio_host::harness_detect::spawn_drain::{closure_env#0}<std::process::ChildStderr>, alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/thread/lifecycle.rs",
+    "spawn_unchecked<skill_studio_host::harness_detect::spawn_drain::{closure_env#0}<std::process::ChildStdout>, alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "std::thread::lifecycle::JoinInner<T>::join",
+    "join<alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "skill_studio_host::probe_cache::ProbeCache::put",
+    "push_mut<skill_studio_host::probe_cache::Entry, alloc::alloc::Global>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/alloc/src/vec/mod.rs",
+    "push<skill_studio_host::probe_cache::Entry, alloc::alloc::Global>",
+    "put",
+    "skill_studio_host::probe_cache::ProbeCache::load",
+    "from_slice<skill_studio_host::probe_cache::Document>",
+    "and_then<std::fs::File, alloc::vec::Vec<skill_studio_host::probe_cache::Entry, alloc::alloc::Global>, skill_studio_host::probe_cache::{impl#1}::load::{closure_env#0}>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/option.rs",
+    "load",
+    "skill_studio_host::probe_cache::_::<impl serde_core::ser::Serialize for skill_studio_host::probe_cache::Entry>::serialize",
+    "serialize_field<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, skill_studio_core::ports::ProcessOutput>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.154/src/ser.rs",
+    "serialize<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>>",
+    "skill_studio_host::probe_cache::ProbeKey::is_current",
+    "is_current",
+    "skill_studio_host::probe_cache::ProbeKey::read",
+    "canonicalize<&std::path::PathBuf>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/fs.rs",
+    "read",
+    "skill_studio_core::ports::_::<impl serde_core::ser::Serialize for skill_studio_core::ports::ProcessOutput>::serialize",
+    "serialize_field<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, bool>",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/performance-process-probes/crates/skill-studio-core/src/ports.rs",
+    "<skill_studio_host::tools::PathToolLookup as skill_studio_core::ports::ToolLookup>::find_binary",
+    "metadata<&std::path::Path>",
+    "is_executable_file",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/performance-process-probes/crates/skill-studio-host/src/tools.rs",
+    "find_map<std::path::PathBuf, std::path::PathBuf, skill_studio_host::tools::{impl#2}::find_binary::{closure_env#0}>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/slice/iter/macros.rs",
+    "find_binary",
+    "serde_core::ser::SerializeMap::serialize_entry",
+    "serialize<skill_studio_host::probe_cache::Entry, &mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.229/src/ser/impls.rs",
+    "serialize_element<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, &skill_studio_host::probe_cache::Entry>",
+    "{closure#0}<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_host::probe_cache::Entry, alloc::alloc::Global>>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.229/src/ser/mod.rs",
+    "{closure#0}<&skill_studio_host::probe_cache::Entry, core::result::Result<(), serde_json::error::Error>, serde_core::ser::Serializer::collect_seq::{closure_env#0}<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_host::probe_cache::Entry, alloc::alloc::Global>>>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/iter/traits/iterator.rs",
+    "try_fold<core::slice::iter::Iter<skill_studio_host::probe_cache::Entry>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<&skill_studio_host::probe_cache::Entry, core::result::Result<(), serde_json::error::Error>, serde_core::ser::Serializer::collect_seq::{closure_env#0}<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_host::probe_cache::Entry, alloc::alloc::Global>>>, core::result::Result<(), serde_json::error::Error>>",
+    "try_for_each<core::slice::iter::Iter<skill_studio_host::probe_cache::Entry>, serde_core::ser::Serializer::collect_seq::{closure_env#0}<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_host::probe_cache::Entry, alloc::alloc::Global>>, core::result::Result<(), serde_json::error::Error>>",
+    "collect_seq<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_host::probe_cache::Entry, alloc::alloc::Global>>",
+    "serialize_value<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, alloc::vec::Vec<skill_studio_host::probe_cache::Entry, alloc::alloc::Global>>",
+    "serialize_entry<serde_json::ser::Compound<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, str, alloc::vec::Vec<skill_studio_host::probe_cache::Entry, alloc::alloc::Global>>",
+    "reserve<u8, alloc::alloc::Global>",
+    "append_elements<u8, alloc::alloc::Global>",
+    "spec_extend<u8, alloc::alloc::Global>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/alloc/src/vec/spec_extend.rs",
+    "extend_from_slice<u8, alloc::alloc::Global>",
+    "write_all<alloc::alloc::Global>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/io/impls.rs",
+    "write_all<alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "write_bool<serde_json::ser::CompactFormatter, &mut alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "serialize_bool<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>",
+    "serialize_value<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, bool>",
+    "serialize_entry<serde_json::ser::Compound<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, str, bool>",
+    "std::io::Write::write_all",
+    "write_all<std::fs::File>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/io/mod.rs",
+    "<skill_studio_host::harness_detect::RealProcessSpawner as skill_studio_core::ports::ProcessSpawner>::run",
+    "run",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/performance-process-probes/crates/skill-studio-host/src/harness_detect.rs",
+    "skill_studio_host::harness_detect::RealProcessSpawner::with_probe_cache",
+    "with_probe_cache",
+    "skill_studio_host::harness_detect::join_killed_reader",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/thread/join_handle.rs",
+    "join_killed_reader",
+    "skill_studio_host::harness_detect::readers_after_exit",
+    "readers_after_exit",
+    "skill_studio_host::harness_detect::spawn_retrying_busy",
+    "retry_when_busy<std::process::Child, skill_studio_host::harness_detect::spawn_retrying_busy::{closure_env#0}>",
+    "spawn_retrying_busy",
+    "<alloc::vec::Vec<T> as alloc::vec::spec_from_iter::SpecFromIter<T,I>>::from_iter",
+    "try_fold<core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<skill_studio_core::harness::HarnessDetection, core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>, fn(skill_studio_core::harness::HarnessDetection) -> core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>>, core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/iter/adapters/mod.rs",
+    "try_for_each<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>>, fn(skill_studio_core::harness::HarnessDetection) -> core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>, core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>>",
+    "next<core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>>",
+    "from_iter<skill_studio_core::harness::HarnessDetection, core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>>>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/alloc/src/vec/spec_from_iter_nested.rs",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/alloc/src/vec/spec_from_iter.rs",
+    "skill_studio_core::ops::harnesses_body",
+    "from_iter<skill_studio_core::harness::HarnessDetection, skill_studio_core::error::CoreError, alloc::vec::Vec<skill_studio_core::harness::HarnessDetection, alloc::alloc::Global>, core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}>>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/result.rs",
+    "collect<core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}>, core::result::Result<alloc::vec::Vec<skill_studio_core::harness::HarnessDetection, alloc::alloc::Global>, skill_studio_core::error::CoreError>>",
+    "harnesses_body",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/performance-process-probes/crates/skill-studio-core/src/ops.rs",
+    "skill_studio_core::ops::codex_path_form",
+    "codex_path_form",
+    "skill_studio_core::ops::harnesses",
+    "harnesses",
+    "skill_studio_core::scope::confined_root",
+    "confined_root",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/performance-process-probes/crates/skill-studio-core/src/scope.rs",
+    "skill_studio_core::scope::NormalizedScope::normalize_with_discovery",
+    "physical",
+    "normalize_with_discovery",
+    "skill_studio_core::scope::NormalizedScope::normalize_with_discovery::{{closure}}",
+    "{closure#4}",
+    "skill_studio_core::harness::DetectedString::unknown",
+    "alloc",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/alloc/src/alloc.rs",
+    "alloc_impl_runtime",
+    "alloc_impl",
+    "allocate",
+    "try_allocate_in<alloc::alloc::Global>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/alloc/src/raw_vec/mod.rs",
+    "with_capacity_in<alloc::alloc::Global>",
+    "with_capacity_in<u8, alloc::alloc::Global>",
+    "to_vec<u8, alloc::alloc::Global>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/alloc/src/slice.rs",
+    "to_vec_in<u8, alloc::alloc::Global>",
+    "to_vec<u8>",
+    "to_owned<u8>",
+    "to_owned",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/alloc/src/str.rs",
+    "from",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/alloc/src/string.rs",
+    "into<&str, alloc::string::String>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/convert/mod.rs",
+    "unknown<&str>",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/performance-process-probes/crates/skill-studio-core/src/harness.rs",
+    "skill_studio_core::harness::HarnessAdapter::detect_with_cancel",
+    "{closure#0}<skill_studio_core::harness::ClaudeCodeAdapter>",
+    "find_map<&str, std::path::PathBuf, skill_studio_core::harness::HarnessAdapter::detect_with_cancel::{closure#0}::{closure_env#0}<skill_studio_core::harness::ClaudeCodeAdapter>>",
+    "and_then<&dyn skill_studio_core::ports::ToolLookup, std::path::PathBuf, skill_studio_core::harness::HarnessAdapter::detect_with_cancel::{closure_env#0}<skill_studio_core::harness::ClaudeCodeAdapter>>",
+    "detect_with_cancel<skill_studio_core::harness::ClaudeCodeAdapter>",
+    "{closure#0}<skill_studio_core::harness::GrokBuildAdapter>",
+    "find_map<&str, std::path::PathBuf, skill_studio_core::harness::HarnessAdapter::detect_with_cancel::{closure#0}::{closure_env#0}<skill_studio_core::harness::GrokBuildAdapter>>",
+    "and_then<&dyn skill_studio_core::ports::ToolLookup, std::path::PathBuf, skill_studio_core::harness::HarnessAdapter::detect_with_cancel::{closure_env#0}<skill_studio_core::harness::GrokBuildAdapter>>",
+    "detect_with_cancel<skill_studio_core::harness::GrokBuildAdapter>",
+    "probe_version<skill_studio_core::harness::CodexAdapter>",
+    "detect_with_cancel<skill_studio_core::harness::CodexAdapter>",
+    "probe_version<skill_studio_core::harness::OpenCodeAdapter>",
+    "detect_with_cancel<skill_studio_core::harness::OpenCodeAdapter>",
+    "{closure#0}<skill_studio_core::harness::PiAdapter>",
+    "find_map<&str, std::path::PathBuf, skill_studio_core::harness::HarnessAdapter::detect_with_cancel::{closure#0}::{closure_env#0}<skill_studio_core::harness::PiAdapter>>",
+    "and_then<&dyn skill_studio_core::ports::ToolLookup, std::path::PathBuf, skill_studio_core::harness::HarnessAdapter::detect_with_cancel::{closure_env#0}<skill_studio_core::harness::PiAdapter>>",
+    "detect_with_cancel<skill_studio_core::harness::PiAdapter>",
+    "{closure#0}<skill_studio_core::harness::CursorAdapter>",
+    "find_map<&str, std::path::PathBuf, skill_studio_core::harness::HarnessAdapter::detect_with_cancel::{closure#0}::{closure_env#0}<skill_studio_core::harness::CursorAdapter>>",
+    "and_then<&dyn skill_studio_core::ports::ToolLookup, std::path::PathBuf, skill_studio_core::harness::HarnessAdapter::detect_with_cancel::{closure_env#0}<skill_studio_core::harness::CursorAdapter>>",
+    "detect_with_cancel<skill_studio_core::harness::CursorAdapter>",
+    "skill_studio_core::harness::infer_install_method",
+    "infer_install_method",
+    "skill_studio_core::ports::Runtime::new",
+    "new",
+    "skill_studio_core::ports::Runtime::run",
+    "run<skill_studio_core::harness::HarnessReport, skill_studio_core::ops::harnesses::{closure_env#0}>",
+    "core::iter::adapters::try_process",
+    "collect<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>>, alloc::vec::Vec<skill_studio_core::harness::HarnessDetection, alloc::alloc::Global>>",
+    "{closure#0}<skill_studio_core::harness::HarnessDetection, skill_studio_core::error::CoreError, alloc::vec::Vec<skill_studio_core::harness::HarnessDetection, alloc::alloc::Global>, core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}>>",
+    "try_process<core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}>, skill_studio_core::harness::HarnessDetection, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>, core::result::{impl#26}::from_iter::{closure_env#0}<skill_studio_core::harness::HarnessDetection, skill_studio_core::error::CoreError, alloc::vec::Vec<skill_studio_core::harness::HarnessDetection, alloc::alloc::Global>, core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}>>, alloc::vec::Vec<skill_studio_core::harness::HarnessDetection, alloc::alloc::Global>>",
+    "<core::iter::adapters::map::Map<I,F> as core::iter::traits::iterator::Iterator>::try_fold",
+    "{closure#0}<&alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>, core::result::Result<skill_studio_core::harness::HarnessDetection, skill_studio_core::error::CoreError>, (), core::ops::control_flow::ControlFlow<core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>, ()>, skill_studio_core::ops::harnesses_body::{closure_env#0}, core::iter::adapters::{impl#0}::try_fold::{closure_env#0}<core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<skill_studio_core::harness::HarnessDetection, core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>, fn(skill_studio_core::harness::HarnessDetection) -> core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>>, core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>>>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/iter/adapters/map.rs",
+    "try_fold<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, (), core::iter::adapters::map::map_try_fold::{closure_env#0}<&alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>, core::result::Result<skill_studio_core::harness::HarnessDetection, skill_studio_core::error::CoreError>, (), core::ops::control_flow::ControlFlow<core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>, ()>, skill_studio_core::ops::harnesses_body::{closure_env#0}, core::iter::adapters::{impl#0}::try_fold::{closure_env#0}<core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<skill_studio_core::harness::HarnessDetection, core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>, fn(skill_studio_core::harness::HarnessDetection) -> core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>>, core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>>>, core::ops::control_flow::ControlFlow<core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>, ()>>",
+    "try_fold<core::result::Result<skill_studio_core::harness::HarnessDetection, skill_studio_core::error::CoreError>, core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}, (), core::iter::adapters::{impl#0}::try_fold::{closure_env#0}<core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::boxed::Box<dyn skill_studio_core::harness::HarnessAdapter, alloc::alloc::Global>>, skill_studio_core::ops::harnesses_body::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<skill_studio_core::harness::HarnessDetection, core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>, fn(skill_studio_core::harness::HarnessDetection) -> core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>>, core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>>, core::ops::control_flow::ControlFlow<core::ops::control_flow::ControlFlow<skill_studio_core::harness::HarnessDetection, ()>, ()>>",
+    "<std::sys::process::unix::common::Command>::spawn",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/process/unix/unix.rs",
+    "<std::sys::thread::unix::Thread>::new",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/thread/unix.rs",
+    "<std::sys::thread::unix::Thread>::join",
+    "<std::sys::process::unix::common::Stdio>::to_child_stdio",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/process/unix/common.rs",
+    "<std::path::Path>::is_dir",
+    "std::sys::fs::unix::stat",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/fs/unix.rs",
+    "<std::sys::fs::unix::stat as core::ops::function::Fn<(&core::ffi::c_str::CStr,)>>::call",
+    "std::sys::helpers::small_c_string::run_with_cstr_stack::<std::sys::fs::unix::FileAttr>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/helpers/small_c_string.rs",
+    "std::sys::helpers::small_c_string::run_with_cstr::<std::sys::fs::unix::FileAttr>",
+    "std::sys::helpers::small_c_string::run_path_with_cstr::<std::sys::fs::unix::FileAttr>",
+    "std::sys::fs::metadata",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/fs/mod.rs",
+    "std::fs::metadata::<&std::path::Path>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/path.rs",
+    "<std::fs::DirBuilder>::_create",
+    "<std::sys::fs::unix::DirBuilder>::mkdir::{closure#0}",
+    "std::sys::helpers::small_c_string::run_with_cstr_stack::<()>",
+    "std::sys::helpers::small_c_string::run_with_cstr::<()>",
+    "std::sys::helpers::small_c_string::run_path_with_cstr::<()>",
+    "<std::sys::fs::unix::DirBuilder>::mkdir",
+    "<std::fs::DirBuilder>::create_dir_all",
+    "<std::process::Child>::try_wait",
+    "<std::sys::process::unix::unix::Process>::try_wait",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/process.rs",
+    "<std::sys::process::unix::common::Command>::capture_env",
+    "<std::sys::process::unix::common::Command>::setup_io",
+    "<std::sys::fs::unix::File>::open_c",
+    "<std::sys::fs::unix::File>::open_c::{closure#0}",
+    "std::sys::pal::unix::cvt_r::<i32, <std::sys::fs::unix::File>::open_c::{closure#0}>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/pal/unix/mod.rs",
+    "<std::process::Command>::spawn",
+    "<std::process::Command>::output",
+    "std::sys::process::output",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/process/mod.rs",
+    "<std::fs::OpenOptions>::_open",
+    "<std::sys::fs::unix::File>::open::{closure#0}",
+    "std::sys::helpers::small_c_string::run_with_cstr_stack::<std::sys::fs::unix::File>",
+    "std::sys::helpers::small_c_string::run_with_cstr::<std::sys::fs::unix::File>",
+    "std::sys::helpers::small_c_string::run_path_with_cstr::<std::sys::fs::unix::File>",
+    "<std::sys::fs::unix::File>::open",
+    "<alloc::sync::Arc<std::thread::thread::Inner, std::alloc::System>>::drop_slow",
+    "<std::sys::sync::thread_parking::darwin::Parker as core::ops::drop::Drop>::drop",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/sync/thread_parking/darwin.rs",
+    "core::ptr::drop_in_place::<std::sys::sync::thread_parking::darwin::Parker>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/ptr/mod.rs",
+    "core::ptr::drop_in_place::<std::thread::thread::Inner>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/alloc/src/sync.rs",
+    "std::rt::lang_start_internal",
+    "<&dyn core::ops::function::Fn<(), Output = i32> + core::panic::unwind_safe::RefUnwindSafe + core::marker::Sync as core::ops::function::FnOnce<()>>::call_once",
+    "std::panicking::catch_unwind::do_call::<&dyn core::ops::function::Fn<(), Output = i32> + core::panic::unwind_safe::RefUnwindSafe + core::marker::Sync, i32>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs",
+    "std::panicking::catch_unwind::<i32, &dyn core::ops::function::Fn<(), Output = i32> + core::panic::unwind_safe::RefUnwindSafe + core::marker::Sync>",
+    "std::panic::catch_unwind::<&dyn core::ops::function::Fn<(), Output = i32> + core::panic::unwind_safe::RefUnwindSafe + core::marker::Sync, i32>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panic.rs",
+    "std::rt::lang_start_internal::{closure#0}",
+    "std::panicking::catch_unwind::do_call::<std::rt::lang_start_internal::{closure#0}, isize>",
+    "std::panicking::catch_unwind::<isize, std::rt::lang_start_internal::{closure#0}>",
+    "std::panic::catch_unwind::<std::rt::lang_start_internal::{closure#0}, isize>",
+    "std::sys::fs::canonicalize",
+    "<std::sys::fs::unix::canonicalize as core::ops::function::Fn<(&core::ffi::c_str::CStr,)>>::call",
+    "std::sys::helpers::small_c_string::run_with_cstr_stack::<std::path::PathBuf>",
+    "std::sys::helpers::small_c_string::run_with_cstr::<std::path::PathBuf>",
+    "std::sys::helpers::small_c_string::run_path_with_cstr::<std::path::PathBuf>",
+    "std::sys::fs::rename",
+    "std::sys::fs::unix::rename",
+    "std::sys::fs::rename::{closure#0}::{closure#0}",
+    "std::sys::fs::rename::{closure#0}",
+    "std::thread::functions::sleep",
+    "std::sys::thread::unix::sleep::nanosleep",
+    "std::sys::thread::unix::sleep",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/thread/functions.rs",
+    "std::sys::fs::unix::canonicalize",
+    "std::sys::pipe::unix::pipe",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/pipe/unix.rs",
+    "std::sys::process::unix::common::read_output",
+    "std::sys::process::unix::common::read_output::{closure#0}",
+    "std::sys::pal::unix::cvt_r::<i32, std::sys::process::unix::common::read_output::{closure#0}>",
+    "<std::fs::File as std::io::Write>::write",
+    "<std::sys::fd::unix::FileDesc>::write",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/fd/unix.rs",
+    "<std::sys::fs::unix::File>::write",
+    "<&std::fs::File as std::io::Write>::write",
+    "core::str::count::do_count_chars",
+    "core::str::count::contains_non_continuation_byte",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/str/count.rs",
+    "<core::bstr::ByteStr as core::fmt::Display>::fmt",
+    "core::str::count::count_chars",
+    "<core::str::iter::Chars as core::iter::traits::iterator::Iterator>::count",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/str/iter.rs",
+    "<core::bstr::ByteStr as core::fmt::Display>::fmt::{closure#0}",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/bstr/mod.rs",
+    "core::iter::adapters::map::map_fold::<core::str::lossy::Utf8Chunk, usize, usize, <core::bstr::ByteStr as core::fmt::Display>::fmt::{closure#0}, <usize as core::iter::traits::accum::Sum>::sum<core::iter::adapters::map::Map<core::str::lossy::Utf8Chunks, <core::bstr::ByteStr as core::fmt::Display>::fmt::{closure#0}>>::{closure#0}>::{closure#0}",
+    "<core::str::lossy::Utf8Chunks as core::iter::traits::iterator::Iterator>::fold::<usize, core::iter::adapters::map::map_fold<core::str::lossy::Utf8Chunk, usize, usize, <core::bstr::ByteStr as core::fmt::Display>::fmt::{closure#0}, <usize as core::iter::traits::accum::Sum>::sum<core::iter::adapters::map::Map<core::str::lossy::Utf8Chunks, <core::bstr::ByteStr as core::fmt::Display>::fmt::{closure#0}>>::{closure#0}>::{closure#0}>",
+    "<core::iter::adapters::map::Map<core::str::lossy::Utf8Chunks, <core::bstr::ByteStr as core::fmt::Display>::fmt::{closure#0}> as core::iter::traits::iterator::Iterator>::fold::<usize, <usize as core::iter::traits::accum::Sum>::sum<core::iter::adapters::map::Map<core::str::lossy::Utf8Chunks, <core::bstr::ByteStr as core::fmt::Display>::fmt::{closure#0}>>::{closure#0}>",
+    "<usize as core::iter::traits::accum::Sum>::sum::<core::iter::adapters::map::Map<core::str::lossy::Utf8Chunks, <core::bstr::ByteStr as core::fmt::Display>::fmt::{closure#0}>>",
+    "/rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/iter/traits/accum.rs",
+    "<core::iter::adapters::map::Map<core::str::lossy::Utf8Chunks, <core::bstr::ByteStr as core::fmt::Display>::fmt::{closure#0}> as core::iter::traits::iterator::Iterator>::sum::<usize>",
+    "alloc::raw_vec::RawVec<T,A>::grow_one",
+    "grow_amortized<alloc::alloc::Global>",
+    "grow_one<alloc::alloc::Global>",
+    "grow_one<skill_studio_host::probe_cache::Entry, alloc::alloc::Global>",
+    "alloc::raw_vec::RawVecInner<A>::finish_grow",
+    "realloc",
+    "grow_impl_runtime",
+    "grow_impl",
+    "grow",
+    "finish_grow<alloc::alloc::Global>",
+    "mach_vm_map",
+    "_kernelrpc_mach_vm_deallocate_trap",
+    "_kernelrpc_mach_vm_map_trap",
+    "mach_msg2_trap",
+    "__getattrlist",
+    "__open",
+    "close",
+    "mkdir",
+    "mach_vm_deallocate",
+    "readlink",
+    "__semwait_signal",
+    "write",
+    "rename",
+    "__rename",
+    "__bsdthread_create",
+    "clock_get_time",
+    "__pipe",
+    "posix_spawnattr_init",
+    "posix_spawn",
+    "__posix_spawn",
+    "__wait4",
+    "poll",
+    "stat",
+    "open",
+    "mach_msg2_internal",
+    "_pthread_deallocate",
+    "_pthread_create",
+    "_pthread_join",
+    "_platform_memmove"
+  ],
+  "data": [
+    {
+      "debug_name": "dyld",
+      "debug_id": "0263b88e-0b22-3b33-bbc0-483be879b513",
+      "code_id": "0263B88E0B223B33BBC0483BE879B513",
+      "symbol_table": [{ "rva": 125332, "size": 7096, "symbol": 1 }],
+      "known_addresses": [[132323, 0]]
+    },
+    {
+      "debug_name": "skill-probe-batched",
+      "debug_id": "ae96cf7c-81bb-34c4-b8a5-6b54b50a80d1",
+      "code_id": "AE96CF7C81BB34C4B8A56B54B50A80D1",
+      "symbol_table": [
+        {
+          "rva": 2552,
+          "size": 7580,
+          "symbol": 2,
+          "frames": [{ "function": 3, "file": 4, "line": 94 }]
+        },
+        {
+          "rva": 10132,
+          "size": 4060,
+          "symbol": 5,
+          "frames": [{ "function": 6, "file": 4, "line": 25 }]
+        },
+        {
+          "rva": 14192,
+          "size": 476,
+          "symbol": 7,
+          "frames": [{ "function": 8, "file": 4, "line": 20 }]
+        },
+        { "rva": 22200, "size": 64, "symbol": 3 },
+        {
+          "rva": 22284,
+          "size": 28,
+          "symbol": 9,
+          "frames": [{ "function": 10, "file": 11, "line": 206 }]
+        },
+        {
+          "rva": 25288,
+          "size": 20,
+          "symbol": 12,
+          "frames": [
+            { "function": 13, "file": 14, "line": 250 },
+            { "function": 15, "file": 16, "line": 166 }
+          ]
+        },
+        {
+          "rva": 38068,
+          "size": 352,
+          "symbol": 17,
+          "frames": [
+            { "function": 18, "file": 19, "line": 45 },
+            { "function": 20, "file": 21, "line": 2513 }
+          ]
+        },
+        {
+          "rva": 49740,
+          "size": 440,
+          "symbol": 22,
+          "frames": [{ "function": 23, "file": 24, "line": 821 }]
+        },
+        {
+          "rva": 66084,
+          "size": 2060,
+          "symbol": 25,
+          "frames": [
+            { "function": 26, "file": 21, "line": 2033 },
+            { "function": 27, "file": 24, "line": 1918 },
+            { "function": 28, "file": 19, "line": 45 },
+            { "function": 29, "file": 21, "line": 1851 }
+          ]
+        },
+        {
+          "rva": 69228,
+          "size": 1236,
+          "symbol": 30,
+          "frames": [{ "function": 31, "file": 32, "line": 137 }]
+        },
+        {
+          "rva": 70464,
+          "size": 1236,
+          "symbol": 30,
+          "frames": [{ "function": 33, "file": 32, "line": 137 }]
+        },
+        {
+          "rva": 71700,
+          "size": 376,
+          "symbol": 34,
+          "frames": [{ "function": 35, "file": 32, "line": 241 }]
+        },
+        {
+          "rva": 86620,
+          "size": 1848,
+          "symbol": 36,
+          "frames": [
+            { "function": 37, "file": 38, "line": 1029 },
+            { "function": 39, "file": 38, "line": 992 },
+            { "function": 40, "file": 19, "line": 86 }
+          ]
+        },
+        {
+          "rva": 88468,
+          "size": 616,
+          "symbol": 41,
+          "frames": [
+            { "function": 42, "file": 21, "line": 2671 },
+            { "function": 8, "file": 19, "line": 65 },
+            { "function": 43, "file": 44, "line": 1546 },
+            { "function": 45, "file": 19, "line": 60 }
+          ]
+        },
+        {
+          "rva": 89084,
+          "size": 284,
+          "symbol": 46,
+          "frames": [
+            { "function": 47, "file": 48, "line": 697 },
+            { "function": 49, "file": 19, "line": 40 }
+          ]
+        },
+        {
+          "rva": 89680,
+          "size": 156,
+          "symbol": 50,
+          "frames": [{ "function": 51, "file": 19, "line": 21 }]
+        },
+        {
+          "rva": 89836,
+          "size": 552,
+          "symbol": 52,
+          "frames": [
+            { "function": 53, "file": 54, "line": 3036 },
+            { "function": 55, "file": 19, "line": 25 }
+          ]
+        },
+        {
+          "rva": 109272,
+          "size": 284,
+          "symbol": 56,
+          "frames": [
+            { "function": 57, "file": 48, "line": 697 },
+            { "function": 49, "file": 58, "line": 1053 }
+          ]
+        },
+        {
+          "rva": 141320,
+          "size": 848,
+          "symbol": 59,
+          "frames": [
+            { "function": 60, "file": 54, "line": 2738 },
+            { "function": 61, "file": 62, "line": 50 },
+            { "function": 8, "file": 62, "line": 62 },
+            { "function": 63, "file": 64, "line": 366 },
+            { "function": 65, "file": 62, "line": 58 }
+          ]
+        },
+        {
+          "rva": 158376,
+          "size": 692,
+          "symbol": 66,
+          "frames": [
+            { "function": 67, "file": 68, "line": 472 },
+            { "function": 69, "file": 48, "line": 502 },
+            { "function": 70, "file": 71, "line": 1303 },
+            { "function": 72, "file": 73, "line": 2528 },
+            { "function": 74, "file": 73, "line": 2469 },
+            { "function": 75, "file": 73, "line": 2531 },
+            { "function": 76, "file": 71, "line": 1303 },
+            { "function": 67, "file": 68, "line": 203 },
+            { "function": 77, "file": 48, "line": 656 },
+            { "function": 78, "file": 71, "line": 1861 }
+          ]
+        },
+        {
+          "rva": 161504,
+          "size": 560,
+          "symbol": 66,
+          "frames": [
+            { "function": 79, "file": 38, "line": 1446 },
+            { "function": 80, "file": 38, "line": 2879 },
+            { "function": 81, "file": 82, "line": 56 },
+            { "function": 83, "file": 38, "line": 3500 },
+            { "function": 84, "file": 85, "line": 504 },
+            { "function": 86, "file": 85, "line": 78 },
+            { "function": 87, "file": 48, "line": 1562 },
+            { "function": 88, "file": 48, "line": 82 },
+            { "function": 49, "file": 68, "line": 15 },
+            { "function": 89, "file": 48, "line": 656 },
+            { "function": 90, "file": 71, "line": 1861 }
+          ]
+        },
+        {
+          "rva": 166352,
+          "size": 240,
+          "symbol": 91,
+          "frames": [{ "function": 92, "file": 93, "line": 1877 }]
+        },
+        {
+          "rva": 197124,
+          "size": 11984,
+          "symbol": 94,
+          "frames": [{ "function": 95, "file": 96, "line": 447 }]
+        },
+        {
+          "rva": 209428,
+          "size": 416,
+          "symbol": 97,
+          "frames": [{ "function": 98, "file": 96, "line": 100 }]
+        },
+        {
+          "rva": 210048,
+          "size": 392,
+          "symbol": 99,
+          "frames": [
+            { "function": 35, "file": 100, "line": 150 },
+            { "function": 101, "file": 96, "line": 356 }
+          ]
+        },
+        {
+          "rva": 210760,
+          "size": 500,
+          "symbol": 102,
+          "frames": [{ "function": 103, "file": 96, "line": 379 }]
+        },
+        {
+          "rva": 211260,
+          "size": 292,
+          "symbol": 104,
+          "frames": [
+            { "function": 8, "file": 96, "line": 41 },
+            { "function": 105, "file": 96, "line": 47 },
+            { "function": 106, "file": 96, "line": 41 }
+          ]
+        },
+        {
+          "rva": 1846896,
+          "size": 984,
+          "symbol": 107,
+          "frames": [
+            { "function": 108, "file": 109, "line": 192 },
+            { "function": 110, "file": 73, "line": 2531 },
+            { "function": 111, "file": 109, "line": 174 },
+            { "function": 112, "file": 113, "line": 24 },
+            { "function": 112, "file": 114, "line": 33 }
+          ]
+        },
+        {
+          "rva": 1848368,
+          "size": 992,
+          "symbol": 115,
+          "frames": [
+            { "function": 116, "file": 117, "line": 2156 },
+            { "function": 118, "file": 73, "line": 2064 },
+            { "function": 119, "file": 120, "line": 3688 }
+          ]
+        },
+        {
+          "rva": 1849360,
+          "size": 656,
+          "symbol": 121,
+          "frames": [{ "function": 122, "file": 120, "line": 2003 }]
+        },
+        {
+          "rva": 1851272,
+          "size": 52,
+          "symbol": 123,
+          "frames": [{ "function": 124, "file": 120, "line": 3662 }]
+        },
+        {
+          "rva": 1857048,
+          "size": 696,
+          "symbol": 125,
+          "frames": [{ "function": 126, "file": 127, "line": 457 }]
+        },
+        {
+          "rva": 1857744,
+          "size": 4076,
+          "symbol": 128,
+          "frames": [
+            { "function": 129, "file": 127, "line": 465 },
+            { "function": 130, "file": 127, "line": 289 }
+          ]
+        },
+        {
+          "rva": 1861820,
+          "size": 288,
+          "symbol": 131,
+          "frames": [{ "function": 132, "file": 127, "line": 326 }]
+        },
+        {
+          "rva": 1873864,
+          "size": 112,
+          "symbol": 133,
+          "frames": [
+            { "function": 134, "file": 135, "line": 95 },
+            { "function": 136, "file": 135, "line": 190 },
+            { "function": 137, "file": 135, "line": 312 },
+            { "function": 138, "file": 135, "line": 429 },
+            { "function": 139, "file": 140, "line": 464 },
+            { "function": 141, "file": 140, "line": 433 },
+            { "function": 142, "file": 140, "line": 177 },
+            { "function": 142, "file": 38, "line": 965 },
+            { "function": 143, "file": 144, "line": 448 },
+            { "function": 145, "file": 144, "line": 400 },
+            { "function": 146, "file": 144, "line": 376 },
+            { "function": 147, "file": 144, "line": 842 },
+            { "function": 148, "file": 149, "line": 211 },
+            { "function": 150, "file": 151, "line": 3114 },
+            { "function": 152, "file": 153, "line": 778 },
+            { "function": 154, "file": 155, "line": 997 }
+          ]
+        },
+        {
+          "rva": 1874336,
+          "size": 2832,
+          "symbol": 156,
+          "frames": [
+            { "function": 157, "file": 155, "line": 1116 },
+            { "function": 158, "file": 64, "line": 366 },
+            { "function": 157, "file": 155, "line": 1116 },
+            { "function": 159, "file": 44, "line": 1546 },
+            { "function": 160, "file": 155, "line": 1113 }
+          ]
+        },
+        {
+          "rva": 1877168,
+          "size": 2820,
+          "symbol": 156,
+          "frames": [
+            { "function": 161, "file": 155, "line": 1116 },
+            { "function": 162, "file": 64, "line": 366 },
+            { "function": 161, "file": 155, "line": 1116 },
+            { "function": 163, "file": 44, "line": 1546 },
+            { "function": 164, "file": 155, "line": 1113 }
+          ]
+        },
+        {
+          "rva": 1879988,
+          "size": 2812,
+          "symbol": 156,
+          "frames": [
+            { "function": 165, "file": 155, "line": 1178 },
+            { "function": 166, "file": 155, "line": 1118 }
+          ]
+        },
+        {
+          "rva": 1882800,
+          "size": 2828,
+          "symbol": 156,
+          "frames": [
+            { "function": 167, "file": 155, "line": 1178 },
+            { "function": 168, "file": 155, "line": 1118 }
+          ]
+        },
+        {
+          "rva": 1885628,
+          "size": 2784,
+          "symbol": 156,
+          "frames": [
+            { "function": 169, "file": 155, "line": 1116 },
+            { "function": 170, "file": 64, "line": 366 },
+            { "function": 169, "file": 155, "line": 1116 },
+            { "function": 171, "file": 44, "line": 1546 },
+            { "function": 172, "file": 155, "line": 1113 }
+          ]
+        },
+        {
+          "rva": 1888412,
+          "size": 2844,
+          "symbol": 156,
+          "frames": [
+            { "function": 173, "file": 155, "line": 1116 },
+            { "function": 174, "file": 64, "line": 366 },
+            { "function": 173, "file": 155, "line": 1116 },
+            { "function": 175, "file": 44, "line": 1546 },
+            { "function": 176, "file": 155, "line": 1113 }
+          ]
+        },
+        {
+          "rva": 1909676,
+          "size": 848,
+          "symbol": 177,
+          "frames": [{ "function": 178, "file": 155, "line": 1225 }]
+        },
+        {
+          "rva": 1925468,
+          "size": 384,
+          "symbol": 179,
+          "frames": [{ "function": 180, "file": 58, "line": 1231 }]
+        },
+        {
+          "rva": 1925852,
+          "size": 2748,
+          "symbol": 181,
+          "frames": [
+            { "function": 8, "file": 120, "line": 3662 },
+            { "function": 182, "file": 58, "line": 1279 }
+          ]
+        },
+        {
+          "rva": 1937224,
+          "size": 336,
+          "symbol": 183,
+          "frames": [
+            { "function": 112, "file": 38, "line": 3865 },
+            { "function": 184, "file": 73, "line": 2064 },
+            { "function": 185, "file": 117, "line": 2156 },
+            { "function": 186, "file": 109, "line": 160 }
+          ]
+        },
+        {
+          "rva": 1944628,
+          "size": 1092,
+          "symbol": 187,
+          "frames": [
+            { "function": 8, "file": 120, "line": 3684 },
+            { "function": 188, "file": 189, "line": 95 },
+            { "function": 190, "file": 73, "line": 2469 },
+            { "function": 191, "file": 189, "line": 121 }
+          ]
+        },
+        {
+          "rva": 2054384,
+          "size": 2336,
+          "symbol": 192,
+          "frames": [{ "function": 192, "file": 193, "line": 62 }]
+        },
+        {
+          "rva": 2059028,
+          "size": 476,
+          "symbol": 194,
+          "frames": [{ "function": 194, "file": 195, "line": 98 }]
+        },
+        {
+          "rva": 2059504,
+          "size": 124,
+          "symbol": 196,
+          "frames": [{ "function": 196, "file": 195, "line": 126 }]
+        },
+        {
+          "rva": 2059628,
+          "size": 312,
+          "symbol": 197,
+          "frames": [{ "function": 197, "file": 198, "line": 421 }]
+        },
+        {
+          "rva": 2063900,
+          "size": 356,
+          "symbol": 199,
+          "frames": [
+            { "function": 200, "file": 201, "line": 2164 },
+            { "function": 202, "file": 14, "line": 79 },
+            { "function": 203, "file": 204, "line": 48 },
+            { "function": 205, "file": 204, "line": 28 },
+            { "function": 206, "file": 204, "line": 18 },
+            { "function": 207, "file": 208, "line": 112 },
+            { "function": 209, "file": 54, "line": 2738 },
+            { "function": 199, "file": 210, "line": 3537 }
+          ]
+        },
+        {
+          "rva": 2083068,
+          "size": 2048,
+          "symbol": 211,
+          "frames": [
+            { "function": 212, "file": 201, "line": 1922 },
+            { "function": 213, "file": 204, "line": 48 },
+            { "function": 214, "file": 204, "line": 28 },
+            { "function": 215, "file": 204, "line": 18 },
+            { "function": 216, "file": 201, "line": 1922 },
+            { "function": 217, "file": 54, "line": 3467 },
+            { "function": 211, "file": 54, "line": 3446 }
+          ]
+        },
+        {
+          "rva": 2085444,
+          "size": 176,
+          "symbol": 218,
+          "frames": [
+            { "function": 219, "file": 193, "line": 1035 },
+            { "function": 218, "file": 220, "line": 2330 }
+          ]
+        },
+        {
+          "rva": 2101884,
+          "size": 2712,
+          "symbol": 221,
+          "frames": [{ "function": 221, "file": 198, "line": 335 }]
+        },
+        {
+          "rva": 2105876,
+          "size": 692,
+          "symbol": 222,
+          "frames": [{ "function": 222, "file": 198, "line": 360 }]
+        },
+        {
+          "rva": 2118724,
+          "size": 484,
+          "symbol": 223,
+          "frames": [
+            { "function": 224, "file": 201, "line": 1358 },
+            { "function": 225, "file": 226, "line": 255 },
+            { "function": 223, "file": 201, "line": 1358 }
+          ]
+        },
+        {
+          "rva": 2119208,
+          "size": 120,
+          "symbol": 227,
+          "frames": [{ "function": 227, "file": 220, "line": 1054 }]
+        },
+        {
+          "rva": 2119328,
+          "size": 824,
+          "symbol": 228,
+          "frames": [
+            { "function": 229, "file": 230, "line": 49 },
+            { "function": 228, "file": 220, "line": 1083 }
+          ]
+        },
+        {
+          "rva": 2120512,
+          "size": 252,
+          "symbol": 231,
+          "frames": [
+            { "function": 232, "file": 201, "line": 1346 },
+            { "function": 233, "file": 204, "line": 48 },
+            { "function": 234, "file": 204, "line": 28 },
+            { "function": 235, "file": 204, "line": 18 },
+            { "function": 236, "file": 201, "line": 1346 },
+            { "function": 231, "file": 54, "line": 1920 }
+          ]
+        },
+        {
+          "rva": 2121328,
+          "size": 112,
+          "symbol": 237,
+          "frames": [
+            { "function": 238, "file": 239, "line": 127 },
+            { "function": 240, "file": 241, "line": 805 },
+            { "function": 242, "file": 241, "line": 805 },
+            { "function": 237, "file": 243, "line": 2120 }
+          ]
+        },
+        {
+          "rva": 2123492,
+          "size": 1560,
+          "symbol": 244,
+          "frames": [
+            { "function": 245, "file": 14, "line": 287 },
+            { "function": 246, "file": 247, "line": 581 },
+            { "function": 248, "file": 247, "line": 544 },
+            { "function": 249, "file": 250, "line": 359 },
+            { "function": 251, "file": 11, "line": 175 },
+            { "function": 252, "file": 247, "line": 581 },
+            { "function": 253, "file": 247, "line": 544 },
+            { "function": 254, "file": 250, "line": 359 },
+            { "function": 244, "file": 11, "line": 171 }
+          ]
+        },
+        {
+          "rva": 2131384,
+          "size": 176,
+          "symbol": 255,
+          "frames": [
+            { "function": 256, "file": 14, "line": 79 },
+            { "function": 257, "file": 204, "line": 48 },
+            { "function": 258, "file": 204, "line": 28 },
+            { "function": 259, "file": 204, "line": 18 },
+            { "function": 255, "file": 208, "line": 148 }
+          ]
+        },
+        {
+          "rva": 2133392,
+          "size": 292,
+          "symbol": 260,
+          "frames": [
+            { "function": 261, "file": 201, "line": 2081 },
+            { "function": 262, "file": 208, "line": 76 },
+            { "function": 213, "file": 204, "line": 48 },
+            { "function": 214, "file": 204, "line": 28 },
+            { "function": 215, "file": 204, "line": 18 },
+            { "function": 263, "file": 208, "line": 76 },
+            { "function": 213, "file": 204, "line": 48 },
+            { "function": 214, "file": 204, "line": 28 },
+            { "function": 215, "file": 204, "line": 18 },
+            { "function": 260, "file": 208, "line": 76 }
+          ]
+        },
+        {
+          "rva": 2133976,
+          "size": 296,
+          "symbol": 207,
+          "frames": [
+            { "function": 200, "file": 201, "line": 2164 },
+            { "function": 202, "file": 14, "line": 79 },
+            { "function": 203, "file": 204, "line": 48 },
+            { "function": 205, "file": 204, "line": 28 },
+            { "function": 206, "file": 204, "line": 18 },
+            { "function": 207, "file": 208, "line": 112 }
+          ]
+        },
+        {
+          "rva": 2135272,
+          "size": 176,
+          "symbol": 264,
+          "frames": [
+            { "function": 265, "file": 195, "line": 558 },
+            { "function": 266, "file": 195, "line": 579 },
+            { "function": 264, "file": 267, "line": 289 }
+          ]
+        },
+        {
+          "rva": 2146284,
+          "size": 168,
+          "symbol": 268,
+          "frames": [{ "function": 268, "file": 201, "line": 2186 }]
+        },
+        {
+          "rva": 2148312,
+          "size": 296,
+          "symbol": 269,
+          "frames": [{ "function": 269, "file": 270, "line": 34 }]
+        },
+        {
+          "rva": 2150388,
+          "size": 688,
+          "symbol": 271,
+          "frames": [
+            { "function": 272, "file": 198, "line": 650 },
+            { "function": 273, "file": 226, "line": 255 },
+            { "function": 271, "file": 198, "line": 650 }
+          ]
+        },
+        {
+          "rva": 2168184,
+          "size": 84,
+          "symbol": 274,
+          "frames": [
+            { "function": 275, "file": 276, "line": 346 },
+            { "function": 277, "file": 201, "line": 1723 },
+            { "function": 278, "file": 54, "line": 1401 },
+            { "function": 274, "file": 54, "line": 1516 }
+          ]
+        },
+        {
+          "rva": 2231584,
+          "size": 1812,
+          "symbol": 279,
+          "frames": [
+            { "function": 280, "file": 281, "line": 117 },
+            { "function": 279, "file": 281, "line": 85 }
+          ]
+        },
+        {
+          "rva": 2249180,
+          "size": 872,
+          "symbol": 282,
+          "frames": [
+            { "function": 283, "file": 281, "line": 35 },
+            { "function": 284, "file": 285, "line": 47 },
+            { "function": 286, "file": 287, "line": 180 },
+            { "function": 288, "file": 189, "line": 88 },
+            { "function": 289, "file": 73, "line": 2647 },
+            { "function": 290, "file": 189, "line": 128 },
+            { "function": 291, "file": 292, "line": 50 },
+            { "function": 293, "file": 73, "line": 3658 },
+            { "function": 282, "file": 287, "line": 182 }
+          ]
+        },
+        {
+          "rva": 2256752,
+          "size": 104,
+          "symbol": 294,
+          "frames": [
+            { "function": 295, "file": 140, "line": 527 },
+            { "function": 296, "file": 140, "line": 491 },
+            { "function": 297, "file": 140, "line": 188 }
+          ]
+        },
+        {
+          "rva": 2257272,
+          "size": 180,
+          "symbol": 298,
+          "frames": [
+            { "function": 299, "file": 135, "line": 135 },
+            { "function": 300, "file": 135, "line": 239 },
+            { "function": 301, "file": 135, "line": 342 },
+            { "function": 302, "file": 135, "line": 454 },
+            { "function": 303, "file": 140, "line": 555 }
+          ]
+        }
+      ],
+      "known_addresses": [
+        [4719, 0],
+        [4867, 0],
+        [5011, 0],
+        [5155, 0],
+        [5299, 0],
+        [5443, 0],
+        [5587, 0],
+        [5731, 0],
+        [5875, 0],
+        [6019, 0],
+        [6135, 0],
+        [6251, 0],
+        [6367, 0],
+        [6483, 0],
+        [6599, 0],
+        [6715, 0],
+        [6831, 0],
+        [6947, 0],
+        [7063, 0],
+        [7179, 0],
+        [10223, 1],
+        [10251, 1],
+        [10363, 1],
+        [10907, 1],
+        [11167, 1],
+        [11291, 1],
+        [14287, 2],
+        [22251, 3],
+        [22299, 4],
+        [25299, 5],
+        [38135, 6],
+        [49740, 7],
+        [66603, 8],
+        [69935, 9],
+        [71171, 10],
+        [71731, 11],
+        [71847, 11],
+        [86883, 12],
+        [87251, 12],
+        [87627, 12],
+        [87755, 12],
+        [87911, 12],
+        [87951, 12],
+        [88771, 13],
+        [89211, 14],
+        [89715, 15],
+        [89919, 16],
+        [90003, 16],
+        [109455, 17],
+        [141503, 18],
+        [158647, 19],
+        [161772, 20],
+        [166431, 21],
+        [200071, 22],
+        [200251, 22],
+        [200331, 22],
+        [200647, 22],
+        [200687, 22],
+        [201284, 22],
+        [201379, 22],
+        [202859, 22],
+        [203991, 22],
+        [204083, 22],
+        [209467, 23],
+        [210231, 24],
+        [211083, 25],
+        [211095, 25],
+        [211295, 26],
+        [1846951, 27],
+        [1847475, 27],
+        [1848855, 28],
+        [1849451, 29],
+        [1851311, 30],
+        [1857223, 31],
+        [1858131, 32],
+        [1859035, 32],
+        [1861903, 33],
+        [1873895, 34],
+        [1874423, 35],
+        [1875335, 35],
+        [1875527, 35],
+        [1876447, 35],
+        [1877255, 36],
+        [1878347, 36],
+        [1879267, 36],
+        [1881159, 37],
+        [1882079, 37],
+        [1883987, 38],
+        [1884907, 38],
+        [1885715, 39],
+        [1886771, 39],
+        [1887691, 39],
+        [1888499, 40],
+        [1888979, 40],
+        [1890539, 40],
+        [1909735, 41],
+        [1910371, 41],
+        [1925567, 42],
+        [1926267, 43],
+        [1937287, 44],
+        [1944791, 45],
+        [2054439, 46],
+        [2054479, 46],
+        [2055507, 46],
+        [2055931, 46],
+        [2059215, 47],
+        [2059527, 48],
+        [2059751, 49],
+        [2059831, 49],
+        [2064047, 50],
+        [2083879, 51],
+        [2084327, 51],
+        [2085507, 52],
+        [2101884, 53],
+        [2105967, 54],
+        [2106047, 54],
+        [2118991, 55],
+        [2119247, 56],
+        [2119379, 57],
+        [2119575, 57],
+        [2119603, 57],
+        [2120659, 58],
+        [2121379, 59],
+        [2124443, 60],
+        [2131503, 61],
+        [2133595, 62],
+        [2134115, 63],
+        [2135335, 64],
+        [2146315, 65],
+        [2148347, 66],
+        [2150595, 67],
+        [2150995, 67],
+        [2168215, 68],
+        [2232564, 69],
+        [2249279, 70],
+        [2256811, 71],
+        [2257363, 72]
+      ]
+    },
+    {
+      "debug_name": "libsystem_kernel.dylib",
+      "debug_id": "ee805b14-29f2-360d-9a2c-3221a1211833",
+      "code_id": "EE805B1429F2360D9A2C3221A1211833",
+      "symbol_table": [
+        { "rva": 2384, "size": 312, "symbol": 304 },
+        { "rva": 2720, "size": 12, "symbol": 305 },
+        { "rva": 2756, "size": 12, "symbol": 306 },
+        { "rva": 3116, "size": 12, "symbol": 307 },
+        { "rva": 5684, "size": 44, "symbol": 308 },
+        { "rva": 5772, "size": 44, "symbol": 309 },
+        { "rva": 6376, "size": 44, "symbol": 310 },
+        { "rva": 10112, "size": 44, "symbol": 311 },
+        { "rva": 10156, "size": 164, "symbol": 312 },
+        { "rva": 12628, "size": 44, "symbol": 313 },
+        { "rva": 17152, "size": 44, "symbol": 314 },
+        { "rva": 18476, "size": 44, "symbol": 315 },
+        { "rva": 18520, "size": 44, "symbol": 316 },
+        { "rva": 18564, "size": 44, "symbol": 317 },
+        { "rva": 19152, "size": 44, "symbol": 318 },
+        { "rva": 25868, "size": 328, "symbol": 319 },
+        { "rva": 29664, "size": 56, "symbol": 320 },
+        { "rva": 31320, "size": 256, "symbol": 321 },
+        { "rva": 32400, "size": 580, "symbol": 322 },
+        { "rva": 32980, "size": 44, "symbol": 323 },
+        { "rva": 33904, "size": 44, "symbol": 324 },
+        { "rva": 38640, "size": 44, "symbol": 325 },
+        { "rva": 51332, "size": 44, "symbol": 326 },
+        { "rva": 51376, "size": 200, "symbol": 327 },
+        { "rva": 79192, "size": 256, "symbol": 328 }
+      ],
+      "known_addresses": [
+        [2511, 0],
+        [2728, 1],
+        [2764, 2],
+        [3124, 3],
+        [5692, 4],
+        [5780, 5],
+        [6384, 6],
+        [10120, 7],
+        [10243, 8],
+        [12636, 9],
+        [17160, 10],
+        [18484, 11],
+        [18535, 12],
+        [18572, 13],
+        [19160, 14],
+        [25983, 15],
+        [29676, 16],
+        [31411, 17],
+        [32895, 18],
+        [32988, 19],
+        [33912, 20],
+        [38648, 21],
+        [51340, 22],
+        [51439, 23],
+        [79267, 24]
+      ]
+    },
+    {
+      "debug_name": "libsystem_pthread.dylib",
+      "debug_id": "a58beabd-7ac0-35f8-bcff-e4ffbd79e938",
+      "code_id": "A58BEABD7AC035F8BCFFE4FFBD79E938",
+      "symbol_table": [
+        { "rva": 26408, "size": 136, "symbol": 329 },
+        { "rva": 32672, "size": 1244, "symbol": 330 },
+        { "rva": 36524, "size": 1032, "symbol": 331 }
+      ],
+      "known_addresses": [
+        [26487, 0],
+        [33071, 1],
+        [33308, 1],
+        [33699, 1],
+        [37283, 2]
+      ]
+    },
+    {
+      "debug_name": "libsystem_platform.dylib",
+      "debug_id": "3af14164-15fe-3623-9ee3-46de29fd5b5a",
+      "code_id": "3AF1416415FE36239EE346DE29FD5B5A",
+      "symbol_table": [{ "rva": 13152, "size": 736, "symbol": 332 }],
+      "known_addresses": [[13596, 0]]
+    }
+  ]
+}

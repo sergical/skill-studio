@@ -1,0 +1,30 @@
+{
+  "samples": 234,
+  "top_five": [
+    {
+      "frame": "__semwait_signal",
+      "samples": 144,
+      "share": 0.6153846153846154
+    },
+    {
+      "frame": "__posix_spawn",
+      "samples": 22,
+      "share": 0.09401709401709402
+    },
+    {
+      "frame": "readlink",
+      "samples": 12,
+      "share": 0.05128205128205128
+    },
+    {
+      "frame": "__open",
+      "samples": 10,
+      "share": 0.042735042735042736
+    },
+    {
+      "frame": "_kernelrpc_mach_vm_deallocate_trap",
+      "samples": 8,
+      "share": 0.03418803418803419
+    }
+  ]
+}
