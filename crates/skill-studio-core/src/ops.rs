@@ -6072,6 +6072,7 @@ pub fn park_git_warning(
     ctx: &OpContext,
     deployment_id: &DeploymentId,
 ) -> Option<String> {
+    let _folder_guard = rt.ports.history.guard_data_folder().ok()?;
     let check = park_check(
         rt,
         ctx,

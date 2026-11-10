@@ -1651,6 +1651,7 @@ fn resolve_target(
     target: &TargetArgs,
     kind: TargetKind,
 ) -> Result<DeploymentId, skill_studio_core::CoreError> {
+    let _folder_guard = rt.ports.history.guard_data_folder()?;
     if let Some(id) = &target.id {
         return DeploymentId::parse(id);
     }

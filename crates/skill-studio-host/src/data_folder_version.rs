@@ -115,10 +115,34 @@ fn folder_identity(folder: &Path) -> io::Result<std::path::PathBuf> {
     }
 }
 
+fn private_coordination_root(base: &Path, uid: u32) -> io::Result<std::path::PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+
+    let root = base.join(format!("skill-studio-data-locks-{uid}"));
+    match std::fs::DirBuilder::new().mode(0o700).create(&root) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    let metadata = std::fs::symlink_metadata(&root)?;
+    if !metadata.is_dir()
+        || metadata.uid() != uid
+        || metadata.permissions().mode() & 0o7777 != 0o700
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "Coordination folder {} must be owned by user {uid} with mode 0700",
+                root.display()
+            ),
+        ));
+    }
+    Ok(root)
+}
+
 fn coordination_lock(folder: &Path) -> io::Result<std::fs::File> {
     // CLI and desktop must use the same lock inode even when TMPDIR differs.
-    let root = Path::new("/tmp").join("skill-studio-data-locks");
-    std::fs::create_dir_all(&root)?;
+    let root = private_coordination_root(Path::new("/tmp"), rustix::process::geteuid().as_raw())?;
     let key = skill_studio_core::identity::sha256_hex(folder.as_os_str().as_encoded_bytes());
     std::fs::OpenOptions::new()
         .read(true)
@@ -126,6 +150,16 @@ fn coordination_lock(folder: &Path) -> io::Result<std::fs::File> {
         .create(true)
         .truncate(false)
         .open(root.join(key))
+}
+
+fn lock_error(error: std::fs::TryLockError) -> String {
+    match error {
+        std::fs::TryLockError::WouldBlock => {
+            "Close the other Skill Studio process and try again. It holds the data folder lock."
+                .to_owned()
+        }
+        std::fs::TryLockError::Error(error) => error.to_string(),
+    }
 }
 
 /// Validates all folders, migrates under exclusive locks, then keeps shared locks.
@@ -164,7 +198,7 @@ fn lock_data_folders_before_lock(
         .collect::<io::Result<Vec<_>>>()
         .map_err(|error| error.to_string())?;
     for lock in &locks {
-        lock.lock_shared().map_err(|error| error.to_string())?;
+        lock.try_lock_shared().map_err(lock_error)?;
     }
     let versions = folders
         .iter()
@@ -180,9 +214,9 @@ fn lock_data_folders_before_lock(
         }
         for (lock, version) in locks.iter().zip(&versions) {
             if *version < CURRENT_DATA_VERSION {
-                lock.lock().map_err(|error| error.to_string())?;
+                lock.try_lock().map_err(lock_error)?;
             } else {
-                lock.lock_shared().map_err(|error| error.to_string())?;
+                lock.try_lock_shared().map_err(lock_error)?;
             }
         }
         let versions = folders
@@ -196,7 +230,7 @@ fn lock_data_folders_before_lock(
             }
         }
         for lock in &locks {
-            lock.lock_shared().map_err(|error| error.to_string())?;
+            lock.try_lock_shared().map_err(lock_error)?;
         }
     }
     for folder in &folders {
@@ -394,20 +428,67 @@ mod tests {
     use std::sync::Mutex;
 
     #[test]
+    fn newer_build_migration_refuses_while_older_desktop_holds_the_folder_or_hangs() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("a");
+        let second = dir.path().join("b");
+        std::fs::create_dir(&second).unwrap();
+        let older = coordination_lock(&folder_identity(&second).unwrap()).unwrap();
+        older.lock_shared().unwrap();
+        let error = lock_data_folders(&[&first, &second]).unwrap_err();
+        assert!(
+            error.contains("Close the other Skill Studio process"),
+            "{error}"
+        );
+        assert!(!first.exists());
+        assert!(!second.join(VERSION_FILE_NAME).exists());
+        let released = coordination_lock(&folder_identity(&first).unwrap()).unwrap();
+        released.try_lock().unwrap();
+        drop(released);
+        drop(older);
+        lock_data_folders(&[&first, &second]).unwrap();
+    }
+
+    #[test]
+    fn startup_coordination_uses_private_user_folder_or_other_accounts_block_access() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("skill-studio-data-locks");
+        std::fs::create_dir(&legacy).unwrap();
+        std::fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let uid = rustix::process::geteuid().as_raw();
+        let root = private_coordination_root(dir.path(), uid).unwrap();
+        let metadata = std::fs::metadata(&root).unwrap();
+        assert_eq!(metadata.uid(), uid);
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o700);
+        assert_eq!(private_coordination_root(dir.path(), uid).unwrap(), root);
+        assert_ne!(root, legacy);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(private_coordination_root(dir.path(), uid).is_err());
+        let other_uid = uid + 1;
+        let other = dir
+            .path()
+            .join(format!("skill-studio-data-locks-{other_uid}"));
+        std::fs::create_dir(&other).unwrap();
+        std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(private_coordination_root(dir.path(), other_uid).is_err());
+        std::fs::remove_dir(&root).unwrap();
+        std::os::unix::fs::symlink(&legacy, &root).unwrap();
+        assert!(private_coordination_root(dir.path(), uid).is_err());
+        assert_eq!(
+            std::fs::metadata(&legacy).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+
+    #[test]
     fn startup_symlink_alias_opens_once_or_deadlocks_on_its_own_lock() {
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().join("real");
         std::fs::create_dir(&real).unwrap();
         let alias = dir.path().join("alias");
         std::os::unix::fs::symlink(&real, &alias).unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            tx.send(with_data_folders(&[&real, &alias], || Ok(())))
-                .unwrap();
-        });
-        rx.recv_timeout(std::time::Duration::from_secs(30))
-            .expect("startup deadlocked on a symlink alias")
-            .unwrap();
+        with_data_folders(&[&real, &alias], || Ok(())).unwrap();
         assert_eq!(
             folder_identity(&dir.path().join("alias/missing")).unwrap(),
             folder_identity(&dir.path().join("real/missing")).unwrap()
@@ -497,8 +578,8 @@ mod tests {
             std::fs::read(&marker).unwrap(),
             std::fs::metadata(&marker).unwrap().modified().unwrap(),
         );
-        continue_tx.send(()).unwrap();
         drop(lock);
+        continue_tx.send(()).unwrap();
         let error = older.join().unwrap().unwrap_err();
         assert_eq!(
             error,

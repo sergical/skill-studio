@@ -103,6 +103,13 @@ impl SqliteHistoryOpener {
 }
 
 impl HistoryOpener for SqliteHistoryOpener {
+    fn guard_data_folder(&self) -> Result<Box<dyn Send>, CoreError> {
+        let parent = self.db_path.parent().unwrap_or_else(|| Path::new("."));
+        crate::lock_data_folders(&[parent])
+            .map(|guard| Box::new(guard) as Box<dyn Send>)
+            .map_err(|message| CoreError::new(ErrorCode::Io, message))
+    }
+
     fn open(
         &self,
         _scope: &NormalizedScope,
@@ -878,6 +885,43 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&child.stdout)
         );
+    }
+
+    #[test]
+    fn cli_mutation_migration_refuses_before_lease_or_blocks_other_mutations() {
+        use skill_studio_core::harness::HarnessCatalog;
+        use skill_studio_core::identity::CorrelationId;
+        use skill_studio_core::ports::{MutationSession, OpContext, Runtime};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let history = dir.path().join(".history");
+        fs::create_dir(&history).unwrap();
+        fs::write(history.join("schema_version"), b"1\n").unwrap();
+        let older = SqliteHistoryStore::open(&history.join("events.sqlite3")).unwrap();
+        fs::remove_file(history.join("schema_version")).unwrap();
+        let leases = history.join("leases");
+        let ports = crate::default_ports_with_history(
+            leases.clone(),
+            Arc::new(HarnessCatalog::builtin()),
+            history.join("events.sqlite3"),
+        );
+        let rt = Runtime::new(&RuntimeScope::fixture(dir.path()), ports).unwrap();
+        let ctx = OpContext::uncancellable(CorrelationId("migration-refusal".to_owned()));
+        let Err(error) = MutationSession::begin(&rt, &ctx) else {
+            unreachable!("migration opened while an older desktop held history");
+        };
+        assert!(error
+            .message
+            .contains("Close the other Skill Studio process"));
+        assert!(
+            !leases.exists(),
+            "failed startup created mutation lease files"
+        );
+        drop(older);
+        let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+        drop(guard);
+        crate::lock_data_folders(&[&history]).unwrap();
     }
 
     fn scope_for(home: &Path) -> NormalizedScope {

@@ -21,6 +21,37 @@ use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use skill_studio_core::testing::fixtures;
 
+fn complete_folder_tree(root: &Path) -> Vec<(PathBuf, u64, Vec<u8>)> {
+    fn walk(root: &Path, path: &Path, entries: &mut Vec<(PathBuf, u64, Vec<u8>)>) {
+        let metadata = std::fs::symlink_metadata(path).unwrap();
+        let bytes = if metadata.is_symlink() {
+            std::fs::read_link(path)
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec()
+        } else if metadata.is_file() {
+            std::fs::read(path).unwrap()
+        } else {
+            Vec::new()
+        };
+        entries.push((
+            path.strip_prefix(root).unwrap().to_path_buf(),
+            metadata.len(),
+            bytes,
+        ));
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(path).unwrap() {
+                walk(root, &entry.unwrap().path(), entries);
+            }
+        }
+    }
+    let mut entries = Vec::new();
+    walk(root, root, &mut entries);
+    entries.sort();
+    entries
+}
+
 fn mcp_bin() -> PathBuf {
     std::env::var_os("SKILL_STUDIO_TEST_MCP_BINARY").map_or_else(
         || env!("CARGO_BIN_EXE_skill-studio-mcp").into(),
@@ -1249,7 +1280,7 @@ async fn harnesses_stdio_reads_claude_install_method_from_fixture_home_or_report
 }
 
 #[tokio::test]
-async fn mcp_park_refuses_newer_history_without_file_changes_or_opens_incompatible_sqlite() {
+async fn mcp_park_refuses_newer_history_without_tree_changes_or_writes_mutation_lease() {
     let (_dir, home) = live_home();
     let deployment = deployment_id_in_root(&home, "gamma", "universal");
     let history = home.join(".skill-studio/history");
@@ -1259,14 +1290,7 @@ async fn mcp_park_refuses_newer_history_without_file_changes_or_opens_incompatib
     let marker = history.join("schema_version");
     let newer = skill_studio_host::CURRENT_DATA_VERSION + 1;
     std::fs::write(&marker, format!("{newer}\n")).unwrap();
-    let snapshot = || {
-        [&db, &marker].map(|path| {
-            (
-                std::fs::read(path).unwrap(),
-                std::fs::metadata(path).unwrap().modified().unwrap(),
-            )
-        })
-    };
+    let snapshot = || complete_folder_tree(&home);
     let before = snapshot();
     let (client, _) = connect(&[
         ("HOME", home.to_str().unwrap()),
