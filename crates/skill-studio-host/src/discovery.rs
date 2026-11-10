@@ -649,6 +649,15 @@ mod tests {
     use crate::opencode_db::{xdg_env_lock, OPENCODE_DATA_ROOT};
     use rusqlite::Connection;
 
+    /// Discovery reads `XDG_DATA_HOME` for the `OpenCode` database. Without the
+    /// lock, a concurrent XDG test makes it list that test's temp project.
+    fn discover_under_xdg_lock(home: &Path) -> Vec<PathBuf> {
+        let _guard = xdg_env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        discover_skill_projects(home)
+    }
+
     #[test]
     fn codex_config_toml_projects_are_parsed_and_filtered() {
         let tmp = tempfile::tempdir().unwrap();
@@ -666,7 +675,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = discover_skill_projects(home);
+        let found = discover_under_xdg_lock(home);
         assert_eq!(found, vec![project]);
     }
 
@@ -760,7 +769,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = discover_skill_projects(home);
+        let found = discover_under_xdg_lock(home);
         assert_eq!(found, vec![project]);
     }
 
@@ -848,7 +857,7 @@ mod tests {
             .unwrap();
         fs::File::open(&newer).unwrap().set_modified(now).unwrap();
 
-        let found = discover_skill_projects(home);
+        let found = discover_under_xdg_lock(home);
         assert_eq!(found, vec![nested_project, hyphenated_project]);
     }
 
@@ -870,7 +879,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = discover_skill_projects(home);
+        let found = discover_under_xdg_lock(home);
         assert_eq!(found, vec![project]);
     }
 
@@ -890,7 +899,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = discover_skill_projects(home);
+        let found = discover_under_xdg_lock(home);
         assert_eq!(found, vec![project]);
     }
 
@@ -924,7 +933,7 @@ mod tests {
             .unwrap();
         fs::File::open(&newer).unwrap().set_modified(now).unwrap();
 
-        let found = discover_skill_projects(home);
+        let found = discover_under_xdg_lock(home);
         assert_eq!(found, vec![project]);
     }
 
@@ -951,7 +960,7 @@ mod tests {
         content.push(b'\n');
         fs::write(transcript_dir.join("session.jsonl"), content).unwrap();
 
-        assert!(discover_skill_projects(home).is_empty());
+        assert!(discover_under_xdg_lock(home).is_empty());
     }
 
     #[test]
@@ -988,7 +997,7 @@ mod tests {
             .unwrap();
         fs::File::open(&newer).unwrap().set_modified(now).unwrap();
 
-        let found = discover_skill_projects(home);
+        let found = discover_under_xdg_lock(home);
         assert_eq!(found, vec![project]);
     }
 
@@ -1009,7 +1018,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = discover_skill_projects(home);
+        let found = discover_under_xdg_lock(home);
         assert_eq!(found, vec![project]);
     }
 
@@ -1033,7 +1042,7 @@ mod tests {
         )
         .unwrap();
 
-        let projects = discover_skill_projects(home);
+        let projects = discover_under_xdg_lock(home);
         assert!(projects.contains(&cursor_project));
         assert!(projects.contains(&grok_project));
     }
@@ -1055,7 +1064,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(discover_skill_projects(home).is_empty());
+        assert!(discover_under_xdg_lock(home).is_empty());
     }
 
     #[test]
@@ -1081,7 +1090,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = discover_skill_projects(home);
+        let found = discover_under_xdg_lock(home);
         assert_eq!(found, vec![project]);
     }
 
@@ -1123,7 +1132,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(discover_skill_projects(home), vec![project]);
+        assert_eq!(discover_under_xdg_lock(home), vec![project]);
     }
 
     /// Only the repo root ever appears in pi's session history; the nested
@@ -1157,7 +1166,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = discover_skill_projects(home);
+        let found = discover_under_xdg_lock(home);
         assert!(
             found.contains(&nested),
             "expected the nested .pi/skills root {nested:?} among {found:?}: a one-level \
@@ -1262,7 +1271,7 @@ mod tests {
             &serde_json::json!({ "folder": uri.as_str() }).to_string(),
         );
 
-        assert_eq!(discover_skill_projects(home), vec![project]);
+        assert_eq!(discover_under_xdg_lock(home), vec![project]);
     }
 
     /// Cursor records the home itself when a window is opened on it.
@@ -1279,7 +1288,7 @@ mod tests {
             &serde_json::json!({ "folder": uri.as_str() }).to_string(),
         );
 
-        assert!(discover_skill_projects(home).is_empty());
+        assert!(discover_under_xdg_lock(home).is_empty());
     }
 
     #[test]
@@ -1718,7 +1727,7 @@ mod tests {
         fs::create_dir_all(&session).unwrap();
 
         assert!(!root.join(grok_dirname(&project)).join(".cwd").exists());
-        assert_eq!(discover_skill_projects(home), vec![project]);
+        assert_eq!(discover_under_xdg_lock(home), vec![project]);
     }
 
     #[test]
@@ -1732,7 +1741,7 @@ mod tests {
         fs::write(dir.join(".cwd"), format!("{}\n", project.display())).unwrap();
 
         assert!(grok_dirname(&project).len() > 255);
-        assert_eq!(discover_skill_projects(home), vec![project]);
+        assert_eq!(discover_under_xdg_lock(home), vec![project]);
     }
 
     #[test]
@@ -1751,7 +1760,7 @@ mod tests {
         fs::write(root.join(grok_dirname(&file_project)), "").unwrap();
 
         assert_eq!(grok_session_cwds(home), vec![project.clone()]);
-        assert_eq!(discover_skill_projects(home), vec![project]);
+        assert_eq!(discover_under_xdg_lock(home), vec![project]);
     }
 
     #[test]
@@ -1810,7 +1819,7 @@ mod tests {
         let [codex_only, claude_only, shared] = two_harness_home(home);
 
         assert_eq!(
-            discover_skill_projects(home),
+            discover_under_xdg_lock(home),
             vec![claude_only, codex_only, shared]
         );
     }
@@ -1823,18 +1832,18 @@ mod tests {
 
         write_discovery_switches(home, &serde_json::json!({ "codex": false }));
         assert_eq!(
-            discover_skill_projects(home),
+            discover_under_xdg_lock(home),
             vec![claude_only.clone(), shared.clone()]
         );
 
         write_discovery_switches(home, &serde_json::json!({ "claude-code": false }));
-        assert_eq!(discover_skill_projects(home), vec![codex_only, shared]);
+        assert_eq!(discover_under_xdg_lock(home), vec![codex_only, shared]);
 
         write_discovery_switches(
             home,
             &serde_json::json!({ "claude-code": false, "codex": false }),
         );
-        assert!(discover_skill_projects(home).is_empty());
+        assert!(discover_under_xdg_lock(home).is_empty());
     }
 
     #[test]
@@ -1848,7 +1857,7 @@ mod tests {
         );
 
         assert_eq!(
-            discover_skill_projects(home),
+            discover_under_xdg_lock(home),
             vec![claude_only, codex_only, shared]
         );
     }
