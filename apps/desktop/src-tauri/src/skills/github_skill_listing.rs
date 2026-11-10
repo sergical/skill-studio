@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,9 @@ use super::skill_update_check;
 
 const GITHUB_API: &str = "https://api.github.com";
 const USER_AGENT: &str = "AgentStudio/0.1.0";
+
+/// Matches the background install-count lookup's eight-second deadline.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 
 // ============================================================================
 // DTOs
@@ -85,11 +89,15 @@ pub trait GithubApi {
 /// never logged or returned.
 pub struct HttpGithubApi {
     token: Option<String>,
+    timeout: Duration,
 }
 
 impl HttpGithubApi {
     pub fn new() -> Self {
-        Self { token: gh_token() }
+        Self {
+            token: gh_token(),
+            timeout: REQUEST_TIMEOUT,
+        }
     }
 }
 
@@ -101,14 +109,21 @@ impl Default for HttpGithubApi {
 
 impl GithubApi for HttpGithubApi {
     async fn get_json(&self, url: &str) -> Result<String, String> {
-        let mut request = reqwest::Client::new()
+        let client = reqwest::Client::builder()
+            .timeout(self.timeout)
+            .build()
+            .map_err(|e| format!("Failed to build GitHub HTTP client: {e}"))?;
+        let mut request = client
             .get(url)
             .header(reqwest::header::USER_AGENT, USER_AGENT)
             .header(reqwest::header::ACCEPT, "application/vnd.github+json");
         if let Some(token) = &self.token {
             request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
         }
-        let response = request.send().await.map_err(|e| e.to_string())?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| request_error(&error))?;
         let status = response.status();
         if !status.is_success() {
             let rate_limited = response
@@ -118,7 +133,15 @@ impl GithubApi for HttpGithubApi {
                 .is_some_and(|v| v.trim() == "0");
             return Err(status_error(status.as_u16(), rate_limited));
         }
-        response.text().await.map_err(|e| e.to_string())
+        response.text().await.map_err(|error| request_error(&error))
+    }
+}
+
+fn request_error(error: &reqwest::Error) -> String {
+    if error.is_timeout() {
+        "GitHub request timed out. Try again.".to_string()
+    } else {
+        error.to_string()
     }
 }
 
@@ -506,5 +529,36 @@ mod tests {
         assert_eq!(status_error(404, false), "Repo or branch not found");
         assert!(status_error(403, true).contains("rate limit"));
         assert!(status_error(500, false).contains("500"));
+    }
+
+    #[tokio::test]
+    async fn a_stalled_github_request_is_abandoned_at_its_timeout() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Accept the connection, read the request head, then hold the socket
+        // open without ever writing a response.
+        let held = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+            std::future::pending::<()>().await;
+        });
+
+        let api = HttpGithubApi {
+            token: None,
+            timeout: Duration::from_millis(250),
+        };
+        let err = tokio::time::timeout(
+            Duration::from_secs(5),
+            api.get_json(&format!("http://{addr}/repos/owner/repo")),
+        )
+        .await
+        .expect("Add Skill must return its own timeout error instead of hanging")
+        .unwrap_err();
+
+        assert_eq!(err, "GitHub request timed out. Try again.");
+        held.abort();
     }
 }
