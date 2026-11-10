@@ -2841,6 +2841,7 @@ fn covered_lock_restore_race(mode: u8) {
             .then(|| Mutex::new(std::fs::OpenOptions::new().write(true).open(&lock).unwrap())),
         crash_after_capture: (3..=5).contains(&mode),
         writer_on_publication: mode == 6,
+        crash_after_publication: mode >= 7,
     });
     let restored = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ops::restore_event(
@@ -2852,6 +2853,87 @@ fn covered_lock_restore_race(mode: u8) {
             },
         )
     }));
+    if mode >= 7 {
+        assert!(restored.is_err());
+        assert!(lock.exists());
+        rt.ports.fs = Arc::new(RealFs::new());
+        let published = std::fs::read(&lock).unwrap();
+        let history = || {
+            rt.ports
+                .history
+                .open(
+                    &rt.scope,
+                    skill_studio_core::ports::HistoryAccess::ReadIfExists,
+                )
+                .unwrap()
+                .unwrap()
+        };
+        let pending = history().pending().unwrap();
+        let restore = pending.iter().find(|e| e.kind == "restore").unwrap();
+        let restore_id = restore.id.clone();
+        if mode == 8 {
+            std::fs::write(&lock, lock_text("external-delta", "old-other")).unwrap();
+            let error = MutationSession::begin(&rt, &ctx()).err().unwrap();
+            assert_eq!(error.code, ErrorCode::DriftConflict);
+            assert!(error.message.contains(".agents-lock-before-restore-"));
+            assert_eq!(
+                std::fs::read_to_string(&lock).unwrap(),
+                lock_text("external-delta", "old-other")
+            );
+            assert!(error.path.unwrap().exists());
+            assert_eq!(
+                history().get(&restore_id).unwrap().unwrap().status,
+                skill_studio_core::events::EventStatus::Pending
+            );
+            std::fs::write(&lock, &published).unwrap();
+            drop(MutationSession::begin(&rt, &ctx()).unwrap());
+        } else {
+            drop(MutationSession::begin(&rt, &ctx()).unwrap());
+            assert_eq!(std::fs::read(&lock).unwrap(), published);
+
+            assert_eq!(
+                history().get(&restore_id).unwrap().unwrap().status,
+                skill_studio_core::events::EventStatus::Interrupted
+            );
+            assert!(history()
+                .get(&event_id)
+                .unwrap()
+                .unwrap()
+                .reverted_by
+                .is_none());
+            ops::restore_event(
+                &rt,
+                &ctx(),
+                &RestoreRequest {
+                    event_id: result.items[0].outcome.as_ref().unwrap().event_id.clone(),
+                    force: false,
+                },
+            )
+            .unwrap();
+            let doc: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&lock).unwrap()).unwrap();
+            assert_eq!(
+                doc["skills"]["delta"]["resolved_commit"].as_str(),
+                Some("old-delta")
+            );
+            assert_eq!(
+                doc["skills"]["other"]["resolved_commit"].as_str(),
+                Some("old-other")
+            );
+        }
+        assert!(std::fs::read_to_string(&other)
+            .unwrap()
+            .contains("Body at v1"));
+        assert!(std::fs::read_to_string(&delta)
+            .unwrap()
+            .contains(if mode == 8 {
+                "Body at v2"
+            } else {
+                "Body at v1"
+            }));
+        std::fs::remove_dir_all(home).unwrap();
+        return;
+    }
     if (3..=5).contains(&mode) {
         assert!(restored.is_err());
         assert!(!lock.exists());
@@ -3065,4 +3147,14 @@ fn update_all_undo_in_either_order_restores_only_own_folder_and_row_or_reverts_a
         }
         std::fs::remove_dir_all(home).unwrap();
     }
+}
+
+#[test]
+fn covered_undo_after_publication_recovers_and_allows_next_mutation_or_blocks_on_own_lock() {
+    covered_lock_restore_race(7);
+}
+
+#[test]
+fn covered_undo_after_publication_preserves_external_edit_as_drift_or_accepts_changed_lock() {
+    covered_lock_restore_race(8);
 }

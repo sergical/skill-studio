@@ -533,7 +533,7 @@ impl HistoryStore for SqliteHistoryStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT r.id, t.id, t.kind, json_extract(r.payload, '$.displaced_agents_lock'), json_extract(r.inverse, '$.dotagents_lock_undo.path') FROM events r \
+                "SELECT r.id, t.id, t.kind, json_extract(r.payload, '$.displaced_agents_lock'), json_extract(r.inverse, '$.dotagents_lock_undo.path'), json_extract(r.payload, '$.agents_lock_publication') FROM events r \
                  JOIN events t ON t.reverted_by = r.id \
                    AND t.id = json_extract(r.payload, '$.target_event') \
                  WHERE r.kind = 'restore' AND r.status IN ('pending', 'interrupted') \
@@ -548,6 +548,18 @@ impl HistoryStore for SqliteHistoryStore {
                     target_kind: row.get(2)?,
                     displaced_agents_lock: row.get::<_, Option<String>>(3)?.map(PathBuf::from),
                     agents_lock: row.get::<_, Option<String>>(4)?.map(PathBuf::from),
+                    agents_lock_publication: row
+                        .get::<_, Option<String>>(5)?
+                        .map(|value| {
+                            serde_json::from_str(&value).map_err(|e| {
+                                rusqlite::Error::FromSqlConversionFailure(
+                                    5,
+                                    rusqlite::types::Type::Text,
+                                    Box::new(e),
+                                )
+                            })
+                        })
+                        .transpose()?,
                 })
             })
             .map_err(sql_err)?;

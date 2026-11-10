@@ -438,6 +438,7 @@ pub fn recover_interrupted(
             &claim.restore,
             claim.displaced_agents_lock.as_deref(),
             claim.agents_lock.as_deref(),
+            claim.agents_lock_publication.as_ref(),
         )?;
         release_restore_claim(guard, store, &claim)?;
     }

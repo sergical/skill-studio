@@ -132,10 +132,20 @@ pub(crate) fn prepare_restore(
     }))
 }
 
+#[derive(Serialize, Deserialize)]
+struct LockPublication {
+    identity: (u64, u64),
+    content: Vec<u8>,
+    captured: Vec<u8>,
+}
+
 pub(crate) fn commit_restore(
     rt: &crate::ports::Runtime,
     restore: &LockRestore,
     displaced: &Path,
+    guard: &crate::ports::ExclusiveGuard,
+    store: &mut dyn crate::ports::HistoryStore,
+    event_id: &crate::identity::EventId,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
     let path = crate::ports::confine_write_through(&rt.scope, fs, &restore.path)?;
@@ -181,10 +191,23 @@ pub(crate) fn commit_restore(
             .mode
             .unwrap_or(0o600)
             & 0o777;
-        fs.fsops_write_new_file_with_mode(&staged, doc.to_string().as_bytes(), mode)
+        let content = doc.to_string().into_bytes();
+        fs.fsops_write_new_file_with_mode(&staged, &content, mode)
             .map_err(|error| CoreError::io(&staged, error))?;
         fs.fsops_fsync_file(&staged)
             .map_err(|error| CoreError::io(&staged, error))?;
+        let publication = LockPublication {
+            identity: fs
+                .fsops_device_inode(&staged)
+                .map_err(|e| CoreError::io(&staged, e))?,
+            content,
+            captured: captured.clone(),
+        };
+        store.patch_payload(
+            guard,
+            event_id,
+            serde_json::json!({ "agents_lock_publication": publication }),
+        )?;
         verify_capture(fs, displaced.as_path(), &captured)?;
         // Linking publishes only into an empty name. A writer that recreates agents.lock wins.
         fs.fsops_hard_link(&staged, path.as_path())
@@ -220,7 +243,13 @@ pub(crate) fn recover_capture(
     };
     let undo: LockRowUndo =
         serde_json::from_value(value.clone()).map_err(|_| invalid_lock(&displaced))?;
-    recover_displaced(fs, &event.id, Some(&displaced), Some(&undo.path))
+    recover_displaced(
+        fs,
+        &event.id,
+        Some(&displaced),
+        Some(&undo.path),
+        event.payload.get("agents_lock_publication"),
+    )
 }
 
 pub(crate) fn recover_displaced(
@@ -228,6 +257,7 @@ pub(crate) fn recover_displaced(
     id: &crate::identity::EventId,
     displaced: Option<&Path>,
     path: Option<&Path>,
+    publication: Option<&serde_json::Value>,
 ) -> Result<(), CoreError> {
     let Some(displaced) = displaced else {
         return Ok(());
@@ -240,6 +270,20 @@ pub(crate) fn recover_displaced(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(CoreError::io(displaced, e)),
         Ok(_) => {}
+    }
+    if let Some(value) = publication {
+        let saved: LockPublication =
+            serde_json::from_value(value.clone()).map_err(|_| invalid_lock(displaced))?;
+        if fs.fsops_device_inode(path).ok() == Some(saved.identity)
+            && fs
+                .read_capped(path, crate::dotagents_ledger::DOTAGENTS_FILE_MAX_BYTES)
+                .ok()
+                .as_ref()
+                == Some(&saved.content)
+        {
+            verify_capture(fs, displaced, &saved.captured)?;
+            return Ok(());
+        }
     }
     match fs.fsops_hard_link(displaced, path) {
         Ok(()) => fs

@@ -13,6 +13,7 @@ pub struct EditOnExchange {
     pub writer: Option<std::sync::Mutex<std::fs::File>>,
     pub crash_after_capture: bool,
     pub writer_on_publication: bool,
+    pub crash_after_publication: bool,
 }
 impl EditOnExchange {
     fn write_descriptor(&self) -> io::Result<()> {
@@ -32,7 +33,13 @@ impl ScopeFs for EditOnExchange {
         if self.writer_on_publication && from.extension().is_some_and(|ext| ext == "restored") {
             self.write_descriptor()?;
         }
-        RealFs::new().fsops_hard_link(from, to)
+        RealFs::new().fsops_hard_link(from, to)?;
+        assert!(
+            !(self.crash_after_publication
+                && from.extension().is_some_and(|ext| ext == "restored")),
+            "interrupted after lock publication"
+        );
+        Ok(())
     }
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {

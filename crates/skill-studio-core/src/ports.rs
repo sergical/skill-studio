@@ -590,6 +590,8 @@ pub struct HeldRestoreClaim {
     pub displaced_agents_lock: Option<PathBuf>,
     /// Lock destination from the saved row inverse.
     pub agents_lock: Option<PathBuf>,
+    /// Publication journal saved before linking the staged lock.
+    pub agents_lock_publication: Option<serde_json::Value>,
 }
 
 /// The append-only event log and its backups.
