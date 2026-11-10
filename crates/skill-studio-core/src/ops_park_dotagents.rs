@@ -799,7 +799,7 @@ fn write_park_file(
         )
         .at(path));
     }
-    write_text(rt, guard, path, &after)?;
+    write_text(rt, guard, path, before.as_deref(), &after)?;
     plan.changes.borrow_mut().push(FileEdit {
         before: FileSnapshot {
             path: path.to_path_buf(),
@@ -860,13 +860,11 @@ pub(crate) fn restore_files(
                 return Err(CoreError::new(ErrorCode::DriftConflict,
                     "a file changed after this operation wrote it; its backup is retained and the current file was kept").at(&file.path));
             }
-            crate::ports::confine_write_through(&rt.scope, fs, &file.path).and_then(|scoped| {
-                match &file.text {
-                    Some(text) => fs.write_atomic(guard, &scoped, text.as_bytes()),
-                    None => fs.remove_file(guard, &scoped),
-                }
-                .map_err(|e| CoreError::io(&file.path, e))
-            })
+            match &file.text {
+                Some(text) => write_text(rt, guard, &file.path, Some(&edit.after), text),
+                None => Err(CoreError::new(ErrorCode::DriftConflict,
+                    "rollback retained the newly created file and its backup instead of deleting it").at(&file.path)),
+            }
         })();
         if let Err(e) = result {
             first_error.get_or_insert(e);
@@ -920,12 +918,53 @@ fn write_text(
     rt: &Runtime,
     guard: &ExclusiveGuard,
     path: &Path,
+    expected: Option<&str>,
     text: &str,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
     let scoped = crate::ports::confine_write_through(&rt.scope, fs, path)?;
-    fs.write_atomic(guard, &scoped, text.as_bytes())
-        .map_err(|e| CoreError::io(path, e))
+    let path = scoped.as_path();
+    if expected.is_none() {
+        return fs
+            .fsops_write_new_file(path, text.as_bytes())
+            .map_err(|e| CoreError::io(path, e));
+    }
+    let displaced = path.with_file_name(format!(
+        ".{}-park-recovery-{}",
+        path.file_name().unwrap_or_default().to_string_lossy(),
+        crate::fsops::unique_suffix()
+    ));
+    let staged = crate::ports::confine(&rt.scope, fs, &displaced)?;
+    let mode = fs
+        .symlink_metadata(path)
+        .map_err(|e| CoreError::io(path, e))?
+        .mode
+        .unwrap_or(0o600);
+    fs.fsops_write_new_file_with_mode(&displaced, b"", mode)
+        .map_err(|e| CoreError::io(&displaced, e))?;
+    fs.write_atomic(guard, &staged, text.as_bytes())
+        .map_err(|e| CoreError::io(&displaced, e))?;
+    fs.fsops_fsync_file(&displaced)
+        .map_err(|e| CoreError::io(&displaced, e))?;
+    fs.fsops_exchange(&displaced, path)
+        .map_err(|e| CoreError::io(path, e))?;
+    if let Some(parent) = path.parent() {
+        fs.fsops_fsync_dir(parent)
+            .map_err(|e| CoreError::io(parent, e))?;
+    }
+    // Keep the displaced inode even after success: an external writer may
+    // still hold an open descriptor and write to it after the exchange.
+    if read_text(fs, &displaced)?.as_deref() != expected {
+        return Err(CoreError::new(
+            ErrorCode::DriftConflict,
+            format!(
+            "the file changed during replacement; both versions are kept, backup is retained at {}",
+            displaced.display()
+        ),
+        )
+        .at(path));
+    }
+    Ok(())
 }
 
 /// `comment` in front of `text`, with a line break between them unless `text`
@@ -1144,7 +1183,7 @@ fn write_back(
     if current.as_deref() == Some(text) {
         return Ok(());
     }
-    write_text(rt, guard, path, text)?;
+    write_text(rt, guard, path, current.as_deref(), text)?;
     changed.push(FileEdit {
         before: FileSnapshot {
             path: path.to_path_buf(),

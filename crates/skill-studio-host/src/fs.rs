@@ -257,7 +257,7 @@ impl ScopeFs for RealFs {
 /// the old nor the new folder at the final name.
 ///
 /// [`fsops::swap`]: skill_studio_core::fsops::swap
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[allow(unsafe_code)]
 mod macos_exchange {
     use std::ffi::CString;
@@ -273,7 +273,19 @@ mod macos_exchange {
         // macOS-only libc entry point (10.12+); not part of the `std`
         // surface, so it is declared by hand instead of pulling in `libc`
         // for one function.
+        #[cfg(target_os = "macos")]
         fn renamex_np(from: *const c_char, to: *const c_char, flags: c_uint) -> c_int;
+    }
+
+    #[cfg(target_os = "linux")]
+    extern "C" {
+        fn renameat2(
+            from_dir: c_int,
+            from: *const c_char,
+            to_dir: c_int,
+            to: *const c_char,
+            flags: c_uint,
+        ) -> c_int;
     }
 
     fn to_cstring(path: &Path) -> io::Result<CString> {
@@ -287,7 +299,12 @@ mod macos_exchange {
         // SAFETY: `a` and `b` are NUL-terminated `CString`s kept alive for
         // the duration of the call; `renamex_np` only reads them and
         // returns a plain `c_int` status, matching the C prototype above.
+        #[cfg(target_os = "macos")]
         let rc = unsafe { renamex_np(a.as_ptr(), b.as_ptr(), RENAME_SWAP) };
+        // SAFETY: both C strings remain alive throughout the call. AT_FDCWD
+        // uses the process directory; RENAME_EXCHANGE is 2 on Linux.
+        #[cfg(target_os = "linux")]
+        let rc = unsafe { renameat2(-100, a.as_ptr(), -100, b.as_ptr(), RENAME_SWAP) };
         if rc == 0 {
             Ok(())
         } else {
@@ -296,23 +313,16 @@ mod macos_exchange {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod macos_exchange {
     use std::io;
     use std::path::Path;
 
-    /// Non-atomic fallback for platforms without `renamex_np`. Skill Studio
-    /// ships macOS only (see the crate doc comment); this exists so the
-    /// crate still builds elsewhere, not to give the same crash guarantee.
-    pub(super) fn exchange(a: &Path, b: &Path) -> io::Result<()> {
-        let tmp = a.with_file_name(format!(
-            ".exchange-{}-{}",
-            std::process::id(),
-            super::TMP_COUNTER.fetch_add(1, super::Ordering::Relaxed)
-        ));
-        std::fs::rename(a, &tmp)?;
-        std::fs::rename(b, a)?;
-        std::fs::rename(&tmp, b)
+    pub(super) fn exchange(_a: &Path, _b: &Path) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "atomic exchange is unavailable; both files were kept",
+        ))
     }
 }
 
