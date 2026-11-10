@@ -413,5 +413,3 @@ pub fn assert_recorded_lock(home: &Path, own: &serde_json::Value, unrelated: &se
     assert_eq!(&lock["skills"]["trace-skill"], own);
     assert_eq!(&lock["skills"]["unrelated"], unrelated);
 }
-
-

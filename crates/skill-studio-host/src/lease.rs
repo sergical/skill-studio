@@ -181,7 +181,8 @@ impl LeaseProvider for FileLease {
                         // process closes and releases the same lock under
                         // heavy concurrent load - into a false "busy". Always
                         // re-check once before trusting the first read.
-                        if deadline.is_some_and(|deadline| Instant::now() >= deadline) && attempted {
+                        if deadline.is_some_and(|deadline| Instant::now() >= deadline) && attempted
+                        {
                             let mut err = CoreError::new(
                                 ErrorCode::ScopeBusy,
                                 format!(
