@@ -5,11 +5,12 @@
 // frontmatter is not valid YAML: both open on the broken line.
 // ============================================================================
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Deployment, FrontmatterRepairPreview, InstalledSkill } from "@skill-studio/lib";
+import { CommandPalette } from "../CommandPalette/CommandPalette";
 import { useAppStore } from "../../store/appStore";
 import { SkillPage } from "./SkillPage";
 
@@ -217,5 +218,71 @@ describe("SkillPage editor entry points", () => {
 
     await openedEditor();
     expect(screen.queryByText(/breaks the YAML frontmatter/)).toBeNull();
+  });
+  it("dirty editor Back Discard closes the editor before navigation resumes instead of leaving stale edits open", async () => {
+    const user = userEvent.setup();
+    useAppStore.getState().openSkill("find-bugs");
+    renderPage(CLEAN_SKILL_MD, []);
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    await user.type(await openedEditor(), " changed");
+    act(() => useAppStore.getState().goBack());
+    expect(await screen.findByRole("alertdialog")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+    expect(useAppStore.getState().activeView.kind).toBe("home");
+  });
+  it("Back after the default copy changes shows the original SKILL.md instead of another copy", async () => {
+    const user = userEvent.setup();
+    const first = fixtureDeployment();
+    const second = fixtureDeployment({
+      id: "second",
+      path: "/home/.codex/skills/find-bugs",
+      agent: "codex",
+    });
+    const skill = { ...fixtureSkill(first), deployments: [first, second] };
+    mockIPC((command, args) => {
+      if (command === "read_installed_skill_md")
+        return args && "path" in args && args.path === `${first.path}/SKILL.md`
+          ? "# Original copy"
+          : "# Other copy";
+      throw new Error(`unexpected command ${command}`);
+    });
+    useAppStore
+      .getState()
+      .setKnownSkillNames(new Set([skill.name]), new Map([[skill.name, first.path]]));
+    useAppStore.getState().openSkill(skill.name);
+    function Page() {
+      const view = useAppStore((state) => state.activeView);
+      return (
+        <>
+          {view.kind === "skill" && view.name === skill.name ? (
+            <SkillPage
+              skill={skill}
+              deploymentPath={view.deploymentPath}
+              onBack={() => useAppStore.getState().closeSkill()}
+              onRemoveComplete={() => {}}
+              from={{ kind: "home" }}
+            />
+          ) : (
+            <p>Home page</p>
+          )}
+          <CommandPalette snapshot={undefined} requestRescan={async () => {}} />
+        </>
+      );
+    }
+    render(<Page />);
+    expect(await screen.findByRole("heading", { name: "Original copy" })).toBeTruthy();
+    act(() => useAppStore.getState().openSkill("other"));
+    act(() =>
+      useAppStore
+        .getState()
+        .setKnownSkillNames(new Set([skill.name]), new Map([[skill.name, second.path]])),
+    );
+    skill.deployments = [second, first];
+    act(() => useAppStore.getState().setCommandPaletteOpen(true));
+    await user.type(await screen.findByRole("combobox"), "Back");
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("heading", { name: "Original copy" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Other copy" })).toBeNull();
   });
 });

@@ -9,6 +9,7 @@ import { useRef, useState } from "react";
 import { forkSkill, pullForkUpstream, skillLocalEdits, updateSkill } from "../lib/skill-api";
 import { updatePluginInstall } from "./skillBatchUpdates";
 import {
+  ForkPullError,
   forkEditedAndUpdate,
   forkableDeployment,
   lifecycleTargetForPark,
@@ -39,10 +40,9 @@ interface PendingUpdate {
 }
 
 /** How a single-owner update ended, for callers that report it their own way. */
-export interface UpdateFinish {
-  success: boolean;
-  error?: string;
-}
+export type UpdateFinish =
+  | { success: true; alreadyCurrent?: boolean; error?: string; failure?: never }
+  | { success: false; alreadyCurrent?: boolean; error?: string; failure?: "fork-pull" };
 
 interface UpdateRequestOptions {
   /** Update this one owner instead of every owner of the skill. */
@@ -78,7 +78,7 @@ export function useGuardedSkillUpdate() {
           const result = await updateSkill(scopeTarget);
           finish = {
             success: result.success,
-            error: result.error ?? "Update command failed without an error message.",
+            alreadyCurrent: result.alreadyCurrent,
           };
         } catch (error) {
           finish = {
@@ -98,6 +98,7 @@ export function useGuardedSkillUpdate() {
       addToast(skillUpdateToast(skill.name, summary));
       await onFinished?.({
         success: summary.failures.length === 0,
+        alreadyCurrent: summary.attempted > 0 && summary.alreadyCurrent === summary.attempted,
         error: summary.failures.map((failure) => failure.message).join("; "),
       });
     };
@@ -153,7 +154,14 @@ export function useGuardedSkillUpdate() {
           updatePluginInstall: options.skipPlugins ? undefined : updatePluginInstall,
         },
         { updateOthers: scopeTarget === undefined },
-      );
+      ).catch(async (error) => {
+        await options.onFinished?.({
+          success: false,
+          failure: error instanceof ForkPullError ? "fork-pull" : undefined,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      });
       addToast(pullUpstreamToast(pull));
       if (others.attempted > 0) addToast(skillUpdateToast(skill.name, others));
       for (const failure of plugins?.failures ?? []) {

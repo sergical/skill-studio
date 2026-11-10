@@ -227,7 +227,6 @@ function AppView({ runId, announce, undoFocusRef }: AppViewProps) {
       <div
         aria-hidden={!toast}
         inert={!toast}
-        data-surface="inverse"
         {...stylex.props(styles.toast, toast && styles.toastOn)}
       >
         <span aria-hidden="true">Parked {unusedCount} skills</span>
@@ -347,7 +346,7 @@ export function UsageSection() {
           aria-labelledby={`use-tab-${mode}`}
           {...stylex.props(styles.panel)}
         >
-          <div data-surface="dark" {...stylex.props(styles.window)}>
+          <div {...stylex.props(styles.window)}>
             <div {...stylex.props(styles.titlebar)}>
               <span {...stylex.props(styles.lights)} aria-hidden="true">
                 <span {...stylex.props(styles.light)} />
@@ -612,7 +611,7 @@ const styles = stylex.create({
     backgroundColor: siteTokens.text,
     borderRadius: 10,
     bottom: 16,
-    boxShadow: "0 8px 24px oklch(0 0 0 / .25)",
+    boxShadow: "0 0 0 1px oklch(1 0 0 / .24), 0 8px 24px oklch(0 0 0 / .25)",
     color: siteTokens.background,
     display: "flex",
     fontSize: 13,
@@ -639,6 +638,7 @@ const styles = stylex.create({
     minHeight: 32,
     paddingInline: 10,
     textDecoration: "underline",
+    ":focus-visible": { outline: "2px solid currentColor", outlineOffset: 2 },
     ":active": { transform: "scale(.96)" },
   },
   footer: { alignItems: "center", display: "flex", flexWrap: "wrap", gap: 16 },

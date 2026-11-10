@@ -1,12 +1,14 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import stylex from "@stylexjs/unplugin";
 import { playwright } from "@vitest/browser-playwright";
 
 // Layout tests: happy-dom does no layout, so a Tailwind class that loses to another
 // one (and so changes a width) only shows up in a real browser.
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  publicDir: "../../packages/marketing/public",
+  plugins: [stylex.vite({ useCSSLayers: true }), react(), tailwindcss()],
   test: {
     include: ["src/**/*.browser.test.tsx"],
     browser: {

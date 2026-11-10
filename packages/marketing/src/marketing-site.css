@@ -97,19 +97,15 @@ html[data-site-theme="light"] ::selection {
   z-index: 2;
 }
 
-:focus-visible {
-  outline: 2px solid rgba(255, 255, 255, 0.52);
-  outline-offset: 2px;
-}
+@layer reset {
+  :focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.52);
+    outline-offset: 2px;
+  }
 
-/* A surface that stays dark in the light theme keeps the white ring. */
-html[data-site-theme="light"] :focus-visible:where(:not([data-surface="dark"] *)) {
-  outline-color: rgba(0, 0, 0, 0.56);
-}
-
-/* A surface in the opposite colour to the page draws the ring in its own text colour. */
-html [data-surface="inverse"] :focus-visible {
-  outline-color: currentColor;
+  html[data-site-theme="light"] :focus-visible {
+    outline-color: rgba(0, 0, 0, 0.56);
+  }
 }
 
 [id] {

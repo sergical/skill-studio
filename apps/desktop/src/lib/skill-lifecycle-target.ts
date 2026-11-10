@@ -608,12 +608,15 @@ export function excludeForkedOwner(
 
 /** Thrown when the fork was made but pulling upstream onto it failed: the edits are safe, only the update is missing. */
 export class ForkPullError extends Error {
-  constructor(cause: unknown) {
+  readonly reason: string;
+
+  constructor(cause: unknown, pluginFailures: string[] = []) {
     const reason = cause instanceof Error ? cause.message : String(cause);
     super(
-      `The fork was made and your edits are kept, but pulling upstream failed: ${reason}. Use Pull latest to retry.`,
+      `The fork was made and your edits are kept, but pulling upstream failed: ${reason}. Use Pull latest to retry.${pluginFailures.length > 0 ? ` Plugin updates failed: ${pluginFailures.join("; ")}` : ""}`,
     );
     this.name = "ForkPullError";
+    this.reason = reason;
   }
 }
 
@@ -647,7 +650,9 @@ export async function forkEditedAndUpdate(
   deps: {
     fork: (target: LifecycleTarget) => Promise<ForkRecord>;
     pullFork: (target: LifecycleTarget) => Promise<PullResult>;
-    updateOwner: (target: LifecycleTarget) => Promise<{ success: boolean; error?: string | null }>;
+    updateOwner: (
+      target: LifecycleTarget,
+    ) => Promise<{ success: boolean; error?: string | null; alreadyCurrent?: boolean }>;
     /** Runs the skill's plugin installs after the copies, when none of those failed. */
     updatePluginInstall?: PluginInstallUpdater;
   },
@@ -657,7 +662,22 @@ export async function forkEditedAndUpdate(
   others: SkillOwnerUpdateSummary;
   plugins: PluginUpdateSummary | null;
 }> {
-  const pull = await forkThenPull(forkTargetForSkill(skill), deps.fork, deps.pullFork);
+  let pull: PullResult;
+  try {
+    pull = await forkThenPull(forkTargetForSkill(skill), deps.fork, deps.pullFork);
+  } catch (error) {
+    if (error instanceof ForkPullError && options.updateOthers && deps.updatePluginInstall) {
+      const plugins = await updatePluginTargets(
+        skillPluginUpdateTargets(skill),
+        deps.updatePluginInstall,
+      );
+      throw new ForkPullError(
+        error.reason,
+        plugins.failures.map((failure) => failure.message),
+      );
+    }
+    throw error;
+  }
   // react-doctor-disable-next-line react-doctor/server-sequential-independent-await -- a failed fork must leave the other copies untouched, and both steps write ~/.agents/.skill-lock.json
   const others = await updateOwnerTargets(
     options.updateOthers ? excludeForkedOwner(skill, skillUpdateOwnerTargets(skill)) : [],
@@ -715,7 +735,9 @@ export function conflictedSkillsNote(skillNames: string[]): string | undefined {
 export async function updateSkillOwners(
   skill: Pick<InstalledSkill, "update_owner_ids" | "update_owners"> &
     Partial<Pick<InstalledSkill, "deployments">>,
-  updateOwner: (target: LifecycleTarget) => Promise<{ success: boolean; error?: string | null }>,
+  updateOwner: (
+    target: LifecycleTarget,
+  ) => Promise<{ success: boolean; error?: string | null; alreadyCurrent?: boolean }>,
   updatePluginInstall?: PluginInstallUpdater,
 ): Promise<SkillOwnerUpdateSummary> {
   const owners = await updateOwnerTargets(skillUpdateOwnerTargets(skill), updateOwner);
@@ -728,7 +750,7 @@ export async function updateSkillOwners(
     attempted: owners.attempted + plugins.attempted,
     succeeded: owners.succeeded + plugins.succeeded,
     failures: plugins.failures,
-    alreadyCurrent: plugins.alreadyCurrent,
+    alreadyCurrent: (owners.alreadyCurrent ?? 0) + plugins.alreadyCurrent,
   };
 }
 
@@ -777,10 +799,13 @@ export async function updatePluginTargets(
 /** Run an update for each owner target in turn and return every failure. */
 async function updateOwnerTargets(
   targets: LifecycleTarget[],
-  updateOwner: (target: LifecycleTarget) => Promise<{ success: boolean; error?: string | null }>,
+  updateOwner: (
+    target: LifecycleTarget,
+  ) => Promise<{ success: boolean; error?: string | null; alreadyCurrent?: boolean }>,
 ): Promise<SkillOwnerUpdateSummary> {
   const failures: SkillOwnerUpdateFailure[] = [];
   let succeeded = 0;
+  let alreadyCurrent = 0;
   for (const target of targets) {
     const ownerId = target.owner_id;
     if (!ownerId) continue;
@@ -788,8 +813,10 @@ async function updateOwnerTargets(
       // Owner updates are sequential because the CLIs share lock files.
       // react-doctor-disable-next-line react-doctor/async-await-in-loop -- concurrent owner CLIs can race on the same ledger and are rejected by the backend mutation lock
       const result = await updateOwner(target);
-      if (result.success) succeeded += 1;
-      else {
+      if (result.success) {
+        succeeded += 1;
+        if (result.alreadyCurrent) alreadyCurrent += 1;
+      } else {
         failures.push({
           ownerId,
           message: result.error ?? "Update command failed without an error message.",
@@ -802,7 +829,7 @@ async function updateOwnerTargets(
       });
     }
   }
-  return { attempted: targets.length, succeeded, failures };
+  return { attempted: targets.length, succeeded, failures, alreadyCurrent };
 }
 
 /**
