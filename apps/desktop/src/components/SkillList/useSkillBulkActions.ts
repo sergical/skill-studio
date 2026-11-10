@@ -63,7 +63,8 @@ export function useSkillBulkActions(
   ) => {
     if (action.kind === "update") {
       const edited = await skillsWithLocalEdits(plan.applicable, skillLocalEdits);
-      if (edited.some((skill) => !approvedEdits.includes(skill))) {
+      const approved = new Set(approvedEdits);
+      if (edited.some((skill) => !approved.has(skill))) {
         setProgress(null);
         setPending({ plan, edited });
         return;
