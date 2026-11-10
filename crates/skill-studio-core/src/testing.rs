@@ -879,6 +879,7 @@ pub struct FailingFs {
     /// path for the same reason as `fail_read_dir_for`: a scan reads many
     /// skills' `SKILL.md` before reaching the one a test wants unreadable.
     fail_read_prefix_for: Mutex<Option<PathBuf>>,
+    fail_read_when_present: Mutex<Option<(PathBuf, PathBuf)>>,
     /// The one `symlink_metadata` call this path should fail with
     /// `PermissionDenied`, or `None`. Keyed by path, like
     /// `fail_read_dir_for`: `remove`'s own link loop calls
@@ -913,6 +914,7 @@ impl FailingFs {
             fsops_rename_calls: AtomicU64::new(0),
             fail_read_dir_for: Mutex::new(None),
             fail_read_prefix_for: Mutex::new(None),
+            fail_read_when_present: Mutex::new(None),
             fail_symlink_metadata_for: Mutex::new(None),
         }
     }
@@ -1092,6 +1094,11 @@ impl FailingFs {
             .expect("fail_read_prefix_for lock") = Some(path);
     }
 
+    /// Fails one read once a mutation has created its trigger path.
+    pub fn fail_read_when_present(&self, path: PathBuf, trigger: PathBuf) {
+        *self.fail_read_when_present.lock().expect("read fault lock") = Some((path, trigger));
+    }
+
     /// The next `symlink_metadata` call for exactly `path` returns
     /// `PermissionDenied` instead of reaching `inner`; a call for any other
     /// path delegates normally, and once consumed `path` itself succeeds
@@ -1146,6 +1153,14 @@ impl ScopeFs for FailingFs {
         self.inner.read_dir(path)
     }
     fn read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+        let mut fault = self.fail_read_when_present.lock().expect("read fault lock");
+        if fault.as_ref().is_some_and(|(target, trigger)| {
+            target == path && self.inner.symlink_metadata(trigger).is_ok()
+        }) {
+            *fault = None;
+            return Err(std::io::Error::other("injected post-mutation read failure"));
+        }
+        drop(fault);
         if self.fail_next_read_capped.swap(false, Ordering::SeqCst) {
             return Err(std::io::Error::other(
                 "FailingFs: injected read_capped failure",

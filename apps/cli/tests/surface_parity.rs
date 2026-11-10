@@ -1,69 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use serde_json::json;
 
-fn cli(home: &std::path::Path, args: &[&str]) -> Value {
-    let output = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
-        .args(args)
-        .arg("--home")
-        .arg(home)
-        .arg("--json")
-        .env("HOME", home)
-        .env("SKILL_STUDIO_TELEMETRY", "0")
-        .output()
-        .unwrap();
-    serde_json::from_slice(&output.stdout)
-        .unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&output.stderr)))
-}
-
-fn mcp(home: &std::path::Path, tool: &str, arguments: &Value) -> Value {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
-        .arg("mcp")
-        .env("HOME", home)
-        .env("SKILL_STUDIO_HOME", home)
-        .env("SKILL_STUDIO_TELEMETRY", "0")
-        .env("SKILL_STUDIO_MCP_DEV_TOOLS", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let mut input = child.stdin.take().unwrap();
-    let mut output = BufReader::new(child.stdout.take().unwrap());
-    let mut line = String::new();
-    writeln!(input, "{}", &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"parity","version":"0"}}})).unwrap();
-    output.read_line(&mut line).unwrap();
-    writeln!(
-        input,
-        "{}",
-        &json!({"jsonrpc":"2.0","method":"notifications/initialized"})
-    )
-    .unwrap();
-    let method = if tool == "tools/list" {
-        "tools/list"
-    } else {
-        "tools/call"
-    };
-    writeln!(
-        input,
-        "{}",
-        &json!({"jsonrpc":"2.0","id":2,"method":method,"params":{"name":tool,"arguments":arguments}})
-    )
-    .unwrap();
-    let result = loop {
-        line.clear();
-        assert_ne!(output.read_line(&mut line).unwrap(), 0, "MCP closed stdout");
-        let value: Value = serde_json::from_str(&line).unwrap();
-        if value["id"] == 2 {
-            break value;
-        }
-    };
-    drop(input);
-    child.wait().unwrap();
-    result
-}
+#[path = "support/headless.rs"]
+mod headless;
+use headless::{cli, mcp};
 
 fn shared(home: &std::path::Path) {
     let root = home.join(".agents/skills/gamma");
@@ -226,4 +167,78 @@ fn capabilities_accepts_both_opencode_spellings_and_returns_the_same_agent_id() 
             );
         }
     }
+}
+
+fn assert_linked_agent_roots_refused(surface: &str) {
+    let home = tempfile::tempdir().unwrap();
+    shared(home.path());
+    std::fs::create_dir_all(home.path().join(".codex/skills")).unwrap();
+    std::fs::create_dir_all(home.path().join(".cursor")).unwrap();
+    std::os::unix::fs::symlink(
+        home.path().join(".codex/skills"),
+        home.path().join(".cursor/skills"),
+    )
+    .unwrap();
+    let path = home.path().join(".agents/skills/gamma/SKILL.md");
+    let before = std::fs::read(&path).unwrap();
+    let scan = cli(home.path(), &["scan"]);
+    let id = scan["data"]["skills"][0]["deployments"][0]["id"]
+        .as_str()
+        .unwrap();
+    let (preview, result) = if surface == "cli" {
+        (
+            cli(
+                home.path(),
+                &["turn-off", "--id", id, "--agent", "codex", "--check"],
+            ),
+            cli(
+                home.path(),
+                &["turn-off", "--id", id, "--agent", "codex", "--confirm"],
+            ),
+        )
+    } else {
+        (
+            mcp(
+                home.path(),
+                "turn_off_check",
+                &json!({"deployment_id":id,"agent":"codex"}),
+            )["result"]["structuredContent"]
+                .clone(),
+            mcp(
+                home.path(),
+                "turn_off_for_agent",
+                &json!({"deployment_id":id,"agent":"codex","confirmed":true}),
+            )["result"]["structuredContent"]
+                .clone(),
+        )
+    };
+    assert!(path.exists(), "{surface}: shared skill lost: {result}");
+    assert_eq!(std::fs::read(path).unwrap(), before);
+    for name in ["Codex", "Cursor"] {
+        assert!(
+            preview["data"]["refusal"]["reason"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{surface}: missing linked-folder refusal: {preview}"))
+                .contains(name),
+            "{surface}: {preview}"
+        );
+    }
+    assert_eq!(
+        result["errors"][0]["code"], "unsupported",
+        "{surface}: {result}"
+    );
+    assert!(!home
+        .path()
+        .join(".agents/skills-parked/codex/gamma")
+        .exists());
+}
+
+#[test]
+fn cli_linked_agent_roots_refuse_without_changing_shared_bytes() {
+    assert_linked_agent_roots_refused("cli");
+}
+
+#[test]
+fn mcp_linked_agent_roots_refuse_without_changing_shared_bytes() {
+    assert_linked_agent_roots_refused("mcp");
 }

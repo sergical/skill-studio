@@ -286,6 +286,70 @@ fn config_off_readers(
         .collect()
 }
 
+fn resolved_destination(
+    fs: &dyn crate::ports::ScopeFs,
+    path: &Path,
+    links: u8,
+) -> Result<PathBuf, CoreError> {
+    match fs.canonicalize(path) {
+        Ok(path) => return Ok(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(CoreError::io(path, e)),
+    }
+    match fs.symlink_metadata(path) {
+        Ok(facts) if facts.kind == crate::ports::FileKind::Symlink => {
+            if links == 0 {
+                return Err(
+                    CoreError::new(ErrorCode::Io, "too many links in agent folder").at(path),
+                );
+            }
+            let target = fs.read_link(path).map_err(|e| CoreError::io(path, e))?;
+            let target = if target.is_absolute() {
+                target
+            } else {
+                path.parent().unwrap_or(path).join(target)
+            };
+            resolved_destination(fs, &target, links - 1)
+        }
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(CoreError::io(path, e)),
+        _ => {
+            let parent = path.parent().ok_or_else(|| {
+                CoreError::new(ErrorCode::Io, "agent folder has no existing parent").at(path)
+            })?;
+            Ok(
+                resolved_destination(fs, parent, links)?.join(path.file_name().ok_or_else(
+                    || CoreError::new(ErrorCode::Io, "agent folder has no name").at(path),
+                )?),
+            )
+        }
+    }
+}
+
+pub(crate) fn refuse_shared_agent_roots(
+    rt: &Runtime,
+    scope: &RootScope,
+    agent: &AgentId,
+) -> Result<(), CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let Some(root) = split_target_root(rt, scope, agent) else {
+        return Ok(());
+    };
+    let destination = resolved_destination(fs, &root, 40)?;
+    for other in SPLIT_HARNESSES
+        .iter()
+        .filter_map(|id| AgentId::parse(id).ok())
+        .filter(|id| id != agent)
+    {
+        let Some(other_root) = split_target_root(rt, scope, &other) else {
+            continue;
+        };
+        if resolved_destination(fs, &other_root, 40)? == destination {
+            return Err(CoreError::new(ErrorCode::Unsupported, format!("{} and {} use the same skills folder ({}). Give each agent a separate folder before turning this skill off for one agent.", harness_label(rt, agent), harness_label(rt, &other), destination.display())).at(&root));
+        }
+    }
+    Ok(())
+}
+
 /// Checks every precondition without writing. The inner `Err` is a refusal
 /// with a plain reason; the outer `Err` is a failure to look.
 fn plan(
@@ -375,6 +439,14 @@ fn plan(
                 true,
             )));
         }
+    }
+
+    if let Err(error) = refuse_shared_agent_roots(rt, &deployment.root.scope, &req.agent) {
+        return if error.code == ErrorCode::Unsupported {
+            Ok(Err(refusal(error.message, true)))
+        } else {
+            Err(error)
+        };
     }
 
     let also_read = cross_readers(rt, skill, deployment, &req.agent, &harnesses);
@@ -478,7 +550,7 @@ fn park_agent_copy(
     split_event: &EventId,
     plan: &Plan,
     agent: &AgentId,
-) -> Result<PathBuf, CoreError> {
+) -> Result<ParkedCopy, CoreError> {
     session.fresh = ops::scan_inner(
         rt,
         ctx,
@@ -520,7 +592,7 @@ fn park_agent_copy(
         }
         return Err(e);
     }
-    Ok(parked.parked_dir)
+    Ok(parked)
 }
 
 /// Moves a parked copy back to `slot` when it is parked and the slot is
