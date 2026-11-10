@@ -20,7 +20,53 @@ use super::skill_materialize;
 use super::skill_refresh::{self, SkillRefreshState, SkillSnapshot};
 use tauri::Manager;
 
-pub struct EventStoreState(pub Mutex<Option<EventStore>>);
+pub struct EventStoreState(
+    pub std::sync::Arc<Mutex<Option<EventStore>>>,
+    std::sync::Arc<std::sync::OnceLock<()>>,
+);
+
+struct RecoveryReady(std::sync::Arc<std::sync::OnceLock<()>>);
+
+impl Drop for RecoveryReady {
+    fn drop(&mut self) {
+        let _ = self.0.set(());
+    }
+}
+
+impl EventStoreState {
+    /// Holds the command gate before publishing state. Recovery may wait for
+    /// another writer; commands wait on this same mutex until it finishes.
+    pub fn with_recovery(
+        store: Option<EventStore>,
+        recover: impl FnOnce(&EventStore) + Send + 'static,
+    ) -> Result<Self, String> {
+        let state = std::sync::Arc::new(Mutex::new(store));
+        let worker_state = state.clone();
+        let completed = std::sync::Arc::new(std::sync::OnceLock::new());
+        let worker_completed = completed.clone();
+        let (started, ready) = std::sync::mpsc::sync_channel(0);
+        std::thread::Builder::new()
+            .name("skill-studio-recovery".into())
+            .spawn(move || {
+                let _ready = RecoveryReady(worker_completed);
+                if let Ok(guard) = worker_state.lock() {
+                    if started.send(()).is_err() {
+                        return;
+                    }
+                    if let Some(store) = guard.as_ref() {
+                        recover(store);
+                    }
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        ready.recv().map_err(|error| error.to_string())?;
+        Ok(Self(state, completed))
+    }
+
+    pub(crate) fn recovery_ready(&self) -> std::sync::Arc<std::sync::OnceLock<()>> {
+        self.1.clone()
+    }
+}
 
 fn locked_store(
     state: &EventStoreState,
@@ -835,6 +881,43 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn a_command_during_startup_waits_for_recovery_or_reads_the_unrecovered_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = EventStore::open(directory.path()).unwrap();
+        let (entered, recovery_entered) = std::sync::mpsc::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let recovered = finished.clone();
+        let state = EventStoreState::with_recovery(Some(store), move |_| {
+            entered.send(()).unwrap();
+            resume.recv().unwrap();
+            recovered.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+        .unwrap();
+        recovery_entered.recv().unwrap();
+        assert!(
+            state.0.try_lock().is_err(),
+            "recovery must own the command gate before state is published"
+        );
+        let ready = state.recovery_ready();
+        assert!(ready.get().is_none());
+        let (attempted, attempt) = std::sync::mpsc::channel();
+        let command = std::thread::spawn(move || {
+            attempted.send(()).unwrap();
+            ready.wait();
+            let store = state.0.lock().unwrap();
+            assert!(store.is_some());
+            assert!(
+                finished.load(std::sync::atomic::Ordering::SeqCst),
+                "command entered before recovery finished"
+            );
+        });
+        attempt.recv().unwrap();
+        release.send(()).unwrap();
+        command.join().unwrap();
+    }
 
     #[test]
     fn event_dto_keeps_non_restorable_backend_policy() {

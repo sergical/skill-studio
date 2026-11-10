@@ -36,6 +36,12 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Repeat isolated CLI and MCP home tests
+        run: |
+          for attempt in $(seq 1 10); do
+            cargo test --workspace --all-features home_flag_writes_nothing_outside_the_given_directory -- --exact
+            cargo test --workspace --all-features skill_studio_home_env_var_never_touches_the_real_data_root -- --exact
+          done
       # Unused dependencies (plan.md section 7): fails the build on any
       # Cargo.toml entry nothing in the workspace actually imports.
       - run: cargo machete

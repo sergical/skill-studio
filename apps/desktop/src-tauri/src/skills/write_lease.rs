@@ -150,6 +150,17 @@ impl WriteLease {
         Ok(ScanLeaseGuard(Some(handle)))
     }
 
+    /// Waits for every trusted scope root before startup recovery runs.
+    pub(crate) fn acquire_for_startup(&self, keys: &[LeaseKey]) -> Result<WriteLeaseGuard, String> {
+        self.lease
+            .acquire(keys, LeaseMode::Exclusive, Duration::MAX)
+            .map(|handle| {
+                HELD_ON_THIS_THREAD.with(|held| held.set(held.get() + 1));
+                WriteLeaseGuard(ExclusiveGuard::from_handle(handle))
+            })
+            .map_err(|error| error.to_string())
+    }
+
     /// Acquires an exclusive lease on `root`, waiting a few seconds at most
     /// for a background scan to finish. `Err` mirrors
     /// the old mutation mutex's message shape when another writer already
@@ -205,6 +216,44 @@ pub(crate) mod scan_wait_probe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_recovery_holds_home_and_project_leases_or_reverses_a_project_under_only_home() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("home");
+        let project = directory.path().join("project");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::create_dir(&project).unwrap();
+        let keys = vec![
+            LeaseKey {
+                canonical_root: home.canonicalize().unwrap(),
+            },
+            LeaseKey {
+                canonical_root: project.canonicalize().unwrap(),
+            },
+        ];
+        let root = directory.path().join("leases");
+        let lease = WriteLease::with_lease_root(root.clone());
+        let guard = lease.acquire_for_startup(&keys).unwrap();
+        let competitor = FileLease::new(root);
+        for key in &keys {
+            let error = competitor
+                .acquire(
+                    std::slice::from_ref(key),
+                    LeaseMode::Exclusive,
+                    Duration::ZERO,
+                )
+                .err()
+                .expect("startup must hold this root");
+            assert_eq!(error.code, skill_studio_core::error::ErrorCode::ScopeBusy);
+        }
+        drop(guard);
+        for key in keys {
+            competitor
+                .acquire(&[key], LeaseMode::Exclusive, Duration::ZERO)
+                .unwrap();
+        }
+    }
 
     #[test]
     fn a_second_acquire_on_the_same_root_is_refused_until_the_first_drops() {

@@ -638,7 +638,13 @@ mod tests {
         let journal = FsJournal::new(PathBuf::from("/journal"), fs.clone());
         let lease = FakeLease::default();
         let handle = lease
-            .acquire(&[], LeaseMode::Exclusive, Duration::from_secs(0))
+            .acquire(
+                &[crate::ports::LeaseKey {
+                    canonical_root: home(),
+                }],
+                LeaseMode::Exclusive,
+                Duration::ZERO,
+            )
             .unwrap();
         let guard = ExclusiveGuard::from_handle(handle);
 

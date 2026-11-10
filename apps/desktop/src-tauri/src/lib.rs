@@ -79,34 +79,13 @@ pub fn open_event_store_at(
     Some(store)
 }
 
-/// Reconciles any row `store` was left holding `pending` by a crash (unit
-/// 1.2's journal reconciliation, ported here from the core's
-/// `journal::reconcile` byte-for-byte in behavior: a `pending` row only
-/// means the process died mid-mutation), then runs the three named
-/// repairers over whatever that reconciliation left `interrupted`. Called
-/// from inside `tauri::async_runtime::spawn_blocking` in `run()`, so this
-/// filesystem work never runs on the UI thread.
-///
-/// The events table is now shared with any CLI or MCP process
-/// (`core_runtime::history_db_path`), so a `pending` row here might belong to
-/// a mutation a still-running sibling process owns, not a crash - flipping it
-/// to `interrupted` (or a recovery loop touching it) out from under that
-/// process would race it. Takes the same root write lease every mutating
-/// command takes; when another process already holds it, this whole pass is
-/// skipped rather than blocking startup, and retried on the next launch.
-fn reconcile_event_store_at_startup(store: &skills::event_store::EventStore) {
-    let Some(home) = dirs::home_dir() else {
-        eprintln!("[event_store] could not resolve home dir for startup reconcile");
-        return;
-    };
-    let write_lease = skills::write_lease::WriteLease::default();
-    let guard = match write_lease.try_acquire(&home) {
-        Ok(guard) => guard,
-        Err(e) => {
-            eprintln!("[event_store] skipped startup reconcile: {e}");
-            return;
-        }
-    };
+/// Repairs legacy event intents while startup holds every trusted scope
+/// root's write lease and the command readiness gate is closed.
+fn reconcile_event_store_at_startup(
+    store: &skills::event_store::EventStore,
+    _home: &Path,
+    guard: &skills::write_lease::WriteLeaseGuard,
+) {
     match store.reconcile_at_startup() {
         Ok(flipped) => {
             for row in &flipped {
@@ -130,11 +109,11 @@ fn reconcile_event_store_at_startup(store: &skills::event_store::EventStore) {
                     .and_then(|home| {
                         if row.kind == "make_independent_copy" {
                             skills::skill_independent_copy::reconcile_interrupted_independent_copy(
-                                store, &home, row, Some(&guard),
+                                store, &home, row, Some(guard),
                             )
                         } else {
                             skills::skill_independent_copy::reconcile_interrupted_independent_copy_restore(
-                                store, &home, row, Some(&guard),
+                                store, &home, row, Some(guard),
                             )
                         }
                     });
@@ -181,7 +160,7 @@ fn reconcile_event_store_at_startup(store: &skills::event_store::EventStore) {
                             store,
                             &home,
                             row,
-                            Some(&guard),
+                            Some(guard),
                         )
                     })
                 {
@@ -197,29 +176,11 @@ fn reconcile_event_store_at_startup(store: &skills::event_store::EventStore) {
     store.retain_backups(guard.as_exclusive_guard());
 }
 
-/// Resolves and reverses every `skill-studio-core` plan a crash left
-/// `Pending` in `store`'s journal (unit 1.2's `journal::reconcile`, Section
-/// C: `EventStore` is now that journal's host implementation). Takes the
-/// same root write lease every other mutating command takes, so this
-/// startup pass can't race a concurrent write; skips reconciliation rather
-/// than blocking startup if that lease is already held. No command routes
-/// its writes through this journal yet (see
-/// `docs/action-map/events-and-history.md`), so today this is a no-op in
-/// practice - it exists so the day one does, a crash mid-write is already
-/// covered.
-fn reconcile_core_journal_at_startup(store: &skills::event_store::EventStore) {
-    let Some(home) = dirs::home_dir() else {
-        eprintln!("[event_store] could not resolve home dir for core journal reconcile");
-        return;
-    };
-    let write_lease = skills::write_lease::WriteLease::default();
-    let guard = match write_lease.try_acquire(&home) {
-        Ok(guard) => guard,
-        Err(e) => {
-            eprintln!("[event_store] skipped core journal reconcile: {e}");
-            return;
-        }
-    };
+/// Recovers the desktop journal under the startup coordinator's lease.
+fn reconcile_core_journal_at_startup(
+    store: &skills::event_store::EventStore,
+    guard: &skills::write_lease::WriteLeaseGuard,
+) {
     let fs = skill_studio_host::RealFs::new();
     match skill_studio_core::journal::reconcile(store, guard.as_exclusive_guard(), &fs) {
         Ok(report) => {
@@ -402,24 +363,33 @@ pub fn run() {
             } else {
                 open_event_store(app)
             };
-            app.manage(skills::event_commands::EventStoreState(
-                std::sync::Mutex::new(event_store),
-            ));
-            // Reconciliation is filesystem work (unit 1.2's journal
-            // reconcile), so it runs off the UI thread; every event command
-            // already tolerates the store not being reconciled yet the same
-            // way it tolerates `EventStoreState` holding `None`.
-            let reconcile_handle = app.handle().clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                let state = reconcile_handle.state::<skills::event_commands::EventStoreState>();
-                let lock = state.0.lock();
-                if let Ok(guard) = lock {
-                    if let Some(store) = guard.as_ref() {
-                        reconcile_event_store_at_startup(store);
-                        reconcile_core_journal_at_startup(store);
+            let recovery_state =
+                skills::event_commands::EventStoreState::with_recovery(event_store, |store| {
+                    let recovery = (|| -> Result<(), String> {
+                        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+                        let runtime =
+                            skills::core_runtime::build_runtime_write_at_with_search_dirs(
+                                &home,
+                                &skills::core_runtime::data_root(),
+                                Vec::new(),
+                            )?;
+                        let lease = skills::write_lease::WriteLease::default();
+                        let guard = lease.acquire_for_startup(&runtime.scope.lease_keys())?;
+                        reconcile_event_store_at_startup(store, &home, &guard);
+                        reconcile_core_journal_at_startup(store, &guard);
+                        skill_studio_core::journal::reconcile_scope_journal(
+                            &runtime,
+                            guard.as_exclusive_guard(),
+                        )
+                        .map_err(|error| error.to_string())?;
+                        Ok(())
+                    })();
+                    if let Err(error) = recovery {
+                        eprintln!("[event_store] startup recovery failed: {error}");
                     }
-                }
-            });
+                })
+                .map_err(std::io::Error::other)?;
+            app.manage(recovery_state);
 
             // Trims timing.jsonl to its 30-day retention once per process
             // start (unit 6.5); off the main thread, since it's a full read

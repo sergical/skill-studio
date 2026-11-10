@@ -107,6 +107,9 @@ pub fn time_command<T: CommandOutcome>(
     f: impl FnOnce() -> T,
 ) -> T {
     let start = std::time::Instant::now();
+    if let Some(state) = app.try_state::<crate::skills::event_commands::EventStoreState>() {
+        state.recovery_ready().wait();
+    }
     let result = f();
     let (outcome, error) = result.outcome();
     record_command(
@@ -129,6 +132,15 @@ pub async fn time_command_async<T: CommandOutcome>(
     fut: impl std::future::Future<Output = T>,
 ) -> T {
     let start = std::time::Instant::now();
+    if let Some(state) = app.try_state::<crate::skills::event_commands::EventStoreState>() {
+        let ready = state.recovery_ready();
+        if ready.get().is_none() {
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                ready.wait();
+            })
+            .await;
+        }
+    }
     let result = fut.await;
     let (outcome, error) = result.outcome();
     record_command(
@@ -157,7 +169,19 @@ pub async fn time_command_blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     let start = std::time::Instant::now();
-    let result = join_result_to_err(command, tauri::async_runtime::spawn_blocking(f).await);
+    let ready = app
+        .try_state::<crate::skills::event_commands::EventStoreState>()
+        .map(|state| state.recovery_ready());
+    let result = join_result_to_err(
+        command,
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Some(ready) = ready {
+                ready.wait();
+            }
+            f()
+        })
+        .await,
+    );
     let (outcome, error) = result.outcome();
     record_command(
         app,
