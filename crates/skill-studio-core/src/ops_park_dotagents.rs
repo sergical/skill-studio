@@ -620,7 +620,7 @@ pub(crate) fn plan_park(
             .ok_or_else(|| {
                 CoreError::new(
                     ErrorCode::DriftConflict,
-                    "the selected deployment changed during rollback recovery; scan and try again",
+                    "the selected skill copy changed during rollback recovery; scan and try again",
                 )
                 .at(&deployment.path)
             })?
