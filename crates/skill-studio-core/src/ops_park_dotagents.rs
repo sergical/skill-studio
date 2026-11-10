@@ -1541,7 +1541,10 @@ fn with_lines_restored(
     if stay
         .iter()
         .any(|line| !line.is_empty() && !line.starts_with('#'))
-        && align.iter().all(Option::is_none)
+        && !stay
+            .iter()
+            .zip(&align)
+            .any(|(line, at)| !line.is_empty() && !line.starts_with('#') && at.is_some())
     {
         return Err(missing
             .iter()
@@ -1661,6 +1664,16 @@ pub(crate) fn backed_up_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turn_on_refuses_comment_only_anchor_or_overrides_external_negation() {
+        assert!(with_lines_restored(
+            "# header\n/skills/foo\n!/skills/foo/\n",
+            "!/skills/*/\n# header\n",
+            &["/skills/foo".to_string()],
+        )
+        .is_err());
+    }
 
     fn restore_line(original: &str, current: &str, line: &str) -> String {
         with_lines_restored(original, current, &[line.to_string()])
