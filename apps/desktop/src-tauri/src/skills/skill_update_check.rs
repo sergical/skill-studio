@@ -1306,6 +1306,11 @@ fn check_candidate(
     })
 }
 
+struct UpdateCheckOutcome {
+    store: UpdateCheckStore,
+    persistence_error: Option<String>,
+}
+
 /// Build owner candidates, optionally filter by owner ID, check them in a
 /// small worker pool, and write the result. A filtered run preserves every
 /// other owner's previous state. `upstream_ahead` replaces the recorded fork
@@ -1319,7 +1324,7 @@ fn run_update_check_impl(
     tree_lookup: &dyn TreeLookup,
     only_owner_ids: Option<&[String]>,
     upstream_ahead: Option<BTreeMap<String, UpstreamAhead>>,
-) -> UpdateCheckStore {
+) -> UpdateCheckOutcome {
     let previous = read_update_check_store(app_data);
     let now = Utc::now().to_rfc3339();
 
@@ -1414,10 +1419,11 @@ fn run_update_check_impl(
         upstream_ahead,
         legacy_skills: BTreeMap::new(),
     };
-    if let Err(e) = write_store(app_data, &store) {
-        eprintln!("skill update check: failed to write store: {e}");
+    let persistence_error = write_store(app_data, &store).err();
+    UpdateCheckOutcome {
+        store,
+        persistence_error,
     }
-    store
 }
 
 /// Check every dotagents/skills.sh skill for an upstream update, using
@@ -1429,7 +1435,7 @@ pub fn run_update_check(
     lookup: &dyn CommitLookup,
     tree_lookup: &dyn TreeLookup,
 ) -> UpdateCheckStore {
-    run_update_check_impl(home, &[], app_data, lookup, tree_lookup, None, None)
+    run_update_check_impl(home, &[], app_data, lookup, tree_lookup, None, None).store
 }
 
 /// Check Global and the supplied registered Project Universal owners.
@@ -1451,6 +1457,7 @@ pub fn run_update_check_with_projects(
         None,
         upstream_ahead,
     )
+    .store
 }
 
 /// `run_update_check_with_projects` with the fork lookups done first, so the
@@ -1462,7 +1469,7 @@ fn run_update_check_with_forks(
     lookup: &dyn CommitLookup,
     tree_lookup: &dyn TreeLookup,
     fork_lookup: &dyn ForkLookup,
-) -> UpdateCheckStore {
+) -> UpdateCheckOutcome {
     let previous = read_update_check_store(app_data);
     // A root with an unreadable lock has incomplete candidates, so its owners
     // keep their previous notes while the other roots are looked up normally.
@@ -1475,12 +1482,13 @@ fn run_update_check_with_forks(
         ),
         &previous.upstream_ahead,
     ));
-    run_update_check_with_projects(
+    run_update_check_impl(
         home,
         project_paths,
         app_data,
         lookup,
         tree_lookup,
+        None,
         upstream_ahead,
     )
 }
@@ -1491,7 +1499,7 @@ fn write_gh_missing_store(
     home: &Path,
     project_paths: &[PathBuf],
     app_data: &Path,
-) -> UpdateCheckStore {
+) -> UpdateCheckOutcome {
     let previous = read_update_check_store(app_data);
     let sources = build_sources(home, project_paths);
     let upstream_ahead = sources.pruned_notes(&previous.upstream_ahead);
@@ -1503,10 +1511,11 @@ fn write_gh_missing_store(
         upstream_ahead,
         legacy_skills: previous.legacy_skills,
     };
-    if let Err(e) = write_store(app_data, &store) {
-        eprintln!("skill update check: failed to write store: {e}");
+    let persistence_error = write_store(app_data, &store).err();
+    UpdateCheckOutcome {
+        store,
+        persistence_error,
     }
-    store
 }
 
 /// Re-check exact lifecycle owners and preserve every other recorded owner.
@@ -1529,6 +1538,7 @@ pub fn run_update_check_for_owners(
         Some(owner_ids),
         None,
     )
+    .store
 }
 
 /// Resolve `gh`, then run the check for real - the production entry point
@@ -1539,7 +1549,7 @@ fn run_update_check_now(
     home: &Path,
     project_paths: &[PathBuf],
     app_data: &Path,
-) -> UpdateCheckStore {
+) -> UpdateCheckOutcome {
     if let Some(gh_bin) = resolve_gh_binary() {
         let store = run_update_check_with_forks(
             home,
@@ -1566,6 +1576,29 @@ fn run_update_check_now(
         store
     } else {
         write_gh_missing_store(home, project_paths, app_data)
+    }
+}
+
+fn update_check_result(outcome: &UpdateCheckOutcome) -> Result<UpdateCheckSummary, String> {
+    let store = &outcome.store;
+    let mut errors: Vec<String> = store
+        .owners
+        .values()
+        .filter_map(|owner| owner.error.clone())
+        .collect();
+    match &store.gh_status {
+        GhStatus::Failed(error) => errors.push(error.clone()),
+        GhStatus::NotLoggedIn => errors.push("GitHub is not logged in".into()),
+        GhStatus::Missing => errors.push("GitHub CLI is missing".into()),
+        GhStatus::Ok => {}
+    }
+    errors.extend(outcome.persistence_error.iter().cloned());
+    errors.sort();
+    errors.dedup();
+    if errors.is_empty() {
+        Ok(summarize(store))
+    } else {
+        Err(errors.join("; "))
     }
 }
 
@@ -1636,7 +1669,7 @@ pub fn check_now(
     state.end();
 
     skill_refresh::request_snapshot_rebuild(app);
-    Ok(summarize(&store))
+    update_check_result(&store)
 }
 
 #[tauri::command]
@@ -1822,6 +1855,41 @@ mod tests {
                 "2026-02-01T00:00:00Z".to_string(),
             )))
         }
+    }
+
+    #[test]
+    fn update_check_with_unwritable_store_publishes_failure_or_reports_success_without_saving() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let app_data = tmp.path().join("blocked");
+        std::fs::write(&app_data, "not a directory").unwrap();
+        let background = super::super::background_work::BackgroundState::default();
+        let events = Mutex::new(Vec::new());
+        let result = background.run(
+            super::super::background_work::BackgroundWorker::UpdateCheck,
+            || {
+                update_check_result(&run_update_check_impl(
+                    &home,
+                    &[],
+                    &app_data,
+                    &AlwaysErrorLookup,
+                    &UnusedTreeLookup,
+                    None,
+                    None,
+                ))
+            },
+            |status| events.lock().unwrap().push(status.clone()),
+        );
+        assert!(result.is_err());
+        let events = events.lock().unwrap();
+        let finished = &events.last().unwrap().tasks[2];
+        assert!(!finished.running);
+        assert!(finished
+            .last_error
+            .as_ref()
+            .unwrap()
+            .contains("Failed to create"));
     }
 
     struct AlwaysErrorLookup;
@@ -2301,7 +2369,7 @@ resolved_commit = "{commit}"
     }
 
     #[test]
-    fn lookup_error_keeps_previous_commits_and_records_error() {
+    fn offline_update_check_publishes_failure_and_keeps_cached_commits_or_reports_healthy_status() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         let app_data = tmp.path().join("data");
@@ -2337,8 +2405,29 @@ resolved_commit = "{commit}"
         write_store(&app_data, &seeded).unwrap();
 
         let lookup = FakeLookup::with_answers(vec![Err("network unreachable".to_string())]);
-        let store = run_update_check(&home, &app_data, &lookup, &UnusedTreeLookup);
-
+        let background = super::super::background_work::BackgroundState::default();
+        let events = Mutex::new(Vec::new());
+        let result = background.run(
+            super::super::background_work::BackgroundWorker::UpdateCheck,
+            || {
+                update_check_result(&run_update_check_impl(
+                    &home,
+                    &[],
+                    &app_data,
+                    &lookup,
+                    &UnusedTreeLookup,
+                    None,
+                    None,
+                ))
+            },
+            |status| events.lock().unwrap().push(status.clone()),
+        );
+        assert_eq!(result.unwrap_err(), "network unreachable");
+        let events = events.lock().unwrap();
+        let finished = &events.last().unwrap().tasks[2];
+        assert!(!finished.running);
+        assert_eq!(finished.last_error.as_deref(), Some("network unreachable"));
+        let store = read_update_check_store(&app_data);
         let state = store.owners.get("owner:v1/global/find-bugs").unwrap();
         assert_eq!(
             state.latest_commit.as_deref(),
@@ -3159,7 +3248,8 @@ resolved_commit = "{commit}"
             &lookup,
             &UnusedTreeLookup,
             &FakeForkLookup::new(),
-        );
+        )
+        .store;
 
         assert_eq!(store.gh_status, GhStatus::NotLoggedIn);
         assert!(store.upstream_ahead.is_empty());
@@ -3177,7 +3267,7 @@ resolved_commit = "{commit}"
         };
         write_store(&app_data, &seeded).unwrap();
 
-        let store = write_gh_missing_store(&home, &[], &app_data);
+        let store = write_gh_missing_store(&home, &[], &app_data).store;
 
         assert_eq!(store.gh_status, GhStatus::Missing);
         assert!(store.upstream_ahead.is_empty());
@@ -3267,7 +3357,7 @@ resolved_commit = "{commit}"
 
         let app_data = tmp.path().join("data");
         write_store(&app_data, &store).unwrap();
-        let written = write_gh_missing_store(&home, &[], &app_data);
+        let written = write_gh_missing_store(&home, &[], &app_data).store;
         assert_eq!(written.upstream_ahead.len(), 1);
 
         let lookups = FakeForkLookup::new();
@@ -3278,7 +3368,8 @@ resolved_commit = "{commit}"
             &FakeLookup::with_answers(vec![]),
             &UnusedTreeLookup,
             &lookups,
-        );
+        )
+        .store;
         assert_eq!(run.upstream_ahead.len(), 1);
         assert!(lookups.info_calls.lock().unwrap().is_empty());
     }
@@ -3313,7 +3404,7 @@ resolved_commit = "{commit}"
 
         let app_data = tmp.path().join("data");
         write_store(&app_data, &store).unwrap();
-        let written = write_gh_missing_store(&home, &[], &app_data);
+        let written = write_gh_missing_store(&home, &[], &app_data).store;
         assert_eq!(
             written.upstream_ahead.keys().collect::<Vec<_>>(),
             vec!["me/lock-only"]
@@ -3338,7 +3429,8 @@ resolved_commit = "{commit}"
             )))]),
             &UnusedTreeLookup,
             &FakeForkLookup::new().fork("me/fork", "them/orig", 0),
-        );
+        )
+        .store;
 
         assert_eq!(
             run.upstream_ahead.keys().collect::<Vec<_>>(),
@@ -3412,7 +3504,8 @@ resolved_commit = "{commit}"
             &FakeLookup::with_answers(vec![]),
             &FakeTreeLookup::with_tree("stale/other", HashMap::new()),
             &FakeForkLookup::new().fork("stale/other", "them/orig", 5),
-        );
+        )
+        .store;
 
         assert_eq!(
             run.upstream_ahead.keys().collect::<Vec<_>>(),
@@ -3454,7 +3547,8 @@ resolved_commit = "{commit}"
             )))]),
             &UnusedTreeLookup,
             &FakeForkLookup::new().fork("stale/other", "them/orig", 5),
-        );
+        )
+        .store;
 
         assert_eq!(
             run.upstream_ahead.keys().collect::<Vec<_>>(),
@@ -3522,7 +3616,8 @@ resolved_commit = "{commit}"
             &FakeLookup::with_answers(vec![]),
             &UnusedTreeLookup,
             &lookups,
-        );
+        )
+        .store;
         assert_eq!(run.upstream_ahead["me/fork"].behind_by, 3);
         assert_eq!(
             run.upstream_ahead["me/proj-fork"].owner_ids,
@@ -3571,7 +3666,8 @@ resolved_commit = "{commit}"
             &lookup,
             &UnusedTreeLookup,
             &FakeForkLookup::new().failing("me/fork", FORK_LOOKUP_TIMED_OUT_MESSAGE),
-        );
+        )
+        .store;
 
         assert_eq!(store.gh_status, GhStatus::Ok);
         assert_eq!(lookup.call_count(), 1);
@@ -3654,7 +3750,8 @@ resolved_commit = "{commit}"
             &FakeLookup::with_answers(vec![Ok(None)]),
             &UnusedTreeLookup,
             &forks,
-        );
+        )
+        .store;
 
         assert_eq!(*forks.checked_at_seen.lock().unwrap(), vec![None]);
         let stored = read_update_check_store(&app_data);
@@ -3682,7 +3779,8 @@ resolved_commit = "{commit}"
             &lookup,
             &UnusedTreeLookup,
             &FakeForkLookup::new().fork("me/fork", "them/orig", 9),
-        );
+        )
+        .store;
 
         assert_eq!(store.gh_status, GhStatus::NotLoggedIn);
         assert_eq!(store.upstream_ahead["me/fork"].behind_by, 4);
@@ -3706,7 +3804,7 @@ resolved_commit = "{commit}"
         };
         write_store(&app_data, &seeded).unwrap();
 
-        let store = write_gh_missing_store(&home, &[], &app_data);
+        let store = write_gh_missing_store(&home, &[], &app_data).store;
 
         assert_eq!(store.gh_status, GhStatus::Missing);
         assert_eq!(store.upstream_ahead, seeded.upstream_ahead);

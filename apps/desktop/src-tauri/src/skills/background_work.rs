@@ -54,7 +54,7 @@ impl BackgroundMemory {
         }
     }
 }
-struct BackgroundState(Mutex<BackgroundMemory>);
+pub(super) struct BackgroundState(Mutex<BackgroundMemory>);
 impl Default for BackgroundState {
     fn default() -> Self {
         Self(Mutex::new(BackgroundMemory {
@@ -98,7 +98,7 @@ impl BackgroundState {
         state.revision = state.revision.saturating_add(1);
         state.snapshot()
     }
-    fn run<T>(
+    pub(super) fn run<T>(
         &self,
         worker: BackgroundWorker,
         work: impl FnOnce() -> Result<T, String>,
@@ -108,15 +108,33 @@ impl BackgroundState {
             task.in_flight = task.in_flight.saturating_add(1);
             task.last_started_at = Some(chrono::Utc::now().to_rfc3339());
         }));
+        let mut completion = RunCompletion {
+            state: self,
+            worker,
+            publish,
+            error: Some("background work panicked".into()),
+        };
         let result = work();
-        publish(&self.change(worker, |task| {
-            task.in_flight = task.in_flight.saturating_sub(1);
-            task.last_finished_at = Some(chrono::Utc::now().to_rfc3339());
-            task.last_error = result.as_ref().err().cloned();
-        }));
+        completion.error = result.as_ref().err().cloned();
         result
     }
 }
+struct RunCompletion<'a, P: Fn(&BackgroundStatus)> {
+    state: &'a BackgroundState,
+    worker: BackgroundWorker,
+    publish: P,
+    error: Option<String>,
+}
+impl<P: Fn(&BackgroundStatus)> Drop for RunCompletion<'_, P> {
+    fn drop(&mut self) {
+        (self.publish)(&self.state.change(self.worker, |task| {
+            task.in_flight = task.in_flight.saturating_sub(1);
+            task.last_finished_at = Some(chrono::Utc::now().to_rfc3339());
+            task.last_error = self.error.take();
+        }));
+    }
+}
+
 fn state() -> &'static BackgroundState {
     static STATE: OnceLock<BackgroundState> = OnceLock::new();
     STATE.get_or_init(BackgroundState::default)
@@ -146,6 +164,33 @@ pub async fn get_background_status(app: tauri::AppHandle) -> Result<BackgroundSt
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn panicking_scan_publishes_finished_failure_and_allows_recovery_or_stays_running_forever() {
+        let state = BackgroundState::default();
+        let events = Mutex::new(Vec::new());
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<(), String> = state.run(
+                BackgroundWorker::Scan,
+                || panic!("scan panic"),
+                |status| events.lock().unwrap().push(status.clone()),
+            );
+        }));
+        assert!(panic.is_err());
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events[0].tasks[0].running);
+        assert!(!events[1].tasks[0].running);
+        assert!(events[1].tasks[0].last_finished_at.is_some());
+        assert_eq!(
+            events[1].tasks[0].last_error.as_deref(),
+            Some("background work panicked")
+        );
+        state
+            .run(BackgroundWorker::Scan, || Ok(()), |_| {})
+            .unwrap();
+        assert!(!state.snapshot().tasks[0].running);
+        assert!(state.snapshot().tasks[0].last_error.is_none());
+    }
     #[test]
     fn overlapping_runs_keep_the_worker_running_until_both_finish_or_hide_the_remaining_scan() {
         let state = BackgroundState::default();

@@ -706,7 +706,7 @@ pub(crate) fn rebuild_snapshot_at(
                 now,
                 Some(scan_lease),
                 || {},
-            );
+            )?;
             Ok(built)
         },
         publish,
@@ -2125,15 +2125,11 @@ pub(crate) fn apply_skill_snapshot_overlays(
 /// the snapshot before it mutates) takes no lease of its own: advisory locks
 /// do not nest within one process, so it would wait on itself.
 ///
-/// A scan failure (a lease held by another instance, an unreadable root)
-/// returns whatever `ops::scan` managed to read before the error, marked
-/// `Partial` with the error as an observation; a total failure (`Runtime`
-/// construction itself erroring) has nothing to fall back to but an empty
-/// list, also marked `Partial`. Either way, `rebuild_snapshot_now` folds a
-/// `Partial` result into the previously published snapshot rather than
-/// publishing it as-is, so an empty or short list here never overwrites a
-/// good one.
+/// Budget-limited scans carry partial inventory. Fatal scan failures carry an
+/// error; the snapshot builder returns it before publication. Unread roots
+/// remain available for targeted callers that schedule a full retry.
 pub(crate) struct CoreScanResult {
+    pub error: Option<String>,
     pub skills: Vec<skill_studio_core::dto::InstalledSkillDto>,
     pub completeness: skill_studio_core::dto::Completeness,
     pub observations: Vec<skill_studio_core::dto::Observation>,
@@ -2239,6 +2235,7 @@ pub(crate) fn core_scan_installed_skills(
 
     match result {
         Ok(inventory) => CoreScanResult {
+            error: None,
             skills: inventory.skills,
             completeness: inventory.completeness,
             observations: inventory.observations,
@@ -2263,6 +2260,7 @@ pub(crate) fn core_scan_installed_skills(
                 }
             }
             CoreScanResult {
+                error: Some(e.to_string()),
                 skills: Vec::new(),
                 completeness: skill_studio_core::dto::Completeness::Partial,
                 observations: vec![skill_studio_core::dto::Observation {
@@ -2342,7 +2340,7 @@ pub fn build_snapshot(
     invocation_index: &mut SkillInvocationIndex,
     paths: BuildPaths,
     now: DateTime<Utc>,
-) -> (SkillSnapshot, SkillUseRefreshReport) {
+) -> Result<(SkillSnapshot, SkillUseRefreshReport), String> {
     build_snapshot_releasing(home, Some(invocation_index), paths, now, None, || {})
 }
 
@@ -2359,7 +2357,7 @@ fn build_snapshot_releasing(
     now: DateTime<Utc>,
     scan_lease: Option<super::write_lease::ScanLeaseGuard>,
     after_scan_reads: impl FnOnce(),
-) -> (SkillSnapshot, SkillUseRefreshReport) {
+) -> Result<(SkillSnapshot, SkillUseRefreshReport), String> {
     let total_start = Instant::now();
     let BuildPaths {
         cache_path,
@@ -2372,6 +2370,9 @@ fn build_snapshot_releasing(
 
     let scan_start = Instant::now();
     let core_result = core_scan_installed_skills(home, &project_paths, update_check_path, &[]);
+    if let Some(error) = core_result.error {
+        return Err(error);
+    }
     let scan_ms = scan_start.elapsed().as_millis();
     let scan_partial = core_result.completeness == skill_studio_core::dto::Completeness::Partial;
     let scan_observations: Vec<String> = core_result
@@ -2486,7 +2487,7 @@ fn build_snapshot_releasing(
         "skill refresh: full rebuild {total_ms} ms (projects {projects_ms} ms, scan {scan_ms} ms, assembly {assembly_ms} ms, overlays {overlays_ms} ms, invocations {invocations_ms} ms, last-test {last_test_ms} ms, rest {rest_ms} ms; {skill_count} skills)"
     );
 
-    (snapshot, report)
+    Ok((snapshot, report))
 }
 
 /// Which kind of rebuild a single filesystem-watch event implies.
@@ -3528,7 +3529,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         assert!(snapshot
             .projects
@@ -3575,7 +3577,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         let skill = snapshot
             .skills
@@ -3655,7 +3658,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
         let skill = snapshot
             .skills
             .iter()
@@ -3698,7 +3702,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         let skill = snapshot
             .skills
@@ -3772,7 +3777,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         let skill = snapshot
             .skills
@@ -3854,7 +3860,8 @@ mod tests {
                 update_check_path: &update_check_path,
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         let foo = snapshot.skills.iter().find(|s| s.name == "foo").unwrap();
         assert_eq!(
@@ -3964,6 +3971,7 @@ mod tests {
             },
             Utc::now(),
         )
+        .unwrap()
         .0
     }
 
@@ -4039,7 +4047,8 @@ mod tests {
                 update_check_path: &update_check_path,
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
         let foo = initial
             .skills
             .iter()
@@ -4086,7 +4095,8 @@ mod tests {
                 update_check_path: &update_check_path,
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
         let foo = snapshot
             .skills
             .iter()
@@ -4130,7 +4140,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         assert!(!snapshot
             .projects
@@ -4162,7 +4173,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         assert!(!snapshot
             .projects
@@ -4360,7 +4372,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         assert!(snapshot.projects.is_empty());
     }
@@ -4382,7 +4395,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         assert!(snapshot.projects.is_empty());
     }
@@ -5215,6 +5229,7 @@ mod tests {
             },
             Utc::now(),
         )
+        .unwrap()
         .0
     }
 
@@ -5456,7 +5471,8 @@ mod tests {
                 update_check_path: &update_check_path,
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
         assert_eq!(snapshot.skills.len(), 2, "both skills start out listed");
         let mut state = SkillRefreshState::fixture(snapshot);
         state.update_check_path = update_check_path;
@@ -5689,7 +5705,7 @@ mod tests {
             paused_rx.recv().unwrap();
             let write = write_lease.try_acquire(home);
             resume_tx.send(()).unwrap();
-            let (snapshot, _report) = rebuild.join().unwrap();
+            let (snapshot, _report) = rebuild.join().unwrap().unwrap();
             assert!(
                 write.is_ok(),
                 "a write was refused while the rebuild only indexed invocations"
@@ -5853,7 +5869,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         let skill = snapshot
             .skills
@@ -6206,18 +6223,37 @@ mod tests {
     }
 
     #[test]
-    fn failed_rebuild_returns_its_error_and_preserves_the_published_snapshot_or_silently_clears_the_list(
+    fn manual_refresh_with_failed_scan_dependency_preserves_revision_and_returns_error_or_publishes_partial_success(
     ) {
         let state = fixture_state();
         let before =
             store_skill_snapshot(&state, fixture_snapshot(Path::new("/fixture/alpha"))).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let missing_home = tmp.path().join("missing-home");
         let result = rebuild_snapshot_with(
             &state,
             Utc::now(),
-            || Err("fixture rebuild failed".into()),
+            || {
+                build_snapshot_releasing(
+                    &missing_home,
+                    None,
+                    BuildPaths {
+                        cache_path: &state.cache_path,
+                        runs_root: &state.runs_root,
+                        update_check_path: &state.update_check_path,
+                    },
+                    Utc::now(),
+                    None,
+                    || {},
+                )
+                .map(|(snapshot, _)| snapshot)
+            },
             |_| panic!("a failed build reached publication"),
         );
-        assert_eq!(result.unwrap_err(), "fixture rebuild failed");
+        assert!(
+            result.is_err(),
+            "a fatal filesystem scan failure was published as a partial success"
+        );
         assert_eq!(
             state.snapshot.read().unwrap().as_ref().unwrap().revision,
             before.revision
