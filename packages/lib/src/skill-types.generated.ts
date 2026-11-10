@@ -1246,7 +1246,7 @@ export interface Evidence {
   confidence: "verified-from-docs" | "inferred" | "unknown";
 }
 /**
- * Install method, inferred from the resolved executable path.
+ * Install method from vendor metadata, or inferred from the executable path.
  */
 export interface DetectedString1 {
   /**

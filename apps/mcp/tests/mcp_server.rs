@@ -1207,3 +1207,43 @@ async fn mcp_turn_on_keeps_concurrent_exclusion_and_refuses_lost_ignore_anchor()
         }
     }
 }
+
+#[tokio::test]
+async fn harnesses_stdio_reads_claude_install_method_from_fixture_home_or_reports_unknown() {
+    let home = tempfile::tempdir().unwrap();
+    let method = "native";
+    let config = home.path().join(".claude.json");
+    std::fs::write(
+        &config,
+        serde_json::to_vec(&serde_json::json!({"installMethod": method})).unwrap(),
+    )
+    .unwrap();
+    let empty_path = home.path().join("bin");
+    std::fs::create_dir(&empty_path).unwrap();
+    let env = [
+        ("HOME", home.path().to_str().unwrap()),
+        ("SKILL_STUDIO_FIXTURE", home.path().to_str().unwrap()),
+        ("PATH", empty_path.to_str().unwrap()),
+        ("SKILL_STUDIO_TELEMETRY", "0"),
+        ("SKILL_STUDIO_MCP_DEV_TOOLS", "1"),
+    ];
+    let (client, _) = connect(&env).await;
+    let result = call_tool(&client, "harnesses", serde_json::json!({})).await;
+    client.cancel().await.ok();
+    assert_eq!(result["status"], "ok");
+    let row = result["data"]["harnesses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "claude-code")
+        .unwrap();
+    assert_eq!(row["install_method"]["value"], method);
+    assert_eq!(
+        row["install_method"]["evidence"]["confidence"],
+        serde_json::to_value(skill_studio_core::harness::Confidence::VerifiedFromDocs).unwrap()
+    );
+    assert!(row["install_method"]["evidence"]["source"]
+        .as_str()
+        .unwrap()
+        .contains(config.to_str().unwrap()));
+}
