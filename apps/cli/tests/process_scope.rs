@@ -43,15 +43,22 @@ case "$1" in
     add)
         mkdir -p "$HOME/.agents/skills/gamma"
         printf '%s\n' '---' 'name: gamma' 'description: test skill' '---' 'Body' > "$HOME/.agents/skills/gamma/SKILL.md"
+        printf '%s\n' '{"version":3,"skills":{"gamma":{"source":"owner/repo","sourceType":"github","sourceUrl":"https://github.com/owner/repo","skillFolderHash":"fixture","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}}}' > "$HOME/.agents/.skill-lock.json"
         ;;
     update) printf '%s\n' 'Updated' >> "$HOME/.agents/skills/gamma/SKILL.md" ;;
     remove)
         for file in "$HOME/.agents/skills/gamma/"*; do unlink "$file"; done
         rmdir "$HOME/.agents/skills/gamma"
+        printf '%s\n' '{"version":3,"skills":{}}' > "$HOME/.agents/.skill-lock.json"
         ;;
 esac
 "#;
-        std::fs::write(home.path().join("skills"), script).unwrap();
+        let runner = format!(
+            "exec /bin/sh -c '{}' \"$0\" \"$@\"\n",
+            script.replace('\'', "'\\''")
+        );
+        std::fs::write(home.path().join("skills"), runner).unwrap();
+        std::os::unix::fs::symlink("skills", home.path().join("skills@1.7.0")).unwrap();
         let mut env = HOME_KEYS
             .iter()
             .map(|key| (key.to_string(), outside.path().display().to_string()))
@@ -62,9 +69,12 @@ esac
         ));
         env.push(("RECORD_PATH".to_string(), record.display().to_string()));
         for operation in ["add", "update", "remove"] {
+            if record.exists() {
+                std::fs::remove_file(&record).unwrap();
+            }
             let result = match (surface, operation) {
                 ("cli", "add") => cli_with_env(home.path(), &["add", "owner/repo", "--name", "gamma", "--method", "skills-sh"], &env),
-                ("cli", "update") => cli_with_env(home.path(), &["update", "gamma", "--method", "skills-sh"], &env),
+                ("cli", "update") => cli_with_env(home.path(), &["update", "--skill", "gamma", "--method", "skills-sh", "--source", "owner/repo"], &env),
                 ("mcp", "add") => envelope(&mcp_with_env(home.path(), "add", &json!({"skill":"gamma","method":"skills_sh","scope":{"scope":"global"},"source":"owner/repo"}), &env)).clone(),
                 ("mcp", "update") => envelope(&mcp_with_env(home.path(), "update", &json!({"skill":"gamma","method":"skills_sh","scope":{"scope":"global"},"source":"owner/repo"}), &env)).clone(),
                 (_, "remove") => {
@@ -77,6 +87,11 @@ esac
             };
             let values = std::fs::read_to_string(&record)
                 .unwrap_or_else(|e| panic!("{surface} {operation}: {e}: {result}"));
+            assert_eq!(
+                values.lines().count(),
+                HOME_KEYS.len(),
+                "{surface} {operation}: missing environment variable"
+            );
             for line in values.lines() {
                 let (key, value) = line.split_once('=').unwrap();
                 if key == "XDG_STATE_HOME" {
@@ -109,44 +124,49 @@ fn cursor_capabilities_and_detection_choose_the_same_specific_runner_or_name_the
         "PATH".to_string(),
         format!("{}:/usr/bin:/bin", bin.display()),
     )];
-    let expected = bin.join("cursor-agent");
-    for surface in ["cli", "mcp"] {
-        let capabilities = if surface == "cli" {
-            cli_with_env(
-                home.path(),
-                &["capabilities", "--harness", "cursor", "--observe"],
-                &env,
-            )
-        } else {
-            envelope(&mcp_with_env(
-                home.path(),
-                "capabilities",
-                &json!({"harnesses":["cursor"],"observe":true,"tools":[]}),
-                &env,
-            ))
-            .clone()
-        };
-        let detected = if surface == "cli" {
-            cli_with_env(home.path(), &["harnesses"], &env)
-        } else {
-            envelope(&mcp_with_env(home.path(), "harnesses", &json!({}), &env)).clone()
-        };
-        let report = &capabilities["data"]["harnesses"][0];
-        assert_eq!(report["harness"], "cursor", "{surface}: {capabilities}");
-        assert_eq!(
-            report["observed"]["runner_binary"],
-            expected.to_str().unwrap(),
-            "{surface}: {capabilities}"
-        );
-        let detection = detected["data"]["harnesses"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|h| h["id"] == "cursor")
-            .unwrap();
-        assert_eq!(
-            detection["executable"], report["observed"]["runner_binary"],
-            "{surface}: {detected}"
-        );
+    for runner in ["cursor-agent", "agent"] {
+        let expected = bin.join(runner);
+        for surface in ["cli", "mcp"] {
+            let capabilities = if surface == "cli" {
+                cli_with_env(
+                    home.path(),
+                    &["capabilities", "--harness", "cursor", "--observe"],
+                    &env,
+                )
+            } else {
+                envelope(&mcp_with_env(
+                    home.path(),
+                    "capabilities",
+                    &json!({"harnesses":["cursor"],"observe":true,"tools":[]}),
+                    &env,
+                ))
+                .clone()
+            };
+            let detected = if surface == "cli" {
+                cli_with_env(home.path(), &["harnesses"], &env)
+            } else {
+                envelope(&mcp_with_env(home.path(), "harnesses", &json!({}), &env)).clone()
+            };
+            let report = &capabilities["data"]["harnesses"][0];
+            assert_eq!(report["harness"], "cursor", "{surface}: {capabilities}");
+            assert_eq!(
+                report["observed"]["runner_binary"],
+                expected.to_str().unwrap(),
+                "{surface}: {capabilities}"
+            );
+            let detection = detected["data"]["harnesses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|h| h["id"] == "cursor")
+                .unwrap();
+            assert_eq!(
+                detection["executable"], report["observed"]["runner_binary"],
+                "{surface}: {detected}"
+            );
+        }
+        if runner == "cursor-agent" {
+            std::fs::remove_file(&expected).unwrap();
+        }
     }
 }

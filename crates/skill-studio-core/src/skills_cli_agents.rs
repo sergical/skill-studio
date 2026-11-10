@@ -177,7 +177,7 @@ pub fn cli_env_pins(home: &Path, codex_home: &Path) -> Vec<(String, String)> {
 }
 
 /// Pins installer and lock paths to the runtime scope for both skills and dotagents.
-pub fn cli_environment(home: &Path, codex_home: &Path) -> Vec<(String, String)> {
+pub(crate) fn cli_environment(home: &Path, codex_home: &Path) -> Vec<(String, String)> {
     let mut env = cli_env_pins(home, codex_home);
     env.extend([
         ("HOME".to_string(), home.display().to_string()),

@@ -1634,7 +1634,7 @@ fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_times
     // The CLI reads its home from `$HOME`, so a `--home` run must point it at
     // the same home the guard checked, not the user's real one.
     assert_eq!(
-        env.first(),
+        env.iter().find(|(name, _)| name == "HOME"),
         Some(&("HOME".to_string(), home.display().to_string())),
         "remove_via_cli must run the CLI with HOME set to the scope home"
     );
