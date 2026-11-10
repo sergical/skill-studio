@@ -89,3 +89,16 @@ it("Activity explains how to reverse non-restorable actions or leaves their rows
   expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
   await user.click(screen.getAllByRole("button", { name: "Reveal in Finder" })[0]);
 });
+
+it("a failed Park row explains unavailable restore without promising Unpark or gives an action for a move that failed", async () => {
+  mockIPC((command) => {
+    if (command === "list_skill_events") return [{ ...event("park"), status: "failed" }];
+    if (command === "open_skill_path") return;
+    throw new Error(`Unexpected ${command}`);
+  });
+  const user = userEvent.setup();
+  render(<SkillHistorySection />);
+  expect(await screen.findByText("This event has no saved change to restore.")).toBeTruthy();
+  expect(screen.queryByText("Unpark the skill to reverse this.")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Reveal in Finder" }));
+});

@@ -57,6 +57,7 @@ export function kindLabel(kind: string): string {
 
 export function restoreUnavailableReason(event: SkillEvent): string {
   if (event.reverted_by) return "Already restored.";
+  if (event.status !== "done") return "This event has no saved change to restore.";
   switch (event.kind) {
     case "park":
       return "Unpark the skill to reverse this.";

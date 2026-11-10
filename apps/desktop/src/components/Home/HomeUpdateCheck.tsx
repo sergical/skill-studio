@@ -38,10 +38,11 @@ export function HomeUpdateCheck({ summary }: { summary: SkillSnapshot["update_ch
           : `${latest.updates_available} update${latest.updates_available === 1 ? "" : "s"} available`;
   return (
     <section
-      aria-label="Skill update check"
+      aria-label="Source update check"
       className="flex items-center justify-between gap-3 rounded-md border border-border-subtle px-4 py-3"
     >
       <div className="flex min-w-0 flex-col gap-1">
+        <span className="text-caption text-text-tertiary">Source update check</span>
         <span role="status" className="text-small text-text-secondary">
           {result.kind === "failed" ? "Could not check for updates" : status}
         </span>

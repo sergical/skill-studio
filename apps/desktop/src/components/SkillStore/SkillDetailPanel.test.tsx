@@ -130,3 +130,31 @@ it("changing the Browse selection clears its old source while loading or offers 
   await user.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
+
+it("local Browse explains its missing remote source without Retry or sends an invalid details request", async () => {
+  let requests = 0;
+  mockIPC((command) => {
+    if (command === "get_skill_details") {
+      requests += 1;
+      throw new Error("No remote details");
+    }
+    if (command === "get_harnesses_choice") return null;
+    if (command === "get_add_method_defaults")
+      return {
+        dotagents_installed: false,
+        has_skill_lock: false,
+        installed_harnesses: [],
+        claude_reads_shared_folder: false,
+      };
+    throw new Error(`Unexpected ${command}`);
+  });
+  const user = userEvent.setup();
+  render(<Details selected={{ ...skill, id: "local", name: "local", top_source: null }} />);
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "This skill has no skills.sh source.",
+  );
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  expect(requests).toBe(0);
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
