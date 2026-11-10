@@ -36,7 +36,7 @@ function labelTipFor(row: LocationRow) {
  * plugin Claude Code disabled), or an empty placeholder to keep columns aligned.
  * An agent's own off setting is shown, not switched here.
  */
-function LocationRowSwitch({ row }: { row: LocationRow }) {
+function LocationRowSwitch({ row, scopeLabel }: { row: LocationRow; scopeLabel: string }) {
   const isAlwaysOnReader = row.kind === "reader";
   if (isAlwaysOnReader) {
     return (
@@ -52,11 +52,7 @@ function LocationRowSwitch({ row }: { row: LocationRow }) {
             checked={row.switchOn}
             disabled
             onCheckedChange={() => undefined}
-            ariaLabel={
-              row.switchOn
-                ? `Always enabled for ${row.harnessLabel}`
-                : `Disabled for ${row.harnessLabel} while this skill is off`
-            }
+            ariaLabel={`${scopeLabel} · ${row.harnessLabel}`}
           />
         </span>
       </TooltipControl>
@@ -75,7 +71,7 @@ function LocationRowSwitch({ row }: { row: LocationRow }) {
             checked={false}
             disabled
             onCheckedChange={() => undefined}
-            ariaLabel={pluginDisabledByClaudeLabel}
+            ariaLabel={`${scopeLabel} · ${row.harnessLabel} plugin`}
           />
         </span>
       </TooltipControl>
@@ -147,13 +143,14 @@ export function SkillLocationRow({
           <RowActionSwitch
             key={turnOff.kind === "turn-off-agent" ? turnOff.shared.id : row.path}
             checked
-            ariaLabel={row.harnessLabel}
+            ariaLabel={`${scopeLabel} · ${row.harnessLabel}`}
+            focusKey={`${scopeLabel}|${row.harness}`}
             title={`On. Turn off to stop ${row.harnessLabel} only: every agent gets its own copy, then the ${row.harnessLabel} copy is parked.`}
             action={turnOff}
             onAction={onAction}
           />
         ) : (
-          <LocationRowSwitch row={row} />
+          <LocationRowSwitch row={row} scopeLabel={scopeLabel} />
         )}
         <SkillLocationMenu
           entries={menu.entries}

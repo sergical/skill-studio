@@ -8,8 +8,9 @@ import { defaultSkillListFilter, isProjectPattern, isProjectScope } from "@skill
 import type { SkillListFilter, HarnessReport, HarnessesChoice } from "@skill-studio/lib";
 import { ALL_ACTIVITY, USAGE_WINDOWS } from "@skill-studio/lib";
 import type { ActivityFilter, UsageWindow } from "@skill-studio/lib";
-import type { Toast, TrackedProjects } from "@skill-studio/lib";
+import type { Toast, TrackedProjects, SkillSnapshot } from "@skill-studio/lib";
 import { addToast } from "../lib/toast";
+import { checkSkillUpdatesNow } from "../lib/skill-api";
 import { EMPTY_NAV_HISTORY, recordNavigation, stepBack, stepForward } from "../lib/nav-history";
 import type {
   DefaultDeploymentPaths,
@@ -185,6 +186,8 @@ interface AppState {
   resolvedTheme: ResolvedTheme;
   setTheme: (theme: Theme) => void;
 
+  checkSkillUpdates: () => Promise<SkillSnapshot["update_check"]>;
+
   // === Add-skill Sheet ===
   addSkillSheet: { open: boolean; prefill?: string };
   openAddSkillSheet: (prefill?: string) => void;
@@ -245,13 +248,14 @@ function navigateHistory(
     history: NavHistory,
     current: ActiveView,
     exists: (view: ActiveView) => boolean,
+    defaults?: DefaultDeploymentPaths | null,
   ) => NavStep | null,
 ): void {
   const plan = () => {
     const { activeView, navHistory, knownSkillNames } = get();
     const exists = (view: ActiveView) =>
       view.kind !== "skill" || knownSkillNames === null || knownSkillNames.has(view.name);
-    return move(navHistory, activeView, exists);
+    return move(navHistory, activeView, exists, historyDefaults(get()));
   };
   // Nothing valid to go to: leave the page alone, without a discard prompt for a no-op.
   if (!plan()) return;
@@ -441,6 +445,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     }
   },
+
+  checkSkillUpdates: checkSkillUpdatesNow,
 
   addSkillSheet: { open: false },
   openAddSkillSheet: (prefill) => set({ addSkillSheet: { open: true, prefill } }),

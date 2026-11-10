@@ -2139,3 +2139,27 @@ fn turn_on_keeps_an_entry_another_tool_added_while_dotagents_ran() {
     assert!(toml.contains("name = \"foo\""), "{toml}");
     std::fs::remove_dir_all(&home).ok();
 }
+
+#[test]
+fn parking_an_ambiguous_dotagents_skill_unlists_it_so_install_cannot_revive_it() {
+    let (home, stub) = dotagents_home("park_ambiguous_dotagents", EXPLICIT_TOML);
+    std::fs::write(home.join(".agents/.skill-lock.json"), r#"{"version":3,"skills":{"foo":{"source":"owner/foo","sourceType":"github","sourceUrl":"https://github.com/owner/foo","skillPath":"skills/foo/SKILL.md","skillFolderHash":"abc","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}}}"#).unwrap();
+    let rt = runtime(&home, stub.clone(), true);
+    let inventory = ops::scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+    let foo = inventory
+        .skills
+        .iter()
+        .find(|skill| skill.name.0 == "foo")
+        .unwrap();
+    assert!(foo
+        .deployments
+        .iter()
+        .any(|copy| copy.owner_kind == skill_studio_core::identity::LifecycleOwnerKind::Ambiguous));
+    park_foo(&rt);
+    dotagents_install(&stub);
+    assert!(
+        !home.join(".agents/skills/foo").exists(),
+        "dotagents install revived the parked ambiguous skill"
+    );
+    std::fs::remove_dir_all(home).ok();
+}

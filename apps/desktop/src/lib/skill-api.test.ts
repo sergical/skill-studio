@@ -20,15 +20,9 @@ import libRsSource from "../../src-tauri/src/lib.rs?raw";
  * - "event": subscribes via `listen`, never calls `invoke`.
  * - "none": not IPC at all (`invokeErrorMessage` is a pure string helper).
  *
- * `registeredInLibRs: false` marks a wrapper whose command is NOT in
- * `generate_handler!` today - a pre-existing gap from unit 4.3 (#200). The
- * UI no longer offers the "Pack" add method (see `availableAddSkillMethods`
- * in `add-skill-form.ts`), so `importSkillPack`/`confirmSkillPackTrust`/
- * `abandonPackImportTrust` are unreachable, but the wrappers stay for when
- * the three pack commands are re-registered; flip this to `true` then.
  */
 type WrapperEntry =
-  | { kind: "command"; command: string; registeredInLibRs: boolean }
+  | { kind: "command"; command: string }
   | { kind: "event"; event: string }
   | { kind: "none" };
 
@@ -37,237 +31,190 @@ const EXPECTED_WRAPPER_COMMANDS = {
   previewSkillFrontmatterRepair: {
     kind: "command",
     command: "preview_skill_frontmatter_repair",
-    registeredInLibRs: true,
   },
   applySkillFrontmatterRepair: {
     kind: "command",
     command: "apply_skill_frontmatter_repair",
-    registeredInLibRs: true,
   },
-  fixSkill: { kind: "command", command: "fix_skill", registeredInLibRs: true },
-  openConflictPaths: { kind: "command", command: "open_conflict_paths", registeredInLibRs: true },
-  searchSkills: { kind: "command", command: "search_skills", registeredInLibRs: true },
-  getPopularSkills: { kind: "command", command: "get_popular_skills", registeredInLibRs: true },
-  getSkillDetails: { kind: "command", command: "get_skill_details", registeredInLibRs: true },
-  getInstallCounts: { kind: "command", command: "get_install_counts", registeredInLibRs: true },
+  fixSkill: { kind: "command", command: "fix_skill" },
+  openConflictPaths: { kind: "command", command: "open_conflict_paths" },
+  searchSkills: { kind: "command", command: "search_skills" },
+  getPopularSkills: { kind: "command", command: "get_popular_skills" },
+  getSkillDetails: { kind: "command", command: "get_skill_details" },
+  getInstallCounts: { kind: "command", command: "get_install_counts" },
   getInstalledSkills: {
     kind: "command",
     command: "get_installed_skills",
-    registeredInLibRs: true,
   },
   getTrackedProjects: {
     kind: "command",
     command: "get_tracked_projects",
-    registeredInLibRs: true,
   },
   registerSkillProjects: {
     kind: "command",
     command: "register_skill_projects",
-    registeredInLibRs: true,
   },
   unregisterSkillProject: {
     kind: "command",
     command: "unregister_skill_project",
-    registeredInLibRs: true,
   },
   removeSkillProject: {
     kind: "command",
     command: "remove_skill_project",
-    registeredInLibRs: true,
   },
   getDiscoverySources: {
     kind: "command",
     command: "get_discovery_sources",
-    registeredInLibRs: true,
   },
   setDiscoverySource: {
     kind: "command",
     command: "set_discovery_source",
-    registeredInLibRs: true,
   },
-  detectHarnesses: { kind: "command", command: "detect_harnesses", registeredInLibRs: true },
+  detectHarnesses: { kind: "command", command: "detect_harnesses" },
   getHarnessesChoice: {
     kind: "command",
     command: "get_harnesses_choice",
-    registeredInLibRs: true,
   },
-  setHarnessEnabled: { kind: "command", command: "set_harness_enabled", registeredInLibRs: true },
+  setHarnessEnabled: { kind: "command", command: "set_harness_enabled" },
   saveHarnessesChoice: {
     kind: "command",
     command: "save_harnesses_choice",
-    registeredInLibRs: true,
   },
   listProjectFolders: {
     kind: "command",
     command: "list_project_folders",
-    registeredInLibRs: true,
   },
   // Deferred from the shell's own UI (no Project Folders "Import" affordance calls it yet), but
   // the command is fully wired - see unit 4.4's four-name allowlist test below.
   importTrackedProjects: {
     kind: "command",
     command: "import_tracked_projects",
-    registeredInLibRs: true,
   },
-  removeSkill: { kind: "command", command: "remove_skill", registeredInLibRs: true },
-  updateSkill: { kind: "command", command: "update_skill", registeredInLibRs: true },
-  cancelUpdateAll: { kind: "command", command: "cancel_update_all", registeredInLibRs: true },
+  removeSkill: { kind: "command", command: "remove_skill" },
+  updateSkill: { kind: "command", command: "update_skill" },
+  cancelUpdateAll: { kind: "command", command: "cancel_update_all" },
   updateAllSkillsWithProgress: { kind: "event", event: "skills://update-all-progress" },
   readInstalledSkillMd: {
     kind: "command",
     command: "read_installed_skill_md",
-    registeredInLibRs: true,
   },
   writeInstalledSkillMdIfUnchanged: {
     kind: "command",
     command: "write_installed_skill_md_if_unchanged",
-    registeredInLibRs: true,
   },
-  openSkillPath: { kind: "command", command: "open_skill_path", registeredInLibRs: true },
-  getEditorChoices: { kind: "command", command: "get_editor_choices", registeredInLibRs: true },
+  openSkillPath: { kind: "command", command: "open_skill_path" },
+  getEditorChoices: { kind: "command", command: "get_editor_choices" },
   setPreferredEditor: {
     kind: "command",
     command: "set_preferred_editor",
-    registeredInLibRs: true,
   },
-  dataFolderStatus: { kind: "command", command: "data_folder_status", registeredInLibRs: true },
+  dataFolderStatus: { kind: "command", command: "data_folder_status" },
   getTelemetryEnabled: {
     kind: "command",
     command: "get_telemetry_enabled",
-    registeredInLibRs: true,
   },
   setTelemetryEnabled: {
     kind: "command",
     command: "set_telemetry_enabled",
-    registeredInLibRs: true,
   },
-  forkSkill: { kind: "command", command: "fork_skill", registeredInLibRs: true },
-  pullForkUpstream: { kind: "command", command: "pull_fork_upstream", registeredInLibRs: true },
-  unforkSkill: { kind: "command", command: "unfork_skill", registeredInLibRs: true },
-  // Not registered - see the module doc above.
-  importSkillPack: { kind: "command", command: "import_skill_pack", registeredInLibRs: false },
-  confirmSkillPackTrust: {
-    kind: "command",
-    command: "confirm_skill_pack_trust",
-    registeredInLibRs: false,
-  },
-  abandonPackImportTrust: {
-    kind: "command",
-    command: "abandon_pack_import_trust",
-    registeredInLibRs: false,
-  },
-  addSkill: { kind: "command", command: "add_skill", registeredInLibRs: true },
+  forkSkill: { kind: "command", command: "fork_skill" },
+  pullForkUpstream: { kind: "command", command: "pull_fork_upstream" },
+  unforkSkill: { kind: "command", command: "unfork_skill" },
+  addSkill: { kind: "command", command: "add_skill" },
   startAddSkillOperation: {
     kind: "command",
     command: "start_add_skill_operation",
-    registeredInLibRs: true,
   },
   startAddSkillsOperation: {
     kind: "command",
     command: "start_add_skills_operation",
-    registeredInLibRs: true,
   },
   getAddSkillOperation: {
     kind: "command",
     command: "get_add_skill_operation",
-    registeredInLibRs: true,
   },
   cancelAddSkillOperation: {
     kind: "command",
     command: "cancel_add_skill_operation",
-    registeredInLibRs: true,
   },
   confirmAddSkillTrust: {
     kind: "command",
     command: "confirm_add_skill_trust",
-    registeredInLibRs: true,
   },
   onAddSkillOperation: { kind: "event", event: "skills://add-skill-operation" },
-  listGithubSkills: { kind: "command", command: "list_github_skills", registeredInLibRs: true },
+  listGithubSkills: { kind: "command", command: "list_github_skills" },
   getAddMethodDefaults: {
     kind: "command",
     command: "get_add_method_defaults",
-    registeredInLibRs: true,
   },
-  parkSkill: { kind: "command", command: "park_skill", registeredInLibRs: true },
-  unparkSkill: { kind: "command", command: "unpark_skill", registeredInLibRs: true },
-  parkCheck: { kind: "command", command: "park_check", registeredInLibRs: true },
-  discardSkillCopy: { kind: "command", command: "discard_skill_copy", registeredInLibRs: true },
+  parkSkill: { kind: "command", command: "park_skill" },
+  unparkSkill: { kind: "command", command: "unpark_skill" },
+  parkCheck: { kind: "command", command: "park_check" },
+  discardSkillCopy: { kind: "command", command: "discard_skill_copy" },
   unlistParkedDotagents: {
     kind: "command",
     command: "unlist_parked_dotagents",
-    registeredInLibRs: true,
   },
-  splitSkill: { kind: "command", command: "split_skill", registeredInLibRs: true },
+  splitSkill: { kind: "command", command: "split_skill" },
   splitSkillTargets: {
     kind: "command",
     command: "split_skill_targets",
-    registeredInLibRs: true,
   },
   turnOffForAgent: {
     kind: "command",
     command: "turn_off_for_agent",
-    registeredInLibRs: true,
   },
-  turnOffCheck: { kind: "command", command: "turn_off_check", registeredInLibRs: true },
+  turnOffCheck: { kind: "command", command: "turn_off_check" },
   restoreMovedDeployment: {
     kind: "command",
     command: "restore_moved_deployment",
-    registeredInLibRs: true,
   },
   setSkillsInvocation: {
     kind: "command",
     command: "set_skills_invocation",
-    registeredInLibRs: true,
   },
-  parkSkills: { kind: "command", command: "park_skills", registeredInLibRs: true },
+  parkSkills: { kind: "command", command: "park_skills" },
   skillLocalEdits: {
     kind: "command",
     command: "skill_local_edits",
-    registeredInLibRs: true,
   },
-  unparkSkills: { kind: "command", command: "unpark_skills", registeredInLibRs: true },
-  setPluginEnabled: { kind: "command", command: "set_plugin_enabled", registeredInLibRs: true },
-  uninstallPlugin: { kind: "command", command: "uninstall_plugin", registeredInLibRs: true },
-  updatePlugin: { kind: "command", command: "update_plugin", registeredInLibRs: true },
-  listSkillEvents: { kind: "command", command: "list_skill_events", registeredInLibRs: true },
+  unparkSkills: { kind: "command", command: "unpark_skills" },
+  setPluginEnabled: { kind: "command", command: "set_plugin_enabled" },
+  uninstallPlugin: { kind: "command", command: "uninstall_plugin" },
+  updatePlugin: { kind: "command", command: "update_plugin" },
+  listSkillEvents: { kind: "command", command: "list_skill_events" },
   restoreSkillEvent: {
     kind: "command",
     command: "restore_skill_event",
-    registeredInLibRs: true,
   },
   materializeHarnessRoot: {
     kind: "command",
     command: "materialize_harness_root",
-    registeredInLibRs: true,
   },
   materializeHarnessRootThenDisable: {
     kind: "command",
     command: "materialize_harness_root_then_disable",
-    registeredInLibRs: true,
   },
   makeSkillIndependentCopy: {
     kind: "command",
     command: "make_skill_independent_copy",
-    registeredInLibRs: true,
   },
-  repairSkillLink: { kind: "command", command: "repair_skill_link", registeredInLibRs: true },
-  getSkillSnapshot: { kind: "command", command: "get_skill_snapshot", registeredInLibRs: true },
+  repairSkillLink: { kind: "command", command: "repair_skill_link" },
+  checkSkillUpdatesNow: { kind: "command", command: "check_skill_updates_now" },
+  getSkillSnapshot: { kind: "command", command: "get_skill_snapshot" },
   requestSkillRescan: {
     kind: "command",
     command: "request_skill_rescan",
-    registeredInLibRs: true,
   },
   rescanSkillsNow: {
     kind: "command",
     command: "rescan_skills_now",
-    registeredInLibRs: true,
   },
   onSkillSnapshot: { kind: "event", event: "skills://snapshot" },
-  appVersion: { kind: "command", command: "app_version", registeredInLibRs: true },
-  checkForUpdate: { kind: "command", command: "check_for_update", registeredInLibRs: true },
-  getUpdateStatus: { kind: "command", command: "get_update_status", registeredInLibRs: true },
-  installUpdate: { kind: "command", command: "install_update", registeredInLibRs: true },
+  appVersion: { kind: "command", command: "app_version" },
+  checkForUpdate: { kind: "command", command: "check_for_update" },
+  getUpdateStatus: { kind: "command", command: "get_update_status" },
+  installUpdate: { kind: "command", command: "install_update" },
   onUpdateStatus: { kind: "event", event: "skills://update-status" },
 } satisfies Record<string, WrapperEntry>;
 
@@ -298,7 +245,7 @@ function wrapperBody(source: string, name: string, allNames: string[]): string {
  * the wrapper's own body. */
 function deriveWrapperEntry(body: string, fullSource: string): WrapperEntry {
   const commandMatch = body.match(/callCommand(?:<[^>]*>)?\(\s*"([a-z_]+)"/);
-  if (commandMatch) return { kind: "command", command: commandMatch[1], registeredInLibRs: true };
+  if (commandMatch) return { kind: "command", command: commandMatch[1] };
   const literalEvent = body.match(/listen<[^>]*>\(\s*"([\w:./-]+)"/);
   if (literalEvent) return { kind: "event", event: literalEvent[1] };
   const constEvent = body.match(/listen<[^>]*>\(\s*([A-Z_][A-Z0-9_]*)/);
@@ -352,17 +299,13 @@ describe("skill-api wrapper set", () => {
         wrapperBody(skillApiSource, name, wrapperNames),
         skillApiSource,
       );
-      expect(derived, `${name}: derived ${JSON.stringify(derived)}`).toEqual(
-        expected.kind === "command"
-          ? { kind: "command", command: expected.command, registeredInLibRs: true }
-          : expected,
-      );
+      expect(derived, `${name}: derived ${JSON.stringify(derived)}`).toEqual(expected);
       if (expected.kind === "command") {
         const isRegistered = registered.has(expected.command);
         expect(
           isRegistered,
-          `${name} -> "${expected.command}": generate_handler! registration is ${isRegistered}, EXPECTED_WRAPPER_COMMANDS says registeredInLibRs: ${expected.registeredInLibRs}`,
-        ).toBe(expected.registeredInLibRs);
+          `${name} -> "${expected.command}" is missing from generate_handler!`,
+        ).toBe(true);
       }
     }
   });
@@ -390,13 +333,9 @@ describe("skill-api wrapper set", () => {
     const mockedCases = new Set(
       [...mockTauriSource.matchAll(/case "([a-z_]+)":/g)].map((m) => m[1]),
     );
-    const missing = Object.values(EXPECTED_WRAPPER_COMMANDS)
-      .filter((entry): entry is Extract<WrapperEntry, { kind: "command" }> => {
-        return (
-          entry.kind === "command" && entry.registeredInLibRs && !mockedCases.has(entry.command)
-        );
-      })
-      .map((entry) => entry.command);
+    const missing = Object.values(EXPECTED_WRAPPER_COMMANDS).flatMap((entry) =>
+      entry.kind === "command" && !mockedCases.has(entry.command) ? [entry.command] : [],
+    );
     expect(missing, `dev harness mock-tauri.ts has no case for: ${missing.join(", ")}`).toEqual([]);
   });
 });

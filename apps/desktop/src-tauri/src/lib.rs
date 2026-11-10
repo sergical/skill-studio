@@ -374,14 +374,6 @@ pub fn run() {
             app.manage(refresh_state);
             app.manage(skills::skill_add_operation::AddSkillOperationState::default());
             app.manage(skills::commands::UpdateAllCancelState::default());
-            app.manage(skills::skill_pack::PackImportTrustState::default());
-            if let Some(home) = dirs::home_dir() {
-                if let Err(error) =
-                    skills::skill_pack::reconcile_pack_import_staging_at_startup(&home)
-                {
-                    eprintln!("[skill_pack] startup staging reconcile failed: {error}");
-                }
-            }
             app.manage(skills::skill_agent_runner::SkillAgentRunnerState::default());
             app.manage(skills::skill_run_target::SkillRunTargetState::default());
             skills::skill_update_check::spawn_update_check_loop(app.handle().clone());
@@ -496,6 +488,7 @@ pub fn run() {
             skills::event_commands::make_skill_independent_copy,
             skills::event_commands::repair_skill_link,
             // Background refresh / invocation snapshot
+            skills::skill_update_check::check_skill_updates_now,
             skills::skill_refresh::get_skill_snapshot,
             skills::skill_refresh::request_skill_rescan,
             skills::skill_refresh::rescan_skills_now,

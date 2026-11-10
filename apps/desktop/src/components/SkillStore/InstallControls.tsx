@@ -49,7 +49,6 @@ export function InstallControls({
   return (
     <InstalledSkillLifecycleActions
       skill={skill}
-      onInstallComplete={onInstallComplete}
       onUpdateComplete={onUpdateComplete}
       onRemoveComplete={onRemoveComplete}
     />

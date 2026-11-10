@@ -276,7 +276,7 @@ describe("back/forward history", () => {
     expect(history().back).toHaveLength(before + 1);
     useAppStore.getState().goBack();
     expect(useAppStore.getState().activeView).toMatchObject({ kind: "skill", name: "a" });
-    expect(useAppStore.getState().activeView).toHaveProperty("deploymentPath", undefined);
+    expect(useAppStore.getState().activeView).toHaveProperty("deploymentPath", "/x");
   });
 
   it("Back from a skill page to a list sets lastClosedSkillName, so the list restores its row cursor", () => {

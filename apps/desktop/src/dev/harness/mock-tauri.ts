@@ -316,6 +316,8 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     async (command, rawPayload) => {
       const payload = isObjectInvokeArgs(rawPayload) ? rawPayload : {};
       switch (command) {
+        case "check_skill_updates_now":
+          return currentSnapshot.update_check;
         case "get_skill_snapshot":
           return currentSnapshot;
         case "get_installed_skills":
@@ -466,12 +468,6 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
             skills: [{ name: "frontend-design", path: "frontend-design" }],
             truncated: false,
           };
-        case "import_skill_pack":
-          return { status: "imported", result: { bundled: [], referenced: [], errors: [] } };
-        case "confirm_skill_pack_trust":
-          return { bundled: [], referenced: [], errors: [] };
-        case "abandon_pack_import_trust":
-          return true;
         case "update_plugin":
           return { outcome: "updated", message: null };
         case "set_plugin_enabled":
