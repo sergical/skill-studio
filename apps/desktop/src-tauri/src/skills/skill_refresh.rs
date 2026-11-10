@@ -1221,6 +1221,7 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
             }
             reconcile_watchers_from_snapshot(&home, &state, &mut debouncer, &mut watched);
         },
+        &super::core_runtime::data_root().join("leases"),
         super::core_runtime::build_runtime_write,
     );
     run_startup_doctor_pass(&app);
@@ -1385,17 +1386,18 @@ fn next_refresh_step(tick: RefreshTick) -> RefreshStep {
 /// `App<MockRuntime>`, not the `App<Wry>` this crate's `AppHandle` alias
 /// requires, and making every function on this call path generic over
 /// `Runtime` is out of scope here). The sweep call is deliberately *not*
-/// injected - it's hard-wired to `run_startup_quarantine_sweep` right here,
+/// injected - it's hard-wired to `run_startup_sweeps` right here,
 /// so a test that deletes or reorders it exercises this production body
 /// directly, rather than a test-owned closure that would stay green under
 /// that mutation. Only `build_runtime` - the sweep's own seam, already used
 /// without a real `AppHandle` - is passed through.
 fn first_scan_then_sweep(
     rebuild: &mut dyn FnMut(),
+    lease_root: &Path,
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
 ) {
     rebuild();
-    run_startup_quarantine_sweep(build_runtime);
+    run_startup_sweeps(lease_root, build_runtime);
 }
 
 /// The startup quarantine sweep unit 3.9b's `run_refresh_loop` runs once,
@@ -1407,9 +1409,15 @@ fn first_scan_then_sweep(
 /// only - a project's own `.agents/skills` quarantine directory is swept the
 /// next time that project's own `remove` runs; sweeping every tracked
 /// project here as well is a follow-up, not part of the happy path.
-fn run_startup_quarantine_sweep(
+fn run_startup_sweeps(
+    lease_root: &Path,
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
 ) {
+    if let Err(error) =
+        skill_studio_host::FileLease::new(lease_root.to_path_buf()).sweep_stale_files()
+    {
+        eprintln!("skill refresh: startup lease sweep failed: {error}");
+    }
     let rt = match build_runtime() {
         Ok(rt) => rt,
         Err(e) => {
@@ -1480,7 +1488,7 @@ fn run_startup_doctor_pass(app: &AppHandle) {
 /// The startup doctor sweep's body, split from [`run_startup_doctor_pass`] so
 /// a test can drive it without a real `AppHandle` (which only a running
 /// Tauri app can construct) - the same split `harness_first_run::detect_with_runtime`
-/// and `run_startup_quarantine_sweep` use. `build_runtime` and `on_result`
+/// and `run_startup_sweeps` use. `build_runtime` and `on_result`
 /// are both parameters rather than fixed to the real adapters, so a test can
 /// record which thread built the runtime and confirm it isn't the test's own
 /// thread.
@@ -5723,13 +5731,13 @@ mod tests {
     /// calls `first_scan_then_sweep` - the exact function `run_refresh_loop`'s
     /// first iteration calls - with a test-owned `rebuild` closure but the
     /// production `sweep` step: `first_scan_then_sweep` hard-wires the sweep
-    /// call to `run_startup_quarantine_sweep` itself rather than accepting it
+    /// call to `run_startup_sweeps` itself rather than accepting it
     /// as a parameter, so this test can't pass its own stand-in for the
     /// sweep the way an earlier version of this test passed its own stand-in
     /// for both steps - that version stayed green under three mutations a
     /// reviewer found by hand: swapping `rebuild`/`sweep` at the production
     /// call site, deleting the sweep call, and reordering it. Only
-    /// `build_runtime` - `run_startup_quarantine_sweep`'s own seam - is
+    /// `build_runtime` - `run_startup_sweeps`'s own seam - is
     /// injected here, so a deleted or reordered sweep call inside
     /// `first_scan_then_sweep` shows up as a missing or misordered `"sweep"`
     /// entry in `recorded`, not just in a scaffold this test owns.
@@ -5756,6 +5764,7 @@ mod tests {
         let build_runtime_log = StdArc::clone(&log);
 
         let handle = std::thread::spawn(move || {
+            let fixture = tempfile::tempdir().unwrap();
             first_scan_then_sweep(
                 &mut || {
                     scan_log
@@ -5763,9 +5772,10 @@ mod tests {
                         .unwrap()
                         .push(("scan", std::thread::current().id()));
                 },
+                &fixture.path().join("leases"),
                 move || {
-                    // `run_startup_quarantine_sweep` calls `build_runtime` as
-                    // its first step, before touching `ops::sweep_quarantine`,
+                    // `build_runtime` is reached after lease cleanup and
+                    // before touching `ops::sweep_quarantine`,
                     // so recording here - before returning the `Err` that
                     // makes it stop - still observes the sweep step itself,
                     // not just this test's stand-in for it.
@@ -5860,5 +5870,29 @@ mod tests {
             "the startup sweep did not deliver ops::doctor's violation to on_result: {:?}",
             report.violations
         );
+    }
+    #[test]
+    fn startup_lease_sweep_runs_after_the_first_snapshot_instead_of_leaving_stale_files() {
+        let fixture = tempfile::tempdir().unwrap();
+        let leases = fixture.path().join("leases");
+        fs::create_dir_all(&leases).unwrap();
+        let stale = leases.join("abandoned.lock");
+        fs::write(&stale, "4294967295|0").unwrap();
+        let mut scanned = false;
+        first_scan_then_sweep(
+            &mut || {
+                assert!(
+                    stale.exists(),
+                    "lease cleanup ran before the first inventory"
+                );
+                scanned = true;
+            },
+            &leases,
+            || {
+                assert!(!stale.exists(), "startup left a stale lease file");
+                Err("fixture stops before quarantine work".to_string())
+            },
+        );
+        assert!(scanned);
     }
 }
