@@ -383,6 +383,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
               display_name: id,
               state: discoverySources.get(id) ? "configured" : "not_found",
               executable: null,
+              executable_on_path: null,
               version: { value: null, evidence: { source: "mock", confidence: "unknown" } },
               install_method: { value: null, evidence: { source: "mock", confidence: "unknown" } },
               configured: discoverySources.get(id) ?? false,
@@ -391,6 +392,8 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           };
         case "get_harnesses_choice":
           return null;
+        case "set_harness_enabled":
+          return { kept: [], search_project_folders: true, saved_at: new Date().toISOString() };
         case "save_harnesses_choice":
           return undefined;
         case "open_skill_path":

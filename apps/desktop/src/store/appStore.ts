@@ -5,7 +5,7 @@
 
 import { create } from "zustand";
 import { defaultSkillListFilter, isProjectPattern, isProjectScope } from "@skill-studio/lib";
-import type { SkillListFilter } from "@skill-studio/lib";
+import type { SkillListFilter, HarnessReport, HarnessesChoice } from "@skill-studio/lib";
 import { ALL_ACTIVITY, USAGE_WINDOWS } from "@skill-studio/lib";
 import type { ActivityFilter, UsageWindow } from "@skill-studio/lib";
 import type { Toast, TrackedProjects } from "@skill-studio/lib";
@@ -64,7 +64,16 @@ export type ActiveView =
 // State Interface
 // ============================================================================
 
+export interface HarnessDetectionState {
+  report: HarnessReport | null;
+  choice: HarnessesChoice | null;
+  error: string | null;
+  saving: boolean;
+}
+
 interface AppState {
+  harnessDetection: HarnessDetectionState;
+  setHarnessDetection: (update: Partial<HarnessDetectionState>) => void;
   // === Toast Notifications ===
   // Toasts render via sonner (see App.tsx's `<Toaster />`); this action is
   // kept on the store so every existing call site
@@ -280,6 +289,9 @@ const initialTheme = loadStoredTheme();
 // ============================================================================
 
 export const useAppStore = create<AppState>((set, get) => ({
+  harnessDetection: { report: null, choice: null, error: null, saving: false },
+  setHarnessDetection: (update) =>
+    set((state) => ({ harnessDetection: { ...state.harnessDetection, ...update } })),
   addToast,
 
   activeView: { kind: "home" },

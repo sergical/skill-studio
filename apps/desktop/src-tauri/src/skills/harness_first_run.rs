@@ -1,25 +1,7 @@
 // ============================================================================
 // Skills Module - harness_first_run
-// The first-run screen: `detect_harnesses` runs `skill-studio-core`'s
-// `ops::harnesses` (the same op the CLI's `harnesses` subcommand and the MCP
-// server's `harnesses` tool call) off the UI thread, over the login-shell
-// `PATH` so a `launchd`-started desktop app sees the same binaries the
-// user's terminal does (`core_runtime::build_runtime_detect`). The screen's
-// result - which rows the user kept, and whether to search harness history
-// for project folders - is saved once under the registry's `harnesses` key
-// (`skill_fork_registry::ForkRegistry::harnesses`); a later launch with that
-// key present skips the screen entirely, per
-// `docs/action-map/harnesses/harness-detection.md`. Re-running detection in
-// the background on a later launch to refresh the saved rows is a named
-// follow-up, not implemented here: nothing in this release consumes such a
-// refreshed report.
-//
-// Old path deleted in this PR: there wasn't one - no first-run screen
-// existed before this unit, so there is no ad-hoc detection to remove here.
-// `apps/desktop/src-tauri/src/skills/agents.rs`'s `FIRST_CLASS_AGENTS` stays:
-// it drives which directories `scan` reads for skills regardless of whether
-// a harness is installed (a skill folder can exist with no harness on this
-// machine), a different job from telling the user what is installed.
+// Detection runs in the blocking pool on each launch. The saved choice controls
+// which agents are on; detecting an agent never changes that choice.
 // ============================================================================
 
 use schemars::JsonSchema;
@@ -66,7 +48,7 @@ pub async fn detect_harnesses(app: tauri::AppHandle) -> Result<HarnessReport, St
 /// built inside the blocking closure too: `Runtime::new` runs project
 /// discovery, which reads harness transcripts and must not sit on an async
 /// worker.
-pub(crate) async fn detect_with_runtime(
+pub async fn detect_with_runtime(
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String> + Send + 'static,
 ) -> Result<HarnessReport, String> {
     let joined = tauri::async_runtime::spawn_blocking(move || {
@@ -127,6 +109,54 @@ pub async fn save_harnesses_choice(
         Ok(())
     })
     .await
+}
+
+#[tauri::command]
+pub async fn set_harness_enabled(
+    id: String,
+    enabled: bool,
+    app: tauri::AppHandle,
+) -> Result<HarnessesChoice, String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "set_harness_enabled", move || {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        set_harness_enabled_at(
+            &super::write_lease::WriteLease::default(),
+            &home,
+            &id,
+            enabled,
+        )
+    })
+    .await
+}
+
+fn set_harness_enabled_at(
+    lease: &super::write_lease::WriteLease,
+    home: &std::path::Path,
+    id: &str,
+    enabled: bool,
+) -> Result<HarnessesChoice, String> {
+    if !skill_studio_core::harness::HarnessCatalog::builtin()
+        .facts
+        .iter()
+        .any(|facts| facts.id.as_str() == id)
+    {
+        return Err("Choose a known agent.".into());
+    }
+    let guard = lease.try_acquire(home)?;
+    let mut registry = super::skill_fork_registry::read_fork_registry(home)?;
+    let choice = registry
+        .harnesses
+        .as_mut()
+        .ok_or("Complete the welcome screen first.")?;
+    choice.kept.retain(|kept| kept != id);
+    if enabled {
+        choice.kept.push(id.to_string());
+    }
+    choice.saved_at = chrono::Utc::now().to_rfc3339();
+    let choice = choice.clone();
+    super::skill_fork_registry::write_fork_registry_locked(&guard, home, &registry)?;
+    Ok(choice)
 }
 
 /// The locked read-modify-write body of `save_harnesses_choice`, kept apart
@@ -454,6 +484,7 @@ mod tests {
             _spec: &skill_studio_core::ports::ProcessSpec,
             _cancel: &dyn skill_studio_core::ports::CancelToken,
         ) -> Result<skill_studio_core::ports::ProcessOutput, skill_studio_core::CoreError> {
+            tokio::runtime::Handle::current().block_on(async {});
             *self.ran_on.lock().unwrap() = Some(std::thread::current().id());
             Ok(skill_studio_core::ports::ProcessOutput {
                 status: Some(0),
@@ -466,14 +497,9 @@ mod tests {
 
     /// `detect_runs_the_probes_on_a_blocking_thread_not_the_ui_task_or_names_the_task_it_blocks`:
     /// runs the command body `detect_with_runtime` (the command itself needs
-    /// a real `tauri::AppHandle` a unit test cannot construct). Under a
-    /// `current_thread` runtime the test task's own thread is the runtime's
-    /// only async worker, so a probe that lands anywhere else must have run
-    /// on `spawn_blocking`'s pool - a deterministic fact, not a timing
-    /// measurement. The runtime builder closure records its thread the same
-    /// way. Fails if `detect_with_runtime` builds the runtime or calls
-    /// `ops::harnesses` on the calling task instead of through
-    /// `spawn_blocking`.
+    /// a real `tauri::AppHandle` a unit test cannot construct). Nested
+    /// `block_on` is allowed in a blocking pool and panics on an async worker.
+    /// Both runtime construction and the probe check this contract.
     #[tokio::test(flavor = "current_thread")]
     async fn detect_runs_the_probes_on_a_blocking_thread_not_the_ui_task_or_names_the_task_it_blocks(
     ) {
@@ -498,15 +524,15 @@ mod tests {
             ran_on: std::sync::Mutex::new(None),
         });
         ports.spawner = Some(spawner.clone());
-        let rt = Runtime::new(&scope, ports).unwrap();
 
         let test_task_thread = std::thread::current().id();
         let runtime_built_on = Arc::new(std::sync::Mutex::new(None));
         let record_build_thread = runtime_built_on.clone();
 
         let result = detect_with_runtime(move || {
+            tokio::runtime::Handle::current().block_on(async {});
             *record_build_thread.lock().unwrap() = Some(std::thread::current().id());
-            Ok(rt)
+            Runtime::new(&scope, ports).map_err(|error| error.to_string())
         })
         .await
         .unwrap();
@@ -538,5 +564,24 @@ mod tests {
             "the version probe ran on the test task's own thread ({test_task_thread:?}) \
              instead of a spawn_blocking pool thread - detect_harnesses would block the UI task"
         );
+    }
+    #[test]
+    fn enabling_a_new_agent_changes_only_the_saved_choice_or_creates_agent_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".agents")).unwrap();
+        std::fs::write(home.join(".agents/skill-studio.json"), r#"{"version":4,"telemetry_enabled":false,"future":{"keep":true},"harnesses":{"kept":["claude-code"],"search_project_folders":true,"saved_at":"2026-01-01T00:00:00Z"}}"#).unwrap();
+        let lease =
+            super::super::write_lease::WriteLease::with_lease_root(dir.path().join("leases"));
+        let enabled = set_harness_enabled_at(&lease, &home, "codex", true).unwrap();
+        assert!(enabled.kept.iter().any(|id| id == "codex"));
+        let disabled = set_harness_enabled_at(&lease, &home, "codex", false).unwrap();
+        assert_eq!(disabled.kept, vec!["claude-code"]);
+        let registry = super::super::skill_fork_registry::read_fork_registry(&home).unwrap();
+        assert!(!registry.telemetry_enabled);
+        assert_eq!(registry.unknown["future"]["keep"], true);
+        assert!(!home.join(".codex").exists());
+        assert!(!home.join(".claude").exists());
+        assert!(set_harness_enabled_at(&lease, &home, "unknown", true).is_err());
     }
 }

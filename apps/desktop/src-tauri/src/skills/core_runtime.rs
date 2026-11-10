@@ -159,7 +159,16 @@ pub fn build_runtime_write_at_with_search_dirs(
 /// read/write split may need to diverge again.
 pub fn build_runtime_detect() -> Result<Runtime, String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    build_runtime_write_at(&home, &data_root())
+    let data = data_root();
+    let tools = skill_studio_host::LoginShellToolLookup::new();
+    let dirs = tools.dirs().to_vec();
+    let mut runtime = build_runtime_write_at_with_search_dirs(&home, &data, dirs.clone())?;
+    runtime.ports.tools = Some(Arc::new(tools));
+    runtime.ports.spawner = Some(Arc::new(
+        skill_studio_host::RealProcessSpawner::with_search_path(dirs)
+            .with_probe_cache(data.join("cache/version-probes.json")),
+    ));
+    Ok(runtime)
 }
 
 /// Unwraps a `ResultEnvelope` into the plain `Result<T, String>` every

@@ -1029,6 +1029,9 @@ pub struct HarnessDetection {
     pub state: HarnessState,
     /// Resolved executable path, when found on `PATH`.
     pub executable: Option<PathBuf>,
+    /// False for an executable found only in a fallback directory.
+    #[serde(default)]
+    pub executable_on_path: Option<bool>,
     /// Version, proven by `<bin> --version`.
     pub version: DetectedString,
     /// Install method, inferred from the resolved executable path.
@@ -1136,6 +1139,9 @@ pub trait HarnessAdapter: Send + Sync {
             id: self.id(),
             display_name: self.display_name().to_string(),
             state,
+            executable_on_path: executable
+                .as_ref()
+                .and_then(|path| ports.tools.and_then(|lookup| lookup.binary_on_path(path))),
             executable,
             version,
             install_method,

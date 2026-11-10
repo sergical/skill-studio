@@ -75,7 +75,7 @@ pub use skill_uses::{
     skill_use_watch_paths_with_databases, SkillInvocationIndex, SkillUseRefreshReport,
     SkillUseWatchPath,
 };
-pub use tools::{LoginShellToolLookup, PathToolLookup};
+pub use tools::{terminal_editor_command, LoginShellToolLookup, PathToolLookup};
 pub use usage_report::{
     desktop_usage_cache_path, usage_report, SkillUsage, SkillUsageRow, UsageReport,
     DEFAULT_USAGE_DAYS,
