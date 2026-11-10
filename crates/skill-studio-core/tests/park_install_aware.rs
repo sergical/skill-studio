@@ -2481,3 +2481,59 @@ fn turn_on_keeps_ignore_edit_at_replacement_or_loses_external_comment() {
 fn failed_park_keeps_config_edit_at_rollback_replacement_or_loses_external_comment() {
     assert_last_moment_edit_is_recoverable(true, false);
 }
+
+#[test]
+fn park_turn_on_roundtrips_agents_toml_layouts_byte_for_byte_or_names_the_layout() {
+    let layouts: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/park-dotagents-layouts.json")).unwrap();
+    for layout in layouts {
+        for crlf in [false, true] {
+            for trailing_newline in [false, true] {
+                let text = layout["manifest"]
+                    .as_str()
+                    .unwrap()
+                    .trim_end_matches('\n')
+                    .to_string();
+                let text = if trailing_newline { text + "\n" } else { text };
+                let text = if crlf {
+                    text.replace('\n', "\r\n")
+                } else {
+                    text
+                };
+                let (home, stub) = dotagents_home_with_pool("park_layout_matrix", &text, &["foo"]);
+                let rt = runtime(&home, stub.clone(), true);
+                // The old dotagents line editor skips these valid headers and CRLF.
+                stub.leave_toml
+                    .store(crlf || text.contains("[[skills]] #"), Ordering::SeqCst);
+                let original_lock = read(&stub.lock_path());
+                let ignore = home.join(".agents/.gitignore");
+                let original_ignore = "/skills/foo\r\n!/skills/foo/\r\n";
+                std::fs::write(&ignore, original_ignore).unwrap();
+                let parked = ops::park(
+                    &rt,
+                    &ctx(),
+                    &ParkRequest {
+                        deployment_id: live_copy(&rt, "foo").id,
+                    },
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "layout {} CRLF={crlf} newline={trailing_newline}: {e}",
+                        layout["name"]
+                    )
+                });
+                assert!(parked.parked_path.join("SKILL.md").is_file());
+                unpark_foo(&rt);
+                assert_eq!(
+                    std::fs::read(stub.toml_path()).unwrap(),
+                    text.as_bytes(),
+                    "layout {} CRLF={crlf} newline={trailing_newline}",
+                    layout["name"]
+                );
+                assert_eq!(read(&stub.lock_path()), original_lock);
+                assert_eq!(read(&ignore), original_ignore);
+                std::fs::remove_dir_all(home).unwrap();
+            }
+        }
+    }
+}

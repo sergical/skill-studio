@@ -1248,3 +1248,28 @@ fn cli_failed_park_restores_config_and_live_copy_when_lock_write_is_denied() {
     assert!(home.join(".agents/skills/foo/SKILL.md").is_file());
     assert!(!home.join("remove-called").exists());
 }
+
+#[test]
+fn cli_park_turn_on_restores_every_layout_byte_for_byte_or_names_the_layout() {
+    for text in park_dotagents::layouts() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().canonicalize().unwrap();
+        let path = park_dotagents::setup(&home);
+        park_dotagents::write_layout(&home, &text);
+        let original = park_dotagents::config_bytes(&home);
+        let env = [("HOME", home.to_str().unwrap()), ("PATH", path.as_str())];
+        for op in ["park", "unpark"] {
+            let result = run_with_env(
+                &[op, "foo", "--home", home.to_str().unwrap(), "--json"],
+                &env,
+            );
+            assert_eq!(result.status, 0, "{op} layout {text:?}: {:?}", result.json);
+        }
+        assert_eq!(
+            park_dotagents::config_bytes(&home),
+            original,
+            "layout {text:?}"
+        );
+        assert!(home.join(".agents/skills/foo/SKILL.md").is_file());
+    }
+}

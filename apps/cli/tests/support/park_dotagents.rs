@@ -54,3 +54,44 @@ pub fn restore_lock_permissions(home: &Path) {
     )
     .unwrap();
 }
+
+pub fn layouts() -> Vec<String> {
+    let table: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "../../../../crates/skill-studio-core/tests/fixtures/park-dotagents-layouts.json"
+    ))
+    .unwrap();
+    let mut variants = Vec::new();
+    for row in table {
+        for crlf in [false, true] {
+            for final_newline in [false, true] {
+                let mut text = row["manifest"]
+                    .as_str()
+                    .unwrap()
+                    .trim_end_matches('\n')
+                    .to_string();
+                if final_newline {
+                    text.push('\n');
+                }
+                if crlf {
+                    text = text.replace('\n', "\r\n");
+                }
+                variants.push(text);
+            }
+        }
+    }
+    variants
+}
+
+pub fn write_layout(home: &Path, text: &str) {
+    let source = if text.contains("owner/pack") {
+        "owner/pack"
+    } else {
+        "owner/foo"
+    };
+    std::fs::write(home.join(".agents/agents.toml"), text).unwrap();
+    std::fs::write(
+        home.join(".agents/agents.lock"),
+        format!("[skills.foo]\nsource = \"{source}\"\n"),
+    )
+    .unwrap();
+}

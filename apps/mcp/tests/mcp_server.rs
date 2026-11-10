@@ -1236,3 +1236,32 @@ async fn mcp_failed_park_restores_config_and_live_copy_when_lock_write_is_denied
     assert!(home.join(".agents/skills/foo/SKILL.md").is_file());
     assert!(!home.join("remove-called").exists());
 }
+
+#[tokio::test]
+async fn mcp_park_turn_on_restores_every_layout_byte_for_byte_or_names_the_layout() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    let path = park_dotagents::setup(&home);
+    let (client, _) = connect(&[
+        ("HOME", home.to_str().unwrap()),
+        ("SKILL_STUDIO_HOME", home.to_str().unwrap()),
+        ("PATH", path.as_str()),
+    ])
+    .await;
+    for text in park_dotagents::layouts() {
+        park_dotagents::write_layout(&home, &text);
+        let original = park_dotagents::config_bytes(&home);
+        for (op, kind) in [("park", "universal"), ("unpark", "parked")] {
+            let id = deployment_id_via_mcp(&client, "foo", kind).await;
+            let result = call_tool(&client, op, serde_json::json!({"deployment_id": id})).await;
+            assert_eq!(result["status"], "ok", "{op} layout {text:?}: {result}");
+        }
+        assert_eq!(
+            park_dotagents::config_bytes(&home),
+            original,
+            "layout {text:?}"
+        );
+        assert!(home.join(".agents/skills/foo/SKILL.md").is_file());
+    }
+    client.cancel().await.ok();
+}

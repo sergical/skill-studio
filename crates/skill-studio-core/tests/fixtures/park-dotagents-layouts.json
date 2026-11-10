@@ -1,0 +1,34 @@
+[
+  {
+    "name": "header-comment",
+    "manifest": "# top\nversion = 1\n\n[[skills]] # keep this comment\nname = \"foo\"\nsource = \"owner/foo\"\n"
+  },
+  {
+    "name": "inline-and-space",
+    "manifest": "version=1\nmetadata = { owner = \"me\", labels = [\"local\", \"test\"] }\n  [[skills]]\nname\t=\t'foo'\nsource='owner/foo'\n"
+  },
+  {
+    "name": "same-line-close",
+    "manifest": "[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\nexclude = [\n \"baz\"]\n"
+  },
+  {
+    "name": "empty-array",
+    "manifest": "[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\nexclude = [] # keep\n"
+  },
+  {
+    "name": "empty-multiline",
+    "manifest": "[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\nexclude = [\n]\n"
+  },
+  {
+    "name": "existing-exclusion",
+    "manifest": "[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\nexclude = [\"foo\"]\n\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\n\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\n"
+  },
+  {
+    "name": "three-suppliers",
+    "manifest": "[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\n\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\n\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\n\n"
+  },
+  {
+    "name": "multiline-value",
+    "manifest": "note = \"\"\"first\nsecond\"\"\"\n[[skills]]\nname = \"foo\"\nsource = \"owner/foo\"\n"
+  }
+]
