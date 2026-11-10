@@ -191,18 +191,12 @@ fn status_error(status: reqwest::StatusCode) -> String {
     }
 }
 
-/// The bound on every Skill Store discovery request. A stalled upstream (the
-/// connection is accepted but no response ever arrives, from skills.sh itself
-/// or the Skill Studio server in front of it) must not hold the Tauri command
-/// and the store's busy state open with no ceiling. The timeout surfaces as a
-/// normal connection error, the same as any other failed fetch. Matches the
-/// 8 s bound `skill_install_counts` puts on its own background fetches.
+/// Matches the background install-count lookup's eight-second deadline.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Builds the client and headers for `access`: `Direct` carries a bearer
 /// `Authorization` header, `Server` carries none - the server it talks to
-/// holds the real key. The client is bounded by `REQUEST_TIMEOUT` so a
-/// stalled upstream fails the request instead of hanging it forever.
+/// holds the real key.
 fn client_for(
     access: &SkillsShAccess,
 ) -> Result<(reqwest::Client, reqwest::header::HeaderMap), String> {
@@ -216,10 +210,6 @@ fn client_for(
     Ok((client_with_timeout(REQUEST_TIMEOUT)?, headers))
 }
 
-/// Builds the HTTP client discovery requests use, bounded by `timeout` so a
-/// stalled upstream fails the request instead of holding it open forever.
-/// Pulled out of `client_for` so a test can build a short-bound client
-/// against a stalled server without waiting the production timeout.
 fn client_with_timeout(timeout: Duration) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(timeout)
@@ -590,14 +580,6 @@ mod tests {
         }
     }
 
-    /// Flow: the Skill Store's upstream - skills.sh itself, or the Skill
-    /// Studio server in front of it - accepts the TCP connection and then
-    /// never sends a response (a stalled proxy or a hung upstream).
-    /// Expectation: the request is abandoned at its bound and returns a
-    /// connection error, so the store's busy state clears, instead of the
-    /// command hanging with no ceiling.
-    /// A failure here means a stalled upstream freezes Skill Store discovery
-    /// forever.
     #[tokio::test]
     async fn a_stalled_upstream_request_is_abandoned_at_its_timeout() {
         use tokio::io::AsyncReadExt;
