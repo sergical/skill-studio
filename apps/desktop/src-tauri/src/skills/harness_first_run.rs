@@ -71,7 +71,7 @@ pub(crate) async fn detect_with_runtime(
 ) -> Result<HarnessReport, String> {
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let rt = build_runtime()?;
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = ops::harnesses(&rt, &ctx, &HarnessesRequest {});
         let envelope = ResultEnvelope::from_result(Operation::Harnesses, &rt.scope, &ctx, result);
         super::core_runtime::to_command_result(envelope)

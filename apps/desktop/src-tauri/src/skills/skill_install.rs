@@ -568,7 +568,7 @@ pub(crate) fn install_one(
         Vec::new()
     };
     let install_req = build_install_request(request, files)?;
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::install(rt, &ctx, &install_req);
     let envelope = ResultEnvelope::from_result(Operation::Install, &rt.scope, &ctx, result);
     let outcome = super::core_runtime::to_command_result(envelope)?;

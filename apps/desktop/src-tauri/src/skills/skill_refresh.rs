@@ -1391,7 +1391,7 @@ fn run_startup_quarantine_sweep(
         }
     };
     let ctx = skill_studio_core::ports::OpContext::uncancellable(
-        skill_studio_core::identity::CorrelationId(ulid::Ulid::new().to_string()),
+        skill_studio_core::identity::CorrelationId(ulid::Ulid::generate().to_string()),
     );
     if let Err(e) = skill_studio_core::ops::sweep_quarantine(
         &rt,

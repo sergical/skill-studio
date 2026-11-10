@@ -7181,7 +7181,7 @@ mod tests {
                 if call <= self.within_budget_calls + PRELUDE_CALLS {
                     Duration::from_millis(0)
                 } else {
-                    Duration::from_millis(3_000)
+                    Duration::from_secs(3)
                 }
             }
         }

@@ -19,7 +19,7 @@ fn lock(updated_at: &str) -> SkillLockFile {
 
 /// Backdates `path` to 2000, as `cp -p`, `rsync -a`, unzip and `mv` leave it.
 fn backdate(path: &std::path::Path) {
-    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(946_684_800);
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_hours(262_968);
     std::fs::File::open(path)
         .unwrap()
         .set_modified(old)

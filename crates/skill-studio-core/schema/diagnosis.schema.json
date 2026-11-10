@@ -952,13 +952,13 @@
           "description": "Run `preview_frontmatter_repair` on the deployment.",
           "type": "object",
           "properties": {
-            "deployment_id": {
-              "description": "Target.",
-              "$ref": "#/$defs/DeploymentId"
-            },
             "action": {
               "type": "string",
               "const": "preview_repair"
+            },
+            "deployment_id": {
+              "description": "Target.",
+              "$ref": "#/$defs/DeploymentId"
             }
           },
           "required": [
@@ -970,13 +970,13 @@
           "description": "Remove or relink the broken link.",
           "type": "object",
           "properties": {
-            "deployment_id": {
-              "description": "Target.",
-              "$ref": "#/$defs/DeploymentId"
-            },
             "action": {
               "type": "string",
               "const": "repair_link"
+            },
+            "deployment_id": {
+              "description": "Target.",
+              "$ref": "#/$defs/DeploymentId"
             }
           },
           "required": [
@@ -988,13 +988,13 @@
           "description": "Restore the parked or disabled deployment.",
           "type": "object",
           "properties": {
-            "deployment_id": {
-              "description": "Target.",
-              "$ref": "#/$defs/DeploymentId"
-            },
             "action": {
               "type": "string",
               "const": "restore"
+            },
+            "deployment_id": {
+              "description": "Target.",
+              "$ref": "#/$defs/DeploymentId"
             }
           },
           "required": [

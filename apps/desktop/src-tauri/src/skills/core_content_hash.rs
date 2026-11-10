@@ -94,7 +94,7 @@ mod tests {
         write_skill(&skill_dir, "widget");
 
         let control =
-            AddOperationControl::new(Arc::new(AtomicBool::new(true)), Duration::from_secs(300));
+            AddOperationControl::new(Arc::new(AtomicBool::new(true)), Duration::from_mins(5));
 
         let err = live_skill_content_hash_controlled(&skill_dir, &control).unwrap_err();
         assert_eq!(err, super::super::skill_process::PROCESS_CANCELLED_MESSAGE);
@@ -122,7 +122,7 @@ mod tests {
         write_skill(&skill_dir, "widget");
 
         let control =
-            AddOperationControl::new(Arc::new(AtomicBool::new(false)), Duration::from_secs(300));
+            AddOperationControl::new(Arc::new(AtomicBool::new(false)), Duration::from_mins(5));
 
         let controlled = live_skill_content_hash_controlled(&skill_dir, &control).unwrap();
         let uncontrolled = live_skill_content_hash(&skill_dir).unwrap();

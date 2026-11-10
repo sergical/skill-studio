@@ -1420,7 +1420,7 @@ mod tests {
         )
         .unwrap();
         let ctx = OpContext::uncancellable(skill_studio_core::identity::CorrelationId(
-            ulid::Ulid::new().to_string(),
+            ulid::Ulid::generate().to_string(),
         ));
         for i in 0..10 {
             let req = InstallRequest {
@@ -1881,7 +1881,7 @@ pub(crate) async fn remove_with_runtime(
             DeploymentId::parse(&deployment.id).map_err(|e| e.message)?
         };
         let rt = build_runtime(&deployment_id)?;
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = ops::remove(&rt, &ctx, &RemoveRequest { deployment_id });
         let envelope = ResultEnvelope::from_result(Operation::Remove, &rt.scope, &ctx, result);
         super::core_runtime::to_command_result(envelope)
@@ -2353,7 +2353,7 @@ pub async fn update_skill(
             .unwrap_or_else(|_| PathBuf::from("."));
         let rt = super::core_runtime::build_runtime_write()?;
         let ctx = skill_studio_core::ports::OpContext::uncancellable(
-            skill_studio_core::identity::CorrelationId(ulid::Ulid::new().to_string()),
+            skill_studio_core::identity::CorrelationId(ulid::Ulid::generate().to_string()),
         );
         if deployment.owner_kind == super::skill_ownership::LifecycleOwnerKind::Copy {
             super::skill_split_update::check_split_deployment(
@@ -2489,7 +2489,7 @@ fn run_update_all_sync(
 ) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
     let rt = build_runtime()?;
     let ctx = skill_studio_core::ports::OpContext::with_cancel(
-        skill_studio_core::identity::CorrelationId(ulid::Ulid::new().to_string()),
+        skill_studio_core::identity::CorrelationId(ulid::Ulid::generate().to_string()),
         cancel,
     );
     Ok(skill_studio_core::ops::update_all(

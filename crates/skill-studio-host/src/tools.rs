@@ -80,7 +80,7 @@ const PATH_MARKER_END: &str = "__skill_studio_path_end__";
 /// `docs/action-map/harnesses/harness-detection.md` gives other processes:
 /// a `.zshrc` that loads nvm or mise routinely needs more, and a timeout
 /// drops the user onto the fallback directories.
-const SHELL_PROBE_TIMEOUT: Duration = Duration::from_millis(5000);
+const SHELL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Reads stdout on a helper thread so a login shell's rc files can't hang
 /// this forever; see `PATH_MARKER_END`'s doc comment. Mirrors

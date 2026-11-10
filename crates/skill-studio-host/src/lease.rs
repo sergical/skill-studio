@@ -114,13 +114,13 @@ fn read_holder(path: &Path) -> Option<(u32, Duration)> {
 /// Whether `pid` still names a live process. `sysinfo`, not `libc`'s
 /// `kill(pid, 0)`, because this crate forbids unsafe code; it refreshes only
 /// the one process, so the check stays cheap.
-fn pid_alive(pid: u32) -> bool {
-    let mut system = sysinfo::System::new();
+fn pid_alive(pid: u32) -> Result<bool, sysinfo::Error> {
+    let mut system = sysinfo::System::new()?;
     system.refresh_processes(
         sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
         true,
     );
-    system.process(sysinfo::Pid::from_u32(pid)).is_some()
+    Ok(system.process(sysinfo::Pid::from_u32(pid)).is_some())
 }
 
 impl LeaseProvider for FileLease {
@@ -158,7 +158,8 @@ impl LeaseProvider for FileLease {
                     }
                     Ok(false) => {
                         let holder = read_holder(&path);
-                        let holder_alive = holder.is_none_or(|(pid, _)| pid_alive(pid));
+                        let holder_alive =
+                            holder.is_none_or(|(pid, _)| pid_alive(pid).unwrap_or(true));
                         if !holder_alive && Instant::now() < stale_deadline {
                             // The recorded holder is dead; the OS releases
                             // its advisory lock as part of exiting, usually
@@ -289,7 +290,7 @@ mod tests {
     #[test]
     fn pid_alive_reports_the_current_process_alive_or_names_the_pid_it_missed() {
         assert!(
-            pid_alive(std::process::id()),
+            pid_alive(std::process::id()).unwrap(),
             "the current process must report alive, or this test proves nothing about \
              detecting a live pid"
         );
@@ -307,7 +308,7 @@ mod tests {
         child.wait().expect("wait for the child to exit");
 
         assert!(
-            !pid_alive(pid),
+            !pid_alive(pid).unwrap(),
             "an exited process's pid ({pid}) must report dead, or this test proves nothing \
              about detecting a stale lease holder"
         );
