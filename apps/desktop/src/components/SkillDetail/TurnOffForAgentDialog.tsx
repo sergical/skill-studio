@@ -25,6 +25,7 @@ interface TurnOffForAgentDialogProps {
   skillName: string;
   request: TurnOffAction;
   onClose: () => void;
+  onTurnedOff: () => void;
   /** Parks the shared copy for every agent: the existing Park action, with its own check and confirm. */
   onOffEverywhere: (request: TurnOffAction) => void;
 }
@@ -33,6 +34,7 @@ export function TurnOffForAgentDialog({
   skillName,
   request,
   onClose,
+  onTurnedOff,
   onOffEverywhere,
 }: TurnOffForAgentDialogProps) {
   const addToast = useAppStore((state) => state.addToast);
@@ -49,7 +51,7 @@ export function TurnOffForAgentDialog({
           title: `${skillName} is off for ${agentLabel}`,
           message: turnOffSuccessMessage(agentLabel),
         });
-        onClose();
+        onTurnedOff();
       })
       .catch((err) => {
         addToast({
