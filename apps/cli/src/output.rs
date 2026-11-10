@@ -293,7 +293,8 @@ pub fn print_doctor_report_table(envelope: &ResultEnvelope<DoctorReport>) {
     }
     for violation in &report.violations {
         println!(
-            "{}: {} ({})",
+            "{}: {}: {} ({})",
+            format!("{:?}", violation.severity).to_ascii_lowercase(),
             doctor_check_words(violation.invariant),
             violation.path.display(),
             violation.detail

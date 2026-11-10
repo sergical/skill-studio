@@ -31,6 +31,7 @@
 
 pub mod discovery_sources;
 pub mod doctor;
+mod doctor_scope;
 pub mod dotagents_ledger;
 pub mod dto;
 pub mod error;

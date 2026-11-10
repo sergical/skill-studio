@@ -78,4 +78,47 @@ mod tests {
             report.violations
         );
     }
+    #[test]
+    fn desktop_doctor_warns_for_external_links_and_errors_for_broken_links_or_reports_a_healthy_scope(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(home.join(".claude/skills")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(
+            outside.join("SKILL.md"),
+            "---\nname: dev-skill\ndescription: fixture\n---\n",
+        )
+        .unwrap();
+        let link = home.join(".claude/skills/dev-skill");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let scope = skill_studio_core::RuntimeScope::fixture(&home);
+        let ports = skill_studio_host::default_ports(
+            dir.path().join("leases"),
+            std::sync::Arc::new(skill_studio_core::harness::HarnessCatalog::builtin()),
+        );
+        let rt = Runtime::new(&scope, ports).unwrap();
+        for expected in [
+            skill_studio_core::dto::Severity::Warning,
+            skill_studio_core::dto::Severity::Error,
+        ] {
+            let report = run_doctor(&rt).unwrap();
+            let links: Vec<_> = report
+                .violations
+                .iter()
+                .filter(|row| {
+                    row.invariant == skill_studio_core::doctor::DoctorInvariant::LinkResolvesInRoot
+                })
+                .collect();
+            assert_eq!(links.len(), 1, "{report:?}");
+            assert_eq!(links[0].severity, expected);
+            assert!(std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            std::fs::remove_file(outside.join("SKILL.md")).ok();
+            std::fs::remove_dir(&outside).ok();
+        }
+    }
 }

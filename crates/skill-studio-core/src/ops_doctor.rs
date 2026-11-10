@@ -20,7 +20,7 @@
 
 use crate::doctor::{
     check_journal_has_no_open_plan, check_link_resolves_in_root, check_lockfile_entry_has_folder,
-    check_no_folder_in_two_states, check_quarantine_within_cap, check_registry_entry_has_folder,
+    check_no_folder_in_two_states, check_registry_entry_has_folder,
 };
 use crate::dto::{DoctorReport, DoctorRequest, DoctorViolation, ScanRequest};
 use crate::error::CoreError;
@@ -63,7 +63,7 @@ fn doctor_body(
 
     let journal = FsJournal::new(journal_root(home), rt.ports.fs.clone());
 
-    let violations: Vec<DoctorViolation> = check_link_resolves_in_root(&diagnosis)
+    let mut violations: Vec<DoctorViolation> = check_link_resolves_in_root(&diagnosis)
         .into_iter()
         .chain(check_registry_entry_has_folder(fs, home))
         .chain(check_lockfile_entry_has_folder(
@@ -75,15 +75,28 @@ fn doctor_body(
             &diagnosis.inventory,
             &skill_names,
         ))
-        .chain(check_quarantine_within_cap(fs, home))
         .chain(check_journal_has_no_open_plan(&journal))
         .map(|violation| DoctorViolation {
+            severity: crate::dto::Severity::Error,
             invariant: violation.invariant,
             path: violation.path,
             detail: violation.message,
         })
         .collect();
 
+    for link in crate::doctor_scope::skill_links(rt) {
+        if !violations
+            .iter()
+            .any(|existing| existing.invariant == link.invariant && existing.path == link.path)
+        {
+            violations.push(link);
+        }
+    }
+    violations.extend(crate::doctor_scope::history_pending(rt));
+    violations.extend(crate::doctor_scope::retained_state(
+        rt,
+        &diagnosis.inventory,
+    ));
     ctx.take_timing();
     Ok(DoctorReport {
         violations,

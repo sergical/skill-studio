@@ -25,7 +25,7 @@ use skill_studio_core::identity::{
 use skill_studio_core::journal::{FsJournal, PlanWriter};
 use skill_studio_core::ops;
 use skill_studio_core::ports::{
-    ExclusiveGuard, LeaseMode, LeaseProvider, PlanStatus, Ports, Runtime, ScopeFs,
+    ExclusiveGuard, Journal, LeaseMode, LeaseProvider, PlanStatus, Ports, Runtime, ScopeFs,
 };
 use skill_studio_core::testing::golden::{ctx, scope_for};
 use skill_studio_core::testing::{FakeClock, FakeIds, FakeLease, FixtureBuilder, NoHistory};
@@ -38,6 +38,10 @@ fn skill_md(name: &str) -> Vec<u8> {
 }
 
 fn runtime(fs: Arc<dyn ScopeFs>) -> Runtime {
+    runtime_with_projects(fs, Vec::new())
+}
+
+fn runtime_with_projects(fs: Arc<dyn ScopeFs>, projects: Vec<std::path::PathBuf>) -> Runtime {
     let ports = Ports {
         fs,
         clock: Arc::new(FakeClock::at(0)),
@@ -52,7 +56,8 @@ fn runtime(fs: Arc<dyn ScopeFs>) -> Runtime {
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
     };
-    let scope = scope_for("doctor", Path::new(HOME));
+    let mut scope = scope_for("doctor", Path::new(HOME));
+    scope.projects = skill_studio_core::scope::ProjectSelection::Explicit { paths: projects };
     Runtime::new(&scope, ports).expect("runtime")
 }
 
@@ -376,4 +381,243 @@ fn doctor_completes_without_a_panic_on_a_real_home_directory_snapshot() {
         report.checked > 0,
         "expected the largest fixture to count at least one skill checked"
     );
+}
+
+#[test]
+fn doctor_checks_links_against_every_scope_or_mislabels_a_valid_development_link() {
+    for (target, exists, severity) in [
+        ("/home/src/dev-skill", true, None),
+        ("/selected/dev-skill", true, None),
+        ("/outside/dev-skill", true, Some("warning")),
+        ("/home/src/missing", false, Some("error")),
+    ] {
+        let mut builder = FixtureBuilder::new()
+            .dir(HOME)
+            .dir("/selected")
+            .alias("/home/.claude/skills/dev-skill", target);
+        if exists {
+            builder = builder.file(&format!("{target}/SKILL.md"), &skill_md("dev-skill"));
+        }
+        let rt = runtime_with_projects(Arc::new(builder.build_fs()), vec!["/selected".into()]);
+        let report = ops::doctor(&rt, &ctx(), &DoctorRequest {}).unwrap();
+        let links: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.invariant == DoctorInvariant::LinkResolvesInRoot)
+            .collect();
+        match severity {
+            None => assert!(links.is_empty(), "valid target {target}: {links:?}"),
+            Some(expected) => {
+                assert_eq!(links.len(), 1, "target {target}: {links:?}");
+                assert_eq!(
+                    serde_json::to_value(links[0]).unwrap()["severity"],
+                    expected,
+                    "target {target}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn doctor_reports_a_corrupt_registry_or_calls_unreadable_state_healthy() {
+    let fs = FixtureBuilder::new()
+        .dir(HOME)
+        .file("/home/.agents/skill-studio.json", b"{broken")
+        .build_fs();
+    let report = run_doctor(Arc::new(fs));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.invariant == DoctorInvariant::RegistryEntryHasFolder
+                && v.detail.contains("parse")),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn doctor_reports_a_corrupt_journal_or_calls_unreadable_plans_empty() {
+    let fs = FixtureBuilder::new()
+        .dir(HOME)
+        .file(
+            "/home/.agents/skill-studio-journal/plans/broken/plan.json",
+            b"{broken",
+        )
+        .build_fs();
+    let rt = runtime(Arc::new(fs));
+    let root = rt.scope.home.lexical.join(".agents/skill-studio-journal");
+    let journal = FsJournal::new(root, rt.ports.fs.clone());
+    assert!(
+        journal.all().is_err(),
+        "fixture must contain an unreadable plan"
+    );
+    let report = ops::doctor(&rt, &ctx(), &DoctorRequest {}).unwrap();
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.invariant == DoctorInvariant::JournalHasNoOpenPlan
+                && v.detail.contains("read")),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn doctor_warns_for_old_unreferenced_entries_and_preserves_active_parked_and_fork_bases_or_deletes_data(
+) {
+    use skill_studio_core::ports::Clock;
+    let clock = Arc::new(FakeClock::at(90 * 24 * 60 * 60 * 1000));
+    let now = clock.now();
+    let old =
+        now - chrono::Duration::days(skill_studio_core::doctor::RETAINED_ENTRY_MAX_AGE_DAYS + 1);
+    let young = now - chrono::Duration::days(1);
+    let trash = "/home/.agents/skills-trash/old";
+    let fresh = "/home/.agents/skills-trash/fresh";
+    let quarantine = "/home/.agents/skills/.skill-studio-quarantine/old";
+    let parked = "/home/.agents/skills-parked/held";
+    let fork = "/home/.history/data/skill-studio/forks/forked/base";
+    let orphan = "/home/.history/data/skill-studio/forks/orphan/base";
+    let registry = serde_json::json!({
+        "parked": {"held":{"skill_dir":parked,"parked_at":old}},
+        "forks": {"forked":{"skill_dir":"/home/.agents/skills/forked","repo":"o/r","path":"skill","base_commit":"commit"}},
+        "trials": {
+            "old":{"backup_path":trash,"created_at":old},
+            "fresh":{"backup_path":fresh,"created_at":young},
+            "quarantine":{"backup_path":quarantine,"created_at":old},
+            "parked":{"backup_path":parked,"created_at":old},
+            "fork":{"backup_path":fork,"created_at":old},
+            "orphan":{"backup_path":orphan,"created_at":old}
+        }
+    });
+    let mut builder = FixtureBuilder::new()
+        .file(
+            "/home/.agents/skill-studio.json",
+            &serde_json::to_vec(&registry).unwrap(),
+        )
+        .file("/home/.agents/skills/forked/SKILL.md", &skill_md("forked"));
+    for (path, name) in [
+        (trash, "old"),
+        (fresh, "fresh"),
+        (quarantine, "quarantined"),
+        (parked, "held"),
+        (fork, "forked"),
+        (orphan, "orphan"),
+    ] {
+        builder = builder.file(&format!("{path}/SKILL.md"), &skill_md(name));
+    }
+    let fs: Arc<dyn ScopeFs> = Arc::new(builder.build_fs());
+    let mut rt = runtime(fs.clone());
+    rt.ports.clock = clock;
+    let report = ops::doctor(&rt, &ctx(), &DoctorRequest {}).unwrap();
+    let old_paths: std::collections::BTreeSet<_> = report
+        .violations
+        .iter()
+        .filter(|v| v.invariant == DoctorInvariant::QuarantineWithinCap)
+        .map(|v| v.path.to_string_lossy().into_owned())
+        .collect();
+    let expected: std::collections::BTreeSet<_> = [trash, quarantine, orphan]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(old_paths, expected, "{report:?}");
+    assert!(report
+        .violations
+        .iter()
+        .filter(|v| v.invariant == DoctorInvariant::QuarantineWithinCap)
+        .all(|v| v.severity == skill_studio_core::dto::Severity::Warning));
+    for path in [trash, fresh, quarantine, parked, fork, orphan] {
+        assert!(
+            fs.symlink_metadata(Path::new(path)).is_ok(),
+            "doctor deleted {path}"
+        );
+    }
+}
+
+#[test]
+fn doctor_finds_a_parked_skill_also_retained_in_trash_or_hides_the_second_state() {
+    let fs = FixtureBuilder::new()
+        .file(
+            "/home/.agents/skills-parked/alpha/SKILL.md",
+            &skill_md("alpha"),
+        )
+        .file(
+            "/home/.agents/skills-trash/alpha/SKILL.md",
+            &skill_md("alpha"),
+        )
+        .build_fs();
+    let report = run_doctor(Arc::new(fs));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.invariant == DoctorInvariant::NoFolderInTwoStates
+                && v.path == Path::new("/home/.agents/skills-trash/alpha")),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn doctor_checks_every_harness_and_the_shared_root_without_warning_on_healthy_skills_or_skips_a_harness(
+) {
+    use skill_studio_core::harness::{RootRole, ScopeLevel};
+    let catalog = HarnessCatalog::builtin();
+    let mut builder =
+        FixtureBuilder::new().file("/home/.agents/skills/shared/SKILL.md", &skill_md("shared"));
+    let mut expected = std::collections::BTreeSet::from(["shared".to_string()]);
+    for facts in &catalog.facts {
+        let root = facts
+            .roots
+            .iter()
+            .find(|root| root.role == RootRole::Own && root.level == ScopeLevel::Global)
+            .unwrap();
+        let name = facts.id.as_str();
+        builder = builder.file(
+            &format!("{HOME}/{}/{name}/SKILL.md", root.relative_path),
+            &skill_md(name),
+        );
+        expected.insert(name.to_string());
+    }
+    let rt = runtime(Arc::new(builder.build_fs()));
+    let scanned = ops::scan(&rt, &ctx(), &Default::default()).unwrap();
+    let found: std::collections::BTreeSet<_> = scanned
+        .skills
+        .iter()
+        .map(|skill| skill.name.0.clone())
+        .collect();
+    assert_eq!(found, expected);
+    let report = ops::doctor(&rt, &ctx(), &DoctorRequest {}).unwrap();
+    assert!(report.violations.is_empty(), "{report:?}");
+    assert_eq!(report.checked as usize, expected.len());
+}
+
+#[test]
+fn doctor_warns_for_old_trash_in_a_selected_project_or_checks_only_the_home() {
+    use skill_studio_core::ports::Clock;
+    let clock = Arc::new(FakeClock::at(90 * 24 * 60 * 60 * 1000));
+    let created = clock.now()
+        - chrono::Duration::days(skill_studio_core::doctor::RETAINED_ENTRY_MAX_AGE_DAYS + 1);
+    let path = "/projects/work/.agents/skills-trash/old";
+    let registry = serde_json::json!({"trials":{"old":{"backup_path":path,"created_at":created}}});
+    let fs: Arc<dyn ScopeFs> = Arc::new(
+        FixtureBuilder::new()
+            .file(
+                "/home/.agents/skill-studio.json",
+                &serde_json::to_vec(&registry).unwrap(),
+            )
+            .file(&format!("{path}/SKILL.md"), &skill_md("old"))
+            .build_fs(),
+    );
+    let mut rt = runtime_with_projects(fs.clone(), vec!["/projects/work".into()]);
+    rt.ports.clock = clock;
+    let report = ops::doctor(&rt, &ctx(), &DoctorRequest {}).unwrap();
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|row| row.path == Path::new(path)
+                && row.severity == skill_studio_core::dto::Severity::Warning),
+        "{report:?}"
+    );
+    assert!(fs.symlink_metadata(Path::new(path)).is_ok());
 }
