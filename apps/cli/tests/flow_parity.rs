@@ -314,21 +314,21 @@ macro_rules! executable_coverage {
 }
 
 executable_coverage! {
-    "First launch harness detect" => (cli_harnesses_flow_has_expected_results, mcp_harnesses_flow_has_expected_results),
-    "Scan" => (cli_scan_flow_has_expected_results, mcp_scan_flow_has_expected_results),
-    "Activity" => (cli_events_flow_has_expected_results, mcp_events_flow_has_expected_results),
-    "Outdated check" => (cli_outdated_flow_has_expected_results, mcp_outdated_flow_has_expected_results),
-    "Install" => (cli_install_flow_has_expected_results, mcp_install_flow_has_expected_results),
-    "Update one" => (cli_update_flow_has_expected_results, mcp_update_flow_has_expected_results),
-    "Update all" => (cli_update_all_flow_has_expected_results, mcp_update_all_flow_has_expected_results),
-    "Park / unpark" => (cli_park_unpark_flow_has_expected_results, mcp_park_unpark_flow_has_expected_results),
-    "Park for every agent" => (cli_park_all_flow_has_expected_results, mcp_park_all_flow_has_expected_results),
-    "Turn off for one agent" => (cli_agent_off_flow_has_expected_results, mcp_agent_off_flow_has_expected_results),
-    "Split" => (cli_split_flow_has_expected_results, mcp_split_flow_has_expected_results),
-    "Remove + undo" => (cli_remove_restore_flow_has_expected_results, mcp_remove_restore_flow_has_expected_results),
-    "Fix" => (cli_fix_flow_has_expected_results, mcp_fix_flow_has_expected_results),
-    "Undo from Activity" => (cli_activity_undo_flow_has_expected_results, mcp_activity_undo_flow_has_expected_results),
-    "Frontmatter repair" => (cli_repair_flow_has_expected_results, mcp_repair_flow_has_expected_results),
+    "First launch harness detect" => (cli_harness_detection_reports_codex_or_names_the_missing_agent, mcp_harness_detection_reports_codex_or_names_the_missing_agent),
+    "Scan" => (cli_scan_reports_shared_gamma_or_names_the_missing_deployment, mcp_scan_reports_shared_gamma_or_names_the_missing_deployment),
+    "Activity" => (cli_activity_contains_install_or_names_the_missing_event, mcp_activity_contains_install_or_names_the_missing_event),
+    "Outdated check" => (cli_outdated_reports_gamma_or_names_the_missing_result, mcp_outdated_reports_gamma_or_names_the_missing_result),
+    "Install" => (cli_install_writes_gamma_or_names_the_missing_bytes, mcp_install_writes_gamma_or_names_the_missing_bytes),
+    "Update one" => (cli_update_replaces_gamma_bytes_or_names_the_stale_copy, mcp_update_replaces_gamma_bytes_or_names_the_stale_copy),
+    "Update all" => (cli_update_all_replaces_each_copy_or_names_the_stale_skill, mcp_update_all_replaces_each_copy_or_names_the_stale_skill),
+    "Park / unpark" => (cli_park_unpark_moves_and_restores_gamma_or_names_the_wrong_path, mcp_park_unpark_moves_and_restores_gamma_or_names_the_wrong_path),
+    "Park for every agent" => (cli_park_all_removes_and_restores_shared_bytes_or_names_the_wrong_path, mcp_park_all_removes_and_restores_shared_bytes_or_names_the_wrong_path),
+    "Turn off for one agent" => (cli_agent_off_parks_codex_and_keeps_cursor_or_names_the_wrong_agent, mcp_agent_off_parks_codex_and_keeps_cursor_or_names_the_wrong_agent),
+    "Split" => (cli_split_writes_claude_and_codex_copies_or_names_the_missing_copy, mcp_split_writes_claude_and_codex_copies_or_names_the_missing_copy),
+    "Remove + undo" => (cli_remove_restore_recovers_gamma_bytes_or_names_the_missing_restore, mcp_remove_restore_recovers_gamma_bytes_or_names_the_missing_restore),
+    "Fix" => (cli_fix_repairs_yaml_or_names_the_still_broken_header, mcp_fix_repairs_yaml_or_names_the_still_broken_header),
+    "Undo from Activity" => (cli_activity_undo_restores_gamma_or_names_the_missing_bytes, mcp_activity_undo_restores_gamma_or_names_the_missing_bytes),
+    "Frontmatter repair" => (cli_repair_applies_preview_or_names_the_unchanged_header, mcp_repair_applies_preview_or_names_the_unchanged_header),
 }
 
 #[test]
