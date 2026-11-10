@@ -745,6 +745,20 @@ impl ScopeFs for FixtureFs {
         self.fsops_write_new_file(path, bytes)
     }
 
+    fn fsops_rename_new(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        let from = self.resolve_leaf(from);
+        let to = self.resolve_leaf(to);
+        let mut state = self.lock();
+        if state.exact_exists(&to) {
+            return Err(std::io::ErrorKind::AlreadyExists.into());
+        }
+        if !state.exact_exists(&from) {
+            return Err(Self::not_found(&from));
+        }
+        let subtree = state.extract_subtree(&from);
+        state.insert_subtree(subtree, &from, &to);
+        Ok(())
+    }
     fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
         let from = &self.resolve_leaf(from);
         let to = &self.resolve_leaf(to);
@@ -853,6 +867,7 @@ pub struct FailingFs {
     fail_next_read_capped: AtomicBool,
     fail_next_fsops_rename: AtomicBool,
     fail_next_fsops_exchange: AtomicBool,
+    crash_after_exchange: AtomicBool,
     fail_next_fsops_fsync_dir: AtomicBool,
     fail_next_fsops_device_inode: AtomicBool,
     /// 1-based call index to fail, or 0 when disarmed. Distinct from
@@ -889,6 +904,22 @@ pub struct FailingFs {
 }
 
 impl FailingFs {
+    fn check_rename_failure(&self) -> std::io::Result<()> {
+        if self.fail_next_fsops_rename.swap(false, Ordering::SeqCst) {
+            return Err(std::io::Error::other(
+                "FailingFs: injected fsops_rename failure",
+            ));
+        }
+        let call = self.fsops_rename_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.fail_nth_fsops_rename.load(Ordering::SeqCst) == call {
+            self.fail_nth_fsops_rename.store(0, Ordering::SeqCst);
+            return Err(std::io::Error::other(
+                "FailingFs: injected fsops_rename failure",
+            ));
+        }
+        Ok(())
+    }
+
     /// Wraps `inner`, initially failing nothing.
     pub fn wrap(inner: Arc<dyn ScopeFs>) -> Self {
         FailingFs {
@@ -906,6 +937,7 @@ impl FailingFs {
             fail_next_read_capped: AtomicBool::new(false),
             fail_next_fsops_rename: AtomicBool::new(false),
             fail_next_fsops_exchange: AtomicBool::new(false),
+            crash_after_exchange: AtomicBool::new(false),
             fail_next_fsops_fsync_dir: AtomicBool::new(false),
             fail_next_fsops_device_inode: AtomicBool::new(false),
             fail_nth_fsops_device_inode: AtomicU64::new(0),
@@ -1015,10 +1047,12 @@ impl FailingFs {
         self.fail_next_fsops_rename.store(true, Ordering::SeqCst);
     }
 
-    /// The next `fsops_exchange` call returns an error instead of reaching
-    /// `inner`; later calls delegate normally again. Lets a test crash
-    /// `fsops::swap` before its exchange lands, symmetric to
-    /// [`Self::fail_next_fsops_rename`] for the rest of the primitives.
+    /// Simulates process loss after the next exchange has committed.
+    pub fn crash_after_next_exchange(&self) {
+        self.crash_after_exchange.store(true, Ordering::SeqCst);
+    }
+
+    /// Fails the next exchange before it reaches the inner filesystem.
     pub fn fail_next_fsops_exchange(&self) {
         self.fail_next_fsops_exchange.store(true, Ordering::SeqCst);
     }
@@ -1329,19 +1363,12 @@ impl ScopeFs for FailingFs {
         }
         self.inner.fsops_write_new_file_with_mode(path, bytes, mode)
     }
+    fn fsops_rename_new(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        self.check_rename_failure()?;
+        self.inner.fsops_rename_new(from, to)
+    }
     fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
-        if self.fail_next_fsops_rename.swap(false, Ordering::SeqCst) {
-            return Err(std::io::Error::other(
-                "FailingFs: injected fsops_rename failure",
-            ));
-        }
-        let call = self.fsops_rename_calls.fetch_add(1, Ordering::SeqCst) + 1;
-        if self.fail_nth_fsops_rename.load(Ordering::SeqCst) == call {
-            self.fail_nth_fsops_rename.store(0, Ordering::SeqCst);
-            return Err(std::io::Error::other(
-                "FailingFs: injected fsops_rename failure",
-            ));
-        }
+        self.check_rename_failure()?;
         self.inner.fsops_rename(from, to)
     }
     fn fsops_symlink(&self, target: &Path, link: &Path) -> std::io::Result<()> {
@@ -1353,13 +1380,19 @@ impl ScopeFs for FailingFs {
     fn fsops_remove_file(&self, path: &Path) -> std::io::Result<()> {
         self.inner.fsops_remove_file(path)
     }
+    #[allow(clippy::panic)]
     fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()> {
         if self.fail_next_fsops_exchange.swap(false, Ordering::SeqCst) {
             return Err(std::io::Error::other(
                 "FailingFs: injected fsops_exchange failure",
             ));
         }
-        self.inner.fsops_exchange(a, b)
+        self.inner.fsops_exchange(a, b)?;
+        assert!(
+            !self.crash_after_exchange.swap(false, Ordering::SeqCst),
+            "crash after exchange"
+        );
+        Ok(())
     }
 }
 

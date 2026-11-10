@@ -228,6 +228,9 @@ impl ScopeFs for RealFs {
         file.set_permissions(fs::Permissions::from_mode(mode))
     }
 
+    fn fsops_rename_new(&self, from: &Path, to: &Path) -> io::Result<()> {
+        macos_exchange::rename_new(from, to)
+    }
     fn fsops_rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         fs::rename(from, to)
     }
@@ -281,6 +284,17 @@ mod macos_exchange {
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))
     }
 
+    pub(super) fn rename_new(a: &Path, b: &Path) -> io::Result<()> {
+        let a = to_cstring(a)?;
+        let b = to_cstring(b)?;
+        // SAFETY: both C strings remain valid for this call. RENAME_EXCL refuses an existing destination.
+        let rc = unsafe { renamex_np(a.as_ptr(), b.as_ptr(), 0x0000_0004) };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
     pub(super) fn exchange(a: &Path, b: &Path) -> io::Result<()> {
         let a = to_cstring(a)?;
         let b = to_cstring(b)?;
@@ -301,6 +315,39 @@ mod macos_exchange {
     use std::io;
     use std::path::Path;
 
+    #[cfg(target_os = "linux")]
+    #[allow(unsafe_code)]
+    pub(super) fn rename_new(a: &Path, b: &Path) -> io::Result<()> {
+        use std::ffi::CString;
+        use std::os::raw::{c_char, c_int, c_uint};
+        use std::os::unix::ffi::OsStrExt;
+        extern "C" {
+            fn renameat2(
+                olddirfd: c_int,
+                oldpath: *const c_char,
+                newdirfd: c_int,
+                newpath: *const c_char,
+                flags: c_uint,
+            ) -> c_int;
+        }
+        let a = CString::new(a.as_os_str().as_bytes())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let b = CString::new(b.as_os_str().as_bytes())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        // SAFETY: both C strings remain valid for the call. RENAME_NOREPLACE refuses an existing destination.
+        if unsafe { renameat2(-100, a.as_ptr(), -100, b.as_ptr(), 1) } == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    pub(super) fn rename_new(_a: &Path, _b: &Path) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "exclusive rename unavailable",
+        ))
+    }
     /// Non-atomic fallback for platforms without `renamex_np`. Skill Studio
     /// ships macOS only (see the crate doc comment); this exists so the
     /// crate still builds elsewhere, not to give the same crash guarantee.
@@ -325,6 +372,26 @@ mod tests {
     fn scope_for(root: &Path) -> NormalizedScope {
         let raw = RuntimeScope::fixture(root);
         NormalizedScope::normalize_with_discovery(&raw, &RealFs::new(), None).unwrap()
+    }
+
+    #[test]
+    fn new_publication_keeps_concurrent_empty_folder_or_replaces_external_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("staged");
+        let live = dir.path().join("live");
+        fs::create_dir(&staged).unwrap();
+        fs::write(staged.join("SKILL.md"), "published").unwrap();
+        fs::create_dir(&live).unwrap();
+        let before = RealFs::new().fsops_device_inode(&live).unwrap();
+        assert_eq!(
+            RealFs::new()
+                .fsops_rename_new(&staged, &live)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(RealFs::new().fsops_device_inode(&live).unwrap(), before);
+        assert!(staged.join("SKILL.md").exists());
     }
 
     #[test]

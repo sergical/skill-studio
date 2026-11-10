@@ -4446,6 +4446,7 @@ fn restore_event_body(
     // Mirrors of an earlier restore's own work (see `with_write_back`): the
     // links it recreated must still be exactly those links, and the places
     // its removed copies go back to must be empty or hold such a link.
+    let ledger_changes = crate::ledger_publication::undo_changes(fs, inverse, req.force)?;
     let secondary_post = crate::events::parse_restore_secondary_post(inverse);
     let remove_links = crate::events::parse_restore_remove_links(inverse);
     let write_back = crate::events::parse_restore_write_back(inverse);
@@ -4938,6 +4939,13 @@ fn restore_event_body(
             serde_json::json!({ "remove_copies_error": copy_errors }),
         );
     }
+    crate::ledger_publication::restore_entries(
+        rt,
+        &session.guard,
+        session.store.as_mut(),
+        &restore_id,
+        ledger_changes,
+    )?;
     // Every harness link `remove` (or whichever event this reverts) took
     // down, recreated the same best-effort way - see
     // `crate::events::restore_backup_inverse_with_links`'s own doc for why

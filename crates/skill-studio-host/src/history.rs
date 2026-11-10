@@ -389,6 +389,30 @@ impl HistoryStore for SqliteHistoryStore {
         })
     }
 
+    fn retain_paths(
+        &mut self,
+        _guard: &ExclusiveGuard,
+        id: &EventId,
+        paths: &[PathBuf],
+    ) -> Result<(), CoreError> {
+        let dir = self.backup_dir_for(id);
+        let mut manifest = read_manifest(&dir)?;
+        manifest
+            .entries
+            .retain(|path, _| paths.iter().any(|p| p.to_string_lossy() == path.as_str()));
+        let path = dir.join("manifest.json");
+        let temporary = dir.join("manifest.retain.tmp");
+        let mut file = File::create(&temporary).map_err(|e| CoreError::io(&temporary, e))?;
+        file.write_all(&serde_json::to_vec_pretty(&manifest).map_err(json_err)?)
+            .map_err(|e| CoreError::io(&temporary, e))?;
+        file.sync_all().map_err(|e| CoreError::io(&temporary, e))?;
+        fs::rename(&temporary, &path).map_err(|e| CoreError::io(&path, e))?;
+        File::open(&dir)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| CoreError::io(&dir, e))?;
+        Ok(())
+    }
+
     fn retain_displaced(
         &mut self,
         _guard: &ExclusiveGuard,
@@ -398,16 +422,32 @@ impl HistoryStore for SqliteHistoryStore {
     ) -> Result<(), CoreError> {
         let dir = self.backup_dir_for(id);
         let mut manifest = read_manifest(&dir)?;
-        let relative = format!(
-            "{}-displaced",
-            manifest
-                .entries
-                .get(&original.to_string_lossy().into_owned())
-                .ok_or_else(|| CoreError::new(ErrorCode::Io, "missing displaced manifest entry"))?
-                .relative_path
-        );
-        copy_recursive(displaced, &dir.join(&relative)).map_err(|e| CoreError::io(displaced, e))?;
+        if !manifest
+            .entries
+            .contains_key(&original.to_string_lossy().into_owned())
+        {
+            return Err(CoreError::new(
+                ErrorCode::Io,
+                "missing displaced manifest entry",
+            ));
+        }
         let fingerprint = hash_entry(displaced).map_err(|e| CoreError::io(displaced, e))?;
+        let relative = format!("retained-{fingerprint}");
+        let retained = dir.join(&relative);
+        if !retained.exists() {
+            let temporary = dir.join("retained-tree.tmp");
+            if temporary.exists() {
+                fs::remove_dir_all(&temporary).map_err(|e| CoreError::io(&temporary, e))?;
+            }
+            copy_recursive(displaced, &temporary).map_err(|e| CoreError::io(displaced, e))?;
+            if hash_entry(&temporary).map_err(|e| CoreError::io(&temporary, e))? != fingerprint {
+                return Err(CoreError::new(
+                    ErrorCode::DriftConflict,
+                    "displaced tree changed during retention",
+                ));
+            }
+            fs::rename(&temporary, &retained).map_err(|e| CoreError::io(&retained, e))?;
+        }
         manifest.entries.insert(
             original.to_string_lossy().into_owned(),
             DesktopBackupEntry {

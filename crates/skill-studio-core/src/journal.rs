@@ -534,6 +534,32 @@ pub fn reconcile_with_history(
             _ => None,
         });
         if let Some(event) = event {
+            let confirmed: Vec<_> = plan
+                .steps
+                .iter()
+                .filter_map(|step| {
+                    if let PlanStep::Swap {
+                        path,
+                        staged,
+                        staged_binding,
+                        quarantined,
+                        ..
+                    } = step
+                    {
+                        let unpublished = fs.fsops_device_inode(staged).ok()
+                            == Some(*staged_binding)
+                            && fs.fsops_device_inode(path).ok() != Some(*staged_binding)
+                            && quarantined
+                                .as_ref()
+                                .is_none_or(|p| fs.symlink_metadata(p).is_err());
+                        if !unpublished {
+                            return Some(path.clone());
+                        }
+                    }
+                    None
+                })
+                .collect();
+            store.retain_paths(guard, event, &confirmed)?;
             for step in &plan.steps {
                 if let PlanStep::Swap {
                     path,
@@ -543,6 +569,9 @@ pub fn reconcile_with_history(
                     ..
                 } = step
                 {
+                    if !confirmed.contains(path) {
+                        continue;
+                    }
                     let root = Root::open(fs, plan.root.clone())
                         .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()))?;
                     for target in step_paths(step) {
@@ -557,7 +586,10 @@ pub fn reconcile_with_history(
                     let staged_is_original = fs
                         .fsops_device_inode(staged)
                         .is_ok_and(|binding| binding != *staged_binding);
-                    let source = if fs.symlink_metadata(displaced).is_ok() {
+                    let source = if fs
+                        .fsops_device_inode(displaced)
+                        .is_ok_and(|binding| binding != *staged_binding)
+                    {
                         displaced
                     } else if staged_is_original || binding == Some(*staged_binding) {
                         staged
@@ -744,6 +776,20 @@ fn reverse_steps(
                     Err(e) => return Err(e),
                 };
                 if !landed {
+                    if let Some(quarantined) = quarantined {
+                        if fs
+                            .fsops_device_inode(quarantined)
+                            .is_ok_and(|binding| binding == *staged_binding)
+                        {
+                            let current = crate::events::fingerprint_path(fs, quarantined)
+                                .map_err(|e| std::io::Error::other(e.to_string()))?;
+                            if current != *published_fingerprint {
+                                return Err(std::io::Error::other("recovery residue changed"));
+                            }
+                            remove_tree(fs, quarantined)?;
+                            continue;
+                        }
+                    }
                     if quarantined
                         .as_ref()
                         .is_some_and(|path| fs.symlink_metadata(path).is_ok())

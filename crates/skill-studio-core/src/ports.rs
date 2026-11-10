@@ -285,6 +285,9 @@ impl ScopeFs for ScopedReads<'_> {
     ) -> std::io::Result<()> {
         self.inner.fsops_write_new_file_with_mode(path, bytes, mode)
     }
+    fn fsops_rename_new(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        self.inner.fsops_rename_new(from, to)
+    }
     fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
         self.inner.fsops_rename(from, to)
     }
@@ -397,6 +400,13 @@ pub trait ScopeFs: Send + Sync {
     /// Renames within one filesystem, confined by the caller's own
     /// [`crate::fsops::Root`] rather than a [`ScopedPath`].
     fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+    /// Atomically moves a path only if the destination is absent.
+    fn fsops_rename_new(&self, _from: &Path, _to: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "exclusive rename unavailable",
+        ))
+    }
     /// Creates a symlink at `link` pointing at `target`, confined by the
     /// caller's own [`crate::fsops::Root`] rather than a [`ScopedPath`].
     fn fsops_symlink(&self, target: &Path, link: &Path) -> std::io::Result<()>;
@@ -604,6 +614,13 @@ pub trait HistoryStore: Send {
         id: &EventId,
         original: &Path,
         displaced: &Path,
+    ) -> Result<(), CoreError>;
+    /// Keeps only confirmed publications in an update backup.
+    fn retain_paths(
+        &mut self,
+        guard: &ExclusiveGuard,
+        id: &EventId,
+        paths: &[PathBuf],
     ) -> Result<(), CoreError>;
     /// Inserts a `pending` row.
     fn record(

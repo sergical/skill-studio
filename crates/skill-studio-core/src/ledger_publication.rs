@@ -227,7 +227,12 @@ pub(crate) fn publish_in_plan(
     name: &str,
     changes: &[LedgerChange],
     plan: &PlanWriter<'_>,
+    history: (
+        &mut dyn crate::ports::HistoryStore,
+        &crate::identity::EventId,
+    ),
 ) -> Result<(), CoreError> {
+    let (store, event) = history;
     let fs = rt.ports.fs.as_ref();
     let mut writes = Vec::new();
     for change in changes {
@@ -264,6 +269,19 @@ pub(crate) fn publish_in_plan(
             bytes,
         ));
     }
+    let entries: Vec<_> = writes
+        .iter()
+        .map(|(path, file, previous, bytes)| {
+            Ok(crate::ports::PlanStep::LedgerEntry {
+                path: path.clone(),
+                file: Some(file.clone()),
+                name: name.into(),
+                before: merge(name, file, None, previous.as_deref(), None)?,
+                after: merge(name, file, None, Some(bytes), None)?,
+            })
+        })
+        .collect::<Result<_, CoreError>>()?;
+    store.patch_inverse(guard, event, serde_json::json!({"ledger_undo": entries}))?;
     publish_writes(rt, guard, name, plan, writes)
 }
 
@@ -287,6 +305,115 @@ fn publish_writes(
         })?;
         let scoped = crate::ports::confine(&rt.scope, fs, &path)?;
         fs.write_atomic(guard, &scoped, &bytes)
+            .map_err(|e| CoreError::io(&path, e))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn undo_changes(
+    fs: &dyn crate::ports::ScopeFs,
+    inverse: &serde_json::Value,
+    force: bool,
+) -> Result<Vec<(String, String, LedgerChange)>, CoreError> {
+    let steps: Vec<crate::ports::PlanStep> = serde_json::from_value(
+        inverse
+            .get("ledger_undo")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    )
+    .map_err(invalid)?;
+    let mut changes = Vec::new();
+    for step in steps {
+        if let crate::ports::PlanStep::LedgerEntry {
+            path,
+            file,
+            name,
+            before,
+            after,
+        } = step
+        {
+            let logical = file.unwrap_or_else(|| {
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+            let live = match fs.read_capped(&path, 8 * 1024 * 1024) {
+                Ok(bytes) => Some(bytes),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => return Err(CoreError::io(&path, e)),
+            };
+            if merge(
+                &name,
+                &logical,
+                Some(&before),
+                Some(&before),
+                live.as_deref(),
+            )
+            .is_ok()
+            {
+                continue;
+            }
+            if !force {
+                merge(
+                    &name,
+                    &logical,
+                    Some(&after),
+                    Some(&before),
+                    live.as_deref(),
+                )?;
+            }
+            changes.push((
+                name,
+                logical,
+                LedgerChange {
+                    path,
+                    before: live,
+                    after: Some(before),
+                },
+            ));
+        }
+    }
+    Ok(changes)
+}
+
+pub(crate) fn restore_entries(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    store: &mut dyn crate::ports::HistoryStore,
+    event: &crate::identity::EventId,
+    changes: Vec<(String, String, LedgerChange)>,
+) -> Result<(), CoreError> {
+    let mut mirror = Vec::new();
+    let mut writes = Vec::new();
+    for (name, file, change) in changes {
+        let live = match rt.ports.fs.read_capped(&change.path, 8 * 1024 * 1024) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(CoreError::io(&change.path, e)),
+        };
+        let bytes = merge(
+            &name,
+            &file,
+            change.before.as_deref(),
+            change.after.as_deref(),
+            live.as_deref(),
+        )?;
+        mirror.push(crate::ports::PlanStep::LedgerEntry {
+            path: change.path.clone(),
+            file: Some(file.clone()),
+            name: name.clone(),
+            before: merge(&name, &file, None, live.as_deref(), None)?,
+            after: merge(&name, &file, None, Some(&bytes), None)?,
+        });
+        writes.push((change.path, bytes));
+    }
+    store.patch_inverse(guard, event, serde_json::json!({"ledger_undo": mirror}))?;
+    for (path, bytes) in writes {
+        let scoped = crate::ports::confine(&rt.scope, rt.ports.fs.as_ref(), &path)?;
+        rt.ports
+            .fs
+            .write_atomic(guard, &scoped, &bytes)
             .map_err(|e| CoreError::io(&path, e))?;
     }
     Ok(())

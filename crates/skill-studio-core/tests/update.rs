@@ -1356,7 +1356,11 @@ fn undo_of_a_copy_update_refuses_when_its_registry_row_changed_since_or_names_th
 /// crash between an op's write and its inverse patch leaves behind.
 struct PatchlessHistory(SqliteHistoryOpener);
 
-struct PatchlessStore(Box<dyn skill_studio_core::ports::HistoryStore>, bool);
+struct PatchlessStore(
+    Box<dyn skill_studio_core::ports::HistoryStore>,
+    bool,
+    Option<PathBuf>,
+);
 
 impl skill_studio_core::ports::HistoryOpener for PatchlessHistory {
     fn open(
@@ -1366,7 +1370,7 @@ impl skill_studio_core::ports::HistoryOpener for PatchlessHistory {
     ) -> Result<Option<Box<dyn skill_studio_core::ports::HistoryStore>>, skill_studio_core::CoreError>
     {
         Ok(self.0.open(scope, access)?.map(|store| {
-            Box::new(PatchlessStore(store, false))
+            Box::new(PatchlessStore(store, false, None))
                 as Box<dyn skill_studio_core::ports::HistoryStore>
         }))
     }
@@ -1391,7 +1395,22 @@ impl skill_studio_core::ports::HistoryStore for PatchlessStore {
         id: &skill_studio_core::identity::EventId,
         paths: &[PathBuf],
     ) -> Result<skill_studio_core::events::BackupManifest, skill_studio_core::CoreError> {
-        self.0.backup_paths(guard, id, paths)
+        let manifest = self.0.backup_paths(guard, id, paths)?;
+        if let Some(path) = &self.2 {
+            if paths.iter().any(|p| p == path) {
+                std::fs::create_dir_all(path).unwrap();
+                std::fs::write(path.join("SKILL.md"), "external copy after backup").unwrap();
+            }
+        }
+        Ok(manifest)
+    }
+    fn retain_paths(
+        &mut self,
+        guard: &skill_studio_core::ports::ExclusiveGuard,
+        id: &skill_studio_core::identity::EventId,
+        paths: &[PathBuf],
+    ) -> Result<(), skill_studio_core::CoreError> {
+        self.0.retain_paths(guard, id, paths)
     }
     fn retain_displaced(
         &mut self,
@@ -1468,6 +1487,18 @@ impl skill_studio_core::ports::HistoryStore for PatchlessStore {
         relative: &str,
     ) -> Result<Vec<skill_studio_core::fsops::StageFile>, skill_studio_core::CoreError> {
         self.0.read_backup_files(backup_dir, relative)
+    }
+    fn patch_inverse(
+        &mut self,
+        guard: &skill_studio_core::ports::ExclusiveGuard,
+        id: &skill_studio_core::identity::EventId,
+        patch: serde_json::Value,
+    ) -> Result<(), skill_studio_core::CoreError> {
+        if self.2.is_some() {
+            self.0.patch_inverse(guard, id, patch)
+        } else {
+            Ok(())
+        }
     }
     fn patch_payload(
         &mut self,
@@ -2808,11 +2839,9 @@ impl ProcessSpawner for WritesDuringUpdate {
         let output = self.inner.run(spec, cancel)?;
         if let Some(bytes) = &self.ledger_after {
             let home = spec.env.iter().find(|(key, _)| key == "HOME").unwrap();
-            std::fs::write(
-                PathBuf::from(&home.1).join(".agents/.skill-lock.json"),
-                bytes,
-            )
-            .unwrap();
+            for file in [".agents/.skill-lock.json", "skills-lock.json"] {
+                std::fs::write(PathBuf::from(&home.1).join(file), bytes).unwrap();
+            }
         }
         Ok(output)
     }
@@ -2974,7 +3003,8 @@ impl skill_studio_core::ports::HistoryOpener for CrashRetentionHistory {
     ) -> Result<Option<Box<dyn skill_studio_core::ports::HistoryStore>>, skill_studio_core::CoreError>
     {
         Ok(self.0.open(scope, access)?.map(|store| {
-            Box::new(PatchlessStore(store, true)) as Box<dyn skill_studio_core::ports::HistoryStore>
+            Box::new(PatchlessStore(store, true, None))
+                as Box<dyn skill_studio_core::ports::HistoryStore>
         }))
     }
 }
@@ -3350,5 +3380,256 @@ fn linked_ledger_recovery(logical: &str, target: &str, before: &[u8], after: &[u
     assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
     assert!(journal.pending().unwrap().is_empty());
     drop(session);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+struct ConcurrentCopyHistory(SqliteHistoryOpener, PathBuf);
+impl skill_studio_core::ports::HistoryOpener for ConcurrentCopyHistory {
+    fn open(
+        &self,
+        scope: &skill_studio_core::scope::NormalizedScope,
+        access: skill_studio_core::ports::HistoryAccess,
+    ) -> Result<Option<Box<dyn skill_studio_core::ports::HistoryStore>>, skill_studio_core::CoreError>
+    {
+        Ok(self.0.open(scope, access)?.map(|store| {
+            Box::new(PatchlessStore(store, false, Some(self.1.clone())))
+                as Box<dyn skill_studio_core::ports::HistoryStore>
+        }))
+    }
+}
+
+#[test]
+fn update_undo_keeps_copy_created_after_backup_or_deletes_external_edits() {
+    let home = unique_temp_dir("after_backup_copy");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "before");
+    let agent = home.join(".codex/skills/delta");
+    let rt = runtime_with_history(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(Arc::new(
+            FakeNpxUpdateSpawner::new(home.clone(), "v2").copying_into(&[".codex/skills"]),
+        )),
+        Arc::new(ConcurrentCopyHistory(
+            SqliteHistoryOpener::new(home.join(".agents/skill-studio/events.db")),
+            agent.clone(),
+        )),
+    );
+    let outcome = ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh)).unwrap();
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(agent.join("SKILL.md")).unwrap(),
+        "external copy after backup"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn update_undo_restores_both_ledgers_and_edit_baseline_or_keeps_updated_metadata() {
+    update_undo_ledgers(false);
+}
+
+#[test]
+fn update_undo_refuses_changed_ledger_entry_before_restoring_folders_or_loses_new_metadata() {
+    update_undo_ledgers(true);
+}
+
+fn update_undo_ledgers(drift: bool) {
+    let home = unique_temp_dir("undo_both_ledgers");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "before");
+    let before = std::fs::read(dir_of(&home, "delta").join("SKILL.md")).unwrap();
+    let hash =
+        skill_studio_core::tree_hash::tree_hash(&RealFs::new(), &dir_of(&home, "delta")).unwrap();
+    let old = serde_json::json!({"version":3,"skills":{"delta":{"skillFolderHash":hash,"source":"owner/old","sourceType":"github","sourceUrl":"https://github.com/owner/old","installedAt":"","updatedAt":""}}}).to_string();
+    for file in [".agents/.skill-lock.json", "skills-lock.json"] {
+        std::fs::write(home.join(file), &old).unwrap();
+    }
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(Arc::new(WritesDuringUpdate { inner: FakeNpxUpdateSpawner::new(home.clone(), "v2"), writes: vec![], ledger_after: Some(r#"{"version":3,"skills":{"delta":{"skillFolderHash":"new","source":"owner/new"}}}"#.into()) })));
+    let outcome = ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh)).unwrap();
+    let ledger = home.join(".agents/.skill-lock.json");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&ledger).unwrap()).unwrap();
+    value["skills"]["other"] = serde_json::json!({"source":"unrelated","sourceType":"github","sourceUrl":"https://github.com/owner/other","skillFolderHash":"","installedAt":"","updatedAt":""});
+    if drift {
+        value["skills"]["delta"]["source"] = serde_json::json!("concurrent");
+    }
+    std::fs::write(&ledger, serde_json::to_vec(&value).unwrap()).unwrap();
+    let restored = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    );
+    if drift {
+        assert_eq!(restored.unwrap_err().code, ErrorCode::DriftConflict);
+        assert_ne!(
+            std::fs::read(dir_of(&home, "delta").join("SKILL.md")).unwrap(),
+            before
+        );
+        std::fs::remove_dir_all(home).unwrap();
+        return;
+    }
+    let restored = restored.unwrap();
+    assert_eq!(
+        std::fs::read(dir_of(&home, "delta").join("SKILL.md")).unwrap(),
+        before
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&ledger).unwrap()).unwrap();
+    assert_eq!(value["skills"]["delta"]["skillFolderHash"], hash);
+    let project: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.join("skills-lock.json")).unwrap()).unwrap();
+    assert_eq!(project["skills"]["delta"], value["skills"]["delta"]);
+    let lock = skill_studio_core::lock_file::read_lock_file(&RealFs::new(), &ledger).unwrap();
+    assert_eq!(
+        skill_studio_core::lock_file::local_edits(
+            &RealFs::new(),
+            &lock,
+            "delta",
+            &dir_of(&home, "delta")
+        ),
+        skill_studio_core::lock_file::LocalEdits::Unedited
+    );
+    assert_eq!(value["skills"]["delta"]["source"], "owner/old");
+    assert_eq!(value["skills"]["other"]["source"], "unrelated");
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: restored.restore_event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    let redone: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&ledger).unwrap()).unwrap();
+    assert_eq!(redone["skills"]["delta"]["skillFolderHash"], "new");
+    assert_eq!(redone["skills"]["other"]["source"], "unrelated");
+    assert_ne!(
+        std::fs::read(dir_of(&home, "delta").join("SKILL.md")).unwrap(),
+        before
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn update_then_recovery_crashes_after_exchange_and_undo_keeps_edits_or_retains_published_backup() {
+    let home = unique_temp_dir("double_recovery_crash");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "before");
+    let shared = dir_of(&home, "delta").join("SKILL.md");
+    let db = home.join(".agents/skill-studio/events.db");
+    let rt = runtime_with_history(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(Arc::new(WritesDuringUpdate {
+            inner: FakeNpxUpdateSpawner::new(home.clone(), "v2"),
+            writes: vec![(shared.clone(), "late edits".into())],
+            ledger_after: None,
+        })),
+        Arc::new(CrashRetentionHistory(SqliteHistoryOpener::new(db.clone()))),
+    );
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ops::update(
+            &rt,
+            &ctx(),
+            &cli_request("delta", InstallMethod::SkillsSh)
+        )))
+        .is_err()
+    );
+    let ids = rt.ports.ids.clone();
+    drop(rt);
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    fs.crash_after_next_exchange();
+    let mut rt = runtime_with_history(
+        &home,
+        fs,
+        None,
+        Arc::new(SqliteHistoryOpener::new(db.clone())),
+    );
+    rt.ports.ids = ids.clone();
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| MutationSession::begin(
+            &rt,
+            &ctx()
+        )))
+        .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&shared).unwrap(), "late edits");
+    drop(rt);
+    let mut rt = runtime_with_history(
+        &home,
+        Arc::new(RealFs::new()),
+        None,
+        Arc::new(SqliteHistoryOpener::new(db)),
+    );
+    rt.ports.ids = ids;
+    let session = MutationSession::begin(&rt, &ctx()).unwrap();
+    session.finish(&rt, &ctx());
+    let events = ops::list_events(&rt, &ctx(), &ListEventsRequest::default()).unwrap();
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: events[0].id.clone(),
+            force: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(&shared).unwrap(), "late edits");
+    use skill_studio_core::ports::Journal;
+    let journal = skill_studio_core::journal::FsJournal::new(
+        home.join(".agents/skill-studio-journal"),
+        rt.ports.fs.clone(),
+    );
+    assert!(journal.pending().unwrap().is_empty());
+    assert!(journal
+        .all()
+        .unwrap()
+        .iter()
+        .all(|plan| plan.status != skill_studio_core::ports::PlanStatus::Interrupted));
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn copy_update_undo_restores_edit_after_backup_or_loses_displaced_content() {
+    let home = unique_temp_dir("copy_late_backup");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "before");
+    let shared = dir_of(&home, "delta");
+    let rt = runtime_with_history(
+        &home,
+        Arc::new(RealFs::new()),
+        None,
+        Arc::new(ConcurrentCopyHistory(
+            SqliteHistoryOpener::new(home.join(".agents/skill-studio/events.db")),
+            shared.clone(),
+        )),
+    );
+    let outcome = ops::update(&rt, &ctx(), &copy_request("delta", "v2")).unwrap();
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(shared.join("SKILL.md")).unwrap(),
+        "external copy after backup"
+    );
     std::fs::remove_dir_all(home).unwrap();
 }

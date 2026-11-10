@@ -449,10 +449,42 @@ pub fn swap_retaining(
     staged: &Staged,
     quarantine_dir: &Path,
 ) -> Result<Option<PathBuf>, FsOpsError> {
+    swap_retaining_mode(root, plan, final_name, staged, quarantine_dir, true)
+}
+
+/// Publishes a new tree without displacing a concurrent destination.
+pub fn publish_new(
+    root: &Root,
+    plan: &PlanWriter<'_>,
+    final_name: &Path,
+    staged: &Staged,
+) -> Result<Option<PathBuf>, FsOpsError> {
+    swap_retaining_mode(
+        root,
+        plan,
+        final_name,
+        staged,
+        Path::new(".quarantine"),
+        false,
+    )
+}
+
+fn swap_retaining_mode(
+    root: &Root,
+    plan: &PlanWriter<'_>,
+    final_name: &Path,
+    staged: &Staged,
+    quarantine_dir: &Path,
+    replace: bool,
+) -> Result<Option<PathBuf>, FsOpsError> {
     root.revalidate()?;
     let mut displaced = None;
     let final_path = root.confine(final_name)?;
-    let old_facts = root.fs.symlink_metadata(&final_path).ok();
+    let old_facts = if replace {
+        root.fs.symlink_metadata(&final_path).ok()
+    } else {
+        None
+    };
     // The identity the exchange will give `final_path` once it lands -
     // captured now, before anything moves, so reversal can later tell
     // whether the exchange landed without needing a second fake filesystem
@@ -477,7 +509,7 @@ pub fn swap_retaining(
             )
             .map_err(FsOpsError::Journal)?;
             root.fs
-                .fsops_rename(&staged.path, &final_path)
+                .fsops_rename_new(&staged.path, &final_path)
                 .fs_err(&final_path)?;
         }
         Some(facts) if facts.kind == FileKind::Dir => {

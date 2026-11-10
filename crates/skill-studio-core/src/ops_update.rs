@@ -459,7 +459,7 @@ fn update_skills_sh_staged(
     crate::ops::ensure_dir_all(rt, session, fs, &staged_root)?;
     let mut files = Vec::new();
     update_files(fs, destination, Path::new(""), &mut files)?;
-    update_copy(rt, &session.guard, &staged_root, &req.skill, &files)?;
+    update_copy(rt, &session.guard, &staged_root, &req.skill, &files, None)?;
     let root = ops_install::scope_root(rt, &req.scope);
     let mut ledgers = Vec::new();
     for name in [".agents/.skill-lock.json", "skills-lock.json"] {
@@ -567,6 +567,7 @@ fn update_skills_sh_staged(
     plan.record_step(crate::ports::PlanStep::RetainEvent {
         event_id: id.clone(),
     })?;
+    let mut published = vec![destination.to_path_buf()];
     let result = (|| {
         // Each swap renames the live tree into quarantine, capturing late external writes too.
         let displaced = update_copy_in_plan(
@@ -597,6 +598,7 @@ fn update_skills_sh_staged(
                         .store
                         .retain_displaced(&session.guard, id, &live, &displaced)?;
                 }
+                published.push(live.clone());
             } else if fs.symlink_metadata(&live).is_err() {
                 if let Ok(relative) = dir.strip_prefix(&root) {
                     let staged_agent = stage.join(relative).join(&req.skill.0);
@@ -606,11 +608,13 @@ fn update_skills_sh_staged(
                     {
                         let mut agent_files = Vec::new();
                         update_files(fs, &staged_agent, Path::new(""), &mut agent_files)?;
-                        update_copy_in_plan(rt, &plan, &dir, &req.skill, &agent_files)?;
+                        update_copy_in_plan_mode(rt, &plan, &dir, &req.skill, &agent_files, false)?;
+                        published.push(live.clone());
                     }
                 }
             }
         }
+        session.store.retain_paths(&session.guard, id, &published)?;
         for (change, name) in ledgers
             .iter_mut()
             .zip([".agents/.skill-lock.json", "skills-lock.json"])
@@ -623,6 +627,7 @@ fn update_skills_sh_staged(
             &req.skill.0,
             &ledgers,
             &plan,
+            (session.store.as_mut(), id),
         )?;
         Ok::<(), CoreError>(())
     })();
@@ -702,6 +707,10 @@ fn update_copy(
     universal_root: &Path,
     skill: &SkillName,
     files: &[crate::dto::InstallFile],
+    retention: Option<(
+        &mut dyn crate::ports::HistoryStore,
+        &crate::identity::EventId,
+    )>,
 ) -> Result<Option<PathBuf>, CoreError> {
     let fs = rt.ports.fs.clone();
     ops_install::ensure_journal_root(rt, guard, fs.as_ref())?;
@@ -720,7 +729,15 @@ fn update_copy(
     )
     .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()))?;
 
+    if let Some((_, event)) = &retention {
+        plan.record_step(crate::ports::PlanStep::RetainEvent {
+            event_id: (*event).clone(),
+        })?;
+    }
     let displaced = update_copy_in_plan(rt, &plan, universal_root, skill, files)?;
+    if let (Some((store, event)), Some(displaced)) = (retention, &displaced) {
+        store.retain_displaced(guard, event, &universal_root.join(&skill.0), displaced)?;
+    }
     plan.finish(PlanStatus::Done)?;
     Ok(displaced)
 }
@@ -731,6 +748,17 @@ fn update_copy_in_plan(
     universal_root: &Path,
     skill: &SkillName,
     files: &[crate::dto::InstallFile],
+) -> Result<Option<PathBuf>, CoreError> {
+    update_copy_in_plan_mode(rt, plan, universal_root, skill, files, true)
+}
+
+fn update_copy_in_plan_mode(
+    rt: &Runtime,
+    plan: &PlanWriter<'_>,
+    universal_root: &Path,
+    skill: &SkillName,
+    files: &[crate::dto::InstallFile],
+    replace: bool,
 ) -> Result<Option<PathBuf>, CoreError> {
     let root = Root::open(rt.ports.fs.as_ref(), universal_root.to_path_buf())
         .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
@@ -749,8 +777,12 @@ fn update_copy_in_plan(
     // update-specific name: a quarantine folder the prune never sees would
     // grow unbounded.
     let quarantine_dir = Path::new(crate::doctor::QUARANTINE_DIR_NAME);
-    let displaced = fsops::swap_retaining(&root, plan, final_name, &staged, quarantine_dir)
-        .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
+    let displaced = if replace {
+        fsops::swap_retaining(&root, plan, final_name, &staged, quarantine_dir)
+    } else {
+        fsops::publish_new(&root, plan, final_name, &staged)
+    }
+    .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
     Ok(displaced)
 }
 
@@ -883,7 +915,14 @@ fn update_write(
     }
     match req.method {
         InstallMethod::Copy => {
-            update_copy(rt, &session.guard, universal_root, &req.skill, &req.files)?;
+            update_copy(
+                rt,
+                &session.guard,
+                universal_root,
+                &req.skill,
+                &req.files,
+                Some((session.store.as_mut(), id)),
+            )?;
             let content_hash = crate::ops::skill_content_hash(fs, ctx, destination)?;
             let read = copy_registry.ok_or_else(|| {
                 CoreError::new(
@@ -1391,7 +1430,7 @@ fn update_one_split_copy(
     let Some(root) = path.parent() else {
         return Ok(Err("this copy has no parent folder".to_string()));
     };
-    update_copy(rt, guard, root, &req.skill, &req.files)?;
+    update_copy(rt, guard, root, &req.skill, &req.files, None)?;
     Ok(Ok(crate::ops::skill_content_hash(fs, ctx, path)?))
 }
 
