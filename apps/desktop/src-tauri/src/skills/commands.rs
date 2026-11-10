@@ -2880,7 +2880,7 @@ pub async fn update_plugin(
         // An up-to-date result can still follow a stale cached version, whose
         // badge would otherwise outlive the click until the next background check.
         if matches!(result.outcome.as_str(), "updated" | "up_to_date") {
-            recheck_plugin_versions(&app, &home);
+            recheck_plugin_versions(&app, &home, &plugin_id);
         }
         Ok(result)
     })
@@ -2892,7 +2892,7 @@ pub async fn update_plugin(
 /// writable data folder, or while a background check already refreshes;
 /// lookups still running after the deadline fail, and the next background
 /// check catches up.
-fn recheck_plugin_versions(app: &tauri::AppHandle, home: &Path) {
+fn recheck_plugin_versions(app: &tauri::AppHandle, home: &Path, plugin_id: &str) {
     let Ok(app_data) = app.path().app_data_dir() else {
         return;
     };
@@ -2900,11 +2900,12 @@ fn recheck_plugin_versions(app: &tauri::AppHandle, home: &Path) {
         return;
     }
     if let Some(gh_bin) = super::skill_update_check::resolve_gh_binary() {
-        super::skill_plugin_update::try_refresh_plugin_versions(
+        super::skill_plugin_update::try_refresh_plugin_version(
             home,
             &app_data,
             &gh_bin,
             std::time::Duration::from_secs(20),
+            plugin_id,
         );
         skill_refresh::request_snapshot_rebuild(app);
     }
