@@ -87,18 +87,43 @@ cat mutants.out/missed.txt
 
 ### Worktrees and Disk Use
 
-A Rust `target/` folder takes 9 to 17 GB. In two weeks, 15 worktrees with their
-own `target/` filled 155 GB of the user's disk. These rules are firm:
+A shared `target/` grew to 156 GB in one night of parallel worktree builds
+(measured 2026-11-10): incremental caches took 72 GB, macOS debug `.o` files
+56 GB, and each `-p` selection, toolchain or `RUSTFLAGS` value a full copy. A
+shared folder also let one worktree's build pass as fresh in another. These
+rules are firm:
 
-- **Share one build folder.** In any worktree under `.claude/worktrees/`, build
-  with the main checkout's `target/`. Never create a second one:
+- **One build folder per worktree, outside the checkout.** Put this in
+  `~/.cargo/config.toml` once per machine. It applies to every cargo call, so
+  agents need no env vars:
 
-  ```bash
-  export CARGO_TARGET_DIR="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/target"
+  ```toml
+  [build]
+  build-dir = "{cargo-cache-home}/build/{workspace-path-hash}"
+  incremental = false
+  
+  [profile.test]
+  debug = false
   ```
 
-  Cargo locks the folder, so two builds at the same time wait for each other.
-  That is the expected cost.
+  Intermediate files go to `~/.cargo/build/<hash>/`, one folder per worktree.
+  Final binaries (`target/debug/skill-studio`) stay in `target/`. Do not set
+  `CARGO_TARGET_DIR`, `CARGO_BUILD_BUILD_DIR`, or `--target-dir`. A worktree
+  costs about 4 to 5 GB.
+
+- **Delete old build folders automatically.** Cargo never deletes them.
+  `tools/cargo-build-gc.sh` deletes whole worktree folders, least recently
+  built first, above a 40 GB total, below 30 GB free disk, or after 3 days. It
+  never runs while `cargo` or `rustc` runs. Run it every 15 minutes with
+  launchd (macOS):
+
+  ```bash
+  install -m 755 tools/cargo-build-gc.sh ~/.local/bin/cargo-build-gc
+  # LaunchAgent: ProgramArguments ~/.local/bin/cargo-build-gc, StartInterval 900
+  ```
+
+  `pnpm run clean:target` runs it once. `CARGO_BUILD_GC_DRY_RUN=1` shows what
+  it would delete.
 
 - **Clean up when the work is done.** When a worktree's PR merges or closes, or
   the session ends with its work pushed, run `git worktree remove <path>`. If
@@ -110,9 +135,16 @@ own `target/` filled 155 GB of the user's disk. These rules are firm:
 - **Check before you report.** Before the final message of a session that
   created worktrees or builds, run
   `du -sh .claude/worktrees .scratch 2>/dev/null` and say what is left and why.
-- **Sweep the shared build folder.** Cargo never deletes old outputs, so the
-  shared `target/` grew to 154 GB. After a batch of merges, run
-  `pnpm run clean:target` (deletes outputs untouched for 2 days).
+- **Build with one command shape.** Each different package selection,
+  toolchain, or flag set gets its own full copy: measured on 2026-11-10,
+  `-p skill-studio-core` added 1.0 GB, `-p core -p host -p cli` 1.5 GB, and
+  `RUSTC_WORKSPACE_WRAPPER` 1.8 GB on top of the 4.2 GB that
+  `--workspace --all-features` tests plus clippy take. Always pass
+  `--workspace --all-features` and narrow with `--test <file>` or a test-name
+  filter, which adds nothing. Use the pinned toolchain. Never set `RUSTFLAGS`,
+  `RUSTC_WRAPPER`, or `RUSTC_WORKSPACE_WRAPPER`.
+- **Stay above the free-disk floor.** Do not start a build below 30 GB free.
+  Run at most 2 Rust builds at once.
 
 ### Frontend Commands
 
