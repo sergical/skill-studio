@@ -2,7 +2,7 @@
 // Skill Studio - Skills Proxy App tests
 // Covers the runtime-neutral app factory: proxy path/query building, unsafe
 // path rejection, and the rate-limit/cache middleware the public Worker
-// entry injects - all with plain fakes, no Miniflare and no network.
+// entry injects. Loopback servers exercise stalled upstream connections.
 // ============================================================================
 
 import { createServer } from "node:http";
@@ -50,12 +50,12 @@ describe("proxyGet", () => {
     expect(result).toEqual({ status: 200, body: { data: [] } });
   });
 
-  it.each([false, true])(
-    "a stalled upstream returns a reported timeout instead of hanging, headers sent: %s",
-    async (headersSent) => {
+  it.each([null, 200, 500])(
+    "a stalled upstream returns a reported timeout instead of hanging, header status: %s",
+    async (headerStatus) => {
       const server = createServer((_request, response) => {
-        if (headersSent) {
-          response.writeHead(200, { "Content-Type": "application/json" });
+        if (headerStatus !== null) {
+          response.writeHead(headerStatus, { "Content-Type": "application/json" });
           response.write('{"data":');
         }
       });

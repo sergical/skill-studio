@@ -54,9 +54,6 @@ export async function proxyGet(
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: controller.signal,
     });
-    if (response.status >= 500) {
-      reportServerError?.(new Error(`skills.sh answered ${response.status}`), { kind: "upstream" });
-    }
     const body = await response.json().catch((error) => {
       if (controller.signal.aborted) throw error;
       if (response.status < 500) {
@@ -69,6 +66,9 @@ export async function proxyGet(
       }
       return { error: "skills.sh returned a non-JSON response" };
     });
+    if (response.status >= 500) {
+      reportServerError?.(new Error(`skills.sh answered ${response.status}`), { kind: "upstream" });
+    }
     return { status: response.status, body };
   } catch (error) {
     reportServerError?.(error, { kind: "upstream" });
