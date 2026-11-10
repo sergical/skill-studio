@@ -1654,6 +1654,19 @@ mod tests {
         index.stats_at(Utc::now(), &filter(known_skills, sources))
     }
 
+    /// The Codex and pi fixtures write fixed 2026-09-16 timestamps, so their stats read the
+    /// window from the next day. A wall-clock `now` ages them out of the 30-day window.
+    fn stats_on_fixture_day(
+        index: &SkillInvocationIndex,
+        known_skills: &StdBTreeSet<String>,
+        sources: &DiscoverySources,
+    ) -> Vec<SkillInvocationStats> {
+        let now = DateTime::parse_from_rfc3339("2026-09-17T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        index.stats_at(now, &filter(known_skills, sources))
+    }
+
     #[test]
     fn refresh_skips_unchanged_files() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2562,6 +2575,7 @@ mod tests {
     }
 
     mod codex_rollouts {
+        use super::stats_on_fixture_day as stats;
         use super::*;
 
         fn rollout_line(record_type: &str, timestamp: &str, payload: &str) -> String {
@@ -2887,6 +2901,7 @@ mod tests {
     }
 
     mod pi_sessions {
+        use super::stats_on_fixture_day as stats;
         use super::*;
 
         fn header_line(id: &str, cwd: &str) -> String {
