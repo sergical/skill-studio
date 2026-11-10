@@ -4836,8 +4836,15 @@ fn restore_event_body(
         }
     }
     if let Some(slot) = &parked_slot {
-        let _ = fs.fsops_remove_dir(&slot.join(crate::park_layout::COPY_ORIGIN_DIR));
-        let _ = fs.fsops_remove_dir(slot);
+        remove_park_scaffolding(
+            rt,
+            &session,
+            &[],
+            &[
+                slot.to_path_buf(),
+                slot.join(crate::park_layout::COPY_ORIGIN_DIR),
+            ],
+        );
         if let Some(marker) = &project_marker {
             let key = marker.parent().unwrap_or(marker);
             let only_marker = fs.read_dir(key).is_ok_and(|entries| {
@@ -4859,9 +4866,7 @@ fn restore_event_body(
                     fs.remove_file(&session.guard, &scoped)
                         .map_err(|error| CoreError::io(marker, error))
                 }) {
-                    Ok(()) => {
-                        let _ = fs.fsops_remove_dir(key);
-                    }
+                    Ok(()) => remove_park_scaffolding(rt, &session, &[], &[key.to_path_buf()]),
                     Err(error) => copy_errors.push(error.message),
                 }
             }
