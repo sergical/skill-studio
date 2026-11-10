@@ -722,3 +722,185 @@ fn split_update_crashes_after_lock_write_then_undo_restores_v1_or_next_update_re
         "lock",
     );
 }
+
+fn history_row(
+    rt: &Runtime,
+    id: &skill_studio_core::identity::EventId,
+) -> skill_studio_core::events::EventRecord {
+    rt.ports
+        .history
+        .open(
+            &rt.scope,
+            skill_studio_core::ports::HistoryAccess::ReadIfExists,
+        )
+        .unwrap()
+        .unwrap()
+        .get(id)
+        .unwrap()
+        .unwrap()
+}
+
+#[test]
+fn split_update_undo_crash_force_retry_redo_restores_matching_hashes_or_next_update_refuses() {
+    let home = split_home("undo_crash_retry");
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+    ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+    let event_id = latest_update(&rt);
+    let crash_rt = runtime_with(
+        &home,
+        Arc::new(edit_on_read::EditOnRead {
+            path: home.join("unused"),
+            backups: home.join(".history/backups"),
+            bytes: vec![],
+            reads: Default::default(),
+            after_v2: None,
+            crash_after: Some("undo-registry"),
+        }),
+    );
+    let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ops::restore_event(
+            &crash_rt,
+            &ctx(),
+            &skill_studio_core::dto::RestoreRequest {
+                event_id: event_id.clone(),
+                force: false,
+            },
+        )
+    }));
+    assert!(
+        crash.is_err(),
+        "fault port did not reach Undo metadata boundary"
+    );
+    for dir in HARNESS_DIRS {
+        assert_eq!(revision_of(&copy_of(&home, dir)), Some("v1"));
+    }
+    let undo = ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id,
+            force: true,
+        },
+    )
+    .unwrap();
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: undo.restore_event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    for dir in HARNESS_DIRS {
+        assert_eq!(
+            revision_of(&copy_of(&home, dir)),
+            Some("v2"),
+            "Redo lost pre-crash files"
+        );
+    }
+    assert_eq!(
+        read_lock(&home)["skills"]["gamma"]["skillFolderHash"],
+        "tree-v2"
+    );
+    assert!(ops::update_split_copies(&rt, &ctx(), &v2())
+        .unwrap()
+        .refused
+        .is_empty());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn split_update_failed_undo_force_preserves_intervening_files_and_metadata_or_discards_edits() {
+    let home = split_home("undo_displaced_retry");
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+    ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+    let event_id = latest_update(&rt);
+    let failed_rt = runtime_with(
+        &home,
+        Arc::new(edit_on_read::EditOnRead {
+            path: home.join("unused"),
+            backups: home.join(".history/backups"),
+            bytes: vec![],
+            reads: Default::default(),
+            after_v2: None,
+            crash_after: Some("fail-undo-registry"),
+        }),
+    );
+    ops::restore_event(
+        &failed_rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: event_id.clone(),
+            force: false,
+        },
+    )
+    .unwrap_err();
+    let mut edited_lock = read_lock(&home);
+    edited_lock["skills"]["gamma"]["source"] = serde_json::json!("edited/source");
+    std::fs::write(
+        home.join(".agents/.skill-lock.json"),
+        edited_lock.to_string(),
+    )
+    .unwrap();
+    let edited_path = copy_of(&home, ".claude/skills").join("SKILL.md");
+    std::fs::write(&edited_path, skill_md("editor")).unwrap();
+    let undo = ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: event_id.clone(),
+            force: true,
+        },
+    )
+    .unwrap();
+    let row = history_row(&rt, &undo.restore_event_id);
+    let displaced = &row.payload["displaced_data"];
+    assert_eq!(
+        displaced["inverse"]["lock_row_undo"]["previous"], edited_lock["skills"]["gamma"],
+        "Force discarded intervening lock edit"
+    );
+    let store = rt
+        .ports
+        .history
+        .open(
+            &rt.scope,
+            skill_studio_core::ports::HistoryAccess::ReadIfExists,
+        )
+        .unwrap()
+        .unwrap();
+    let backup = displaced["backup_dir"]
+        .as_str()
+        .expect("Force did not save displaced files");
+    let manifest = store.read_manifest(backup).unwrap();
+    let entry = manifest
+        .entries
+        .iter()
+        .find(|entry| entry.original == edited_path.parent().unwrap())
+        .unwrap();
+    let files = store.read_backup_files(backup, &entry.relative).unwrap();
+    assert!(
+        files.iter().any(|file| file.bytes == skill_md("editor")),
+        "Force discarded intervening file edit"
+    );
+    assert_ne!(
+        row.backup_dir.as_deref(),
+        Some(backup),
+        "Redo and displaced data share an inconsistent snapshot"
+    );
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: undo.restore_event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert!(ops::update_split_copies(&rt, &ctx(), &v2())
+        .unwrap()
+        .refused
+        .is_empty());
+    drop(store);
+    std::fs::remove_dir_all(home).unwrap();
+}

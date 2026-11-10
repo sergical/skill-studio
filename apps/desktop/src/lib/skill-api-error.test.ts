@@ -83,3 +83,33 @@ describe("callCommand normalizes a raw string rejection to an Error", () => {
     ).toBe(true);
   });
 });
+
+it("Activity Undo offers Force for a changed source-lock row or leaves the conflict without recovery", async () => {
+  mockIPC(() => {
+    throw JSON.stringify({
+      code: "drift_conflict",
+      message: "the updated lock row changed; pass force to restore anyway",
+    });
+  });
+  let caught: unknown;
+  try {
+    await restoreSkillEvent("update", false);
+  } catch (error) {
+    caught = error;
+  }
+  const event = {
+    id: "update",
+    ts: "",
+    kind: "update",
+    skill: "gamma",
+    status: "done",
+    restorable: true,
+    force_restorable: true,
+    harness: null,
+    project_path: null,
+    reverted_by: null,
+    scope: null,
+  };
+  expect(shouldOfferForceRestore(event, caught)).toBe(true);
+  expect(shouldOfferForceRestore({ ...event, force_restorable: false }, caught)).toBe(false);
+});

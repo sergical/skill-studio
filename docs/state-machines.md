@@ -64,3 +64,16 @@ works today. Make one explicit when you next change it.
 | ------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Manual skill update check | HomeUpdateCheck useActionState  | Result starts initial. A request from initial, checked or failed settles as checked or failed. React owns pending; Check now is disabled while pending. No request produces initial.                                                                               | HomeUpdateCheck.test.tsx walks initial → failed → checked and initial → checked → checked → failed → failed → checked, plus deferred busy state and both keyboard activation keys. |
 | Browse details            | SkillDetailsContent load effect | Remote sources start loading; a local source with no remote id starts failed. Current request settles loaded or failed. Retry moves failed → loading. A new skill id remounts in loading. Effect cleanup ignores old completions after unmount or a newer request. | SkillDetailPanel.test.tsx covers loading → failed → loading → loaded, normal loading → loaded, and a selected source change while loading.                                         |
+
+## Split-update restore retry snapshots
+
+Before a Restore changes files, it saves its id as the target's `restore_retry`.
+Recovery can release the claim without losing that first snapshot. A Force retry
+keeps that snapshot for Redo and records its own current files and metadata in
+`payload.displaced_data`, with a separate backup directory and inverse. Further
+failed attempts keep the first retry reference. No event status or legal status
+move changes.
+
+Guards: `split_update_undo_crash_force_retry_redo_restores_matching_hashes_or_next_update_refuses`
+and `split_update_failed_undo_force_preserves_intervening_files_and_metadata_or_discards_edits`
+in `crates/skill-studio-core/tests/split_copy_update.rs`.

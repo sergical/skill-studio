@@ -235,6 +235,13 @@ fn core_restore_event_at(
             force,
         },
     );
+    if let Err(error) = &result {
+        return Err(serde_json::json!({
+            "code": error.code.as_str(),
+            "message": error.message,
+        })
+        .to_string());
+    }
     let envelope = skill_studio_core::ops::ResultEnvelope::from_result(
         skill_studio_core::ops::Operation::RestoreEvent,
         &rt.scope,

@@ -1,3 +1,4 @@
+#![allow(clippy::panic)]
 use skill_studio_core::ports::{DirEntryFacts, ExclusiveGuard, FileFacts, ScopeFs, ScopedPath};
 use skill_studio_host::RealFs;
 use std::{
@@ -55,6 +56,16 @@ impl ScopeFs for EditOnRead {
         path: &ScopedPath,
         bytes: &[u8],
     ) -> io::Result<()> {
+        if self.crash_after == Some("fail-undo-registry")
+            && path.as_path().ends_with(".agents/skill-studio.json")
+        {
+            return Err(io::Error::other("injected registry write failure"));
+        }
+        if self.crash_after == Some("undo-registry")
+            && path.as_path().ends_with(".agents/skill-studio.json")
+        {
+            panic!("injected crash before Undo registry write");
+        }
         RealFs::new().write_atomic(guard, path, bytes)?;
         if self.crash_after == Some("lock") && bytes.windows(7).any(|b| b == b"tree-v2") {
             std::process::exit(86);

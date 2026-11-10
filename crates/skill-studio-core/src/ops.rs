@@ -4766,18 +4766,10 @@ fn restore_event_body(
     // A forced write over a real folder quarantines it; the backup keeps it
     // restorable.
     restore_backup_targets.extend(write_back.iter().cloned());
-    let manifest = if let Some(retry) = &retry {
-        session.store.read_manifest(
-            retry
-                .backup_dir
-                .as_deref()
-                .ok_or_else(|| CoreError::new(ErrorCode::Io, "restore retry has no backup"))?,
-        )?
-    } else {
+    let manifest =
         session
             .store
-            .backup_paths(&session.guard, &restore_id, &restore_backup_targets)?
-    };
+            .backup_paths(&session.guard, &restore_id, &restore_backup_targets)?;
     let restore_pre_fingerprint = manifest.entries.first().and_then(|e| e.fingerprint.clone());
     // Origin notes are files and must replay with the folders they describe.
     let mut removed_copies: Vec<PathBuf> = remove_copies
@@ -4835,6 +4827,7 @@ fn restore_event_body(
             "skill": edit["skill"], "previous": live, "expected": edit["previous"]
         });
     }
+    let displaced_inverse = restore_inverse.clone();
     if let Some(retry) = &retry {
         restore_inverse = retry
             .inverse
@@ -4847,9 +4840,22 @@ fn restore_event_body(
         harness: target.harness.clone(),
         scope: target.scope.clone(),
         project_path: target.project_path.clone(),
-        payload: serde_json::json!({ "target_event": target.id.0, "agent_off": target.payload.get("agent_off") }),
+        payload: serde_json::json!({
+            "target_event": target.id.0,
+            "agent_off": target.payload.get("agent_off"),
+            "displaced_data": {
+                "backup_dir": manifest.backup_dir,
+                "inverse": displaced_inverse,
+            },
+        }),
         inverse: Some(restore_inverse),
-        backup_dir: Some(manifest.backup_dir.clone()),
+        backup_dir: Some(match &retry {
+            Some(retry) => retry
+                .backup_dir
+                .clone()
+                .ok_or_else(|| CoreError::new(ErrorCode::Io, "restore retry has no backup"))?,
+            None => manifest.backup_dir.clone(),
+        }),
     };
     session.store.record(&session.guard, &restore_id, &draft)?;
 
@@ -4876,6 +4882,14 @@ fn restore_event_body(
             ErrorCode::AlreadyReverted,
             "this event was already reverted",
         ));
+    }
+
+    if retry.is_none() {
+        session.store.patch_payload(
+            &session.guard,
+            &target.id,
+            serde_json::json!({ "restore_retry": restore_id.0 }),
+        )?;
     }
 
     let mutation_result = match &plan {
@@ -5177,11 +5191,6 @@ fn restore_event_body(
     }
 
     if !unrestored.is_empty() {
-        session.store.patch_payload(
-            &session.guard,
-            &target.id,
-            serde_json::json!({ "restore_retry": restore_id.0 }),
-        )?;
         // Release the claim like a failed primary write, so the target stays revertible.
         // The primary path is back already, so the retry needs `force`.
         let _ = session

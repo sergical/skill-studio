@@ -6,6 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { normalizeCommandError } from "./skill-command-error";
 import { recordIpcCall } from "./perf-marks";
 import { isUpdateAllRunning, plainBusyMessage } from "./skill-busy-message";
 import type {
@@ -80,7 +81,7 @@ function callCommand<T>(command: string, args?: InvokeArgs): Promise<T> {
     },
     (cause: unknown) => {
       finish(false);
-      const error = cause instanceof Error ? cause : new Error(String(cause));
+      const error = normalizeCommandError(cause);
       // The batch's own refusal is not caused by the batch, so it never gets the Update all wording.
       error.message = plainBusyMessage(
         error.message,

@@ -1,3 +1,4 @@
+import { SkillCommandError } from "../../lib/skill-command-error";
 import type { SkillEvent } from "@skill-studio/lib";
 
 /** True when Activity can offer the backend restore action for this event. */
@@ -11,8 +12,12 @@ function isDriftRefusal(message: string): boolean {
 }
 
 /** True only when the backend says bypassing this event's drift check is safe. */
-export function shouldOfferForceRestore(event: SkillEvent, message: string): boolean {
-  return event.force_restorable && isDriftRefusal(message);
+export function shouldOfferForceRestore(event: SkillEvent, cause: unknown): boolean {
+  const conflict =
+    cause instanceof SkillCommandError
+      ? cause.code === "drift_conflict"
+      : isDriftRefusal(cause instanceof Error ? cause.message : String(cause));
+  return event.force_restorable && conflict;
 }
 
 /**
