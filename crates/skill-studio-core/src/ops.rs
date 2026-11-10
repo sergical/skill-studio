@@ -5501,8 +5501,6 @@ pub(crate) fn park_found_copy(
     // What this attempt created, so a failed move leaves no empty key folder.
     let mut created_dirs: Vec<PathBuf> = Vec::new();
     let mut written_files: Vec<PathBuf> = Vec::new();
-    // Set when a failed `dotagents remove` could not move the copy back: the
-    // marker that names its origin is then the only record of where it goes.
     let mut copy_stays_parked = false;
     let write_result = (|| -> Result<(), CoreError> {
         for (link, scoped_link) in links.iter().zip(&scoped_links) {
@@ -5537,7 +5535,11 @@ pub(crate) fn park_found_copy(
             created_dirs.extend(ensure_dir_all_tracked(rt, session, fs, &marker_dir)?);
             write_marker(marker_dir.join(&skill.name.0), relative, true)?;
         }
-        crate::park_move::move_dir(rt, session, &deployment.path, &parked_dir)?;
+        if let Err(failure) = crate::park_move::move_dir(rt, session, &deployment.path, &parked_dir)
+        {
+            copy_stays_parked = failure.destination_published;
+            return Err(failure.error);
+        }
         if let Some(plan) = &dotagents {
             if let Err(e) = crate::ops_park_dotagents::unlist(
                 rt,
@@ -5557,7 +5559,7 @@ pub(crate) fn park_found_copy(
                     message = format!(
                         "{message} The copy could not be moved back and is still at {}: {}",
                         parked_dir.display(),
-                        move_error.message
+                        move_error.error.message
                     );
                 }
                 if let Err(files_error) = &files_back {
@@ -5797,10 +5799,10 @@ fn unpark_body(
             None,
         );
         if let Err(mut restore_error) = restored_files {
-            restore_error.message = format!("{} {}", e.message, restore_error.message);
+            restore_error.message = format!("{} {}", e.error.message, restore_error.message);
             return Err(restore_error);
         }
-        return Err(e);
+        return Err(e.error);
     }
     if let Some(parent) = deployment.path.parent() {
         let marker = parent
@@ -6042,15 +6044,20 @@ fn migrate_legacy_flat_copy(
     // window for a crash to strand the skill under a hidden name.
     let holding = parked_root.join(format!(".legacy-{}", crate::fsops::unique_suffix()));
     let result = if top_level == "universal" {
-        crate::park_move::move_dir(rt, &*session, &legacy, &holding).and_then(|()| {
-            let parent = destination.parent().unwrap_or(&destination).to_path_buf();
-            ensure_dir_all(rt, &*session, fs, &parent)?;
-            crate::park_move::move_dir(rt, &*session, &holding, &destination)
-        })
+        crate::park_move::move_dir(rt, &*session, &legacy, &holding)
+            .map_err(CoreError::from)
+            .and_then(|()| {
+                let parent = destination.parent().unwrap_or(&destination).to_path_buf();
+                ensure_dir_all(rt, &*session, fs, &parent)?;
+                crate::park_move::move_dir(rt, &*session, &holding, &destination)
+                    .map_err(CoreError::from)
+            })
     } else {
         let parent = destination.parent().unwrap_or(&destination).to_path_buf();
-        ensure_dir_all(rt, &*session, fs, &parent)
-            .and_then(|()| crate::park_move::move_dir(rt, &*session, &legacy, &destination))
+        ensure_dir_all(rt, &*session, fs, &parent).and_then(|()| {
+            crate::park_move::move_dir(rt, &*session, &legacy, &destination)
+                .map_err(CoreError::from)
+        })
     };
     let status = if result.is_ok() {
         crate::events::EventStatus::Done

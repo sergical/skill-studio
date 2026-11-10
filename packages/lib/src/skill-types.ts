@@ -135,7 +135,7 @@ export interface Toast {
   message?: string;
   duration?: number;
   /** A secondary button - see `ToastContainer`. */
-  action?: { label: string; onClick: () => void };
+  action?: { label: string; onClick: (event: { preventDefault(): void }) => void };
 }
 
 /**

@@ -30,6 +30,17 @@ pub(crate) fn crosses_devices(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::CrossesDevices || err.raw_os_error() == Some(EXDEV)
 }
 
+pub(crate) struct MoveFailure {
+    pub error: CoreError,
+    pub destination_published: bool,
+}
+
+impl From<MoveFailure> for CoreError {
+    fn from(failure: MoveFailure) -> Self {
+        failure.error
+    }
+}
+
 /// Moves the folder `from` to `to`. A rename when both sit on one volume.
 /// Across volumes: copies and flushes the folder, then quarantines the source
 /// on its own volume before comparing its identity, entries, modes and hashes.
@@ -39,18 +50,30 @@ pub(crate) fn move_dir(
     session: &MutationSession,
     from: &Path,
     to: &Path,
-) -> Result<(), CoreError> {
-    let fs = rt.ports.fs.as_ref();
-    for dir in [from.parent(), to.parent()].into_iter().flatten() {
-        sweep_trash(rt, session, dir);
-    }
-    let scoped_from = confine(&rt.scope, fs, from)?;
-    let scoped_to = confine(&rt.scope, fs, to)?;
-    match fs.rename(&session.guard, &scoped_from, &scoped_to) {
-        Ok(()) => Ok(()),
-        Err(e) if crosses_devices(&e) => copy_verify_remove(rt, session, from, to),
-        Err(e) => Err(CoreError::io(from, e)),
-    }
+) -> Result<(), MoveFailure> {
+    let mut destination_published = false;
+    let result = (|| {
+        let fs = rt.ports.fs.as_ref();
+        for dir in [from.parent(), to.parent()].into_iter().flatten() {
+            sweep_trash(rt, session, dir);
+        }
+        let scoped_from = confine(&rt.scope, fs, from)?;
+        let scoped_to = confine(&rt.scope, fs, to)?;
+        match fs.rename(&session.guard, &scoped_from, &scoped_to) {
+            Ok(()) => {
+                destination_published = true;
+                Ok(())
+            }
+            Err(e) if crosses_devices(&e) => {
+                copy_verify_remove(rt, session, from, to, &mut destination_published)
+            }
+            Err(e) => Err(CoreError::io(from, e)),
+        }
+    })();
+    result.map_err(|error| MoveFailure {
+        error,
+        destination_published,
+    })
 }
 
 /// First half of a delete: renames the folder `dir` to a hidden
@@ -79,6 +102,7 @@ fn copy_verify_remove(
     session: &MutationSession,
     from: &Path,
     to: &Path,
+    destination_published: &mut bool,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
     // A link would be followed by the walk below, and the delete would then
@@ -186,8 +210,8 @@ fn copy_verify_remove(
             )
             .at(&stage)
         })?;
-    fs.fsops_fsync_dir(parent)
-        .map_err(|e| CoreError::io(parent, e))?;
+    *destination_published = true;
+    flush_tree(fs, to, &tree).map_err(|e| CoreError::io(to, e))?;
 
     // Conflict copies must never enter the trash sweeper's namespace.
     let trash = from.parent().unwrap_or(from).join(format!(

@@ -20,7 +20,8 @@ export function useParkRecovery(addToast: (notice: Omit<Toast, "id">) => string)
                 duration: Infinity,
                 action: {
                   label: "Acknowledge",
-                  onClick: () => {
+                  onClick: (event) => {
+                    event.preventDefault();
                     acknowledgeParkRecovery([recordId])
                       .then(() => {
                         const id = notices.get(recordId);

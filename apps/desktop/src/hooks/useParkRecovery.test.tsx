@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
-import { renderHook, waitFor, cleanup, act } from "@testing-library/react";
+import { renderHook, render, screen, waitFor, cleanup, act } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
-import { toast } from "sonner";
+import userEvent from "@testing-library/user-event";
+import { addToast as showToast } from "../lib/toast";
+import { Toaster, toast } from "sonner";
 import type { Toast } from "@skill-studio/lib";
 import { useParkRecovery } from "./useParkRecovery";
 
@@ -25,7 +27,7 @@ it("desktop startup shows retained paths until explicit acknowledgement or drops
   expect(notice?.message).toContain("/fixture/.park-stage-kept");
   expect(notice?.duration).toBe(Infinity);
   expect(acknowledgements).toEqual([]);
-  notice?.action?.onClick();
+  notice?.action?.onClick({ preventDefault: vi.fn() });
   await waitFor(() => expect(acknowledgements).toEqual(["acknowledge_park_recovery"]));
 });
 
@@ -74,9 +76,35 @@ it("refresh twice then acknowledge removes the record notice or leaves duplicate
   expect(reads).toBe(2);
   expect(addToast).toHaveBeenCalledOnce();
   await act(async () => {
-    addToast.mock.calls[0]?.[0].action?.onClick();
+    addToast.mock.calls[0]?.[0].action?.onClick({ preventDefault: vi.fn() });
   });
   expect(acknowledged).toBe(true);
   expect(dismiss).toHaveBeenCalledExactlyOnceWith("recovery-toast");
   dismiss.mockRestore();
+});
+
+it("recovery action keeps the rendered warning on rejected acknowledgement or hides an unresolved move", async () => {
+  let reject = true;
+  mockIPC((command) => {
+    if (command === "park_recovery_notices")
+      return { interrupted: ["rejected-move"], retained_quarantines: [] };
+    if (command === "acknowledge_park_recovery" && reject)
+      return Promise.reject(new Error("IPC rejected"));
+  });
+  function Recovery() {
+    useParkRecovery(showToast);
+    return <Toaster />;
+  }
+  render(<Recovery />);
+  const user = userEvent.setup();
+  const action = await screen.findByRole("button", { name: "Acknowledge" });
+  await user.click(action);
+  await screen.findByText("Could not acknowledge recovery");
+  const warning = screen.getByText("Interrupted skill moves").closest("[data-sonner-toast]");
+  expect(warning?.getAttribute("data-removed")).not.toBe("true");
+  window.dispatchEvent(new Event("skill-studio:move-finished"));
+  expect(screen.getAllByRole("button", { name: "Acknowledge" })).toHaveLength(1);
+  reject = false;
+  await user.click(action);
+  await waitFor(() => expect(warning?.getAttribute("data-removed")).toBe("true"));
 });

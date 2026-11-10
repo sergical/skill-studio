@@ -754,7 +754,14 @@ fn row_from(row: &rusqlite::Row) -> rusqlite::Result<EventRecord> {
         )
     })?;
     let harness = harness
-        .map(|h| AgentId::parse(&h))
+        .map(|h| {
+            // Older desktop releases stored display names in this column.
+            AgentId::parse_harness(match h.as_str() {
+                "Claude Code" => AgentId::CLAUDE_CODE,
+                "Grok Build" => AgentId::GROK_BUILD,
+                _ => &h,
+            })
+        })
         .transpose()
         .map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(

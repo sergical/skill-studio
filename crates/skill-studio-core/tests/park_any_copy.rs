@@ -2107,3 +2107,100 @@ fn park_recovery_keeps_notice_before_stage_journal_or_loses_legacy_interruption(
     drop(guard);
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn park_drift_after_publication_then_turn_on_restores_opencode_folder_and_links_or_loses_origin() {
+    let home = unique_temp_dir("park_drift_turn_on");
+    let live = home.join(".config/opencode/skill/foo");
+    write_skill(&live, "foo");
+    let link = home.join(".claude/skills/foo");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink("../../.config/opencode/skill/foo", &link).unwrap();
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let mut rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    // Model a catalog that still owns OpenCode's v1 skill root.
+    for root in Arc::make_mut(&mut rt.ports.catalog)
+        .facts
+        .iter_mut()
+        .flat_map(|facts| &mut facts.roots)
+    {
+        if root.relative_path == ".config/opencode/skill" {
+            root.role = skill_studio_core::harness::RootRole::Own;
+        }
+    }
+    let id = live_copy(&rt, "foo", &live).id;
+    fs.fail_next_rename_cross_device();
+    let edited = live.join("SKILL.md");
+    fs.after_full_sync_once(move || std::fs::write(edited, "external edit"));
+    let error = ops::park(&rt, &ctx(), &ParkRequest { deployment_id: id }).unwrap_err();
+    assert_eq!(
+        error.code,
+        skill_studio_core::error::ErrorCode::DriftConflict
+    );
+    let quarantine = error.path.unwrap();
+    ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: only_parked_copy(&rt, "foo").id,
+        },
+    )
+    .unwrap();
+    assert!(live.join("SKILL.md").is_file());
+    assert!(!home.join(".config/opencode/skills/foo").exists());
+    assert_eq!(
+        std::fs::read_link(&link).unwrap(),
+        PathBuf::from("../../.config/opencode/skill/foo")
+    );
+    assert!(link.join("SKILL.md").is_file());
+    assert_eq!(
+        std::fs::read_to_string(quarantine.join("SKILL.md")).unwrap(),
+        "external edit"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn turn_on_cross_volume_full_syncs_published_destination_before_quarantine_or_hides_skill_on_power_loss(
+) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let home = unique_temp_dir("turn_on_publish_sync");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    let parked = park_copy_at(&rt, "foo", &live);
+    let synced = Arc::new(AtomicBool::new(false));
+    let checked = synced.clone();
+    let injected = fs.clone();
+    let destination = live.clone();
+    fs.after_full_sync_once(move || {
+        injected.after_full_sync_once(move || {
+            assert!(
+                destination.join("SKILL.md").is_file(),
+                "full sync preceded publication"
+            );
+            checked.store(true, Ordering::SeqCst);
+            Ok(())
+        });
+        Ok(())
+    });
+    fs.before_rename_once(parked, move || {
+        assert!(
+            synced.load(Ordering::SeqCst),
+            "quarantine preceded destination full sync"
+        );
+        Ok(())
+    });
+    fs.fail_next_rename_cross_device();
+    ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: only_parked_copy(&rt, "foo").id,
+        },
+    )
+    .unwrap();
+    assert!(live.join("SKILL.md").is_file());
+    std::fs::remove_dir_all(home).unwrap();
+}
