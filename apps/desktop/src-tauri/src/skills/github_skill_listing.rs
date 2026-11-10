@@ -23,12 +23,7 @@ use super::skill_update_check;
 const GITHUB_API: &str = "https://api.github.com";
 const USER_AGENT: &str = "AgentStudio/0.1.0";
 
-/// The bound on every request this module makes to `api.github.com`. A
-/// stalled GitHub (the connection is accepted but no response ever
-/// arrives) must not hold the Add-skill lookup open with no ceiling. The
-/// timeout surfaces as a normal connection error, the same as any other
-/// failed fetch. Matches the 8 s bound `skill_install_counts` puts on its
-/// own background fetches.
+/// Matches the background install-count lookup's eight-second deadline.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 
 // ============================================================================
@@ -91,9 +86,7 @@ pub trait GithubApi {
 
 /// The real `GithubApi`. `token` is a `gh auth token` value when the CLI is
 /// signed in - it raises the rate limit and reaches private repos, and is
-/// never logged or returned. `timeout` bounds every request this client
-/// makes; it is a field so a test can build a short bound against a stalled
-/// server without waiting the production timeout.
+/// never logged or returned.
 pub struct HttpGithubApi {
     token: Option<String>,
     timeout: Duration,
@@ -127,7 +120,10 @@ impl GithubApi for HttpGithubApi {
         if let Some(token) = &self.token {
             request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
         }
-        let response = request.send().await.map_err(|e| e.to_string())?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| request_error(&error))?;
         let status = response.status();
         if !status.is_success() {
             let rate_limited = response
@@ -137,7 +133,15 @@ impl GithubApi for HttpGithubApi {
                 .is_some_and(|v| v.trim() == "0");
             return Err(status_error(status.as_u16(), rate_limited));
         }
-        response.text().await.map_err(|e| e.to_string())
+        response.text().await.map_err(|error| request_error(&error))
+    }
+}
+
+fn request_error(error: &reqwest::Error) -> String {
+    if error.is_timeout() {
+        "GitHub request timed out. Try again.".to_string()
+    } else {
+        error.to_string()
     }
 }
 
@@ -527,13 +531,6 @@ mod tests {
         assert!(status_error(500, false).contains("500"));
     }
 
-    /// Flow: the Add-skill sheet resolves a pasted GitHub source and
-    /// `api.github.com` accepts the connection but never sends a response (a
-    /// stalled proxy or a hung GitHub). Expectation: `get_json` abandons the
-    /// request at its bound and returns a connection error, so the sheet
-    /// clears its loading state, instead of hanging with no ceiling.
-    /// A failure here means a stalled api.github.com freezes the Add-skill
-    /// lookup forever.
     #[tokio::test]
     async fn a_stalled_github_request_is_abandoned_at_its_timeout() {
         use tokio::io::AsyncReadExt;
@@ -561,7 +558,7 @@ mod tests {
         .expect("Add Skill must return its own timeout error instead of hanging")
         .unwrap_err();
 
-        assert!(!err.is_empty(), "a bounded fetch still reports its failure");
+        assert_eq!(err, "GitHub request timed out. Try again.");
         held.abort();
     }
 }
