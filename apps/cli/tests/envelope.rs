@@ -1188,3 +1188,39 @@ fn split_writes_the_chosen_copy_and_drops_the_rest_or_names_the_envelope() {
         .symlink_metadata()
         .is_err());
 }
+
+#[path = "support/park_dotagents.rs"]
+mod park_dotagents;
+
+#[test]
+fn cli_turn_on_keeps_concurrent_exclusion_and_refuses_lost_ignore_anchor() {
+    for changed_anchor in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().canonicalize().unwrap();
+        let path = park_dotagents::setup(&home);
+        let env = [("HOME", home.to_str().unwrap()), ("PATH", path.as_str())];
+        let parked = run_with_env(
+            &["park", "foo", "--home", home.to_str().unwrap(), "--json"],
+            &env,
+        );
+        assert_eq!(parked.json["status"], "ok", "{:?}", parked.json);
+        if changed_anchor {
+            std::fs::write(home.join(".agents/.gitignore"), "!/skills/*/\n").unwrap();
+        }
+        let before = park_dotagents::config_bytes(&home);
+        let result = run_with_env(
+            &["unpark", "foo", "--home", home.to_str().unwrap(), "--json"],
+            &env,
+        );
+        if changed_anchor {
+            assert_ne!(result.status, 0, "{:?}", result.json);
+            assert_eq!(park_dotagents::config_bytes(&home), before);
+            assert!(!home.join(".agents/skills/foo").exists());
+        } else {
+            assert_eq!(result.status, 0, "{:?}", result.json);
+            let text = std::fs::read_to_string(home.join(".agents/agents.toml")).unwrap();
+            assert!(text.contains("exclude = [\"foo\"]"), "{text}");
+            assert!(home.join(".agents/skills/foo/SKILL.md").is_file());
+        }
+    }
+}

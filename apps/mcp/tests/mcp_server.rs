@@ -1169,3 +1169,41 @@ async fn server_info_names_skill_studio() {
     assert_eq!(server.version, env!("CARGO_PKG_VERSION"));
     std::fs::remove_dir_all(&home).ok();
 }
+
+#[path = "../../cli/tests/support/park_dotagents.rs"]
+mod park_dotagents;
+
+#[tokio::test]
+async fn mcp_turn_on_keeps_concurrent_exclusion_and_refuses_lost_ignore_anchor() {
+    for changed_anchor in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().canonicalize().unwrap();
+        let path = park_dotagents::setup(&home);
+        let (client, _) = connect(&[
+            ("HOME", home.to_str().unwrap()),
+            ("SKILL_STUDIO_HOME", home.to_str().unwrap()),
+            ("PATH", path.as_str()),
+        ])
+        .await;
+        let id = deployment_id_via_mcp(&client, "foo", "universal").await;
+        let parked = call_tool(&client, "park", serde_json::json!({"deployment_id": id})).await;
+        assert_eq!(parked["status"], "ok", "{parked}");
+        if changed_anchor {
+            std::fs::write(home.join(".agents/.gitignore"), "!/skills/*/\n").unwrap();
+        }
+        let before = park_dotagents::config_bytes(&home);
+        let id = deployment_id_via_mcp(&client, "foo", "parked").await;
+        let result = call_tool(&client, "unpark", serde_json::json!({"deployment_id": id})).await;
+        client.cancel().await.ok();
+        if changed_anchor {
+            assert_ne!(result["status"], "ok", "{result}");
+            assert_eq!(park_dotagents::config_bytes(&home), before);
+            assert!(!home.join(".agents/skills/foo").exists());
+        } else {
+            assert_eq!(result["status"], "ok", "{result}");
+            let text = std::fs::read_to_string(home.join(".agents/agents.toml")).unwrap();
+            assert!(text.contains("exclude = [\"foo\"]"), "{text}");
+            assert!(home.join(".agents/skills/foo/SKILL.md").is_file());
+        }
+    }
+}

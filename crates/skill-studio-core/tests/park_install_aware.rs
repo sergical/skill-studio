@@ -75,6 +75,7 @@ struct FakeDotagents {
     /// `remove` also writes an unrelated skill into `agents.toml`, as another
     /// tool editing the file at the same time would.
     add_unrelated_entry: AtomicBool,
+    exclude_unrelated: AtomicBool,
     /// `remove` rewrites the files, then exits non-zero.
     fail_after_edit: AtomicBool,
 }
@@ -92,6 +93,7 @@ impl FakeDotagents {
             leave_toml: AtomicBool::new(false),
             block_move_back: AtomicBool::new(false),
             add_unrelated_entry: AtomicBool::new(false),
+            exclude_unrelated: AtomicBool::new(false),
             fail_after_edit: AtomicBool::new(false),
         })
     }
@@ -328,6 +330,14 @@ impl ProcessSpawner for FakeDotagents {
             let toml = std::fs::read_to_string(self.toml_path()).unwrap();
             let toml = toml + "\n[[skills]]\nname = \"extra\"\nsource = \"owner/extra\"\n";
             std::fs::write(self.toml_path(), toml).unwrap();
+        }
+        if status == 0 && self.exclude_unrelated.load(Ordering::SeqCst) {
+            let text = read(&self.toml_path());
+            std::fs::write(
+                self.toml_path(),
+                text.replace("exclude = []", "exclude = [\"foo\"]"),
+            )
+            .unwrap();
         }
         if status != 0 && self.block_move_back.load(Ordering::SeqCst) {
             write_skill(&self.skill_dir("foo"), "foo");
@@ -2138,4 +2148,69 @@ fn turn_on_keeps_an_entry_another_tool_added_while_dotagents_ran() {
     assert!(toml.contains("name = \"extra\""), "{toml}");
     assert!(toml.contains("name = \"foo\""), "{toml}");
     std::fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn turn_on_keeps_unrelated_wildcard_exclusion_added_during_remove() {
+    let manifest = format!(
+        "{EXPLICIT_TOML}\n[[skills]]\nname = \"*\"\nsource = \"other/repo\"\nexclude = []\n"
+    );
+    let (home, stub) = dotagents_home("park_unrelated_exclude", &manifest);
+    let rt = runtime(&home, stub.clone(), true);
+    stub.exclude_unrelated.store(true, Ordering::SeqCst);
+    park_foo(&rt);
+    unpark_foo(&rt);
+    let doc = read(&stub.toml_path())
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    let row = doc["skills"]
+        .as_array_of_tables()
+        .unwrap()
+        .iter()
+        .find(|row| row["source"].as_str() == Some("other/repo"))
+        .unwrap();
+    assert!(row["exclude"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str() == Some("foo")));
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn turn_on_refuses_changed_ignore_anchor_without_changing_files() {
+    let (home, stub) = dotagents_home("park_ignore_anchor", EXPLICIT_TOML);
+    let ignore = home.join(".agents/.gitignore");
+    std::fs::write(&ignore, "/skills/foo\n!/skills/foo/\n").unwrap();
+    let rt = runtime(&home, stub.clone(), true);
+    park_foo(&rt);
+    std::fs::write(&ignore, "!/skills/*/\n").unwrap();
+    let before = (
+        read(&stub.toml_path()),
+        read(&stub.lock_path()),
+        read(&ignore),
+    );
+    let err = ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked_copy(&rt, "foo").id,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code, skill_studio_core::ErrorCode::DriftConflict);
+    assert!(err.message.contains("/skills/foo"));
+    assert_eq!(
+        (
+            read(&stub.toml_path()),
+            read(&stub.lock_path()),
+            read(&ignore)
+        ),
+        before
+    );
+    assert!(home
+        .join(".agents/skills-parked/universal/foo/SKILL.md")
+        .exists());
+    assert!(!home.join(".agents/skills/foo").exists());
+    std::fs::remove_dir_all(home).unwrap();
 }

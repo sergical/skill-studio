@@ -147,7 +147,7 @@ impl DotagentsPark {
         let only_own_entries_gone = removed_only(
             before_text(&self.config).as_deref(),
             config.as_deref(),
-            |text| config_shape(text, name),
+            |text| config_shape(text, name, &self.wildcards),
         ) && removed_only(
             before_text(&self.lock).as_deref(),
             lock.as_deref(),
@@ -238,9 +238,9 @@ fn item_json(item: &toml_edit::Item) -> serde_json::Value {
 }
 
 /// `agents.toml` without `skill`'s own row, and without `skill` in any
-/// `exclude` list (an empty list reads as no list, and so does an empty
+/// recorded wildcard's `exclude` list (an empty list reads as no list, and so does an empty
 /// `skills` array: dotagents drops the key once the last row is gone).
-fn config_shape(text: &str, skill: &str) -> Option<serde_json::Value> {
+fn config_shape(text: &str, skill: &str, wildcards: &[WildcardRef]) -> Option<serde_json::Value> {
     let doc = parse(Path::new("agents.toml"), text).ok()?;
     let mut shape = item_json(doc.as_item());
     if let Some(skills) = shape.get_mut("skills").and_then(|v| v.as_array_mut()) {
@@ -249,6 +249,17 @@ fn config_shape(text: &str, skill: &str) -> Option<serde_json::Value> {
             let Some(row) = row.as_object_mut() else {
                 continue;
             };
+            let recorded = row.get("name").and_then(|v| v.as_str()) == Some("*")
+                && wildcards.iter().any(|w| {
+                    row.get("source")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|source| sources_match(source, &w.source))
+                        && comparable_path(row.get("path").and_then(|v| v.as_str()))
+                            == comparable_path(w.path.as_deref())
+                });
+            if !recorded {
+                continue;
+            }
             if let Some(exclude) = row.get_mut("exclude").and_then(|v| v.as_array_mut()) {
                 exclude.retain(|item| item.as_str() != Some(skill));
             }
@@ -1497,7 +1508,7 @@ const IGNORE_ALIGN_CELL_CAP: usize = 4_000_000;
 /// earlier backup line, else right before the one aligned to its nearest
 /// later line, else at the end. Git takes the last rule that matches, so a
 /// line put after a negation would change what is ignored. `Err` carries the
-/// missing lines when the alignment would be too big to compute.
+/// missing lines when the alignment is too big or no original rule has an anchor.
 fn with_lines_restored(
     original: &str,
     current: &str,
@@ -1527,6 +1538,16 @@ fn with_lines_restored(
             .map(|(_, line)| (*line).to_string())
             .collect());
     };
+    if stay
+        .iter()
+        .any(|line| !line.is_empty() && !line.starts_with('#'))
+        && align.iter().all(Option::is_none)
+    {
+        return Err(missing
+            .iter()
+            .map(|(_, line)| (*line).to_string())
+            .collect());
+    }
     let mut inserts: Vec<(usize, usize, &str)> = missing
         .iter()
         .enumerate()
