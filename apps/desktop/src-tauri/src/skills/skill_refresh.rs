@@ -691,21 +691,26 @@ pub(crate) fn rebuild_snapshot_at(
     // below, so a rebuild that straddles an hour boundary doesn't record the
     // new hour against cutoffs computed for the old one.
     let now = Utc::now();
-    rebuild_snapshot_with(state, now, || {
-    let (built, _) = build_snapshot_releasing(
-        home,
-        None,
-        BuildPaths {
-            cache_path: &state.cache_path,
-            runs_root: &state.runs_root,
-            update_check_path: &state.update_check_path,
-        },
+    rebuild_snapshot_with(
+        state,
         now,
-        Some(scan_lease),
-        || {},
-    );
-        Ok(built)
-    }, publish)
+        || {
+            let (built, _) = build_snapshot_releasing(
+                home,
+                None,
+                BuildPaths {
+                    cache_path: &state.cache_path,
+                    runs_root: &state.runs_root,
+                    update_check_path: &state.update_check_path,
+                },
+                now,
+                Some(scan_lease),
+                || {},
+            );
+            Ok(built)
+        },
+        publish,
+    )
 }
 
 fn rebuild_snapshot_with(
@@ -6180,13 +6185,8 @@ mod tests {
             .iter()
             .map(describe_observation)
             .collect();
-        let published = rebuild_snapshot_with(
-            &state,
-            Utc::now(),
-            || Ok(candidate),
-            |_| Ok(()),
-        )
-        .unwrap();
+        let published =
+            rebuild_snapshot_with(&state, Utc::now(), || Ok(candidate), |_| Ok(())).unwrap();
         let names = |snapshot: &SkillSnapshot| {
             snapshot
                 .skills

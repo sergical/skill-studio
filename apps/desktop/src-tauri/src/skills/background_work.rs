@@ -26,8 +26,11 @@ pub struct BackgroundStatus {
     pub tasks: Vec<BackgroundTaskStatus>,
 }
 struct TaskRecord {
-    status: BackgroundTaskStatus,
+    worker: BackgroundWorker,
     in_flight: u32,
+    last_started_at: Option<String>,
+    last_finished_at: Option<String>,
+    last_error: Option<String>,
 }
 struct BackgroundMemory {
     revision: u64,
@@ -37,7 +40,17 @@ impl BackgroundMemory {
     fn snapshot(&self) -> BackgroundStatus {
         BackgroundStatus {
             revision: self.revision,
-            tasks: self.tasks.iter().map(|task| task.status.clone()).collect(),
+            tasks: self
+                .tasks
+                .iter()
+                .map(|task| BackgroundTaskStatus {
+                    worker: task.worker,
+                    running: task.in_flight != 0,
+                    last_started_at: task.last_started_at.clone(),
+                    last_finished_at: task.last_finished_at.clone(),
+                    last_error: task.last_error.clone(),
+                })
+                .collect(),
         }
     }
 }
@@ -54,13 +67,10 @@ impl Default for BackgroundState {
             .into_iter()
             .map(|worker| TaskRecord {
                 in_flight: 0,
-                status: BackgroundTaskStatus {
-                    worker,
-                    running: false,
-                    last_started_at: None,
-                    last_finished_at: None,
-                    last_error: None,
-                },
+                worker,
+                last_started_at: None,
+                last_finished_at: None,
+                last_error: None,
             })
             .collect(),
         }))
@@ -82,11 +92,7 @@ impl BackgroundState {
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(task) = state
-            .tasks
-            .iter_mut()
-            .find(|task| task.status.worker == worker)
-        {
+        if let Some(task) = state.tasks.iter_mut().find(|task| task.worker == worker) {
             update(task);
         }
         state.revision = state.revision.saturating_add(1);
@@ -100,15 +106,13 @@ impl BackgroundState {
     ) -> Result<T, String> {
         publish(&self.change(worker, |task| {
             task.in_flight = task.in_flight.saturating_add(1);
-            task.status.running = true;
-            task.status.last_started_at = Some(chrono::Utc::now().to_rfc3339());
+            task.last_started_at = Some(chrono::Utc::now().to_rfc3339());
         }));
         let result = work();
         publish(&self.change(worker, |task| {
             task.in_flight = task.in_flight.saturating_sub(1);
-            task.status.running = task.in_flight != 0;
-            task.status.last_finished_at = Some(chrono::Utc::now().to_rfc3339());
-            task.status.last_error = result.as_ref().err().cloned();
+            task.last_finished_at = Some(chrono::Utc::now().to_rfc3339());
+            task.last_error = result.as_ref().err().cloned();
         }));
         result
     }

@@ -520,13 +520,15 @@ mod tests {
         }
     }
 
-    /// The function name out of a `pub [async] fn <name>(` line, or `None`
-    /// when the line isn't a function signature at all (e.g. a doc comment
-    /// sitting between the attribute and the fn).
     fn fn_name(line: &str) -> Option<&str> {
-        let after_fn = line
-            .strip_prefix("pub async fn ")
-            .or_else(|| line.strip_prefix("pub fn "))?;
+        let declaration = if line.starts_with("pub(") {
+            line.split_once(") ")?.1
+        } else {
+            line.strip_prefix("pub ").unwrap_or(line)
+        };
+        let after_fn = declaration
+            .strip_prefix("async fn ")
+            .or_else(|| declaration.strip_prefix("fn "))?;
         after_fn.split(['(', '<', ' ']).next()
     }
 
@@ -542,7 +544,7 @@ mod tests {
                 .iter()
                 .find(|line| fn_name(line).is_some());
             if let Some(declaration) = declaration {
-                if !asynchronous && !declaration.starts_with("pub async fn ") {
+                if !asynchronous && !declaration.contains("async fn ") {
                     failures.push(fn_name(declaration).unwrap().to_string());
                 }
             }
@@ -578,6 +580,11 @@ mod tests {
             "{attribute}\n// fixture context\n#[allow(dead_code)]\npub fn startup_scan() {{}}"
         );
         assert_eq!(commands_on_main(&source), vec!["startup_scan"]);
+        for visibility in ["", "pub(crate) ", "pub(super) "] {
+            let private = source.replace("pub fn ", &format!("{visibility}fn "));
+            assert_eq!(commands_on_main(&private), vec!["startup_scan"]);
+            assert!(commands_on_main(&private.replace("fn ", "async fn ")).is_empty());
+        }
         assert!(commands_on_main(&source.replace("pub fn", "pub async fn")).is_empty());
         assert!(commands_on_main(
             &source.replace(&attribute, &["#[tauri", "::command(async)]"].concat())
