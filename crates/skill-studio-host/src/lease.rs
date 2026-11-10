@@ -151,9 +151,14 @@ impl LeaseProvider for FileLease {
             loop {
                 match try_lock(&file, mode) {
                     Ok(true) => {
-                        if mode == LeaseMode::Exclusive {
-                            let _ = write_holder(&file);
-                        }
+                        // No exclusive holder can coexist with a shared one,
+                        // so any record left by an earlier writer is stale.
+                        // Left in place, it would send a later exclusive
+                        // waiter into the dead-holder takeover past its wait.
+                        let _ = match mode {
+                            LeaseMode::Exclusive => write_holder(&file),
+                            LeaseMode::Shared => file.set_len(0),
+                        };
                         break;
                     }
                     Ok(false) => {
@@ -324,6 +329,40 @@ mod tests {
         file.seek(SeekFrom::Start(0)).expect("seek to the start");
         write!(file, "{pid}|0").expect("write the fake holder record");
         file.sync_all().expect("flush the fake holder record");
+    }
+
+    #[test]
+    fn a_shared_lease_clears_a_dead_writers_record_or_an_exclusive_waiter_outlasts_its_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = FileLease::new(dir.path().to_path_buf());
+        let keys = vec![key("shared-over-dead-writer")];
+        let path = lease.lock_path(&keys[0]);
+        fs::create_dir_all(dir.path()).unwrap();
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        write_fake_holder(&file, u32::MAX);
+        drop(file);
+
+        let _reader = lease
+            .acquire(&keys, LeaseMode::Shared, Duration::from_millis(100))
+            .unwrap();
+
+        assert_eq!(
+            read_holder(&path),
+            None,
+            "a live shared reader left the dead writer's record, so an exclusive waiter retries \
+             the stale takeover for {STALE_TAKEOVER_TIMEOUT:?} whatever its own wait"
+        );
+        let busy = lease
+            .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
+            .err()
+            .expect("the shared reader still holds the root");
+        assert_eq!(busy.code, ErrorCode::ScopeBusy);
     }
 
     /// Given another `FileLease` holds an exclusive lease, when this
