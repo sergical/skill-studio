@@ -22,6 +22,7 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 /// The data folder version this build writes and expects. A folder read at
 /// a version higher than this was written by a newer app; see
@@ -144,12 +145,36 @@ fn coordination_lock(folder: &Path) -> io::Result<std::fs::File> {
     // CLI and desktop must use the same lock inode even when TMPDIR differs.
     let root = private_coordination_root(Path::new("/tmp"), rustix::process::geteuid().as_raw())?;
     let key = skill_studio_core::identity::sha256_hex(folder.as_os_str().as_encoded_bytes());
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(root.join(key))
+    rustix::fs::open(
+        root.join(key),
+        rustix::fs::OFlags::RDWR | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .map(std::fs::File::from)
+    .map_err(io::Error::from)
+}
+
+fn wait_for_lock(
+    lock: &std::fs::File,
+    exclusive: bool,
+    on_retry: &mut impl FnMut(),
+) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let result = if exclusive {
+            lock.try_lock()
+        } else {
+            lock.try_lock_shared()
+        };
+        match result {
+            Ok(()) => return Ok(()),
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                on_retry();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(lock_error(error)),
+        }
+    }
 }
 
 fn lock_error(error: std::fs::TryLockError) -> String {
@@ -171,7 +196,7 @@ pub fn guard_read_data_folder(folder: &Path) -> Result<DataFolderGuard, String> 
     };
     validate()?;
     let lock = coordination_lock(&folder).map_err(|error| error.to_string())?;
-    lock.try_lock_shared().map_err(lock_error)?;
+    wait_for_lock(&lock, false, &mut || {})?;
     validate()?;
     Ok(DataFolderGuard { _locks: vec![lock] })
 }
@@ -184,6 +209,14 @@ pub fn lock_data_folders(folders: &[&Path]) -> Result<DataFolderGuard, String> {
 fn lock_data_folders_before_lock(
     folders: &[&Path],
     before_lock: impl FnOnce(),
+) -> Result<DataFolderGuard, String> {
+    lock_data_folders_with_retry(folders, before_lock, || {})
+}
+
+fn lock_data_folders_with_retry(
+    folders: &[&Path],
+    before_lock: impl FnOnce(),
+    mut on_retry: impl FnMut(),
 ) -> Result<DataFolderGuard, String> {
     let validate = |folder: &Path| {
         let version = read_version(&RealFs, folder).map_err(|error| {
@@ -212,7 +245,7 @@ fn lock_data_folders_before_lock(
         .collect::<io::Result<Vec<_>>>()
         .map_err(|error| error.to_string())?;
     for lock in &locks {
-        lock.try_lock_shared().map_err(lock_error)?;
+        wait_for_lock(lock, false, &mut on_retry)?;
     }
     let versions = folders
         .iter()
@@ -228,9 +261,9 @@ fn lock_data_folders_before_lock(
         }
         for (lock, version) in locks.iter().zip(&versions) {
             if *version < CURRENT_DATA_VERSION {
-                lock.try_lock().map_err(lock_error)?;
+                wait_for_lock(lock, true, &mut on_retry)?;
             } else {
-                lock.try_lock_shared().map_err(lock_error)?;
+                wait_for_lock(lock, false, &mut on_retry)?;
             }
         }
         let versions = folders
@@ -244,7 +277,7 @@ fn lock_data_folders_before_lock(
             }
         }
         for lock in &locks {
-            lock.try_lock_shared().map_err(lock_error)?;
+            wait_for_lock(lock, false, &mut on_retry)?;
         }
     }
     for folder in &folders {
@@ -440,6 +473,88 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
+
+    #[test]
+    fn write_after_short_scan_waits_and_migrates_or_reports_a_false_lock_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut reader = Some(guard_read_data_folder(dir.path()).unwrap());
+        let mut retried = false;
+        let writer = lock_data_folders_with_retry(
+            &[dir.path()],
+            || {},
+            || {
+                retried = true;
+                drop(reader.take());
+            },
+        )
+        .unwrap();
+        assert!(retried);
+        assert_eq!(
+            read_version(&RealFs, dir.path()).unwrap(),
+            CURRENT_DATA_VERSION
+        );
+        drop(writer);
+    }
+
+    #[test]
+    fn scan_lock_closes_on_child_exec_or_a_running_child_blocks_the_writer() {
+        use std::io::{BufRead, Write};
+        use std::process::{Command, Stdio};
+        let dir = tempfile::tempdir().unwrap();
+        let reader = guard_read_data_folder(dir.path()).unwrap();
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "echo ready; read release"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        drop(reader);
+        let lock = coordination_lock(&folder_identity(dir.path()).unwrap()).unwrap();
+        let result = lock.try_lock();
+        child.stdin.take().unwrap().write_all(b"release\n").unwrap();
+        assert!(child.wait().unwrap().success());
+        result.unwrap();
+    }
+
+    #[test]
+    fn child_spawned_during_scan_does_not_keep_lock_or_block_a_later_writer() {
+        use std::io::{Read, Write};
+        use std::os::unix::{net::UnixStream, process::CommandExt};
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let reader = guard_read_data_folder(dir.path()).unwrap();
+        let (mut parent, mut child_pipe) = UnixStream::pair().unwrap();
+        let spawning = std::thread::spawn(move || {
+            let mut command = Command::new("/usr/bin/true");
+            // SAFETY: the child only uses read/write syscalls before exec; it takes no Rust locks.
+            #[allow(unsafe_code)]
+            unsafe {
+                command.pre_exec(move || {
+                    child_pipe.write_all(b"r")?;
+                    child_pipe.read_exact(&mut [0])?;
+                    Ok(())
+                });
+            }
+            command.spawn().unwrap()
+        });
+        parent.read_exact(&mut [0]).unwrap();
+        drop(reader);
+        let writer = lock_data_folders_with_retry(
+            &[dir.path()],
+            || {},
+            || {
+                let _ = parent.write_all(b"x");
+            },
+        );
+        let _ = parent.write_all(b"x");
+        assert!(spawning.join().unwrap().wait().unwrap().success());
+        writer.unwrap();
+    }
 
     #[test]
     fn newer_build_migration_refuses_while_older_desktop_holds_the_folder_or_hangs() {

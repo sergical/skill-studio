@@ -247,11 +247,62 @@ fn read_only_cli_and_mcp_preserve_absent_and_unversioned_history_or_name_the_wri
                 json!({"deployment_id":id,"agent":"codex"}),
             ),
         ];
+        fn assert_read_result(tool: &str, result: &Value, id: &str) {
+            let data = &result["data"];
+            match tool {
+                "scan" => assert_eq!(data["skills"][0]["name"], "gamma", "{result}"),
+                "diagnose" => {
+                    assert_eq!(data["inventory"]["skills"][0]["name"], "gamma", "{result}");
+                }
+                "diagnose_conflict" => assert_eq!(data["conflicts"], json!([]), "{result}"),
+                "skill_usage" => assert_eq!(data["unused"], json!(["gamma"]), "{result}"),
+                "capabilities" | "harnesses" => assert!(
+                    !data["harnesses"].as_array().unwrap().is_empty(),
+                    "{result}"
+                ),
+                "preview_frontmatter_repair" => {
+                    assert_eq!(result["errors"][0]["code"], "unsupported", "{result}");
+                    assert_eq!(
+                        result["errors"][0]["message"],
+                        "SKILL.md does not have a malformed YAML frontmatter block",
+                        "{id}: {result}"
+                    );
+                }
+                "list_events" => assert_eq!(*data, json!([]), "{result}"),
+                "outdated" => assert_eq!(
+                    *data,
+                    json!({"gamma":{"currency":"not_tracked","installed_commit":null,"latest_commit":null,"latest_commit_at":null,"error":null}}),
+                    "{result}"
+                ),
+                "doctor" => {
+                    assert_eq!(data["checked"], 1, "{result}");
+                    assert_eq!(data["violations"], json!([]), "{result}");
+                }
+                "install_preferences" => {
+                    assert_eq!(data["saved"], false, "{result}");
+                    assert!(data["method"].is_string(), "{result}");
+                }
+                "turn_off_check" => assert!(
+                    data.as_object().unwrap().contains_key("refusal"),
+                    "{result}"
+                ),
+                _ => panic!("missing result check for {tool}"),
+            }
+        }
         for (args, tool, request) in cases {
             let mut args = args.to_vec();
             args.extend(["--fixture", fixture]);
             let result = headless::cli_request(home.path(), &args, &[], false);
-            assert!(result["status"].is_string(), "{args:?}: {result}");
+            assert_eq!(
+                result["status"],
+                if *tool == "preview_frontmatter_repair" {
+                    "error"
+                } else {
+                    "ok"
+                },
+                "{args:?}: {result}"
+            );
+            assert_read_result(tool, &result, id);
             assert_eq!(
                 before,
                 snapshot(),
@@ -264,10 +315,16 @@ fn read_only_cli_and_mcp_preserve_absent_and_unversioned_history_or_name_the_wri
                 &[("SKILL_STUDIO_FIXTURE".into(), fixture.into())],
                 false,
             );
-            assert!(
-                envelope(&response)["status"].is_string(),
+            assert_eq!(
+                envelope(&response)["status"],
+                if *tool == "preview_frontmatter_repair" {
+                    "error"
+                } else {
+                    "ok"
+                },
                 "MCP {tool}: {response}"
             );
+            assert_read_result(tool, envelope(&response), id);
             assert_eq!(before, snapshot(), "MCP {tool}, unversioned={unversioned}");
         }
         let health = headless::cli_request(home.path(), &["health"], &[], false);
@@ -297,6 +354,7 @@ fn empty_outdated_preserves_absent_and_unversioned_history_without_gh_or_migrate
                 envelope(&mcp_with_env(home.path(), "outdated", &json!({}), &env)).clone()
             };
             assert_eq!(result["status"], "ok", "{surface}: {result}");
+            assert_eq!(result["data"], json!({}), "{surface}: {result}");
             assert_eq!(history.exists(), unversioned, "{surface} created history");
             if unversioned {
                 assert_eq!(std::fs::read(history.join("legacy")).unwrap(), b"keep");
