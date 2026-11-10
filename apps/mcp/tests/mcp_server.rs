@@ -22,9 +22,10 @@ use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use skill_studio_core::testing::fixtures;
 
 fn mcp_bin() -> PathBuf {
-    std::env::var_os("SKILL_STUDIO_TEST_MCP_BINARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| env!("CARGO_BIN_EXE_skill-studio-mcp").into())
+    std::env::var_os("SKILL_STUDIO_TEST_MCP_BINARY").map_or_else(
+        || env!("CARGO_BIN_EXE_skill-studio-mcp").into(),
+        PathBuf::from,
+    )
 }
 
 /// The CLI binary's path. Not a Cargo dependency of this crate (artifact
