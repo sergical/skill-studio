@@ -1597,6 +1597,29 @@ pub(crate) fn opencode_config_root(home: &Path) -> PathBuf {
     }
 }
 
+fn park_event_times(db_path: &Path, paths: &[&str]) -> BTreeMap<String, String> {
+    if paths.is_empty() {
+        return BTreeMap::new();
+    }
+    let read = || -> rusqlite::Result<BTreeMap<String, String>> {
+        let db = rusqlite::Connection::open_with_flags(
+            db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        db.busy_timeout(Duration::from_millis(50))?;
+        let mut query = db.prepare(
+            "SELECT json_extract(payload, '$.to'), MAX(ts) FROM events
+             WHERE kind = 'park' AND status = 'done'
+             AND json_extract(payload, '$.to') IN (SELECT value FROM json_each(?1))
+             GROUP BY json_extract(payload, '$.to')",
+        )?;
+        let paths = serde_json::json!(paths).to_string();
+        let rows = query.query_map([paths], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    };
+    read().unwrap_or_default()
+}
+
 /// Recompute registry, update, disable, and invocation fields on freshly
 /// assembled skills. Both full and targeted discovery use this same path.
 /// `pub(crate)` (rather than private) so a `commands.rs` test can rebuild
@@ -1790,18 +1813,16 @@ pub(crate) fn apply_skill_snapshot_overlays(
         skill.update_commit_at = shared_metadata.and_then(|update| update.latest_commit_at.clone());
     }
 
-    // Parked skills have no deployment left for `classify_source_kind` to
-    // look at, so the "parked" flag itself follows the disk fact core scan
-    // already reports for a parked deployment (scope "parked" - see
-    // `skill_assembly::scope_from_core`/`RootKind::Parked`), not the
-    // registry. `ops::park` (unit 3.1) no longer writes the registry's
-    // `parked` bucket, so a skill parked through it has no record here; the
-    // record, when one exists (a skill parked before that unit shipped),
-    // still supplies `parked_at`/`source_kind`. Without a record,
-    // `parked_at` stays `None` rather than opening the SQLite history store
-    // on every refresh cycle to look up the park event - refresh runs on a
-    // timer and must not pay a per-skill I/O cost just for a badge
-    // timestamp.
+    let parked_paths: Vec<&str> = skills
+        .iter()
+        .flat_map(|skill| &skill.deployments)
+        .filter(|deployment| deployment.scope == "parked")
+        .map(|deployment| deployment.path.as_str())
+        .collect();
+    let park_times = park_event_times(
+        &super::core_runtime::history_db_path(&super::core_runtime::data_root()),
+        &parked_paths,
+    );
     for skill in skills.iter_mut() {
         // A skill with any live copy is not parked as a whole: its parked
         // copies show as their own rows (and as "left behind" when a live
@@ -1827,6 +1848,13 @@ pub(crate) fn apply_skill_snapshot_overlays(
         if let Some(record) = record {
             skill.parked_at = Some(record.parked_at.clone());
             skill.source_kind = record.source_kind;
+        } else {
+            skill.parked_at = skill
+                .deployments
+                .iter()
+                .filter_map(|deployment| park_times.get(&deployment.path))
+                .max()
+                .cloned();
         }
     }
 
@@ -3350,6 +3378,82 @@ mod tests {
         assert!(skill.deployments.iter().any(|d| d.scope == "global"));
     }
 
+    #[test]
+    fn refresh_fills_parked_at_from_the_park_history_event_when_no_registry_record_exists() {
+        use skill_studio_core::{dto::ScanRequest, ops, testing::golden::ctx};
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let name = format!("park-time-{}", ulid::Ulid::new().to_string().to_lowercase());
+        let folder = home.join(".agents/skills").join(&name);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: test\n---\nbody"),
+        )
+        .unwrap();
+        let data_root = super::super::core_runtime::data_root();
+        let rt = super::super::core_runtime::build_runtime_write_at_with_search_dirs(
+            &home,
+            &data_root,
+            vec![],
+        )
+        .unwrap();
+        let inventory = ops::scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+        let id = inventory
+            .skills
+            .iter()
+            .find(|skill| skill.name.0 == name)
+            .unwrap()
+            .deployments[0]
+            .id
+            .clone();
+        let parked = ops::park(
+            &rt,
+            &ctx(),
+            &skill_studio_core::dto::ParkRequest { deployment_id: id },
+        )
+        .unwrap();
+        let db = rusqlite::Connection::open_with_flags(
+            super::super::core_runtime::history_db_path(&data_root),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let timestamp: String = db
+            .query_row(
+                "SELECT ts FROM events WHERE id = ?1",
+                [parked.event_id.0],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            !super::super::skill_fork_registry::read_fork_registry_or_default(&home)
+                .parked
+                .contains_key(&name)
+        );
+        let mut invocation_index = SkillInvocationIndex::default();
+        let (snapshot, _) = build_snapshot(
+            &home,
+            &mut invocation_index,
+            BuildPaths {
+                cache_path: &tmp.path().join("cache.json"),
+                runs_root: tmp.path(),
+                update_check_path: &tmp.path().join("update-check.json"),
+            },
+            Utc::now(),
+        );
+        let skill = snapshot
+            .skills
+            .iter()
+            .find(|skill| skill.name == name)
+            .unwrap();
+        assert!(skill.parked);
+        assert_eq!(
+            skill.parked_at.as_deref(),
+            Some(timestamp.as_str()),
+            "the Park event time is missing from the refreshed skill"
+        );
+    }
+
     /// A skill parked through `ops::park` (unit 3.1) never gets a
     /// `fork_registry.parked` record - that write path no longer touches
     /// the registry. The badge still has to come on: it now follows the
@@ -3398,7 +3502,7 @@ mod tests {
         );
         assert_eq!(
             skill.parked_at, None,
-            "no registry record exists for this skill, so parked_at must stay None"
+            "a parked folder without a matching history event has no known park time"
         );
     }
 
