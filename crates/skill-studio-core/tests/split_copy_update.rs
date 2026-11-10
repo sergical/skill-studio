@@ -1066,3 +1066,151 @@ fn split_update_undo_force_restores_a_lock_deleted_before_undo_or_fails_with_not
 fn split_update_undo_force_restores_a_lock_deleted_before_retry_or_fails_with_not_found() {
     split_update_undo_force_restores_deleted_lock_before_undo_or_retry_instead_of_not_found(true);
 }
+
+fn deleted_registry_force_restore_keeps_next_update(only_copies: bool, delete_before_redo: bool) {
+    let home = split_home("deleted_registry_force_restore");
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+    let registry = home.join(".agents/skill-studio.json");
+    let before: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
+    ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+    let updated: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
+    let delete = || {
+        if only_copies {
+            let mut doc: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
+            doc.as_object_mut().unwrap().remove("copies");
+            doc["unrelated"] = serde_json::json!("keep");
+            std::fs::write(&registry, doc.to_string()).unwrap();
+        } else {
+            std::fs::remove_file(&registry).unwrap();
+        }
+    };
+    if !delete_before_redo {
+        delete();
+    }
+    let undo = ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: latest_update(&rt),
+            force: true,
+        },
+    )
+    .unwrap();
+    let restored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
+    assert_eq!(restored["copies"], before["copies"]);
+    for dir in HARNESS_DIRS {
+        assert_eq!(revision_of(&copy_of(&home, dir)), Some("v1"));
+    }
+    if delete_before_redo {
+        delete();
+    }
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: undo.restore_event_id,
+            force: delete_before_redo,
+        },
+    )
+    .unwrap();
+    let redone: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
+    assert_eq!(redone["copies"], updated["copies"]);
+    if only_copies {
+        assert_eq!(redone["unrelated"], "keep");
+    }
+    for dir in HARNESS_DIRS {
+        assert_eq!(revision_of(&copy_of(&home, dir)), Some("v2"));
+    }
+    let next = ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+    assert!(
+        next.refused.is_empty(),
+        "registry hashes refused unchanged copies: {next:?}"
+    );
+    assert_eq!(next.updated.len(), 3);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn split_update_deleted_registry_force_undo_redo_allows_update_or_loses_copy_rows() {
+    deleted_registry_force_restore_keeps_next_update(false, false);
+}
+
+#[test]
+fn split_update_deleted_copies_force_undo_redo_allows_update_or_loses_copy_rows() {
+    deleted_registry_force_restore_keeps_next_update(true, false);
+}
+
+#[test]
+fn split_update_undo_deleted_registry_force_redo_allows_update_or_loses_copy_rows() {
+    deleted_registry_force_restore_keeps_next_update(false, true);
+}
+
+#[test]
+fn split_update_undo_deleted_copies_force_redo_allows_update_or_loses_copy_rows() {
+    deleted_registry_force_restore_keeps_next_update(true, true);
+}
+
+fn force_restore_rejects_non_object_copies(redo: bool) {
+    for invalid in [
+        serde_json::json!(null),
+        serde_json::json!([]),
+        serde_json::json!("invalid"),
+        serde_json::json!(1),
+        serde_json::json!(false),
+    ] {
+        let home = split_home("invalid_registry_copies");
+        let rt = runtime_with(&home, Arc::new(RealFs::new()));
+        ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+        let event_id = if redo {
+            ops::restore_event(
+                &rt,
+                &ctx(),
+                &skill_studio_core::dto::RestoreRequest {
+                    event_id: latest_update(&rt),
+                    force: false,
+                },
+            )
+            .unwrap()
+            .restore_event_id
+        } else {
+            latest_update(&rt)
+        };
+        let registry = home.join(".agents/skill-studio.json");
+        let mut doc: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
+        doc["copies"] = invalid;
+        std::fs::write(&registry, doc.to_string()).unwrap();
+        let error = ops::restore_event(
+            &rt,
+            &ctx(),
+            &skill_studio_core::dto::RestoreRequest {
+                event_id,
+                force: true,
+            },
+        )
+        .expect_err("Force silently skipped saved copy rows");
+        assert!(
+            error.message.contains("copies") && error.message.contains("object"),
+            "{error:?}"
+        );
+        let unchanged: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
+        assert_eq!(unchanged["copies"], doc["copies"]);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+}
+
+#[test]
+fn split_update_force_undo_rejects_non_object_copies_or_reports_success_without_rows() {
+    force_restore_rejects_non_object_copies(false);
+}
+
+#[test]
+fn split_update_undo_force_redo_rejects_non_object_copies_or_reports_success_without_rows() {
+    force_restore_rejects_non_object_copies(true);
+}

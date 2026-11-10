@@ -4855,6 +4855,17 @@ fn restore_event_body(
                 if edit["key"] != "copies" {
                     continue;
                 }
+                if edit["previous"].is_null() {
+                    if let Some(saved) = inverse["registry_undo"].as_array().and_then(|rows| {
+                        rows.iter().find(|row| {
+                            row["root"] == edit["root"]
+                                && row["key"] == edit["key"]
+                                && row["id"] == edit["id"]
+                        })
+                    }) {
+                        edit["previous"] = saved["previous"].clone();
+                    }
+                }
                 if let Some(folder) = edit["previous"]["path"].as_str().map(PathBuf::from) {
                     if let Some(entry) = manifest
                         .entries
@@ -5219,7 +5230,7 @@ fn restore_event_body(
         }
     }
 
-    let mut metadata_conflict = None;
+    let mut metadata_error = None;
     if let Some(edit) = attempt_inverse
         .get("lock_row_undo")
         .filter(|v| !v.is_null())
@@ -5228,7 +5239,7 @@ fn restore_event_body(
             crate::lock_file::restore_updated_row(&session.guard, fs, &rt.scope, edit, req.force)
         {
             if error.code == ErrorCode::DriftConflict {
-                metadata_conflict = Some(error);
+                metadata_error = Some(error);
             }
             unrestored.push(crate::lock_file::lock_file_path(&rt.scope.home.lexical));
         }
@@ -5240,9 +5251,7 @@ fn restore_event_body(
             &restore_id,
             serde_json::json!({ "registry_restore_error": error.message }),
         );
-        if error.code == ErrorCode::DriftConflict {
-            metadata_conflict = Some(error);
-        }
+        metadata_error = Some(error);
     }
 
     if !unrestored.is_empty() {
@@ -5257,7 +5266,7 @@ fn restore_event_body(
             crate::events::EventStatus::Failed,
             None,
         );
-        if let Some(error) = metadata_conflict {
+        if let Some(error) = metadata_error {
             return Err(error);
         }
         let names: Vec<String> = unrestored.iter().map(|p| p.display().to_string()).collect();

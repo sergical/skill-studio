@@ -970,7 +970,17 @@ pub(crate) fn restore_registry(
                     }
                 },
                 Some(id) => {
-                    if let Some(serde_json::Value::Object(map)) = document.get_mut(key) {
+                    if previous.is_some() && !document.contains_key(key) {
+                        document.insert(key.to_string(), serde_json::json!({}));
+                    }
+                    if let Some(rows) = document.get_mut(key) {
+                        let map = rows.as_object_mut().ok_or_else(|| {
+                            CoreError::new(
+                                ErrorCode::Io,
+                                format!("the {key} registry value must be a JSON object to restore row {id}"),
+                            )
+                            .at(registry_path(&root))
+                        })?;
                         match previous {
                             Some(value) => {
                                 map.insert(id.to_string(), value);
