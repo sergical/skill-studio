@@ -38,3 +38,28 @@ one-use parser wrapper. Saved-row validation still runs before folder writes.
 Final review checked row drift, exclusive publication, recovery without
 replacement, retained bytes, and permission preservation. No further change
 was needed. CLI and MCP code was not touched.
+
+## Follow-up P1 review
+
+The first Update all result now points to its own folder backup and lock-row
+inverse. A separate event, marked `full_install_recovery`, retains the complete
+install backup. The Undo-order regression checks A then B and B then A. Each
+step checks both folders and both lock rows.
+
+The open-descriptor regression opens agents.lock before capture and writes an
+unrelated row through that descriptor after the restore proposal is staged,
+and again in a separate case at publication. Restore checks the captured inode
+before and after publication against the exact bytes used for the merge. Changed bytes cause
+DriftConflict, retain the captured file, and report its path.
+
+The Restore payload journals the displaced path before rename. Recovery links
+that file back only if agents.lock is absent. An existing file with a different
+inode causes DriftConflict. Recovery handles pending restores and interrupted
+restores that still hold a claim, including rows already reconciled by desktop
+startup. The raw claim query retains support for old harness labels.
+
+All four new tests failed with the production fixes removed. The descriptor
+case reported success with stale bytes. Capture recovery left agents.lock
+missing, and recovery accepted a replacement without reporting a conflict.
+The Undo-order case restored another skill. The tests use fixture homes and
+filesystem callbacks, with no sleeps or wall-clock gates.

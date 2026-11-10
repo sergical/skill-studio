@@ -2224,7 +2224,11 @@ fn update_all_records_a_covered_skill_against_the_latest_install_or_reuses_anoth
     let session = MutationSession::begin(&rt, &ctx()).unwrap();
     let covered = session.store.get(&event(2)).unwrap().unwrap();
     assert_eq!(covered.skill.0, "gamma");
-    assert_eq!(covered.payload["covered_by_install"], event(1).0);
+    let first = session.store.get(&event(1)).unwrap().unwrap();
+    assert_eq!(
+        covered.payload["covered_by_install"],
+        first.payload["covered_by_install"]
+    );
 
     std::fs::remove_dir_all(&home).ok();
 }
@@ -2795,7 +2799,8 @@ fn update_all_reports_skills_a_finished_dotagents_install_covered_after_cancel_o
 #[path = "support/edit_on_exchange.rs"]
 mod edit_on_exchange;
 
-fn covered_lock_restore_race(recreate: bool) {
+fn covered_lock_restore_race(mode: u8) {
+    let recreate = mode == 1;
     let home = unique_temp_dir("update_all_dotagents_undo_one");
     std::fs::create_dir_all(&home).unwrap();
     seed_installed_skill(&home, "delta", "v1");
@@ -2824,23 +2829,112 @@ fn covered_lock_restore_race(recreate: bool) {
     let event_id = result.items[1].outcome.as_ref().unwrap().event_id.clone();
     assert_ne!(event_id, result.items[0].outcome.as_ref().unwrap().event_id);
     rt.ports.fs = Arc::new(edit_on_exchange::EditOnExchange {
-        trigger: if recreate {
-            lock.clone()
-        } else {
-            other.parent().unwrap().to_path_buf()
+        trigger: match mode {
+            0 => other.parent().unwrap().to_path_buf(),
+            1 => lock.clone(),
+            _ => PathBuf::new(),
         },
         path: lock.clone(),
         bytes: lock_text("external-delta", "new-other").into_bytes(),
         reads: Default::default(),
+        writer: (mode == 2 || mode == 6)
+            .then(|| Mutex::new(std::fs::OpenOptions::new().write(true).open(&lock).unwrap())),
+        crash_after_capture: (3..=5).contains(&mode),
+        writer_on_publication: mode == 6,
     });
-    let restored = ops::restore_event(
-        &rt,
-        &ctx(),
-        &RestoreRequest {
-            event_id,
-            force: false,
-        },
-    );
+    let restored = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ops::restore_event(
+            &rt,
+            &ctx(),
+            &RestoreRequest {
+                event_id: event_id.clone(),
+                force: false,
+            },
+        )
+    }));
+    if (3..=5).contains(&mode) {
+        assert!(restored.is_err());
+        assert!(!lock.exists());
+        rt.ports.fs = Arc::new(RealFs::new());
+        if mode == 5 {
+            let guard =
+                skill_studio_core::ports::acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)
+                    .unwrap();
+            let mut store = rt
+                .ports
+                .history
+                .open(
+                    &rt.scope,
+                    skill_studio_core::ports::HistoryAccess::ReadWrite,
+                )
+                .unwrap()
+                .unwrap();
+            for event in store.pending().unwrap() {
+                store
+                    .finish(
+                        &guard,
+                        &event.id,
+                        skill_studio_core::events::EventStatus::Interrupted,
+                        None,
+                    )
+                    .unwrap();
+            }
+        }
+        if mode == 4 {
+            std::fs::write(&lock, lock_text("external-delta", "new-other")).unwrap();
+        }
+        let session = MutationSession::begin(&rt, &ctx());
+        if mode == 4 {
+            let error = session.err().unwrap();
+            assert_eq!(error.code, ErrorCode::DriftConflict);
+            assert!(error.message.contains(".agents-lock-before-restore-"));
+            let displaced = error.path.as_ref().unwrap();
+            assert!(std::fs::read_to_string(displaced)
+                .unwrap()
+                .contains("new-delta"));
+            assert_eq!(
+                std::fs::read_to_string(&lock).unwrap(),
+                lock_text("external-delta", "new-other")
+            );
+        } else {
+            drop(session.unwrap());
+            assert!(std::fs::read_to_string(&lock)
+                .unwrap()
+                .contains("new-other"));
+            ops::restore_event(
+                &rt,
+                &ctx(),
+                &RestoreRequest {
+                    event_id,
+                    force: true,
+                },
+            )
+            .unwrap();
+            let doc: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&lock).unwrap()).unwrap();
+            assert_eq!(
+                doc["skills"]["other"]["resolved_commit"].as_str(),
+                Some("old-other")
+            );
+            assert_eq!(
+                doc["skills"]["delta"]["resolved_commit"].as_str(),
+                Some("new-delta")
+            );
+        }
+        std::fs::remove_dir_all(home).unwrap();
+        return;
+    }
+    let restored = restored.unwrap();
+    if mode == 2 || mode == 6 {
+        let error = restored.unwrap_err();
+        assert_eq!(error.code, ErrorCode::DriftConflict);
+        assert!(error.message.contains(".agents-lock-before-restore-"));
+        assert!(std::fs::read_to_string(error.path.as_ref().unwrap())
+            .unwrap()
+            .contains("external-delta"));
+        std::fs::remove_dir_all(home).unwrap();
+        return;
+    }
     if recreate {
         assert!(
             restored.is_err(),
@@ -2889,10 +2983,86 @@ fn covered_lock_restore_race(recreate: bool) {
 
 #[test]
 fn covered_update_undo_preserves_another_lock_row_edited_during_folder_restore_or_loses_the_edit() {
-    covered_lock_restore_race(false);
+    covered_lock_restore_race(0);
 }
 
 #[test]
 fn covered_update_undo_refuses_a_recreated_lock_and_keeps_both_versions_or_overwrites_the_writer() {
-    covered_lock_restore_race(true);
+    covered_lock_restore_race(1);
+}
+
+#[test]
+fn covered_undo_refuses_open_descriptor_edit_or_reports_success_with_stale_lock_bytes() {
+    covered_lock_restore_race(2);
+    covered_lock_restore_race(6);
+}
+#[test]
+fn covered_undo_recovers_capture_then_retries_or_leaves_lock_missing_after_interruption() {
+    covered_lock_restore_race(3);
+    covered_lock_restore_race(5);
+}
+#[test]
+fn covered_undo_recovery_keeps_recreated_lock_or_overwrites_writer_after_interruption() {
+    covered_lock_restore_race(4);
+}
+
+#[test]
+fn update_all_undo_in_either_order_restores_only_own_folder_and_row_or_reverts_another_skill() {
+    for order in [[0, 1], [1, 0]] {
+        let home = unique_temp_dir("undo_both_orders");
+        std::fs::create_dir_all(&home).unwrap();
+        for skill in ["delta", "other"] {
+            seed_installed_skill(&home, skill, "v1");
+        }
+        seed_dotagents_files(&home, DECLARED_TOML);
+        let lock = home.join(".agents/agents.lock");
+        std::fs::write(&lock, "[skills.delta]\nresolved_commit = 'old-delta'\n[skills.other]\nresolved_commit = 'old-other'\n").unwrap();
+        let mut fake = FakeNpxUpdateSpawner::new(home.clone(), "v2");
+        fake.lock_after = Some("[skills.delta]\nresolved_commit = 'new-delta'\n[skills.other]\nresolved_commit = 'new-other'\n");
+        let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(Arc::new(fake)));
+        let requests = [
+            cli_request("delta", InstallMethod::Dotagents),
+            cli_request("other", InstallMethod::Dotagents),
+        ];
+        let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+        assert!(result.errors.is_empty());
+        let mut undone = [false; 2];
+        for index in order {
+            ops::restore_event(
+                &rt,
+                &ctx(),
+                &RestoreRequest {
+                    event_id: result.items[index]
+                        .outcome
+                        .as_ref()
+                        .unwrap()
+                        .event_id
+                        .clone(),
+                    force: false,
+                },
+            )
+            .unwrap();
+            undone[index] = true;
+            let doc: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&lock).unwrap()).unwrap();
+            for (i, skill) in ["delta", "other"].iter().enumerate() {
+                assert!(std::fs::read_to_string(
+                    home.join(UNIVERSAL_ROOT_RELATIVE)
+                        .join(skill)
+                        .join("SKILL.md")
+                )
+                .unwrap()
+                .contains(if undone[i] {
+                    "Body at v1"
+                } else {
+                    "Body at v2"
+                }));
+                assert_eq!(
+                    doc["skills"][skill]["resolved_commit"].as_str(),
+                    Some(format!("{}-{skill}", if undone[i] { "old" } else { "new" }).as_str())
+                );
+            }
+        }
+        std::fs::remove_dir_all(home).unwrap();
+    }
 }

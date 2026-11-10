@@ -674,14 +674,14 @@ pub fn update(
     ctx: &OpContext,
     req: &UpdateRequest,
 ) -> Result<UpdateOutcome, CoreError> {
-    update_then_release(rt, ctx, req, &[]).map(|(outcome, _)| outcome)
+    update_then_release(rt, ctx, req, None).map(|(outcome, _)| outcome)
 }
 
 fn update_then_release(
     rt: &Runtime,
     ctx: &OpContext,
     req: &UpdateRequest,
-    later: &[UpdateRequest],
+    later: Option<&[UpdateRequest]>,
 ) -> Result<(UpdateOutcome, Option<DotagentsBatch>), CoreError> {
     rt.run(Operation::Update, ctx, || {
         refuse_parked(rt, req)?;
@@ -732,7 +732,7 @@ fn update_body(
     rt: &Runtime,
     ctx: &OpContext,
     req: &UpdateRequest,
-    later: &[UpdateRequest],
+    later: Option<&[UpdateRequest]>,
 ) -> Result<(UpdateOutcome, Option<DotagentsBatch>), CoreError> {
     ctx.checkpoint()?;
     let clock = rt.ports.clock.as_ref();
@@ -828,6 +828,7 @@ fn update_body(
             "destination": destination,
             "source": req.source,
             "tree_hash_before": tree_hash_before,
+            "full_install_recovery": dotagents.is_some() && later.is_some(),
         }),
         inverse: Some(inverse),
         backup_dir: Some(manifest.backup_dir.clone()),
@@ -908,6 +909,7 @@ fn update_body(
     session
         .store
         .finish(&session.guard, &id, EventStatus::Done, post_fingerprint)?;
+    let own_outcome = covered_outcomes.get(&req.skill).cloned();
     let batch = dotagents.map(|_| DotagentsBatch {
         scope: req.scope.clone(),
         outcomes: covered_outcomes,
@@ -922,13 +924,13 @@ fn update_body(
         vec![begin_step, write_step],
     ));
     Ok((
-        UpdateOutcome {
+        own_outcome.unwrap_or(UpdateOutcome {
             event_id: id,
             skill: req.skill.clone(),
             deployment_path: destination,
             tree_hash_before,
             tree_hash_after,
-        },
+        }),
         batch,
     ))
 }
@@ -1231,13 +1233,24 @@ fn prepare_covered_updates(
     rt: &Runtime,
     session: &mut MutationSession,
     req: &UpdateRequest,
-    later: &[UpdateRequest],
+    later: Option<&[UpdateRequest]>,
     plan: &DotagentsPlan,
     install_id: &crate::identity::EventId,
     covered: &mut Vec<CoveredUpdate>,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
-    for (skill, tree_hash_before) in hash_later_dotagents(rt, later, &req.scope, &plan.declared) {
+    let mut skills =
+        hash_later_dotagents(rt, later.unwrap_or_default(), &req.scope, &plan.declared);
+    if later.is_some() {
+        let destination = ops_install::scope_root(rt, &req.scope)
+            .join(UNIVERSAL_ROOT_RELATIVE)
+            .join(&req.skill.0);
+        skills.insert(
+            req.skill.clone(),
+            crate::tree_hash::tree_hash(fs, &destination)?,
+        );
+    }
+    for (skill, tree_hash_before) in skills {
         let destination = ops_install::scope_root(rt, &req.scope)
             .join(UNIVERSAL_ROOT_RELATIVE)
             .join(&skill.0);
@@ -1381,7 +1394,7 @@ fn update_all_body(
                 not_run.push(req.skill.clone());
                 continue;
             }
-            let result = update_then_release(rt, ctx, req, &requests[index + 1..]);
+            let result = update_then_release(rt, ctx, req, Some(&requests[index + 1..]));
             installed.retain(|batch| batch.scope != req.scope);
             result.map(|(outcome, batch)| {
                 if let Some(batch) = batch {

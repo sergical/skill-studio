@@ -10,9 +10,28 @@ pub struct EditOnExchange {
     pub trigger: PathBuf,
     pub bytes: Vec<u8>,
     pub reads: AtomicUsize,
+    pub writer: Option<std::sync::Mutex<std::fs::File>>,
+    pub crash_after_capture: bool,
+    pub writer_on_publication: bool,
+}
+impl EditOnExchange {
+    fn write_descriptor(&self) -> io::Result<()> {
+        if let Some(writer) = &self.writer {
+            use std::io::{Seek, Write};
+            let mut writer = writer.lock().unwrap();
+            writer.rewind()?;
+            writer.set_len(0)?;
+            writer.write_all(&self.bytes)?;
+            writer.sync_all()?;
+        }
+        Ok(())
+    }
 }
 impl ScopeFs for EditOnExchange {
     fn fsops_hard_link(&self, from: &Path, to: &Path) -> io::Result<()> {
+        if self.writer_on_publication && from.extension().is_some_and(|ext| ext == "restored") {
+            self.write_descriptor()?;
+        }
         RealFs::new().fsops_hard_link(from, to)
     }
 
@@ -75,6 +94,9 @@ impl ScopeFs for EditOnExchange {
         RealFs::new().fsops_device_inode(path)
     }
     fn fsops_fsync_file(&self, path: &Path) -> io::Result<()> {
+        if !self.writer_on_publication && path.extension().is_some_and(|ext| ext == "restored") {
+            self.write_descriptor()?;
+        }
         RealFs::new().fsops_fsync_file(path)
     }
     fn fsops_fsync_dir(&self, path: &Path) -> io::Result<()> {
@@ -96,6 +118,10 @@ impl ScopeFs for EditOnExchange {
     }
     fn fsops_rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         RealFs::new().fsops_rename(from, to)?;
+        assert!(
+            !(from == self.path && self.crash_after_capture),
+            "interrupted after lock capture"
+        );
         if from == self.path
             && self.trigger == self.path
             && self.reads.fetch_add(1, Ordering::SeqCst) == 0

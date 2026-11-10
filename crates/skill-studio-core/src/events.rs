@@ -425,14 +425,23 @@ pub fn recover_interrupted(
     fs: &dyn ScopeFs,
     sink: &dyn EventSink,
 ) -> Result<RecoveryReport, CoreError> {
-    let _ = fs;
     let mut report = RecoveryReport::default();
     // The releases come first: a crash before the flip leaves the row
     // `pending`, so the next pass flips it.
+    let pending = store.pending()?;
+    for row in &pending {
+        crate::ops_dotagents_history::recover_capture(fs, row)?;
+    }
     for claim in store.held_restore_claims()? {
+        crate::ops_dotagents_history::recover_displaced(
+            fs,
+            &claim.restore,
+            claim.displaced_agents_lock.as_deref(),
+            claim.agents_lock.as_deref(),
+        )?;
         release_restore_claim(guard, store, &claim)?;
     }
-    for row in store.pending()? {
+    for row in pending {
         store.finish(guard, &row.id, EventStatus::Interrupted, None)?;
         report.interrupted.push(row.id);
     }

@@ -586,6 +586,10 @@ pub struct HeldRestoreClaim {
     pub target: EventId,
     /// The target's raw `kind` column.
     pub target_kind: String,
+    /// Captured lock path recorded before rename.
+    pub displaced_agents_lock: Option<PathBuf>,
+    /// Lock destination from the saved row inverse.
+    pub agents_lock: Option<PathBuf>,
 }
 
 /// The append-only event log and its backups.
@@ -642,8 +646,8 @@ pub trait HistoryStore: Send {
     fn pending(&self) -> Result<Vec<EventRecord>, CoreError>;
     /// Claims that `pending` or `interrupted` restore rows still hold on
     /// their targets, oldest restore first. An older build or the desktop
-    /// startup pass can leave one behind. Reads only the ids and the target
-    /// kind, so a row whose other columns an older build wrote still lists.
+    /// startup pass can leave one behind. Reads raw ids, target kind, and optional
+    /// lock paths without decoding legacy harness labels.
     fn held_restore_claims(&self) -> Result<Vec<HeldRestoreClaim>, CoreError>;
     /// Reads back the manifest a prior [`Self::backup_paths`] call wrote for
     /// `backup_dir` (an [`EventRecord::backup_dir`] value). A restore uses

@@ -22,7 +22,11 @@ fn document(fs: &dyn ScopeFs, path: &Path) -> Result<DocumentMut, CoreError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(DocumentMut::new()),
         Err(error) => return Err(CoreError::io(path, error)),
     };
-    let text = std::str::from_utf8(&bytes).map_err(|_| invalid_lock(path))?;
+    parse_document(&bytes, path)
+}
+
+fn parse_document(bytes: &[u8], path: &Path) -> Result<DocumentMut, CoreError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| invalid_lock(path))?;
     let mut doc = text
         .parse::<DocumentMut>()
         .map_err(|_| invalid_lock(path))?;
@@ -139,7 +143,15 @@ pub(crate) fn commit_restore(
     fs.fsops_rename(path.as_path(), displaced.as_path())
         .map_err(|error| CoreError::io(&restore.path, error))?;
     let result = (|| {
-        let mut doc = document(fs, displaced.as_path())?;
+        fs.fsops_fsync_dir(path.as_path().parent().unwrap_or(path.as_path()))
+            .map_err(|e| CoreError::io(&restore.path, e))?;
+        let captured = fs
+            .read_capped(
+                displaced.as_path(),
+                crate::dotagents_ledger::DOTAGENTS_FILE_MAX_BYTES,
+            )
+            .map_err(|e| CoreError::io(displaced.as_path(), e))?;
+        let mut doc = parse_document(&captured, displaced.as_path())?;
         let undo = &restore.request;
         if row(&doc, &undo.skill, &undo.path)? != undo.expected {
             return Err(CoreError::new(
@@ -173,14 +185,101 @@ pub(crate) fn commit_restore(
             .map_err(|error| CoreError::io(&staged, error))?;
         fs.fsops_fsync_file(&staged)
             .map_err(|error| CoreError::io(&staged, error))?;
+        verify_capture(fs, displaced.as_path(), &captured)?;
         // Linking publishes only into an empty name. A writer that recreates agents.lock wins.
         fs.fsops_hard_link(&staged, path.as_path())
             .map_err(|error| CoreError::io(&restore.path, error))?;
         fs.fsops_fsync_dir(path.as_path().parent().unwrap_or(path.as_path()))
-            .map_err(|error| CoreError::io(&restore.path, error))
+            .map_err(|error| CoreError::io(&restore.path, error))?;
+        verify_capture(fs, displaced.as_path(), &captured)
     })();
     if result.is_err() {
         let _ = fs.fsops_hard_link(displaced.as_path(), path.as_path());
     }
     result
+}
+
+pub(crate) fn recover_capture(
+    fs: &dyn ScopeFs,
+    event: &crate::events::EventRecord,
+) -> Result<(), CoreError> {
+    let Some(displaced) = event
+        .payload
+        .get("displaced_agents_lock")
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+    else {
+        return Ok(());
+    };
+    let Some(value) = event
+        .inverse
+        .as_ref()
+        .and_then(|v| v.get("dotagents_lock_undo"))
+    else {
+        return Err(invalid_lock(&displaced));
+    };
+    let undo: LockRowUndo =
+        serde_json::from_value(value.clone()).map_err(|_| invalid_lock(&displaced))?;
+    recover_displaced(fs, &event.id, Some(&displaced), Some(&undo.path))
+}
+
+pub(crate) fn recover_displaced(
+    fs: &dyn ScopeFs,
+    id: &crate::identity::EventId,
+    displaced: Option<&Path>,
+    path: Option<&Path>,
+) -> Result<(), CoreError> {
+    let Some(displaced) = displaced else {
+        return Ok(());
+    };
+    let path = path.ok_or_else(|| invalid_lock(displaced))?;
+    if displaced != path.with_file_name(format!(".agents-lock-before-restore-{}", id.0)) {
+        return Err(invalid_lock(displaced));
+    }
+    match fs.symlink_metadata(displaced) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(CoreError::io(displaced, e)),
+        Ok(_) => {}
+    }
+    match fs.fsops_hard_link(displaced, path) {
+        Ok(()) => fs
+            .fsops_fsync_dir(path.parent().ok_or_else(|| invalid_lock(path))?)
+            .map_err(|e| CoreError::io(path, e)),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::AlreadyExists
+                && fs
+                    .fsops_device_inode(displaced)
+                    .ok()
+                    .zip(fs.fsops_device_inode(path).ok())
+                    .is_some_and(|(left, right)| left == right) =>
+        {
+            Ok(())
+        }
+        Err(_) => Err(CoreError::new(
+            ErrorCode::DriftConflict,
+            format!(
+                "agents.lock recovery conflicts with another writer; retained at {}",
+                displaced.display()
+            ),
+        )
+        .at(displaced)),
+    }
+}
+
+fn verify_capture(fs: &dyn ScopeFs, displaced: &Path, captured: &[u8]) -> Result<(), CoreError> {
+    if fs
+        .read_capped(displaced, crate::dotagents_ledger::DOTAGENTS_FILE_MAX_BYTES)
+        .map_err(|e| CoreError::io(displaced, e))?
+        != captured
+    {
+        return Err(CoreError::new(
+            ErrorCode::DriftConflict,
+            format!(
+                "agents.lock changed through an open writer; retained at {}",
+                displaced.display()
+            ),
+        )
+        .at(displaced));
+    }
+    Ok(())
 }
