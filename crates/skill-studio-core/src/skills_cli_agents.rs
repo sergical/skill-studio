@@ -176,6 +176,21 @@ pub fn cli_env_pins(home: &Path, codex_home: &Path) -> Vec<(String, String)> {
     .collect()
 }
 
+/// Pins installer and lock paths to the runtime scope for both skills and dotagents.
+pub fn cli_environment(home: &Path, codex_home: &Path) -> Vec<(String, String)> {
+    let mut env = cli_env_pins(home, codex_home);
+    env.extend([
+        ("HOME".to_string(), home.display().to_string()),
+        (
+            "DOTAGENTS_HOME".to_string(),
+            home.join(".agents").display().to_string(),
+        ),
+        // skills uses HOME/.agents/.skill-lock.json when XDG_STATE_HOME is empty.
+        ("XDG_STATE_HOME".to_string(), String::new()),
+    ]);
+    env
+}
+
 /// Every `<agent skills folder>/<name>` the CLI deletes for a removal in `scope`, without
 /// duplicates. `name` must be the CLI's sanitized folder name. A global removal runs the CLI
 /// in `home`, so an agent with no global folder resolves under `home`.
