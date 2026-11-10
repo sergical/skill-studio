@@ -83,12 +83,11 @@ ignore = [
   { id = "RUSTSEC-2025-0081", reason = "unic-char-property is unmaintained; transitive via tauri-utils -> urlpattern, no upgrade path yet" },
   { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version is unmaintained; transitive via tauri-utils -> urlpattern, no upgrade path yet" },
   { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident is unmaintained; transitive via tauri-utils -> urlpattern, no upgrade path yet" },
-  # unsafe-libyaml is the machine-translated libyaml that serde_yaml uses;
-  # `skill-studio-core` and the desktop crate still parse SKILL.md
-  # frontmatter with serde_yaml, which is deprecated and archived, so no
-  # in-range upgrade removes it. Moving to a maintained YAML crate is the
-  # durable fix and can then drop this entry.
-  { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml is unmaintained; transitive via the deprecated serde_yaml 0.9.34+deprecated, no upgrade path yet" },
+  # Expires 2026-11-30. Review the YAML migration before renewing this exception.
+  # serde-saphyr changes generic Value/Mapping handling, scalar coercion, and
+  # error locations. Our repair code also matches serde_yaml's diagnostic text.
+  # A replacement needs parser/repair compatibility work in core and desktop.
+  { id = "RUSTSEC-2024-0449", reason = "Unmaintained unsafe-libyaml via serde_yaml in core and desktop; accepted until 2026-11-30 while YAML value and repair compatibility are reviewed" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
