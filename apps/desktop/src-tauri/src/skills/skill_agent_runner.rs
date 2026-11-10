@@ -1193,6 +1193,12 @@ async fn run_process(
         None => Vec::new(),
     };
 
+    // A harness that already reported its result keeps that `Finished`, even
+    // when a cancel arrives while the process is still exiting.
+    if finished_emitted {
+        return;
+    }
+
     if cancelled {
         emit_event(
             sink,
@@ -1208,10 +1214,6 @@ async fn run_process(
                 skill_loaded: parse_state.skill_loaded,
             },
         );
-        return;
-    }
-
-    if finished_emitted {
         return;
     }
 
@@ -2029,6 +2031,92 @@ mod tests {
                 assert!(!ok, "a cancelled run is not ok");
                 assert!(cancelled, "the cancel branch must set cancelled = true");
                 assert_eq!(final_text, "Cancelled");
+            }
+            other => panic!("expected Finished, got {other:?}"),
+        }
+    }
+
+    /// Test run: Claude Code prints its `result` line, then a cancel lands
+    /// before the process exits. The run must end with the harness's own
+    /// `Finished` only. Fails if the cancel branch adds a second `Finished`,
+    /// which the run panel would read as "Cancelled" after a real answer.
+    #[tokio::test]
+    async fn a_cancel_after_the_harness_result_keeps_one_finished_or_names_the_duplicate() {
+        let dir = tempdir().unwrap();
+        let run_id = new_run_id();
+        let handle = Arc::new(RunHandle::default());
+
+        let events: Arc<Mutex<Vec<SkillAgentEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        let sink: EventSink = Box::new(move |event| {
+            events_clone
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(event);
+        });
+        let has_finished = |evs: &[SkillAgentEvent]| {
+            evs.iter()
+                .filter(|e| matches!(e.kind, SkillAgentEventKind::Finished { .. }))
+                .count()
+        };
+
+        let result = r#"{"type":"result","subtype":"success","is_error":false,"result":"BANANA","session_id":"sess-abc","total_cost_usd":0.061,"duration_ms":1200}"#;
+        let script = format!("echo '{result}'; sleep 30");
+        let handle_for_cancel = handle.clone();
+        let run_task = tokio::spawn(async move {
+            run_process(
+                &sink,
+                &run_id,
+                HarnessId::ClaudeCode,
+                "say-banana",
+                "/bin/sh",
+                &["-c".to_string(), script],
+                &[],
+                dir.path(),
+                None,
+                &handle_for_cancel,
+            )
+            .await;
+        });
+
+        let mut waited = Duration::ZERO;
+        while has_finished(
+            &events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ) == 0
+        {
+            assert!(
+                waited < Duration::from_secs(10),
+                "the harness result never arrived"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            waited += Duration::from_millis(20);
+        }
+        handle.cancel.notify_one();
+        run_task.await.unwrap();
+
+        let evs = events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(
+            has_finished(&evs),
+            1,
+            "expected exactly one Finished, got {evs:?}"
+        );
+        let finished = evs
+            .iter()
+            .find(|e| matches!(e.kind, SkillAgentEventKind::Finished { .. }))
+            .unwrap();
+        match &finished.kind {
+            SkillAgentEventKind::Finished {
+                cancelled,
+                final_text,
+                ..
+            } => {
+                assert!(!cancelled, "the harness result is not a cancel");
+                assert_eq!(final_text, "BANANA");
             }
             other => panic!("expected Finished, got {other:?}"),
         }

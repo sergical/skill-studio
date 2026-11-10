@@ -363,6 +363,7 @@ Enabled in `apps/desktop/tsconfig.json`:
 
 - `docs/agent-skill-conventions.md` — agentskills.io spec rules, per-agent discovery paths, invocation control (explicit vs model-invocable), the agent settings that hide a skill (read only; Park is the only off), and the local data sources Skill Studio reads. Check it before researching agent behavior again.
 - `docs/flows.md` — every user-facing flow with its UI entry, command, and flow-level test. A new flow adds a row and a test.
+- `docs/state-machines.md` — every explicit state machine (states, legal moves, guard test) and the ones still implicit. A new status field or phase enum adds a row and a table test.
 
 ## Skills.sh Integration
 

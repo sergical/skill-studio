@@ -9,8 +9,25 @@ import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog
 import { cn } from "../lib/cn";
 import { Button } from "./button";
 
-function AlertDialog({ ...props }: AlertDialogPrimitive.Root.Props) {
-  return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />;
+interface AlertDialogProps extends AlertDialogPrimitive.Root.Props {
+  /** True while the confirmed action runs: Escape and outside clicks then leave the dialog open. */
+  busy?: boolean;
+}
+
+function AlertDialog({ busy = false, onOpenChange, ...props }: AlertDialogProps) {
+  return (
+    <AlertDialogPrimitive.Root
+      data-slot="alert-dialog"
+      onOpenChange={(open, eventDetails) => {
+        if (busy && !open) {
+          eventDetails.cancel();
+          return;
+        }
+        onOpenChange?.(open, eventDetails);
+      }}
+      {...props}
+    />
+  );
 }
 
 function AlertDialogTrigger({ ...props }: AlertDialogPrimitive.Trigger.Props) {

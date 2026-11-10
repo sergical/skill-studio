@@ -27,17 +27,26 @@ export function updatePluginInstall(target: PluginUpdateTarget): Promise<PluginU
 export interface UpdateAllControl {
   /** Names this batch to the backend, so a Cancel that lands before the batch starts still reaches it. */
   batchId: string;
-  stopRequested: boolean;
+  /**
+   * The latest Cancel: `null` before any, then a promise that resolves `true`
+   * once the backend has it or `false` if it never got there. A phase boundary
+   * waits for it, so a Cancel still in flight neither stops nor clears the batch.
+   */
+  stopRequest: Promise<boolean> | null;
 }
 
 export function newUpdateAllControl(): UpdateAllControl {
-  return { batchId: crypto.randomUUID(), stopRequested: false };
+  return { batchId: crypto.randomUUID(), stopRequest: null };
 }
 
 /** Stops the batch after the step it is on, in the frontend phases and in the backend's own loop. */
-export async function requestUpdateAllStop(control: UpdateAllControl): Promise<void> {
-  control.stopRequested = true;
-  await cancelUpdateAll(control.batchId);
+export function requestUpdateAllStop(control: UpdateAllControl): Promise<void> {
+  const sent = cancelUpdateAll(control.batchId);
+  control.stopRequest = sent.then(
+    () => true,
+    () => false,
+  );
+  return sent;
 }
 
 /** Home's "Update all"; `forkNames` are the edited skills to fork and merge instead of overwrite. `onProgress`'s third argument names the skill that starts next. */
@@ -61,7 +70,7 @@ export async function runHomeUpdateAll(
       onProgress,
       forkNames && { names: forkNames, fork: forkSkill },
       updatePluginInstall,
-      control && (() => control.stopRequested),
+      control && (() => control.stopRequest ?? false),
     );
   } finally {
     setUpdateAllRunning(false);
@@ -131,7 +140,8 @@ export async function stopHomeUpdateAll(): Promise<void> {
   try {
     await requestUpdateAllStop(batch.control);
   } catch (error) {
-    // Cancel did not reach the backend, so offer it again.
+    // Cancel did not reach the backend, so the whole batch keeps running and
+    // offers Cancel again.
     if (activeBatch?.control === batch.control)
       setActiveBatch({ ...activeBatch, isStopping: false });
     throw error;

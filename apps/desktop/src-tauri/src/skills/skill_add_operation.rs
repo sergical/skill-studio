@@ -61,6 +61,25 @@ impl AddSkillOperationPhase {
             Self::Completed | Self::Failed | Self::Cancelled | Self::TimedOut
         )
     }
+
+    /// Every move the worker, `request_cancel`, and trust confirmation make.
+    /// No Rust path enters `Finalizing` or `TimedOut`; the frontend still
+    /// reads them from the wire type.
+    fn can_advance_to(self, next: Self) -> bool {
+        use AddSkillOperationPhase::{
+            Cancelled, Completed, Failed, Fetching, Installing, NeedsTrust, Queued, Reconciling,
+            Validating,
+        };
+        matches!(
+            (self, next),
+            (Queued, Validating | Cancelled | Failed)
+                | (Validating, Fetching | Installing | Failed)
+                | (Fetching, Installing | Failed)
+                | (Installing, Installing | Reconciling | Failed)
+                | (Reconciling, Completed | Failed | NeedsTrust)
+                | (NeedsTrust, NeedsTrust | Cancelled)
+        )
+    }
 }
 
 /// Batch item progress: 1-based `current` of `total`, plus the skill name.
@@ -215,7 +234,7 @@ impl AddSkillOperationState {
                 AddSkillOperationPhase::Cancelled,
                 "Add skill cancelled",
                 |_| {},
-            );
+            )?;
             return Ok(record.event.clone());
         }
         if record.event.phase != AddSkillOperationPhase::Queued {
@@ -255,14 +274,14 @@ impl AddSkillOperationState {
                 AddSkillOperationPhase::Cancelled,
                 "Add skill cancelled",
                 |_| {},
-            );
+            )?;
         } else {
             advance_locked(
                 record,
                 AddSkillOperationPhase::Validating,
                 "Checking source",
                 |_| {},
-            );
+            )?;
         }
         Ok(record.event.clone())
     }
@@ -291,7 +310,7 @@ impl AddSkillOperationState {
         if record.event.phase.is_terminal() {
             return Ok(record.event.clone());
         }
-        advance_locked(record, phase, message, patch);
+        advance_locked(record, phase, message, patch)?;
         Ok(record.event.clone())
     }
 }
@@ -301,12 +320,20 @@ fn advance_locked(
     phase: AddSkillOperationPhase,
     message: impl Into<String>,
     patch: impl FnOnce(&mut AddSkillOperationEvent),
-) {
+) -> Result<(), String> {
+    let from = record.event.phase;
+    if !from.can_advance_to(phase) {
+        return Err(format!(
+            "Add skill operation {} cannot move from {from:?} to {phase:?}",
+            record.event.operation_id
+        ));
+    }
     record.event.sequence += 1;
     record.event.phase = phase;
     record.event.message = message.into();
     patch(&mut record.event);
     record.updated_at = Instant::now();
+    Ok(())
 }
 
 fn prune_locked(inner: &mut AddSkillOperationInner, now: Instant) {
@@ -879,7 +906,7 @@ fn confirm_add_skill_trust_with(
                 |event| {
                     event.retry_of = Some(retry_operation_id.to_string());
                 },
-            );
+            )?;
             parent.event.clone()
         };
         let queued = AddSkillOperationEvent {
@@ -1024,6 +1051,89 @@ mod tests {
             scope: InstallScope::Global,
             project_path: None,
         }
+    }
+
+    /// Walks a queued record along the worker's own path, so a test can then
+    /// make the last move it is about.
+    fn walk_to_reconciling(state: &AddSkillOperationState, operation_id: &str) {
+        for phase in [
+            AddSkillOperationPhase::Validating,
+            AddSkillOperationPhase::Installing,
+            AddSkillOperationPhase::Reconciling,
+        ] {
+            state
+                .advance(operation_id, phase, "test step", |_| {})
+                .unwrap();
+        }
+    }
+
+    /// Flow: any add operation, from queue to its last phase. Expect only
+    /// the moves the worker, Cancel, and trust confirmation make; a move
+    /// back, or out of a terminal phase, is refused and leaves the event as
+    /// it was. Failure: a stale publish rewinds a finished operation, so the
+    /// Add sheet shows progress for an add that already ended.
+    #[test]
+    fn an_add_operation_only_moves_forward_or_names_the_illegal_move() {
+        use AddSkillOperationPhase::*;
+        let all = [
+            Queued,
+            Validating,
+            Fetching,
+            Installing,
+            Finalizing,
+            Reconciling,
+            NeedsTrust,
+            Completed,
+            Failed,
+            Cancelled,
+            TimedOut,
+        ];
+        let legal = [
+            (Queued, Validating),
+            (Queued, Cancelled),
+            (Queued, Failed),
+            (Validating, Fetching),
+            (Validating, Installing),
+            (Validating, Failed),
+            (Fetching, Installing),
+            (Fetching, Failed),
+            (Installing, Installing),
+            (Installing, Reconciling),
+            (Installing, Failed),
+            (Reconciling, Completed),
+            (Reconciling, Failed),
+            (Reconciling, NeedsTrust),
+            (NeedsTrust, NeedsTrust),
+            (NeedsTrust, Cancelled),
+        ];
+        for from in all {
+            for to in all {
+                assert_eq!(
+                    from.can_advance_to(to),
+                    legal.contains(&(from, to)),
+                    "{from:?} -> {to:?}"
+                );
+            }
+        }
+
+        let state = AddSkillOperationState::default();
+        let kind = AddSkillOperationKind::Single(single_request(
+            "getsentry/skills",
+            "find-bugs",
+            AddMethod::Copy,
+        ));
+        state.begin("op-rewind".to_string(), kind, None).unwrap();
+        walk_to_reconciling(&state, "op-rewind");
+        let before = state.snapshot("op-rewind").unwrap();
+        let error = state
+            .advance("op-rewind", Installing, "Installing", |_| {})
+            .unwrap_err();
+        assert!(error.contains("Reconciling to Installing"), "{error}");
+        let after = state.snapshot("op-rewind").unwrap();
+        assert_eq!(
+            (after.sequence, after.phase),
+            (before.sequence, before.phase)
+        );
     }
 
     #[test]
@@ -1516,6 +1626,7 @@ mod tests {
                 None,
             )
             .unwrap();
+        walk_to_reconciling(&state, "op-expired-trust");
         state
             .advance(
                 "op-expired-trust",
@@ -1556,6 +1667,7 @@ mod tests {
                 None,
             )
             .unwrap();
+        walk_to_reconciling(&state, "cancel-trust");
         state
             .advance(
                 "cancel-trust",
@@ -1584,6 +1696,7 @@ mod tests {
         state
             .begin("terminal-old".to_string(), kind(), None)
             .unwrap();
+        walk_to_reconciling(&state, "terminal-old");
         state
             .advance(
                 "terminal-old",
@@ -1652,6 +1765,7 @@ mod tests {
                 None,
             )
             .unwrap();
+        walk_to_reconciling(&state, "trust-parent");
         state
             .advance(
                 "trust-parent",

@@ -196,14 +196,8 @@ impl Journal for FsJournal {
         id: &PlanId,
         status: PlanStatus,
     ) -> Result<(), CoreError> {
-        if status == PlanStatus::Pending {
-            return Err(CoreError::new(
-                ErrorCode::InvalidRequest,
-                "finish must not set Pending",
-            ));
-        }
         let mut record: PlanRecord = self.read_json(&self.plan_path(id))?;
-        record.status = status;
+        record.status = record.status.settle(status)?;
         self.write_record(&record)
     }
 
@@ -728,18 +722,17 @@ fn reverse_steps(
                         .map_err(|e| std::io::Error::other(e.to_string()))?;
                     let landed = match fs.read_capped(path, u64::MAX) {
                         Ok(live) => live != backup_bytes,
-                        // Only a missing path means the write never landed
-                        // (the rename always leaves a file at `path`) - any
-                        // other error leaves whether it landed unknown.
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                        // A backup means a file was at `path` before the
+                        // plan, and the forward write's rename never leaves
+                        // `path` empty. A missing file is what a reversal
+                        // from before the atomic restore below left when it
+                        // crashed between its remove and its write: still
+                        // landed, and the backup is the only copy left.
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
                         Err(e) => return Err(e),
                     };
                     if landed {
-                        if fs.symlink_metadata(path).is_ok() {
-                            fs.fsops_remove_file(path)?;
-                        }
-                        fs.fsops_write_new_file(path, &backup_bytes)?;
-                        fs.fsops_fsync_file(path)?;
+                        restore_file_from_backup(fs, path, &backup_bytes)?;
                     }
                 }
                 None => {
@@ -751,6 +744,50 @@ fn reverse_steps(
         }
     }
     Ok(())
+}
+
+/// Puts `backup` back at `path` through a temp file and a rename, so a
+/// crash mid-restore leaves `path` showing either its post-write bytes or
+/// the backup, never no file at all. Leftover temps from a crashed earlier
+/// attempt are removed first, but only those holding exactly `backup`: a
+/// file with the same name pattern and other bytes is the user's own.
+fn restore_file_from_backup(fs: &dyn ScopeFs, path: &Path, backup: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or(Path::new("/")).to_path_buf();
+    let leaf = path.file_name().and_then(|s| s.to_str()).unwrap_or("write");
+    let temp_prefix = format!(".{leaf}-");
+    for entry in fs.read_dir(&parent)? {
+        if entry.kind != FileKind::File || !is_file_restore_temp_name(&entry.name, &temp_prefix) {
+            continue;
+        }
+        let stale = parent.join(&entry.name);
+        let holds_backup = match fs.read_capped(&stale, u64::MAX) {
+            Ok(bytes) => bytes == backup,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(e),
+        };
+        if holds_backup {
+            match fs.fsops_remove_file(&stale) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    let tmp_path = parent.join(format!(
+        "{temp_prefix}{}{FILE_RESTORE_TEMP_SUFFIX}",
+        fsops::unique_suffix()
+    ));
+    fs.fsops_write_new_file(&tmp_path, backup)?;
+    fs.fsops_fsync_file(&tmp_path)?;
+    fs.fsops_rename(&tmp_path, path)?;
+    fs.fsops_fsync_dir(&parent)
+}
+
+const FILE_RESTORE_TEMP_SUFFIX: &str = ".restore";
+
+fn is_file_restore_temp_name(name: &str, temp_prefix: &str) -> bool {
+    name.strip_suffix(FILE_RESTORE_TEMP_SUFFIX)
+        .is_some_and(|stem| is_link_restore_temp_name(stem, temp_prefix))
 }
 
 /// Removes `path` and everything under it, deepest first, using only the
@@ -1895,6 +1932,152 @@ mod tests {
             after, pristine,
             "a fully retried reversal must leave no leaked temp entry behind, or names the extra entry"
         );
+    }
+
+    /// Writes `file.txt` from "original" to "new bytes" under a plan that
+    /// is then left `Pending` (the ordinary crash before `finish`), and
+    /// returns the plan's id plus the tree as it stood before the write.
+    fn pending_write_over_original(
+        fixture: &crate::testing::FixtureFs,
+        journal: &FsJournal,
+        g: &ExclusiveGuard,
+        id: &str,
+    ) -> (PlanId, std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+        let root_path = PathBuf::from("/root");
+        let before = tree_snapshot(fixture, &root_path);
+        let root = Root::open(fixture, root_path.clone()).expect("open root");
+        let id = PlanId(id.into());
+        let plan = PlanWriter::begin(
+            journal,
+            g,
+            id.clone(),
+            Utc::now(),
+            "write over the file, then crash before finish",
+            root_path.clone(),
+            Vec::new(),
+        )
+        .expect("begin");
+        let target = root_path.join("file.txt");
+        let stamp = fsops::read_stamp(fixture, &target).expect("read the stamp");
+        fsops::write_file(&root, &plan, Path::new("file.txt"), b"new bytes", &stamp)
+            .expect("write");
+        drop(plan);
+        (id, before)
+    }
+
+    /// Given a pending write over an existing file, when an older build's
+    /// reversal crashed after removing the file and before writing the
+    /// backup back (the file is simply gone), then the next reconcile
+    /// still restores the backup; on failure the panic names the file the
+    /// plan was marked `Reversed` without restoring.
+    #[test]
+    fn a_reversal_that_crashed_after_removing_the_file_restores_the_backup_or_names_the_lost_file()
+    {
+        let fixture = FixtureBuilder::new()
+            .dir("/journal")
+            .dir("/root")
+            .file("/root/file.txt", b"original")
+            .build_fs();
+        let journal = journal_over(Arc::new(fixture.clone()));
+        let lease = FakeLease::default();
+        let g = guard(&lease);
+        let (id, before) =
+            pending_write_over_original(&fixture, &journal, &g, "01PLANWRITEUNDOGONE0000001");
+
+        fixture
+            .fsops_remove_file(Path::new("/root/file.txt"))
+            .expect("simulate the half-done reversal");
+
+        let report = reconcile(&journal, &g, &fixture).expect("reconciliation must run");
+        assert!(report.reversed.contains(&id), "not reversed: {report:?}");
+        assert_eq!(
+            tree_snapshot(&fixture, Path::new("/root")),
+            before,
+            "the backup must come back at /root/file.txt, or the plan is Reversed with the file lost"
+        );
+    }
+
+    /// Given a pending write over an existing file, when the reversal's own
+    /// rename fails partway, then `file.txt` still shows a complete file
+    /// (never no file), and the next reconcile restores the backup and
+    /// leaves no restore temp behind; on failure the panic names the
+    /// missing file or the leaked temp.
+    #[test]
+    fn a_crash_inside_write_file_reversal_never_leaves_the_file_missing_or_names_the_gap() {
+        let fixture = FixtureBuilder::new()
+            .dir("/journal")
+            .dir("/root")
+            .file("/root/file.txt", b"original")
+            .build_fs();
+        let journal = journal_over(Arc::new(fixture.clone()));
+        let lease = FakeLease::default();
+        let g = guard(&lease);
+        let (id, before) =
+            pending_write_over_original(&fixture, &journal, &g, "01PLANWRITEUNDOCRASH000001");
+
+        let record = journal
+            .all()
+            .expect("read")
+            .into_iter()
+            .find(|p| p.id == id)
+            .expect("the plan begun above");
+        let failing = FailingFs::wrap(Arc::new(fixture.clone()));
+        failing.fail_next_fsops_rename();
+        reverse_steps(&journal, &record, &failing)
+            .expect_err("the restore rename must fail, or this test proves nothing");
+        assert_eq!(
+            fixture
+                .read_capped(Path::new("/root/file.txt"), u64::MAX)
+                .expect("a crash mid-restore must never leave /root/file.txt missing"),
+            b"new bytes".to_vec(),
+        );
+
+        let report = reconcile(&journal, &g, &fixture).expect("reconciliation must run");
+        assert!(report.reversed.contains(&id), "not reversed: {report:?}");
+        assert_eq!(
+            tree_snapshot(&fixture, Path::new("/root")),
+            before,
+            "the retried reversal must restore the backup and remove its leaked temp"
+        );
+    }
+
+    /// Given a plan that already settled `Done`, when anything calls
+    /// `finish` on it again, then the call fails and the status stays
+    /// `Done`; on failure the panic names the status it was overwritten to.
+    #[test]
+    fn a_settled_plan_refuses_a_second_finish_or_names_the_overwritten_status() {
+        let fixture = FixtureBuilder::new()
+            .dir("/journal")
+            .dir("/root")
+            .build_fs();
+        let journal = journal_over(Arc::new(fixture.clone()));
+        let lease = FakeLease::default();
+        let g = guard(&lease);
+        let id = PlanId("01PLANSETTLEDONCE000000001".into());
+        PlanWriter::begin(
+            &journal,
+            &g,
+            id.clone(),
+            Utc::now(),
+            "settle once",
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .expect("begin")
+        .finish(PlanStatus::Done)
+        .expect("first finish");
+
+        journal
+            .finish(&g, &id, PlanStatus::Reversed)
+            .expect_err("a Done plan must not become Reversed");
+        let status = journal
+            .all()
+            .expect("read")
+            .into_iter()
+            .find(|p| p.id == id)
+            .expect("the plan")
+            .status;
+        assert_eq!(status, PlanStatus::Done, "overwritten to {status:?}");
     }
 
     /// Given a user's own entries next to a managed link that share the

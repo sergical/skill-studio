@@ -195,11 +195,6 @@ interface AppState {
   toggleSkillSelection: (path: string) => void;
   clearSkillSelection: () => void;
   selectSkills: (paths: string[]) => void;
-  /** Whether the table renders selection checkboxes at all - see SkillListTable's "Select" ghost button. */
-  selectionMode: boolean;
-  enterSelectionMode: () => void;
-  /** Also clears `selectedSkillPaths` - Cancel/Escape should leave nothing selected behind. */
-  exitSelectionMode: () => void;
 }
 
 // ============================================================================
@@ -259,7 +254,6 @@ function navigateHistory(
       activeView: result.view,
       navHistory: result.history,
       selectedSkillPaths: new Set(),
-      selectionMode: false,
       // Leaving a skill page for a list restores that list's row cursor, as Escape does.
       lastClosedSkillName: left.kind === "skill" && result.view.kind !== "skill" ? left.name : null,
     });
@@ -301,7 +295,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         historyDefaults(state),
       ),
       selectedSkillPaths: new Set(),
-      selectionMode: false,
       lastClosedSkillName: null,
     })),
   openSkill: (name, deploymentPath, intent) => {
@@ -317,7 +310,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         historyDefaults(state),
       ),
       selectedSkillPaths: new Set(),
-      selectionMode: false,
       // A fresh open resolves the default copy again; only back/forward keep the pin.
       pinnedDeployment: { skillName: undefined, path: undefined },
     }));
@@ -363,21 +355,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       const skillListFilter = { ...state.skillListFilter, ...patch };
       return sameSkillListScope(state.skillListFilter.scope, skillListFilter.scope)
         ? { skillListFilter }
-        : { skillListFilter, selectedSkillPaths: new Set(), selectionMode: false };
+        : { skillListFilter, selectedSkillPaths: new Set() };
     }),
   replaceSkillListFilter: (patch) =>
     set((state) => {
       const skillListFilter = { ...defaultSkillListFilter(), ...patch };
       return sameSkillListScope(state.skillListFilter.scope, skillListFilter.scope)
         ? { skillListFilter }
-        : { skillListFilter, selectedSkillPaths: new Set(), selectionMode: false };
+        : { skillListFilter, selectedSkillPaths: new Set() };
     }),
   resetSkillListFilter: () =>
     set((state) => {
       const skillListFilter = defaultSkillListFilter();
       return sameSkillListScope(state.skillListFilter.scope, skillListFilter.scope)
         ? { skillListFilter }
-        : { skillListFilter, selectedSkillPaths: new Set(), selectionMode: false };
+        : { skillListFilter, selectedSkillPaths: new Set() };
     }),
 
   skillSearchFocusRequest: 0,
@@ -454,10 +446,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   clearSkillSelection: () => set({ selectedSkillPaths: new Set() }),
   selectSkills: (paths) => set({ selectedSkillPaths: new Set(paths) }),
-
-  selectionMode: false,
-  enterSelectionMode: () => set({ selectionMode: true }),
-  exitSelectionMode: () => set({ selectionMode: false, selectedSkillPaths: new Set() }),
 }));
 
 // Wires the live OS-follow listener when the stored preference is "system".

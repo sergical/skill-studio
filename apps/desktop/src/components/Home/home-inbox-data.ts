@@ -165,7 +165,7 @@ export function updateAllFailureMessage(tally: UpdateAllTally): string | undefin
  * run last, through `updatePluginInstall`, once per plugin id, scope, and project
  * even when several skills ship from one plugin. A fork is pulled only when the fork
  * itself is outdated, and a failed pull does not stop its plugin installs.
- * `shouldStop` is checked before each fork and each plugin install and before the
+ * `shouldStop` is awaited before each fork and each plugin install and before the
  * owner batch; whatever it skips counts as not updated, and `tally.stopped` is set.
  * A step already running always finishes.
  */
@@ -185,7 +185,7 @@ export async function updateAllOutdatedSkills(
     fork: (target: LifecycleTarget) => Promise<ForkRecord>;
   },
   updatePluginInstall?: PluginInstallUpdater,
-  shouldStop?: () => boolean,
+  shouldStop?: () => boolean | Promise<boolean>,
 ): Promise<UpdateAllTally> {
   const pullsUpstream = (skill: (typeof skills)[number]) =>
     skillHasManagedUpdate(skill) &&
@@ -268,7 +268,8 @@ export async function updateAllOutdatedSkills(
   onProgress?.(0, total, forks[0]?.name ?? afterForksName());
 
   for (const [index, skill] of forks.entries()) {
-    if (shouldStop?.()) {
+    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- the stop check sits between sequential pulls
+    if (await shouldStop?.()) {
       for (const unstarted of forks.slice(index)) skippedSkillNames.add(unstarted.name);
       break;
     }
@@ -298,7 +299,7 @@ export async function updateAllOutdatedSkills(
     if (total !== plannedTotal) onProgress?.(done, total, current);
   };
   retotal(forks.length, afterForksName());
-  if (ownerTargets.length > 0 && shouldStop?.()) {
+  if (ownerTargets.length > 0 && (await shouldStop?.())) {
     for (const entry of owners) skippedSkillNames.add(entry.name);
   } else if (ownerTargets.length > 0) {
     try {

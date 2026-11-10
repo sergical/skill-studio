@@ -1,7 +1,7 @@
 // ============================================================================
 // useSkillListSelection - Row selection state for SkillListTable: which
-// deployments are checked, keeping the store's "selection mode" mirroring
-// "at least one row checked", and shift-click range selection.
+// deployments are checked, and shift-click range selection. The list is in
+// selection mode while at least one row is checked; no other flag holds it.
 // ============================================================================
 
 import { useRef } from "react";
@@ -12,8 +12,6 @@ interface UseSkillListSelection {
   selectedPaths: Set<string>;
   clearSkillSelection: () => void;
   selectSkills: (paths: string[]) => void;
-  exitSelectionMode: () => void;
-  syncSelectionMode: (nextSize: number) => void;
   handleRowCheckboxClick: (index: number, shiftKey: boolean) => void;
 }
 
@@ -25,18 +23,8 @@ export function useSkillListSelection(
   const toggleSkillSelection = useAppStore((state) => state.toggleSkillSelection);
   const clearSkillSelection = useAppStore((state) => state.clearSkillSelection);
   const selectSkills = useAppStore((state) => state.selectSkills);
-  const selectionMode = useAppStore((state) => state.selectionMode);
-  const enterSelectionMode = useAppStore((state) => state.enterSelectionMode);
-  const exitSelectionMode = useAppStore((state) => state.exitSelectionMode);
   /** Index of the last row checked by click (not shift-click), for shift-click range-select. */
   const lastCheckedIndexRef = useRef<number | null>(null);
-
-  /** The store's `selectionMode` mirrors "at least one row checked" - kept in sync here since a
-   * checkbox now drives selection directly instead of a separate mode switch. */
-  function syncSelectionMode(nextSize: number) {
-    if (nextSize > 0 && !selectionMode) enterSelectionMode();
-    else if (nextSize === 0 && selectionMode) exitSelectionMode();
-  }
 
   /** Checkbox click for one row - shift-click selects every row between it and the last clicked one, in visible (grouped) order. */
   function handleRowCheckboxClick(index: number, shiftKey: boolean) {
@@ -46,16 +34,9 @@ export function useSkillListSelection(
       const next = new Set(selectedPaths);
       range.forEach((path) => path && next.add(path));
       selectSkills([...next]);
-      syncSelectionMode(next.size);
     } else {
       const path = rowPath(rows[index]);
-      if (path) {
-        const next = new Set(selectedPaths);
-        if (next.has(path)) next.delete(path);
-        else next.add(path);
-        toggleSkillSelection(path);
-        syncSelectionMode(next.size);
-      }
+      if (path) toggleSkillSelection(path);
     }
     lastCheckedIndexRef.current = index;
   }
@@ -64,8 +45,6 @@ export function useSkillListSelection(
     selectedPaths,
     clearSkillSelection,
     selectSkills,
-    exitSelectionMode,
-    syncSelectionMode,
     handleRowCheckboxClick,
   };
 }

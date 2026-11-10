@@ -249,4 +249,76 @@ describe("Home Update all cancel", () => {
     expect(second).toBeNull();
     expect(calls.filter((command) => command === "pull_fork_upstream")).toHaveLength(1);
   });
+
+  it("a_cancel_that_fails_to_reach_the_backend_keeps_the_whole_batch_running_or_the_ui_offers_cancel_while_it_stops", async () => {
+    let releaseFork: () => void = () => {};
+    const forkHeld = new Promise<void>((resolve) => (releaseFork = resolve));
+    mockCommands(async (command) => {
+      if (command === "pull_fork_upstream") {
+        await forkHeld;
+        return pullResult;
+      }
+      if (command === "cancel_update_all") throw new Error("bridge closed");
+      if (command === "update_all_skills") {
+        return {
+          items: [{ skill: "alpha", outcome: outcomeFor("alpha") }],
+          errors: {},
+          not_run: [],
+        };
+      }
+      return null;
+    });
+
+    const running = startHomeUpdateAll([
+      outdated("forked", "fork"),
+      outdated("alpha", "skills-sh"),
+    ]);
+    await expect(stopHomeUpdateAll()).rejects.toThrow();
+    expect(getActiveUpdateAll()?.isStopping).toBe(false);
+    releaseFork();
+    const tally = await running;
+
+    expect(calls).toContain("update_all_skills");
+    expect(tally?.stopped).toBeUndefined();
+  });
+
+  // Flow: press Cancel during a fork pull; the fork finishes while the Cancel
+  // is still on its way, then the Cancel fails to reach the backend. Expect the
+  // remaining owners to run, because nothing stopped the batch. Failure: the
+  // frontend skipped them on the strength of a Cancel that never landed.
+  it("a_cancel_still_in_flight_at_a_phase_boundary_decides_nothing_until_it_lands_or_the_batch_skips_work_nothing_stopped", async () => {
+    let releaseFork: () => void = () => {};
+    const forkHeld = new Promise<void>((resolve) => (releaseFork = resolve));
+    let rejectCancel: (error: Error) => void = () => {};
+    const cancelHeld = new Promise<never>((_, reject) => (rejectCancel = reject));
+    mockCommands(async (command) => {
+      if (command === "pull_fork_upstream") {
+        await forkHeld;
+        return pullResult;
+      }
+      if (command === "cancel_update_all") return cancelHeld;
+      if (command === "update_all_skills") {
+        return {
+          items: [{ skill: "alpha", outcome: outcomeFor("alpha") }],
+          errors: {},
+          not_run: [],
+        };
+      }
+      return null;
+    });
+
+    const running = startHomeUpdateAll([
+      outdated("forked", "fork"),
+      outdated("alpha", "skills-sh"),
+    ]);
+    const stopping = stopHomeUpdateAll();
+    releaseFork();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    rejectCancel(new Error("bridge closed"));
+    await expect(stopping).rejects.toThrow();
+    const tally = await running;
+
+    expect(calls).toContain("update_all_skills");
+    expect(tally?.stopped).toBeUndefined();
+  });
 });

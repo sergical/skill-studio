@@ -736,14 +736,15 @@ export async function updateSkillOwners(
 export async function updatePluginTargets(
   targets: PluginUpdateTarget[],
   updatePluginInstall: PluginInstallUpdater,
-  shouldStop?: () => boolean,
+  shouldStop?: () => boolean | Promise<boolean>,
 ): Promise<PluginUpdateSummary> {
   const failures: PluginUpdateFailure[] = [];
   const notRun: PluginUpdateTarget[] = [];
   let succeeded = 0;
   let alreadyCurrent = 0;
   for (const target of targets) {
-    if (shouldStop?.()) {
+    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- the stop check sits between sequential plugin updates
+    if (await shouldStop?.()) {
       notRun.push(target);
       continue;
     }

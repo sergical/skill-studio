@@ -47,7 +47,7 @@ export function UninstallPluginDialog({
   };
 
   return (
-    <AlertDialog open onOpenChange={(open) => !open && onClose()}>
+    <AlertDialog open busy={isRemoving} onOpenChange={(open) => !open && onClose()}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Uninstall the {pluginName} plugin?</AlertDialogTitle>
