@@ -114,9 +114,27 @@ impl ScopeFs for EditOnRead {
         Ok(())
     }
     fn fsops_create_dir(&self, path: &Path) -> io::Result<()> {
+        if self.crash_after == Some("next-stage")
+            && self.backups.parent().is_some_and(|home| {
+                [".claude/skills", ".codex/skills", ".pi/agent/skills"]
+                    .iter()
+                    .any(|dir| {
+                        std::fs::read(home.join(dir).join("gamma/SKILL.md"))
+                            .is_ok_and(|bytes| bytes == self.bytes)
+                    })
+            })
+        {
+            std::process::exit(86);
+        }
         RealFs::new().fsops_create_dir(path)
     }
     fn fsops_write_new_file(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        if self.crash_after == Some("edit-during-restore")
+            && bytes.windows(10).any(|b| b == b"Body at v1")
+            && self.reads.fetch_add(1, Ordering::SeqCst) == 0
+        {
+            std::fs::write(&self.path, &self.bytes)?;
+        }
         RealFs::new().fsops_write_new_file(path, bytes)
     }
     fn fsops_write_new_file_with_mode(
@@ -125,6 +143,12 @@ impl ScopeFs for EditOnRead {
         bytes: &[u8],
         mode: u32,
     ) -> io::Result<()> {
+        if self.crash_after == Some("edit-during-restore")
+            && bytes.windows(10).any(|b| b == b"Body at v1")
+            && self.reads.fetch_add(1, Ordering::SeqCst) == 0
+        {
+            std::fs::write(&self.path, &self.bytes)?;
+        }
         RealFs::new().fsops_write_new_file_with_mode(path, bytes, mode)
     }
     fn fsops_rename(&self, from: &Path, to: &Path) -> io::Result<()> {

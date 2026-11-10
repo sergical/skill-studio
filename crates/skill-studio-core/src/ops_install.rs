@@ -946,6 +946,19 @@ pub(crate) fn restore_registry(
             let Some(key) = edit.get("key").and_then(serde_json::Value::as_str) else {
                 continue;
             };
+            if let (Some(id), Some(expected)) = (edit["id"].as_str(), edit.get("expected")) {
+                let live = document
+                    .get(key)
+                    .and_then(|rows| rows.get(id))
+                    .unwrap_or(&serde_json::Value::Null);
+                if live != expected {
+                    return Err(CoreError::new(
+                        ErrorCode::DriftConflict,
+                        "the registry row changed during restore; pass force to retry",
+                    )
+                    .at(registry_path(&root)));
+                }
+            }
             let previous = edit.get("previous").filter(|v| !v.is_null()).cloned();
             match edit.get("id").and_then(serde_json::Value::as_str) {
                 None => match previous {

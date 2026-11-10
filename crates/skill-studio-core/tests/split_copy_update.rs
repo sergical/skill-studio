@@ -670,7 +670,7 @@ fn interrupted_update_flow(test: &str, boundary: &'static str) {
     assert_eq!(status.code(), Some(86), "child missed the crash boundary");
     let rt = runtime_with(&home, Arc::new(RealFs::new()));
     let event_id = latest_update(&rt);
-    ops::restore_event(
+    let undo = ops::restore_event(
         &rt,
         &ctx(),
         &skill_studio_core::dto::RestoreRequest {
@@ -698,10 +698,24 @@ fn interrupted_update_flow(test: &str, boundary: &'static str) {
         lock_before,
         "Undo did not restore the source lock row"
     );
+    if boundary != "swap" {
+        ops::restore_event(
+            &rt,
+            &ctx(),
+            &skill_studio_core::dto::RestoreRequest {
+                event_id: undo.restore_event_id,
+                force: false,
+            },
+        )
+        .unwrap();
+        assert!(HARNESS_DIRS
+            .iter()
+            .any(|dir| revision_of(&copy_of(&home, dir)) == Some("v2")));
+    }
     let next = ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
     assert!(
         next.refused.is_empty(),
-        "interrupted Undo left stale registry hashes: {next:?}"
+        "interrupted Update Undo Redo left stale registry hashes: {next:?}"
     );
     assert_eq!(next.updated.len(), 3);
     std::fs::remove_dir_all(home).unwrap();
@@ -716,9 +730,9 @@ fn split_update_crashes_after_swap_then_undo_restores_v1_or_next_update_refuses(
 }
 
 #[test]
-fn split_update_crashes_after_lock_write_then_undo_restores_v1_or_next_update_refuses() {
+fn split_update_crashes_after_lock_write_undo_redo_allows_update_or_stale_hash_refuses() {
     interrupted_update_flow(
-        "split_update_crashes_after_lock_write_then_undo_restores_v1_or_next_update_refuses",
+        "split_update_crashes_after_lock_write_undo_redo_allows_update_or_stale_hash_refuses",
         "lock",
     );
 }
@@ -903,4 +917,152 @@ fn split_update_failed_undo_force_preserves_intervening_files_and_metadata_or_di
         .is_empty());
     drop(store);
     std::fs::remove_dir_all(home).unwrap();
+}
+
+fn split_update_force_detects_metadata_edits_during_restore_or_loses_the_new_row(registry: bool) {
+    let home = split_home("force_metadata_race");
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+    ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+    let event_id = latest_update(&rt);
+    let path = home.join(if registry {
+        ".agents/skill-studio.json"
+    } else {
+        ".agents/.skill-lock.json"
+    });
+    let mut edited: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    if registry {
+        for row in edited["copies"].as_object_mut().unwrap().values_mut() {
+            row["concurrent_edit"] = serde_json::json!(true);
+        }
+    } else {
+        edited["skills"]["gamma"]["concurrent_edit"] = serde_json::json!(true);
+    }
+    let race_rt = runtime_with(
+        &home,
+        Arc::new(edit_on_read::EditOnRead {
+            path: path.clone(),
+            backups: home.join(".history/backups"),
+            bytes: serde_json::to_vec(&edited).unwrap(),
+            reads: Default::default(),
+            after_v2: None,
+            crash_after: Some("edit-during-restore"),
+        }),
+    );
+    let error = ops::restore_event(
+        &race_rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: event_id.clone(),
+            force: true,
+        },
+    )
+    .expect_err("Force overwrote metadata edited during folder restoration");
+    assert_eq!(
+        error.code,
+        skill_studio_core::error::ErrorCode::DriftConflict
+    );
+    let live: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(live, edited);
+    let undo = ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id,
+            force: true,
+        },
+    )
+    .unwrap();
+    let row = history_row(&rt, &undo.restore_event_id);
+    let displaced = &row.payload["displaced_data"]["inverse"];
+    if registry {
+        assert!(displaced["registry_undo"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|edit| edit["previous"]["concurrent_edit"] == true));
+    } else {
+        assert_eq!(
+            displaced["lock_row_undo"]["previous"],
+            edited["skills"]["gamma"]
+        );
+    }
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+fn split_update_undo_force_restores_deleted_lock_before_undo_or_retry_instead_of_not_found(
+    before_retry: bool,
+) {
+    let home = split_home("force_deleted_lock");
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+    ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+    let event_id = latest_update(&rt);
+    if before_retry {
+        let failing = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+        let failed_rt = runtime_with(&home, failing.clone());
+        failing.fail_next_write_atomic();
+        ops::restore_event(
+            &failed_rt,
+            &ctx(),
+            &skill_studio_core::dto::RestoreRequest {
+                event_id: event_id.clone(),
+                force: false,
+            },
+        )
+        .unwrap_err();
+    }
+    std::fs::remove_file(home.join(".agents/.skill-lock.json")).unwrap();
+    let request = skill_studio_core::dto::RestoreRequest {
+        event_id,
+        force: false,
+    };
+    assert_eq!(
+        ops::restore_event(&rt, &ctx(), &request).unwrap_err().code,
+        skill_studio_core::error::ErrorCode::DriftConflict
+    );
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            force: true,
+            ..request
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        read_lock(&home)["skills"]["gamma"],
+        lock_doc()["skills"]["gamma"]
+    );
+    for dir in HARNESS_DIRS {
+        assert_eq!(revision_of(&copy_of(&home, dir)), Some("v1"));
+    }
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn split_update_crashes_before_registry_undo_redo_allows_update_or_stale_hash_refuses() {
+    interrupted_update_flow(
+        "split_update_crashes_before_registry_undo_redo_allows_update_or_stale_hash_refuses",
+        "next-stage",
+    );
+}
+
+#[test]
+fn split_update_force_detects_lock_edits_during_restore_or_loses_the_new_row() {
+    split_update_force_detects_metadata_edits_during_restore_or_loses_the_new_row(false);
+}
+
+#[test]
+fn split_update_force_detects_registry_edits_during_restore_or_loses_the_new_row() {
+    split_update_force_detects_metadata_edits_during_restore_or_loses_the_new_row(true);
+}
+
+#[test]
+fn split_update_undo_force_restores_a_lock_deleted_before_undo_or_fails_with_not_found() {
+    split_update_undo_force_restores_deleted_lock_before_undo_or_retry_instead_of_not_found(false);
+}
+
+#[test]
+fn split_update_undo_force_restores_a_lock_deleted_before_retry_or_fails_with_not_found() {
+    split_update_undo_force_restores_deleted_lock_before_undo_or_retry_instead_of_not_found(true);
 }

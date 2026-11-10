@@ -374,16 +374,19 @@ pub(crate) fn restore_updated_row(
     let skill = edit["skill"]
         .as_str()
         .ok_or_else(|| CoreError::new(ErrorCode::InvalidRequest, "missing lock skill"))?;
-    let bytes = fs
-        .read_capped(&path, LOCK_FILE_MAX_BYTES)
-        .map_err(|e| CoreError::io(&path, e))?;
-    let mut doc: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()))?;
+    let mut doc: serde_json::Value = match fs.read_capped(&path, LOCK_FILE_MAX_BYTES) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()))?,
+        Err(error) if force && error.kind() == std::io::ErrorKind::NotFound => {
+            serde_json::json!({"version": 3, "skills": {}})
+        }
+        Err(error) => return Err(CoreError::io(&path, error)),
+    };
     let rows = doc
         .get_mut("skills")
         .and_then(serde_json::Value::as_object_mut)
         .ok_or_else(|| CoreError::new(ErrorCode::Io, "missing lock rows"))?;
-    if !force && rows.get(skill).unwrap_or(&serde_json::Value::Null) != &edit["expected"] {
+    if rows.get(skill).unwrap_or(&serde_json::Value::Null) != &edit["expected"] {
         return Err(CoreError::new(
             ErrorCode::DriftConflict,
             "the updated lock row changed; pass force to restore anyway",

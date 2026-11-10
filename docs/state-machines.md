@@ -77,3 +77,14 @@ move changes.
 Guards: `split_update_undo_crash_force_retry_redo_restores_matching_hashes_or_next_update_refuses`
 and `split_update_failed_undo_force_preserves_intervening_files_and_metadata_or_discards_edits`
 in `crates/skill-studio-core/tests/split_copy_update.rs`.
+
+Each restore compares metadata with its own captured rows before replacing them,
+including under Force. A new edit returns `drift_conflict` and releases the claim,
+so Activity can offer Force again with a fresh snapshot. Force can rebuild a
+deleted source-lock document. Redo of an interrupted Update derives copy hashes
+from the backed-up folders while displaced metadata keeps the original live rows.
+
+Guards: `split_update_crashes_before_registry_undo_redo_allows_update_or_stale_hash_refuses`,
+`split_update_force_detects_lock_edits_during_restore_or_loses_the_new_row`,
+and `split_update_undo_force_restores_a_lock_deleted_before_retry_or_fails_with_not_found`
+in `crates/skill-studio-core/tests/split_copy_update.rs`.
