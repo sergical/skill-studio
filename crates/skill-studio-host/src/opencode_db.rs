@@ -136,18 +136,42 @@ pub(crate) fn table_exists(conn: &Connection, table: &str) -> rusqlite::Result<b
     .map(|found| found.is_some())
 }
 
-/// Serializes every test in the crate that touches `XDG_DATA_HOME` or
-/// `XDG_CONFIG_HOME`: both are process-global and cargo runs tests on
-/// multiple threads, so without this an unrelated test's
-/// `opencode_databases(home)`/`opencode_config_dir(home)` call can read the
-/// override set by a mutating test and look at the wrong directory. Mirrors
-/// `core_scan_parity.rs`'s `home_env_lock` for `HOME`. Shared across
-/// `discovery.rs` and `skill_uses.rs` so every `OpenCode` XDG test in the
-/// crate serializes on the same lock.
+/// Set on the child test process that `run_with_env_in_child` starts; holds
+/// the temp directory the child builds its fixture under.
 #[cfg(test)]
-pub(crate) fn xdg_env_lock() -> &'static std::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+const ENV_CHILD_ROOT: &str = "SKILL_STUDIO_HOST_ENV_CHILD_ROOT";
+
+/// Runs `body` in a child copy of this test binary with the env vars from
+/// `env` set, so they never reach the tests running in parallel in this
+/// process. `module` is the caller's `module_path!()` and `test` its function
+/// name. Both calls run `body` with the same temp root: the parent picks it,
+/// the child receives it.
+#[cfg(test)]
+pub(crate) fn run_with_env_in_child(
+    module: &str,
+    test: &str,
+    env: impl FnOnce(&Path) -> Vec<(&'static str, PathBuf)>,
+    body: impl FnOnce(&Path),
+) {
+    if let Some(root) = std::env::var_os(ENV_CHILD_ROOT) {
+        body(Path::new(&root));
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+    let name = format!("{module}::{test}");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([name.as_str(), "--exact", "--nocapture", "--test-threads=1"])
+        .env(ENV_CHILD_ROOT, tmp.path())
+        .envs(env(tmp.path()))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "child run of {name} failed or matched no test:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[cfg(test)]
