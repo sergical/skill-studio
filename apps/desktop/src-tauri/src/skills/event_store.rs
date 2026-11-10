@@ -83,6 +83,7 @@ pub fn open(db_path: &Path) -> Result<Connection, String> {
             restorable  INTEGER NOT NULL DEFAULT 1
         );
         CREATE INDEX IF NOT EXISTS idx_events_skill ON events(skill, ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 
         CREATE TABLE IF NOT EXISTS materialized_roots (
             root_path   TEXT PRIMARY KEY,
@@ -1485,6 +1486,51 @@ mod tests {
     use super::*;
     use crate::skills::skill_md_write::skill_md_write_transaction_is_held;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn desktop_history_open_indexes_timestamp_pages_and_keeps_tie_order_or_sorts_the_whole_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("events.sqlite3");
+        let conn = open(&path).unwrap();
+        conn.execute("DROP INDEX IF EXISTS idx_events_ts", [])
+            .unwrap();
+        let fixtures = [
+            ("old", "2026-01-01T00:00:00Z"),
+            ("tied-first", "2026-02-01T00:00:00Z"),
+            ("tied-last", "2026-02-01T00:00:00Z"),
+        ];
+        for (id, ts) in fixtures {
+            conn.execute("INSERT INTO events (id,ts,kind,skill,payload,status) VALUES (?1,?2,'install','alpha','{}','done')", params![id, ts]).unwrap();
+        }
+        drop(conn);
+        let store = EventStore::open_with_db(tmp.path(), &path).unwrap();
+        let plan: Vec<String> = store
+            .conn
+            .prepare("EXPLAIN QUERY PLAN SELECT * FROM events ORDER BY ts DESC,rowid DESC LIMIT 2")
+            .unwrap()
+            .query_map([], |row| row.get(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|line| line.contains("idx_events_ts")),
+            "timestamp index missing: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|line| line.contains("TEMP B-TREE")),
+            "page still sorts the store: {plan:?}"
+        );
+        let rows = store.list(2, None).unwrap();
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            fixtures
+                .iter()
+                .rev()
+                .take(2)
+                .map(|(id, _)| *id)
+                .collect::<Vec<_>>()
+        );
+    }
 
     fn store(dir: &Path) -> EventStore {
         EventStore::open(&dir.join("app_data")).expect("open store")
