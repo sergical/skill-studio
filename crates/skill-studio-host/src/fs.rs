@@ -106,7 +106,9 @@ impl ScopeFs for RealFs {
         let mut bytes = Vec::new();
         // Read one byte past the limit so truncation can be told apart from
         // "exactly at the limit" without ever buffering more than that.
-        file.by_ref().take(limit + 1).read_to_end(&mut bytes)?;
+        file.by_ref()
+            .take(limit.saturating_add(1))
+            .read_to_end(&mut bytes)?;
         let truncated = bytes.len() as u64 > limit;
         if truncated {
             bytes.truncate(limit as usize);
@@ -352,6 +354,15 @@ mod tests {
         fs::write(&path, vec![0u8; 16]).unwrap();
         let err = RealFs::new().read_capped(&path, 4).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn read_capped_with_no_cap_returns_the_whole_file_or_overflows_to_an_empty_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stamp");
+        fs::write(&path, b"backup bytes").unwrap();
+        let bytes = RealFs::new().read_capped(&path, u64::MAX).unwrap();
+        assert_eq!(bytes, b"backup bytes");
     }
 
     #[test]
