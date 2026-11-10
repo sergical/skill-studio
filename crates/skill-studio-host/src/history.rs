@@ -49,6 +49,35 @@ impl HistoryOpener for NoHistoryOpener {
     }
 }
 
+/// A history-free runtime that still protects its lease folder's data format.
+#[derive(Debug, Clone)]
+pub struct GuardedNoHistoryOpener {
+    folder: PathBuf,
+}
+
+impl GuardedNoHistoryOpener {
+    /// Binds read-lease protection to the history folder.
+    pub fn new(folder: PathBuf) -> Self {
+        Self { folder }
+    }
+}
+
+impl HistoryOpener for GuardedNoHistoryOpener {
+    fn guard_data_folder(&self) -> Result<Box<dyn Send>, CoreError> {
+        crate::data_folder_version::guard_read_data_folder(&self.folder)
+            .map(|guard| Box::new(guard) as Box<dyn Send>)
+            .map_err(|message| CoreError::new(ErrorCode::Io, message))
+    }
+
+    fn open(
+        &self,
+        scope: &NormalizedScope,
+        access: HistoryAccess,
+    ) -> Result<Option<Box<dyn HistoryStore>>, CoreError> {
+        NoHistoryOpener.open(scope, access)
+    }
+}
+
 /// Schema shared with the desktop's `event_store::open`. Kept in sync by
 /// hand; the round-trip test in this module opens a database seeded with
 /// the desktop's own `CREATE TABLE` statements to catch drift.
@@ -117,9 +146,13 @@ impl HistoryOpener for SqliteHistoryOpener {
     ) -> Result<Option<Box<dyn HistoryStore>>, CoreError> {
         match access {
             HistoryAccess::ReadIfExists => {
+                let parent = self.db_path.parent().unwrap_or_else(|| Path::new("."));
+                let folder_guard = crate::data_folder_version::guard_read_data_folder(parent)
+                    .map_err(|message| CoreError::new(ErrorCode::Io, message))?;
                 if !self.db_path.exists() {
                     return Ok(None);
                 }
+                drop(folder_guard);
                 Ok(Some(Box::new(SqliteHistoryStore::open(&self.db_path)?)))
             }
             HistoryAccess::ReadWrite => {
@@ -962,6 +995,7 @@ mod tests {
         let store = opener.open(&scope, HistoryAccess::ReadIfExists).unwrap();
         assert!(store.is_none());
         assert!(!db_path.exists());
+        assert!(!tmp.path().join("history").exists());
     }
 
     #[test]

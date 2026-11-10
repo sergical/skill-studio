@@ -1349,3 +1349,65 @@ fn cli_park_refuses_newer_history_without_tree_changes_or_writes_mutation_lease(
         assert_eq!(std::fs::read_dir(&history).unwrap().count(), 2);
     }
 }
+
+#[test]
+fn cli_fixture_scan_refuses_newer_history_without_tree_changes_or_creates_read_leases() {
+    let home = tempfile::tempdir().unwrap();
+    let history = home.path().join(".history");
+    std::fs::create_dir_all(&history).unwrap();
+    let newer = skill_studio_host::CURRENT_DATA_VERSION + 1;
+    std::fs::write(history.join("schema_version"), format!("{newer}\n")).unwrap();
+    let before = complete_folder_tree(home.path());
+    let result = run_with_env(
+        &["scan", "--fixture", home.path().to_str().unwrap(), "--json"],
+        &[
+            ("HOME", home.path().to_str().unwrap()),
+            ("SKILL_STUDIO_TELEMETRY", "off"),
+        ],
+    );
+    assert_ne!(result.status, 0, "{:?}", result.json);
+    let message = result.json.to_string();
+    assert!(
+        message.contains(&format!("folder is version {newer}")),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "up to version {}",
+            skill_studio_host::CURRENT_DATA_VERSION
+        )),
+        "{message}"
+    );
+    assert_eq!(before, complete_folder_tree(home.path()));
+}
+
+#[test]
+fn cli_events_refuse_newer_history_without_sqlite_or_return_empty_success() {
+    let home = tempfile::tempdir().unwrap();
+    let history = home.path().join(".skill-studio/history");
+    std::fs::create_dir_all(&history).unwrap();
+    let newer = skill_studio_host::CURRENT_DATA_VERSION + 1;
+    std::fs::write(history.join("schema_version"), format!("{newer}\n")).unwrap();
+    let before = complete_folder_tree(home.path());
+    let result = run_with_env(
+        &["events", "--home", home.path().to_str().unwrap(), "--json"],
+        &[
+            ("HOME", home.path().to_str().unwrap()),
+            ("SKILL_STUDIO_TELEMETRY", "off"),
+        ],
+    );
+    assert_ne!(result.status, 0, "{:?}", result.json);
+    let message = result.json.to_string();
+    assert!(
+        message.contains(&format!("folder is version {newer}")),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "up to version {}",
+            skill_studio_host::CURRENT_DATA_VERSION
+        )),
+        "{message}"
+    );
+    assert_eq!(before, complete_folder_tree(home.path()));
+}

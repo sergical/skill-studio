@@ -162,6 +162,20 @@ fn lock_error(error: std::fs::TryLockError) -> String {
     }
 }
 
+/// Holds a compatible folder without creating or migrating its contents.
+pub(crate) fn guard_read_data_folder(folder: &Path) -> Result<DataFolderGuard, String> {
+    let folder = folder_identity(folder).map_err(|error| error.to_string())?;
+    let validate = || {
+        let version = read_version(&RealFs, &folder).map_err(|error| error.to_string())?;
+        check_compatible(version, CURRENT_DATA_VERSION).map_err(newer_data_folder_message)
+    };
+    validate()?;
+    let lock = coordination_lock(&folder).map_err(|error| error.to_string())?;
+    lock.try_lock_shared().map_err(lock_error)?;
+    validate()?;
+    Ok(DataFolderGuard { _locks: vec![lock] })
+}
+
 /// Validates all folders, migrates under exclusive locks, then keeps shared locks.
 pub fn lock_data_folders(folders: &[&Path]) -> Result<DataFolderGuard, String> {
     lock_data_folders_before_lock(folders, || {})
