@@ -3036,16 +3036,10 @@ fn assert_killed_staging_allows_turn_on(rollback: bool, concurrent_edit: bool) {
             let config = stub.toml_path();
             let child_home = home.clone();
             fs.before_write_once(stub.lock_path(), move || {
-                let recovery = recovery_files(&child_home)
-                    .into_iter()
-                    .find(|p| {
-                        p.file_name()
-                            .unwrap()
-                            .to_string_lossy()
-                            .starts_with(".agents.toml-park-recovery-")
-                    })
-                    .unwrap();
-                armed.after_rename_once(recovery, signal);
+                armed.after_rename_once(
+                    child_home.join(".agents/skills-parked/universal/foo"),
+                    signal,
+                );
                 assert!(!read(&config).contains("name = \"foo\""));
                 Err(std::io::Error::other("injected rollback"))
             });
@@ -3209,4 +3203,56 @@ fn park_refuses_a_new_supplying_wildcard_after_planning_or_turn_on_leaves_it_exc
 #[test]
 fn park_killed_during_rollback_refuses_changed_config_on_retry_or_loses_external_edit() {
     assert_killed_staging_allows_turn_on(true, true);
+}
+
+fn assert_park_move_back_crash_preserves_management(fail_ignore: bool) {
+    let (home, stub) = dotagents_home("park_move_back_crash", EXPLICIT_TOML);
+    let ignore = home.join(".agents/.gitignore");
+    std::fs::write(&ignore, "/skills/foo\n").unwrap();
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    let armed = fs.clone();
+    let parked = home.join(".agents/skills-parked/universal/foo");
+    fs.before_write_once(
+        if fail_ignore {
+            ignore.clone()
+        } else {
+            stub.lock_path()
+        },
+        move || {
+            armed.after_rename_once(parked, || {
+                panic!("injected crash after rollback moves the folder back")
+            });
+            Err(std::io::Error::other("injected bookkeeping failure"))
+        },
+    );
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| park_foo(&rt)));
+    assert!(crashed.is_err());
+    assert!(stub.skill_dir("foo").join("SKILL.md").exists());
+    let rt = runtime(&home, stub.clone(), true);
+    for _ in 0..100 {
+        rt.ports.ids.next_event_id();
+    }
+    park_foo(&rt);
+    unpark_foo(&rt);
+    assert!(
+        read(&stub.toml_path()).contains("name = \"foo\""),
+        "rollback crash lost the config entry"
+    );
+    assert!(
+        read(&stub.lock_path()).contains("[skills.foo]"),
+        "rollback crash lost the lock entry"
+    );
+    assert_eq!(read(&ignore), "/skills/foo\n");
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn park_lock_failure_move_back_crash_then_park_turn_on_restores_management_or_loses_config_entry() {
+    assert_park_move_back_crash_preserves_management(false);
+}
+
+#[test]
+fn park_ignore_failure_move_back_crash_then_park_turn_on_restores_management_or_loses_config_and_lock_entries(
+) {
+    assert_park_move_back_crash_preserves_management(true);
 }

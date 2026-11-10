@@ -5465,6 +5465,12 @@ pub(crate) fn park_found_copy(
                 &skill.name,
                 &deployment.root.scope,
             ) {
+                if let Err(error) =
+                    crate::ops_park_dotagents::prepare_originals(rt, &session.guard, plan)
+                {
+                    copy_stays_parked = true;
+                    return Err(error);
+                }
                 let moved_back =
                     crate::park_move::move_dir(rt, session, &parked_dir, &deployment.path);
                 let files_back =

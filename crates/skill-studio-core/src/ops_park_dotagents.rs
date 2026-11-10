@@ -850,19 +850,13 @@ impl DotagentsPark {
     }
 }
 
-/// Rolls back this Park's writes only while their recorded output still matches.
-pub(crate) fn restore_originals(
+pub(crate) fn prepare_originals(
     rt: &Runtime,
     guard: &ExclusiveGuard,
     plan: &DotagentsPark,
 ) -> Result<(), CoreError> {
-    let files = plan.changes.borrow();
-    for edit in files.iter().rev() {
-        if read_text(rt.ports.fs.as_ref(), &edit.before.path)?.as_deref()
-            == Some(edit.after.as_str())
-        {
-            continue;
-        }
+    let mut files = plan.changes.borrow_mut();
+    for edit in files.iter_mut().rev() {
         if let Some(recovery) = &edit.recovery {
             let retained =
                 available_recovery_path(rt, &edit.before.path, Some(&edit.after), Some(recovery))?;
@@ -873,6 +867,7 @@ pub(crate) fn restore_originals(
                 .fs
                 .rename(guard, &source, &destination)
                 .map_err(|e| CoreError::io(recovery, e))?;
+            edit.recovery = Some(pending);
             if let Some(parent) = edit.before.path.parent() {
                 rt.ports
                     .fs
@@ -881,7 +876,16 @@ pub(crate) fn restore_originals(
             }
         }
     }
-    restore_files(rt, guard, &files)
+    Ok(())
+}
+
+/// Rolls back this Park's writes only while their recorded output still matches.
+pub(crate) fn restore_originals(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    plan: &DotagentsPark,
+) -> Result<(), CoreError> {
+    restore_files(rt, guard, &plan.changes.borrow())
 }
 
 /// Writes every snapshot back and reports the first failure after trying all.
@@ -902,11 +906,16 @@ pub(crate) fn restore_files(
             match &file.text {
                 Some(text) => {
                     if let Some(recovery) = &edit.recovery {
-                        let retained = available_recovery_path(rt, &file.path, Some(&edit.after), Some(recovery))?;
-                        let pending = PathBuf::from(format!("{}-rollback-staging", retained.display()));
-                        let source = crate::ports::confine(&rt.scope, fs, recovery)?;
-                        let destination = crate::ports::confine(&rt.scope, fs, &pending)?;
-                        fs.rename(guard, &source, &destination).map_err(|e| CoreError::io(recovery, e))?;
+                        let (pending, retained) = if let Some(retained) = recovery.to_string_lossy().strip_suffix("-rollback-staging") {
+                            (recovery.clone(), PathBuf::from(retained))
+                        } else {
+                            let retained = available_recovery_path(rt, &file.path, Some(&edit.after), Some(recovery))?;
+                            let pending = PathBuf::from(format!("{}-rollback-staging", retained.display()));
+                            let source = crate::ports::confine(&rt.scope, fs, recovery)?;
+                            let destination = crate::ports::confine(&rt.scope, fs, &pending)?;
+                            fs.rename(guard, &source, &destination).map_err(|e| CoreError::io(recovery, e))?;
+                            (pending, retained)
+                        };
                         fs.fsops_exchange(&pending, &file.path).map_err(|e| CoreError::io(&file.path, e))?;
                         fs.fsops_rename(&pending, &retained).map_err(|e| CoreError::io(&pending, e))?;
                         let pending = retained;
