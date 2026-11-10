@@ -1,0 +1,23 @@
+{
+  "cases": [
+    {
+      "case": "warning",
+      "cli_json": "passed",
+      "cli_human": "passed",
+      "mcp_stdio": "passed",
+      "link_preserved": true
+    },
+    {
+      "case": "error",
+      "cli_json": "passed",
+      "cli_human": "passed",
+      "mcp_stdio": "passed",
+      "link_preserved": true
+    }
+  ],
+  "binaries": {
+    "skill-studio": "6944c5d3d35b03583a20214468cfd7afed02725da64359b85542028d353aca2d",
+    "skill-studio-mcp": "fc9c8f85dcdf31be614afe150742429492058756540a61750f9cd5971b7e3622"
+  },
+  "source_git_sha": "b639223f1e83c4875b7e3ee69038ff9cfc26657f"
+}

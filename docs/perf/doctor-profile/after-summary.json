@@ -1,0 +1,30 @@
+{
+  "total_samples": 1695,
+  "top_five": [
+    {
+      "frame": "lstat",
+      "samples": 396,
+      "share": 0.2336283185840708
+    },
+    {
+      "frame": "__open_nocancel",
+      "samples": 199,
+      "share": 0.11740412979351032
+    },
+    {
+      "frame": "__open",
+      "samples": 150,
+      "share": 0.08849557522123894
+    },
+    {
+      "frame": "libsystem_malloc.dylib unresolved",
+      "samples": 124,
+      "share": 0.07315634218289085
+    },
+    {
+      "frame": "__getdirentries64",
+      "samples": 109,
+      "share": 0.06430678466076696
+    }
+  ]
+}

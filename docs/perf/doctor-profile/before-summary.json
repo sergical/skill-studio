@@ -1,0 +1,30 @@
+{
+  "total_samples": 1880,
+  "top_five": [
+    {
+      "frame": "lstat",
+      "samples": 382,
+      "share": 0.20319148936170212
+    },
+    {
+      "frame": "__open_nocancel",
+      "samples": 175,
+      "share": 0.09308510638297872
+    },
+    {
+      "frame": "__open",
+      "samples": 174,
+      "share": 0.0925531914893617
+    },
+    {
+      "frame": "read",
+      "samples": 165,
+      "share": 0.08776595744680851
+    },
+    {
+      "frame": "ftruncate",
+      "samples": 143,
+      "share": 0.07606382978723404
+    }
+  ]
+}
