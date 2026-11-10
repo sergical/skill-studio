@@ -10,7 +10,7 @@ import { useState } from "react";
 import type { InstalledSkill } from "@skill-studio/lib";
 import { removeSkill, skillLocalEdits } from "../../lib/skill-api";
 import { runListUpdate } from "../../hooks/skillBatchUpdates";
-import { forkableDeployment, skillsWithLocalEdits } from "../../lib/skill-lifecycle-target";
+import { partitionForkableSkills, skillsWithLocalEdits } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
 import type { UpdatePrompt } from "../SkillDetail/UpdateOverwritesEditsDialog";
 import {
@@ -102,12 +102,24 @@ export function useSkillBulkActions(
   };
 
   const updateAction: BulkAction = { kind: "update" };
+  const editedChoices = partitionForkableSkills(pending?.edited ?? []);
   const updatePrompt: UpdatePrompt | null = pending && {
     skillNames: pending.edited.map((skill) => skill.name),
-    canFork: pending.edited.every((skill) => forkableDeployment(skill) !== undefined),
-    fork: () => {
+    canFork: editedChoices.forkable.length > 0,
+    unforkableSkillNames: editedChoices.unforkable.map((skill) => skill.name),
+    fork: (unforkable = "overwrite") => {
       setPending(null);
-      void execute(updateAction, pending.plan, new Set(pending.edited.map((skill) => skill.name)));
+      const forkNames = new Set(editedChoices.forkable.map((skill) => skill.name));
+      const skipped = unforkable === "skip" ? editedChoices.unforkable : [];
+      const skippedSkills = new Set(skipped);
+      const plan: BulkPlan = {
+        applicable: pending.plan.applicable.filter((skill) => !skippedSkills.has(skill)),
+        skipped: [
+          ...pending.plan.skipped,
+          ...skipped.map((skill) => ({ skill, reason: "edited copy skipped" })),
+        ],
+      };
+      void execute(updateAction, plan, forkNames);
     },
     overwrite: () => {
       setPending(null);

@@ -584,6 +584,16 @@ export function forkableDeployment(
   );
 }
 
+export function partitionForkableSkills(skills: readonly InstalledSkill[]) {
+  const forkable: InstalledSkill[] = [];
+  const unforkable: InstalledSkill[] = [];
+  for (const skill of skills) {
+    if (forkableDeployment(skill)) forkable.push(skill);
+    else unforkable.push(skill);
+  }
+  return { forkable, unforkable };
+}
+
 /** The lifecycle target a fork of `skill` starts from; throws when the skill has no forkable folder. */
 export function forkTargetForSkill(
   skill: Pick<InstalledSkill, "name" | "deployments">,

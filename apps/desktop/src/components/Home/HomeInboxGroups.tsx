@@ -14,7 +14,7 @@ import {
   conflictedSkillsNote,
   lifecycleTargetForPark,
   skillCanPark,
-  forkableDeployment,
+  partitionForkableSkills,
   skillsWithLocalEdits,
 } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
@@ -553,10 +553,16 @@ function UpdatesGroup({
   const isStopping = activeBatch?.isStopping ?? false;
   const isUpdatingAll = activeBatch !== null || isCheckingEdits;
 
-  const runUpdateAll = async (forkNames?: ReadonlySet<string>) => {
+  const runUpdateAll = async (
+    forkNames?: ReadonlySet<string>,
+    skippedNames: ReadonlySet<string> = new Set(),
+  ) => {
     // `updateAllOutdatedSkills` catches every `pullFork`/`updateAllOwners`
     // rejection itself and folds it into `failures`, so this never throws.
-    const tally = await startHomeUpdateAll(updates, forkNames);
+    const tally = await startHomeUpdateAll(
+      updates.filter((skill) => !skippedNames.has(skill.name)),
+      forkNames,
+    );
     if (!tally) return;
     const { failures } = tally;
     const conflictNote = conflictedSkillsNote(tally.conflicted ?? []);
@@ -564,7 +570,13 @@ function UpdatesGroup({
       type: failures > 0 || conflictNote || tally.stopped ? "warning" : "success",
       title: updateAllTitle(tally),
       message:
-        [updateAllFailureMessage(tally), conflictNote].filter(Boolean).join(". ") || undefined,
+        [
+          updateAllFailureMessage(tally),
+          conflictNote,
+          skippedNames.size > 0 ? `Skipped ${[...skippedNames].join(", ")}` : null,
+        ]
+          .filter(Boolean)
+          .join(". ") || undefined,
     });
   };
 
@@ -593,6 +605,9 @@ function UpdatesGroup({
   };
 
   const closeEditsDialog = () => setEditedSkills([]);
+  const editedChoices = partitionForkableSkills(editedSkills);
+  const forkNames = editedChoices.forkable.map((skill) => skill.name);
+  const unforkableNames = editedChoices.unforkable.map((skill) => skill.name);
 
   return (
     <Collapsible data-group="upd" role="rowgroup" open={isExpanded} onOpenChange={onToggle}>
@@ -693,10 +708,14 @@ function UpdatesGroup({
       <UpdateOverwritesEditsDialog
         skillNames={editedSkills.map((skill) => skill.name)}
         isBulk
-        canFork={editedSkills.every((skill) => forkableDeployment(skill) !== undefined)}
-        onFork={() => {
+        canFork={forkNames.length > 0}
+        unforkableSkillNames={unforkableNames}
+        onFork={(choice) => {
           closeEditsDialog();
-          void runUpdateAll(new Set(editedSkills.map((skill) => skill.name)));
+          void runUpdateAll(
+            new Set(forkNames),
+            choice === "skip" ? new Set(unforkableNames) : undefined,
+          );
         }}
         onOverwrite={() => {
           closeEditsDialog();

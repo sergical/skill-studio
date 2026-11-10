@@ -187,7 +187,8 @@ export function SkillListSelectionBar({
         skillNames={updatePrompt?.skillNames ?? []}
         isBulk
         canFork={updatePrompt?.canFork ?? true}
-        onFork={() => updatePrompt?.fork()}
+        unforkableSkillNames={updatePrompt?.unforkableSkillNames ?? []}
+        onFork={(choice) => updatePrompt?.fork(choice)}
         onOverwrite={() => updatePrompt?.overwrite()}
         onCancel={() => updatePrompt?.cancel()}
       />
