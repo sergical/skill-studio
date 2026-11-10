@@ -775,3 +775,111 @@ fn registration_failure_after_park_restores_shared_files_links_and_registry_and_
         assert_eq!(split.restore, RestoreCapability::NoInverse);
     }
 }
+
+struct ChangeSettingsAtLease {
+    inner: FileLease,
+    home: PathBuf,
+    changed: std::sync::atomic::AtomicBool,
+}
+
+impl skill_studio_core::ports::LeaseProvider for ChangeSettingsAtLease {
+    fn acquire(
+        &self,
+        keys: &[skill_studio_core::ports::LeaseKey],
+        mode: skill_studio_core::ports::LeaseMode,
+        wait: std::time::Duration,
+    ) -> Result<Box<dyn skill_studio_core::ports::LeaseHandle>, skill_studio_core::CoreError> {
+        if mode == skill_studio_core::ports::LeaseMode::Exclusive
+            && !self.changed.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            std::fs::write(self.home.join(".codex/config.toml"), format!("[[skills.config]]\npath = \"{}/.agents/skills/gamma/SKILL.md\"\nenabled = false\n", self.home.display())).unwrap();
+        }
+        skill_studio_core::ports::LeaseProvider::acquire(&self.inner, keys, mode, wait)
+    }
+}
+
+#[test]
+fn turning_off_pi_rechecks_settings_under_the_lease_or_reenables_codex() {
+    let home = unique_temp_dir("agent_off_settings_at_lease");
+    global_home(&home);
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    let mut rt = runtime(&home, &[]);
+    let id = shared_deployment(&rt).id;
+    rt.ports.leases = Arc::new(ChangeSettingsAtLease {
+        inner: FileLease::new(home.join(".leases")),
+        home: home.clone(),
+        changed: std::sync::atomic::AtomicBool::new(false),
+    });
+    let error = turn_off_for_agent(&rt, &ctx(), &request(id, "pi")).unwrap_err();
+    assert!(
+        error.message.contains("Codex") && error.message.contains("own settings"),
+        "{}",
+        error.message
+    );
+    assert!(home.join(".agents/skills/gamma/SKILL.md").exists());
+    assert!(!home.join(".codex/skills/gamma").exists());
+    std::fs::remove_dir_all(home).ok();
+}
+
+#[test]
+fn undoing_project_agent_off_removes_empty_slots_and_redo_restores_origin_notes() {
+    let home = unique_temp_dir("agent_off_project_redo");
+    let project = home.join("work/app");
+    shared_skill(
+        &project.join(".agents/skills"),
+        &[project.join(".claude/skills")],
+    );
+    let rt = runtime(&home, std::slice::from_ref(&project));
+    let id = shared_deployment(&rt).id;
+    let outcome = turn_off_for_agent(&rt, &ctx(), &request(id, "codex")).unwrap();
+    let slot = outcome.parked_path.parent().unwrap();
+    let key = slot.parent().unwrap();
+    let note = slot.join(".origin/gamma");
+    let project_note = key.join(".origin");
+    let origin = std::fs::read(&note).unwrap();
+    let project_origin = std::fs::read(&project_note).unwrap();
+    let undo = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert!(
+        !key.exists(),
+        "Undo left the project marker or empty slot folders"
+    );
+    let redo = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: undo.restore_event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(&note).unwrap(), origin);
+    assert_eq!(std::fs::read(&project_note).unwrap(), project_origin);
+    assert_eq!(
+        std::fs::read(outcome.parked_path.join("SKILL.md")).unwrap(),
+        SKILL_MD
+    );
+    std::fs::create_dir_all(slot.join("delta")).unwrap();
+    std::fs::write(slot.join("delta/SKILL.md"), b"another parked skill").unwrap();
+    std::fs::write(slot.join(".origin/delta"), b".codex/skills").unwrap();
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: redo.restore_event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert!(!outcome.parked_path.exists());
+    assert!(slot.join("delta/SKILL.md").exists());
+    assert_eq!(std::fs::read(&project_note).unwrap(), project_origin);
+    std::fs::remove_dir_all(home).ok();
+}

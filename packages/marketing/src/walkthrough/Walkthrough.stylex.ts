@@ -110,6 +110,6 @@ export const walkthroughStyles = stylex.create({
   dialogHeader: { alignItems: "center", display: "flex", gap: 20, justifyContent: "space-between" },
   dialogTitle: { fontSize: 22, fontWeight: 550, letterSpacing: "-.03em", margin: 0 },
   dialogHint: { color: siteTokens.muted, fontSize: 12, lineHeight: 1.6, margin: "8px 0 20px" },
-  expandedScroll: { overflow: "auto" },
+  expandedScroll: { overflow: "auto", padding: 4 },
   expandedVideo: { display: "block", minWidth: 900, width: "100%" },
 });

@@ -380,7 +380,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
     const topSource = extractGitHubRepo(skill.source, skill.source_url);
 
     return {
-      id: skill.name,
+      id: topSource ? `${topSource}/${skill.name}` : skill.name,
       name: skill.name,
       installs: 0,
       author: null,
