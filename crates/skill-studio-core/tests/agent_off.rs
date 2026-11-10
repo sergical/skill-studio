@@ -725,44 +725,53 @@ fn linked_agent_folders_refuse_preview_and_apply_without_losing_the_shared_skill
 }
 
 #[test]
-fn registration_failure_after_park_restores_shared_files_links_and_registry_or_reports_incomplete_rollback(
-) {
-    let home = unique_temp_dir("agent_off_registration_rollback");
-    global_home(&home);
-    let before = tree(&home.join(".agents/skills/gamma"));
-    let mut rt = runtime(&home, &[]);
-    let req = request(shared_deployment(&rt).id, "codex");
-    let fs = Arc::new(skill_studio_core::testing::FailingFs::wrap(
-        rt.ports.fs.clone(),
-    ));
-    fs.fail_read_when_present(
-        home.join(".agents/skill-studio.json"),
-        home.join(".agents/skills-parked/codex/gamma"),
-    );
-    rt.ports.fs = fs;
-    let error = turn_off_for_agent(&rt, &ctx(), &req).unwrap_err();
-    assert!(
-        home.join(".agents/skills/gamma/SKILL.md").exists(),
-        "{}",
-        error.message
-    );
-    assert_eq!(tree(&home.join(".agents/skills/gamma")), before);
-    for link in [".claude/skills/gamma", ".pi/agent/skills/gamma"] {
-        assert!(is_link(&home.join(link)));
-    }
-    for path in [
-        ".codex/skills/gamma",
-        ".cursor/skills/gamma",
-        ".config/opencode/skills/gamma",
-        ".agents/skills-parked/codex/gamma",
-        ".agents/skills-parked/codex/.origin/gamma",
-        ".agents/skill-studio.json",
+fn registration_failure_after_park_restores_shared_files_links_and_registry_and_reports_the_event()
+{
+    for registry_before in [
+        None,
+        Some(b"{\"write_version\":7,\"unrelated\":{\"sentinel\":true}}\n".as_slice()),
     ] {
-        assert!(!home.join(path).exists(), "rollback left {path}");
+        let home = unique_temp_dir("agent_off_registration_rollback");
+        global_home(&home);
+        let registry = home.join(".agents/skill-studio.json");
+        if let Some(bytes) = registry_before {
+            std::fs::write(&registry, bytes).unwrap();
+        }
+        let before = tree(&home.join(".agents/skills/gamma"));
+        let mut rt = runtime(&home, &[]);
+        let req = request(shared_deployment(&rt).id, "codex");
+        let fs = Arc::new(skill_studio_core::testing::FailingFs::wrap(
+            rt.ports.fs.clone(),
+        ));
+        fs.fail_read_when_present(
+            home.join(".agents/skill-studio.json"),
+            home.join(".agents/skills-parked/codex/gamma"),
+        );
+        rt.ports.fs = fs;
+        let error = turn_off_for_agent(&rt, &ctx(), &req).unwrap_err();
+        assert!(
+            home.join(".agents/skills/gamma/SKILL.md").exists(),
+            "{}",
+            error.message
+        );
+        assert_eq!(tree(&home.join(".agents/skills/gamma")), before);
+        for link in [".claude/skills/gamma", ".pi/agent/skills/gamma"] {
+            assert!(is_link(&home.join(link)));
+        }
+        for path in [
+            ".codex/skills/gamma",
+            ".cursor/skills/gamma",
+            ".config/opencode/skills/gamma",
+            ".agents/skills-parked/codex/gamma",
+            ".agents/skills-parked/codex/.origin/gamma",
+        ] {
+            assert!(!home.join(path).exists(), "rollback left {path}");
+        }
+        assert_eq!(std::fs::read(&registry).ok().as_deref(), registry_before);
+        assert!(error.message.contains("rolled back"), "{}", error.message);
+        let events = ops::list_events(&rt, &ctx(), &ListEventsRequest::default()).unwrap();
+        let split = events.iter().find(|event| event.kind == "split").unwrap();
+        assert!(error.message.contains(&split.id.0), "{}", error.message);
+        assert_eq!(split.restore, RestoreCapability::NoInverse);
     }
-    assert!(error.message.contains("rolled back"), "{}", error.message);
-    let events = ops::list_events(&rt, &ctx(), &ListEventsRequest::default()).unwrap();
-    let split = events.iter().find(|event| event.kind == "split").unwrap();
-    assert!(error.message.contains(&split.id.0), "{}", error.message);
-    assert_eq!(split.restore, RestoreCapability::NoInverse);
 }
