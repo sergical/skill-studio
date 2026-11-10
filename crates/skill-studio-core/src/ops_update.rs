@@ -453,6 +453,7 @@ fn update_copy(
     universal_root: &Path,
     skill: &SkillName,
     files: &[crate::dto::InstallFile],
+    before_swap: impl FnOnce(&UpdatedCopy) -> Result<(), CoreError>,
 ) -> Result<UpdatedCopy, CoreError> {
     let fs = rt.ports.fs.clone();
     ops_install::ensure_journal_root(rt, guard, fs.as_ref())?;
@@ -485,6 +486,10 @@ fn update_copy(
         .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
     let hash = crate::ops::skill_content_hash(fs.as_ref(), ctx, staged.path())?;
     let fingerprint = fingerprint_path(fs.as_ref(), staged.path())?;
+    before_swap(&UpdatedCopy {
+        content_hash: hash.clone(),
+        fingerprint: fingerprint.clone(),
+    })?;
     let final_name = Path::new(&skill.0);
     // Same directory the doctor prune and check sweep, not a
     // update-specific name: a quarantine folder the prune never sees would
@@ -631,6 +636,7 @@ fn update_write(
                 universal_root,
                 &req.skill,
                 &req.files,
+                |_| Ok(()),
             )?;
             let content_hash = crate::ops::skill_content_hash(fs, ctx, destination)?;
             let read = copy_registry.ok_or_else(|| {
@@ -1114,16 +1120,60 @@ fn update_split_copies_body(
                 RootScope::Project(project) => Some(project.0.clone()),
             },
             payload: serde_json::json!({ "split_copies": true, "destinations": backup_targets }),
-            inverse: Some(inverse),
+            inverse: Some(inverse.clone()),
             backup_dir: Some(manifest.backup_dir),
         },
     )?;
     let mut expected_posts = BTreeMap::new();
-    let mut lock_undo = None;
+
+    let mut recovery_paths = Vec::new();
+    let mut recovery_rows = Vec::new();
     for (copy_id, path, recorded_hash) in &candidates {
-        match update_one_split_copy(rt, ctx, &session.guard, req, path, recorded_hash) {
+        match update_one_split_copy(
+            rt,
+            ctx,
+            &session.guard,
+            req,
+            path,
+            recorded_hash,
+            |updated| {
+                recovery_paths.push(path.clone());
+                let mut row = rows_before[copy_id].clone();
+                row["content_hash"] = serde_json::json!(updated.content_hash);
+                recovery_rows.push(ops_install::guarded_registry_undo(
+                    home,
+                    "copies",
+                    copy_id,
+                    rows_before.get(copy_id),
+                    Some(&row),
+                ));
+                expected_posts.insert(path.clone(), updated.fingerprint.clone());
+                let primary = &recovery_paths[0];
+                let pre = manifest
+                    .entries
+                    .iter()
+                    .find(|entry| &entry.original == primary)
+                    .and_then(|entry| entry.fingerprint.as_ref());
+                inverse = crate::events::restore_backup_inverse(
+                    primary,
+                    pre,
+                    expected_posts[primary].as_ref(),
+                );
+                inverse["restore_paths"] = serde_json::json!(recovery_paths);
+                inverse["registry_undo"] = serde_json::json!(recovery_rows);
+                let secondary = recovery_paths
+                    .iter()
+                    .skip(1)
+                    .map(|p| (p.clone(), Ok(expected_posts[p].clone())))
+                    .collect::<Vec<_>>();
+                session.store.patch_inverse(
+                    &session.guard,
+                    &id,
+                    crate::events::with_secondary_post(inverse.clone(), &secondary),
+                )
+            },
+        ) {
             Ok(Ok(updated)) => {
-                expected_posts.insert(path.clone(), updated.fingerprint);
                 if let Some(row) = document
                     .get_mut("copies")
                     .and_then(|copies| copies.get_mut(copy_id))
@@ -1140,21 +1190,6 @@ fn update_split_copies_body(
     }
     // Hashes of the copies that did swap are always recorded, even when a
     // later copy failed, or the next update would refuse them as edited.
-    let registry_after = candidates
-        .iter()
-        .filter(|(_, path, _)| outcome.updated.contains(path))
-        .map(|(copy_id, _, _)| {
-            ops_install::guarded_registry_undo(
-                home,
-                "copies",
-                copy_id,
-                rows_before.get(copy_id),
-                document
-                    .get("copies")
-                    .and_then(|copies| copies.get(copy_id)),
-            )
-        })
-        .collect::<Vec<_>>();
     let mut result = Ok(());
     if !outcome.updated.is_empty() {
         result = ops_install::write_registry_document(&session.guard, fs, home, document);
@@ -1164,6 +1199,20 @@ fn update_split_copies_body(
     if result.is_ok() && outcome.refused.is_empty() && !outcome.updated.is_empty() {
         if let (Some(hash), RootScope::Global) = (&req.lock_folder_hash, &req.scope) {
             let path = crate::lock_file::lock_file_path(home);
+            if let Some(previous) =
+                crate::lock_file::read_lock_entry_value(fs, &path, &req.skill.0)?
+            {
+                let mut expected = previous.clone();
+                expected["skillFolderHash"] = serde_json::json!(hash);
+                let lock_undo = Some(
+                    serde_json::json!({ "skill": req.skill.0, "previous": previous, "expected": expected }),
+                );
+                session.store.patch_inverse(
+                    &session.guard,
+                    &id,
+                    serde_json::json!({ "lock_row_undo": lock_undo }),
+                )?;
+            }
             result = crate::lock_file::set_skill_folder_hash_with_undo(
                 &session.guard,
                 fs,
@@ -1172,41 +1221,9 @@ fn update_split_copies_body(
                 &req.skill.0,
                 hash,
             )
-            .map(|edit| {
-                lock_undo = edit;
-            });
+            .map(|_| ());
         }
     }
-    let changed_paths = outcome.updated.clone();
-    session.store.patch_payload(
-        &session.guard,
-        &id,
-        serde_json::json!({ "destinations": changed_paths }),
-    )?;
-    let Some(primary) = outcome.updated.first() else {
-        session
-            .store
-            .finish(&session.guard, &id, EventStatus::Failed, None)?;
-        session.finish(rt, ctx);
-        return result.map(|()| outcome);
-    };
-    let pre = manifest
-        .entries
-        .iter()
-        .find(|entry| &entry.original == primary)
-        .and_then(|entry| entry.fingerprint.as_ref());
-    let mut final_inverse = crate::events::restore_backup_inverse(primary, pre, None);
-    final_inverse["restore_paths"] = serde_json::json!(changed_paths);
-    final_inverse["registry_undo"] = serde_json::json!(registry_after);
-    final_inverse["lock_row_undo"] = serde_json::json!(lock_undo);
-    let secondary_post = changed_paths
-        .iter()
-        .skip(1)
-        .map(|path| (path.clone(), Ok(expected_posts[path].clone())))
-        .collect::<Vec<_>>();
-    let patch = crate::events::with_secondary_post(final_inverse, &secondary_post);
-    session.store.patch_inverse(&session.guard, &id, patch)?;
-    let post = expected_posts[primary].clone();
     session.store.finish(
         &session.guard,
         &id,
@@ -1215,7 +1232,9 @@ fn update_split_copies_body(
         } else {
             EventStatus::Failed
         },
-        post,
+        recovery_paths
+            .first()
+            .and_then(|p| expected_posts[p].clone()),
     )?;
     session.finish(rt, ctx);
     result.map(|()| outcome)
@@ -1230,6 +1249,7 @@ fn update_one_split_copy(
     req: &SplitCopiesUpdate,
     path: &Path,
     recorded_hash: &str,
+    before_swap: impl FnOnce(&UpdatedCopy) -> Result<(), CoreError>,
 ) -> Result<Result<UpdatedCopy, String>, CoreError> {
     let fs = rt.ports.fs.as_ref();
     if crate::ops::skill_content_hash(fs, ctx, path)? != recorded_hash {
@@ -1241,7 +1261,13 @@ fn update_one_split_copy(
         return Ok(Err("this copy has no parent folder".to_string()));
     };
     Ok(Ok(update_copy(
-        rt, ctx, guard, root, &req.skill, &req.files,
+        rt,
+        ctx,
+        guard,
+        root,
+        &req.skill,
+        &req.files,
+        before_swap,
     )?))
 }
 

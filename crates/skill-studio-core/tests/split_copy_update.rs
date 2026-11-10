@@ -445,6 +445,7 @@ fn split_update_then_undo_keeps_a_copy_edited_after_backup_or_overwrites_the_ref
         backups: home.join(".history/backups"),
         bytes: edited.clone(),
         reads: Default::default(),
+        crash_after: None,
         after_v2: None,
     };
     let rt = runtime_with(&home, Arc::new(fs));
@@ -510,6 +511,7 @@ fn split_update_undo_refuses_an_edit_while_other_copies_finish_or_overwrites_use
         backups: home.join(".history/backups"),
         bytes: edited.clone(),
         reads: Default::default(),
+        crash_after: None,
         after_v2: Some(path.clone()),
     };
     let rt = runtime_with(&home, Arc::new(fs));
@@ -553,6 +555,7 @@ fn split_update_undo_preserves_an_install_added_during_update_or_deletes_its_loc
         backups: home.join(".history/backups"),
         bytes: serde_json::to_vec(&installed).unwrap(),
         reads: Default::default(),
+        crash_after: None,
         after_v2: Some(copy_of(&home, ".claude/skills").join("SKILL.md")),
     };
     let rt = runtime_with(&home, Arc::new(fs));
@@ -579,8 +582,7 @@ fn split_update_undo_preserves_an_install_added_during_update_or_deletes_its_loc
 }
 
 #[test]
-fn split_update_undo_reports_registry_write_failure_and_force_retry_finishes_or_reports_false_success(
-) {
+fn split_update_undo_force_retry_then_redo_keeps_hashes_matching_or_next_update_refuses() {
     let home = split_home("split_registry_retry");
     let rt = runtime_with(&home, Arc::new(RealFs::new()));
     let mut request = v2();
@@ -616,11 +618,107 @@ fn split_update_undo_reports_registry_write_failure_and_force_retry_finishes_or_
         },
     )
     .unwrap();
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: undo.restore_event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    for dir in HARNESS_DIRS {
+        assert_eq!(
+            revision_of(&copy_of(&home, dir)),
+            Some("v2"),
+            "Redo lost the original v2 backup"
+        );
+    }
     let next = ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
     assert!(
         next.refused.is_empty(),
-        "retry left stale registry hashes: {next:?}"
+        "Redo left stale registry hashes: {next:?}"
     );
-    assert!(!undo.restore_event_id.0.is_empty());
     std::fs::remove_dir_all(home).unwrap();
+}
+
+fn interrupted_update_flow(test: &str, boundary: &'static str) {
+    if let Ok(home) = std::env::var("SPLIT_UPDATE_CRASH_HOME") {
+        let home = PathBuf::from(home);
+        let fs = edit_on_read::EditOnRead {
+            path: copy_of(&home, HARNESS_DIRS[0]).join("SKILL.md"),
+            backups: home.join(".history"),
+            bytes: skill_md("v2"),
+            reads: Default::default(),
+            after_v2: None,
+            crash_after: Some(boundary),
+        };
+        let rt = runtime_with(&home, Arc::new(fs));
+        ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+        panic!("update did not reach the crash boundary");
+    }
+    let home = split_home(boundary);
+    let before: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.join(".agents/skill-studio.json")).unwrap())
+            .unwrap();
+    let lock_before = read_lock(&home);
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env("SPLIT_UPDATE_CRASH_HOME", &home)
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(86), "child missed the crash boundary");
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+    let event_id = latest_update(&rt);
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    for dir in HARNESS_DIRS {
+        assert_eq!(
+            revision_of(&copy_of(&home, dir)),
+            Some("v1"),
+            "interrupted Undo left v2 bytes"
+        );
+    }
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.join(".agents/skill-studio.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        after["copies"], before["copies"],
+        "Undo did not restore the registry rows"
+    );
+    assert_eq!(
+        read_lock(&home),
+        lock_before,
+        "Undo did not restore the source lock row"
+    );
+    let next = ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+    assert!(
+        next.refused.is_empty(),
+        "interrupted Undo left stale registry hashes: {next:?}"
+    );
+    assert_eq!(next.updated.len(), 3);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn split_update_crashes_after_swap_then_undo_restores_v1_or_next_update_refuses() {
+    interrupted_update_flow(
+        "split_update_crashes_after_swap_then_undo_restores_v1_or_next_update_refuses",
+        "swap",
+    );
+}
+
+#[test]
+fn split_update_crashes_after_lock_write_then_undo_restores_v1_or_next_update_refuses() {
+    interrupted_update_flow(
+        "split_update_crashes_after_lock_write_then_undo_restores_v1_or_next_update_refuses",
+        "lock",
+    );
 }

@@ -11,6 +11,7 @@ pub struct EditOnRead {
     pub bytes: Vec<u8>,
     pub reads: AtomicUsize,
     pub after_v2: Option<PathBuf>,
+    pub crash_after: Option<&'static str>,
 }
 impl ScopeFs for EditOnRead {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
@@ -38,7 +39,8 @@ impl ScopeFs for EditOnRead {
         {
             std::fs::write(&self.path, &self.bytes)?;
         }
-        if self.after_v2.is_none()
+        if self.crash_after.is_none()
+            && self.after_v2.is_none()
             && path == self.path
             && std::fs::read_dir(&self.backups)?.count() >= 2
             && self.reads.fetch_add(1, Ordering::SeqCst) == 0
@@ -53,7 +55,11 @@ impl ScopeFs for EditOnRead {
         path: &ScopedPath,
         bytes: &[u8],
     ) -> io::Result<()> {
-        RealFs::new().write_atomic(guard, path, bytes)
+        RealFs::new().write_atomic(guard, path, bytes)?;
+        if self.crash_after == Some("lock") && bytes.windows(7).any(|b| b == b"tree-v2") {
+            std::process::exit(86);
+        }
+        Ok(())
     }
     fn rename(&self, guard: &ExclusiveGuard, from: &ScopedPath, to: &ScopedPath) -> io::Result<()> {
         RealFs::new().rename(guard, from, to)
@@ -88,7 +94,13 @@ impl ScopeFs for EditOnRead {
         RealFs::new().fsops_fsync_file(path)
     }
     fn fsops_fsync_dir(&self, path: &Path) -> io::Result<()> {
-        RealFs::new().fsops_fsync_dir(path)
+        RealFs::new().fsops_fsync_dir(path)?;
+        if self.crash_after == Some("swap")
+            && std::fs::read(&self.path).is_ok_and(|b| b == self.bytes)
+        {
+            std::process::exit(86);
+        }
+        Ok(())
     }
     fn fsops_create_dir(&self, path: &Path) -> io::Result<()> {
         RealFs::new().fsops_create_dir(path)
