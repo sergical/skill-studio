@@ -2562,3 +2562,58 @@ fn turn_on_preserves_ignore_rule_order_changed_during_park() {
     );
     std::fs::remove_dir_all(home).unwrap();
 }
+
+fn assert_failed_turn_on_keeps_a_concurrent_edit(fail_move: bool) {
+    let (home, stub) = dotagents_home("turn_on_rollback_drift", EXPLICIT_TOML);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    park_foo(&rt);
+    let config = stub.toml_path();
+    if fail_move {
+        fs.fail_next_rename();
+    }
+    fs.before_write_once(stub.lock_path(), move || {
+        std::fs::write(
+            &config,
+            read(&config) + "\n[[skills]]\nname = \"extra\"\nsource = \"owner/extra\"\n",
+        )?;
+        if fail_move {
+            Ok(())
+        } else {
+            Err(std::io::Error::other("injected lock failure"))
+        }
+    });
+    let error = ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked_copy(&rt, "foo").id,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        read(&stub.toml_path()).contains("name = \"extra\""),
+        "Turn on rollback deleted the concurrent entry"
+    );
+    assert_eq!(error.code, skill_studio_core::ErrorCode::DriftConflict);
+    assert!(
+        error.message.contains("backup is retained"),
+        "{}",
+        error.message
+    );
+    assert!(parked_copy(&rt, "foo").path.join("SKILL.md").is_file());
+    assert!(!stub.skill_dir("foo").exists());
+    unpark_foo(&rt);
+    assert!(stub.skill_dir("foo").join("SKILL.md").is_file());
+    assert!(read(&stub.toml_path()).contains("name = \"extra\""));
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn failed_turn_on_keeps_an_edit_after_relisting_when_lock_write_fails() {
+    assert_failed_turn_on_keeps_a_concurrent_edit(false);
+}
+
+#[test]
+fn failed_turn_on_keeps_an_edit_after_relisting_when_move_fails() {
+    assert_failed_turn_on_keeps_a_concurrent_edit(true);
+}

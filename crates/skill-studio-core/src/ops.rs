@@ -5699,13 +5699,18 @@ fn unpark_body(
         None => Vec::new(),
     };
     if let Err(e) = crate::park_move::move_dir(rt, &session, &deployment.path, &restored_dir) {
-        let _ = crate::ops_park_dotagents::restore_files(rt, &session.guard, &listed_again);
+        let restored_files =
+            crate::ops_park_dotagents::restore_files(rt, &session.guard, &listed_again);
         let _ = session.store.finish(
             &session.guard,
             &id,
             crate::events::EventStatus::Failed,
             None,
         );
+        if let Err(mut restore_error) = restored_files {
+            restore_error.message = format!("{} {}", e.message, restore_error.message);
+            return Err(restore_error);
+        }
         return Err(e);
     }
     if let Some(parent) = deployment.path.parent() {
