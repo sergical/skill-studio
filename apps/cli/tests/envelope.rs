@@ -279,7 +279,7 @@ fn a_nonexistent_fixture_exits_2() {
 #[test]
 fn a_lease_held_by_another_process_exits_3() {
     let home = materialized_fixture("basic");
-    let lease_root = home.join(".history").join("leases");
+    let lease_root = home.join(".skill-studio").join("leases");
     let lease = FileLease::new(lease_root);
     let key = LeaseKey {
         canonical_root: home.clone(),
@@ -552,7 +552,7 @@ fn a_malformed_project_registry_still_scans_with_no_projects() {
 #[test]
 fn a_write_command_under_a_held_lease_exits_3_instead_of_blocking() {
     let home = materialized_fixture("basic");
-    let lease_root = home.join(".history").join("leases");
+    let lease_root = home.join(".skill-studio").join("leases");
     let lease = FileLease::new(lease_root);
     let key = LeaseKey {
         canonical_root: home.clone(),

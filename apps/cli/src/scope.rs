@@ -35,7 +35,7 @@ impl ScopeArgs {
     /// Builds the `RuntimeScope` and the lease root for this invocation.
     ///
     /// `--fixture <dir>` builds `RuntimeScope::fixture(dir)`, with its lease
-    /// root at `<dir>/.history/leases`. `--home <dir>` builds a `Live` scope
+    /// root at `<dir>/.skill-studio/leases`. `--home <dir>` builds a `Live` scope
     /// rooted at `<dir>`, but keeps its history and lease roots namespaced
     /// under that same `<dir>` (`<dir>/.skill-studio/history` and
     /// `<dir>/.skill-studio/leases`) rather than the real machine's data
@@ -92,7 +92,7 @@ impl ScopeArgs {
             }
             scope.opencode_config_root =
                 Some(skill_studio_host::opencode_config_dir_under(fixture));
-            let lease_root = fixture.join(".history").join("leases");
+            let lease_root = fixture.join(".skill-studio").join("leases");
             (scope, lease_root)
         } else if let Some(home) = &self.home {
             let data_root = home.join(".skill-studio");

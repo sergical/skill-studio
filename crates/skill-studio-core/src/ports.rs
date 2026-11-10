@@ -566,6 +566,11 @@ pub trait HistoryOpener: Send + Sync {
         Ok(Box::new(()))
     }
 
+    /// Checks history compatibility without creating or migrating history.
+    fn guard_read_data_folder(&self) -> Result<Box<dyn Send>, CoreError> {
+        self.guard_data_folder()
+    }
+
     /// Returns `None` for [`HistoryAccess::ReadIfExists`] when no store exists.
     fn open(
         &self,

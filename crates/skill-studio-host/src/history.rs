@@ -132,6 +132,13 @@ impl SqliteHistoryOpener {
 }
 
 impl HistoryOpener for SqliteHistoryOpener {
+    fn guard_read_data_folder(&self) -> Result<Box<dyn Send>, CoreError> {
+        let parent = self.db_path.parent().unwrap_or_else(|| Path::new("."));
+        crate::data_folder_version::guard_read_data_folder(parent)
+            .map(|guard| Box::new(guard) as Box<dyn Send>)
+            .map_err(|message| CoreError::new(ErrorCode::Io, message))
+    }
+
     fn guard_data_folder(&self) -> Result<Box<dyn Send>, CoreError> {
         let parent = self.db_path.parent().unwrap_or_else(|| Path::new("."));
         crate::lock_data_folders(&[parent])

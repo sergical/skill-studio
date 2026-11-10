@@ -180,3 +180,132 @@ fn cursor_capabilities_and_detection_choose_the_same_specific_runner_or_name_the
         }
     }
 }
+
+#[test]
+fn read_only_cli_and_mcp_preserve_absent_and_unversioned_history_or_name_the_writer() {
+    for unversioned in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let skill = home.path().join(".agents/skills/gamma");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: gamma\ndescription: Test skill\n---\nBody\n",
+        )
+        .unwrap();
+        let history = home.path().join(".history");
+        if unversioned {
+            std::fs::create_dir(&history).unwrap();
+            std::fs::write(history.join("legacy"), b"keep").unwrap();
+        }
+        fn history_snapshot(path: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+            if !path.exists() {
+                return Vec::new();
+            }
+            let mut entries = vec![(path.to_path_buf(), Vec::new())];
+            if path.is_dir() {
+                for entry in std::fs::read_dir(path).unwrap() {
+                    entries.extend(history_snapshot(&entry.unwrap().path()));
+                }
+            } else {
+                entries[0].1 = std::fs::read(path).unwrap();
+            }
+            entries.sort();
+            entries
+        }
+        let snapshot = || history_snapshot(&history);
+        let before = snapshot();
+        let fixture = home.path().to_str().unwrap();
+        let scan = headless::cli_request(home.path(), &["scan", "--fixture", fixture], &[], false);
+        assert_eq!(scan["status"], "ok", "{scan}");
+        assert_eq!(before, snapshot(), "CLI scan created history");
+        let id = scan["data"]["skills"][0]["deployments"][0]["id"]
+            .as_str()
+            .unwrap();
+        let cases: &[(&[&str], &str, Value)] = &[
+            (&["scan"], "scan", json!({})),
+            (&["diagnose"], "diagnose", json!({})),
+            (&["conflicts"], "diagnose_conflict", json!({})),
+            (&["usage"], "skill_usage", json!({})),
+            (
+                &["capabilities"],
+                "capabilities",
+                json!({"harnesses":[],"observe":false,"tools":[]}),
+            ),
+            (&["harnesses"], "harnesses", json!({})),
+            (
+                &["preview-repair", "--deployment-id", id],
+                "preview_frontmatter_repair",
+                json!({"deployment_id":id}),
+            ),
+            (&["events"], "list_events", json!({})),
+            (&["doctor"], "doctor", json!({})),
+            (&["outdated"], "outdated", json!({})),
+            (&["install-preferences"], "install_preferences", json!({})),
+            (
+                &["turn-off", "--id", id, "--agent", "codex", "--check"],
+                "turn_off_check",
+                json!({"deployment_id":id,"agent":"codex"}),
+            ),
+        ];
+        for (args, tool, request) in cases {
+            let mut args = args.to_vec();
+            args.extend(["--fixture", fixture]);
+            let result = headless::cli_request(home.path(), &args, &[], false);
+            assert!(result["status"].is_string(), "{args:?}: {result}");
+            assert_eq!(
+                before,
+                snapshot(),
+                "CLI {args:?}, unversioned={unversioned}"
+            );
+            let response = headless::mcp_request(
+                home.path(),
+                tool,
+                request,
+                &[("SKILL_STUDIO_FIXTURE".into(), fixture.into())],
+                false,
+            );
+            assert!(
+                envelope(&response)["status"].is_string(),
+                "MCP {tool}: {response}"
+            );
+            assert_eq!(before, snapshot(), "MCP {tool}, unversioned={unversioned}");
+        }
+        let health = headless::cli_request(home.path(), &["health"], &[], false);
+        assert!(health.is_array(), "{health}");
+        assert_eq!(before, snapshot(), "CLI health");
+        let watch =
+            headless::cli_request(home.path(), &["watch", "--fixture", fixture], &[], false);
+        assert!(watch["inventory"].is_object(), "{watch}");
+        assert_eq!(before, snapshot(), "CLI watch");
+    }
+}
+
+#[test]
+fn empty_outdated_preserves_absent_and_unversioned_history_without_gh_or_migrates_it() {
+    for surface in ["cli", "mcp"] {
+        for unversioned in [false, true] {
+            let home = tempfile::tempdir().unwrap();
+            let history = home.path().join(".skill-studio/history");
+            if unversioned {
+                std::fs::create_dir_all(&history).unwrap();
+                std::fs::write(history.join("legacy"), b"keep").unwrap();
+            }
+            let env = vec![("PATH".into(), "/usr/bin:/bin".into())];
+            let result = if surface == "cli" {
+                cli_with_env(home.path(), &["outdated"], &env)
+            } else {
+                envelope(&mcp_with_env(home.path(), "outdated", &json!({}), &env)).clone()
+            };
+            assert_eq!(result["status"], "ok", "{surface}: {result}");
+            assert_eq!(history.exists(), unversioned, "{surface} created history");
+            if unversioned {
+                assert_eq!(std::fs::read(history.join("legacy")).unwrap(), b"keep");
+                assert_eq!(
+                    std::fs::read_dir(&history).unwrap().count(),
+                    1,
+                    "{surface} migrated history"
+                );
+            }
+        }
+    }
+}
