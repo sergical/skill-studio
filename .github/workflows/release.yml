@@ -78,7 +78,7 @@ jobs:
     permissions:
       contents: write
     strategy:
-      # tauri-action's own `latest.json` merge (from `includeUpdaterJson`) is
+      # tauri-action's own `latest.json` merge (from `uploadUpdaterJson`) is
       # a non-atomic download-edit-upload against the same release: two
       # matrix legs finishing at once can each read the other's not-yet-
       # uploaded state and clobber it. One leg at a time keeps that merge
@@ -242,7 +242,7 @@ jobs:
           # A tag with a pre-release suffix (e.g. v0.1.0-rc.1) publishes as a
           # GitHub pre-release; a plain vX.Y.Z tag publishes normally.
           prerelease: ${{ contains(github.ref_name, '-') }}
-          includeUpdaterJson: true
+          uploadUpdaterJson: true
 
       # The workspace's [profile.release] sets split-debuginfo = "packed", so
       # cargo writes the app binary's .dSYM beside the binary in the root
