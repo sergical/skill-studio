@@ -236,13 +236,14 @@ function navigateHistory(
     history: NavHistory,
     current: ActiveView,
     exists: (view: ActiveView) => boolean,
+    defaults?: DefaultDeploymentPaths | null,
   ) => NavStep | null,
 ): void {
   const plan = () => {
     const { activeView, navHistory, knownSkillNames } = get();
     const exists = (view: ActiveView) =>
       view.kind !== "skill" || knownSkillNames === null || knownSkillNames.has(view.name);
-    return move(navHistory, activeView, exists);
+    return move(navHistory, activeView, exists, historyDefaults(get()));
   };
   // Nothing valid to go to: leave the page alone, without a discard prompt for a no-op.
   if (!plan()) return;

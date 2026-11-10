@@ -608,12 +608,15 @@ export function excludeForkedOwner(
 
 /** Thrown when the fork was made but pulling upstream onto it failed: the edits are safe, only the update is missing. */
 export class ForkPullError extends Error {
-  constructor(cause: unknown) {
+  readonly reason: string;
+
+  constructor(cause: unknown, pluginFailures: string[] = []) {
     const reason = cause instanceof Error ? cause.message : String(cause);
     super(
-      `The fork was made and your edits are kept, but pulling upstream failed: ${reason}. Use Pull latest to retry.`,
+      `The fork was made and your edits are kept, but pulling upstream failed: ${reason}. Use Pull latest to retry.${pluginFailures.length > 0 ? ` Plugin updates failed: ${pluginFailures.join("; ")}` : ""}`,
     );
     this.name = "ForkPullError";
+    this.reason = reason;
   }
 }
 
@@ -657,7 +660,22 @@ export async function forkEditedAndUpdate(
   others: SkillOwnerUpdateSummary;
   plugins: PluginUpdateSummary | null;
 }> {
-  const pull = await forkThenPull(forkTargetForSkill(skill), deps.fork, deps.pullFork);
+  let pull: PullResult;
+  try {
+    pull = await forkThenPull(forkTargetForSkill(skill), deps.fork, deps.pullFork);
+  } catch (error) {
+    if (error instanceof ForkPullError && options.updateOthers && deps.updatePluginInstall) {
+      const plugins = await updatePluginTargets(
+        skillPluginUpdateTargets(skill),
+        deps.updatePluginInstall,
+      );
+      throw new ForkPullError(
+        error.reason,
+        plugins.failures.map((failure) => failure.message),
+      );
+    }
+    throw error;
+  }
   // react-doctor-disable-next-line react-doctor/server-sequential-independent-await -- a failed fork must leave the other copies untouched, and both steps write ~/.agents/.skill-lock.json
   const others = await updateOwnerTargets(
     options.updateOthers ? excludeForkedOwner(skill, skillUpdateOwnerTargets(skill)) : [],
