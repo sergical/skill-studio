@@ -802,6 +802,21 @@ describe("forkEditedAndUpdate", () => {
     ).toBe(undefined);
   });
 
+  it("fork_with_an_independent_agent_copy_is_not_offered_or_removal_loses_its_edits", () => {
+    const copy: Deployment = {
+      ...deployment("dep:copy"),
+      destination: "per-harness",
+      owner_kind: "manual",
+      backing: { kind: "independent" },
+      path: "/home/u/.codex/skills/x",
+    };
+    expect(forkableDeployment({ deployments: [...skill.deployments, copy] })).toBeUndefined();
+    expect(
+      forkableDeployment({ deployments: [...skill.deployments, { ...copy, is_symlink: true }] })
+        ?.id,
+    ).toBe("dep:global");
+  });
+
   it("updates_the_other_owner_normally_after_the_fork_or_the_project_copy_is_silently_dropped", async () => {
     const calls: string[] = [];
     const { others } = await forkEditedAndUpdate(skill, {

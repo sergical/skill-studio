@@ -36,7 +36,7 @@ function forkCopy(skillNames: string[], isBulk: boolean): string {
 
 function noForkCopy(skillNames: string[], isBulk: boolean): string {
   const names = isBulk ? skillNames.join(", ") : skillNames[0];
-  return `You changed ${names} after you installed ${isBulk && skillNames.length > 1 ? "them" : "it"}. ${isBulk && skillNames.length > 1 ? "They" : "It"} cannot be forked here, so the update would overwrite your edits.`;
+  return `You changed ${names} after you installed ${isBulk && skillNames.length > 1 ? "them" : "it"}. ${isBulk && skillNames.length > 1 ? "They" : "It"} cannot be forked here. Fork requires a shared Global folder with no independent agent copies. Updating will overwrite your edits.`;
 }
 
 export function UpdateOverwritesEditsDialog({
@@ -69,7 +69,7 @@ export function UpdateOverwritesEditsDialog({
             {canFork ? forkCopy(forkableNames, isBulk) : noForkCopy(skillNames, isBulk)}
             {canFork &&
               unforkableSkillNames.length > 0 &&
-              ` ${unforkableSkillNames.join(", ")} cannot be forked here. Skip ${unforkableSkillNames.length === 1 ? "it" : "them"}, or overwrite ${unforkableSkillNames.length === 1 ? "its" : "their"} edits.`}
+              ` ${unforkableSkillNames.join(", ")} cannot be forked here. Fork requires a shared Global folder with no independent agent copies. Skip ${unforkableSkillNames.length === 1 ? "it" : "them"}, or overwrite ${unforkableSkillNames.length === 1 ? "its" : "their"} edits.`}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
