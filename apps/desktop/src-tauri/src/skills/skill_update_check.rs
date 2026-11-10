@@ -551,6 +551,9 @@ pub trait ForkLookup: Sync {
         base_branch: &str,
         head_sha: &str,
     ) -> Result<u32, String>;
+    fn upstream_ahead(&self, repo: &str) -> Result<Option<UpstreamAhead>, String> {
+        upstream_ahead_for_repo(repo, self)
+    }
 }
 
 /// Parses the `@tsv` line `GhForkLookup::repo_info` asks `gh` for:
@@ -573,7 +576,7 @@ fn parse_repo_fork_info(stdout: &str) -> RepoForkInfo {
     }
 }
 
-/// Deadline for one fork lookup call, so a stalled `gh` cannot hold up the
+/// Deadline shared by one repository's fork lookup calls, so a stalled `gh` cannot hold up the
 /// owner update checks that wait for the fork lookups.
 const FORK_LOOKUP_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -581,18 +584,21 @@ const FORK_LOOKUP_TIMEOUT: Duration = Duration::from_secs(20);
 const FORK_LOOKUP_TIMED_OUT_MESSAGE: &str = "GitHub fork lookup timed out";
 
 /// Real `ForkLookup` backed by the `gh` CLI.
-pub struct GhForkLookup {
-    pub gh_bin: PathBuf,
-    /// Deadline for each `gh` call; a timeout is an ordinary failed lookup.
-    pub timeout: Duration,
+struct GhForkLookup {
+    gh_bin: PathBuf,
+    /// Budget for one repository; a timeout is an ordinary failed lookup.
+    timeout: Duration,
+    control: Option<super::skill_process::AddOperationControl>,
 }
 
 impl GhForkLookup {
     fn run(&self, args: &[&str]) -> Result<Vec<u8>, String> {
-        let control = super::skill_process::AddOperationControl::new(
-            Arc::new(AtomicBool::new(false)),
-            self.timeout,
-        );
+        let control = self.control.clone().unwrap_or_else(|| {
+            super::skill_process::AddOperationControl::new(
+                Arc::new(AtomicBool::new(false)),
+                self.timeout,
+            )
+        });
         super::gh_cli::run_gh_controlled(&self.gh_bin, args, &control).map_err(|e| {
             let message = e.message();
             if message == super::skill_process::PROCESS_TIMED_OUT_MESSAGE {
@@ -605,6 +611,18 @@ impl GhForkLookup {
 }
 
 impl ForkLookup for GhForkLookup {
+    fn upstream_ahead(&self, repo: &str) -> Result<Option<UpstreamAhead>, String> {
+        let scoped = Self {
+            gh_bin: self.gh_bin.clone(),
+            timeout: self.timeout,
+            control: Some(super::skill_process::AddOperationControl::new(
+                Arc::new(AtomicBool::new(false)),
+                self.timeout,
+            )),
+        };
+        upstream_ahead_for_repo(repo, &scoped)
+    }
+
     fn repo_info(&self, repo: &str) -> Result<RepoForkInfo, String> {
         let api_path = format!("repos/{repo}");
         let stdout = self.run(&[
@@ -663,9 +681,9 @@ fn split_safe_repo(repo: &str) -> Option<(&str, &str)> {
 
 /// One record for `repo` when it is a fork whose original is ahead. `Ok(None)`
 /// for a non-fork, an up-to-date fork, or names that are unsafe for a URL.
-fn upstream_ahead_for_repo(
+fn upstream_ahead_for_repo<L: ForkLookup + ?Sized>(
     repo: &str,
-    lookup: &dyn ForkLookup,
+    lookup: &L,
 ) -> Result<Option<UpstreamAhead>, String> {
     if split_safe_repo(repo).is_none() {
         return Ok(None);
@@ -771,7 +789,7 @@ fn find_upstream_ahead_with_pool(
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .pop_front();
                 let Some((key, repo)) = next else { break };
-                let result = upstream_ahead_for_repo(repo, lookup);
+                let result = lookup.upstream_ahead(repo);
                 if let Err(e) = &result {
                     eprintln!("skill update check: fork lookup for {repo} failed: {e}");
                     // Every further call would fail or stall the same way.
@@ -1126,6 +1144,11 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
         }
     }
 
+    candidates.retain(|candidate| !unverified_ids.contains(&candidate.owner_id));
+    let registered_forks: std::collections::BTreeSet<_> = fork_names
+        .iter()
+        .map(|name| format!("owner:v1/global/{name}"))
+        .collect();
     candidates.sort_by(|a, b| a.owner_id.cmp(&b.owner_id));
     let mut fork_candidates: Vec<ForkCandidate> = candidates
         .iter()
@@ -1136,13 +1159,16 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
         .chain(path_less)
         // A row an unreadable ledger or fork registry might shadow is not
         // looked up: a stale row naming another fork would add a second note.
-        .filter(|c| !unverified_ids.contains(&c.owner_id))
+        .filter(|c| {
+            !unverified_ids.contains(&c.owner_id) && !registered_forks.contains(&c.owner_id)
+        })
         .collect();
     fork_candidates.sort_by(|a, b| a.owner_id.cmp(&b.owner_id));
     let resolved_owners = fork_candidates
         .iter()
         .map(|c| c.owner_id.clone())
         .chain(ledger_names)
+        .chain(registered_forks)
         .collect();
     Sources {
         candidates,
@@ -1528,6 +1554,7 @@ fn run_update_check_now(
             &GhForkLookup {
                 gh_bin: gh_bin.clone(),
                 timeout: FORK_LOOKUP_TIMEOUT,
+                control: None,
             },
         );
         super::skill_plugin_update::refresh_plugin_versions(
@@ -2216,6 +2243,10 @@ resolved_commit = "{commit}"
             },
         );
         super::super::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+        assert!(
+            build_sources(&home, &[]).fork_candidates.is_empty(),
+            "Skill Studio forks cannot show the informational note"
+        );
 
         let lookup = FakeLookup::with_answers(vec![Ok(Some((
             "b".repeat(40),
@@ -3555,6 +3586,7 @@ resolved_commit = "{commit}"
         let lookup = GhForkLookup {
             gh_bin,
             timeout: Duration::from_millis(200),
+            control: None,
         };
 
         let started = std::time::Instant::now();
@@ -3724,5 +3756,72 @@ resolved_commit = "{commit}"
         let store = read_update_check_store(tmp.path());
         assert_eq!(store.checked_at.as_deref(), Some("t"));
         assert!(store.upstream_ahead.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_repo_shares_its_deadline_across_github_calls_or_a_slow_third_call_still_publishes_a_note(
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let gh_bin = tmp.path().join("gh");
+        super::super::test_support::write_fake_executable(&gh_bin, &format!(
+            "sleep 0.3\ncase \"$2\" in\nrepos/me/fork) printf 'true\\tmain\\tthem/orig\\tmain\\n' ;;\n*/git/ref/*) printf '%s\\n' '{}' ;;\n*) printf '1\\n' ;;\nesac", "a".repeat(40)
+        ));
+        let lookup = GhForkLookup {
+            gh_bin,
+            timeout: Duration::from_millis(700),
+            control: None,
+        };
+        let found = find_upstream_ahead(
+            &[repo_candidate("demo", "me/fork")],
+            &lookup,
+            &BTreeMap::new(),
+        );
+        assert!(
+            found.is_empty(),
+            "one repository must share the deadline across all calls"
+        );
+    }
+
+    #[test]
+    fn unreadable_registry_blocks_skills_sh_owner_and_note_lookups_or_uses_a_shadowed_owner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        write_skill_lock(&home, "demo", "me/fork", "skills/demo/SKILL.md", "hash");
+        fs::write(
+            super::super::skill_fork_registry::fork_registry_path(&home),
+            "{ invalid",
+        )
+        .unwrap();
+        let sources = build_sources(&home, &[]);
+        assert!(
+            sources.candidates.is_empty(),
+            "owner checks must not use a row the unreadable registry might shadow"
+        );
+        assert!(sources.fork_candidates.is_empty());
+        assert!(!sources.failed_roots.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_lookup_reads_the_source_repository_fields_or_uses_the_immediate_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let gh_bin = tmp.path().join("gh");
+        super::super::test_support::write_fake_executable(
+            &gh_bin,
+            r#"case "$4" in
+          *".source.full_name"*".source.default_branch"*) printf 'true\tmain\toriginal/repo\ttrunk\n' ;;
+          *) exit 77 ;;
+        esac"#,
+        );
+        let lookup = GhForkLookup {
+            gh_bin,
+            timeout: Duration::from_secs(1),
+            control: None,
+        };
+        let info = lookup.repo_info("me/fork").unwrap();
+        let source = info.parent.unwrap();
+        assert_eq!(source.full_name, "original/repo");
+        assert_eq!(source.default_branch, "trunk");
     }
 }

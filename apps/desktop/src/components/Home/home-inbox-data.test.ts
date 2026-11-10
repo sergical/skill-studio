@@ -224,7 +224,7 @@ describe("updateAllOutdatedSkills", () => {
       failures: 0,
       skillsAttempted: 3,
       skillsSucceeded: 3,
-      firstError: null,
+      errors: [],
     });
   });
 
@@ -319,7 +319,7 @@ describe("updateAllOutdatedSkills", () => {
       failures: 0,
       skillsAttempted: 2,
       skillsSucceeded: 2,
-      firstError: null,
+      errors: [],
     });
   });
 
@@ -343,7 +343,7 @@ describe("updateAllOutdatedSkills", () => {
       failures: 2,
       skillsAttempted: 2,
       skillsSucceeded: 0,
-      firstError: "update failed",
+      errors: ["update failed"],
     });
   });
 
@@ -376,11 +376,11 @@ describe("updateAllOutdatedSkills", () => {
       failures: 2,
       skillsAttempted: 1,
       skillsSucceeded: 0,
-      firstError: "update failed",
+      errors: ["update failed"],
     });
   });
 
-  it("update_all_reports_the_first_item_error_and_counts_each_failed_item_or_names_the_lost_reason", async () => {
+  it("update_all_reports_every_item_error_and_counts_each_failed_item_or_names_the_lost_reason", async () => {
     const skills = [
       ownerSkill("alpha", "owner:v1/global/alpha"),
       ownerSkill("beta", "owner:v1/global/beta"),
@@ -409,7 +409,7 @@ describe("updateAllOutdatedSkills", () => {
       failures: 2,
       skillsAttempted: 3,
       skillsSucceeded: 1,
-      firstError: "beta is wildcard-dotagents (read-only)",
+      errors: ["beta is wildcard-dotagents (read-only)", "gamma failed"],
     });
   });
 
@@ -435,7 +435,7 @@ describe("updateAllOutdatedSkills", () => {
       failures: 2,
       skillsAttempted: 2,
       skillsSucceeded: 0,
-      firstError: "backend unreachable",
+      errors: ["backend unreachable"],
     });
   });
 
@@ -477,17 +477,17 @@ describe("updateAllFailureMessage", () => {
       failures: 3,
       skillsAttempted: 5,
       skillsSucceeded: 2,
-      firstError: "read-only",
+      errors: ["read-only"],
     };
     expect(updateAllFailureMessage(tally)).toBe("3 failed: read-only");
-    expect(updateAllFailureMessage({ ...tally, failures: 0, firstError: null })).toBeUndefined();
-    const long = updateAllFailureMessage({ ...tally, firstError: "x".repeat(500) }) ?? "";
+    expect(updateAllFailureMessage({ ...tally, failures: 0, errors: [] })).toBeUndefined();
+    const long = updateAllFailureMessage({ ...tally, errors: ["x".repeat(500)] }) ?? "";
     expect(long.length).toBeLessThan(170);
     expect(long.endsWith("…")).toBe(true);
   });
 
   it("update_all_toast_counts_skills_not_copies_so_it_agrees_with_its_title", () => {
-    const base = { attempted: 2, firstError: "read-only" };
+    const base = { attempted: 2, errors: ["read-only"] };
     // One skill, both copies failed: title "Updated 0 of 1 skill", so one failed.
     expect(
       updateAllFailureMessage({
@@ -680,7 +680,7 @@ describe("updateAllOutdatedSkills with edited skills", () => {
 
     expect(tally.failures).toBe(1);
     expect(tally.skillsSucceeded).toBe(0);
-    expect(tally.firstError).toBe("fork refused");
+    expect(tally.errors[0]).toBe("fork refused");
   });
 
   it("update_all_names_the_skill_whose_pull_left_conflict_markers_or_the_toast_hides_them", async () => {
@@ -762,7 +762,7 @@ describe("updateAllOutdatedSkills with edited skills", () => {
       },
     );
     expect(tally.skillsSucceeded).toBe(0);
-    expect(tally.firstError).toBe("fork refused");
+    expect(tally.errors[0]).toBe("fork refused");
   });
 
   it("update_all_says_the_fork_was_made_when_only_the_pull_fails_or_the_user_thinks_the_edits_are_gone", async () => {
@@ -775,8 +775,8 @@ describe("updateAllOutdatedSkills with edited skills", () => {
       undefined,
       { names: new Set(["edited"]), fork: async () => forkRecord },
     );
-    expect(tally.firstError).toContain("The fork was made and your edits are kept");
-    expect(tally.firstError).toContain("network down");
+    expect(tally.errors[0]).toContain("The fork was made and your edits are kept");
+    expect(tally.errors[0]).toContain("network down");
   });
 
   it("update_all_counts_a_forked_skills_other_copy_as_failed_when_the_whole_batch_rejects_or_it_reads_as_updated", async () => {
@@ -861,7 +861,7 @@ describe("updateAllOutdatedSkills with plugin updates", () => {
       },
     );
     expect(tally).toMatchObject({ skillsSucceeded: 0, failures: 1 });
-    expect(tally.firstError).toContain("marketplace unreachable");
+    expect(tally.errors[0]).toContain("marketplace unreachable");
   });
 
   /** Failure: a skill whose copy update failed still has its plugin updated. */
@@ -1009,7 +1009,7 @@ describe("updateAllOutdatedSkills with plugin updates", () => {
       },
     );
     expect(plugins).toEqual(["codex@official"]);
-    expect(tally).toMatchObject({ skillsSucceeded: 0, failures: 1, firstError: "merge exploded" });
+    expect(tally).toMatchObject({ skillsSucceeded: 0, failures: 1, errors: ["merge exploded"] });
   });
 
   /** Flow: Update all with edited-skill forking on, and a skill that is already a fork fails its
@@ -1080,7 +1080,7 @@ describe("updateAllOutdatedSkills with plugin updates", () => {
       },
     );
     expect(plugins).toEqual([]);
-    expect(tally).toMatchObject({ skillsSucceeded: 0, firstError: "permission denied" });
+    expect(tally).toMatchObject({ skillsSucceeded: 0, errors: ["permission denied"] });
   });
 
   /** Flow: the fork of an edited skill is made but the pull onto it fails. Expectation: its
@@ -1121,7 +1121,7 @@ describe("updateAllOutdatedSkills with plugin updates", () => {
       undefined,
       async () => ({ outcome: "skipped", message: "Pinned to 1.0.0" }),
     );
-    expect(tally).toMatchObject({ skillsSucceeded: 0, failures: 1, firstError: "Pinned to 1.0.0" });
+    expect(tally).toMatchObject({ skillsSucceeded: 0, failures: 1, errors: ["Pinned to 1.0.0"] });
     expect(seen[seen.length - 1]).toEqual([1, 1]);
 
     const failedSeen: [number, number][] = [];
