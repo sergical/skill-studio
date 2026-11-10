@@ -729,6 +729,7 @@ export async function setPluginEnabled(
 
 /** What `claude plugin update --json` reported for one install. */
 export interface PluginUpdateResult {
+  marketplace_refreshed?: boolean;
   /** The CLI's `updateOutcome`: `updated`, `up_to_date`, or another value such as `skipped`. */
   outcome: string;
   /** The CLI's own message or reason for the outcome, when it gave one. */
@@ -747,8 +748,11 @@ export async function updatePlugin(
   harness: string,
   scope: string,
   projectPath: string | null,
+  skipMarketplaceRefresh = false,
 ): Promise<PluginUpdateResult> {
-  return callCommand("update_plugin", { pluginId, harness, scope, projectPath });
+  const request = { pluginId, harness, scope, projectPath };
+  if (skipMarketplaceRefresh) Object.assign(request, { skipMarketplaceRefresh: true });
+  return callCommand("update_plugin", request);
 }
 
 /**

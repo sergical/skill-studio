@@ -66,7 +66,7 @@ interface UseLocationActionsResult {
   closePluginUninstallRequest: () => void;
   /** Set while a project copy's Park is pending its confirm. */
   parkRequest: { deployment: Deployment; scopeLabel: string } | null;
-  closeParkRequest: () => void;
+  closeParkRequest: (parked?: boolean) => void;
   /** Set while "Keep live" or "Keep parked" is pending its confirm. */
   leftBehindRequest: { choice: LeftBehindChoice; pair: LeftBehindPair } | null;
   closeLeftBehindRequest: () => void;
@@ -75,7 +75,7 @@ interface UseLocationActionsResult {
   closeSplitRequest: () => void;
   /** Set while a "Turn off for <Agent>" action is pending its confirm. */
   turnOffRequest: TurnOffAction | null;
-  closeTurnOffRequest: () => void;
+  closeTurnOffRequest: (turnedOff?: boolean) => void;
 }
 
 type SplitLocationRequest = Omit<Extract<LocationAction, { kind: "split" }>, "kind">;
@@ -146,6 +146,7 @@ export function useLocationActions(
   const [parkRequest, setParkRequest] = useState<{
     deployment: Deployment;
     scopeLabel: string;
+    settle: (parked: boolean) => void;
   } | null>(null);
   const [leftBehindRequest, setLeftBehindRequest] = useState<{
     choice: LeftBehindChoice;
@@ -153,7 +154,10 @@ export function useLocationActions(
   } | null>(null);
   const [pluginUninstallRequest, setPluginUninstallRequest] = useState<Deployment | null>(null);
   const [splitRequest, setSplitRequest] = useState<SplitLocationRequest | null>(null);
-  const [turnOffRequest, setTurnOffRequest] = useState<TurnOffAction | null>(null);
+  const [turnOffRequest, setTurnOffRequest] = useState<{
+    action: TurnOffAction;
+    settle: (turnedOff: boolean) => void;
+  } | null>(null);
 
   /** Resolves `true` when `fn` succeeded, `false` after showing its error toast. Never rejects. */
   const runWithErrorToast = <T = void>(
@@ -251,8 +255,13 @@ export function useLocationActions(
       case "park":
         // A project copy leaves a repository, so it confirms first; a global one parks at once.
         if (action.projectPath !== null) {
-          setParkRequest({ deployment: action.deployment, scopeLabel: action.scopeLabel });
-          return Promise.resolve(true);
+          return new Promise((settle) => {
+            setParkRequest({
+              deployment: action.deployment,
+              scopeLabel: action.scopeLabel,
+              settle,
+            });
+          });
         }
         return runWithErrorToast("Couldn't park skill", () =>
           parkSkill({ deployment_id: action.deployment.id }),
@@ -284,8 +293,7 @@ export function useLocationActions(
         });
         return Promise.resolve(true);
       case "turn-off-agent":
-        setTurnOffRequest(action);
-        return Promise.resolve(true);
+        return new Promise((settle) => setTurnOffRequest({ action, settle }));
       case "remove-scope":
         setRemoveRequest({ scopeLabel: action.scopeLabel, projectPath: action.projectPath });
         return Promise.resolve(true);
@@ -346,13 +354,19 @@ export function useLocationActions(
     pluginUninstallRequest,
     closePluginUninstallRequest: () => setPluginUninstallRequest(null),
     parkRequest,
-    closeParkRequest: () => setParkRequest(null),
+    closeParkRequest: (parked = false) => {
+      parkRequest?.settle(parked);
+      setParkRequest(null);
+    },
     leftBehindRequest,
     closeLeftBehindRequest: () => setLeftBehindRequest(null),
     splitRequest,
     closeSplitRequest: () => setSplitRequest(null),
-    turnOffRequest,
-    closeTurnOffRequest: () => setTurnOffRequest(null),
+    turnOffRequest: turnOffRequest?.action ?? null,
+    closeTurnOffRequest: (turnedOff = false) => {
+      turnOffRequest?.settle(turnedOff);
+      setTurnOffRequest(null);
+    },
   };
 }
 
