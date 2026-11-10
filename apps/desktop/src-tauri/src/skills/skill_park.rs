@@ -80,7 +80,7 @@ pub fn park_with_runtime(
     deployment_id: DeploymentId,
 ) -> Result<ParkOutcome, String> {
     let rt = super::core_runtime::build_runtime_write_at(home, data_root)?;
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::park(&rt, &ctx, &ParkRequest { deployment_id });
     let envelope = ResultEnvelope::from_result(Operation::Park, &rt.scope, &ctx, result);
     super::core_runtime::to_command_result(envelope)
@@ -113,7 +113,7 @@ pub async fn park_check(
     crate::timing_log::time_command_blocking(&app, "park_check", move || {
         let deployment_id = deployment_id_from_target(&target, "Park check")?;
         let rt = super::core_runtime::build_runtime_write()?;
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         ops::park_check(&rt, &ctx, &ParkCheckRequest { deployment_id }).map_err(|e| e.message)
     })
     .await
@@ -133,7 +133,7 @@ pub async fn discard_skill_copy(
         let keep_deployment_id = deployment_id_from_target(&keep, "Keep copy")?;
         let names = skill_names_for_deployments([&deployment_id]);
         let rt = super::core_runtime::build_runtime_write()?;
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = ops::discard(
             &rt,
             &ctx,
@@ -162,7 +162,7 @@ pub async fn unlist_parked_dotagents(
         let deployment_id = deployment_id_from_target(&target, "Stop dotagents installing it")?;
         let names = skill_names_for_deployments([&deployment_id]);
         let rt = super::core_runtime::build_runtime_write()?;
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = ops::unlist_parked_dotagents(&rt, &ctx, &deployment_id);
         let envelope = ResultEnvelope::from_result(Operation::Remove, &rt.scope, &ctx, result);
         super::core_runtime::to_command_result(envelope)?;
@@ -182,7 +182,7 @@ pub async fn unpark_skill(
         let deployment_id = deployment_id_from_target(&target, "Unpark")?;
         let names = skill_names_for_deployments([&deployment_id]);
         let rt = super::core_runtime::build_runtime_write()?;
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = ops::unpark(&rt, &ctx, &UnparkRequest { deployment_id });
         let envelope = ResultEnvelope::from_result(Operation::Unpark, &rt.scope, &ctx, result);
         let outcome = super::core_runtime::to_command_result(envelope)?;
@@ -257,7 +257,7 @@ fn run_batch(
     let rt = super::core_runtime::build_runtime_write()?;
     let results = BulkTargetResult::collect(targets, |target| {
         let deployment_id = deployment_id_from_target(target, action)?;
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         op(&rt, &ctx, deployment_id)
     });
     eprintln!(

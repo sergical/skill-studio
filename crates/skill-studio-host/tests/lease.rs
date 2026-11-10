@@ -181,3 +181,72 @@ fn two_writers_to_different_roots_never_block_each_other_or_names_the_root_that_
     assert_eq!(first.mode(), LeaseMode::Exclusive);
     assert_eq!(second.mode(), LeaseMode::Exclusive);
 }
+
+const LEGACY_WAITER_ENV: &str = "SKILL_STUDIO_LEGACY_WAITER_PATH";
+
+#[test]
+fn legacy_waiter_child_worker() {
+    let Some(path) = std::env::var_os(LEGACY_WAITER_ENV) else {
+        return;
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    println!("opened");
+    std::io::stdout().flush().unwrap();
+    let mut command = String::new();
+    std::io::stdin().read_line(&mut command).unwrap();
+    file.lock().unwrap();
+    println!("held");
+    std::io::stdout().flush().unwrap();
+    command.clear();
+    std::io::stdin().read_line(&mut command).unwrap();
+}
+
+#[test]
+fn a_legacy_waiter_keeps_exclusion_after_release_instead_of_locking_an_unlinked_inode() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("home");
+    let lease_root = dir.path().join("leases");
+    let lease = FileLease::new(lease_root.clone());
+    let keys = [key(&root)];
+    let held = lease
+        .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
+        .unwrap();
+    let path = lease_root.join(format!(
+        "{}.lock",
+        skill_studio_core::identity::sha256_hex(root.to_string_lossy().as_bytes())
+    ));
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "legacy_waiter_child_worker", "--nocapture"])
+        .env(LEGACY_WAITER_ENV, path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let wait_for = |stdout: &mut BufReader<std::process::ChildStdout>, expected: &str| loop {
+        let mut line = String::new();
+        assert_ne!(
+            stdout.read_line(&mut line).unwrap(),
+            0,
+            "legacy child exited before {expected}"
+        );
+        if line.trim() == expected {
+            break;
+        }
+    };
+    wait_for(&mut stdout, "opened");
+    drop(held);
+    child.stdin.as_mut().unwrap().write_all(b"lock\n").unwrap();
+    wait_for(&mut stdout, "held");
+    let second = lease.acquire(&keys, LeaseMode::Exclusive, Duration::ZERO);
+    drop(child.stdin.take());
+    assert!(child.wait().unwrap().success());
+    assert!(
+        matches!(second, Err(ref error) if error.code == ErrorCode::ScopeBusy),
+        "a new writer acquired a replacement inode while the legacy process held its open file"
+    );
+}

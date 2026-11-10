@@ -740,12 +740,11 @@ pub fn consent_from_registry(home: &Path) -> bool {
         return false;
     };
     serde_json::from_str::<TelemetryRegistry>(&contents)
-        .map(|registry| {
+        .map_or(None, |registry| {
             registry
                 .telemetry_enabled
                 .or(registry.error_reporting_enabled)
         })
-        .unwrap_or(None)
         .unwrap_or(false)
 }
 

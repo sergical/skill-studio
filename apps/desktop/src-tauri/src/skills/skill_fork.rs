@@ -2062,6 +2062,121 @@ mod tests {
     }
 
     #[test]
+    fn fork_completes_and_releases_its_lease_while_invocation_indexing_is_stalled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_data = tmp.path().join("data");
+        seed_dotagents_ledger(
+            &home,
+            "find-bugs",
+            "getsentry/find-bugs",
+            "skills/find-bugs",
+            &"a".repeat(40),
+        );
+        write_file(
+            &home.join(".agents/skills/find-bugs/SKILL.md"),
+            "---\nname: find-bugs\ndescription: Find bugs\n---\nbody",
+        );
+        let (snapshot, _) = skill_refresh::build_snapshot(
+            &home,
+            &mut skill_studio_host::SkillInvocationIndex::default(),
+            skill_refresh::BuildPaths::new(
+                &tmp.path().join("invocations.json"),
+                &app_data,
+                &tmp.path().join("updates.json"),
+            ),
+            chrono::Utc::now(),
+        );
+        let deployment = snapshot
+            .skills
+            .iter()
+            .find(|skill| skill.name == "find-bugs")
+            .unwrap()
+            .deployments
+            .iter()
+            .find(|deployment| deployment.destination == SkillDestination::Universal)
+            .unwrap();
+        let target = super::super::skill_dto::LifecycleTarget {
+            deployment_id: Some(deployment.id.clone()),
+            owner_id: None,
+        };
+        let state = SkillRefreshState::fixture_with_paths(
+            snapshot,
+            skill_refresh::BuildPaths::new(
+                &tmp.path().join("invocations.json"),
+                &app_data,
+                &tmp.path().join("updates.json"),
+            ),
+        );
+        let (paused_tx, paused_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let (home, state) = (&home, &state);
+            let indexer = scope.spawn(move || {
+                skill_refresh::rebuild_invocations_at(
+                    home,
+                    state,
+                    || {
+                        paused_tx.send(()).unwrap();
+                        resume_rx.recv().unwrap();
+                    },
+                    |_| Ok(()),
+                )
+            });
+            paused_rx.recv().unwrap();
+            let (app_data, target) = (&app_data, &target);
+            let writer = scope.spawn(move || {
+                let result = (|| {
+                    let lease = super::super::write_lease::WriteLease::default();
+                    let guard = lease.try_acquire(home)?;
+                    let fresh = skill_refresh::rebuild_snapshot_at(home, state, |_| Ok(()))?;
+                    let (skill, deployment) =
+                        super::super::skill_lifecycle::resolve_lifecycle_target(
+                            &fresh, target, "Fork",
+                        )?;
+                    fork_skill_with(
+                        &guard,
+                        home,
+                        app_data,
+                        &skill.name,
+                        Path::new(&deployment.path),
+                        &FakeLedger::default(),
+                        &FakeFetch {
+                            files: vec![("SKILL.md", "---\nname: find-bugs\n---\nupstream body")],
+                        },
+                        &NeverCalledLookup,
+                    )
+                })();
+                completed_tx.send(result).unwrap();
+            });
+            let completed = completed_rx.recv_timeout(std::time::Duration::from_secs(10));
+            let released = matches!(completed, Ok(Ok(_)))
+                && super::super::write_lease::WriteLease::default()
+                    .try_acquire(home)
+                    .is_ok();
+            let revision_before_resume = state.snapshot.read().unwrap().as_ref().unwrap().revision;
+            resume_tx.send(()).unwrap();
+            writer.join().unwrap();
+            indexer.join().unwrap().unwrap();
+            assert!(
+                matches!(completed, Ok(Ok(_))),
+                "Fork did not complete while indexing was paused: {completed:?}"
+            );
+            assert!(released, "Fork kept its write lease after completing");
+            assert_eq!(
+                state.snapshot.read().unwrap().as_ref().unwrap().revision,
+                revision_before_resume,
+                "indexing published results computed before the fresh write snapshot"
+            );
+            assert!(read_fork_registry(home)
+                .unwrap()
+                .forks
+                .contains_key("find-bugs"));
+        });
+    }
+
+    #[test]
     fn fork_happy_path_snapshots_removes_restores_and_records() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
