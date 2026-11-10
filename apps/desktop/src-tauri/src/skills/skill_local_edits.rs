@@ -56,6 +56,28 @@ fn deployment_local_edits(
     }
 }
 
+fn update_local_edits(
+    fs: &dyn ScopeFs,
+    lock: Option<&SkillLockFile>,
+    skill_name: &str,
+    deployment: &Deployment,
+    deployments: &[Deployment],
+) -> LocalEditsDto {
+    let Some(owner_id) = deployment.owner_id.as_deref() else {
+        return deployment_local_edits(fs, lock, skill_name, deployment);
+    };
+    let mut verdict = NOT_CHECKED;
+    for copy in deployments
+        .iter()
+        .filter(|copy| copy.owner_id.as_deref() == Some(owner_id) && !copy.is_symlink)
+    {
+        let checked = deployment_local_edits(fs, lock, skill_name, copy);
+        verdict.edited |= checked.edited;
+        verdict.checked |= checked.checked;
+    }
+    verdict
+}
+
 /// One verdict per target, in the order sent. A target that no longer
 /// resolves reads as not checked: Update itself reports that refusal.
 #[tauri::command]
@@ -80,9 +102,13 @@ pub async fn skill_local_edits(
             .iter()
             .map(|target| {
                 match skill_lifecycle::resolve_lifecycle_target(&snapshot, target, "Update") {
-                    Ok((skill, deployment)) => {
-                        deployment_local_edits(&fs, lock.as_ref(), &skill.name, &deployment)
-                    }
+                    Ok((skill, deployment)) => update_local_edits(
+                        &fs,
+                        lock.as_ref(),
+                        &skill.name,
+                        &deployment,
+                        &skill.deployments,
+                    ),
                     Err(e) => {
                         eprintln!("[local-edits] target not resolved: {e}");
                         NOT_CHECKED
@@ -92,4 +118,74 @@ pub async fn skill_local_edits(
             .collect())
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn updating_an_owner_checks_its_copy_mode_folders_or_silently_overwrites_their_edits() {
+        let home = tempfile::tempdir().unwrap();
+        let canonical_path = home.path().join(".agents/skills/sample");
+        let copy_path = home.path().join(".codex/skills/sample");
+        for path in [&canonical_path, &copy_path] {
+            fs::create_dir_all(path).unwrap();
+            fs::write(path.join("SKILL.md"), b"original skill").unwrap();
+        }
+        let real_fs = skill_studio_host::RealFs::new();
+        let hash = skill_studio_core::tree_hash::tree_hash_ignoring_junk(&real_fs, &canonical_path)
+            .unwrap();
+        let lock: SkillLockFile = serde_json::from_value(serde_json::json!({"version":3,"skills":{"sample":{"source":"owner/repo","sourceType":"github","sourceUrl":"https://github.com/owner/repo","skillFolderHash":hash,"installedAt":"2020-01-01T00:00:00Z","updatedAt":"2020-01-01T00:00:00Z"}}})).unwrap();
+        let canonical = Deployment {
+            path: canonical_path.to_string_lossy().into_owned(),
+            scope: "global".to_string(),
+            owner_kind: LifecycleOwnerKind::SkillsSh,
+            owner_id: Some("owner:v1/global/sample".to_string()),
+            ..Default::default()
+        };
+        let copy = Deployment {
+            path: copy_path.to_string_lossy().into_owned(),
+            ..canonical.clone()
+        };
+        fs::write(copy_path.join("SKILL.md"), b"my edit").unwrap();
+        let verdict = update_local_edits(
+            &real_fs,
+            Some(&lock),
+            "sample",
+            &canonical,
+            &[canonical.clone(), copy.clone()],
+        );
+        assert!(
+            verdict.edited && verdict.checked,
+            "the edited per-agent folder was not checked"
+        );
+        fs::write(copy_path.join("SKILL.md"), b"original skill").unwrap();
+        let foreign = Deployment {
+            owner_id: Some("another-owner".to_string()),
+            path: home.path().join("foreign").to_string_lossy().into_owned(),
+            ..copy.clone()
+        };
+        fs::create_dir_all(&foreign.path).unwrap();
+        fs::write(Path::new(&foreign.path).join("SKILL.md"), b"foreign edit").unwrap();
+        let linked_path = home.path().join("linked");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&foreign.path, &linked_path).unwrap();
+        let linked = Deployment {
+            path: linked_path.to_string_lossy().into_owned(),
+            is_symlink: true,
+            ..canonical.clone()
+        };
+        assert!(
+            !update_local_edits(
+                &real_fs,
+                Some(&lock),
+                "sample",
+                &canonical,
+                &[canonical.clone(), copy, foreign, linked]
+            )
+            .edited
+        );
+    }
 }

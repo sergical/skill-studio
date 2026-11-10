@@ -18,9 +18,10 @@ import {
 /** The pending "Update will replace your edits" choice: the dialog is open while `skillNames` is not empty. */
 export interface UpdatePrompt {
   skillNames: string[];
-  /** False when a fork is impossible here (no Global Universal copy), so the dialog offers only Overwrite and Cancel. */
+  /** False when none of the edited skills can be forked here. */
   canFork: boolean;
-  fork: () => void;
+  unforkableSkillNames: string[];
+  fork: (unforkable?: "skip" | "overwrite") => void;
   overwrite: () => void;
   cancel: () => void;
 }
@@ -42,6 +43,7 @@ export function UpdateOverwritesEditsDialog({
   skillNames,
   isBulk,
   canFork,
+  unforkableSkillNames = [],
   onFork,
   onOverwrite,
   onCancel,
@@ -51,17 +53,23 @@ export function UpdateOverwritesEditsDialog({
   /** True for "Update all": the buttons say "all" and the description lists every name. */
   isBulk: boolean;
   canFork: boolean;
-  onFork: () => void;
+  unforkableSkillNames?: string[];
+  onFork: (unforkable: "skip" | "overwrite") => void;
   onOverwrite: () => void;
   onCancel: () => void;
 }) {
+  const unforkableNames = new Set(unforkableSkillNames);
+  const forkableNames = skillNames.filter((name) => !unforkableNames.has(name));
   return (
     <AlertDialog open={skillNames.length > 0} onOpenChange={(open) => !open && onCancel()}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Update will replace your edits</AlertDialogTitle>
           <AlertDialogDescription>
-            {canFork ? forkCopy(skillNames, isBulk) : noForkCopy(skillNames, isBulk)}
+            {canFork ? forkCopy(forkableNames, isBulk) : noForkCopy(skillNames, isBulk)}
+            {canFork &&
+              unforkableSkillNames.length > 0 &&
+              ` ${unforkableSkillNames.join(", ")} cannot be forked here. Skip ${unforkableSkillNames.length === 1 ? "it" : "them"}, or overwrite ${unforkableSkillNames.length === 1 ? "its" : "their"} edits.`}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -70,9 +78,20 @@ export function UpdateOverwritesEditsDialog({
             {isBulk ? "Overwrite all" : "Overwrite edits"}
           </AlertDialogAction>
           {canFork && (
-            <AlertDialogAction onClick={onFork}>
-              {isBulk ? "Fork edited and update all" : "Fork and update"}
-            </AlertDialogAction>
+            <>
+              <AlertDialogAction onClick={() => onFork("overwrite")}>
+                {unforkableSkillNames.length > 0
+                  ? "Fork eligible and overwrite others"
+                  : isBulk
+                    ? "Fork edited and update all"
+                    : "Fork and update"}
+              </AlertDialogAction>
+              {unforkableSkillNames.length > 0 && (
+                <AlertDialogAction variant="outline" onClick={() => onFork("skip")}>
+                  Fork eligible and skip others
+                </AlertDialogAction>
+              )}
+            </>
           )}
         </AlertDialogFooter>
       </AlertDialogContent>
