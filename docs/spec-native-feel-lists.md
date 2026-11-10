@@ -61,7 +61,7 @@ same row so the two pages look like one product.
   chevron (`text-text-tertiary`, rotates, `motion-reduce:transition-none`),
   label, count `tabular-nums text-text-tertiary`. Sticky at the top of the
   scroll area (`sticky top-0 z-1 bg-bg-primary`), with a `border-b
-border-border-subtle`. Use the kit `Collapsible` like Home's `GroupHead`
+  border-border-subtle`. Use the kit `Collapsible` like Home's `GroupHead`
   does; reuse `GroupHead` by moving it to a shared file in
   `components/SkillList/` if its shape fits, instead of writing a second one.
 - The trigger is a real button with `aria-expanded`; its accessible name

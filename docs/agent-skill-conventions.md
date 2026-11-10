@@ -310,8 +310,8 @@ row's deployment path) builds:
   or skills.sh's resolved `installed_commit`, falling back to a dotagents
   declared ref, or omitted for an unpinned/wildcard entry).
 - `README.md` - generated install instructions for both `npx -y
-@sentry/dotagents add <owner>/<repo> --all` and `npx skills add
-<owner>/<repo>`.
+  @sentry/dotagents add <owner>/<repo> --all` and `npx skills add
+  <owner>/<repo>`.
 
 `create_skill_pack`/`update_skill_pack` commit the tree with `git`
 locally only; `update_skill_pack` rebuilds from the pack's already-recorded
@@ -358,22 +358,22 @@ stdout. Binaries are resolved with `$SHELL -lc 'command -v <bin>'` (fallback
 user's shell config.
 
 - **Claude Code**: `claude -p "<prompt>" --output-format stream-json --verbose
---permission-mode <mode> [--resume <id>]`. Lines:
+  --permission-mode <mode> [--resume <id>]`. Lines:
   `{"type":"system","subtype":"init",...,"session_id"}`;
   `{"type":"assistant","message":{"content":[{"type":"text","text":...} |
-{"type":"tool_use","name":"Skill","input":{"skill":"say-banana"}} |
-{"type":"thinking",...}]}}`;
+  {"type":"tool_use","name":"Skill","input":{"skill":"say-banana"}} |
+  {"type":"thinking",...}]}}`;
   `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":...,"content":"Launching skill: say-banana"}]}}`;
   `{"type":"result","subtype":"success","is_error":false,"result":"BANANA","session_id":"…","total_cost_usd":0.061,"duration_ms":…}`.
   Ignore `system/hook_*`, `rate_limit_event`, `thinking`. Skill loaded = a
   `tool_use` named `Skill` whose `input.skill` equals the skill name.
 - **Codex**: `codex exec --json --skip-git-repo-check -s <read-only|workspace-write>
-[-C <cwd>] "<prompt>"`; resume: `codex exec resume <thread_id> --json "<prompt>"`
+  [-C <cwd>] "<prompt>"`; resume: `codex exec resume <thread_id> --json "<prompt>"`
   (no `-C`; set the process cwd instead). No `-a` flag. Lines:
   `{"type":"thread.started","thread_id":"…"}`, `turn.started`,
   `{"type":"item.started"|"item.completed","item":{"id","type":"agent_message","text"}
-| {"type":"command_execution","command","aggregated_output","exit_code"} |
-{"type":"reasoning"} | {"type":"file_change",...} | {"type":"error","message"}}`,
+  | {"type":"command_execution","command","aggregated_output","exit_code"} |
+  {"type":"reasoning"} | {"type":"file_change",...} | {"type":"error","message"}}`,
   `{"type":"turn.completed","usage":{...}}`, `turn.failed`. Skill loaded = any
   `command_execution.command` containing `/<skill-name>/SKILL.md`, else unknown.
   Final text = last completed `agent_message`.
@@ -385,7 +385,7 @@ user's shell config.
   `read` tool whose `args.path` ends with or contains `/<skill-name>/SKILL.md`, else
   unknown. Final text = concatenated text blocks of the last `turn_end`.
 - **OpenCode**: `opencode2 run --standalone --format json --auto [--session <id>]
-"<prompt>"` (binary is `opencode2`, the v2 CLI; no `--dir` flag, cwd is the process
+  "<prompt>"` (binary is `opencode2`, the v2 CLI; no `--dir` flag, cwd is the process
   cwd; `--standalone` bypasses the shared `opencode2 serve --service` background
   service, which hangs every run with no output when wedged). JSONL `type` values:
   `step_start | text | tool | step_finish`, each carrying a `part`. Session id comes
