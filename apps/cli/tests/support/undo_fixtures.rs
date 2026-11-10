@@ -413,3 +413,85 @@ pub fn assert_recorded_lock(home: &Path, own: &serde_json::Value, unrelated: &se
     assert_eq!(&lock["skills"]["trace-skill"], own);
     assert_eq!(&lock["skills"]["unrelated"], unrelated);
 }
+
+
+
+const DOTAGENTS_DECLARATION: &str = "# saved alpha\n[[skills]]\nname = 'alpha' # exact\nsource = 'owner/alpha'\nref = 'pinned-before-remove'\n\n";
+const DOTAGENTS_LOCK: &str = "# saved alpha lock\n[skills.alpha]\nsource = 'owner/alpha'\nresolved_commit = 'pinned-before-remove'\n\n";
+const LATER_DECLARATION: &str =
+    "# later beta stays exact\n[[skills]]\nname = 'beta'\nsource = 'owner/beta'\n";
+const LATER_LOCK: &str = "# later beta lock stays exact\n[skills.beta]\nsource = 'owner/beta'\nresolved_commit = 'later-beta'\n";
+
+struct DotagentsRemoveCli(PathBuf);
+impl ProcessSpawner for DotagentsRemoveCli {
+    fn run(
+        &self,
+        spec: &ProcessSpec,
+        _: &dyn CancelToken,
+    ) -> Result<ProcessOutput, skill_studio_core::CoreError> {
+        assert!(spec.args.iter().any(|arg| arg == "remove"));
+        assert!(spec.args.iter().any(|arg| arg == "@sentry/dotagents"));
+        std::fs::remove_dir_all(self.0.join(".agents/skills/alpha")).unwrap();
+        std::fs::remove_file(self.0.join(".agents/agents.toml")).unwrap();
+        std::fs::remove_file(self.0.join(".agents/agents.lock")).unwrap();
+        std::fs::remove_file(self.0.join(".agents/.gitignore")).unwrap();
+        Ok(ProcessOutput {
+            status: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+        })
+    }
+}
+
+pub fn removed_dotagents(home: &Path, later: bool) -> EventId {
+    write_skill(home, "alpha", "saved Dotagents bytes");
+    std::fs::write(home.join(".agents/agents.toml"), DOTAGENTS_DECLARATION).unwrap();
+    std::fs::write(home.join(".agents/agents.lock"), DOTAGENTS_LOCK).unwrap();
+    std::fs::write(home.join(".agents/.gitignore"), "/skills/alpha\r\n").unwrap();
+    let mut rt = runtime(home);
+    rt.ports.spawner = Some(Arc::new(DotagentsRemoveCli(home.to_path_buf())));
+    let deployment_id = deployment(&rt, &RootKind::Universal);
+    let removed = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+    if later {
+        std::fs::write(home.join(".agents/agents.toml"), LATER_DECLARATION).unwrap();
+        std::fs::write(home.join(".agents/agents.lock"), LATER_LOCK).unwrap();
+        std::fs::write(home.join(".agents/.gitignore"), "/skills/beta\n").unwrap();
+    }
+    removed.event_id
+}
+
+pub fn assert_dotagents_saved_entries(home: &Path, later: bool, restored: bool) {
+    for (name, saved, other) in [
+        ("agents.toml", DOTAGENTS_DECLARATION, LATER_DECLARATION),
+        ("agents.lock", DOTAGENTS_LOCK, LATER_LOCK),
+        (".gitignore", "/skills/alpha\r\n", "/skills/beta\n"),
+    ] {
+        let expected = format!(
+            "{}{}",
+            if restored { saved } else { "" },
+            if later { other } else { "" }
+        );
+        let path = home.join(".agents").join(name);
+        if !later && !restored {
+            assert!(!path.exists(), "{} should be absent", path.display());
+        } else {
+            assert_eq!(std::fs::read_to_string(path).unwrap(), expected);
+        }
+    }
+    assert_eq!(home.join(".agents/skills/alpha").exists(), restored);
+}
+
+pub fn conflict_dotagents_slot(home: &Path, lock: bool) -> (PathBuf, String) {
+    let path = home
+        .join(".agents")
+        .join(if lock { "agents.lock" } else { "agents.toml" });
+    let newer = if lock {
+        "[skills.alpha]\nsource = 'new-owner/new-entry'\n"
+    } else {
+        "[[skills]]\nname = 'alpha'\nsource = 'new-owner/new-entry'\n"
+    }
+    .to_string();
+    std::fs::write(&path, &newer).unwrap();
+    (path, newer)
+}

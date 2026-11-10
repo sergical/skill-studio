@@ -33,6 +33,7 @@ pub mod backup_retention;
 pub mod discovery_sources;
 pub mod doctor;
 pub mod dotagents_ledger;
+mod dotagents_saved_entries;
 pub mod dto;
 pub mod error;
 pub mod events;
