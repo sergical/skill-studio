@@ -362,7 +362,7 @@ fn park_unpark_and_install_each_appear_in_history_and_park_undo_restores_the_ski
     // `unpark_skill` command, not `restore_skill_event`. Drive that same
     // path here, against the deployment id `park` moved the skill to.
     let parked_deployment_id = resolve_parked_deployment_id(&rt, park_skill);
-    let unpark_ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let unpark_ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let unpark_result = ops::unpark(
         &rt,
         &unpark_ctx,

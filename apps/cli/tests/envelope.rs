@@ -65,10 +65,8 @@ fn run_with_env(args: &[&str], env: &[(&str, &str)]) -> Run {
 /// the home path percent-encoded partway through a larger opaque string).
 fn replace_everywhere(value: &mut serde_json::Value, from: &str, to: &str) {
     match value {
-        serde_json::Value::String(s) => {
-            if s.contains(from) {
-                *s = s.replace(from, to);
-            }
+        serde_json::Value::String(s) if s.contains(from) => {
+            *s = s.replace(from, to);
         }
         serde_json::Value::Array(items) => items
             .iter_mut()

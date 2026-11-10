@@ -1179,7 +1179,7 @@ fn row_from(row: &rusqlite::Row) -> rusqlite::Result<EventRow> {
 
 /// A fresh, sortable-by-time event id. No DB access.
 pub fn allocate_id() -> String {
-    ulid::Ulid::new().to_string()
+    ulid::Ulid::generate().to_string()
 }
 
 /// Content fingerprint for drift detection and backup verification:

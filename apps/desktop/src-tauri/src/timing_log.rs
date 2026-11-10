@@ -291,7 +291,7 @@ fn rotate_if_needed(log_path: &Path, app_data: &Path, rotate_at_bytes: u64) -> s
 
 /// Rows older than this are dropped from `timing.jsonl` on each process
 /// start ([`trim_on_open`]) - matches unit 6.5's 30-day retention.
-const RETAIN: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
+const RETAIN: std::time::Duration = std::time::Duration::from_hours(720);
 
 /// Reads every parsable line of `<app_data_dir>/timing.jsonl` into a
 /// [`TimingRow`], for [`skill_studio_core::health::health_rollup`]. A line

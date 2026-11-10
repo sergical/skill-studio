@@ -21,7 +21,7 @@ use super::skill_refresh::{self, SkillRefreshState, SkillSnapshot};
 pub async fn fix_skill(skill: String, app: tauri::AppHandle) -> Result<FixSkillOutcome, String> {
     crate::timing_log::time_command_blocking(&app, "fix_skill", move || {
         let rt = super::core_runtime::build_runtime_write()?;
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = ops::fix_skill(
             &rt,
             &ctx,

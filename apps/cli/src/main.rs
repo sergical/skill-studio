@@ -41,7 +41,7 @@ use crate::scope::ScopeArgs;
 
 /// The rollup window `run_health` folds `timing.jsonl` over, matching the
 /// Settings "Command health" card and unit 6.5's ticket.
-const HEALTH_WINDOW: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3600);
+const HEALTH_WINDOW: std::time::Duration = std::time::Duration::from_hours(168);
 
 /// The version clap prints for `--version`: the crate version and the build
 /// commit, `SKILL_STUDIO_COMMIT` from `build.rs` ("dev" outside a release
@@ -827,7 +827,7 @@ fn error_envelope<T: ops::Outcome>(
             message: err.message,
             path: err.path.map(|p| p.display().to_string()),
         }],
-        correlation_id: CorrelationId(ulid::Ulid::new().to_string()),
+        correlation_id: CorrelationId(ulid::Ulid::generate().to_string()),
         event_id: None,
         // No `OpContext` exists yet at this point: the scope failed to
         // normalize before any op function ran, so there's nothing to
@@ -852,7 +852,7 @@ fn run_scan(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let req = ScanRequest {
         skills: skills.into_iter().map(SkillName).collect(),
         timings,
@@ -884,7 +884,7 @@ fn run_diagnose(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let req = ScanRequest {
         skills: skills.into_iter().map(SkillName).collect(),
         timings,
@@ -917,7 +917,7 @@ fn run_capabilities(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let harnesses = match harnesses
         .into_iter()
         .map(|h| AgentId::parse_harness(&h))
@@ -968,7 +968,7 @@ fn run_harnesses(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::harnesses(&rt, &ctx, &HarnessesRequest {});
     let envelope = ResultEnvelope::from_result(Operation::Harnesses, &rt.scope, &ctx, result);
     let code = exit_code(envelope.exit_status());
@@ -990,7 +990,7 @@ fn run_preview_repair(scope: &ScopeArgs, deployment_id: &str, json: bool, time: 
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let deployment_id = match DeploymentId::parse(deployment_id) {
         Ok(id) => id,
         Err(err) => {
@@ -1020,7 +1020,7 @@ fn run_apply_repair(scope: &ScopeArgs, preview_json: &PathBuf, json: bool, time:
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let preview = match std::fs::read_to_string(preview_json)
         .map_err(|e| skill_studio_core::CoreError::io(preview_json, e))
         .and_then(|text| {
@@ -1132,7 +1132,7 @@ fn run_add(scope: &ScopeArgs, args: AddArgs, json: bool, time: bool) -> ExitCode
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let method: InstallMethod = args.method.into();
     // `dotagents`/`skills-sh` shell out to `npx skills add`, which always
     // installs under the repo's own skill slug; a derived `--name` (the
@@ -1232,7 +1232,7 @@ fn run_fix(scope: &ScopeArgs, skill: &str, json: bool, time: bool) -> ExitCode {
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let req = skill_studio_core::dto::FixSkillRequest {
         skill: SkillName(skill.to_string()),
     };
@@ -1258,7 +1258,7 @@ fn run_install_preferences(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let req = InstallPreferencesRequest {
         scope: match project_path {
             Some(project) => RootScope::Project(ProjectRef(project)),
@@ -1285,7 +1285,7 @@ fn run_diagnose_conflict(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode 
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::diagnose_conflict(
         &rt,
         &ctx,
@@ -1303,7 +1303,7 @@ fn run_doctor(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
             Ok(rt) => rt,
             Err(code) => return code,
         };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::doctor(&rt, &ctx, &skill_studio_core::dto::DoctorRequest::default());
     let envelope = ResultEnvelope::from_result(Operation::Doctor, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_doctor_report_table)
@@ -1397,7 +1397,7 @@ fn run_update(args: UpdateArgs<'_>, time: bool) -> ExitCode {
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let method = parse_install_method(&method);
     let files = match (method, source_dir.as_ref()) {
         (InstallMethod::Copy, Some(dir)) => match read_install_files(dir) {
@@ -1481,7 +1481,7 @@ fn run_events(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let req = ListEventsRequest {
         skill: skill.map(SkillName),
         limit,
@@ -1508,7 +1508,7 @@ fn run_restore(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let req = RestoreRequest {
         event_id: EventId(event_id),
         force,
@@ -1531,7 +1531,7 @@ fn run_undo(scope: &ScopeArgs, force: bool, json: bool, time: bool) -> ExitCode 
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     // A page of all non-restorable rows must not read as "nothing to undo":
     // page through `list_events` with `after` until a restorable row turns
     // up or a page comes back short of the limit (the end of the history).
@@ -1650,7 +1650,7 @@ fn resolve_target(
     let name = target.skill.as_deref().unwrap_or_default();
     // Its own context: the op that follows records its timing on the
     // caller's context, and a scan there would be reported as part of it.
-    let scan_ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let scan_ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let inventory = ops::scan(
         rt,
         &scan_ctx,
@@ -1703,7 +1703,7 @@ fn run_remove(scope: &ScopeArgs, target: &TargetArgs, json: bool, time: bool) ->
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = resolve_target(&rt, target, TargetKind::Remove).and_then(|deployment_id| {
         ops::remove(
             &rt,
@@ -1725,7 +1725,7 @@ fn run_park(scope: &ScopeArgs, target: &TargetArgs, json: bool, time: bool) -> E
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = resolve_target(&rt, target, TargetKind::Park).and_then(|deployment_id| {
         // Asked before the park: the copy has moved by the time it returns.
         let warning = ops::park_git_warning(&rt, &ctx, &deployment_id);
@@ -1756,7 +1756,7 @@ fn run_split(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let parsed = DeploymentId::parse(deployment_id).and_then(|deployment_id| {
         let harnesses = harnesses
             .iter()
@@ -1782,7 +1782,7 @@ fn run_unpark(scope: &ScopeArgs, target: &TargetArgs, json: bool, time: bool) ->
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = resolve_target(&rt, target, TargetKind::Unpark)
         .and_then(|deployment_id| ops::unpark(&rt, &ctx, &UnparkRequest { deployment_id }));
     let envelope = ResultEnvelope::from_result(Operation::Unpark, &rt.scope, &ctx, result);
@@ -1798,7 +1798,7 @@ fn run_usage(scope: &ScopeArgs, days: u32, json: bool, time: bool) -> ExitCode {
             Ok(rt) => rt,
             Err(code) => return code,
         };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let cache = scope.desktop_usage_cache();
     let result = ops::scan(&rt, &ctx, &ScanRequest::default()).map(|inventory| {
         skill_studio_host::usage_report(
@@ -1871,7 +1871,7 @@ fn run_outdated(scope: &ScopeArgs, skills: Vec<String>, json: bool, time: bool) 
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let req = ScanRequest {
         skills: skills.into_iter().map(SkillName).collect(),
         timings: false,
@@ -1902,7 +1902,7 @@ fn run_sweep_quarantine(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::sweep_quarantine(&rt, &ctx, &RootScope::Global);
     let envelope = ResultEnvelope::from_result(Operation::SweepQuarantine, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_sweep_quarantine_table)
@@ -2014,7 +2014,7 @@ fn run_watch(scope: &ScopeArgs, since: Option<u64>, json: bool, time: bool) -> E
             Ok(rt) => rt,
             Err(code) => return code,
         };
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let req = ScanRequest::default();
         let scan_result = ops::scan(&rt, &ctx, &req);
         print_timing(time, ctx.take_timing().as_ref());
@@ -2140,7 +2140,7 @@ fn run_turn_off(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let request = resolve_target(&rt, target, TargetKind::Park).and_then(|deployment_id| {
         Ok(AgentOffRequest {
             deployment_id,

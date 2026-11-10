@@ -88,7 +88,7 @@ fn is_executable_file(path: &Path) -> bool {
 pub const PROCESS_CANCEL_GRACE: Duration = Duration::from_secs(2);
 
 /// Default Add Skill CLI timeout. Tests pass a shorter value.
-pub const DEFAULT_ADD_PROCESS_TIMEOUT: Duration = Duration::from_secs(300);
+pub const DEFAULT_ADD_PROCESS_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Bytes kept from each of stdout and stderr. Extra output is dropped.
 pub const MAX_PROCESS_OUTPUT_BYTES: usize = 64 * 1024;

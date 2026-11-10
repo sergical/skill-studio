@@ -7,6 +7,10 @@
       "description": "The skill was installed.",
       "type": "object",
       "properties": {
+        "kind": {
+          "type": "string",
+          "const": "installed"
+        },
         "event_id": {
           "description": "The `install` event.",
           "$ref": "#/$defs/EventId"
@@ -33,10 +37,6 @@
             "$ref": "#/$defs/InstallHarnessResult"
           },
           "default": []
-        },
-        "kind": {
-          "type": "string",
-          "const": "installed"
         }
       },
       "required": [
@@ -51,13 +51,13 @@
       "description": "`trust_identity` was set, is not yet trusted, and `trust_confirmed`\nwas `false`. Nothing was written; retry with `trust_confirmed: true`\nonce the user confirms.",
       "type": "object",
       "properties": {
-        "identity": {
-          "description": "The normalized identity that needs confirming.",
-          "type": "string"
-        },
         "kind": {
           "type": "string",
           "const": "needs_trust"
+        },
+        "identity": {
+          "description": "The normalized identity that needs confirming.",
+          "type": "string"
         }
       },
       "required": [
@@ -86,6 +86,10 @@
           "description": "The harness reads the skill from the shared folder at `path`, either\ndirectly or because its own folder is a link to the shared folder.",
           "type": "object",
           "properties": {
+            "kind": {
+              "type": "string",
+              "const": "reads_shared"
+            },
             "harness": {
               "description": "The requested harness (or `universal`).",
               "$ref": "#/$defs/AgentIdentity"
@@ -93,10 +97,6 @@
             "path": {
               "description": "The skill folder the harness reads.",
               "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "reads_shared"
             }
           },
           "required": [
@@ -109,6 +109,10 @@
           "description": "A relative symlink at `path` points to the shared folder's copy.",
           "type": "object",
           "properties": {
+            "kind": {
+              "type": "string",
+              "const": "linked"
+            },
             "harness": {
               "description": "The requested harness.",
               "$ref": "#/$defs/AgentIdentity"
@@ -116,10 +120,6 @@
             "path": {
               "description": "The new link.",
               "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "linked"
             }
           },
           "required": [
@@ -132,6 +132,10 @@
           "description": "A real folder at `path`.",
           "type": "object",
           "properties": {
+            "kind": {
+              "type": "string",
+              "const": "copied"
+            },
             "harness": {
               "description": "The requested harness.",
               "$ref": "#/$defs/AgentIdentity"
@@ -143,10 +147,6 @@
             "link_failed": {
               "description": "`true` when a link was asked for but the symlink failed, so the\nfolder was copied instead.",
               "type": "boolean"
-            },
-            "kind": {
-              "type": "string",
-              "const": "copied"
             }
           },
           "required": [
@@ -160,6 +160,10 @@
           "description": "Nothing was written for this harness.",
           "type": "object",
           "properties": {
+            "kind": {
+              "type": "string",
+              "const": "skipped"
+            },
             "harness": {
               "description": "The requested harness.",
               "$ref": "#/$defs/AgentIdentity"
@@ -167,10 +171,6 @@
             "reason": {
               "description": "Why, in one plain sentence.",
               "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "skipped"
             }
           },
           "required": [
