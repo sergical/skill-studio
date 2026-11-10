@@ -145,10 +145,8 @@ Each item names a command, file, or grep. Items that repeat the same fix across 
 - [ ] `update_skill_pack` records a journal event; a late git failure rolls back the tree instead of leaving it half-rewritten.
 - [ ] `publish_skill_pack` compensates or warns the user when a registry write fails after `gh repo create` succeeds.
 - [ ] `delete_skill_pack` shows a success toast and compensates when a registry write fails after directory removal.
-- [ ] `import_skill_pack` and `confirm_skill_pack_trust` clean up CLI partial writes on a mid-install failure, with a journal event.
 - [ ] The four packs.rs-native write commands take a per-pack lease, not the single global `ForkMutationLock` (shared: per-scope-lease).
 - [ ] The four packs.rs-native write commands move into `skill-studio-core` (shared: one-write-path-in-core).
-- [ ] `import_skill_pack` and `confirm_skill_pack_trust`'s named tests are identified in the source map by file and line.
 - [ ] `publish_skill_pack`'s backend `private` visibility option gets a UI path in `PacksView`.
 
 ### assistant-runs
@@ -193,7 +191,7 @@ This area collects the fixes that repeat across every other area above. Closing 
 - [ ] one-write-path-in-core: every write implementation listed above moves from `apps/desktop/src-tauri` into `skill-studio-core`, so the CLI and MCP server can reuse it.
 - [ ] retention-limit: `<app_data>/backups/<event-id>/` and `<app_data>/events.sqlite3` each have a size cap or an age cap; a test asserts old entries are pruned.
 - [ ] no-command-without-caller: `grep -rn '#\[tauri::command\]' apps/desktop/src-tauri/src/skills/commands.rs` cross-checked against every frontend `invoke()` call returns zero commands with no caller.
-- [ ] The five background loops (refresh, update check, trial expiry, startup reconcile, pack staging reconcile) each expose a last-run and last-error state and can be cancelled independently of the app.
+- [ ] The four background loops (refresh, update check, trial expiry, startup reconcile) each expose a last-run and last-error state and can be cancelled independently of the app.
 - [ ] `docs/spec-core-primitives.md` D9's rejected-alternative note (the global `ForkMutationLock`) is deleted once the lease lands, not left describing a still-shipping design.
 
 ### harness-integration
