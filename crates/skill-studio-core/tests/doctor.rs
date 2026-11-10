@@ -701,3 +701,67 @@ fn doctor_without_retained_candidates_skips_retention_history_or_reads_unneeded_
         "only pending-event detection needs history when no retained candidates exist"
     );
 }
+
+#[test]
+fn doctor_retained_linked_roots_and_ancestors_report_problem_or_walk_external_tree() {
+    for linked in [
+        "/home/.agents/skills-parked",
+        "/home/.agents",
+        "/data/forks",
+        "/data/skill-studio",
+    ] {
+        let fs = FixtureBuilder::new()
+            .dir("/home")
+            .dir("/external")
+            .file(
+                "/external/old/SKILL.md",
+                b"---\nname: old\ndescription: old\n---\n",
+            )
+            .alias(linked, "/external")
+            .build_fs();
+        let mut rt = runtime(Arc::new(fs));
+        rt.scope.data_root = Some("/data".into());
+        rt.ports.clock = Arc::new(FakeClock::at(10_000_000_000));
+        let report = ops::doctor(&rt, &ctx(), &DoctorRequest::default()).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.path == Path::new(linked) && v.detail.contains("linked ancestor")),
+            "{report:?}"
+        );
+        assert!(
+            !report
+                .violations
+                .iter()
+                .any(|v| v.detail.contains("retained entry created")),
+            "{report:?}"
+        );
+    }
+}
+
+#[test]
+fn doctor_finds_desktop_fork_storage_or_checks_only_shared_xdg_forks() {
+    let home = Path::new(HOME);
+    let data = Path::new("/data/skill-studio");
+    let base = skill_studio_core::scope::desktop_fork_storage_root(home, data).join("alpha/base");
+    let fs = FixtureBuilder::new()
+        .dir(HOME)
+        .file(
+            base.join("SKILL.md").to_str().unwrap(),
+            b"---\nname: alpha\ndescription: alpha\n---\n",
+        )
+        .file("/home/.agents/skill-studio.json", &serde_json::to_vec(&serde_json::json!({"retained": {"base_dir": base, "created_at": "2000-01-01T00:00:00Z"}})).unwrap())
+        .build_fs();
+    let mut rt = runtime(Arc::new(fs));
+    rt.scope.data_root = Some(data.into());
+    rt.ports.clock = Arc::new(FakeClock::at(2_000_000_000_000));
+    let report = ops::doctor(&rt, &ctx(), &DoctorRequest::default()).unwrap();
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.path == base && v.detail.contains("older than 30 days")),
+        "{report:?}"
+    );
+}

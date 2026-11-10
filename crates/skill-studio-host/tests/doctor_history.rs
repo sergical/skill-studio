@@ -130,3 +130,38 @@ fn doctor_reads_delete_mode_history_without_changing_bytes_schema_or_mode_or_mig
         assert!(!db.with_file_name("events.sqlite3-shm").exists());
     }
 }
+
+#[test]
+fn doctor_pending_report_caps_examples_and_counts_all_or_returns_every_pending_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    let scope = RuntimeScope::fixture(&home);
+    let db = scope.history_root.join("events.sqlite3");
+    std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute_batch("CREATE TABLE events (id TEXT, kind TEXT, status TEXT, payload TEXT, inverse TEXT); WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<4097) INSERT INTO events SELECT x,'park','pending','invalid JSON','invalid JSON' FROM n;").unwrap();
+    drop(conn);
+    let ports = skill_studio_host::default_ports_with_history(
+        dir.path().join("leases"),
+        Arc::new(HarnessCatalog::builtin()),
+        db,
+    );
+    let rt = Runtime::new(&scope, ports).unwrap();
+    let report = ops::doctor(
+        &rt,
+        &OpContext::uncancellable(CorrelationId("doctor".into())),
+        &DoctorRequest {},
+    )
+    .unwrap();
+    let problems: Vec<_> = report
+        .violations
+        .iter()
+        .filter(|v| v.invariant == skill_studio_core::doctor::DoctorInvariant::JournalHasNoOpenPlan)
+        .collect();
+    assert_eq!(problems.len(), 1);
+    assert!(problems[0]
+        .detail
+        .contains("4097 history events still pending"));
+    assert_eq!(problems[0].detail.matches("(park)").count(), 20);
+}

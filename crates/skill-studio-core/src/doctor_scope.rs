@@ -91,21 +91,41 @@ pub(crate) fn history_pending(rt: &Runtime) -> Vec<DoctorViolation> {
     let result = rt
         .ports
         .history
-        .open(&rt.scope, crate::ports::HistoryAccess::ReadIfExists)
-        .and_then(|store| store.map(|store| store.pending()).transpose());
+        .open(&rt.scope, crate::ports::HistoryAccess::Inspect)
+        .and_then(|store| {
+            store
+                .map(|store| {
+                    let mut after = 0;
+                    let mut total = 0_u64;
+                    let mut examples = Vec::new();
+                    loop {
+                        let rows = store.doctor_pending(after)?;
+                        if rows.is_empty() {
+                            break;
+                        }
+                        for (rowid, id, kind) in rows {
+                            after = rowid;
+                            total += 1;
+                            if examples.len() < 20 {
+                                examples.push(format!("{id} ({kind})"));
+                            }
+                        }
+                    }
+                    Ok::<_, crate::error::CoreError>((total, examples))
+                })
+                .transpose()
+        });
     match result {
-        Ok(Some(rows)) => rows
-            .into_iter()
-            .map(|row| {
-                violation(
-                    DoctorInvariant::JournalHasNoOpenPlan,
-                    path.clone(),
-                    Severity::Error,
-                    format!("history event {} ({}) is still pending", row.id.0, row.kind),
-                )
-            })
-            .collect(),
-        Ok(None) => Vec::new(),
+        Ok(Some((0, _)) | None) => Vec::new(),
+        Ok(Some((total, examples))) => vec![violation(
+            DoctorInvariant::JournalHasNoOpenPlan,
+            path.clone(),
+            Severity::Error,
+            format!(
+                "{total} history events still pending; examples: {}",
+                examples.join(", ")
+            ),
+        )],
         Err(error) => vec![violation(
             DoctorInvariant::JournalHasNoOpenPlan,
             path,
@@ -228,22 +248,17 @@ fn creation_time(
 }
 
 fn read_retention_history(
-    mut list: impl FnMut(
-        &crate::events::EventFilter,
-    ) -> Result<Vec<crate::events::EventRecord>, crate::error::CoreError>,
+    mut list: impl FnMut(i64) -> Result<Vec<crate::ports::DoctorHistoryRow>, crate::error::CoreError>,
     candidates: &BTreeSet<PathBuf>,
     records: &mut std::collections::BTreeMap<PathBuf, Option<chrono::DateTime<chrono::Utc>>>,
 ) -> Result<(), crate::error::CoreError> {
-    let mut filter = crate::events::EventFilter {
-        limit: 256,
-        ..Default::default()
-    };
+    let mut after = 0;
     loop {
-        let rows = list(&filter)?;
-        if rows.is_empty() {
+        let rows = list(after)?;
+        let Some(last) = rows.last() else {
             break;
-        }
-        filter.after = rows.last().map(|row| row.id.clone());
+        };
+        after = last.rowid;
         for row in rows {
             let mut paths = std::collections::BTreeMap::new();
             recorded_paths(&row.payload, Some(row.ts), &mut paths);
@@ -321,7 +336,11 @@ pub(crate) fn retained_state(
         })
         .collect();
     if let Some(data) = &rt.scope.data_root {
-        for forks in [data.join("forks"), data.join("skill-studio/forks")] {
+        for forks in [
+            data.join("forks"),
+            data.join("skill-studio/forks"),
+            crate::scope::desktop_fork_storage_root(home, data),
+        ] {
             if let Some(active) = registry.get("forks").and_then(serde_json::Value::as_object) {
                 for name in active.keys() {
                     protected.push(forks.join(name).join("base"));
@@ -330,10 +349,41 @@ pub(crate) fn retained_state(
             roots.push((forks, true));
         }
     }
+    let mut warnings = Vec::new();
     let candidates: Vec<_> = roots
         .into_iter()
         .map(|(root, nested)| {
             let mut entries = Vec::new();
+            let boundary = std::iter::once(home)
+                .chain(rt.scope.projects.iter().map(|project| &project.lexical))
+                .chain(rt.scope.data_root.iter())
+                .find(|boundary| root.starts_with(boundary))
+                .map_or_else(
+                    || {
+                        rt.scope
+                            .data_root
+                            .as_deref()
+                            .and_then(std::path::Path::parent)
+                            .unwrap_or(&root)
+                    },
+                    |path| path.as_path(),
+                );
+            if let Some(link) = root
+                .ancestors()
+                .take_while(|path| path.starts_with(boundary))
+                .find(|path| {
+                    fs.symlink_metadata(path)
+                        .is_ok_and(|facts| facts.kind == FileKind::Symlink)
+                })
+            {
+                warnings.push(violation(
+                    DoctorInvariant::QuarantineWithinCap,
+                    link.to_path_buf(),
+                    Severity::Warning,
+                    "retained root has a linked ancestor; skipped".into(),
+                ));
+                return (root, entries);
+            }
             retained_entries(
                 fs,
                 &root,
@@ -349,7 +399,7 @@ pub(crate) fn retained_state(
         .flat_map(|(_, entries)| entries.iter().cloned())
         .collect();
     if paths.is_empty() {
-        return Vec::new();
+        return warnings;
     }
     let mut records = std::collections::BTreeMap::new();
     recorded_paths(&registry, None, &mut records);
@@ -369,13 +419,10 @@ pub(crate) fn retained_state(
             }
         }
     }
-    match rt
-        .ports
-        .history
-        .open(&rt.scope, HistoryAccess::ReadIfExists)
-    {
+    match rt.ports.history.open(&rt.scope, HistoryAccess::Inspect) {
         Ok(Some(store)) => {
-            let result = read_retention_history(|filter| store.list(filter), &paths, &mut records);
+            let result =
+                read_retention_history(|after| store.doctor_retention(after), &paths, &mut records);
             if let Err(error) = result {
                 return vec![violation(
                     DoctorInvariant::QuarantineWithinCap,
@@ -386,10 +433,9 @@ pub(crate) fn retained_state(
             }
         }
         Ok(None) => {}
-        Err(_) => return Vec::new(),
+        Err(_) => return warnings,
     }
     let now = rt.ports.clock.now();
-    let mut warnings = Vec::new();
     let parked_names: BTreeSet<_> = inventory
         .skills
         .iter()
@@ -500,21 +546,26 @@ mod tests {
         let mut records = std::collections::BTreeMap::new();
         let mut pages = 0;
         let mut returned = 0;
-        read_retention_history(|filter| {
-            assert!(filter.limit <= 256, "unbounded history request");
-            let start = filter.after.as_ref().map_or(0, |id| id.0.parse::<usize>().unwrap() + 1);
-            pages += 1;
-            let rows: Vec<_> = (start..(start + filter.limit as usize).min(4097)).map(|n| {
-                serde_json::from_value(serde_json::json!({
-                    "id": n.to_string(), "ts": chrono::DateTime::from_timestamp(10000 - i64::try_from(n).unwrap(), 0).unwrap(),
-                    "kind": "remove", "skill": "old", "harness": null, "scope": null,
-                    "project_path": null, "payload": {"to": path}, "inverse": null,
-                    "backup_dir": null, "status": "done", "reverted_by": null, "restorable": true
-                })).unwrap()
-            }).collect();
-            returned += rows.len();
-            Ok(rows)
-        }, &BTreeSet::from([path.clone()]), &mut records).unwrap();
+        read_retention_history(
+            |after| {
+                let start = usize::try_from(after).unwrap();
+                pages += 1;
+                let rows: Vec<_> = (start..(start + 256).min(4097))
+                    .map(|n| crate::ports::DoctorHistoryRow {
+                        rowid: i64::try_from(n + 1).unwrap(),
+                        ts: chrono::DateTime::from_timestamp(10000 - i64::try_from(n).unwrap(), 0)
+                            .unwrap(),
+                        payload: serde_json::json!({"to": path}),
+                        inverse: None,
+                    })
+                    .collect();
+                returned += rows.len();
+                Ok(rows)
+            },
+            &BTreeSet::from([path.clone()]),
+            &mut records,
+        )
+        .unwrap();
         assert_eq!(returned, 4097);
         assert_eq!(pages, 18);
         assert_eq!(

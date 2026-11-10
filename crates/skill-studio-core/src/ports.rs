@@ -555,6 +555,8 @@ pub fn acquire_exclusive(
 pub enum HistoryAccess {
     /// Open an existing database read-only. Never creates it or changes its schema or journal mode.
     ReadIfExists,
+    /// Inspect without writing database sidecars; a busy WAL may be skipped.
+    Inspect,
     /// Open or create. Requires an exclusive guard at the call site.
     ReadWrite,
 }
@@ -580,11 +582,38 @@ pub struct HeldRestoreClaim {
     pub target_kind: String,
 }
 
+/// One bounded doctor history page entry.
+pub struct DoctorHistoryRow {
+    /// `SQLite` traversal key, independent of event time.
+    pub rowid: i64,
+    /// Event creation time.
+    pub ts: chrono::DateTime<chrono::Utc>,
+    /// Recorded paths and creation times.
+    pub payload: serde_json::Value,
+    /// Inverse paths.
+    pub inverse: Option<serde_json::Value>,
+}
+
 /// The append-only event log and its backups.
 ///
 /// Invariant: the store does not decide recovery. Startup recovery lives in
 /// [`crate::events::recover_interrupted`] and takes the exclusive guard.
 pub trait HistoryStore: Send {
+    /// Pending identifiers only, in rowid order, at most 256 rows.
+    fn doctor_pending(&self, _after: i64) -> Result<Vec<(i64, String, String)>, CoreError> {
+        Err(CoreError::new(
+            crate::error::ErrorCode::Unsupported,
+            "doctor history unavailable",
+        ))
+    }
+    /// Retention records in rowid order, at most 256 rows.
+    fn doctor_retention(&self, _after: i64) -> Result<Vec<DoctorHistoryRow>, CoreError> {
+        Err(CoreError::new(
+            crate::error::ErrorCode::Unsupported,
+            "doctor history unavailable",
+        ))
+    }
+
     /// Lists events, newest first, honoring the filter.
     fn list(&self, filter: &EventFilter) -> Result<Vec<EventRecord>, CoreError>;
     /// Reads one event.

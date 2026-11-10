@@ -317,9 +317,7 @@ pub fn fork_registry_path(home: &Path) -> PathBuf {
 /// a forked skill, used as the "base" `pull_fork_upstream` diffs against to
 /// find files both sides changed and write conflict markers into.
 pub fn fork_snapshot_dir(app_data: &Path, name: &str) -> PathBuf {
-    app_data
-        .join("skill-studio")
-        .join("forks")
+    skill_studio_core::scope::fork_storage_root(app_data)
         .join(name)
         .join("base")
 }
@@ -886,5 +884,24 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
             .count();
         assert_eq!(leftover, 0);
+    }
+}
+
+#[cfg(test)]
+mod doctor_storage_tests {
+    #[test]
+    fn doctor_cli_mcp_fork_root_matches_desktop_snapshot_or_misses_desktop_forks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let data = home.join(".local/share/skill-studio");
+        let app_data = if cfg!(target_os = "macos") {
+            home.join("Library/Application Support/com.skillstudio.app")
+        } else {
+            home.join(".local/share/com.skillstudio.app")
+        };
+        assert_eq!(
+            super::fork_snapshot_dir(&app_data, "alpha"),
+            skill_studio_core::scope::desktop_fork_storage_root(home, &data).join("alpha/base")
+        );
     }
 }
