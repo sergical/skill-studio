@@ -30,6 +30,13 @@ fn runtime(home: &Path, projects: &[PathBuf]) -> Runtime {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--perf-build-id") {
+        println!(
+            "{}",
+            option_env!("SKILL_STUDIO_PERF_BUILD").unwrap_or("unmarked")
+        );
+        return;
+    }
     let args: Vec<_> = std::env::args().collect();
     let home = PathBuf::from(args.get(1).expect("fixture output home"));
     let count: usize = args.get(2).expect("skill count").parse().expect("count");

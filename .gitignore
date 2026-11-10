@@ -39,3 +39,7 @@ lerna-debug.log*
 
 # Vitest browser mode failure screenshots
 .vitest/
+
+# Derived from the committed performance trace.
+/docs/perf/real-shaped-profile.folded.txt
+/docs/perf/real-shaped-flamegraph.svg

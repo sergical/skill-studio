@@ -14,8 +14,6 @@ Cargo processes before/after: 0/0.
 
 DEVELOPER_DIR: `/Library/Developer/CommandLineTools`.
 
-![CLI scan flame graph](real-shaped-flamegraph.svg)
-
 The table counts main-thread leaf samples. It does not measure CPU percentages. Unresolved frames stay in the denominator.
 
 | Leaf frame                          | Samples | Share |
@@ -30,10 +28,12 @@ Total nonempty main-thread stacks: 1599.
 
 Filesystem calls dominate the sampled work. A cache needs invalidation and scope-safety proof before it can be a clear win. No scan hot-spot fix is included here.
 
-The compressed Samply profile and symbol sidecar preserve the full trace. The SVG uses the same folded stacks and the standard [FlameGraph renderer](https://github.com/brendangregg/FlameGraph).
+The compressed Samply profile and symbol sidecar preserve the full trace. Folded stacks and SVG are generated files and are not committed.
 
-Regenerate the table and folded stacks with:
+Regenerate the table, folded stacks, and SVG with:
 
 ```sh
 python3 tools/perf-profile-summary.py docs/perf/real-shaped-profile.json.gz
+curl -fsSL https://raw.githubusercontent.com/brendangregg/FlameGraph/41fee1f99f9276008b7cd112fca19dc3ea84ac32/flamegraph.pl -o /tmp/skill-studio-flamegraph.pl
+perl /tmp/skill-studio-flamegraph.pl docs/perf/real-shaped-profile.folded.txt > docs/perf/real-shaped-flamegraph.svg
 ```

@@ -46,11 +46,20 @@ available lifecycle guidance is `docs/action-map/lifecycle-states.md`.
 
 CLI measurements use a 60-second read budget so large fixtures can complete.
 MCP and desktop use their default read budget. The JSON records CLI status,
-MCP status and skill counts, and the desktop skill count. Check these fields before comparing
+MCP status and skill counts, and every desktop sample's skill count and `scan_partial`. The Markdown summary labels mixed desktop counts or completeness. Check these fields before comparing
 results. A partial scan is not a complete inventory benchmark.
 
 The runner copies each executable out of the shared target folder before it
 measures it. Other worktrees can then build without replacing that executable
-during the sample run. Timing still includes contention from other processes.
+during the sample run. Before measurement, it checks each copy's embedded build
+marker against this run's source SHA and unique build token. A mismatch stops
+the run. The JSON records each verified marker and executable SHA-256.
+Timing still includes contention from other processes.
 
-The profile metadata records the copied executable hash, source commit, load average, Cargo process counts before and after, and `DEVELOPER_DIR`. The SVG flame graph is generated from the same sampled stacks as the summary table.
+The committed baseline predates these checks. Its executable identities and
+per-sample desktop completeness were not recorded and cannot be recovered.
+Its numbers remain historical, provisional measurements. New runs record these
+fields and pass `--runs` to the desktop example. Run
+`python3 tools/perf-baseline.py --check` to check the runner without a baseline.
+
+The profile metadata records the copied executable hash, source commit, load average, Cargo process counts before and after, and `DEVELOPER_DIR`. The commands in `profile.md` generate the folded stacks and SVG from the same trace as the summary table. These derived files are not committed.

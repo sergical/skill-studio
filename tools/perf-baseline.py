@@ -1,5 +1,6 @@
 """Release baseline over isolated FixtureBuilder homes. No duration gates."""
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -12,6 +13,7 @@ import statistics
 import subprocess
 import tempfile
 import time
+import uuid
 
 
 def command(args, **kwargs):
@@ -107,11 +109,69 @@ def wait_for_cargo_idle():
         time.sleep(1)
 
 
+def copy_verified(source, destination, build_id):
+    shutil.copy2(source, destination)
+    actual = command([str(destination), "--perf-build-id"])
+    if actual != build_id:
+        raise RuntimeError(f"{destination.name}: build identity mismatch: {actual!r} != {build_id!r}")
+    return {"build_id": actual, "sha256": hashlib.sha256(destination.read_bytes()).hexdigest()}
+
+
+def desktop_samples(binary, runs, env):
+    desktop = json.loads(command([str(binary), str(runs)], env=env))
+    assert len(desktop["desktop_scan"]) == runs
+    assert len(desktop["desktop_first_list_ipc_bytes"]) == runs
+    return desktop
+
+
+def desktop_summary(outcomes):
+    counts = sorted({row["skills"] for row in outcomes})
+    partial = sum(row["scan_partial"] for row in outcomes)
+    mixed = len({(row["skills"], row["scan_partial"]) for row in outcomes}) > 1
+    return f"counts={counts}, partial={partial}/{len(outcomes)}, mixed={mixed}"
+
+
+def self_check():
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory() as temp:
+        source = Path(temp) / "source"
+        copied = Path(temp) / "copied"
+        source.write_bytes(b"expected executable")
+        with patch(__name__ + ".command", return_value="sha:unique-build") as run:
+            identity = copy_verified(source, copied, "sha:unique-build")
+            run.assert_called_once_with([str(copied), "--perf-build-id"])
+        assert identity["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+        source.write_bytes(b"replacement executable")
+        with patch(__name__ + ".command", return_value="other:build"):
+            try:
+                copy_verified(source, copied, "sha:unique-build")
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("accepted a replaced executable")
+    payload = {"desktop_scan": [{"skills": 20, "scan_partial": False}] * 11,
+               "desktop_first_list_ipc_bytes": [100] * 11}
+    with patch(__name__ + ".command", return_value=json.dumps(payload)) as run:
+        assert desktop_samples(Path("snapshot"), 11, {}) == payload
+        run.assert_called_once_with(["snapshot", "11"], env={})
+    complete = {"skills": 20, "scan_partial": False}
+    partial = {"skills": 19, "scan_partial": True}
+    assert desktop_summary([complete] * 11) == "counts=[20], partial=0/11, mixed=False"
+    assert desktop_summary([complete, partial]) == "counts=[19, 20], partial=1/2, mixed=True"
+    assert "mixed=True" in desktop_summary([complete, {**complete, "scan_partial": True}])
+    assert "mixed=False" in desktop_summary([partial] * 10)
+    print("Build identity, executable hash, and desktop outcome checks passed")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=Path("docs/perf/baseline.json"))
     parser.add_argument("--runs", type=int, default=10)
+    parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
+    if args.check:
+        self_check()
+        return
     if args.runs < 10:
         parser.error("at least 10 samples are required")
     target = Path(os.environ["CARGO_TARGET_DIR"]) / "release"
@@ -122,18 +182,22 @@ def main():
 
 
 def build_and_run(args, target, binaries):
-    subprocess.run(["cargo", "build", "--release", "--all-features", "-p", "skill-studio-core", "--example", "perf_baseline", "-p", "skill-studio-cli", "--bin", "skill-studio"], check=True)
-    for executable in ["skill-studio", "examples/perf_baseline"]:
-        shutil.copy2(target / executable, binaries / executable)
-    subprocess.run(["cargo", "build", "--release", "--all-features", "-p", "skill-studio", "--example", "perf_snapshot"], check=True)
-    shutil.copy2(target / "examples/perf_snapshot", binaries / "examples/perf_snapshot")
-    target = binaries
     source_sha = command(["git", "rev-parse", "HEAD"])
     source_dirty = bool(command(["git", "status", "--porcelain"]))
+    build_id = f"{source_sha}:{uuid.uuid4().hex}"
+    build_env = {**os.environ, "SKILL_STUDIO_PERF_BUILD": build_id}
+    identities = {}
+    subprocess.run(["cargo", "build", "--release", "--all-features", "-p", "skill-studio-core", "--example", "perf_baseline", "-p", "skill-studio-cli", "--bin", "skill-studio"], env=build_env, check=True)
+    for executable in ["skill-studio", "examples/perf_baseline"]:
+        identities[executable] = copy_verified(target / executable, binaries / executable, build_id)
+    subprocess.run(["cargo", "build", "--release", "--all-features", "-p", "skill-studio", "--example", "perf_snapshot"], env=build_env, check=True)
+    identities["examples/perf_snapshot"] = copy_verified(target / "examples/perf_snapshot", binaries / "examples/perf_snapshot", build_id)
+    target = binaries
     wait_for_cargo_idle()
     mac = platform.system() == "Darwin"
     report = {"git_sha": source_sha,
               "dirty": source_dirty,
+              "executables": identities,
               "os": command(["sw_vers"]) if mac else platform.platform(),
               "cpu": command(["sysctl", "-n", "machdep.cpu.brand_string"]) if mac else platform.processor(),
               "memory_bytes": int(command(["sysctl", "-n", "hw.memsize"])) if mac else os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"),
@@ -160,8 +224,8 @@ def build_and_run(args, target, binaries):
             outcomes["mcp_scan"] = mcp_results
             registry = home / ".agents/skill-studio.json"
             registry.write_text(json.dumps({"projects": {"added": projects}}))
-            desktop = json.loads(command([str(target / "examples/perf_snapshot")], env=env))
-            outcomes["desktop_skills"] = desktop["desktop_skills"]
+            desktop = desktop_samples(target / "examples/perf_snapshot", args.runs, env)
+            outcomes["desktop_scan"] = desktop["desktop_scan"]
             metrics["desktop_first_list_ipc_bytes"] = distribution(desktop["desktop_first_list_ipc_bytes"])
             report["fixtures"][label] = {**data, "outcomes": outcomes, "metrics": metrics}
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -173,7 +237,7 @@ def build_and_run(args, target, binaries):
     table += ["", "Before samples, `pgrep -x cargo` returned no PIDs. Other host load is uncontrolled.", ""]
     for label, fixture in report["fixtures"].items():
         partial = sum(row["status"] == "partial" for row in fixture["outcomes"]["mcp_scan"])
-        table.append(f"{label}: desktop returned {fixture['outcomes']['desktop_skills']} skills; MCP returned partial inventories in {partial}/{args.runs} calls. Partial timings do not measure a complete scan.")
+        table.append(f"{label}: desktop {desktop_summary(fixture['outcomes']['desktop_scan'])}; MCP returned partial inventories in {partial}/{args.runs} calls. Partial timings do not measure a complete scan.")
         table.append("")
     args.output.with_suffix(".md").write_text("\n".join(table) + "\n")
     print(f"Wrote {args.output} and {args.output.with_suffix('.md')}")
