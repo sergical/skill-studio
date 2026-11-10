@@ -97,6 +97,16 @@ def mcp_samples(binary, env, runs):
             child.wait()
 
 
+def wait_for_cargo_idle():
+    while True:
+        result = subprocess.run(["pgrep", "-x", "cargo"], capture_output=True, text=True, check=False)
+        if result.returncode == 1:
+            return
+        if result.returncode != 0:
+            raise RuntimeError("pgrep could not check Cargo activity")
+        time.sleep(1)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=Path("docs/perf/baseline.json"))
@@ -118,16 +128,19 @@ def build_and_run(args, target, binaries):
     subprocess.run(["cargo", "build", "--release", "--all-features", "-p", "skill-studio", "--example", "perf_snapshot"], check=True)
     shutil.copy2(target / "examples/perf_snapshot", binaries / "examples/perf_snapshot")
     target = binaries
+    wait_for_cargo_idle()
     mac = platform.system() == "Darwin"
     report = {"git_sha": command(["git", "rev-parse", "HEAD"]),
               "dirty": bool(command(["git", "status", "--porcelain"])),
               "os": command(["sw_vers"]) if mac else platform.platform(),
               "cpu": command(["sysctl", "-n", "machdep.cpu.brand_string"]) if mac else platform.processor(),
               "memory_bytes": int(command(["sysctl", "-n", "hw.memsize"])) if mac else os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"),
+              "cargo_idle_check": {"command": "pgrep -x cargo", "pids": []},
               "rustc": command(["rustc", "-Vv"]), "profile": "release", "telemetry": "off",
               "cache_state": "Fresh runtime and reused runtime; OS cache uncontrolled, not cold disk. MCP persistent after initialize. Empty history.",
               "fixtures": {}}
     for label, count in [("small", 20), ("real-shaped", 378), ("large", 5000)]:
+        wait_for_cargo_idle()
         with tempfile.TemporaryDirectory(prefix="skill-perf-") as temp:
             home = Path(temp) / "home"
             data = json.loads(command([str(target / "examples/perf_baseline"), str(home), str(count), str(args.runs)]))
@@ -155,7 +168,7 @@ def build_and_run(args, target, binaries):
     for label, fixture in report["fixtures"].items():
         for metric, stats in fixture["metrics"].items():
             table.append(f"| {label} | {metric} | {stats['n']} | {stats['median']:.3f} | {stats['p95']:.3f} | {stats['max']:.3f} |")
-    table += ["", "Host load affects these timings. The recorded local baseline ran alongside other builds and tests.", ""]
+    table += ["", "Before samples, `pgrep -x cargo` returned no PIDs. Other host load is uncontrolled.", ""]
     for label, fixture in report["fixtures"].items():
         partial = sum(row["status"] == "partial" for row in fixture["outcomes"]["mcp_scan"])
         table.append(f"{label}: desktop returned {fixture['outcomes']['desktop_skills']} skills; MCP returned partial inventories in {partial}/{args.runs} calls. Partial timings do not measure a complete scan.")
