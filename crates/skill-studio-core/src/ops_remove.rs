@@ -50,7 +50,7 @@ use crate::ports::{
 fn cli_package(owner_kind: LifecycleOwnerKind) -> Option<&'static str> {
     match owner_kind {
         LifecycleOwnerKind::Dotagents => Some("@sentry/dotagents"),
-        LifecycleOwnerKind::SkillsSh => Some("skills"),
+        LifecycleOwnerKind::SkillsSh => Some(crate::skills_cli_agents::SKILLS_CLI_PACKAGE),
         _ => None,
     }
 }
@@ -80,7 +80,7 @@ fn remove_cli_args_and_cwd(
     match owner_kind {
         LifecycleOwnerKind::SkillsSh => {
             let mut args = vec![
-                "skills@1.7.0".to_string(),
+                crate::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string(),
                 "remove".to_string(),
                 name.to_string(),
                 "--yes".to_string(),
@@ -227,6 +227,12 @@ fn refuse_unbacked_cli_deletions(
 /// folders to back up as copies, and symlinks as `(link, target)` pairs for the inverse's
 /// `links`. Both skip the removed folder itself (even when reached through a directory link)
 /// and the links `links` already holds, and neither repeats a folder two agent folders share.
+#[derive(Default)]
+struct CliAgentBackups {
+    folders: Vec<PathBuf>,
+    links: Vec<(PathBuf, PathBuf)>,
+}
+
 fn cli_agent_folder_backups(
     fs: &dyn ScopeFs,
     home: &Path,
@@ -235,11 +241,10 @@ fn cli_agent_folder_backups(
     name: &str,
     removed: &Path,
     links: &[PathBuf],
-) -> (Vec<PathBuf>, Vec<(PathBuf, PathBuf)>) {
+) -> Result<CliAgentBackups, CoreError> {
     let removed_real = fs.canonicalize(removed).ok();
-    let mut folders: Vec<PathBuf> = Vec::new();
+    let mut backups = CliAgentBackups::default();
     let mut folder_reals: Vec<PathBuf> = Vec::new();
-    let mut link_targets: Vec<(PathBuf, PathBuf)> = Vec::new();
     for path in crate::skills_cli_agents::cli_removal_targets(
         home,
         codex_home,
@@ -250,13 +255,16 @@ fn cli_agent_folder_backups(
         if links.contains(&path) {
             continue;
         }
-        let Ok(facts) = fs.symlink_metadata(&path) else {
-            continue;
+        let facts = match fs.symlink_metadata(&path) {
+            Ok(facts) => facts,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(CoreError::io(&path, error)),
         };
         if facts.kind == FileKind::Symlink {
-            if let Ok(target) = fs.read_link(&path) {
-                link_targets.push((path, target));
-            }
+            let target = fs
+                .read_link(&path)
+                .map_err(|error| CoreError::io(&path, error))?;
+            backups.links.push((path, target));
             continue;
         }
         let real = fs.canonicalize(&path).unwrap_or_else(|_| path.clone());
@@ -264,9 +272,9 @@ fn cli_agent_folder_backups(
             continue;
         }
         folder_reals.push(real);
-        folders.push(path);
+        backups.folders.push(path);
     }
-    (folders, link_targets)
+    Ok(backups)
 }
 
 /// The first symlink inside the real folder at `dir`, if any. A backup copy cannot hold a
@@ -635,7 +643,10 @@ fn remove_body(
         .collect();
     // The skills CLI also deletes `<agent skills folder>/<name>` for every agent it knows,
     // scanned or not; back those up like the tree itself so Undo can bring them back.
-    let (cli_folders, cli_links) = if deployment.owner_kind == LifecycleOwnerKind::SkillsSh {
+    let CliAgentBackups {
+        folders: cli_folders,
+        links: cli_links,
+    } = if deployment.owner_kind == LifecycleOwnerKind::SkillsSh {
         cli_agent_folder_backups(
             fs,
             &rt.scope.home.lexical,
@@ -644,9 +655,9 @@ fn remove_body(
             &skill.name.0,
             &deployment.path,
             &links,
-        )
+        )?
     } else {
-        (Vec::new(), Vec::new())
+        CliAgentBackups::default()
     };
     if let Some(nested) = cli_folders
         .iter()

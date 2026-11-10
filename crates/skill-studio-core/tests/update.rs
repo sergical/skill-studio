@@ -563,7 +563,7 @@ fn cli_update_spawns_the_npx_skills_update_argv_and_lands_the_new_revision_or_na
         (
             "skills_sh",
             InstallMethod::SkillsSh,
-            vec!["skills", "update", "delta", "--global"],
+            vec!["skills@1.7.0", "update", "delta", "--global"],
         ),
         (
             "dotagents",

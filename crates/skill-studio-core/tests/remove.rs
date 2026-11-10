@@ -2364,3 +2364,50 @@ fn skills_sh_remove_is_refused_when_an_agent_link_points_out_of_the_scope() {
     );
     std::fs::remove_dir_all(&outside).ok();
 }
+
+#[cfg(unix)]
+fn assert_unreadable_cli_backup_refuses_before_spawn(link_error: bool) {
+    let home = unique_temp_dir("remove_unreadable_cli_backup");
+    std::fs::create_dir_all(&home).unwrap();
+    let failing = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    let rt = runtime_with(&home, failing.clone(), Some(spawner.clone()));
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    let secondary = home.join(".adal/skills/x");
+    std::fs::create_dir_all(secondary.parent().unwrap()).unwrap();
+    if link_error {
+        std::os::unix::fs::symlink("../../.agents/skills/x", &secondary).unwrap();
+        failing.fail_read_link_for(secondary.clone());
+    } else {
+        write_skill_md(&secondary);
+        failing.fail_symlink_metadata_for(secondary.clone());
+    }
+    let result = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id });
+    assert!(
+        spawner.recorded.lock().unwrap().is_empty(),
+        "the CLI ran despite unreadable backup input: {result:?}"
+    );
+    let error = result.expect_err("unreadable backup input must refuse Remove");
+    assert_eq!(
+        error.path.as_ref(),
+        Some(&secondary),
+        "the refusal must identify the unreadable path: {error:?}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&secondary).is_ok(),
+        "the secondary copy was deleted"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_with_unreadable_cli_backup_metadata_refuses_before_spawn_or_loses_the_secondary_copy() {
+    assert_unreadable_cli_backup_refuses_before_spawn(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_with_unreadable_cli_backup_link_target_refuses_before_spawn_or_loses_the_secondary_link()
+{
+    assert_unreadable_cli_backup_refuses_before_spawn(true);
+}
