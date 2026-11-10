@@ -11,6 +11,67 @@ use skill_studio_core::ports::{
     DirEntryFacts, ExclusiveGuard, FileFacts, FileKind, ScopeFs, ScopedPath,
 };
 
+fn probe_mode_preservation(parent: &Path) -> io::Result<bool> {
+    let dir = parent.join(format!(
+        ".park-mode-probe-{}-{}",
+        std::process::id(),
+        TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&dir)?;
+    let path = dir.join("file");
+    let checked = (|| {
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        for mode in [0o640, 0o751] {
+            if !mode_change_supported(file.set_permissions(fs::Permissions::from_mode(mode)))?
+                || file.metadata()?.mode() & 0o7777 != mode
+            {
+                return Ok(false);
+            }
+        }
+        for mode in [0o710, 0o750] {
+            if !mode_change_supported(fs::set_permissions(&dir, fs::Permissions::from_mode(mode)))?
+                || fs::metadata(&dir)?.mode() & 0o7777 != mode
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    })();
+    let cleanup = fs::remove_file(&path)
+        .or_else(|e| {
+            if e.kind() == io::ErrorKind::NotFound {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
+        .and_then(|()| fs::remove_dir(&dir));
+    match checked {
+        Ok(supported) => cleanup.map(|()| supported),
+        Err(e) => Err(e),
+    }
+}
+
+fn mode_change_supported(result: io::Result<()>) -> io::Result<bool> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::Unsupported
+                    | io::ErrorKind::PermissionDenied
+                    | io::ErrorKind::InvalidInput
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// A counter mixed into temp file names so concurrent writers on the same
 /// process never collide.
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -188,6 +249,23 @@ impl ScopeFs for RealFs {
 
     fn fsops_fsync_file(&self, path: &Path) -> io::Result<()> {
         fs::File::open(path)?.sync_all()
+    }
+    fn fsops_full_sync_file(&self, path: &Path) -> io::Result<()> {
+        let file = fs::File::open(path)?;
+        file.sync_all()?;
+        #[cfg(target_os = "macos")]
+        {
+            nix::fcntl::fcntl(&file, nix::fcntl::FcntlArg::F_FULLFSYNC).map_err(io::Error::from)?;
+        }
+        Ok(())
+    }
+
+    fn fsops_set_directory_mode(&self, path: &Path, mode: u32) -> io::Result<()> {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode & 0o7777))
+    }
+
+    fn fsops_preserves_modes(&self, path: &Path) -> io::Result<bool> {
+        probe_mode_preservation(path)
     }
 
     fn fsops_fsync_dir(&self, path: &Path) -> io::Result<()> {

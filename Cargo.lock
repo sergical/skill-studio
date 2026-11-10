@@ -4474,6 +4474,7 @@ name = "skill-studio-host"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "nix",
  "percent-encoding",
  "reqwest",
  "rusqlite",

@@ -1311,3 +1311,107 @@ fn park_succeeds_when_the_sweep_cannot_delete_a_stale_trash_folder() {
     );
     std::fs::remove_dir_all(&home).ok();
 }
+
+#[path = "../../../apps/cli/tests/support/park_volume.rs"]
+mod park_volume;
+
+#[test]
+fn cross_volume_roundtrip_preserves_directory_and_file_modes() {
+    let Some(fixture) = park_volume::fixture() else {
+        return;
+    };
+    let live = fixture.project.join(".codex/skills/volume-copy");
+    let original_bytes = park_volume::bytes(&live);
+    let original_modes = park_volume::modes(&live);
+    let rt = runtime(&fixture.home, std::slice::from_ref(&fixture.project));
+    let parked = park_copy_at(&rt, "volume-copy", &live);
+    let parked_modes = park_volume::modes(&parked);
+    assert_eq!(park_volume::bytes(&parked), original_bytes);
+    ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked_copy(&rt, "volume-copy", &RootKind::Harness("codex".into())).id,
+        },
+    )
+    .unwrap();
+    assert_eq!(parked_modes, original_modes);
+    assert_eq!(park_volume::modes(&live), original_modes);
+    assert_eq!(park_volume::bytes(&live), original_bytes);
+}
+
+#[test]
+fn cross_volume_park_keeps_source_when_full_sync_fails() {
+    let home = unique_temp_dir("park_full_sync_failure");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let original = std::fs::read(live.join("SKILL.md")).unwrap();
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    fs.fail_next_rename_cross_device();
+    fs.fail_next_full_sync_file();
+    let result = ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: live_copy(&rt, "foo", &live).id,
+        },
+    );
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(live.join("SKILL.md")).unwrap(), original);
+    assert!(!home.join(".agents/skills-parked/codex/foo").exists());
+    assert_eq!(fs.full_sync_calls(), 1);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn cross_volume_park_accepts_synthetic_modes_without_losing_bytes() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = unique_temp_dir("park_synthetic_modes");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    std::fs::set_permissions(
+        live.join("SKILL.md"),
+        std::fs::Permissions::from_mode(0o751),
+    )
+    .unwrap();
+    let original = std::fs::read(live.join("SKILL.md")).unwrap();
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    fs.fail_next_rename_cross_device();
+    fs.use_synthetic_modes();
+    let parked = park_copy_at(&rt, "foo", &live);
+    assert_eq!(std::fs::read(parked.join("SKILL.md")).unwrap(), original);
+    assert_ne!(
+        std::fs::metadata(parked.join("SKILL.md"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o751
+    );
+    assert!(!live.exists());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn cross_volume_full_sync_finishes_before_source_disposal() {
+    let home = unique_temp_dir("park_full_sync_order");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    fs.fail_next_rename_cross_device();
+    let checked = fs.clone();
+    fs.after_rename_once(live.clone(), move || {
+        assert!(
+            checked.full_sync_calls() > 0,
+            "source moved before full sync"
+        );
+        Ok(())
+    });
+    let parked = park_copy_at(&rt, "foo", &live);
+    assert!(parked.join("SKILL.md").is_file());
+    assert!(!live.exists());
+    std::fs::remove_dir_all(home).unwrap();
+}

@@ -268,6 +268,15 @@ impl ScopeFs for ScopedReads<'_> {
     fn fsops_fsync_file(&self, path: &Path) -> std::io::Result<()> {
         self.inner.fsops_fsync_file(path)
     }
+    fn fsops_full_sync_file(&self, path: &Path) -> std::io::Result<()> {
+        self.inner.fsops_full_sync_file(path)
+    }
+    fn fsops_set_directory_mode(&self, path: &Path, mode: u32) -> std::io::Result<()> {
+        self.inner.fsops_set_directory_mode(path, mode)
+    }
+    fn fsops_preserves_modes(&self, path: &Path) -> std::io::Result<bool> {
+        self.inner.fsops_preserves_modes(path)
+    }
     fn fsops_fsync_dir(&self, path: &Path) -> std::io::Result<()> {
         self.inner.fsops_fsync_dir(path)
     }
@@ -374,6 +383,28 @@ pub trait ScopeFs: Send + Sync {
     fn fsops_device_inode(&self, path: &Path) -> std::io::Result<(u64, u64)>;
     /// Flushes a file's contents to durable storage.
     fn fsops_fsync_file(&self, path: &Path) -> std::io::Result<()>;
+    /// Flushes file data and the storage device's write cache before source disposal.
+    fn fsops_full_sync_file(&self, _path: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "full file sync is not supported",
+        ))
+    }
+    /// Sets a copied directory's Unix permission bits.
+    fn fsops_set_directory_mode(&self, _path: &Path, _mode: u32) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "directory modes are not supported",
+        ))
+    }
+    /// Probes whether the destination preserves Unix modes. May create and
+    /// remove a temporary directory under `path`.
+    fn fsops_preserves_modes(&self, _path: &Path) -> std::io::Result<bool> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "mode checks are not supported",
+        ))
+    }
     /// Flushes a directory's own entry (its listing), so a create, rename,
     /// or removal inside it is durable, not only the thing it named.
     fn fsops_fsync_dir(&self, path: &Path) -> std::io::Result<()>;

@@ -1309,3 +1309,35 @@ async fn mcp_turn_on_refuses_ambiguous_wildcards_and_keeps_reviewed_exclusions()
     assert_eq!(result["status"], "ok", "{result}");
     assert_eq!(std::fs::read_to_string(config).unwrap(), reviewed);
 }
+
+#[path = "../../cli/tests/support/park_volume.rs"]
+mod park_volume;
+
+#[tokio::test]
+async fn mcp_cross_volume_park_unpark_preserves_all_bytes_and_modes() {
+    let Some(fixture) = park_volume::fixture() else {
+        return;
+    };
+    let live = fixture.project.join(".codex/skills/volume-copy");
+    let before_bytes = park_volume::bytes(&live);
+    let before_modes = park_volume::modes(&live);
+    let (client, _) = connect(&[
+        ("HOME", fixture.home.to_str().unwrap()),
+        ("SKILL_STUDIO_HOME", fixture.home.to_str().unwrap()),
+        ("SKILL_STUDIO_PROJECT", fixture.project.to_str().unwrap()),
+    ])
+    .await;
+    let id = deployment_id_via_mcp(&client, "volume-copy", "harness").await;
+    let parked = call_tool(&client, "park", serde_json::json!({"deployment_id": id})).await;
+    assert_eq!(parked["status"], "ok", "{parked}");
+    let path = PathBuf::from(parked["data"]["parked_path"].as_str().unwrap());
+    let parked_modes = park_volume::modes(&path);
+    assert_eq!(park_volume::bytes(&path), before_bytes);
+    let id = deployment_id_via_mcp(&client, "volume-copy", "parked").await;
+    let restored = call_tool(&client, "unpark", serde_json::json!({"deployment_id": id})).await;
+    client.cancel().await.ok();
+    assert_eq!(restored["status"], "ok", "{restored}");
+    assert_eq!(parked_modes, before_modes);
+    assert_eq!(park_volume::modes(&live), before_modes);
+    assert_eq!(park_volume::bytes(&live), before_bytes);
+}

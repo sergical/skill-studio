@@ -686,6 +686,14 @@ impl ScopeFs for FixtureFs {
         }
     }
 
+    fn fsops_full_sync_file(&self, path: &Path) -> std::io::Result<()> {
+        self.fsops_fsync_file(path)
+    }
+
+    fn fsops_preserves_modes(&self, _path: &Path) -> std::io::Result<bool> {
+        Ok(true)
+    }
+
     fn fsops_fsync_dir(&self, path: &Path) -> std::io::Result<()> {
         let path = self.resolve_leaf(path);
         if self.lock().dirs.iter().any(|d| d == &path) {
@@ -836,6 +844,9 @@ type FsHook = Box<dyn FnOnce() -> std::io::Result<()> + Send>;
 
 /// A filesystem wrapper with deterministic fault and race injection.
 pub struct FailingFs {
+    full_sync_calls: AtomicU64,
+    fail_next_full_sync: AtomicBool,
+    preserves_modes: AtomicBool,
     before_write_for: Mutex<Option<(PathBuf, FsHook)>>,
     after_rename_from: Mutex<Option<(PathBuf, FsHook)>>,
     inner: Arc<dyn ScopeFs>,
@@ -894,6 +905,9 @@ impl FailingFs {
     /// Wraps `inner`, initially failing nothing.
     pub fn wrap(inner: Arc<dyn ScopeFs>) -> Self {
         FailingFs {
+            full_sync_calls: AtomicU64::new(0),
+            fail_next_full_sync: AtomicBool::new(false),
+            preserves_modes: AtomicBool::new(true),
             before_write_for: Mutex::new(None),
             after_rename_from: Mutex::new(None),
             inner,
@@ -921,6 +935,21 @@ impl FailingFs {
             fail_read_when_present: Mutex::new(None),
             fail_symlink_metadata_for: Mutex::new(None),
         }
+    }
+
+    /// Fails the next full file sync before reaching the inner adapter.
+    pub fn fail_next_full_sync_file(&self) {
+        self.fail_next_full_sync.store(true, Ordering::SeqCst);
+    }
+
+    /// Number of full file sync attempts.
+    pub fn full_sync_calls(&self) -> u64 {
+        self.full_sync_calls.load(Ordering::SeqCst)
+    }
+
+    /// Models a volume that synthesizes modes and ignores chmod requests.
+    pub fn use_synthetic_modes(&self) {
+        self.preserves_modes.store(false, Ordering::SeqCst);
     }
 
     /// Runs a callback once before the named file is written.
@@ -1326,6 +1355,25 @@ impl ScopeFs for FailingFs {
     fn fsops_fsync_file(&self, path: &Path) -> std::io::Result<()> {
         self.inner.fsops_fsync_file(path)
     }
+    fn fsops_full_sync_file(&self, path: &Path) -> std::io::Result<()> {
+        self.full_sync_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_next_full_sync.swap(false, Ordering::SeqCst) {
+            return Err(std::io::Error::other("injected full sync failure"));
+        }
+        self.inner.fsops_full_sync_file(path)
+    }
+    fn fsops_set_directory_mode(&self, path: &Path, mode: u32) -> std::io::Result<()> {
+        if !self.preserves_modes.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.inner.fsops_set_directory_mode(path, mode)
+    }
+    fn fsops_preserves_modes(&self, path: &Path) -> std::io::Result<bool> {
+        if !self.preserves_modes.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        self.inner.fsops_preserves_modes(path)
+    }
     fn fsops_fsync_dir(&self, path: &Path) -> std::io::Result<()> {
         if self.fail_next_fsops_fsync_dir.swap(false, Ordering::SeqCst) {
             return Err(std::io::Error::other(
@@ -1351,6 +1399,9 @@ impl ScopeFs for FailingFs {
         bytes: &[u8],
         mode: u32,
     ) -> std::io::Result<()> {
+        if !self.preserves_modes.load(Ordering::SeqCst) {
+            return self.inner.fsops_write_new_file(path, bytes);
+        }
         if self
             .corrupt_next_new_file_with_mode
             .swap(false, Ordering::SeqCst)

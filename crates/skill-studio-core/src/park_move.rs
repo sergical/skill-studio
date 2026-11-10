@@ -107,8 +107,16 @@ fn copy_verify_remove(
         .at(from.join(&entry.relative)));
     }
 
-    let copied = copy_tree(rt, session, from, to, &tree)
-        .and_then(|()| verify_copy(fs, from, to, &tree).map_err(|e| CoreError::io(to, e)))
+    let parent = to.parent().unwrap_or(to);
+    confine(&rt.scope, fs, parent)?;
+    let preserves_modes = fs
+        .fsops_preserves_modes(parent)
+        .map_err(|e| CoreError::io(parent, e))?;
+    let copied = copy_tree(rt, session, from, to, &tree, preserves_modes, facts.mode)
+        .and_then(|()| {
+            verify_copy(fs, from, to, &tree, preserves_modes, facts.mode)
+                .map_err(|e| CoreError::io(to, e))
+        })
         .and_then(|()| flush_tree(fs, to, &tree).map_err(|e| CoreError::io(to, e)));
     let trash = from
         .parent()
@@ -200,17 +208,17 @@ fn sweep_trash(rt: &Runtime, session: &MutationSession, dir: &Path) {
 /// Flushes every file and directory of the copy at `to` to disk, so the
 /// source is not renamed away while the copy is still only in memory.
 fn flush_tree(fs: &dyn ScopeFs, to: &Path, tree: &[TreeEntry]) -> io::Result<()> {
-    for entry in tree.iter().filter(|e| e.kind == FileKind::File) {
-        fs.fsops_fsync_file(&to.join(&entry.relative))?;
-    }
     for entry in tree.iter().rev().filter(|e| e.kind == FileKind::Dir) {
         fs.fsops_fsync_dir(&to.join(&entry.relative))?;
     }
     fs.fsops_fsync_dir(to)?;
-    match to.parent() {
-        Some(parent) => fs.fsops_fsync_dir(parent),
-        None => Ok(()),
+    if let Some(parent) = to.parent() {
+        fs.fsops_fsync_dir(parent)?;
     }
+    for entry in tree.iter().filter(|e| e.kind == FileKind::File) {
+        fs.fsops_full_sync_file(&to.join(&entry.relative))?;
+    }
+    Ok(())
 }
 
 /// Every entry under `root`, directories before their contents.
@@ -243,6 +251,8 @@ fn copy_tree(
     from: &Path,
     to: &Path,
     tree: &[TreeEntry],
+    preserves_modes: bool,
+    root_mode: Option<u32>,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
     let scoped_root = confine(&rt.scope, fs, to)?;
@@ -260,11 +270,26 @@ fn copy_tree(
             let bytes = fs
                 .read_capped(&source, COPY_FILE_MAX_BYTES)
                 .map_err(|e| CoreError::io(&source, e))?;
-            let written = match entry.mode {
+            let written = match entry.mode.filter(|_| preserves_modes) {
                 Some(mode) => fs.fsops_write_new_file_with_mode(&dest, &bytes, mode & 0o7777),
                 None => fs.fsops_write_new_file(&dest, &bytes),
             };
             written.map_err(|e| CoreError::io(&dest, e))?;
+        }
+    }
+    if preserves_modes {
+        for entry in tree.iter().rev().filter(|e| e.kind == FileKind::Dir) {
+            if let Some(mode) = entry.mode {
+                let path = to.join(&entry.relative);
+                confine(&rt.scope, fs, &path)?;
+                fs.fsops_set_directory_mode(&path, mode & 0o7777)
+                    .map_err(|e| CoreError::io(&path, e))?;
+            }
+        }
+        if let Some(mode) = root_mode {
+            confine(&rt.scope, fs, to)?;
+            fs.fsops_set_directory_mode(to, mode & 0o7777)
+                .map_err(|e| CoreError::io(to, e))?;
         }
     }
     Ok(())
@@ -272,13 +297,28 @@ fn copy_tree(
 
 /// Fails unless `to` holds the same entries as `tree`, and every file hashes
 /// the same as its source.
-fn verify_copy(fs: &dyn ScopeFs, from: &Path, to: &Path, tree: &[TreeEntry]) -> io::Result<()> {
+fn verify_copy(
+    fs: &dyn ScopeFs,
+    from: &Path,
+    to: &Path,
+    tree: &[TreeEntry],
+    preserves_modes: bool,
+    root_mode: Option<u32>,
+) -> io::Result<()> {
+    let same_mode = |copied: Option<u32>, original: Option<u32>| {
+        !preserves_modes
+            || original.is_none()
+            || copied.map(|mode| mode & 0o7777) == original.map(|mode| mode & 0o7777)
+    };
+    if !same_mode(fs.symlink_metadata(to)?.mode, root_mode) {
+        return Err(io::Error::other(
+            "the copied root has different permission bits",
+        ));
+    }
     let copied = walk(fs, to)?;
     let same_shape = copied.len() == tree.len()
         && copied.iter().zip(tree).all(|(a, b)| {
-            a.relative == b.relative
-                && a.kind == b.kind
-                && (a.kind != FileKind::File || a.mode == b.mode)
+            a.relative == b.relative && a.kind == b.kind && same_mode(a.mode, b.mode)
         });
     if !same_shape {
         return Err(io::Error::other(
@@ -303,7 +343,20 @@ fn verify_copy(fs: &dyn ScopeFs, from: &Path, to: &Path, tree: &[TreeEntry]) -> 
 /// Deletes `root` and everything under it (files and directories only).
 fn remove_tree(rt: &Runtime, session: &MutationSession, root: &Path) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
+    confine(&rt.scope, fs, root)?;
+    if let Ok(facts) = fs.symlink_metadata(root) {
+        if let Some(mode) = facts.mode {
+            let _ = fs.fsops_set_directory_mode(root, (mode & 0o7777) | 0o700);
+        }
+    }
     let tree = walk(fs, root).map_err(|e| CoreError::io(root, e))?;
+    for entry in tree.iter().filter(|entry| entry.kind == FileKind::Dir) {
+        if let Some(mode) = entry.mode {
+            let path = root.join(&entry.relative);
+            confine(&rt.scope, fs, &path)?;
+            let _ = fs.fsops_set_directory_mode(&path, (mode & 0o7777) | 0o700);
+        }
+    }
     for entry in tree.iter().rev() {
         let path = root.join(&entry.relative);
         if entry.kind == FileKind::Dir {

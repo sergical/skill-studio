@@ -1323,3 +1323,51 @@ fn cli_turn_on_refuses_ambiguous_wildcards_and_keeps_reviewed_exclusions() {
     );
     assert_eq!(std::fs::read_to_string(config).unwrap(), reviewed);
 }
+
+#[path = "support/park_volume.rs"]
+mod park_volume;
+
+#[test]
+fn cli_cross_volume_park_unpark_preserves_all_bytes_and_modes() {
+    let Some(fixture) = park_volume::fixture() else {
+        return;
+    };
+    let home = fixture.home.to_str().unwrap();
+    let project = fixture.project.to_str().unwrap();
+    let live = fixture.project.join(".codex/skills/volume-copy");
+    let before_bytes = park_volume::bytes(&live);
+    let before_modes = park_volume::modes(&live);
+    let env = [("HOME", home)];
+    let parked = run_with_env(
+        &[
+            "park",
+            "volume-copy",
+            "--home",
+            home,
+            "--project",
+            project,
+            "--json",
+        ],
+        &env,
+    );
+    assert_eq!(parked.status, 0, "{:?}", parked.json);
+    let parked_path = PathBuf::from(parked.json["data"]["parked_path"].as_str().unwrap());
+    let parked_modes = park_volume::modes(&parked_path);
+    assert_eq!(park_volume::bytes(&parked_path), before_bytes);
+    let restored = run_with_env(
+        &[
+            "unpark",
+            "volume-copy",
+            "--home",
+            home,
+            "--project",
+            project,
+            "--json",
+        ],
+        &env,
+    );
+    assert_eq!(restored.status, 0, "{:?}", restored.json);
+    assert_eq!(parked_modes, before_modes);
+    assert_eq!(park_volume::modes(&live), before_modes);
+    assert_eq!(park_volume::bytes(&live), before_bytes);
+}

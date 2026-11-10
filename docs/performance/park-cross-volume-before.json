@@ -1,0 +1,65 @@
+{
+  "hardware": "Apple M3 Max",
+  "platform": "macOS-26.7-arm64-arm-64bit-Mach-O",
+  "runs": 10,
+  "binary": "/private/tmp/skill-studio-park-before-main",
+  "fixture": "Cross-volume project Codex copies; SKILL.md, README.md and scripts/run.sh per skill; 0750 skill root, 0710 scripts directory, 0751 executable. Real CLI, fresh HOME and history per sample.",
+  "results": [
+    {
+      "skills": 1,
+      "modes_after_roundtrip": {
+        "root": "0o755",
+        "scripts": "0o755",
+        "file": "0o751"
+      },
+      "park": {
+        "median_ms": 120.37916702684015,
+        "p95_ms": 541.0592080443166,
+        "samples_ms": [
+          541.0592080443166, 131.85141701251268, 119.61741599952802, 117.66829196130857,
+          130.85820799460635, 116.45475000841543, 131.64095900719985, 120.22616702597588,
+          120.53216702770442, 96.79725003661588
+        ]
+      },
+      "unpark": {
+        "median_ms": 70.71062497561797,
+        "p95_ms": 74.16079100221395,
+        "samples_ms": [
+          70.00354095362127, 73.24654195690528, 73.81641597021371, 71.41770899761468,
+          72.32037500943989, 69.47845802642405, 74.16079100221395, 69.14220802718773,
+          69.3539580097422, 67.93449999531731
+        ]
+      }
+    },
+    {
+      "skills": 100,
+      "modes_after_roundtrip": {
+        "root": "0o755",
+        "scripts": "0o755",
+        "file": "0o751"
+      },
+      "park": {
+        "median_ms": 12992.71806247998,
+        "p95_ms": 14860.219207999762,
+        "samples_ms": [
+          12196.076333988458, 10891.003374999855, 13601.293415995315, 11919.29179202998,
+          12492.822833999526, 10148.43420899706, 13930.47675001435, 14860.219207999762,
+          13492.613290960435, 13724.708958005067
+        ]
+      },
+      "unpark": {
+        "median_ms": 7517.500333022326,
+        "p95_ms": 9723.802291962784,
+        "samples_ms": [
+          7055.480874958448, 7542.205375037156, 7284.806374984328, 7353.076375031378,
+          7492.795291007496, 7643.2805840158835, 9723.802291962784, 8769.963250029832,
+          7289.621750009246, 8811.897749954369
+        ]
+      }
+    }
+  ],
+  "binary_sha256": "97ce59e1d5d37efa43780415f310bfcd6b8baa859ad9441020967ad2d67eb6d9",
+  "base_commit": "4c15eabb9918246593d8dded5f7be505db498f55",
+  "park_move_blob": "9157854fbee42f7d4b61b5c94bd6321afa30e5a3",
+  "measurement_notes": "Includes CLI startup, scanning, history, and verified copy. Other developer builds were active. Each sample uses fresh fixture HOME and history."
+}
