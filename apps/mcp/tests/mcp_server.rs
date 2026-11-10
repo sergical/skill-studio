@@ -21,6 +21,37 @@ use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use skill_studio_core::testing::fixtures;
 
+fn complete_folder_tree(root: &Path) -> Vec<(PathBuf, u64, Vec<u8>)> {
+    fn walk(root: &Path, path: &Path, entries: &mut Vec<(PathBuf, u64, Vec<u8>)>) {
+        let metadata = std::fs::symlink_metadata(path).unwrap();
+        let bytes = if metadata.is_symlink() {
+            std::fs::read_link(path)
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec()
+        } else if metadata.is_file() {
+            std::fs::read(path).unwrap()
+        } else {
+            Vec::new()
+        };
+        entries.push((
+            path.strip_prefix(root).unwrap().to_path_buf(),
+            metadata.len(),
+            bytes,
+        ));
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(path).unwrap() {
+                walk(root, &entry.unwrap().path(), entries);
+            }
+        }
+    }
+    let mut entries = Vec::new();
+    walk(root, root, &mut entries);
+    entries.sort();
+    entries
+}
+
 fn mcp_bin() -> PathBuf {
     std::env::var_os("SKILL_STUDIO_TEST_MCP_BINARY").map_or_else(
         || env!("CARGO_BIN_EXE_skill-studio-mcp").into(),
@@ -1206,4 +1237,151 @@ async fn mcp_turn_on_keeps_concurrent_exclusion_and_refuses_lost_ignore_anchor()
             assert!(home.join(".agents/skills/foo/SKILL.md").is_file());
         }
     }
+}
+
+#[tokio::test]
+async fn harnesses_stdio_reads_claude_install_method_from_fixture_home_or_reports_unknown() {
+    let home = tempfile::tempdir().unwrap();
+    let method = "native";
+    let config = home.path().join(".claude.json");
+    std::fs::write(
+        &config,
+        serde_json::to_vec(&serde_json::json!({"installMethod": method})).unwrap(),
+    )
+    .unwrap();
+    let empty_path = home.path().join("bin");
+    std::fs::create_dir(&empty_path).unwrap();
+    let env = [
+        ("HOME", home.path().to_str().unwrap()),
+        ("SKILL_STUDIO_FIXTURE", home.path().to_str().unwrap()),
+        ("PATH", empty_path.to_str().unwrap()),
+        ("SKILL_STUDIO_TELEMETRY", "0"),
+        ("SKILL_STUDIO_MCP_DEV_TOOLS", "1"),
+    ];
+    let (client, _) = connect(&env).await;
+    let result = call_tool(&client, "harnesses", serde_json::json!({})).await;
+    client.cancel().await.ok();
+    assert_eq!(result["status"], "ok");
+    let row = result["data"]["harnesses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "claude-code")
+        .unwrap();
+    assert_eq!(row["install_method"]["value"], method);
+    assert_eq!(
+        row["install_method"]["evidence"]["confidence"],
+        serde_json::to_value(skill_studio_core::harness::Confidence::VerifiedFromDocs).unwrap()
+    );
+    assert!(row["install_method"]["evidence"]["source"]
+        .as_str()
+        .unwrap()
+        .contains(config.to_str().unwrap()));
+}
+
+#[tokio::test]
+async fn mcp_park_refuses_newer_history_without_tree_changes_or_writes_mutation_lease() {
+    let (_dir, home) = live_home();
+    let deployment = deployment_id_in_root(&home, "gamma", "universal");
+    let history = home.join(".skill-studio/history");
+    std::fs::create_dir_all(&history).unwrap();
+    let db = history.join("events.sqlite3");
+    std::fs::write(&db, b"").unwrap();
+    let marker = history.join("schema_version");
+    let newer = skill_studio_host::CURRENT_DATA_VERSION + 1;
+    std::fs::write(&marker, format!("{newer}\n")).unwrap();
+    let snapshot = || complete_folder_tree(&home);
+    let before = snapshot();
+    let (client, _) = connect(&[
+        ("HOME", home.to_str().unwrap()),
+        ("SKILL_STUDIO_HOME", home.to_str().unwrap()),
+        ("SKILL_STUDIO_TELEMETRY", "off"),
+    ])
+    .await;
+    let result = call_tool(
+        &client,
+        "park",
+        serde_json::json!({"deployment_id": deployment}),
+    )
+    .await;
+    client.cancel().await.unwrap();
+    assert_ne!(result["status"], "ok");
+    let message = result.to_string();
+    assert!(
+        message.contains(&format!("folder is version {newer}")),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "up to version {}",
+            skill_studio_host::CURRENT_DATA_VERSION
+        )),
+        "{message}"
+    );
+    assert_eq!(before, snapshot());
+    assert_eq!(std::fs::read_dir(&history).unwrap().count(), 2);
+}
+
+#[tokio::test]
+async fn mcp_fixture_scan_refuses_newer_history_without_tree_changes_or_creates_read_leases() {
+    let home = tempfile::tempdir().unwrap();
+    let history = home.path().join(".history");
+    std::fs::create_dir_all(&history).unwrap();
+    let newer = skill_studio_host::CURRENT_DATA_VERSION + 1;
+    std::fs::write(history.join("schema_version"), format!("{newer}\n")).unwrap();
+    let before = complete_folder_tree(home.path());
+    let (client, _) = connect(&[
+        ("HOME", home.path().to_str().unwrap()),
+        ("SKILL_STUDIO_FIXTURE", home.path().to_str().unwrap()),
+        ("SKILL_STUDIO_TELEMETRY", "off"),
+    ])
+    .await;
+    let result = call_tool(&client, "scan", serde_json::json!({})).await;
+    client.cancel().await.unwrap();
+    assert_ne!(result["status"], "ok", "{result}");
+    let message = result.to_string();
+    assert!(
+        message.contains(&format!("folder is version {newer}")),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "up to version {}",
+            skill_studio_host::CURRENT_DATA_VERSION
+        )),
+        "{message}"
+    );
+    assert_eq!(before, complete_folder_tree(home.path()));
+}
+
+#[tokio::test]
+async fn mcp_events_refuse_newer_history_without_sqlite_or_return_empty_success() {
+    let home = tempfile::tempdir().unwrap();
+    let history = home.path().join(".skill-studio/history");
+    std::fs::create_dir_all(&history).unwrap();
+    let newer = skill_studio_host::CURRENT_DATA_VERSION + 1;
+    std::fs::write(history.join("schema_version"), format!("{newer}\n")).unwrap();
+    let before = complete_folder_tree(home.path());
+    let (client, _) = connect(&[
+        ("HOME", home.path().to_str().unwrap()),
+        ("SKILL_STUDIO_HOME", home.path().to_str().unwrap()),
+        ("SKILL_STUDIO_TELEMETRY", "off"),
+    ])
+    .await;
+    let result = call_tool(&client, "list_events", serde_json::json!({})).await;
+    client.cancel().await.unwrap();
+    assert_ne!(result["status"], "ok", "{result}");
+    let message = result.to_string();
+    assert!(
+        message.contains(&format!("folder is version {newer}")),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "up to version {}",
+            skill_studio_host::CURRENT_DATA_VERSION
+        )),
+        "{message}"
+    );
+    assert_eq!(before, complete_folder_tree(home.path()));
 }

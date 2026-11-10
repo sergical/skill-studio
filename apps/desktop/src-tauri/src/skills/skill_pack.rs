@@ -570,7 +570,7 @@ pub(crate) fn create_skill_pack_with(
         skills: Vec::new(),
     };
     registry.packs.insert(name.to_string(), record.clone());
-    skill_fork_registry::write_fork_registry_locked(guard, home, &registry)?;
+    skill_fork_registry::write_fork_registry_locked(guard, home, &mut registry)?;
 
     Ok(PackInfo::from_record(home, name, &record))
 }
@@ -659,7 +659,7 @@ pub(crate) fn publish_skill_pack_with(
     let mut updated = record;
     updated.repo = Some(owner_repo);
     registry.packs.insert(name.to_string(), updated.clone());
-    skill_fork_registry::write_fork_registry_locked(guard, home, &registry)?;
+    skill_fork_registry::write_fork_registry_locked(guard, home, &mut registry)?;
 
     Ok(PackInfo::from_record(home, name, &updated))
 }
@@ -686,7 +686,7 @@ pub(crate) fn delete_skill_pack_with(
             .map_err(|e| format!("Failed to remove {}: {e}", record.dir.display()))?;
     }
     registry.packs.remove(name);
-    skill_fork_registry::write_fork_registry_locked(guard, home, &registry)
+    skill_fork_registry::write_fork_registry_locked(guard, home, &mut registry)
 }
 
 // ============================================================================
@@ -1163,7 +1163,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
                 base_commit: "5".repeat(40),
             },
         );
-        skill_fork_registry::write_fork_registry(home, &registry).unwrap();
+        skill_fork_registry::write_fork_registry(home, &mut registry).unwrap();
 
         let git = FakeGit::new("");
         let info = create_skill_pack_with(
@@ -1413,7 +1413,7 @@ resolved_commit = "3333333333333333333333333333333333cccc"
                 skills: Vec::new(),
             },
         );
-        skill_fork_registry::write_fork_registry(home, &registry).unwrap();
+        skill_fork_registry::write_fork_registry(home, &mut registry).unwrap();
     }
 
     #[test]

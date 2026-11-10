@@ -85,9 +85,9 @@ fn set_telemetry_enabled_at_with(
     consent: &Consent,
     env_override: Option<String>,
 ) -> Result<(), String> {
-    let mut registry = super::skill_fork_registry::read_fork_registry(home)?;
-    registry.telemetry_enabled = enabled;
-    super::skill_fork_registry::write_fork_registry(home, &registry)?;
+    super::skill_fork_registry::update_fork_registry(home, |registry| {
+        registry.telemetry_enabled = enabled;
+    })?;
     consent.set(skill_studio_host::telemetry::resolve_consent(
         env_override,
         enabled,
@@ -140,7 +140,7 @@ mod tests {
         std::fs::create_dir_all(home.join(".agents")).unwrap();
         let mut registry = super::super::skill_fork_registry::read_fork_registry(&home).unwrap();
         registry.telemetry_enabled = true;
-        super::super::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+        super::super::skill_fork_registry::write_fork_registry(&home, &mut registry).unwrap();
         let consent = Consent::new(true);
 
         set_telemetry_enabled_at_with(&home, false, &consent, None).unwrap();

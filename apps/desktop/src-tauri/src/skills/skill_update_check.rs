@@ -2483,7 +2483,7 @@ resolved_commit = "{commit}"
                 base_commit: base_commit.clone(),
             },
         );
-        super::super::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+        super::super::skill_fork_registry::write_fork_registry(&home, &mut registry).unwrap();
         assert!(
             build_sources(&home, &[]).fork_candidates.is_empty(),
             "Skill Studio forks cannot show the informational note"

@@ -375,16 +375,14 @@ fn drop_home_directory_from_batch(paths: Vec<String>, home: &Path) -> Vec<String
 fn update_registry_section<T: Clone + PartialEq>(
     home: &Path,
     section: fn(&mut ForkRegistry) -> &mut T,
-    change: impl FnOnce(&mut T),
+    mut change: impl FnMut(&mut T),
 ) -> Result<(T, bool), String> {
-    let mut registry = super::skill_fork_registry::read_fork_registry(home)?;
-    let before = section(&mut registry).clone();
-    change(section(&mut registry));
-    let changed = *section(&mut registry) != before;
-    if changed {
-        super::skill_fork_registry::write_fork_registry(home, &registry)?;
-    }
-    Ok((section(&mut registry).clone(), changed))
+    super::skill_fork_registry::update_fork_registry(home, |registry| {
+        let before = section(registry).clone();
+        change(section(registry));
+        let changed = *section(registry) != before;
+        (section(registry).clone(), changed)
+    })
 }
 
 /// The saved project lists, straight off disk - unlike the other three
@@ -438,7 +436,7 @@ pub async fn register_skill_projects(
         let (projects, changed) = update_registry_section(
             &home,
             |registry| &mut registry.projects,
-            |tracked| tracked.track(to_save),
+            |tracked| tracked.track(to_save.clone()),
         )?;
         if changed {
             state.mark_skills_dirty();
@@ -519,7 +517,7 @@ pub async fn import_tracked_projects(
             &home,
             |registry| &mut registry.projects,
             |tracked| {
-                tracked.track(added.into_iter().map(PathBuf::from));
+                tracked.track(added.iter().map(|path| PathBuf::from(path.as_str())));
                 for path in &excluded {
                     tracked.untrack(Path::new(path));
                 }
@@ -689,6 +687,11 @@ pub fn rebuild_snapshot_now(
     app: &AppHandle,
     state: &SkillRefreshState,
 ) -> Result<SkillSnapshot, String> {
+    if let Some(state) = app.try_state::<super::data_folder_status::DataFolderStatusState>() {
+        if let Some(message) = state.0.lock().map_err(|error| error.to_string())?.clone() {
+            return Err(message);
+        }
+    }
     super::background_work::run(app, super::background_work::BackgroundWorker::Scan, || {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         rebuild_snapshot_at(&home, state, |built| {
@@ -1095,7 +1098,7 @@ fn reconcile_skill_names_at(
         &update_store,
         &skill_plugin_update::read_plugin_versions_beside(&state.update_check_path),
         &current_owner_ids,
-    );
+    )?;
     sort_snapshot_skills(&mut replacements);
 
     let mut built = current;
@@ -1759,10 +1762,12 @@ pub(crate) fn opencode_config_root(home: &Path) -> PathBuf {
     }
 }
 
-fn park_event_times(db_path: &Path, paths: &[&str]) -> BTreeMap<String, String> {
+fn park_event_times(db_path: &Path, paths: &[&str]) -> Result<BTreeMap<String, String>, String> {
     if paths.is_empty() {
-        return BTreeMap::new();
+        return Ok(BTreeMap::new());
     }
+    let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+    let _guard = skill_studio_host::guard_read_data_folder(parent)?;
     let read = || -> rusqlite::Result<BTreeMap<String, String>> {
         let db = rusqlite::Connection::open_with_flags(
             db_path,
@@ -1779,7 +1784,7 @@ fn park_event_times(db_path: &Path, paths: &[&str]) -> BTreeMap<String, String> 
         let rows = query.query_map([paths], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect()
     };
-    read().unwrap_or_default()
+    Ok(read().unwrap_or_default())
 }
 
 /// Recompute registry, update, disable, and invocation fields on freshly
@@ -1795,7 +1800,7 @@ pub(crate) fn apply_skill_snapshot_overlays(
     update_store: &skill_update_check::UpdateCheckStore,
     plugin_versions: &skill_plugin_update::PluginVersionCache,
     current_owner_ids: &[String],
-) {
+) -> Result<(), String> {
     for skill in skills.iter_mut() {
         skill.has_update = false;
         skill.update_owner_ids.clear();
@@ -1984,7 +1989,7 @@ pub(crate) fn apply_skill_snapshot_overlays(
     let park_times = park_event_times(
         &super::core_runtime::history_db_path(&super::core_runtime::data_root()),
         &parked_paths,
-    );
+    )?;
     for skill in skills.iter_mut() {
         // A skill with any live copy is not parked as a whole: its parked
         // copies show as their own rows (and as "left behind" when a live
@@ -2131,6 +2136,7 @@ pub(crate) fn apply_skill_snapshot_overlays(
         skill.invocation =
             super::frontmatter::invocation_policy_from(disable_model, user_invocable).0;
     }
+    Ok(())
 }
 
 /// Runs core `ops::scan` over `home`/`project_paths`, restricted to `names`
@@ -2238,6 +2244,11 @@ pub(crate) fn core_scan_installed_skills(
 
     let catalog = std::sync::Arc::new(skill_studio_core::harness::HarnessCatalog::builtin());
     let mut ports = skill_studio_host::default_ports(lease_root, catalog);
+    if std::env::var_os("SKILL_STUDIO_FIXTURE").is_some() {
+        ports.history = std::sync::Arc::new(skill_studio_host::GuardedNoHistoryOpener::new(
+            home.join(".history"),
+        ));
+    }
     if super::write_lease::current_thread_holds_home_lease() {
         ports.leases = std::sync::Arc::new(CallerHoldsLease);
     }
@@ -2448,7 +2459,7 @@ fn build_snapshot_releasing(
         &update_store,
         &skill_plugin_update::read_plugin_versions_beside(update_check_path),
         &current_owner_ids,
-    );
+    )?;
     let overlays_ms = overlays_start.elapsed().as_millis();
 
     drop(scan_lease);
@@ -2874,15 +2885,62 @@ mod tests {
         let mut registry = super::super::skill_fork_registry::read_fork_registry(home).unwrap();
         registry.projects.added = added.to_vec();
         registry.projects.excluded = excluded.to_vec();
-        super::super::skill_fork_registry::write_fork_registry(home, &registry).unwrap();
+        super::super::skill_fork_registry::write_fork_registry(home, &mut registry).unwrap();
     }
 
     /// `update_registry_section` on the `projects` field.
     fn update_tracked_projects(
         home: &Path,
-        change: impl FnOnce(&mut TrackedProjects),
+        change: impl FnMut(&mut TrackedProjects),
     ) -> Result<(TrackedProjects, bool), String> {
         update_registry_section(home, |registry| &mut registry.projects, change)
+    }
+
+    #[test]
+    fn parked_history_read_leaves_absent_folder_missing_or_creates_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("history");
+        assert!(
+            park_event_times(&folder.join("events.sqlite3"), &["parked"])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!folder.exists());
+    }
+
+    #[test]
+    fn fixture_scan_refuses_newer_history_before_lease_or_creates_cache_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        fs::create_dir_all(home.join(".history")).unwrap();
+        fs::write(home.join(".history/schema_version"), b"2\n").unwrap();
+        let _env = super::super::test_support::OpencodeHomeGuard::new(&home);
+        let leases = dir.path().join("leases");
+        let lease = super::super::write_lease::WriteLease::with_lease_root(leases.clone());
+        assert!(lease.acquire_scan_lease(&home, &[]).is_err());
+        assert!(!leases.exists());
+        let cache = dir.path().join("cache/updates.json");
+        let scan = core_scan_installed_skills(&home, &[], &cache, &[]);
+        assert!(scan.unread_roots.contains(&home));
+        assert!(!cache.parent().unwrap().exists());
+        assert_eq!(fs::read_dir(&home).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(home.join(".history")).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn parked_history_read_refuses_newer_folder_or_opens_an_incompatible_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("schema_version");
+        std::fs::write(&marker, b"2\n").unwrap();
+        let error = park_event_times(&dir.path().join("events.sqlite3"), &["parked"]).unwrap_err();
+        assert_eq!(
+            error,
+            skill_studio_host::newer_data_folder_message(skill_studio_host::NewerDataFolder {
+                folder_version: 2,
+                app_version: skill_studio_host::CURRENT_DATA_VERSION
+            })
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]
@@ -3797,7 +3855,7 @@ mod tests {
             },
         );
         registry.projects.added = vec![project.clone()];
-        super::super::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+        super::super::skill_fork_registry::write_fork_registry(&home, &mut registry).unwrap();
 
         let mut invocation_index = SkillInvocationIndex::default();
         let cache_path = tmp.path().join("cache.json");
@@ -4383,7 +4441,7 @@ mod tests {
         update_tracked_projects(&home, |tracked| tracked.track([project.clone()])).unwrap();
 
         let (_, changed) =
-            update_tracked_projects(&home, |tracked| tracked.track([project])).unwrap();
+            update_tracked_projects(&home, |tracked| tracked.track([project.clone()])).unwrap();
 
         assert!(!changed);
     }
@@ -5219,7 +5277,8 @@ resolved_commit = "old"
             &skill_update_check::UpdateCheckStore::default(),
             &skill_plugin_update::PluginVersionCache::default(),
             &[],
-        );
+        )
+        .unwrap();
 
         assert!(!skill.has_update);
         assert!(skill.update_owner_ids.is_empty());
@@ -5277,7 +5336,8 @@ resolved_commit = "old"
             &skill_update_check::UpdateCheckStore::default(),
             &skill_plugin_update::PluginVersionCache::default(),
             &[],
-        );
+        )
+        .unwrap();
 
         assert!(skill.has_update);
         assert_eq!(skill.update_owner_ids, vec!["plugin:codex@official"]);
@@ -5299,7 +5359,8 @@ resolved_commit = "old"
             &skill_update_check::UpdateCheckStore::default(),
             &skill_plugin_update::PluginVersionCache::default(),
             &[],
-        );
+        )
+        .unwrap();
         assert!(!skill.has_update);
     }
 
@@ -5356,7 +5417,8 @@ resolved_commit = "old"
             &store,
             &skill_plugin_update::PluginVersionCache::default(),
             &all_owner_ids,
-        );
+        )
+        .unwrap();
         skill
     }
 
@@ -5945,6 +6007,7 @@ resolved_commit = "old"
                         resume_rx.recv().unwrap();
                     },
                 )
+                .unwrap()
             });
             paused_rx.recv().unwrap();
             let write = write_lease.try_acquire(home);
@@ -6101,7 +6164,7 @@ resolved_commit = "old"
                 }
             }),
         );
-        super::super::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+        super::super::skill_fork_registry::write_fork_registry(&home, &mut registry).unwrap();
 
         let mut invocation_index = SkillInvocationIndex::default();
         let (snapshot, _report) = build_snapshot(

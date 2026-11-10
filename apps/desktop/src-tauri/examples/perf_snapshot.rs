@@ -36,7 +36,7 @@ fn main() {
             BuildPaths::new(&cache, &runs, &updates),
             chrono::Utc::now(),
         )
-        .expect("build snapshot");
+        .expect("build fixture snapshot");
         outcomes.push(serde_json::json!({
             "skills": snapshot.skills.len(),
             "scan_partial": snapshot.scan_partial,

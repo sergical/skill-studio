@@ -10,9 +10,7 @@ use std::path::Path;
 use std::{error::Error, fmt};
 
 use super::skill_dto::{ParsedSkillSource, ParsedSkillSourceKind};
-use super::skill_fork_registry::{
-    read_fork_registry, write_fork_registry, write_fork_registry_locked,
-};
+use super::skill_fork_registry::{read_fork_registry, write_fork_registry_locked};
 use super::write_lease::WriteLeaseGuard;
 
 /// Unique prefix so an untrusted-source error greps back to this module.
@@ -112,11 +110,11 @@ pub fn require_trusted_dotagents_identity(
 /// so confirmation cannot trust arbitrary error text.
 pub fn record_trusted_dotagents_source(home: &Path, identity: &str) -> Result<String, String> {
     let normalized = normalize_confirmation_identity(identity)?;
-    let mut registry = read_fork_registry(home)?;
-    registry
-        .trusted_dotagents_sources
-        .insert(normalized.clone());
-    write_fork_registry(home, &registry)?;
+    super::skill_fork_registry::update_fork_registry(home, |registry| {
+        registry
+            .trusted_dotagents_sources
+            .insert(normalized.clone());
+    })?;
     Ok(normalized)
 }
 
@@ -132,7 +130,7 @@ pub fn record_trusted_dotagents_source_locked(
     registry
         .trusted_dotagents_sources
         .insert(normalized.clone());
-    write_fork_registry_locked(guard, home, &registry)?;
+    write_fork_registry_locked(guard, home, &mut registry)?;
     Ok(normalized)
 }
 
@@ -147,11 +145,11 @@ pub fn record_trusted_dotagents_sources(
         .iter()
         .map(|identity| normalize_confirmation_identity(identity))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut registry = read_fork_registry(home)?;
-    registry
-        .trusted_dotagents_sources
-        .extend(normalized.iter().cloned());
-    write_fork_registry(home, &registry)?;
+    super::skill_fork_registry::update_fork_registry(home, |registry| {
+        registry
+            .trusted_dotagents_sources
+            .extend(normalized.iter().cloned());
+    })?;
     Ok(normalized)
 }
 
@@ -170,7 +168,7 @@ pub fn record_trusted_dotagents_sources_locked(
     registry
         .trusted_dotagents_sources
         .extend(normalized.iter().cloned());
-    write_fork_registry_locked(guard, home, &registry)?;
+    write_fork_registry_locked(guard, home, &mut registry)?;
     Ok(normalized)
 }
 

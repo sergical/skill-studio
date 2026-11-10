@@ -95,7 +95,11 @@ fn update_cli_args_and_cwd(
     };
     match method {
         InstallMethod::SkillsSh => {
-            let mut args = vec!["skills".to_string(), "update".to_string(), skill.0.clone()];
+            let mut args = vec![
+                crate::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string(),
+                "update".to_string(),
+                skill.0.clone(),
+            ];
             args.push(
                 match scope {
                     RootScope::Global => "--global",
@@ -1391,14 +1395,14 @@ mod tests {
                 "skills.sh global",
                 InstallMethod::SkillsSh,
                 &RootScope::Global,
-                vec!["skills", "update", "alpha", "--global"],
+                vec!["skills@1.7.0", "update", "alpha", "--global"],
                 None,
             ),
             (
                 "skills.sh project",
                 InstallMethod::SkillsSh,
                 &project,
-                vec!["skills", "update", "alpha", "--project"],
+                vec!["skills@1.7.0", "update", "alpha", "--project"],
                 Some(PathBuf::from("/proj")),
             ),
             (

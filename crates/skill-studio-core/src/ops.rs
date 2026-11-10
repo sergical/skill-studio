@@ -399,6 +399,7 @@ pub fn scan(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Inventor
 
 fn scan_body(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Inventory, CoreError> {
     ctx.checkpoint()?;
+    let _folder_guard = rt.ports.history.guard_read_data_folder()?;
     let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
     scan_inner(rt, ctx, req)
 }
@@ -3856,6 +3857,7 @@ fn preview_frontmatter_repair_body(
     ctx.checkpoint()?;
     let clock = rt.ports.clock.as_ref();
     let op_start = clock.monotonic();
+    let _folder_guard = rt.ports.history.guard_read_data_folder()?;
     let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
     let step_start = clock.monotonic();
     let inventory = scan_inner(
@@ -6072,6 +6074,7 @@ pub fn park_git_warning(
     ctx: &OpContext,
     deployment_id: &DeploymentId,
 ) -> Option<String> {
+    let _folder_guard = rt.ports.history.guard_read_data_folder().ok()?;
     let check = park_check(
         rt,
         ctx,

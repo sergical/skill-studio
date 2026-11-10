@@ -162,7 +162,7 @@ pub fn skills_sh_universal_add_args(
         return Err("That install option is only for the shared Universal folder".to_string());
     }
     let mut args = vec![
-        "skills".to_string(),
+        skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string(),
         "add".to_string(),
         repo_source.to_string(),
         "--yes".to_string(),
@@ -809,7 +809,7 @@ impl ForkTransactionStorage for FileForkTransactionStorage {
         home: &Path,
         registry: &ForkRegistry,
     ) -> Result<(), String> {
-        write_fork_registry_locked(guard, home, registry)
+        write_fork_registry_locked(guard, home, &mut registry.clone())
     }
 }
 
@@ -901,6 +901,7 @@ fn restore_quarantined_live_recovery(
 
 struct ForkPreDetachPaths<'a> {
     home: &'a Path,
+    name: &'a str,
     base_dir: &'a Path,
     recovery_dir: &'a Path,
     quarantine_dir: Option<&'a Path>,
@@ -922,7 +923,14 @@ fn rollback_fork_before_detach(
 ) -> String {
     let mut rollback_errors = Vec::new();
     if let Some(registry_before) = registry_before {
-        if let Err(error) = storage.write_registry(guard, paths.home, registry_before) {
+        if let Err(error) = super::skill_fork_registry::restore_registry_entry(
+            paths.home,
+            paths.name,
+            registry_before.forks.get(paths.name),
+            |registry| &mut registry.forks,
+            |home| storage.read_registry(home),
+            |home, registry| storage.write_registry(guard, home, registry),
+        ) {
             rollback_errors.push(format!("Failed to restore the fork registry: {error}"));
         }
     }
@@ -1040,6 +1048,7 @@ fn fork_skill_with_storage(
     let base_dir = fork_snapshot_dir(app_data, name);
     let rollback_paths = ForkPreDetachPaths {
         home,
+        name,
         base_dir: &base_dir,
         recovery_dir: &recovery_dir,
         quarantine_dir: quarantined_recovery.as_deref(),
@@ -1665,7 +1674,7 @@ pub fn unfork_skill_with(
     ledger.reinstall(&record, name)?;
 
     registry.forks.remove(name);
-    write_fork_registry_locked(guard, home, &registry)?;
+    write_fork_registry_locked(guard, home, &mut registry)?;
     let _ = fs::remove_dir_all(fork_snapshot_dir(app_data, name));
     Ok(())
 }
@@ -1757,6 +1766,28 @@ mod tests {
             .unwrap()
     }
 
+    #[test]
+    fn fork_remove_uses_the_pinned_cli_or_names_the_unpinned_package() {
+        for scope in [InstallScope::Global, InstallScope::Project] {
+            let args =
+                super::super::skill_lifecycle::skills_sh_remove_args_for_scope("alpha", scope);
+            assert_eq!(
+                args[0], "skills@1.7.0",
+                "fork removal must use the audited CLI"
+            );
+        }
+    }
+
+    #[test]
+    fn unfork_reinstall_uses_the_pinned_cli_or_names_the_unpinned_package() {
+        let (args, _) =
+            skills_sh_universal_add_args("owner/repo", Some("alpha"), &universal_global()).unwrap();
+        assert_eq!(
+            args[0], "skills@1.7.0",
+            "unfork reinstall must use the audited CLI"
+        );
+    }
+
     // Moved from `skill_install_plan.rs` (unit 3.5c) alongside
     // `skills_sh_universal_add_args` itself.
     fn universal_global() -> SkillInstallSpec {
@@ -1775,7 +1806,7 @@ mod tests {
         assert_eq!(
             argv,
             vec![
-                "skills",
+                "skills@1.7.0",
                 "add",
                 "o/r",
                 "--yes",
@@ -2008,7 +2039,7 @@ mod tests {
             if self.fail_registry_write_call == Some(*calls) {
                 return Err("injected registry write failure".to_string());
             }
-            write_fork_registry_locked(guard, home, registry)
+            write_fork_registry_locked(guard, home, &mut registry.clone())
         }
     }
 
@@ -2611,7 +2642,7 @@ mod tests {
         registry
             .trusted_dotagents_sources
             .insert("owner/repo".to_string());
-        write_fork_registry(&home, &registry).unwrap();
+        write_fork_registry(&home, &mut registry).unwrap();
         let registry_before =
             fs::read(super::super::skill_fork_registry::fork_registry_path(&home)).unwrap();
         let agents_toml_before = fs::read(home.join(".agents/agents.toml")).unwrap();
@@ -2726,11 +2757,11 @@ mod tests {
         write_file(&skill_md, "live body");
         let recovery_dir = fork_live_recovery_dir(&app_data, "find-bugs");
         write_file(&recovery_dir.join("stale.txt"), "stale recovery");
-        let registry = ForkRegistry {
+        let mut registry = ForkRegistry {
             server_url: Some("https://registry.example.test".to_string()),
             ..ForkRegistry::default()
         };
-        write_fork_registry(&home, &registry).unwrap();
+        write_fork_registry(&home, &mut registry).unwrap();
         let registry_path = super::super::skill_fork_registry::fork_registry_path(&home);
         let registry_before = fs::read(&registry_path).unwrap();
         let storage = InjectedForkTransactionStorage {
@@ -2832,11 +2863,11 @@ mod tests {
         write_file(&skill_md, "live body");
         let recovery_dir = fork_live_recovery_dir(&app_data, "find-bugs");
         write_file(&recovery_dir.join("stale.txt"), "stale recovery");
-        let registry = ForkRegistry {
+        let mut registry = ForkRegistry {
             server_url: Some("https://registry.example.test".to_string()),
             ..ForkRegistry::default()
         };
-        write_fork_registry(&home, &registry).unwrap();
+        write_fork_registry(&home, &mut registry).unwrap();
         let registry_path = super::super::skill_fork_registry::fork_registry_path(&home);
         let registry_before = fs::read(&registry_path).unwrap();
         let storage = InjectedForkTransactionStorage {
@@ -2890,11 +2921,11 @@ mod tests {
         let recovery_dir = fork_live_recovery_dir(&app_data, "find-bugs");
         let quarantine_dir = fork_live_recovery_quarantine_dir(&app_data, "find-bugs");
         write_file(&recovery_dir.join("stale.txt"), "stale recovery");
-        let registry = ForkRegistry {
+        let mut registry = ForkRegistry {
             server_url: Some("https://registry.example.test".to_string()),
             ..ForkRegistry::default()
         };
-        write_fork_registry(&home, &registry).unwrap();
+        write_fork_registry(&home, &mut registry).unwrap();
         let registry_path = super::super::skill_fork_registry::fork_registry_path(&home);
         let registry_before = fs::read(&registry_path).unwrap();
         let storage = InjectedForkTransactionStorage {
@@ -3068,7 +3099,7 @@ mod tests {
                 base_commit: base_commit.to_string(),
             },
         );
-        write_fork_registry(home, &registry).unwrap();
+        write_fork_registry(home, &mut registry).unwrap();
         write_file(
             &fork_snapshot_dir(app_data, name).join("SKILL.md"),
             mine_content,
@@ -3523,7 +3554,7 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "skills",
+                "skills@1.7.0",
                 "add",
                 "obra/find-bugs@v1.2.3",
                 "--yes",
@@ -3594,7 +3625,7 @@ mod tests {
                 base_commit: "a".repeat(40),
             },
         );
-        write_fork_registry(&home, &registry).unwrap();
+        write_fork_registry(&home, &mut registry).unwrap();
         write_file(
             &fork_snapshot_dir(&app_data, "find-bugs").join("SKILL.md"),
             "body",
@@ -3633,7 +3664,7 @@ mod tests {
                 base_commit: "a".repeat(40),
             },
         );
-        write_fork_registry(&home, &registry).unwrap();
+        write_fork_registry(&home, &mut registry).unwrap();
 
         let ledger = FakeLedger::default();
         unfork_skill_with(&test_guard(&home), &home, &app_data, "find-bugs", &ledger).unwrap();
