@@ -867,11 +867,14 @@ pub(crate) fn restore_files(
             match &file.text {
                 Some(text) => {
                     if let Some(recovery) = &edit.recovery {
-                        let pending = recovery_path(&file.path, Some(&edit.after));
+                        let retained = available_recovery_path(rt, &file.path, Some(&edit.after), Some(recovery))?;
+                        let pending = PathBuf::from(format!("{}-staging", retained.display()));
                         let source = crate::ports::confine(&rt.scope, fs, recovery)?;
                         let destination = crate::ports::confine(&rt.scope, fs, &pending)?;
                         fs.rename(guard, &source, &destination).map_err(|e| CoreError::io(recovery, e))?;
                         fs.fsops_exchange(&pending, &file.path).map_err(|e| CoreError::io(&file.path, e))?;
+                        fs.fsops_rename(&pending, &retained).map_err(|e| CoreError::io(&pending, e))?;
+                        let pending = retained;
                         if let Some(parent) = file.path.parent() {
                             fs.fsops_fsync_dir(parent).map_err(|e| CoreError::io(parent, e))?;
                         }
@@ -944,7 +947,46 @@ fn recovery_path(path: &Path, expected: Option<&str>) -> PathBuf {
     ))
 }
 
-fn clean_pending(rt: &Runtime, guard: &ExclusiveGuard, path: &Path) -> Result<(), CoreError> {
+fn available_recovery_path(
+    rt: &Runtime,
+    path: &Path,
+    expected: Option<&str>,
+    replacing: Option<&Path>,
+) -> Result<PathBuf, CoreError> {
+    let prefix = format!(
+        ".{}-park-recovery-",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    );
+    let parent = path
+        .parent()
+        .ok_or_else(|| CoreError::new(ErrorCode::Io, "file has no parent"))?;
+    let count = rt
+        .ports
+        .fs
+        .read_dir(parent)
+        .map_err(|e| CoreError::io(parent, e))?
+        .iter()
+        .filter(|entry| {
+            entry.name.starts_with(&prefix) && replacing != Some(parent.join(&entry.name).as_path())
+        })
+        .count();
+    if count >= 32 {
+        return Err(CoreError::new(ErrorCode::DriftConflict, "retained Park files reached the limit; inspect and explicitly remove recovery and staging files before retrying").at(path));
+    }
+    let base = recovery_path(path, expected);
+    for slot in 0..32 {
+        let candidate = PathBuf::from(format!("{}.retained-{slot}", base.display()));
+        let staging = PathBuf::from(format!("{}-staging", candidate.display()));
+        if rt.ports.fs.symlink_metadata(&candidate).is_err()
+            && rt.ports.fs.symlink_metadata(&staging).is_err()
+        {
+            return Ok(candidate);
+        }
+    }
+    Err(CoreError::new(ErrorCode::DriftConflict, "retained Park files reached the limit; inspect and explicitly remove recovery and staging files before retrying").at(path))
+}
+
+fn clean_pending(rt: &Runtime, _guard: &ExclusiveGuard, path: &Path) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
     let scoped = crate::ports::confine_write_through(&rt.scope, fs, path)?;
     let path = scoped.as_path();
@@ -958,6 +1000,11 @@ fn clean_pending(rt: &Runtime, guard: &ExclusiveGuard, path: &Path) -> Result<()
     for entry in fs.read_dir(parent).map_err(|e| CoreError::io(parent, e))? {
         let name = entry.name.as_str();
         if let Some(expected) = name.strip_prefix(&prefix) {
+            // A crash after exchange can leave displaced input under the staging name.
+            if name.ends_with("-staging") {
+                continue;
+            }
+            let expected = expected.split(".retained-").next().unwrap_or(expected);
             let pending = parent.join(&entry.name);
             let bytes = fs
                 .read_capped(&pending, crate::dotagents_ledger::DOTAGENTS_FILE_MAX_BYTES)
@@ -972,9 +1019,6 @@ fn clean_pending(rt: &Runtime, guard: &ExclusiveGuard, path: &Path) -> Result<()
                 )
                 .at(&pending));
             }
-            let scoped = crate::ports::confine(&rt.scope, fs, &pending)?;
-            fs.remove_file(guard, &scoped)
-                .map_err(|e| CoreError::io(&pending, e))?;
         }
     }
     Ok(())
@@ -1019,7 +1063,8 @@ fn write_text(
         });
         return Ok(());
     }
-    let displaced = recovery_path(path, expected);
+    let recovery = available_recovery_path(rt, path, expected, None)?;
+    let displaced = PathBuf::from(format!("{}-staging", recovery.display()));
     let staged = crate::ports::confine(&rt.scope, fs, &displaced)?;
     let mode = fs
         .symlink_metadata(path)
@@ -1049,6 +1094,13 @@ fn write_text(
         after: text.to_string(),
         recovery: Some(displaced.clone()),
     });
+    let retained = crate::ports::confine(&rt.scope, fs, &recovery)?;
+    fs.fsops_rename(staged.as_path(), retained.as_path())
+        .map_err(|e| CoreError::io(&displaced, e))?;
+    if let Some(edit) = changed.last_mut() {
+        edit.recovery = Some(recovery.clone());
+    }
+    let displaced = recovery;
     if let Some(parent) = path.parent() {
         fs.fsops_fsync_dir(parent)
             .map_err(|e| CoreError::io(parent, e))?;
@@ -1405,10 +1457,10 @@ fn turn_on_files(
         if let Some(original) = wholesale {
             write_back(rt, guard, gitignore, current.as_deref(), original, changed)?;
         } else {
-            let merge = if current.as_deref() == ignore_input {
+            let merge = if current == ignore_input {
                 ignore_merge
             } else {
-                planned_ignore_merge(recorded, originals, skill, current.as_deref())?
+                planned_ignore_merge(recorded, originals, skill, current)?
             };
             if let Some((text, before)) = merge {
                 write_back(rt, guard, gitignore, Some(&before), &text, changed)?;

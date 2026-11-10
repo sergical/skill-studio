@@ -123,3 +123,32 @@ Passed on the merged source:
 
 The simplification pass found no worthwhile simplification. The same checks passed
 again after that pass. Final diff review found no further issue. CI also runs the full suite in its default test profile.
+
+## Retained files and process death
+
+Displaced config, lock, and ignore files are no longer removed automatically.
+Each target can retain at most 32 files. At the limit, Park reports a conflict
+and requires inspection and explicit removal before retrying. This replaces the
+cleanup behavior described above. A retained inode can still receive writes
+through an editor's old handle after any hash comparison.
+
+Staging uses a distinct `-staging` suffix. Restart keeps interrupted staging
+files, counts them toward the same limit, and does not treat their output bytes
+as displaced input. A process killed after exchange can also leave displaced
+input under that suffix, so restart must retain it too.
+
+The three `turn_on_keeps_*_write_after_pending_read_or_unlink_deletes_edit`
+tests append through old handles after the next Turn on reads each retained
+file. The `park_killed_after_staging_allows_turn_on_or_retry_conflicts_forever`
+test uses a pipe signal to kill a child after staging is written and before
+exchange. A second subprocess test kills rollback between its staging rename
+and exchange, then requires a successful Park and Turn on retry. The retention
+tests also require rollback to work at the limit and all retained files to
+survive a refused Park. None uses sleeps or wall-clock limits.
+
+Local validation passed with 78 Park tests and 756 tests across the complete core
+suite, all features enabled in release mode. Workspace Clippy passed with all
+targets and features and warnings denied in the required separate Clippy target.
+Rust format and oxfmt passed. The simplification pass found no worthwhile
+simplification. Final review also covered rollback at the retention limit and
+process death during rollback.

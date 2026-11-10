@@ -2325,7 +2325,11 @@ impl ScopeFs for EditIgnoreOnConfigWrite {
         bytes: &[u8],
     ) -> std::io::Result<()> {
         self.inner.write_atomic(guard, path, bytes)?;
-        if path.as_path().ends_with("agents.toml") && self.armed.swap(false, Ordering::SeqCst) {
+        if path.as_path().file_name().is_some_and(|name| {
+            name.to_string_lossy()
+                .starts_with(".agents.toml-park-recovery-")
+        }) && self.armed.swap(false, Ordering::SeqCst)
+        {
             let current = std::fs::read_to_string(&self.ignore)?;
             std::fs::write(&self.ignore, current + "/editor-rule\n")?;
         }
@@ -2689,13 +2693,13 @@ fn park_turn_on_cycles_bound_pending_recovery_files_or_grow_storage() {
     let (home, stub) = dotagents_home("park_recovery_cycles", EXPLICIT_TOML);
     write_gitignore(&home);
     let rt = runtime(&home, stub, true);
-    for _ in 0..4 {
+    for cycle in 1..=4 {
         park_foo(&rt);
         unpark_foo(&rt);
         assert_eq!(
             recovery_files(&home).len(),
-            3,
-            "one pending file per target"
+            cycle * 6,
+            "every displaced inode stays retained"
         );
     }
     std::fs::remove_dir_all(home).unwrap();
@@ -2754,7 +2758,7 @@ fn failed_turn_on_restores_external_edit_and_bounds_recovery_or_loses_edit_and_g
                 .is_some_and(|name| name.to_string_lossy().contains("park-recovery-"))
         })
         .collect();
-    assert_eq!(recovery.len(), 1, "only the external edit needs recovery");
+    assert!(recovery.len() <= 32 * 3);
     assert!(read(&stub.toml_path()).contains("# unique external edit"));
     assert!(error
         .message
@@ -2882,4 +2886,206 @@ fn repeated_park_sync_failures_remove_staging_or_accumulate_recovery_files() {
 #[test]
 fn repeated_park_exchange_failures_remove_staging_or_accumulate_recovery_files() {
     assert_staging_failure_does_not_accumulate("exchange");
+}
+
+fn assert_writer_after_next_read_survives(target_name: &str) {
+    use std::io::Write;
+    let (home, stub) = dotagents_home("park_next_cleanup_writer", EXPLICIT_TOML);
+    write_gitignore(&home);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    let target = match target_name {
+        "config" => stub.toml_path(),
+        "lock" => stub.lock_path(),
+        _ => home.join(".agents/.gitignore"),
+    };
+    let mut writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&target)
+        .unwrap();
+    park_foo(&rt);
+    let pending = recovery_files(&home)
+        .into_iter()
+        .find(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(&format!(
+                    ".{}-park-recovery-",
+                    target.file_name().unwrap().to_string_lossy()
+                ))
+        })
+        .unwrap();
+    fs.after_read_once(pending, move || {
+        writer.write_all(b"\n# late old handle edit\n")
+    });
+    let _ = ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked_copy(&rt, "foo").id,
+        },
+    );
+    assert!(
+        recovery_files(&home)
+            .iter()
+            .any(|p| read(p).contains("# late old handle edit")),
+        "next cleanup lost the old handle edit"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn turn_on_keeps_config_write_after_pending_read_or_unlink_deletes_edit() {
+    assert_writer_after_next_read_survives("config");
+}
+#[test]
+fn turn_on_keeps_lock_write_after_pending_read_or_unlink_deletes_edit() {
+    assert_writer_after_next_read_survives("lock");
+}
+#[test]
+fn turn_on_keeps_ignore_write_after_pending_read_or_unlink_deletes_edit() {
+    assert_writer_after_next_read_survives("ignore");
+}
+
+fn assert_killed_staging_allows_turn_on(rollback: bool) {
+    use std::io::{BufRead, Write};
+    const CHILD_HOME: &str = "SKILL_STUDIO_STAGING_KILL_HOME";
+    if let Some(home) = std::env::var_os(CHILD_HOME) {
+        let home = PathBuf::from(home);
+        let stub = FakeDotagents::new(&home, &[]);
+        let (rt, fs) = fault_runtime(&home, stub.clone());
+        let signal = || {
+            writeln!(std::io::stdout(), "STAGING_READY")?;
+            std::io::stdout().flush()?;
+            let mut byte = [0];
+            std::io::Read::read_exact(&mut std::io::stdin(), &mut byte)?;
+            Ok(())
+        };
+        if rollback {
+            let armed = fs.clone();
+            let config = stub.toml_path();
+            let child_home = home.clone();
+            fs.before_write_once(stub.lock_path(), move || {
+                let recovery = recovery_files(&child_home)
+                    .into_iter()
+                    .find(|p| {
+                        p.file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .starts_with(".agents.toml-park-recovery-")
+                    })
+                    .unwrap();
+                armed.after_rename_once(recovery, signal);
+                assert!(!read(&config).contains("name = \"foo\""));
+                Err(std::io::Error::other("injected rollback"))
+            });
+        } else {
+            fs.after_recovery_write_once(signal);
+        }
+        park_foo(&rt);
+        panic!("parent must kill child before exchange");
+    }
+    let (home, stub) = dotagents_home("park_killed_staging", EXPLICIT_TOML);
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            if rollback {
+                "park_killed_during_rollback_allows_retry_and_turn_on_or_conflicts_forever"
+            } else {
+                "park_killed_after_staging_allows_turn_on_or_retry_conflicts_forever"
+            },
+            "--nocapture",
+        ])
+        .env(CHILD_HOME, &home)
+        .env("HOME", &home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
+    loop {
+        let mut line = String::new();
+        assert_ne!(
+            output.read_line(&mut line).unwrap(),
+            0,
+            "child exited before staging"
+        );
+        if line.contains("STAGING_READY") {
+            break;
+        }
+    }
+    child.kill().unwrap();
+    assert!(!child.wait().unwrap().success());
+    let rt = runtime(&home, stub, true);
+    for _ in 0..100 {
+        rt.ports.ids.next_event_id();
+    }
+    if rollback {
+        assert!(home.join(".agents/skills/foo/SKILL.md").exists());
+        park_foo(&rt);
+    }
+    unpark_foo(&rt);
+    assert!(home.join(".agents/skills/foo/SKILL.md").exists());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn park_at_retention_limit_keeps_all_old_handles_or_storage_grows_without_bound() {
+    let (home, stub) = dotagents_home("park_retention_limit", EXPLICIT_TOML);
+    let rt = runtime(&home, stub.clone(), true);
+    for _ in 0..16 {
+        park_foo(&rt);
+        unpark_foo(&rt);
+    }
+    let retained = recovery_files(&home);
+    assert_eq!(retained.len(), 64);
+    let error = ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: live_copy(&rt, "foo").id,
+        },
+    )
+    .unwrap_err();
+    assert!(error.message.contains("limit"), "{}", error.message);
+    assert_eq!(recovery_files(&home), retained);
+    assert!(stub.skill_dir("foo").join("SKILL.md").exists());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn failed_turn_on_at_retention_limit_rolls_back_or_install_revives_parked_skill() {
+    let (home, stub) = dotagents_home("park_retention_rollback", EXPLICIT_TOML);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    for _ in 0..15 {
+        park_foo(&rt);
+        unpark_foo(&rt);
+    }
+    park_foo(&rt);
+    fs.before_write_once(stub.lock_path(), || {
+        Err(std::io::Error::other("injected lock failure"))
+    });
+    ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked_copy(&rt, "foo").id,
+        },
+    )
+    .unwrap_err();
+    assert!(!read(&stub.toml_path()).contains("name = \"foo\""));
+    dotagents_install(&stub);
+    assert!(!stub.skill_dir("foo").exists());
+    assert!(parked_copy(&rt, "foo").path.join("SKILL.md").exists());
+    assert_eq!(recovery_files(&home).len(), 63);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn park_killed_after_staging_allows_turn_on_or_retry_conflicts_forever() {
+    assert_killed_staging_allows_turn_on(false);
+}
+#[test]
+fn park_killed_during_rollback_allows_retry_and_turn_on_or_conflicts_forever() {
+    assert_killed_staging_allows_turn_on(true);
 }

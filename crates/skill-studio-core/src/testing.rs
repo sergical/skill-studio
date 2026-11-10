@@ -838,6 +838,8 @@ type FsHook = Box<dyn FnOnce() -> std::io::Result<()> + Send>;
 pub struct FailingFs {
     before_recovery_write: Mutex<Option<FsHook>>,
     after_recovery_read: Mutex<Option<FsHook>>,
+    after_recovery_write: Mutex<Option<FsHook>>,
+    after_read_for: Mutex<Option<(PathBuf, FsHook)>>,
     fail_next_fsops_fsync_file: AtomicBool,
     before_write_for: Mutex<Option<(PathBuf, FsHook)>>,
     after_rename_from: Mutex<Option<(PathBuf, FsHook)>>,
@@ -902,6 +904,8 @@ impl FailingFs {
             inner,
             before_recovery_write: Mutex::new(None),
             after_recovery_read: Mutex::new(None),
+            after_recovery_write: Mutex::new(None),
+            after_read_for: Mutex::new(None),
             fail_next_fsops_fsync_file: AtomicBool::new(false),
             fail_next_write_atomic: AtomicBool::new(false),
             fail_next_rename: AtomicBool::new(false),
@@ -965,6 +969,23 @@ impl FailingFs {
         hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
     ) {
         *self.before_recovery_write.lock().expect("hook lock") = Some(Box::new(hook));
+    }
+
+    /// Runs after reading the specified file, before returning its bytes.
+    pub fn after_read_once(
+        &self,
+        path: PathBuf,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.after_read_for.lock().expect("hook lock") = Some((path, Box::new(hook)));
+    }
+
+    /// Runs after staging bytes are written, before exchange.
+    pub fn after_recovery_write_once(
+        &self,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.after_recovery_write.lock().expect("hook lock") = Some(Box::new(hook));
     }
 
     /// Runs after reading displaced bytes, before the caller compares the returned copy.
@@ -1229,6 +1250,7 @@ impl ScopeFs for FailingFs {
             ));
         }
         let bytes = self.inner.read_capped(path, max_bytes)?;
+        Self::run_hook(&self.after_read_for, path)?;
         if path
             .file_name()
             .is_some_and(|name| name.to_string_lossy().contains("park-recovery-"))
@@ -1285,7 +1307,18 @@ impl ScopeFs for FailingFs {
             }
             self.write_atomic_budget.fetch_sub(1, Ordering::SeqCst);
         }
-        self.inner.write_atomic(guard, path, bytes)
+        self.inner.write_atomic(guard, path, bytes)?;
+        if path
+            .as_path()
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().contains("park-recovery-"))
+        {
+            let hook = self.after_recovery_write.lock().expect("hook lock").take();
+            if let Some(hook) = hook {
+                hook()?;
+            }
+        }
+        Ok(())
     }
     fn rename(
         &self,
