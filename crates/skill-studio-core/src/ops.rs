@@ -4545,19 +4545,11 @@ fn restore_event_body(
                     )
                     .at(copy)
                 })?;
-            let copy_plan = if entry.is_dir {
-                RestorePlan::WriteDir(
-                    session
-                        .store
-                        .read_backup_files(backup_dir, &entry.relative)?,
-                )
-            } else {
-                RestorePlan::Write(
-                    session
-                        .store
-                        .read_backup_bytes(backup_dir, &entry.relative)?,
-                )
-            };
+            let copy_plan = RestorePlan::Restore(read_backup_content(
+                session.store.as_ref(),
+                backup_dir,
+                entry,
+            )?);
             write_back_plans.push((copy.clone(), copy_plan));
         }
     }
@@ -4799,12 +4791,10 @@ fn restore_event_body(
             .parent()
             .map_or(Ok(()), |root| ensure_dir_all(rt, &session, fs, root));
         let written = written.and_then(|()| match copy_plan {
-            RestorePlan::Write(bytes) => {
+            RestorePlan::Restore(content) => {
                 let scoped = crate::ports::confine(&rt.scope, fs, copy)?;
-                fs.write_atomic(&session.guard, &scoped, bytes)
-                    .map_err(|error| CoreError::io(copy, error))
+                apply_backup_content(rt, &session.guard, copy, &scoped, content)
             }
-            RestorePlan::WriteDir(files) => restore_write_dir(rt, &session.guard, copy, files),
             RestorePlan::RemoveIfPresent => {
                 unreachable!("write_back plans only contain backed-up paths")
             }
