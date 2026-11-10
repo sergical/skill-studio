@@ -108,9 +108,6 @@ pub fn expired_event_backups(
         .collect();
     let mut targets: BTreeMap<PathBuf, Vec<&EventRecord>> = BTreeMap::new();
     for entry in entries {
-        if entry.event.backup_dir.is_none() {
-            continue;
-        }
         let Some(target) = entry.target() else {
             continue;
         };
@@ -124,13 +121,16 @@ pub fn expired_event_backups(
     }
     let mut expired = Vec::new();
     for events in targets.values_mut() {
-        events.sort_by(|left, right| right.ts.cmp(&left.ts));
+        events.sort_by_key(|event| std::cmp::Reverse(event.ts));
         let newest_undoable = events
             .iter()
             .find(|event| event.restore_capability() == RestoreCapability::Yes)
             .map(|event| &event.id);
         let mut completed = 0;
         for event in events.iter() {
+            if event.backup_dir.is_none() {
+                continue;
+            }
             match event.status {
                 EventStatus::Done => {}
                 EventStatus::Pending | EventStatus::Failed | EventStatus::Interrupted => continue,

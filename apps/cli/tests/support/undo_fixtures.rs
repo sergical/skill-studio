@@ -200,7 +200,7 @@ pub fn expired_backup(home: &Path) -> (EventId, Vec<u8>) {
     let mut ids = Vec::new();
     for index in 0..BACKUP_RETENTION_COUNT + 2 {
         write_skill(home, "alpha", &format!("version {index}"));
-        let id = EventId::from_ulid(ulid::Ulid::new());
+        let id = EventId::from_ulid(ulid::Ulid::generate());
         let manifest = store
             .backup_paths(&guard, &id, std::slice::from_ref(&target))
             .unwrap();

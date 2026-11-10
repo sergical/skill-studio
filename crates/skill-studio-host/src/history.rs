@@ -131,6 +131,7 @@ impl SqliteHistoryOpener {
 
     /// Adds host-owned legacy backup folders. Never derive these from an
     /// event row; the desktop supplies its app-data folder directly.
+    #[must_use]
     pub fn with_backup_roots(mut self, roots: Vec<PathBuf>) -> Self {
         self.backup_roots = roots;
         self
@@ -704,7 +705,6 @@ impl HistoryStore for SqliteHistoryStore {
             let mut statement = self.conn.prepare(
                 "SELECT e.id,e.ts,e.kind,e.skill,NULL AS harness,e.scope,e.project_path,e.payload,e.inverse,e.backup_dir,e.status,e.reverted_by,e.restorable,t.target AS backup_target \
                  FROM events e LEFT JOIN backup_targets t ON t.event_id=e.id \
-                 WHERE e.backup_dir IS NOT NULL OR e.status IN ('pending','interrupted') \
                  ORDER BY e.ts DESC,e.rowid DESC"
             ).map_err(sql_err)?;
             let rows = statement
@@ -742,9 +742,21 @@ impl HistoryStore for SqliteHistoryStore {
                 .conn
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .map_err(sql_err)?;
+            let stored: String = transaction
+                .query_row(
+                    "SELECT payload FROM events WHERE id=?1",
+                    params![id.0],
+                    |row| row.get(0),
+                )
+                .map_err(sql_err)?;
+            let mut payload: serde_json::Value = serde_json::from_str(&stored).map_err(json_err)?;
+            if !payload.is_object() {
+                payload = serde_json::json!({"original_payload": payload});
+            }
+            payload[BACKUP_EXPIRED_PAYLOAD_KEY] = serde_json::Value::Bool(true);
             let changed = transaction.execute(
-                "UPDATE events SET backup_dir=NULL,restorable=0,payload=json_set(payload,?1,json('true')) WHERE id=?2 AND backup_dir=?3 AND status='done'",
-                params![format!("$.{BACKUP_EXPIRED_PAYLOAD_KEY}"),id.0,backup_dir],
+                "UPDATE events SET backup_dir=NULL,restorable=0,payload=?1 WHERE id=?2 AND backup_dir=?3 AND status='done'",
+                params![serde_json::to_string(&payload).map_err(json_err)?,id.0,backup_dir],
             ).map_err(sql_err)?;
             if changed > 0 {
                 transaction.execute("INSERT OR REPLACE INTO expired_backups (event_id,backup_dir,target) VALUES (?1,?2,?3)",params![id.0,managed.to_string_lossy(),target.to_string_lossy()]).map_err(sql_err)?;
@@ -1164,10 +1176,12 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
     enum RetentionProtection {
         Count,
         Recent,
         NewestUndoable,
+        NewestUndoableNeedsNoBackup,
         Restore(EventStatus),
     }
 
@@ -1193,7 +1207,11 @@ mod tests {
             let mut row = draft(
                 EventKind::Update,
                 "alpha",
-                serde_json::json!({}),
+                if index == 0 {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!({})
+                },
                 Some(serde_json::json!({
                     "op":"restore_backup", "path":target, "pre_fingerprint":fingerprint, "post_fingerprint":fingerprint,
                 })),
@@ -1218,7 +1236,7 @@ mod tests {
                 RetentionProtection::Recent if index > 0 => chrono::Duration::days(1),
                 _ => BACKUP_RETENTION_AGE + chrono::Duration::days(1),
             };
-            let timestamp = now - age + chrono::Duration::seconds(index as i64);
+            let timestamp = now - age + chrono::Duration::seconds(i64::try_from(index).unwrap());
             store
                 .conn
                 .execute(
@@ -1241,6 +1259,32 @@ mod tests {
                     )
                     .unwrap();
                 (0, 1, count - 1)
+            }
+            RetentionProtection::NewestUndoableNeedsNoBackup => {
+                store
+                    .conn
+                    .execute(
+                        "UPDATE events SET restorable=1 WHERE id=?1",
+                        params![ids[0].0],
+                    )
+                    .unwrap();
+                let latest = EventId("latest-without-backup".into());
+                store
+                    .record(
+                        &guard,
+                        &latest,
+                        &draft(
+                            EventKind::Update,
+                            "alpha",
+                            serde_json::json!({}),
+                            Some(serde_json::json!({"op":"restore_backup", "path": target})),
+                        ),
+                    )
+                    .unwrap();
+                store
+                    .finish(&guard, &latest, EventStatus::Done, None)
+                    .unwrap();
+                (count - BACKUP_RETENTION_COUNT, 0, BACKUP_RETENTION_COUNT)
             }
             RetentionProtection::Restore(status) => {
                 let holder = EventId("retention-restore-holder".into());
@@ -1290,6 +1334,17 @@ mod tests {
     }
 
     #[test]
+    fn expired_legacy_payload_keeps_its_value_and_reason_or_drops_the_expiry_marker() {
+        let row = retention_protects_one_backup_and_expires_the_control(RetentionProtection::Count);
+        assert!(
+            skill_studio_core::backup_retention::backup_is_expired(&row.payload),
+            "legacy payload: {}",
+            row.payload
+        );
+        assert_eq!(row.payload["original_payload"], serde_json::Value::Null);
+    }
+
+    #[test]
     fn expired_history_row_reports_backup_expired_or_looks_like_an_ordinary_non_undoable_row() {
         let row = retention_protects_one_backup_and_expires_the_control(RetentionProtection::Count);
         let dto = serde_json::to_value(row.to_dto()).unwrap();
@@ -1309,6 +1364,13 @@ mod tests {
     #[test]
     fn successful_write_keeps_the_newest_undoable_backup_beyond_both_limits_or_loses_undo() {
         retention_protects_one_backup_and_expires_the_control(RetentionProtection::NewestUndoable);
+    }
+
+    #[test]
+    fn a_newer_undoable_row_without_a_backup_does_not_pin_an_old_backup_or_keep_expired_disk_use() {
+        retention_protects_one_backup_and_expires_the_control(
+            RetentionProtection::NewestUndoableNeedsNoBackup,
+        );
     }
 
     #[test]
@@ -1383,11 +1445,26 @@ mod tests {
                 crashed.is_err(),
                 "cut {cut} did not interrupt a durable step"
             );
-            for row in store.list(&EventFilter::default()).unwrap() {
+            let expected_rows = skill_studio_core::backup_retention::BACKUP_RETENTION_COUNT + 2;
+            let rows = store
+                .list(&EventFilter {
+                    limit: expected_rows.try_into().unwrap(),
+                    ..EventFilter::default()
+                })
+                .unwrap();
+            assert_eq!(
+                rows.len(),
+                expected_rows,
+                "the crash check must inspect every fixture row"
+            );
+            for row in rows {
                 if let Some(ref backup_dir) = row.backup_dir {
-                    let manifest = store.read_manifest(backup_dir).unwrap_or_else(|error| {
-                        panic!("cut {cut}: usable row has no manifest: {error}")
-                    });
+                    let manifest = store.read_manifest(backup_dir);
+                    assert!(
+                        manifest.is_ok(),
+                        "cut {cut}: usable row has no manifest: {manifest:?}"
+                    );
+                    let manifest = manifest.unwrap();
                     for entry in manifest.entries {
                         let actual =
                             hash_entry(&store.root.join(backup_dir).join(entry.relative)).unwrap();

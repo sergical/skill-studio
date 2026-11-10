@@ -123,6 +123,30 @@
           ]
         },
         {
+          "description": "Retention has expired the event's backup.",
+          "type": "object",
+          "properties": {
+            "restorable": {
+              "type": "string",
+              "const": "backup_expired"
+            },
+            "reverted_by": {
+              "description": "A previous restore, if the event had already been undone.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "restorable"
+          ]
+        },
+        {
           "description": "The row has no inverse.",
           "type": "object",
           "properties": {

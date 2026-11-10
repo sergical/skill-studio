@@ -191,7 +191,7 @@ impl Journal for FsJournal {
 
     fn finish(
         &self,
-        _guard: &ExclusiveGuard,
+        guard: &ExclusiveGuard,
         id: &PlanId,
         status: PlanStatus,
     ) -> Result<(), CoreError> {
@@ -200,7 +200,7 @@ impl Journal for FsJournal {
         self.write_record(&record)?;
         if status == PlanStatus::Done {
             // The write has committed. Failed cleanup is retried at startup.
-            let _ = trim_backups(self, _guard, Utc::now());
+            let _ = trim_backups(self, guard, Utc::now());
         }
         Ok(())
     }
@@ -885,10 +885,15 @@ pub fn trim_backups(
                 journal.remove_backup(guard, &plan.id, &backup.relative)?;
                 continue;
             }
-            let primary = plan.steps.iter().find_map(|step| match step {
-                PlanStep::Swap { path, .. } => Some(path),
-                _ => None,
-            }).or_else(|| plan.backups.first().map(|entry| &entry.original)).unwrap_or(&backup.original);
+            let primary = plan
+                .steps
+                .iter()
+                .find_map(|step| match step {
+                    PlanStep::Swap { path, .. } => Some(path),
+                    _ => None,
+                })
+                .or_else(|| plan.backups.first().map(|entry| &entry.original))
+                .unwrap_or(&backup.original);
             let target = crate::backup_retention::skill_target(primary);
             targets.entry(target).or_default().push((plan, backup));
         }
@@ -966,7 +971,7 @@ mod tests {
                 &journal,
                 &guard,
                 id.clone(),
-                now - age + chrono::Duration::seconds(index as i64),
+                now - age + chrono::Duration::seconds(i64::try_from(index).unwrap()),
                 "retention",
                 PathBuf::from("/root"),
                 Vec::new(),
@@ -1000,7 +1005,7 @@ mod tests {
             } else {
                 0
             };
-            let control = if protected == 0 { 1 } else { 0 };
+            let control = usize::from(protected == 0);
             let path = |index: usize| {
                 journal.backup_path(&ids[index], &records[index].backups[0].relative)
             };
