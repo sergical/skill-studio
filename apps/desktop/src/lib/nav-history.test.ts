@@ -94,3 +94,49 @@ describe("stepBack and stepForward", () => {
     expect(stepBack(history, home, (view) => view.kind !== "skill")).toBeNull();
   });
 });
+
+describe("concrete copy history", () => {
+  it("Back retains the copy shown before the default changes instead of opening another copy", () => {
+    const history = recordNavigation(
+      EMPTY_NAV_HISTORY,
+      skillPage("a"),
+      home,
+      new Map([["a", "/d1"]]),
+    );
+    expect(stepBack(history, home, always)?.view).toMatchObject({ deploymentPath: "/d1" });
+  });
+
+  it.each([false, true])(
+    "implicit and explicit default copy navigation adds no duplicate in direction %s",
+    (reverse) => {
+      const implicit = skillPage("a");
+      const explicit = { ...implicit, deploymentPath: "/d1" };
+      expect(
+        recordNavigation(
+          EMPTY_NAV_HISTORY,
+          reverse ? explicit : implicit,
+          reverse ? implicit : explicit,
+          new Map([["a", "/d1"]]),
+        ),
+      ).toBe(EMPTY_NAV_HISTORY);
+    },
+  );
+});
+
+describe("history steps pin the page being left", () => {
+  it("Back then Forward retains the default copy being left instead of resolving a later default", () => {
+    const history = recordNavigation(EMPTY_NAV_HISTORY, home, skillPage("a"));
+    const back = stepBack(history, skillPage("a"), always, new Map([["a", "/d1"]]))!;
+    expect(stepForward(back.history, home, always)?.view).toMatchObject({ deploymentPath: "/d1" });
+  });
+
+  it("Forward then Back retains the default copy being left instead of resolving a later default", () => {
+    const forward = stepForward(
+      { back: [], forward: [home] },
+      skillPage("a"),
+      always,
+      new Map([["a", "/d1"]]),
+    )!;
+    expect(stepBack(forward.history, home, always)?.view).toMatchObject({ deploymentPath: "/d1" });
+  });
+});
