@@ -593,6 +593,34 @@ fn acquire_rebuild_lease(
         .inspect_err(|_| state.mark_skills_dirty())
 }
 
+fn try_rebuild_lock(
+    state: &SkillRefreshState,
+    scan_lease: super::write_lease::ScanLeaseGuard,
+) -> Result<
+    Option<(
+        super::write_lease::ScanLeaseGuard,
+        std::sync::MutexGuard<'_, ()>,
+    )>,
+    String,
+> {
+    match state.rebuild_lock.try_lock() {
+        Ok(guard) => Ok(Some((scan_lease, guard))),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            drop(scan_lease);
+            drop(
+                state
+                    .rebuild_lock
+                    .lock()
+                    .map_err(|error| format!("rebuild lock poisoned: {error}"))?,
+            );
+            Ok(None)
+        }
+        Err(std::sync::TryLockError::Poisoned(error)) => {
+            Err(format!("rebuild lock poisoned: {error}"))
+        }
+    }
+}
+
 /// Build a full snapshot right now on the calling thread, store it, and emit
 /// `SNAPSHOT_EVENT`. Used both by the background loop's full-rebuild path and
 /// by commands that need the caller's next read to see fresh data (a new
@@ -604,13 +632,13 @@ pub fn rebuild_snapshot_now(
     state: &SkillRefreshState,
 ) -> Result<SkillSnapshot, String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    // Before `rebuild_lock`: see `ScanLeaseGuard` for the order.
-    let scan_lease =
-        acquire_rebuild_lease(&super::write_lease::WriteLease::default(), state, &home)?;
-    let _guard = state
-        .rebuild_lock
-        .lock()
-        .map_err(|e| format!("rebuild lock poisoned: {e}"))?;
+    let (scan_lease, _guard) = loop {
+        let scan_lease =
+            acquire_rebuild_lease(&super::write_lease::WriteLease::default(), state, &home)?;
+        if let Some(guards) = try_rebuild_lock(state, scan_lease)? {
+            break guards;
+        }
+    };
 
     let mut invocation_index = state
         .invocation_index
@@ -898,19 +926,17 @@ fn reconcile_skill_names_at(
     }
 
     let reconcile_start = Instant::now();
-    // Before `rebuild_lock`: see `ScanLeaseGuard` for the order. A write still
-    // holding its lease past the wait leaves the skills dirty for the next
-    // full rebuild.
-    let Ok(_scan_lease) = super::write_lease::WriteLease::default()
-        .acquire_scan_lease(home, &effective_project_paths(home))
-    else {
-        state.mark_skills_dirty();
-        return Ok(());
+    let (_scan_lease, _guard) = loop {
+        let Ok(scan_lease) = super::write_lease::WriteLease::default()
+            .acquire_scan_lease(home, &effective_project_paths(home))
+        else {
+            state.mark_skills_dirty();
+            return Ok(());
+        };
+        if let Some(guards) = try_rebuild_lock(state, scan_lease)? {
+            break guards;
+        }
     };
-    let _guard = state
-        .rebuild_lock
-        .lock()
-        .map_err(|error| format!("rebuild lock poisoned: {error}"))?;
     let current = state
         .snapshot
         .read()
@@ -5474,6 +5500,39 @@ mod tests {
                 "a write was refused while the rebuild only indexed invocations"
             );
             assert!(snapshot.skills.iter().any(|s| s.name == "alpha"));
+        });
+    }
+
+    #[test]
+    fn a_queued_scan_releases_the_home_lease_instead_of_blocking_writes_during_indexing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        write_skill(&home, "alpha");
+        let lease = super::super::write_lease::WriteLease::with_lease_root_and_wait(
+            tmp.path().join("leases"),
+            std::time::Duration::from_secs(3),
+        );
+        let state = fixture_state();
+        let indexing = state.rebuild_lock.lock().unwrap();
+        let (queued_tx, queued_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let queued = scope.spawn(|| {
+                let scan = acquire_rebuild_lease(&lease, &state, &home).unwrap();
+                queued_tx.send(()).unwrap();
+                try_rebuild_lock(&state, scan).unwrap().is_none()
+            });
+            queued_rx.recv().unwrap();
+            let write = lease.try_acquire(&home);
+            drop(indexing);
+            let released_before_waiting = queued.join().unwrap();
+            assert!(
+                write.is_ok(),
+                "a queued scan blocked a write during indexing"
+            );
+            assert!(
+                released_before_waiting,
+                "the scan kept its lease while waiting"
+            );
         });
     }
 
