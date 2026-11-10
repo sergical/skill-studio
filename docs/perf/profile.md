@@ -8,15 +8,15 @@ The first attempt used the default budget and returned a partial inventory.
 The table counts leaf frames. These are sampled wall-time stacks, not CPU percentages.
 Unresolved system frames remain in the denominator.
 
-| Leaf frame          | Samples | Share |
-| ------------------- | ------: | ----: |
-| `lstat`             |    1079 | 21.4% |
-| `__getattrlist`     |     917 | 18.2% |
-| `__open_nocancel`   |     557 | 11.0% |
-| `__open`            |     542 | 10.7% |
-| `__getdirentries64` |     463 |  9.2% |
+| Leaf frame                          | Samples | Share |
+| ----------------------------------- | ------: | ----: |
+| `lstat`                             |    2144 | 28.5% |
+| `__open_nocancel`                   |     940 | 12.5% |
+| `__open`                            |     897 | 11.9% |
+| `__getdirentries64`                 |     516 |  6.9% |
+| `libsystem_malloc.dylib unresolved` |     476 |  6.3% |
 
-Total nonempty stacks: 5046.
+Total nonempty stacks: 7521.
 
 The flame graph data are in `real-shaped-profile.json.gz`. The symbol sidecar
 is `real-shaped-profile.json.syms.json`. Load both with samply to inspect the stacks.
@@ -35,3 +35,9 @@ samply record --save-only --unstable-presymbolicate --iteration-count 10 \
 
 Repeat `--project` for each generated project. Set HOME and agent cache roots
 to the fixture home, with telemetry off. The command must never select the real home.
+
+Source commit: `c205022785ad40db6530dedc99b542d16630a326`.
+
+Measured executable SHA-256: `71f1906eaa8c7fc50d2c8a5c5604fef2cc76a82b9c57fe106de95c7eee90d90e`.
+
+The measured executable was copied out of the shared Cargo target folder.
