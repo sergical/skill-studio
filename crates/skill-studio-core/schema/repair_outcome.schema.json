@@ -7,6 +7,10 @@
       "description": "The file was rewritten and an event recorded.",
       "type": "object",
       "properties": {
+        "outcome": {
+          "type": "string",
+          "const": "applied"
+        },
         "event_id": {
           "description": "History event.",
           "$ref": "#/$defs/EventId"
@@ -14,10 +18,6 @@
         "deployment_id": {
           "description": "Deployment written (the fork for `ForkAndFix`).",
           "$ref": "#/$defs/DeploymentId"
-        },
-        "outcome": {
-          "type": "string",
-          "const": "applied"
         }
       },
       "required": [
@@ -30,13 +30,13 @@
       "description": "The file already had the proposed bytes; nothing was written.",
       "type": "object",
       "properties": {
-        "deployment_id": {
-          "description": "Deployment inspected.",
-          "$ref": "#/$defs/DeploymentId"
-        },
         "outcome": {
           "type": "string",
           "const": "already_applied"
+        },
+        "deployment_id": {
+          "description": "Deployment inspected.",
+          "$ref": "#/$defs/DeploymentId"
         }
       },
       "required": [

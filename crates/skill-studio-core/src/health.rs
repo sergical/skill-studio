@@ -169,7 +169,7 @@ mod tests {
             row("scan", 0, 40, Outcome::Ok, None),
         ];
 
-        let got = health_rollup(&rows, now, Duration::from_secs(7 * 24 * 3600));
+        let got = health_rollup(&rows, now, Duration::from_hours(168));
 
         let expected = vec![
             CommandHealth {
@@ -227,7 +227,7 @@ mod tests {
             })
             .collect();
 
-        let kept = trim_rows(rows, now, Duration::from_secs(30 * 24 * 3600));
+        let kept = trim_rows(rows, now, Duration::from_hours(720));
 
         let kept_ages_days: Vec<i64> = kept.iter().map(|r| (now - r.ts).num_days()).collect();
         assert_eq!(
@@ -273,7 +273,7 @@ mod tests {
             .collect();
 
         let start = std::time::Instant::now();
-        let got = health_rollup(&rows, now, Duration::from_secs(7 * 24 * 3600));
+        let got = health_rollup(&rows, now, Duration::from_hours(168));
         // For a human running this test with `--nocapture`; not asserted (see
         // the doc comment above) so a loaded CI box can't make it flaky.
         #[allow(clippy::print_stderr)]

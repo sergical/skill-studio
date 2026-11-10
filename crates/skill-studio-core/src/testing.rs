@@ -1915,7 +1915,7 @@ pub mod golden {
 
     /// An uncancellable context with a fresh correlation id.
     pub fn ctx() -> OpContext {
-        OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()))
+        OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()))
     }
 
     /// `Normalizer::apply` only rewrites a string that starts with the home
@@ -1924,10 +1924,8 @@ pub mod golden {
     /// substring rewrite too.
     pub fn replace_everywhere(value: &mut serde_json::Value, from: &str, to: &str) {
         match value {
-            serde_json::Value::String(s) => {
-                if s.contains(from) {
-                    *s = s.replace(from, to);
-                }
+            serde_json::Value::String(s) if s.contains(from) => {
+                *s = s.replace(from, to);
             }
             serde_json::Value::Array(items) => {
                 for v in items.iter_mut() {
