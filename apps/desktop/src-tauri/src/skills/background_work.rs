@@ -135,7 +135,7 @@ impl<P: Fn(&BackgroundStatus)> Drop for RunCompletion<'_, P> {
     }
 }
 
-fn state() -> &'static BackgroundState {
+pub(super) fn state() -> &'static BackgroundState {
     static STATE: OnceLock<BackgroundState> = OnceLock::new();
     STATE.get_or_init(BackgroundState::default)
 }

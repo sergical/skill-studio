@@ -35,7 +35,8 @@ fn main() {
             &mut SkillInvocationIndex::default(),
             BuildPaths::new(&cache, &runs, &updates),
             chrono::Utc::now(),
-        );
+        )
+        .expect("build snapshot");
         outcomes.push(serde_json::json!({
             "skills": snapshot.skills.len(),
             "scan_partial": snapshot.scan_partial,

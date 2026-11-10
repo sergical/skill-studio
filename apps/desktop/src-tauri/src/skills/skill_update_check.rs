@@ -23,7 +23,7 @@ use std::time::Duration;
 use chrono::Utc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use super::skill_agent_runner::{is_executable_file, pick_executable_line};
 use super::skill_dto::InstallScope;
@@ -740,12 +740,19 @@ fn is_auth_failure(message: &str) -> bool {
 /// invents a note. After an auth failure or a second timeout the remaining repos are
 /// not asked and also keep their previous records. Repos no longer among
 /// `candidates` are dropped. Keyed by `normalize_repo_key`.
+#[cfg(test)]
 fn find_upstream_ahead(
     candidates: &[ForkCandidate],
     lookup: &dyn ForkLookup,
     previous: &BTreeMap<String, UpstreamAhead>,
 ) -> BTreeMap<String, UpstreamAhead> {
-    find_upstream_ahead_with_pool(candidates, lookup, previous, LOOKUP_POOL_SIZE)
+    find_upstream_ahead_with_pool(
+        candidates,
+        lookup,
+        previous,
+        LOOKUP_POOL_SIZE,
+        &mut Vec::new(),
+    )
 }
 
 /// `find_upstream_ahead` on `pool_size` workers.
@@ -754,6 +761,7 @@ fn find_upstream_ahead_with_pool(
     lookup: &dyn ForkLookup,
     previous: &BTreeMap<String, UpstreamAhead>,
     pool_size: usize,
+    errors: &mut Vec<String>,
 ) -> BTreeMap<String, UpstreamAhead> {
     // key -> (repo as first seen, owner ids of every skill from it)
     let mut groups: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
@@ -811,6 +819,12 @@ fn find_upstream_ahead_with_pool(
     let results = results
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    errors.extend(results.iter().filter_map(|(repo, result)| {
+        result
+            .as_ref()
+            .err()
+            .map(|error| format!("{repo}: {error}"))
+    }));
     let mut found = BTreeMap::new();
     for (key, (_, owner_ids)) in &groups {
         let record = match results.get(key) {
@@ -1309,6 +1323,7 @@ fn check_candidate(
 struct UpdateCheckOutcome {
     store: UpdateCheckStore,
     persistence_error: Option<String>,
+    fork_errors: Vec<String>,
 }
 
 /// Build owner candidates, optionally filter by owner ID, check them in a
@@ -1423,6 +1438,7 @@ fn run_update_check_impl(
     UpdateCheckOutcome {
         store,
         persistence_error,
+        fork_errors: Vec::new(),
     }
 }
 
@@ -1474,15 +1490,18 @@ fn run_update_check_with_forks(
     // A root with an unreadable lock has incomplete candidates, so its owners
     // keep their previous notes while the other roots are looked up normally.
     let sources = build_sources(home, project_paths);
+    let mut fork_errors = Vec::new();
     let upstream_ahead = Some(sources.keep_failed_root_notes(
-        find_upstream_ahead(
+        find_upstream_ahead_with_pool(
             &sources.fork_candidates,
             fork_lookup,
             &previous.upstream_ahead,
+            LOOKUP_POOL_SIZE,
+            &mut fork_errors,
         ),
         &previous.upstream_ahead,
     ));
-    run_update_check_impl(
+    let mut outcome = run_update_check_impl(
         home,
         project_paths,
         app_data,
@@ -1490,7 +1509,9 @@ fn run_update_check_with_forks(
         tree_lookup,
         None,
         upstream_ahead,
-    )
+    );
+    outcome.fork_errors = fork_errors;
+    outcome
 }
 
 /// Records `gh_status: Missing` and keeps every previously recorded state,
@@ -1515,6 +1536,7 @@ fn write_gh_missing_store(
     UpdateCheckOutcome {
         store,
         persistence_error,
+        fork_errors: Vec::new(),
     }
 }
 
@@ -1593,6 +1615,7 @@ fn update_check_result(outcome: &UpdateCheckOutcome) -> Result<UpdateCheckSummar
         GhStatus::Ok => {}
     }
     errors.extend(outcome.persistence_error.iter().cloned());
+    errors.extend(outcome.fork_errors.iter().cloned());
     errors.sort();
     errors.dedup();
     if errors.is_empty() {
@@ -1653,23 +1676,54 @@ pub fn check_now(
     if !crate::skills::data_folder_status::data_folder_writable(app) {
         return Ok(summarize(&read_update_check_store(&app_data)));
     }
-    if !state.try_begin() {
-        return Ok(summarize(&read_update_check_store(&app_data)));
-    }
-    let project_paths: Vec<PathBuf> = refresh_state
-        .snapshot
-        .read()
-        .ok()
-        .and_then(|snapshot| snapshot.as_ref().map(|snapshot| snapshot.projects.clone()))
-        .unwrap_or_default()
-        .into_iter()
-        .map(PathBuf::from)
-        .collect();
-    let store = run_update_check_now(&home, &project_paths, &app_data);
-    state.end();
+    run_claimed_check(
+        state,
+        &app_data,
+        super::background_work::state(),
+        || {
+            let project_paths: Vec<PathBuf> = refresh_state
+                .snapshot
+                .read()
+                .ok()
+                .and_then(|snapshot| snapshot.as_ref().map(|snapshot| snapshot.projects.clone()))
+                .unwrap_or_default()
+                .into_iter()
+                .map(PathBuf::from)
+                .collect();
+            let store = run_update_check_now(&home, &project_paths, &app_data);
+            skill_refresh::request_snapshot_rebuild(app);
+            update_check_result(&store)
+        },
+        |status| {
+            let _ = app.emit(super::background_work::BACKGROUND_EVENT, status);
+        },
+    )
+}
 
-    skill_refresh::request_snapshot_rebuild(app);
-    update_check_result(&store)
+struct UpdateCheckClaim<'a>(&'a UpdateCheckState);
+
+impl Drop for UpdateCheckClaim<'_> {
+    fn drop(&mut self) {
+        self.0.end();
+    }
+}
+
+fn run_claimed_check(
+    state: &UpdateCheckState,
+    app_data: &Path,
+    background: &super::background_work::BackgroundState,
+    work: impl FnOnce() -> Result<UpdateCheckSummary, String>,
+    publish: impl Fn(&super::background_work::BackgroundStatus),
+) -> Result<UpdateCheckSummary, String> {
+    if !state.try_begin() {
+        return Ok(summarize(&read_update_check_store(app_data)));
+    }
+    let _claim = UpdateCheckClaim(state);
+    background.run(
+        super::background_work::BackgroundWorker::UpdateCheck,
+        work,
+        publish,
+    )
 }
 
 #[tauri::command]
@@ -1736,11 +1790,7 @@ pub fn spawn_update_check_loop(app: AppHandle) {
         std::thread::sleep(INITIAL_DELAY);
         loop {
             let refresh_state = app.state::<skill_refresh::SkillRefreshState>();
-            if let Err(e) = super::background_work::run(
-                &app,
-                super::background_work::BackgroundWorker::UpdateCheck,
-                || check_now(&app, &state, &refresh_state),
-            ) {
+            if let Err(e) = check_now(&app, &state, &refresh_state) {
                 eprintln!("skill update check: check failed: {e}");
             }
             std::thread::sleep(UPDATE_CHECK_INTERVAL);
@@ -1855,6 +1905,113 @@ mod tests {
                 "2026-02-01T00:00:00Z".to_string(),
             )))
         }
+    }
+
+    #[test]
+    fn manual_check_publishes_running_failure_and_recovery_or_leaves_stale_worker_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = UpdateCheckState::default();
+        let background = super::super::background_work::BackgroundState::default();
+        let events = Mutex::new(Vec::new());
+        let publish = |status: &super::super::background_work::BackgroundStatus| {
+            events.lock().unwrap().push(status.clone());
+        };
+        let failed = run_claimed_check(
+            &state,
+            tmp.path(),
+            &background,
+            || {
+                assert!(events.lock().unwrap().last().unwrap().tasks[2].running);
+                let count = events.lock().unwrap().len();
+                run_claimed_check(
+                    &state,
+                    tmp.path(),
+                    &background,
+                    || panic!("overlapping check ran"),
+                    publish,
+                )
+                .unwrap();
+                assert_eq!(
+                    events.lock().unwrap().len(),
+                    count,
+                    "skipped check changed worker status"
+                );
+                Err("manual lookup failed".into())
+            },
+            publish,
+        );
+        assert_eq!(failed.unwrap_err(), "manual lookup failed");
+        {
+            let events = events.lock().unwrap();
+            let finished = &events.last().unwrap().tasks[2];
+            assert!(!finished.running);
+            assert_eq!(finished.last_error.as_deref(), Some("manual lookup failed"));
+        }
+        run_claimed_check(
+            &state,
+            tmp.path(),
+            &background,
+            || {
+                assert!(events.lock().unwrap().last().unwrap().tasks[2].running);
+                Ok(summarize(&UpdateCheckStore::default()))
+            },
+            publish,
+        )
+        .unwrap();
+        let events = events.lock().unwrap();
+        let finished = &events.last().unwrap().tasks[2];
+        assert!(!finished.running);
+        assert!(finished.last_error.is_none());
+        assert_eq!(events.len(), 4);
+    }
+
+    #[test]
+    fn manual_check_after_panic_runs_again_or_returns_cached_success_forever() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = UpdateCheckState::default();
+        let background = super::super::background_work::BackgroundState::default();
+        let events = Mutex::new(Vec::new());
+        let publish = |status: &super::super::background_work::BackgroundStatus| {
+            events.lock().unwrap().push(status.clone());
+        };
+        let panic = std::panic::catch_unwind(|| {
+            let _ = run_claimed_check(
+                &state,
+                tmp.path(),
+                &background,
+                || panic!("lookup panicked"),
+                publish,
+            );
+        });
+        assert!(panic.is_err());
+        {
+            let events = events.lock().unwrap();
+            let finished = &events.last().unwrap().tasks[2];
+            assert!(!finished.running);
+            assert_eq!(
+                finished.last_error.as_deref(),
+                Some("background work panicked")
+            );
+        }
+        let ran = AtomicBool::new(false);
+        run_claimed_check(
+            &state,
+            tmp.path(),
+            &background,
+            || {
+                ran.store(true, Ordering::Relaxed);
+                Ok(summarize(&UpdateCheckStore::default()))
+            },
+            publish,
+        )
+        .unwrap();
+        assert!(
+            ran.load(Ordering::Relaxed),
+            "check returned cached success after panic"
+        );
+        assert!(events.lock().unwrap().last().unwrap().tasks[2]
+            .last_error
+            .is_none());
     }
 
     #[test]
@@ -3111,7 +3268,8 @@ resolved_commit = "{commit}"
         ]);
         // One worker asks the repos in order, so the first failure is the
         // only call when the stop works.
-        let found = find_upstream_ahead_with_pool(&candidates, &lookup, &previous, 1);
+        let found =
+            find_upstream_ahead_with_pool(&candidates, &lookup, &previous, 1, &mut Vec::new());
         assert_eq!(found.keys().collect::<Vec<_>>(), vec!["me/a", "me/j"]);
         assert_eq!(
             *lookup.calls.lock().unwrap(),
@@ -3133,7 +3291,8 @@ resolved_commit = "{commit}"
             previous_record("me/c", "c", 4),
             previous_record("me/a", "a", 2),
         ]);
-        let found = find_upstream_ahead_with_pool(&candidates, &lookup, &previous, 1);
+        let found =
+            find_upstream_ahead_with_pool(&candidates, &lookup, &previous, 1, &mut Vec::new());
         assert_eq!(found.keys().collect::<Vec<_>>(), vec!["me/a", "me/c"]);
         assert_eq!(
             *lookup.info_calls.lock().unwrap(),
@@ -3147,7 +3306,13 @@ resolved_commit = "{commit}"
             .failing("me/a", FORK_LOOKUP_TIMED_OUT_MESSAGE)
             .fork("me/b", "them/orig", 3);
         let candidates = [repo_candidate("a", "me/a"), repo_candidate("b", "me/b")];
-        let found = find_upstream_ahead_with_pool(&candidates, &lookup, &BTreeMap::new(), 1);
+        let found = find_upstream_ahead_with_pool(
+            &candidates,
+            &lookup,
+            &BTreeMap::new(),
+            1,
+            &mut Vec::new(),
+        );
         assert_eq!(found.keys().collect::<Vec<_>>(), vec!["me/b"]);
     }
 
@@ -3644,7 +3809,7 @@ resolved_commit = "{commit}"
     }
 
     #[test]
-    fn a_stalled_fork_lookup_still_lets_owner_checks_run_and_the_store_persist() {
+    fn a_stalled_fork_lookup_reports_failure_and_persists_owner_checks_or_clears_worker_error() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         let app_data = tmp.path().join("data");
@@ -3659,15 +3824,19 @@ resolved_commit = "{commit}"
             "2026-01-02T00:00:00Z".to_string(),
         )))]);
 
-        let store = run_update_check_with_forks(
+        let outcome = run_update_check_with_forks(
             &home,
             &[],
             &app_data,
             &lookup,
             &UnusedTreeLookup,
             &FakeForkLookup::new().failing("me/fork", FORK_LOOKUP_TIMED_OUT_MESSAGE),
-        )
-        .store;
+        );
+
+        assert!(update_check_result(&outcome)
+            .unwrap_err()
+            .contains(FORK_LOOKUP_TIMED_OUT_MESSAGE));
+        let store = outcome.store;
 
         assert_eq!(store.gh_status, GhStatus::Ok);
         assert_eq!(lookup.call_count(), 1);
