@@ -26,5 +26,16 @@ The CLI and MCP tests each cover both cases under a temporary HOME. Both passed
 after a fresh core build. An earlier CLI run used a stale shared build artifact
 and failed. No claim of a controlled baseline run is made for that run.
 
-The frontend gate and workspace Clippy passed. The full Rust test suite is
-pending. No timing result is claimed. The F_FULLFSYNC change has not started.
+The frontend gate, Rust format check, and workspace Clippy passed. The full
+Rust test suite failed in two Remove tests outside this diff:
+
+- `remove_with_unreadable_cli_backup_link_target_refuses_before_spawn_or_loses_the_secondary_link`
+- `remove_with_unreadable_cli_backup_metadata_refuses_before_spawn_or_loses_the_secondary_copy`
+
+Both failures say the CLI ran despite unreadable backup input. The complete log
+is local at `/tmp/park-workspace.log`. This run did not establish whether those
+failures also occur on the base branch. No Remove code was changed.
+
+The full gate is red, so the required post-green simplification, push, PR,
+and CI wait have not run. No timing result is claimed. The F_FULLFSYNC change
+has not started. Issues #447, #448, #404, #398, and #408 remain unimplemented.
