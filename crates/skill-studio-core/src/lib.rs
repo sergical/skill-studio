@@ -44,6 +44,7 @@ pub mod health;
 pub mod identity;
 pub mod install_targets;
 pub mod journal;
+pub mod ledger_publication;
 pub mod lock_file;
 pub mod opencode_config;
 pub mod ops;

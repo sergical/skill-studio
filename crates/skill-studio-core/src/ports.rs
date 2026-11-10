@@ -597,6 +597,14 @@ pub trait HistoryStore: Send {
         id: &EventId,
         paths: &[PathBuf],
     ) -> Result<crate::events::BackupManifest, CoreError>;
+    /// Replaces one restore-manifest entry with the tree displaced by an atomic swap.
+    fn retain_displaced(
+        &mut self,
+        guard: &ExclusiveGuard,
+        id: &EventId,
+        original: &Path,
+        displaced: &Path,
+    ) -> Result<(), CoreError>;
     /// Inserts a `pending` row.
     fn record(
         &mut self,

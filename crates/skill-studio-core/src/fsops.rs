@@ -438,7 +438,19 @@ pub fn swap(
     staged: &Staged,
     quarantine_dir: &Path,
 ) -> Result<(), FsOpsError> {
+    swap_retaining(root, plan, final_name, staged, quarantine_dir).map(|_| ())
+}
+
+/// Swaps a tree and returns the retained displaced tree, when present.
+pub fn swap_retaining(
+    root: &Root,
+    plan: &PlanWriter<'_>,
+    final_name: &Path,
+    staged: &Staged,
+    quarantine_dir: &Path,
+) -> Result<Option<PathBuf>, FsOpsError> {
     root.revalidate()?;
+    let mut displaced = None;
     let final_path = root.confine(final_name)?;
     let old_facts = root.fs.symlink_metadata(&final_path).ok();
     // The identity the exchange will give `final_path` once it lands -
@@ -507,6 +519,7 @@ pub fn swap(
             root.fs
                 .fsops_rename(&staged.path, &quarantine_target)
                 .fs_err(&quarantine_target)?;
+            displaced = Some(quarantine_target);
         }
         Some(_) => {
             return Err(FsOpsError::ReplacedBySymlink { path: final_path });
@@ -516,7 +529,7 @@ pub fn swap(
     let parent = final_path.parent().unwrap_or(root.path()).to_path_buf();
     fsync_up_to_root(root, parent)?;
     root.revalidate()?;
-    Ok(())
+    Ok(displaced)
 }
 
 /// Creates a symlink at `name` pointing at `target`, under a temp name

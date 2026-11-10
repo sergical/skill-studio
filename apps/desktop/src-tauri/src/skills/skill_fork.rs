@@ -302,6 +302,7 @@ fn run_npx_in_home(
 }
 
 fn detach_ledger(
+    guard: &super::write_lease::WriteLeaseGuard,
     ledger: &dyn LedgerTool,
     home: &Path,
     tool: OriginTool,
@@ -311,35 +312,36 @@ fn detach_ledger(
     let isolated = tempfile::tempdir().map_err(|e| e.to_string())?;
     let agents = isolated.path().join(".agents");
     fs::create_dir_all(agents.join("skills").join(name)).map_err(|e| e.to_string())?;
-    let files = [
-        ".skill-lock.json",
-        "agents.toml",
-        "agents.lock",
-        ".gitignore",
-    ];
+    let files = [".skill-lock.json", "agents.toml", "agents.lock"];
+    let mut changes = Vec::new();
     for file in files {
-        let source = home.join(".agents").join(file);
-        if source.exists() {
-            fs::copy(&source, agents.join(file)).map_err(|e| e.to_string())?;
+        let path = home.join(".agents").join(file);
+        let before = fs::read(&path).ok();
+        if let Some(bytes) = &before {
+            fs::write(agents.join(file), bytes).map_err(|e| e.to_string())?;
         }
+        changes.push(skill_studio_core::ledger_publication::LedgerChange {
+            path,
+            before,
+            after: None,
+        });
     }
     ledger.remove(isolated.path(), tool, name)?;
-    for file in files {
-        let source = agents.join(file);
-        if source.exists() {
-            let destination = fs::canonicalize(home.join(".agents").join(file))
-                .unwrap_or_else(|_| home.join(".agents").join(file));
-            let mut staged = tempfile::NamedTempFile::new_in(
-                destination
-                    .parent()
-                    .ok_or("Ledger has no parent directory")?,
-            )
-            .map_err(|e| e.to_string())?;
-            std::io::Write::write_all(&mut staged, &fs::read(source).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
-            staged.persist(destination).map_err(|e| e.to_string())?;
-        }
+    for (change, file) in changes.iter_mut().zip(files) {
+        change.after = fs::read(agents.join(file)).ok();
     }
+    let runtime = super::core_runtime::build_runtime_write_at_with_search_dirs(
+        home,
+        isolated.path(),
+        Vec::new(),
+    )?;
+    skill_studio_core::ledger_publication::publish(
+        &runtime,
+        guard.as_exclusive_guard(),
+        name,
+        &changes,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1269,7 +1271,7 @@ fn fork_skill_with_storage(
             ForkRecoveryRollback::KeepComplete,
         ));
     }
-    if let Err(error) = detach_ledger(ledger, home, origin.tool, name) {
+    if let Err(error) = detach_ledger(guard, ledger, home, origin.tool, name) {
         return Err(rollback_fork_before_detach(
             storage,
             guard,
@@ -2754,6 +2756,62 @@ mod tests {
             fs::read_to_string(home.join(".codex/skills/find-bugs/SKILL.md")).unwrap(),
             "late agent edit"
         );
+    }
+
+    #[test]
+    fn fork_preserves_unrelated_concurrent_ledger_edits_or_overwrites_other_declarations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        seed_dotagents_ledger(
+            &home,
+            "find-bugs",
+            "owner/repo",
+            "skills/find-bugs",
+            &"a".repeat(40),
+        );
+        let shared = home.join(".agents/skills/find-bugs");
+        write_file(&shared.join("SKILL.md"), "original");
+        struct ConcurrentLedger(PathBuf);
+        impl LedgerTool for ConcurrentLedger {
+            fn remove(&self, isolated: &Path, _: OriginTool, _: &str) -> Result<(), String> {
+                for file in ["agents.toml", "agents.lock"] {
+                    let path = self.0.join(".agents").join(file);
+                    let mut bytes = fs::read_to_string(&path).unwrap();
+                    bytes.push_str(if file == "agents.toml" {
+                        "\n[[skills]]\nname = \"other\"\nsource = \"late/repo\"\n"
+                    } else {
+                        "\n[skills.other]\nsource = \"late/repo\"\n"
+                    });
+                    fs::write(path, bytes).unwrap();
+                    fs::write(isolated.join(".agents").join(file), "").unwrap();
+                }
+                Ok(())
+            }
+            fn reinstall(&self, _: &ForkRecord, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        fork_skill_with(
+            &test_guard(&home),
+            &home,
+            &tmp.path().join("data"),
+            "find-bugs",
+            &shared,
+            &ConcurrentLedger(home.clone()),
+            &FakeFetch {
+                files: vec![("SKILL.md", "upstream")],
+            },
+            &NeverCalledLookup,
+        )
+        .unwrap();
+        for file in ["agents.toml", "agents.lock"] {
+            let bytes = fs::read_to_string(home.join(".agents").join(file)).unwrap();
+            assert!(bytes.contains("late/repo"), "lost unrelated edit in {file}");
+            assert!(
+                !bytes.contains("find-bugs"),
+                "did not detach target in {file}"
+            );
+        }
     }
 
     #[test]

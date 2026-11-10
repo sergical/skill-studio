@@ -389,6 +389,45 @@ impl HistoryStore for SqliteHistoryStore {
         })
     }
 
+    fn retain_displaced(
+        &mut self,
+        _guard: &ExclusiveGuard,
+        id: &EventId,
+        original: &Path,
+        displaced: &Path,
+    ) -> Result<(), CoreError> {
+        let dir = self.backup_dir_for(id);
+        let mut manifest = read_manifest(&dir)?;
+        let relative = format!(
+            "{}-displaced",
+            manifest
+                .entries
+                .get(&original.to_string_lossy().into_owned())
+                .ok_or_else(|| CoreError::new(ErrorCode::Io, "missing displaced manifest entry"))?
+                .relative_path
+        );
+        copy_recursive(displaced, &dir.join(&relative)).map_err(|e| CoreError::io(displaced, e))?;
+        let fingerprint = hash_entry(displaced).map_err(|e| CoreError::io(displaced, e))?;
+        manifest.entries.insert(
+            original.to_string_lossy().into_owned(),
+            DesktopBackupEntry {
+                relative_path: relative,
+                fingerprint,
+            },
+        );
+        let path = dir.join("manifest.json");
+        let temporary = dir.join("manifest.displaced.tmp");
+        let mut file = File::create(&temporary).map_err(|e| CoreError::io(&temporary, e))?;
+        file.write_all(&serde_json::to_vec_pretty(&manifest).map_err(json_err)?)
+            .map_err(|e| CoreError::io(&temporary, e))?;
+        file.sync_all().map_err(|e| CoreError::io(&temporary, e))?;
+        fs::rename(&temporary, &path).map_err(|e| CoreError::io(&path, e))?;
+        File::open(&dir)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| CoreError::io(&dir, e))?;
+        Ok(())
+    }
+
     fn record(
         &mut self,
         _guard: &ExclusiveGuard,

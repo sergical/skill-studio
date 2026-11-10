@@ -421,7 +421,8 @@ fn update_files(
 fn update_skills_sh_staged(
     rt: &Runtime,
     ctx: &OpContext,
-    session: &MutationSession,
+    session: &mut MutationSession,
+    id: &crate::identity::EventId,
     req: &UpdateRequest,
     destination: &Path,
 ) -> Result<(), CoreError> {
@@ -434,14 +435,25 @@ fn update_skills_sh_staged(
     update_files(fs, destination, Path::new(""), &mut files)?;
     update_copy(rt, &session.guard, &staged_root, &req.skill, &files)?;
     let root = ops_install::scope_root(rt, &req.scope);
+    let mut ledgers = Vec::new();
     for name in [".agents/.skill-lock.json", "skills-lock.json"] {
         let source = root.join(name);
-        if let Ok(bytes) = fs.read_capped(&source, 8 * 1024 * 1024) {
+        let before = match fs.read_capped(&source, 8 * 1024 * 1024) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(CoreError::io(&source, e)),
+        };
+        if let Some(bytes) = &before {
             let target = stage.join(name);
             let scoped = crate::ports::confine(&rt.scope, fs, &target)?;
-            fs.write_atomic(&session.guard, &scoped, &bytes)
+            fs.write_atomic(&session.guard, &scoped, bytes)
                 .map_err(|e| CoreError::io(&target, e))?;
         }
+        ledgers.push(crate::ledger_publication::LedgerChange {
+            path: source,
+            before,
+            after: None,
+        });
     }
     let spawner = rt
         .ports
@@ -453,7 +465,10 @@ fn update_skills_sh_staged(
         &crate::ports::ProcessSpec {
             program: "npx".into(),
             args,
-            cwd: Some(stage.clone()),
+            cwd: match req.scope {
+                RootScope::Global => None,
+                RootScope::Project(_) => Some(stage.clone()),
+            },
             env: crate::skills_cli_agents::cli_environment(&stage, &stage.join(".codex")),
             timeout_ms: 120_000,
         },
@@ -470,7 +485,7 @@ fn update_skills_sh_staged(
         &mut files,
     )?;
     // Each swap renames the live tree into quarantine, capturing late external writes too.
-    update_copy(
+    let displaced = update_copy(
         rt,
         &session.guard,
         destination.parent().ok_or_else(|| {
@@ -479,13 +494,22 @@ fn update_skills_sh_staged(
         &req.skill,
         &files,
     )?;
+    if let Some(displaced) = displaced {
+        session
+            .store
+            .retain_displaced(&session.guard, id, destination, &displaced)?;
+    }
     for dir in crate::ops::harness_own_skill_roots(rt, &req.scope) {
         let live = dir.join(&req.skill.0);
         if fs
             .symlink_metadata(&live)
             .is_ok_and(|facts| facts.kind == crate::ports::FileKind::Dir)
         {
-            update_copy(rt, &session.guard, &dir, &req.skill, &files)?;
+            if let Some(displaced) = update_copy(rt, &session.guard, &dir, &req.skill, &files)? {
+                session
+                    .store
+                    .retain_displaced(&session.guard, id, &live, &displaced)?;
+            }
         } else if fs.symlink_metadata(&live).is_err() {
             if let Ok(relative) = dir.strip_prefix(&root) {
                 let staged_agent = stage.join(relative).join(&req.skill.0);
@@ -501,15 +525,13 @@ fn update_skills_sh_staged(
             }
         }
     }
-    for name in [".agents/.skill-lock.json", "skills-lock.json"] {
-        let source = stage.join(name);
-        if let Ok(bytes) = fs.read_capped(&source, 8 * 1024 * 1024) {
-            let target = root.join(name);
-            let scoped = crate::ports::confine(&rt.scope, fs, &target)?;
-            fs.write_atomic(&session.guard, &scoped, &bytes)
-                .map_err(|e| CoreError::io(&target, e))?;
-        }
+    for (change, name) in ledgers
+        .iter_mut()
+        .zip([".agents/.skill-lock.json", "skills-lock.json"])
+    {
+        change.after = fs.read_capped(&stage.join(name), 8 * 1024 * 1024).ok();
     }
+    crate::ledger_publication::publish(rt, &session.guard, &req.skill.0, &ledgers)?;
     crate::ops_remove::remove_tree_best_effort(fs, &stage);
     Ok(())
 }
@@ -574,7 +596,7 @@ fn update_copy(
     universal_root: &Path,
     skill: &SkillName,
     files: &[crate::dto::InstallFile],
-) -> Result<(), CoreError> {
+) -> Result<Option<PathBuf>, CoreError> {
     let fs = rt.ports.fs.clone();
     ops_install::ensure_journal_root(rt, guard, fs.as_ref())?;
     let journal_root = ops_install::journal_root(&rt.scope.home.lexical);
@@ -609,11 +631,11 @@ fn update_copy(
     // update-specific name: a quarantine folder the prune never sees would
     // grow unbounded.
     let quarantine_dir = Path::new(crate::doctor::QUARANTINE_DIR_NAME);
-    fsops::swap(&root, &plan, final_name, &staged, quarantine_dir)
+    let displaced = fsops::swap_retaining(&root, &plan, final_name, &staged, quarantine_dir)
         .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(universal_root))?;
     plan.finish(PlanStatus::Done)
         .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()))?;
-    Ok(())
+    Ok(displaced)
 }
 
 /// `Copy` only: both registry documents `write_copy_registry` will later
@@ -736,10 +758,11 @@ fn update_write(
     destination: &Path,
     copy_registry: Option<CopyRegistryRead>,
     dotagents: Option<&DotagentsPlan>,
+    id: &crate::identity::EventId,
 ) -> Result<Option<serde_json::Value>, CoreError> {
     let fs = rt.ports.fs.as_ref();
     if req.method == InstallMethod::SkillsSh {
-        update_skills_sh_staged(rt, ctx, session, req, destination)?;
+        update_skills_sh_staged(rt, ctx, session, id, req, destination)?;
         return Ok(None);
     }
     match req.method {
@@ -935,7 +958,7 @@ fn update_body(
                 .map(|dir| dir.join(&req.skill.0))
                 .filter(|path| {
                     fs.symlink_metadata(path)
-                        .is_ok_and(|facts| facts.kind == crate::ports::FileKind::Dir)
+                        .map_or(true, |facts| facts.kind == crate::ports::FileKind::Dir)
                 }),
         );
     }
@@ -998,6 +1021,7 @@ fn update_body(
         &destination,
         copy_registry,
         dotagents.as_ref(),
+        &id,
     ) {
         Ok(undo) => undo,
         Err(e) => {

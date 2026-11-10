@@ -98,7 +98,15 @@ impl ProcessSpawner for FakeNpxUpdateSpawner {
             .lock()
             .unwrap()
             .push((spec.args.clone(), spec.cwd.clone()));
-        let cwd = spec.cwd.clone().unwrap_or_else(|| self.home.clone());
+        let cwd = if spec.args.first().is_some_and(|arg| arg == "skills") {
+            spec.env
+                .iter()
+                .find(|(key, _)| key == "HOME")
+                .map(|(_, value)| PathBuf::from(value))
+                .unwrap_or_else(|| self.home.clone())
+        } else {
+            spec.cwd.clone().unwrap_or_else(|| self.home.clone())
+        };
         let skills = if spec.args.iter().any(|a| a == "install") {
             // `dotagents install` refreshes every declared entry: rewrite
             // each folder already in the skills root, and the lock file.
@@ -1384,6 +1392,15 @@ impl skill_studio_core::ports::HistoryStore for PatchlessStore {
         paths: &[PathBuf],
     ) -> Result<skill_studio_core::events::BackupManifest, skill_studio_core::CoreError> {
         self.0.backup_paths(guard, id, paths)
+    }
+    fn retain_displaced(
+        &mut self,
+        guard: &skill_studio_core::ports::ExclusiveGuard,
+        id: &skill_studio_core::identity::EventId,
+        original: &std::path::Path,
+        displaced: &std::path::Path,
+    ) -> Result<(), skill_studio_core::CoreError> {
+        self.0.retain_displaced(guard, id, original, displaced)
     }
     fn record(
         &mut self,
@@ -2765,5 +2782,148 @@ fn skills_sh_overwrite_undo_restores_shared_and_agent_trees_or_loses_unique_agen
         std::fs::read_to_string(agent.join("agent-only.txt")).unwrap(),
         "agent extra"
     );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+struct WritesDuringUpdate {
+    inner: FakeNpxUpdateSpawner,
+    writes: Vec<(PathBuf, String)>,
+    ledger_after: Option<String>,
+}
+
+impl ProcessSpawner for WritesDuringUpdate {
+    fn run(
+        &self,
+        spec: &ProcessSpec,
+        cancel: &dyn CancelToken,
+    ) -> Result<ProcessOutput, skill_studio_core::CoreError> {
+        for (path, bytes) in &self.writes {
+            std::fs::write(path, bytes).unwrap();
+        }
+        let output = self.inner.run(spec, cancel)?;
+        if let Some(bytes) = &self.ledger_after {
+            let home = spec.env.iter().find(|(key, _)| key == "HOME").unwrap();
+            std::fs::write(
+                PathBuf::from(&home.1).join(".agents/.skill-lock.json"),
+                bytes,
+            )
+            .unwrap();
+        }
+        Ok(output)
+    }
+}
+
+#[test]
+fn skills_sh_update_undo_restores_edits_during_cli_or_loses_displaced_bytes() {
+    let home = unique_temp_dir("late_update_undo");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "before");
+    let shared = dir_of(&home, "delta").join("SKILL.md");
+    let agent = home.join(".codex/skills/delta/SKILL.md");
+    std::fs::create_dir_all(agent.parent().unwrap()).unwrap();
+    std::fs::write(&agent, "before agent").unwrap();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(Arc::new(WritesDuringUpdate {
+            inner: FakeNpxUpdateSpawner::new(home.clone(), "v2"),
+            writes: vec![
+                (shared.clone(), "late shared".into()),
+                (agent.clone(), "late agent".into()),
+            ],
+            ledger_after: None,
+        })),
+    );
+    let outcome = ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh)).unwrap();
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(shared).unwrap(), "late shared");
+    assert_eq!(std::fs::read_to_string(agent).unwrap(), "late agent");
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn skills_sh_update_preserves_unrelated_concurrent_ledger_entry_or_overwrites_new_install() {
+    let home = unique_temp_dir("late_update_ledger");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "before");
+    let ledger = home.join(".agents/.skill-lock.json");
+    std::fs::write(
+        &ledger,
+        r#"{"version":3,"skills":{"delta":{"hash":"old"}}}"#,
+    )
+    .unwrap();
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(Arc::new(WritesDuringUpdate {
+            inner: FakeNpxUpdateSpawner::new(home.clone(), "v2"),
+            writes: vec![(
+                ledger.clone(),
+                r#"{"version":3,"skills":{"delta":{"hash":"old"},"other":{"hash":"concurrent"}}}"#
+                    .into(),
+            )],
+            ledger_after: Some(r#"{"version":3,"skills":{"delta":{"hash":"new"}}}"#.into()),
+        })),
+    );
+    ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh)).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(ledger).unwrap()).unwrap();
+    assert_eq!(value["skills"]["other"]["hash"], "concurrent");
+    assert_eq!(value["skills"]["delta"]["hash"], "new");
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn skills_sh_update_undo_removes_new_agent_copy_or_leaves_updated_skill_loading() {
+    new_agent_undo(false);
+}
+
+#[test]
+fn skills_sh_update_undo_refuses_edited_new_agent_copy_or_deletes_later_work() {
+    new_agent_undo(true);
+}
+
+fn new_agent_undo(edit: bool) {
+    let home = unique_temp_dir("new_agent_undo");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "before");
+    let agent = home.join(".codex/skills/delta");
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(Arc::new(
+            FakeNpxUpdateSpawner::new(home.clone(), "v2").copying_into(&[".codex/skills"]),
+        )),
+    );
+    let outcome = ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh)).unwrap();
+    assert!(agent.exists());
+    if edit {
+        std::fs::write(agent.join("SKILL.md"), "later work").unwrap();
+    }
+    let result = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    );
+    if edit {
+        assert!(result.is_err(), "Undo must report drift");
+        assert_eq!(
+            std::fs::read_to_string(agent.join("SKILL.md")).unwrap(),
+            "later work"
+        );
+    } else {
+        result.unwrap();
+        assert!(!agent.exists(), "Undo left an updated agent copy");
+    }
     std::fs::remove_dir_all(home).unwrap();
 }
