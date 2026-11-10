@@ -1439,6 +1439,7 @@ impl MutationSession {
             ));
         };
         let recovery = crate::events::recover_interrupted(
+            &rt.scope,
             &guard,
             store.as_mut(),
             rt.ports.fs.as_ref(),

@@ -89,7 +89,8 @@ fn doctor_body(
         .history
         .open(&rt.scope, crate::ports::HistoryAccess::ReadIfExists)?
     {
-        for path in crate::ops_dotagents_history::retained_captures(fs, store.as_ref())? {
+        for path in crate::ops_dotagents_history::retained_captures(&rt.scope, fs, store.as_ref())?
+        {
             violations.push(DoctorViolation {
                 invariant: crate::doctor::DoctorInvariant::RetainedLockCapture,
                 path,

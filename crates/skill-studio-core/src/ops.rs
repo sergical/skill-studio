@@ -4499,12 +4499,14 @@ fn restore_event_body(
         }
         crate::ops_install::check_registry_drift(fs, inverse)?;
     }
-    let lock_restore = crate::ops_dotagents_history::prepare_restore(fs, inverse, req.force)?;
+    let lock_restore =
+        crate::ops_dotagents_history::prepare_restore(&rt.scope, fs, inverse, req.force)?;
     if lock_restore
         .as_ref()
         .is_some_and(|restore| restore.needs_write)
     {
-        let captures = crate::ops_dotagents_history::retained_captures(fs, session.store.as_ref())?;
+        let captures =
+            crate::ops_dotagents_history::retained_captures(&rt.scope, fs, session.store.as_ref())?;
         if captures.len() >= crate::ops_dotagents_history::LOCK_CAPTURE_LIMIT {
             return Err(CoreError::new(ErrorCode::DriftConflict, "retained agents.lock capture limit reached; inspect the oldest file and delete it only after its writers have closed").at(&captures[0]));
         }

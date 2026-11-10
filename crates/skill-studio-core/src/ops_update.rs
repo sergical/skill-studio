@@ -1255,7 +1255,7 @@ fn prepare_covered_updates(
             .join(UNIVERSAL_ROOT_RELATIVE)
             .join(&skill.0);
         let lock_undo =
-            crate::ops_dotagents_history::LockRowUndo::before(fs, &plan.lock, &skill.0)?;
+            crate::ops_dotagents_history::LockRowUndo::before(&rt.scope, fs, &plan.lock, &skill.0)?;
         let id = rt.ports.ids.next_event_id();
         let manifest =
             session
@@ -1299,7 +1299,7 @@ fn finish_covered_updates(
                 .finish(&session.guard, &entry.event_id, EventStatus::Failed, None)?;
             continue;
         };
-        let undo = entry.lock_undo.clone().after(fs)?;
+        let undo = entry.lock_undo.clone().after(&rt.scope, fs)?;
         session.store.patch_inverse(
             &session.guard,
             &entry.event_id,

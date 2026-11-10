@@ -428,6 +428,7 @@ pub struct RecoveryReport {
 /// session, and never from a read operation. Reports through `sink` as
 /// [`crate::ports::CoreNotice::Recovered`].
 pub fn recover_interrupted(
+    scope: &crate::scope::NormalizedScope,
     guard: &ExclusiveGuard,
     store: &mut dyn HistoryStore,
     fs: &dyn ScopeFs,
@@ -437,15 +438,16 @@ pub fn recover_interrupted(
     // The releases come first: a crash before the flip leaves the row
     // `pending`, so the next pass flips it.
     for mut row in store.retained_lock_captures()? {
-        crate::ops_dotagents_history::journal_capture(fs, guard, store, &mut row)?;
-        crate::ops_dotagents_history::check_completed_capture(fs, &row)?;
+        crate::ops_dotagents_history::journal_capture(scope, fs, guard, store, &mut row)?;
+        crate::ops_dotagents_history::check_completed_capture(scope, fs, &row)?;
     }
     let pending = store.pending()?;
     for row in &pending {
-        crate::ops_dotagents_history::recover_capture(fs, row)?;
+        crate::ops_dotagents_history::recover_capture(scope, fs, row)?;
     }
     for claim in store.held_restore_claims()? {
         crate::ops_dotagents_history::recover_displaced(
+            scope,
             fs,
             &claim.restore,
             claim.displaced_agents_lock.as_deref(),

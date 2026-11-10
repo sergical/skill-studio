@@ -2807,9 +2807,12 @@ mod edit_on_exchange;
 
 fn covered_lock_restore_race(mode: u8) {
     let unpublished_writer = mode == 14;
-    let symlink_lock = mode == 15 || mode == 16;
+    let fail_recovery_sync = mode == 17;
+    let moved_parent = mode == 18;
+    let symlink_lock = mode == 15 || mode == 16 || moved_parent;
     let mode = match mode {
-        14 | 16 => 3,
+        14 | 16 | 18 => 3,
+        17 => 7,
         15 => 0,
         _ => mode,
     };
@@ -3105,6 +3108,24 @@ fn covered_lock_restore_race(mode: u8) {
         let pending = history().pending().unwrap();
         let restore = pending.iter().find(|e| e.kind == "restore").unwrap();
         let restore_id = restore.id.clone();
+        if fail_recovery_sync {
+            let failing = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+            failing.fail_next_fsops_fsync_dir();
+            rt.ports.fs = failing;
+            assert!(MutationSession::begin(&rt, &ctx()).is_err());
+            assert_eq!(
+                history().get(&restore_id).unwrap().unwrap().status,
+                skill_studio_core::events::EventStatus::Pending
+            );
+            assert_eq!(
+                history().get(&event_id).unwrap().unwrap().reverted_by,
+                Some(restore_id)
+            );
+            rt.ports.fs = Arc::new(RealFs::new());
+            drop(MutationSession::begin(&rt, &ctx()).unwrap());
+            std::fs::remove_dir_all(home).unwrap();
+            return;
+        }
         if mode == 8 {
             std::fs::write(&lock, lock_text("external-delta", "old-other")).unwrap();
             let error = MutationSession::begin(&rt, &ctx()).err().unwrap();
@@ -3196,6 +3217,28 @@ fn covered_lock_restore_race(mode: u8) {
         assert!(restored.is_err());
         assert!(!lock.exists());
         rt.ports.fs = Arc::new(RealFs::new());
+        if moved_parent {
+            let outside = unique_temp_dir("undo_moved_dotfiles");
+            std::fs::rename(home.join("dotfiles"), &outside).unwrap();
+            std::os::unix::fs::symlink(&outside, home.join("dotfiles")).unwrap();
+            let error = MutationSession::begin(&rt, &ctx()).err().unwrap();
+            assert_eq!(error.code, ErrorCode::InvalidRequest);
+            assert!(!outside.join("agents.lock").exists());
+            let history = rt
+                .ports
+                .history
+                .open(
+                    &rt.scope,
+                    skill_studio_core::ports::HistoryAccess::ReadIfExists,
+                )
+                .unwrap()
+                .unwrap();
+            assert!(!history.held_restore_claims().unwrap().is_empty());
+            assert!(!history.pending().unwrap().is_empty());
+            std::fs::remove_dir_all(outside).unwrap();
+            std::fs::remove_dir_all(home).unwrap();
+            return;
+        }
         if mode == 5 {
             let guard =
                 skill_studio_core::ports::acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)
@@ -3509,4 +3552,14 @@ fn covered_undo_capture_crash_recovery_detects_late_descriptor_write_or_skips_un
 fn covered_undo_after_lock_symlink_conversion_allows_next_mutation_or_blocks_on_capture_path() {
     covered_lock_restore_race(15);
     covered_lock_restore_race(16);
+}
+
+#[test]
+fn covered_undo_publication_recovery_keeps_claim_when_directory_sync_fails() {
+    covered_lock_restore_race(17);
+}
+
+#[test]
+fn covered_undo_capture_recovery_refuses_moved_parent_symlink_without_external_write() {
+    covered_lock_restore_race(18);
 }

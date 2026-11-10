@@ -1131,6 +1131,7 @@ mod tests {
             .unwrap();
 
         skill_studio_core::events::recover_interrupted(
+            &scope,
             &guard,
             &mut store,
             &crate::fs::RealFs,

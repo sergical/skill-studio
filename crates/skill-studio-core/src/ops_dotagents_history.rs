@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::error::{CoreError, ErrorCode};
-use crate::ports::ScopeFs;
+use crate::ports::{confine, confine_write_through, ScopeFs};
+use crate::scope::NormalizedScope;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct LockRowUndo {
@@ -16,8 +17,16 @@ pub(crate) struct LockRowUndo {
     expected: Option<String>,
 }
 
-fn document(fs: &dyn ScopeFs, path: &Path) -> Result<DocumentMut, CoreError> {
-    let bytes = match fs.read_capped(path, crate::dotagents_ledger::DOTAGENTS_FILE_MAX_BYTES) {
+fn document(
+    scope: &NormalizedScope,
+    fs: &dyn ScopeFs,
+    path: &Path,
+) -> Result<DocumentMut, CoreError> {
+    let checked = confine_write_through(scope, fs, path)?;
+    let bytes = match fs.read_capped(
+        checked.as_path(),
+        crate::dotagents_ledger::DOTAGENTS_FILE_MAX_BYTES,
+    ) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(DocumentMut::new()),
         Err(error) => return Err(CoreError::io(path, error)),
@@ -62,17 +71,26 @@ fn row(doc: &DocumentMut, skill: &str, path: &Path) -> Result<Option<String>, Co
 }
 
 impl LockRowUndo {
-    pub(crate) fn before(fs: &dyn ScopeFs, path: &Path, skill: &str) -> Result<Self, CoreError> {
+    pub(crate) fn before(
+        scope: &NormalizedScope,
+        fs: &dyn ScopeFs,
+        path: &Path,
+        skill: &str,
+    ) -> Result<Self, CoreError> {
         Ok(Self {
             path: path.to_path_buf(),
             skill: skill.to_string(),
-            previous: row(&document(fs, path)?, skill, path)?,
+            previous: row(&document(scope, fs, path)?, skill, path)?,
             expected: None,
         })
     }
 
-    pub(crate) fn after(mut self, fs: &dyn ScopeFs) -> Result<Self, CoreError> {
-        self.expected = row(&document(fs, &self.path)?, &self.skill, &self.path)?;
+    pub(crate) fn after(
+        mut self,
+        scope: &NormalizedScope,
+        fs: &dyn ScopeFs,
+    ) -> Result<Self, CoreError> {
+        self.expected = row(&document(scope, fs, &self.path)?, &self.skill, &self.path)?;
         Ok(self)
     }
 }
@@ -85,6 +103,7 @@ pub(crate) struct LockRestore {
 }
 
 pub(crate) fn prepare_restore(
+    scope: &NormalizedScope,
     fs: &dyn ScopeFs,
     inverse: &serde_json::Value,
     force: bool,
@@ -98,7 +117,7 @@ pub(crate) fn prepare_restore(
             "cannot read the saved agents.lock row",
         )
     })?;
-    let doc = document(fs, &undo.path)?;
+    let doc = document(scope, fs, &undo.path)?;
     let live = row(&doc, &undo.skill, &undo.path)?;
     if !force && live != undo.expected {
         return Err(CoreError::new(
@@ -165,6 +184,11 @@ pub(crate) fn commit_restore(
     let result = (|| {
         fs.fsops_fsync_dir(path.as_path().parent().unwrap_or(path.as_path()))
             .map_err(|e| CoreError::io(&restore.path, e))?;
+        if !absent {
+            confine_write_through(&rt.scope, fs, displaced.as_path())?;
+            fs.fsops_fsync_file(displaced.as_path())
+                .map_err(|e| CoreError::io(displaced.as_path(), e))?;
+        }
         let captured = if absent {
             Vec::new()
         } else {
@@ -206,6 +230,7 @@ pub(crate) fn commit_restore(
             skills.remove(&undo.skill);
         }
         let staged = displaced.as_path().with_extension("restored");
+        confine(&rt.scope, fs, &staged)?;
         let mode = if absent {
             0o600
         } else {
@@ -220,6 +245,8 @@ pub(crate) fn commit_restore(
             .map_err(|error| CoreError::io(&staged, error))?;
         fs.fsops_fsync_file(&staged)
             .map_err(|error| CoreError::io(&staged, error))?;
+        fs.fsops_fsync_dir(staged.parent().ok_or_else(|| invalid_lock(&staged))?)
+            .map_err(|e| CoreError::io(&staged, e))?;
         let publication = LockPublication {
             identity: fs
                 .fsops_device_inode(&staged)
@@ -241,9 +268,11 @@ pub(crate) fn commit_restore(
             serde_json::json!({ "agents_lock_publication": publication }),
         )?;
         if !absent {
-            verify_capture(fs, displaced.as_path(), &captured)?;
+            verify_capture(&rt.scope, fs, displaced.as_path(), &captured)?;
         }
         // Linking publishes only into an empty name. A writer that recreates agents.lock wins.
+        confine(&rt.scope, fs, &staged)?;
+        confine(&rt.scope, fs, path.as_path())?;
         fs.fsops_hard_link(&staged, path.as_path())
             .map_err(|error| CoreError::io(&restore.path, error))?;
         fs.fsops_fsync_dir(path.as_path().parent().unwrap_or(path.as_path()))
@@ -251,13 +280,16 @@ pub(crate) fn commit_restore(
         if absent {
             Ok(())
         } else {
-            verify_capture(fs, displaced.as_path(), &captured)
+            verify_capture(&rt.scope, fs, displaced.as_path(), &captured)
         }
     })();
     if let Err(mut error) = result {
         if !absent {
+            confine(&rt.scope, fs, displaced.as_path())?;
+            confine(&rt.scope, fs, path.as_path())?;
             if let Err(rollback) = fs
-                .fsops_hard_link(displaced.as_path(), path.as_path())
+                .fsops_fsync_file(displaced.as_path())
+                .and_then(|()| fs.fsops_hard_link(displaced.as_path(), path.as_path()))
                 .and_then(|()| {
                     fs.fsops_fsync_dir(path.as_path().parent().unwrap_or(path.as_path()))
                 })
@@ -271,6 +303,7 @@ pub(crate) fn commit_restore(
 }
 
 pub(crate) fn journal_capture(
+    scope: &NormalizedScope,
     fs: &dyn ScopeFs,
     guard: &crate::ports::ExclusiveGuard,
     store: &mut dyn crate::ports::HistoryStore,
@@ -286,11 +319,20 @@ pub(crate) fn journal_capture(
     else {
         return Ok(());
     };
+    confine_write_through(scope, fs, Path::new(path))?;
     match fs.symlink_metadata(Path::new(path)) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(CoreError::io(path, e)),
         Ok(_) => {}
     }
+    fs.fsops_fsync_file(Path::new(path))
+        .map_err(|e| CoreError::io(path, e))?;
+    fs.fsops_fsync_dir(
+        Path::new(path)
+            .parent()
+            .ok_or_else(|| invalid_lock(Path::new(path)))?,
+    )
+    .map_err(|e| CoreError::io(path, e))?;
     let baseline = if let Some(publication) = event.payload.get("agents_lock_publication") {
         serde_json::json!({"captured": publication["captured"], "captured_identity": publication["captured_identity"]})
     } else {
@@ -323,6 +365,7 @@ fn lock_destination<'a>(event: &'a crate::events::EventRecord, fallback: &'a Pat
 }
 
 pub(crate) fn check_completed_capture(
+    scope: &NormalizedScope,
     fs: &dyn ScopeFs,
     event: &crate::events::EventRecord,
 ) -> Result<(), CoreError> {
@@ -342,6 +385,7 @@ pub(crate) fn check_completed_capture(
         .and_then(serde_json::Value::as_str)
         .map(PathBuf::from)
         .ok_or_else(|| invalid_lock(Path::new("agents.lock")))?;
+    confine_write_through(scope, fs, &displaced)?;
     match fs.symlink_metadata(&displaced) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(CoreError::io(&displaced, e)),
@@ -378,10 +422,11 @@ pub(crate) fn check_completed_capture(
             .at(&displaced));
         }
     }
-    verify_capture(fs, &displaced, &saved.captured)
+    verify_capture(scope, fs, &displaced, &saved.captured)
 }
 
 pub(crate) fn recover_capture(
+    scope: &NormalizedScope,
     fs: &dyn ScopeFs,
     event: &crate::events::EventRecord,
 ) -> Result<(), CoreError> {
@@ -403,6 +448,7 @@ pub(crate) fn recover_capture(
     let undo: LockRowUndo =
         serde_json::from_value(value.clone()).map_err(|_| invalid_lock(&displaced))?;
     recover_displaced(
+        scope,
         fs,
         &event.id,
         Some(&displaced),
@@ -412,6 +458,7 @@ pub(crate) fn recover_capture(
 }
 
 pub(crate) fn recover_displaced(
+    scope: &NormalizedScope,
     fs: &dyn ScopeFs,
     id: &crate::identity::EventId,
     displaced: Option<&Path>,
@@ -422,11 +469,8 @@ pub(crate) fn recover_displaced(
         return Ok(());
     };
     let path = path.ok_or_else(|| invalid_lock(displaced))?;
-    match fs.symlink_metadata(displaced) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(CoreError::io(displaced, e)),
-        Ok(_) => {}
-    }
+    confine_write_through(scope, fs, displaced)?;
+    confine_write_through(scope, fs, path)?;
     if displaced != path.with_file_name(format!(".agents-lock-before-restore-{}", id.0)) {
         return Err(invalid_lock(displaced));
     }
@@ -440,10 +484,21 @@ pub(crate) fn recover_displaced(
                 .as_ref()
                 == Some(&saved.content)
         {
-            verify_capture(fs, displaced, &saved.captured)?;
+            if saved.captured_identity.is_some() {
+                verify_capture(scope, fs, displaced, &saved.captured)?;
+            }
+            fs.fsops_fsync_dir(path.parent().ok_or_else(|| invalid_lock(path))?)
+                .map_err(|e| CoreError::io(path, e))?;
             return Ok(());
         }
     }
+    match fs.symlink_metadata(displaced) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(CoreError::io(displaced, e)),
+        Ok(_) => {}
+    }
+    fs.fsops_fsync_file(displaced)
+        .map_err(|e| CoreError::io(displaced, e))?;
     match fs.fsops_hard_link(displaced, path) {
         Ok(()) => fs
             .fsops_fsync_dir(path.parent().ok_or_else(|| invalid_lock(path))?)
@@ -470,7 +525,13 @@ pub(crate) fn recover_displaced(
     }
 }
 
-fn verify_capture(fs: &dyn ScopeFs, displaced: &Path, captured: &[u8]) -> Result<(), CoreError> {
+fn verify_capture(
+    scope: &NormalizedScope,
+    fs: &dyn ScopeFs,
+    displaced: &Path,
+    captured: &[u8],
+) -> Result<(), CoreError> {
+    confine_write_through(scope, fs, displaced)?;
     if fs
         .read_capped(displaced, crate::dotagents_ledger::DOTAGENTS_FILE_MAX_BYTES)
         .map_err(|e| CoreError::io(displaced, e))?
@@ -491,6 +552,7 @@ fn verify_capture(fs: &dyn ScopeFs, displaced: &Path, captured: &[u8]) -> Result
 pub(crate) const LOCK_CAPTURE_LIMIT: usize = 32;
 
 pub(crate) fn retained_captures(
+    scope: &NormalizedScope,
     fs: &dyn ScopeFs,
     store: &dyn crate::ports::HistoryStore,
 ) -> Result<Vec<PathBuf>, CoreError> {
@@ -502,6 +564,7 @@ pub(crate) fn retained_captures(
             .and_then(serde_json::Value::as_str)
         {
             let path = PathBuf::from(path);
+            confine_write_through(scope, fs, &path)?;
             match fs.symlink_metadata(&path) {
                 Ok(_) => paths.push(path),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
