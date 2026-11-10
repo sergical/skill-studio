@@ -2526,13 +2526,30 @@ fn dotagents_remove_undo_preserves_edited_neighbors_or_reformats_other_saved_ent
 
 #[test]
 fn dotagents_remove_undo_refuses_a_changed_entry_even_when_forced_or_clobbers_its_new_place() {
-    for (lock_conflict, link) in [(false, false), (true, false), (false, true), (true, true)] {
+    for (lock_conflict, link, original_link) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (true, true, false),
+        (false, true, true),
+        (true, true, true),
+    ] {
         for force in [false, true] {
             let home = unique_temp_dir("dotagents_saved_slot_conflict");
             std::fs::create_dir_all(&home).unwrap();
             let rt = runtime_for(&home);
             let deployment_id =
                 setup_owner_kind(&rt, &home, LifecycleOwnerKind::Dotagents, "alpha");
+            if original_link {
+                let source = home.join(".agents").join(if lock_conflict {
+                    "agents.lock"
+                } else {
+                    "agents.toml"
+                });
+                let saved = source.with_extension("saved");
+                std::fs::rename(&source, &saved).unwrap();
+                std::os::unix::fs::symlink(saved.file_name().unwrap(), &source).unwrap();
+            }
             let removed = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
             let config = home.join(".agents/agents.toml");
             let lock = home.join(".agents/agents.lock");

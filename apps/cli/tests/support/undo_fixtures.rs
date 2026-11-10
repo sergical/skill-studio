@@ -458,10 +458,22 @@ impl ProcessSpawner for DotagentsRemoveCli {
 }
 
 pub fn removed_dotagents(home: &Path, later: bool) -> EventId {
+    removed_dotagents_with_link(home, later, None)
+}
+
+pub fn removed_dotagents_with_link(home: &Path, later: bool, linked_lock: Option<bool>) -> EventId {
     write_skill(home, "alpha", "saved Dotagents bytes");
     std::fs::write(home.join(".agents/agents.toml"), DOTAGENTS_DECLARATION).unwrap();
     std::fs::write(home.join(".agents/agents.lock"), DOTAGENTS_LOCK).unwrap();
     std::fs::write(home.join(".agents/.gitignore"), "/skills/alpha\r\n").unwrap();
+    if let Some(lock) = linked_lock {
+        let path = home
+            .join(".agents")
+            .join(if lock { "agents.lock" } else { "agents.toml" });
+        let saved = path.with_extension("saved");
+        std::fs::rename(&path, &saved).unwrap();
+        std::os::unix::fs::symlink(saved.file_name().unwrap(), &path).unwrap();
+    }
     let mut rt = runtime(home);
     rt.ports.spawner = Some(Arc::new(DotagentsRemoveCli(home.to_path_buf())));
     let deployment_id = deployment(&rt, &RootKind::Universal);

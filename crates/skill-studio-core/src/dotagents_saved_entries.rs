@@ -37,6 +37,7 @@ struct SlotBytes {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SavedEntry {
     path: PathBuf,
+    source: PathBuf,
     kind: EntryKind,
     skill: String,
     previous: SlotBytes,
@@ -114,7 +115,7 @@ fn collect_headers(
             owned,
         });
     }
-    for (key, item) in table.iter() {
+    for (key, item) in table {
         path.push(key.to_string());
         if let Some(child) = item.as_table() {
             let own =
@@ -238,8 +239,8 @@ impl SavedEntries {
         if let Some(project) = project {
             paths.push((project.join(".agents/.gitignore"), EntryKind::Ignore));
         }
-        for (path, kind) in paths {
-            let path = crate::ports::resolve_config_link(rt.ports.fs.as_ref(), &path)?;
+        for (source, kind) in paths {
+            let path = crate::ports::resolve_config_link(rt.ports.fs.as_ref(), &source)?;
             crate::ports::confine_write_through(&rt.scope, rt.ports.fs.as_ref(), &path)?;
             let text = read_text(rt.ports.fs.as_ref(), &path)?;
             let headers = parse_headers(&text, &path, kind, skill)?;
@@ -264,6 +265,7 @@ impl SavedEntries {
                 .map(|header| header.key.clone());
             files.push(SavedEntry {
                 path,
+                source,
                 kind,
                 skill: skill.into(),
                 previous: SlotBytes {
@@ -355,6 +357,11 @@ pub(crate) fn prepare_saved_entry_restore(
         .map_err(|error| invalid(Path::new("agents.toml"), error.to_string()))?;
     let mut files = Vec::new();
     for entry in &mut saved.files {
+        let resolved = crate::ports::resolve_config_link(rt.ports.fs.as_ref(), &entry.source)
+            .map_err(|_| conflict(&entry.source))?;
+        if resolved != entry.path {
+            return Err(conflict(&entry.source));
+        }
         crate::ports::confine_write_through(&rt.scope, rt.ports.fs.as_ref(), &entry.path)?;
         let current_absent = match rt.ports.fs.symlink_metadata(&entry.path) {
             Ok(facts) if facts.kind == crate::ports::FileKind::File => false,

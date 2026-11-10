@@ -422,9 +422,20 @@ fn mcp_history_and_dotagents_remove_undo_restore_exact_saved_entries_or_erase_a_
 
 #[test]
 fn mcp_dotagents_remove_undo_refuses_a_changed_slot_when_forced_or_replaces_another_entry() {
-    for (lock, link) in [(false, false), (true, false), (false, true), (true, true)] {
+    for (lock, link, original_link) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (true, true, false),
+        (false, true, true),
+        (true, true, true),
+    ] {
         let home = tempfile::tempdir().unwrap();
-        let event = undo_fixtures::removed_dotagents(home.path(), true);
+        let event = undo_fixtures::removed_dotagents_with_link(
+            home.path(),
+            true,
+            original_link.then_some(lock),
+        );
         let (path, newer) = undo_fixtures::conflict_dotagents_slot(home.path(), lock, link);
         let mut mcp = UndoMcp::new(home.path());
         for force in [false, true] {
