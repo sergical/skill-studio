@@ -7,6 +7,131 @@
 // this file drifts from the Rust source of truth.
 // ============================================================================
 
+export type TestMode = "discovery" | "explicit";
+export type Assertion =
+  | {
+      text: string;
+      kind: "output_contains";
+    }
+  | {
+      text: string;
+      kind: "output_excludes";
+    }
+  | {
+      pointer: string;
+      equals: unknown;
+      kind: "output_json";
+    }
+  | {
+      path: string;
+      kind: "file_exists";
+    }
+  | {
+      path: string;
+      text: string;
+      kind: "file_contains";
+    }
+  | {
+      program: string;
+      args: string[];
+      expected_exit: number;
+      kind: "command";
+    }
+  | {
+      name: string;
+      kind: "tool_called";
+    }
+  | {
+      expected: boolean;
+      kind: "skill_loaded";
+    }
+  | {
+      criteria: string;
+      kind: "rubric";
+    };
+/**
+ * One of the four first-class agents a skill run can target.
+ */
+export type HarnessId = "claude-code" | "codex" | "open-code" | "pi";
+export type SkillVariant =
+  | {
+      kind: "candidate";
+    }
+  | {
+      kind: "without_skill";
+    }
+  | {
+      path: string;
+      kind: "baseline";
+    };
+export type RunState = "queued" | "running" | "completed" | "cancelled" | "interrupted" | "failed";
+export type TrialState =
+  | "queued"
+  | "running"
+  | "checking"
+  | "finished"
+  | "cancelled"
+  | "interrupted";
+export type ExecutionState = "completed" | "failed" | "cancelled" | "timed_out" | "interrupted";
+/**
+ * Whether the run loaded the skill under test, inferred per-harness from
+ * its tool-call events - see `parse_line`.
+ */
+export type SkillLoaded = "yes" | "no" | "unknown";
+/**
+ * The discriminated union of everything a run can report.
+ */
+export type SkillAgentEventKind =
+  | {
+      command: string;
+      session_id: string | null;
+      kind: "started";
+    }
+  | {
+      text: string;
+      is_delta: boolean;
+      kind: "assistant_text";
+    }
+  | {
+      name: string;
+      summary: string;
+      detail: string | null;
+      kind: "tool_call";
+    }
+  | {
+      name: string;
+      summary: string;
+      kind: "tool_result";
+    }
+  | {
+      ok: boolean;
+      /**
+       * `true` only for the cancel branch's terminal `Finished`. Carries the
+       * user-initiated cancel signal as a first-class field so the frontend
+       * can render "Cancelled" without keying off the `final_text` magic
+       * string. `#[serde(default)]` so transcripts written before this
+       * field existed deserialize with `cancelled: false` (a genuine
+       * finish, never a cancel).
+       */
+      cancelled: boolean;
+      final_text: string;
+      session_id: string | null;
+      cost_usd: number | null;
+      duration_ms: number;
+      skill_loaded: SkillLoaded;
+      kind: "finished";
+    }
+  | {
+      message: string;
+      kind: "error";
+    };
+export type CheckStatus = "passed" | "failed" | "needs_review" | "error";
+export type EvaluationOutcome =
+  | "passed"
+  | "failed"
+  | "needs_review"
+  | "check_error"
+  | "not_evaluated";
 /**
  * Which mechanism `Deployment.disabled` came from - see
  * `skill_harness_disable`. The first three are native per-harness switches;
@@ -23,10 +148,6 @@ export type DisabledBy =
  * Which CLI a forked skill was originally managed by.
  */
 export type OriginTool = "dotagents" | "skills-sh";
-/**
- * One of the four first-class agents a skill run can target.
- */
-export type HarnessId = "claude-code" | "codex" | "open-code" | "pi";
 /**
  * Which `OpenCode` config format is present, so a caller can tell the user
  * to hand-edit a `.jsonc` file rather than silently showing no disables.
@@ -146,6 +267,134 @@ export type FixApplied = {
  */
 export type SkillName = string;
 
+export interface TestSuite {
+  schema_version: number;
+  id: string;
+  name: string;
+  skill_path: string;
+  cases: TestCase[];
+  variants: TestVariant[];
+  repetitions: number;
+  timeout_seconds: number;
+  judge: JudgeConfig | null;
+}
+export interface TestCase {
+  id: string;
+  name: string;
+  prompt: string;
+  mode: TestMode;
+  files: FixtureFile[];
+  checks: Check[];
+}
+export interface FixtureFile {
+  path: string;
+  content: string;
+}
+export interface Check {
+  id: string;
+  name: string;
+  assertion: Assertion;
+}
+export interface TestVariant {
+  id: string;
+  name: string;
+  client: HarnessId;
+  model: string | null;
+  skill: SkillVariant;
+}
+export interface JudgeConfig {
+  client: HarnessId;
+  model: string | null;
+}
+export interface RunRecord {
+  schema_version: number;
+  id: string;
+  suite: TestSuite;
+  input_hash: string;
+  created_at: string;
+  finished_at: string | null;
+  state: RunState;
+  trials: Trial[];
+  error: string | null;
+}
+export interface Trial {
+  id: string;
+  case_id: string;
+  variant_id: string;
+  repetition: number;
+  state: TrialState;
+  started_at: string | null;
+  finished_at: string | null;
+  client_version: string | null;
+  client_binary: string | null;
+  isolation: string;
+  skill_hash: string | null;
+  result: ProcessResult | null;
+  judge: ProcessResult | null;
+  checks: CheckResult[];
+  outcome: EvaluationOutcome;
+  artifacts: Artifact[];
+  reviews: HumanReview[];
+  error: string | null;
+}
+export interface ProcessResult {
+  state: ExecutionState;
+  exit_code: number | null;
+  duration_ms: number;
+  output: string;
+  error: string | null;
+  skill_loaded: SkillLoaded;
+  usage: Usage;
+  events: SkillAgentEventKind[];
+}
+export interface Usage {
+  input_tokens: number | null;
+  cached_input_tokens: number | null;
+  output_tokens: number | null;
+  cost_usd: number | null;
+  source: string | null;
+  reported_model: string | null;
+}
+export interface CheckResult {
+  check_id: string;
+  name: string;
+  status: CheckStatus;
+  reason: string;
+  evidence: string;
+}
+export interface Artifact {
+  path: string;
+  sha256: string;
+  bytes: number;
+  text: string | null;
+  change: string;
+}
+export interface HumanReview {
+  at: string;
+  accepted: boolean;
+  reason: string;
+}
+export interface ClientInfo {
+  id: HarnessId;
+  binary: string | null;
+  version: string | null;
+  available: boolean;
+  no_skill_control: boolean;
+  note: string;
+}
+export interface RunSummary {
+  id: string;
+  suite_id: string;
+  name: string;
+  skill_path: string;
+  created_at: string;
+  state: RunState;
+  total: number;
+  passed: number;
+  failed: number;
+  needs_review: number;
+  not_evaluated: number;
+}
 /**
  * Everything the frontend needs about installed skills, discovered
  * projects, and invocation history, built together in one background pass.

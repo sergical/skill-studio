@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "id": "emil-unslop-code-acceptance",
+  "name": "Installed skill: emil-unslop-code",
+  "skill_path": "emil-unslop-code",
+  "cases": [
+    {
+      "id": "cleanup",
+      "name": "Remove dead code and narrated comments",
+      "prompt": "Clean invoice.mjs using this skill. Preserve the totalCents export and behavior for valid invoices. Work only in this task folder. Do not use the network or install packages.",
+      "mode": "explicit",
+      "files": [
+        {
+          "path": "invoice.mjs",
+          "content": "// Calculate the total\nexport function totalCents(lines) {\n  // Initialize the total\n  let total = 0;\n  // Loop through each line\n  for (const line of lines) {\n    // Add price times quantity\n    total += line.priceCents * line.quantity;\n  }\n  // Return the result\n  return total;\n}\nfunction unusedEnhancedTotalV2(lines) { return totalCents(lines); }\n// TODO: implement totals later\n"
+        }
+      ],
+      "checks": [
+        {
+          "id": "loaded",
+          "name": "Native evidence shows the target skill loaded",
+          "assertion": {
+            "kind": "skill_loaded",
+            "expected": true
+          }
+        },
+        {
+          "id": "behavior",
+          "name": "Known totals, empty list and input preservation",
+          "assertion": {
+            "kind": "command",
+            "program": "node",
+            "args": [
+              "--input-type=module",
+              "-e",
+              "import assert from 'node:assert/strict'; import {totalCents} from './invoice.mjs'; const lines=[{priceCents:199,quantity:3},{priceCents:250,quantity:2}]; const before=JSON.stringify(lines); assert.equal(totalCents(lines),1097); assert.equal(totalCents([]),0); assert.equal(JSON.stringify(lines),before);"
+            ],
+            "expected_exit": 0
+          }
+        },
+        {
+          "id": "cleanup",
+          "name": "Narrated comments and unused helper removed",
+          "assertion": {
+            "kind": "command",
+            "program": "node",
+            "args": [
+              "--input-type=module",
+              "-e",
+              "import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs'; const s=readFileSync('invoice.mjs','utf8'); for(const text of ['unusedEnhancedTotalV2','TODO','// Calculate the total','// Initialize the total','// Loop through each line','// Add price times quantity','// Return the result']) assert.ok(!s.includes(text),text);"
+            ],
+            "expected_exit": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "failure",
+      "name": "Stop hiding fetch failures",
+      "prompt": "Clean load-invoices.mjs using this skill. Keep the loadInvoices(fetchInvoices) export. The caller must receive failures; an empty invoice list must mean a successful empty response. Work only in this task folder. Do not use the network or install packages.",
+      "mode": "explicit",
+      "files": [
+        {
+          "path": "load-invoices.mjs",
+          "content": "export async function loadInvoices(fetchInvoices) {\n  try {\n    const data = await fetchInvoices();\n    return data ?? [];\n  } catch (error) {\n    return [];\n  }\n}\n"
+        }
+      ],
+      "checks": [
+        {
+          "id": "loaded",
+          "name": "Native evidence shows the target skill loaded",
+          "assertion": {
+            "kind": "skill_loaded",
+            "expected": true
+          }
+        },
+        {
+          "id": "contract",
+          "name": "Failures propagate and successful values survive",
+          "assertion": {
+            "kind": "command",
+            "program": "node",
+            "args": [
+              "--input-type=module",
+              "-e",
+              "import assert from 'node:assert/strict'; import {loadInvoices} from './load-invoices.mjs'; const invoices=[{id:'inv-7',totalCents:250}]; assert.deepEqual(await loadInvoices(async()=>invoices),invoices); assert.deepEqual(await loadInvoices(async()=>[]),[]); const error=new Error('service unavailable'); await assert.rejects(loadInvoices(async()=>{throw error}),e=>e===error);"
+            ],
+            "expected_exit": 0
+          }
+        }
+      ]
+    }
+  ],
+  "variants": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "client": "codex",
+      "model": null,
+      "skill": {
+        "kind": "candidate"
+      }
+    }
+  ],
+  "repetitions": 1,
+  "timeout_seconds": 180,
+  "judge": null
+}

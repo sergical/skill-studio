@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "id": "report-judge",
+  "name": "Judge evidence cannot erase a file failure",
+  "skill_path": "report-skill",
+  "cases": [
+    {
+      "id": "report",
+      "name": "Write a project report",
+      "prompt": "Read input.txt and write report.md with a short report of the given facts. Do not use the internet or change any other files.",
+      "mode": "explicit",
+      "files": [
+        {
+          "path": "input.txt",
+          "content": "Project Cedar shipped two fixes on Monday. One issue remains."
+        }
+      ],
+      "checks": [
+        {
+          "id": "exists",
+          "name": "Report exists",
+          "assertion": {
+            "kind": "file_exists",
+            "path": "report.md"
+          }
+        },
+        {
+          "id": "facts",
+          "name": "Includes the shipped fixes",
+          "assertion": {
+            "kind": "file_contains",
+            "path": "report.md",
+            "text": "two fixes"
+          }
+        },
+        {
+          "id": "workflow",
+          "name": "Uses the source verification line",
+          "assertion": {
+            "kind": "file_contains",
+            "path": "report.md",
+            "text": "Verified from the source facts."
+          }
+        },
+        {
+          "id": "planted-failure",
+          "name": "Deliberately missing artifact",
+          "assertion": {
+            "kind": "file_exists",
+            "path": "not-created.md"
+          }
+        },
+        {
+          "id": "accurate",
+          "name": "No invented facts",
+          "assertion": {
+            "kind": "rubric",
+            "criteria": "The report mentions only Project Cedar, two fixes shipped on Monday, and one remaining issue. The verification line is allowed."
+          }
+        }
+      ]
+    }
+  ],
+  "variants": [
+    {
+      "id": "candidate",
+      "name": "Current skill",
+      "client": "pi",
+      "model": null,
+      "skill": {
+        "kind": "candidate"
+      }
+    }
+  ],
+  "repetitions": 1,
+  "timeout_seconds": 120,
+  "judge": {
+    "client": "pi",
+    "model": null
+  }
+}

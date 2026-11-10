@@ -166,6 +166,7 @@ removed; do not list individual source files here.
 │   └── tui/                      # Terminal UI (Node)
 ├── crates/
 │   ├── skill-studio-core/        # Scope-confined core: scan, ops, events, DTOs, schema/
+│   ├── skill-studio-eval/        # Native client skill tests, evidence, checks, and saved suites
 │   └── skill-studio-host/        # Real-world port adapters for the core crate
 ├── packages/
 │   ├── lib/                      # Shared TypeScript library

@@ -8,7 +8,7 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deployment, FrontmatterRepairPreview, InstalledSkill } from "@skill-studio/lib";
 import { CommandPalette } from "../CommandPalette/CommandPalette";
 import { useAppStore } from "../../store/appStore";
@@ -107,6 +107,7 @@ function renderPage(skillMd: string, violations: string[]) {
   mockIPC((command) => {
     if (command === "read_installed_skill_md") return skillMd;
     if (command === "preview_skill_frontmatter_repair") return REPAIR_PREVIEW;
+    if (command.startsWith("lab_")) return [];
     throw new Error(`unexpected command ${command}`);
   });
   const skill = fixtureSkill(fixtureDeployment({ spec_violations: violations }));
@@ -141,11 +142,13 @@ describe("SkillPage editor entry points", () => {
 
   beforeEach(() => {
     useAppStore.setState(initialState, true);
+    localStorage.clear();
   });
 
   afterEach(() => {
     cleanup();
     clearMocks();
+    localStorage.clear();
   });
 
   it("clicking_Edit_on_a_skill_with_broken_YAML_marks_the_error_line_in_red_and_puts_the_caret_on_it_so_the_user_lands_on_the_mistake_instead_of_the_top_of_the_file", async () => {
@@ -284,5 +287,62 @@ describe("SkillPage editor entry points", () => {
     await user.keyboard("{Enter}");
     expect(await screen.findByRole("heading", { name: "Original copy" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Other copy" })).toBeNull();
+  });
+
+  it("has one flagged Assistant entry that opens a page and returns to the same skill", async () => {
+    localStorage.setItem("feature:skill-assistant", "on");
+    const called = vi.fn();
+    mockIPC((command) => {
+      called(command);
+      if (command === "read_installed_skill_md") return CLEAN_SKILL_MD;
+      if (command === "lab_clients") return [{ id: "codex", available: true }];
+      return [];
+    });
+    const props = {
+      skill: fixtureSkill(fixtureDeployment()),
+      onBack: vi.fn(),
+      onRemoveComplete: vi.fn(),
+      from: { kind: "home" as const },
+    };
+    const page = render(<SkillPage {...props} />);
+    const user = userEvent.setup();
+    const assistant = screen.getByRole("button", { name: "Assistant" });
+    expect(screen.queryByRole("button", { name: "Test skill" })).toBeNull();
+    expect(called.mock.calls.some(([command]) => command.startsWith("lab_"))).toBe(false);
+    await user.click(assistant);
+    await user.type(await screen.findByLabelText("Task"), "Check a real change");
+    expect(screen.getByRole("region", { name: "Assistant for find-bugs" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Assistant" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "find-bugs" }));
+    await waitFor(() => expect(document.activeElement).toBe(assistant));
+    await user.click(assistant);
+    expect(screen.getByLabelText<HTMLTextAreaElement>("Task").value).toBe("Check a real change");
+    page.rerender(<SkillPage {...props} deploymentPath="/removed/copy" />);
+    expect(screen.queryByRole("region", { name: "Assistant for find-bugs" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Home" })).toBeTruthy();
+    localStorage.setItem("feature:skill-assistant", "off");
+    page.unmount();
+    called.mockClear();
+    render(<SkillPage {...props} />);
+    expect(screen.queryByRole("region", { name: "Assistant for find-bugs" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Assistant" })).toBeNull();
+    expect(called.mock.calls.some(([command]) => command.startsWith("lab_"))).toBe(false);
+  });
+
+  it("returns from Assistant with Escape without discarding the skill editor draft", async () => {
+    localStorage.setItem("feature:skill-assistant", "on");
+    renderPage(CLEAN_SKILL_MD, []);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    const editor = await openedEditor();
+    await user.clear(editor);
+    await user.type(editor, "Unsaved skill edit");
+    await user.click(screen.getByRole("button", { name: "Assistant" }));
+    await screen.findByLabelText("Task");
+    await user.click(screen.getByRole("button", { name: "Task" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect((await openedEditor()).value).toBe("Unsaved skill edit");
   });
 });

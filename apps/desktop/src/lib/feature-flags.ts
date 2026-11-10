@@ -9,9 +9,8 @@
 
 const FLAG_DEFAULTS = {
   /**
-   * The skill page's Assistant drawer (ask/audit/test a skill in a scratch
-   * harness) and the "last test" link that opens its run history.
-   * Off until the harness runs are reliable.
+   * All desktop skill assistant entry points, including the test workspace,
+   * recorded preview, improvement tools, and last-test links. Off by default.
    */
   "skill-assistant": false,
 } as const;
@@ -30,6 +29,9 @@ export function isFeatureEnabled(flag: FeatureFlag): boolean {
     if (override === "off") return false;
   } catch {
     // Storage unavailable (private mode, etc.) - fall through to the default.
+  }
+  if (flag === "skill-assistant" && import.meta.env.DEV) {
+    return import.meta.env.VITE_SKILL_ASSISTANT === "1";
   }
   return FLAG_DEFAULTS[flag];
 }

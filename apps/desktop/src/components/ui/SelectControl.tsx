@@ -21,6 +21,7 @@ interface SelectControlProps {
   /** Short label before the value, e.g. "Sort:" - names what the select controls. */
   triggerPrefix?: string;
   disabled?: boolean;
+  size?: "default" | "lg";
 }
 
 export function SelectControl({
@@ -31,6 +32,7 @@ export function SelectControl({
   leadingIcon,
   triggerPrefix,
   disabled,
+  size = "default",
 }: SelectControlProps) {
   return (
     <Select
@@ -43,7 +45,7 @@ export function SelectControl({
     >
       <SelectTrigger
         aria-label={ariaLabel}
-        className="h-(--control-height) min-w-0 justify-between gap-1.5 rounded-sm border-border bg-transparent py-0 pr-2 pl-3 text-body text-text-secondary hover:bg-bg-hover hover:text-text-primary data-open:text-text-primary"
+        className={`h-(--control-height) min-w-0 justify-between gap-1.5 rounded-sm border-border bg-transparent py-0 pr-2 pl-3 text-body text-text-secondary hover:bg-bg-hover hover:text-text-primary data-open:text-text-primary ${size === "lg" ? "min-h-11 min-w-11" : ""}`}
       >
         <span className="inline-flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
           {triggerPrefix && <span className="shrink-0 text-text-tertiary">{triggerPrefix}</span>}
@@ -61,7 +63,7 @@ export function SelectControl({
           <SelectItem
             key={item.value}
             value={item.value}
-            className="h-(--control-height) rounded-sm px-2.5 text-body text-text-secondary data-highlighted:bg-bg-hover data-highlighted:text-text-primary [&_svg]:text-accent"
+            className={`h-(--control-height) rounded-sm px-2.5 text-body text-text-secondary data-highlighted:bg-bg-hover data-highlighted:text-text-primary [&_svg]:text-accent ${size === "lg" ? "min-h-11 min-w-11" : ""}`}
           >
             <span className="truncate" title={item.label}>
               {item.label}

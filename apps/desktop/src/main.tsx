@@ -4,6 +4,7 @@ import { KitPreview } from "@skill-studio/ui";
 import App from "./App";
 import { installWindowErrorReporting, reportBoundaryError } from "./lib/frontend-error-report";
 import { stampInitialTheme } from "./lib/theme";
+import { isFeatureEnabled } from "./lib/feature-flags";
 
 // Stamped before React renders, so the app never flashes the wrong palette
 // on first paint.
@@ -83,6 +84,24 @@ async function boot(): Promise<void> {
   const rootElement = document.getElementById("root");
   if (!rootElement) {
     throw new Error("Skill Studio root element #root is missing from index.html");
+  }
+
+  if (
+    import.meta.env.DEV &&
+    isFeatureEnabled("skill-assistant") &&
+    new URLSearchParams(location.search).get("skill-lab") === "1"
+  ) {
+    const { SkillLabPreview } = await import("./dev/harness/SkillLabPreview");
+    const { installSkillLabPreview } = await import("./dev/harness/skill-lab-preview-ipc");
+    installSkillLabPreview();
+    ReactDOM.createRoot(rootElement).render(
+      <React.StrictMode>
+        <ErrorBoundary>
+          <SkillLabPreview />
+        </ErrorBoundary>
+      </React.StrictMode>,
+    );
+    return;
   }
 
   // No Tauri runtime behind this tab (a plain browser dev session): install

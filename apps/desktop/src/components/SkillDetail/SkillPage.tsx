@@ -2,7 +2,7 @@
 // SkillPage - Full-page view of an installed skill: header (name, one
 // primary action, an assistant trigger, overflow menu, chips, source ledger),
 // the "where it lives" locations card, the SKILL.md card, and the
-// assistant panel in a right-hand overlay drawer.
+// dedicated Assistant workspace.
 // ============================================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -27,7 +27,7 @@ import { PageShell } from "../Shell/PageShell";
 import { DiscardChangesDialog } from "./DiscardChangesDialog";
 import { InstalledSkillHeader } from "./InstalledSkillHeader";
 import { backLabel } from "./skill-page-nav";
-import { SkillAssistantDrawer } from "./SkillAssistantDrawer";
+import { SkillAssistantWorkspace } from "../SkillLab/SkillAssistantWorkspace";
 import { SkillAssistantPanel } from "./SkillAssistantPanel";
 import { useSkillAssistantNavigation } from "./skill-assistant-view-policy";
 import { SkillCompareDialog } from "./SkillCompareDialog";
@@ -200,8 +200,7 @@ function useSkillMdContent({ skill, skillMdPath, deployment, addToast }: UseSkil
  * Full-page view of an installed skill: `InstalledSkillHeader` (which owns
  * the back button, name, primary action, assistant trigger, overflow menu,
  * chips, and source ledger), then a single-column body - `SkillLocationsCard`
- * and `SkillMarkdownCard` - with `SkillAssistantPanel` rendered inside a
- * `SkillAssistantDrawer` overlay.
+ * and `SkillMarkdownCard`, with one entry to the Assistant workspace.
  */
 export function SkillPage({
   skill,
@@ -215,13 +214,17 @@ export function SkillPage({
   const openSkill = useAppStore((state) => state.openSkill);
   const activeView = useAppStore((state) => state.activeView);
   const clearSkillIntent = useAppStore((state) => state.clearSkillIntent);
-  const isAssistantOpen = useAppStore((state) => state.isAssistantOpen);
-  const setIsAssistantOpen = useAppStore((state) => state.setIsAssistantOpen);
+  const [isAssistantOpen, setIsAssistantOpen] = useState(false);
   const { isRunsOpen, openAssistant, closeAssistant, openRuns, closeRuns } =
     useSkillAssistantNavigation(skill?.name, setIsAssistantOpen);
   const pageActions = useSkillPageActions(skill, onRemoveComplete);
   const [openRepairKind, setOpenRepairKind] = useState<FrontmatterRepairKind | null>(null);
   const assistantTriggerRef = useRef<HTMLButtonElement>(null);
+  const [assistantPath, setAssistantPath] = useState<string | undefined>(undefined);
+  const returnToSkill = () => {
+    closeAssistant();
+    requestAnimationFrame(() => assistantTriggerRef.current?.focus());
+  };
 
   const { isCompareOpen, setIsCompareOpen } = useSkillCompareDialog(skill?.name);
 
@@ -245,6 +248,9 @@ export function SkillPage({
 
   const { deployment, deploymentUnresolved, isDeploymentBroken, skillMdPath, isPluginManaged } =
     resolveSkillPageDeployment(skill, deploymentPath ?? currentPinned.path);
+  const hasOpenedAssistant = !!skillMdPath && assistantPath === skillMdPath;
+  const assistantVisible =
+    hasOpenedAssistant && isAssistantOpen && isFeatureEnabled("skill-assistant");
 
   const { frontmatterRepairs, isFrontmatterPreviewSettled, clearFrontmatterRepair } =
     useSkillFrontmatterRepair(deployment);
@@ -276,6 +282,7 @@ export function SkillPage({
     isEditing,
     isEditorDirty,
     onBack,
+    assistantVisible ? returnToSkill : undefined,
   );
 
   const handleSave = (content: string) => {
@@ -324,128 +331,144 @@ export function SkillPage({
   }
 
   return (
-    <PageShell
-      title={skill.name}
-      parent={{ label: backLabel(from), onClick: onBack }}
-      actions={
-        <SkillPageHeaderActions
-          actions={pageActions}
-          assistantEnabled={isFeatureEnabled("skill-assistant")}
-          isAssistantOpen={isAssistantOpen}
-          onOpenAssistant={openAssistant}
-          assistantTriggerRef={assistantTriggerRef}
-        />
-      }
-    >
-      <div className="grid grid-cols-1 gap-8 min-[900px]:grid-cols-[minmax(0,1fr)_260px]">
-        <div className="flex min-w-0 flex-col gap-6">
-          <InstalledSkillHeader
-            skill={skill}
-            upstreamAhead={upstreamAhead}
-            deployment={deployment ?? undefined}
-            frontmatterRepairs={frontmatterRepairs}
-            isFrontmatterPreviewSettled={isFrontmatterPreviewSettled}
-            skillMdContent={rawContent}
-            onQuoteRepair={isPluginManaged ? undefined : handleQuoteRepair}
-            onFixRepair={setOpenRepairKind}
-            onEditManually={openEditor}
-          />
+    <>
+      <div
+        hidden={assistantVisible}
+        className={assistantVisible ? "hidden" : "flex min-h-0 flex-1 flex-col"}
+      >
+        <PageShell
+          title={skill.name}
+          parent={{ label: backLabel(from), onClick: onBack }}
+          actions={
+            <>
+              <SkillPageHeaderActions
+                actions={pageActions}
+                assistantEnabled={isFeatureEnabled("skill-assistant") && !!skillMdPath}
+                isAssistantOpen={assistantVisible}
+                onOpenAssistant={() => {
+                  setAssistantPath(skillMdPath);
+                  openAssistant();
+                }}
+                assistantTriggerRef={assistantTriggerRef}
+              />
+            </>
+          }
+        >
+          <div className="grid grid-cols-1 gap-8 min-[900px]:grid-cols-[minmax(0,1fr)_260px]">
+            <div className="flex min-w-0 flex-col gap-6">
+              <InstalledSkillHeader
+                skill={skill}
+                upstreamAhead={upstreamAhead}
+                deployment={deployment ?? undefined}
+                frontmatterRepairs={frontmatterRepairs}
+                isFrontmatterPreviewSettled={isFrontmatterPreviewSettled}
+                skillMdContent={rawContent}
+                onQuoteRepair={isPluginManaged ? undefined : handleQuoteRepair}
+                onFixRepair={setOpenRepairKind}
+                onEditManually={openEditor}
+              />
 
-          <SkillLocationsCard skill={skill} onCompareCopies={() => setIsCompareOpen(true)} />
+              <SkillLocationsCard skill={skill} onCompareCopies={() => setIsCompareOpen(true)} />
 
-          {deployment && isDeploymentBroken ? (
-            <SkillRepairCard skill={skill} deployment={deployment} />
-          ) : (
-            <SkillMarkdownCard
-              skill={skill}
-              isPluginManaged={isPluginManaged}
-              deploymentUnresolved={deploymentUnresolved}
-              ownDeploymentOptions={editableDeployments(skill)}
-              deployment={deployment ?? undefined}
-              onSelectDeployment={(path) => openSkill(skill.name, path)}
-              rawContent={rawContent}
-              isLoadingContent={isLoadingContent}
-              loadError={loadError}
-              onRetry={handleRetryLoad}
-              editState={
-                editorOpenedContent !== null
-                  ? {
-                      kind: "editing",
-                      openedContent: editorOpenedContent,
-                      isDirty: isEditorDirty,
-                      isSaving,
-                    }
-                  : { kind: "viewing" }
-              }
-              onStartEdit={startEditing}
-              saveLabel={needsForkToSave ? "Fork and save" : "Save"}
-              onSave={handleSave}
-              onCancelEdit={() => {
-                setEditorOpenedContent(null);
-                setIsEditorDirty(false);
+              {deployment && isDeploymentBroken ? (
+                <SkillRepairCard skill={skill} deployment={deployment} />
+              ) : (
+                <SkillMarkdownCard
+                  skill={skill}
+                  isPluginManaged={isPluginManaged}
+                  deploymentUnresolved={deploymentUnresolved}
+                  ownDeploymentOptions={editableDeployments(skill)}
+                  deployment={deployment ?? undefined}
+                  onSelectDeployment={(path) => openSkill(skill.name, path)}
+                  rawContent={rawContent}
+                  isLoadingContent={isLoadingContent}
+                  loadError={loadError}
+                  onRetry={handleRetryLoad}
+                  editState={
+                    editorOpenedContent !== null
+                      ? {
+                          kind: "editing",
+                          openedContent: editorOpenedContent,
+                          isDirty: isEditorDirty,
+                          isSaving,
+                        }
+                      : { kind: "viewing" }
+                  }
+                  onStartEdit={startEditing}
+                  saveLabel={needsForkToSave ? "Fork and save" : "Save"}
+                  onSave={handleSave}
+                  onCancelEdit={() => {
+                    setEditorOpenedContent(null);
+                    setIsEditorDirty(false);
+                  }}
+                  onDirtyChange={setIsEditorDirty}
+                  highlightLine={editorHighlightLine}
+                />
+              )}
+            </div>
+
+            <SkillPropertiesRail skill={skill} />
+          </div>
+
+          {isCompareOpen && (
+            <SkillCompareDialog skill={skill} onClose={() => setIsCompareOpen(false)} />
+          )}
+
+          {openRepair && deployment && (
+            <SkillFrontmatterRepairDialog
+              key={openRepair.proposal_id}
+              target={lifecycleTargetForDeployment(deployment)}
+              preview={openRepair}
+              onClose={() => setOpenRepairKind(null)}
+              onEditManually={startEditing}
+              onApplied={() => {
+                clearFrontmatterRepair();
+                if (skillMdPath) loadContent(skillMdPath, false);
               }}
-              onDirtyChange={setIsEditorDirty}
-              highlightLine={editorHighlightLine}
             />
           )}
-        </div>
 
-        <SkillPropertiesRail skill={skill} />
+          {pageActions.updateDialog}
+
+          <DiscardChangesDialog
+            open={pendingDiscard !== null}
+            onOpenChange={(open) => {
+              if (!open) setPendingDiscard(null);
+            }}
+            onDiscard={() => {
+              // The step may land on this same SKILL.md, which would not reset the editor by itself.
+              setEditorOpenedContent(null);
+              setIsEditorDirty(false);
+              pendingDiscard?.();
+              setPendingDiscard(null);
+            }}
+          />
+        </PageShell>
       </div>
-
-      <SkillAssistantDrawer
-        isOpen={isAssistantOpen && isFeatureEnabled("skill-assistant")}
-        onClose={closeAssistant}
-        triggerRef={assistantTriggerRef}
-      >
-        <SkillAssistantPanel
-          skill={skill}
-          rawContent={rawContent}
-          skillMdPath={skillMdPath}
-          isPluginManaged={isPluginManaged}
-          onApplied={handleApplied}
-          onDiskChanged={() => {
-            if (skillMdPath) loadContent(skillMdPath, false);
-          }}
-          showHistory={isRunsOpen}
-          onOpenHistory={openRuns}
-          onCloseHistory={closeRuns}
-        />
-      </SkillAssistantDrawer>
-
-      {isCompareOpen && (
-        <SkillCompareDialog skill={skill} onClose={() => setIsCompareOpen(false)} />
-      )}
-
-      {openRepair && deployment && (
-        <SkillFrontmatterRepairDialog
-          key={openRepair.proposal_id}
-          target={lifecycleTargetForDeployment(deployment)}
-          preview={openRepair}
-          onClose={() => setOpenRepairKind(null)}
-          onEditManually={startEditing}
-          onApplied={() => {
-            clearFrontmatterRepair();
-            if (skillMdPath) loadContent(skillMdPath, false);
-          }}
+      {hasOpenedAssistant && skillMdPath && (
+        <SkillAssistantWorkspace
+          key={skillMdPath}
+          open={assistantVisible}
+          skillName={skill.name}
+          skillPath={skillMdPath}
+          onBack={returnToSkill}
+          improveSkill={
+            <SkillAssistantPanel
+              skill={skill}
+              rawContent={rawContent}
+              skillMdPath={skillMdPath}
+              isPluginManaged={isPluginManaged}
+              onApplied={handleApplied}
+              onDiskChanged={() => {
+                if (skillMdPath) loadContent(skillMdPath, false);
+              }}
+              showHistory={isRunsOpen}
+              onOpenHistory={openRuns}
+              onCloseHistory={closeRuns}
+            />
+          }
         />
       )}
-
-      {pageActions.updateDialog}
-
-      <DiscardChangesDialog
-        open={pendingDiscard !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingDiscard(null);
-        }}
-        onDiscard={() => {
-          // The step may land on this same SKILL.md, which would not reset the editor by itself.
-          setEditorOpenedContent(null);
-          setIsEditorDirty(false);
-          pendingDiscard?.();
-          setPendingDiscard(null);
-        }}
-      />
-    </PageShell>
+    </>
   );
 }

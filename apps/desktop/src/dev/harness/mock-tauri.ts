@@ -66,20 +66,16 @@ declare global {
 /** The `AddSkillRequest`/`AddSkillsRequest` fields the harness's `add_skill` family of handlers
  * actually reads - narrower than the real DTOs so `z.parse` doesn't have to reproduce every
  * field the Add Skill sheet sends. */
-const addRequestSchema = z
-  .object({
-    scope: z.enum(["global", "project"]),
-    project_path: z.string().nullable().optional(),
-    method: z.enum(["dotagents", "skills-sh", "copy"]),
-    source: z
-      .object({
-        skillName: z.string().nullable(),
-        repo: z.string().nullable(),
-        url: z.string().nullable(),
-      })
-      .passthrough(),
-  })
-  .passthrough();
+const addRequestSchema = z.looseObject({
+  scope: z.enum(["global", "project"]),
+  project_path: z.string().nullable().optional(),
+  method: z.enum(["dotagents", "skills-sh", "copy"]),
+  source: z.looseObject({
+    skillName: z.string().nullable(),
+    repo: z.string().nullable(),
+    url: z.string().nullable(),
+  }),
+});
 type AddRequestLike = z.infer<typeof addRequestSchema>;
 
 type ObjectInvokeArgs = Exclude<InvokeArgs, number[] | ArrayBuffer | Uint8Array>;

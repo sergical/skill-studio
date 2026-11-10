@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "id": "report-clients",
+  "name": "Report writer across installed clients",
+  "skill_path": "report-skill",
+  "cases": [
+    {
+      "id": "report",
+      "name": "Write a project report",
+      "prompt": "Read input.txt and write report.md with a short report of the given facts. Do not use the internet or change any other files.",
+      "mode": "explicit",
+      "files": [
+        {
+          "path": "input.txt",
+          "content": "Project Cedar shipped two fixes on Monday. One issue remains."
+        }
+      ],
+      "checks": [
+        {
+          "id": "exists",
+          "name": "Report exists",
+          "assertion": {
+            "kind": "file_exists",
+            "path": "report.md"
+          }
+        },
+        {
+          "id": "facts",
+          "name": "Includes the shipped fixes",
+          "assertion": {
+            "kind": "file_contains",
+            "path": "report.md",
+            "text": "two fixes"
+          }
+        },
+        {
+          "id": "workflow",
+          "name": "Uses the source verification line",
+          "assertion": {
+            "kind": "file_contains",
+            "path": "report.md",
+            "text": "Verified from the source facts."
+          }
+        }
+      ]
+    }
+  ],
+  "variants": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "client": "codex",
+      "model": null,
+      "skill": {
+        "kind": "candidate"
+      }
+    },
+    {
+      "id": "claude-code",
+      "name": "Claude Code",
+      "client": "claude-code",
+      "model": null,
+      "skill": {
+        "kind": "candidate"
+      }
+    },
+    {
+      "id": "open-code",
+      "name": "OpenCode",
+      "client": "open-code",
+      "model": null,
+      "skill": {
+        "kind": "candidate"
+      }
+    },
+    {
+      "id": "pi",
+      "name": "pi",
+      "client": "pi",
+      "model": null,
+      "skill": {
+        "kind": "candidate"
+      }
+    }
+  ],
+  "repetitions": 1,
+  "timeout_seconds": 120,
+  "judge": null
+}

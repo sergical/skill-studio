@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "id": "emil-forms-and-inputs-acceptance",
+  "name": "Installed skill: emil-forms-and-inputs",
+  "skill_path": "emil-forms-and-inputs",
+  "cases": [
+    {
+      "id": "semantics",
+      "name": "Fix a signup form",
+      "prompt": "Improve signup.html using this skill. Keep a single email signup form and submit action. Use plain HTML and inline CSS only. Work only in this task folder. Do not use the network or install packages.",
+      "mode": "explicit",
+      "files": [
+        {
+          "path": "signup.html",
+          "content": "<!doctype html><html lang=\"en\"><head><style>input {font-size:12px;outline:none}</style></head><body><div><input placeholder=\"Email\"><div onclick=\"alert('saved')\">Subscribe</div></div></body></html>"
+        }
+      ],
+      "checks": [
+        {
+          "id": "loaded",
+          "name": "Native evidence shows the target skill loaded",
+          "assertion": {
+            "kind": "skill_loaded",
+            "expected": true
+          }
+        },
+        {
+          "id": "semantics",
+          "name": "Form, email label, submit button, focus and font size",
+          "assertion": {
+            "kind": "command",
+            "program": "node",
+            "args": [
+              "--input-type=module",
+              "-e",
+              "import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs'; const s=readFileSync('signup.html','utf8'); assert.match(s,/<form[\\s>]/i); assert.match(s,/<input[^>]*type=[\"']email[\"']/i); assert.match(s,/<label[\\s>]/i); assert.match(s,/<button[^>]*type=[\"']submit[\"']/i); assert.match(s,/font-size\\s*:\\s*(16px|1rem)/i); assert.match(s,/:focus-visible/); const input=s.match(/<input[^>]*>/i)[0]; const id=input.match(/id=[\"']([^\"']+)/)?.[1]; assert.ok((id && s.includes('for=\"'+id+'\"')) || /<label[^>]*>[\\s\\S]*<input[^>]*>[\\s\\S]*<\\/label>/i.test(s));"
+            ],
+            "expected_exit": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "duplicate-submit",
+      "name": "Handle concurrent form submission",
+      "prompt": "Fix submit.mjs using this skill. Keep createSubmitHandler(save, setBusy) returning an async handler. Prevent concurrent saves; release the busy state after either success or failure and let errors reach the caller. Work only in this task folder. Do not use the network or install packages.",
+      "mode": "explicit",
+      "files": [
+        {
+          "path": "submit.mjs",
+          "content": "export function createSubmitHandler(save, setBusy) {\n  return async function submit(event) {\n    event.preventDefault();\n    setBusy(true);\n    await save();\n    setBusy(false);\n  };\n}\n"
+        }
+      ],
+      "checks": [
+        {
+          "id": "loaded",
+          "name": "Native evidence shows the target skill loaded",
+          "assertion": {
+            "kind": "skill_loaded",
+            "expected": true
+          }
+        },
+        {
+          "id": "lifecycle",
+          "name": "One pending save, failure recovery, and later retry",
+          "assertion": {
+            "kind": "command",
+            "program": "node",
+            "args": [
+              "--input-type=module",
+              "-e",
+              "import assert from 'node:assert/strict'; import {createSubmitHandler} from './submit.mjs'; let calls=0, resolve; const states=[]; const handler=createSubmitHandler(()=>{calls++;return new Promise(r=>resolve=r)},v=>states.push(v)); let prevented=0; const event={preventDefault(){prevented++}}; const first=handler(event); await handler(event); assert.equal(calls,1); resolve(); await first; assert.equal(states.at(-1),false); const next=handler(event); assert.equal(calls,2); resolve(); await next; const error=new Error('save failed'); let failures=0; const fail=createSubmitHandler(async()=>{failures++;throw error},v=>states.push(v)); await assert.rejects(fail(event),e=>e===error); assert.equal(states.at(-1),false); await assert.rejects(fail(event),e=>e===error); assert.equal(failures,2); assert.ok(prevented>=3);"
+            ],
+            "expected_exit": 0
+          }
+        }
+      ]
+    }
+  ],
+  "variants": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "client": "codex",
+      "model": null,
+      "skill": {
+        "kind": "candidate"
+      }
+    }
+  ],
+  "repetitions": 1,
+  "timeout_seconds": 180,
+  "judge": null
+}

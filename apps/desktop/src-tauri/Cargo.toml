@@ -69,6 +69,7 @@ default_trait_access = "allow"
 items_after_statements = "allow"
 
 [dependencies]
+skill-studio-eval = { path = "../../../crates/skill-studio-eval" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"

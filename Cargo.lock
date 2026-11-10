@@ -843,7 +843,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0b1fab2ae45819af2d0731d60f2afe17227ebb1a1538a236da84c93e9a60162"
 dependencies = [
  "dispatch2",
- "nix",
+ "nix 0.31.3",
  "windows-sys 0.61.2",
 ]
 
@@ -1299,6 +1299,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
@@ -2619,6 +2629,18 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
+name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
@@ -3028,7 +3050,7 @@ checksum = "9cf20a545b305cf1da722b236b5155c9bb35f1d5ceb28c048bd96ca842f41b5b"
 dependencies = [
  "android_system_properties",
  "log",
- "nix",
+ "nix 0.31.3",
  "objc2",
  "objc2-foundation",
  "objc2-ui-kit",
@@ -3407,7 +3429,7 @@ checksum = "1f21b97672d2dc848e7b25701ab4535618b92f4861c13cc3f7f7bed52ad3c8da"
 dependencies = [
  "futures",
  "indexmap 2.14.2",
- "nix",
+ "nix 0.31.3",
  "tokio",
  "tracing",
  "windows",
@@ -4412,6 +4434,7 @@ dependencies = [
  "similar",
  "skill-studio",
  "skill-studio-core",
+ "skill-studio-eval",
  "skill-studio-host",
  "skill-studio-mcp",
  "tauri",
@@ -4439,6 +4462,7 @@ dependencies = [
  "serde_json",
  "similar",
  "skill-studio-core",
+ "skill-studio-eval",
  "skill-studio-host",
  "skill-studio-mcp",
  "tempfile",
@@ -4467,6 +4491,27 @@ dependencies = [
  "toml 1.2.1+spec-1.1.0",
  "toml_edit 0.25.19+spec-1.1.0",
  "ulid",
+]
+
+[[package]]
+name = "skill-studio-eval"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "dirs 5.0.1",
+ "fs2",
+ "hex",
+ "nix 0.29.0",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.11.0",
+ "shlex",
+ "tempfile",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

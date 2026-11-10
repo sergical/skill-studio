@@ -18,6 +18,7 @@ export function useSkillEscapeGuard(
   isEditing: boolean,
   isEditorDirty: boolean,
   onBack: () => void,
+  onReturnWithinPage?: () => void,
 ): UseSkillEscapeGuard {
   // Set while the discard-changes guard is waiting on the user - runs on
   // confirm, cleared on cancel. The old native confirm() prompt made this a
@@ -27,6 +28,10 @@ export function useSkillEscapeGuard(
   // Reads the latest isEditing/isEditorDirty/onBack without making the
   // listener effect below re-subscribe every time one of them changes.
   const onEscapeBack = useEffectEvent(() => {
+    if (onReturnWithinPage) {
+      onReturnWithinPage();
+      return;
+    }
     if (isEditing && isEditorDirty) {
       setPendingDiscard(() => onBack);
       return;

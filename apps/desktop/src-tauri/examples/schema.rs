@@ -36,6 +36,10 @@ use skill_studio_lib::skills::skill_refresh::{DiscoverySourceSetting, SkillSnaps
 #[derive(JsonSchema)]
 #[allow(dead_code)]
 struct WireTypes {
+    eval_suite: skill_studio_eval::suite::TestSuite,
+    eval_run: skill_studio_eval::store::RunRecord,
+    eval_client: skill_studio_eval::clients::ClientInfo,
+    eval_summary: skill_studio_lib::skills::skill_lab::RunSummary,
     skill_snapshot: SkillSnapshot,
     agent_target: AgentTarget,
     add_method_defaults: AddMethodDefaults,

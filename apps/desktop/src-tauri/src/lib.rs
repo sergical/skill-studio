@@ -374,6 +374,7 @@ pub fn run() {
             app.manage(refresh_state);
             app.manage(skills::skill_add_operation::AddSkillOperationState::default());
             app.manage(skills::commands::UpdateAllCancelState::default());
+            app.manage(skills::skill_lab::LabState::open(app.handle()));
             app.manage(skills::skill_agent_runner::SkillAgentRunnerState::default());
             app.manage(skills::skill_run_target::SkillRunTargetState::default());
             skills::skill_update_check::spawn_update_check_loop(app.handle().clone());
@@ -421,6 +422,18 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            skills::skill_lab::lab_clients,
+            skills::skill_lab::lab_suites,
+            skills::skill_lab::lab_save_suite,
+            skills::skill_lab::lab_import_suite,
+            skills::skill_lab::lab_start,
+            skills::skill_lab::lab_cancel,
+            skills::skill_lab::lab_runs,
+            skills::skill_lab::lab_run,
+            skills::skill_lab::lab_review,
+            skills::skill_lab::lab_export,
+            skills::skill_lab::lab_save_export,
+            skills::skill_lab::lab_delete_run,
             skills::app_version::app_version,
             skills::data_folder_status::data_folder_status,
             // In-app update (unit 6.2)

@@ -64,3 +64,5 @@ pub use github_skill_listing::{GithubSkillEntry, GithubSkillListing};
 pub use skill_dto::*;
 pub use skill_refresh::{SkillRefreshState, SkillSnapshot};
 pub use skill_studio_core::identity::SourceKind;
+
+pub mod skill_lab;

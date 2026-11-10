@@ -1,0 +1,336 @@
+{
+  "schema_version": 1,
+  "id": "08c5cd88-ebd1-4c50-94c8-2c2769bc9702",
+  "suite": {
+    "schema_version": 1,
+    "id": "emil-unslop-code-acceptance",
+    "name": "Installed skill: emil-unslop-code",
+    "skill_path": "<home>/.agents/skills/emil-unslop-code",
+    "cases": [
+      {
+        "id": "cleanup",
+        "name": "Remove dead code and narrated comments",
+        "prompt": "Clean invoice.mjs using this skill. Preserve the totalCents export and behavior for valid invoices. Work only in this task folder. Do not use the network or install packages.",
+        "mode": "explicit",
+        "files": [
+          {
+            "path": "invoice.mjs",
+            "content": "// Calculate the total\nexport function totalCents(lines) {\n  // Initialize the total\n  let total = 0;\n  // Loop through each line\n  for (const line of lines) {\n    // Add price times quantity\n    total += line.priceCents * line.quantity;\n  }\n  // Return the result\n  return total;\n}\nfunction unusedEnhancedTotalV2(lines) { return totalCents(lines); }\n// TODO: implement totals later\n"
+          }
+        ],
+        "checks": [
+          {
+            "id": "loaded",
+            "name": "Native evidence shows the target skill loaded",
+            "assertion": {
+              "kind": "skill_loaded",
+              "expected": true
+            }
+          },
+          {
+            "id": "behavior",
+            "name": "Known totals, empty list and input preservation",
+            "assertion": {
+              "kind": "command",
+              "program": "node",
+              "args": [
+                "--input-type=module",
+                "-e",
+                "import assert from 'node:assert/strict'; import {totalCents} from './invoice.mjs'; const lines=[{priceCents:199,quantity:3},{priceCents:250,quantity:2}]; const before=JSON.stringify(lines); assert.equal(totalCents(lines),1097); assert.equal(totalCents([]),0); assert.equal(JSON.stringify(lines),before);"
+              ],
+              "expected_exit": 0
+            }
+          },
+          {
+            "id": "cleanup",
+            "name": "Narrated comments and unused helper removed",
+            "assertion": {
+              "kind": "command",
+              "program": "node",
+              "args": [
+                "--input-type=module",
+                "-e",
+                "import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs'; const s=readFileSync('invoice.mjs','utf8'); for(const text of ['unusedEnhancedTotalV2','TODO','// Calculate the total','// Initialize the total','// Loop through each line','// Add price times quantity','// Return the result']) assert.ok(!s.includes(text),text);"
+              ],
+              "expected_exit": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "failure",
+        "name": "Stop hiding fetch failures",
+        "prompt": "Clean load-invoices.mjs using this skill. Keep the loadInvoices(fetchInvoices) export. The caller must receive failures; an empty invoice list must mean a successful empty response. Work only in this task folder. Do not use the network or install packages.",
+        "mode": "explicit",
+        "files": [
+          {
+            "path": "load-invoices.mjs",
+            "content": "export async function loadInvoices(fetchInvoices) {\n  try {\n    const data = await fetchInvoices();\n    return data ?? [];\n  } catch (error) {\n    return [];\n  }\n}\n"
+          }
+        ],
+        "checks": [
+          {
+            "id": "loaded",
+            "name": "Native evidence shows the target skill loaded",
+            "assertion": {
+              "kind": "skill_loaded",
+              "expected": true
+            }
+          },
+          {
+            "id": "contract",
+            "name": "Failures propagate and successful values survive",
+            "assertion": {
+              "kind": "command",
+              "program": "node",
+              "args": [
+                "--input-type=module",
+                "-e",
+                "import assert from 'node:assert/strict'; import {loadInvoices} from './load-invoices.mjs'; const invoices=[{id:'inv-7',totalCents:250}]; assert.deepEqual(await loadInvoices(async()=>invoices),invoices); assert.deepEqual(await loadInvoices(async()=>[]),[]); const error=new Error('service unavailable'); await assert.rejects(loadInvoices(async()=>{throw error}),e=>e===error);"
+              ],
+              "expected_exit": 0
+            }
+          }
+        ]
+      }
+    ],
+    "variants": [
+      {
+        "id": "codex",
+        "name": "Codex",
+        "client": "codex",
+        "model": null,
+        "skill": {
+          "kind": "candidate"
+        }
+      }
+    ],
+    "repetitions": 1,
+    "timeout_seconds": 180,
+    "judge": null
+  },
+  "input_hash": "475a77bf7688dc6df0fcfac4c8126cb040b412c11f98d9d4acd874b2b98e2afc",
+  "created_at": "2026-11-10T18:31:01.555252Z",
+  "finished_at": "2026-11-10T18:31:57.695054Z",
+  "state": "completed",
+  "trials": [
+    {
+      "id": "trial-1",
+      "case_id": "cleanup",
+      "variant_id": "codex",
+      "repetition": 1,
+      "state": "finished",
+      "started_at": "2026-11-10T18:31:02.029587Z",
+      "finished_at": "2026-11-10T18:31:29.591195Z",
+      "client_version": "codex-cli 0.167.0",
+      "client_binary": "<home>/.vite-plus/bin/codex",
+      "isolation": "Fresh session and workspace; user config is ignored. Existing login is used. Other user or bundled skills may remain available. Compare as an environment test.",
+      "skill_hash": "1f2831a009bc311c6316aa91aa2f080eedc1493c37be9469e644666d47f0d50f",
+      "result": {
+        "state": "completed",
+        "exit_code": 0,
+        "duration_ms": 26153,
+        "output": "Cleaned `invoice.mjs` with the requested skill. Removed redundant comments, the unused wrapper, and the stale TODO. Preserved the `totalCents` export and calculation.\n\nAll four invoice checks passed. No network access or package installation.",
+        "error": null,
+        "skill_loaded": "yes",
+        "usage": {
+          "input_tokens": 124520,
+          "cached_input_tokens": 104064,
+          "output_tokens": 673,
+          "cost_usd": null,
+          "source": "codex.turn.completed",
+          "reported_model": null
+        },
+        "events": [
+          {
+            "kind": "assistant_text",
+            "text": "I\u2019ll read the skill and `invoice.mjs`, clean the code, and check that valid invoices produce the same totals.",
+            "is_delta": false
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc \"pwd; cat .agents/skills/emil-unslop-code/SKILL.md; rg --files -g '\"'!node_modules'\"' -g '\"'!package-lock.json'\"' -g '\"'!'\"\\\\.git' | head -60\"",
+            "detail": "/private/tmp/skill-assistant-expanded-verification/data-emil-unslop-code/runs/08c5cd88-ebd1-4c50-94c8-2c2769bc9702/trial-1/workspace-37P3zA\n---\nname: emil-unslop-code\ndescription: \"Strip the tells that mark code as AI-generated \u2014 narrated comments, try-catch theater, silent fallbacks, dead scaffolding, `as any` \u2014 then make the diff read like the codebase it lands in. Use when cleaning up agent-written code, before opening a PR, when a diff \\\"looks AI-generated\\\", or as a pass after any generated change. Triggers on: code slop, AI slop, slop, de-slop, unslop, clean up this code, obvious comments, redundant comments, narrated comments, commented-out code, stale comments, try-catch, swallowed error, silent failure, fallback, defensive, null checks, as any, ts-ignore, non-null assertion, console.log, debug logs, TODO, dead code, unused imports, duplicate helper, one-call wrapper, V2, enhanced, legacy alias, backwards compatibility, minimal diff, drive-by changes, tautological test, skipped test, \\\"reads like Copilot wrote it\\\".\"\n---\n\n# Unslop Code\n\nNobody flags AI code for one bad line. They recognize the accumulation: a comment narrating every statement, a try-catch around code that can't throw, a fallback to an empty array, a helper that already exists two files over. Each choice is defensible alone; together they're a watermark. The cause is mechanical: models were trained where code that *runs* wins, so they over-defend, over-comment, and over-scaffold \u2014 everything that makes a snippet survive in isolation makes it slop inside a codebase.\n\nSlop is rarely buggy. It compiles, it passes tests, and it still costs you: it buries intent, hides real failures behind quiet fallbacks, and doubles the surface the next reader has to hold in their head. This skill is a pass over any generated change, and the default fix for almost every pattern in it is deletion, not rewriting.\n\n## The pass\n\n1. Scan the diff (or file) for the patterns below, in order: comments, defense, types, naming, structure, logging, tests, scope.\n2. Fix by deleting first. Rewrite only where behavior must survive. When removing a cast, catch, or fallback forces a choice about what happens on bad input, choose the loud failure \u2014 a throw or a failed build \u2014 over the quiet wrong answer.\n3. Match the room: mirror the surrounding codebase's comment density, naming, and error-handling idiom. Slop is relative \u2014 a comment style that's normal in one repo is noise in another.\n4. Final read: \"What here would make a reviewer suspect a model wrote this?\" Fix it. Repeat until the answer is nothing.\n\n## Comments\n\nComments carry the strongest signal, and one test covers all of them: **does this comment state something the code cannot?** A constraint, a unit, a tradeoff, the bug it works around \u2014 keep. Everything else \u2014 delete.\n\n### Comments that narrate\n\n`// increment the counter` above `count++`. `// Loop through each item`. `// Return the result`. The model comments the way it was rewarded to in training: constantly. Narration restates the next line and doubles the code's length for zero information. Delete every one.\n\n### Comments that talk to the reviewer\n\n`// Updated to use the new API`. `// Removed the old implementation`. `// Now handles null`. `// NEW:`, `// Fixed:`. These describe the *diff*, not the code \u2014 and the moment the change merges they describe nothing, because the next reader never saw the old version. That explanation belongs in the commit message. Delete.\n\n### Comments that lie\n\nA comment describing behavior the code no longer has, a parameter that was removed, a step that moved elsewhere. Worse than no comment, because a reader trusts it over the code. When editing any region, re-read every comment in it and delete or correct the ones the edit invalidated.\n\n### Section dividers and numbered steps\n\n`// ===== Helpers =====`, `// Step 1: parse input`. A function that needs numbered steps needs extracted functions with those names instead. Delete the divider, or do the extraction.\n\n### Docstrings that restate the signature\n\n`@param userId - the ID of the user`. Bytes, not information. Document constraints, units, side effects, and surprising behavior \u2014 or document nothing.\n\n### Commented-out code and summary blocks\n\nDelete commented-out code; git has it, and \"kept just in case\" is what version control is for. Delete file-level blocks that list everything the code below does; they go stale on the first edit and nobody reads them.\n\n## Defensive theater\n\nModels over-defend because defensive code \"succeeds\" more often. In a real codebase the defense inverts: it hides bugs instead of preventing them.\n\n### Checks against impossible states\n\nA null check on a value the type system, the constructor, or the three lines above already guarantee. `if (!user) return;` after a call that throws when user is missing. Trust the invariant \u2014 and if it genuinely isn't guaranteed, fix the type once instead of checking at every call site.\n\n### Catch theater\n\nCatching only to log and rethrow unchanged. An empty catch. `catch (e) { console.error(e) }` that swallows the failure and continues as if it succeeded. Handle errors once, at a real boundary, adding context \u2014 or don't catch at all. A stack trace beats a log line plus corrupted state.\n\n### Silent fallbacks\n\n`catch { return [] }`. `?? defaultValue` masking a failed fetch. A simpler backup code path for when the real one fails. This is the most dangerous pattern on the list, because the fallback keeps tests green while the primary path is broken \u2014 you can no longer tell what you're actually running. Let it fail loudly, unless degraded behavior is an explicit product decision, and then make the degraded state visible to the user.\n\n### Validation at every layer\n\nThe same null-and-range check repeated in the handler, the service, and the helper. Validate untrusted input once at the boundary, then pass a trusted value through \u2014 repetition just means three places to update when the rule changes.\n\n### Condition padding\n\n`x !== null && x !== undefined && x !== ''` where one check suffices. `=== true` on a boolean. `a?.b?.c` chains on values guaranteed to exist. Write the check the invariant actually needs, not the one that looks safest.\n\n## Type escape hatches\n\n`as any`, `as unknown as X`, `@ts-ignore`, a non-null `!` used to silence an error instead of fixing it. The compiler error was information; the cast deletes it and moves the failure to runtime, where it lands on a user. Parse or validate at the boundary and let the correct type flow through. A cast survives the pass only with a comment stating the invariant that makes it safe.\n\n## Naming\n\n### Generic names\n\n`data`, `result`, `item`, `temp`, `handler`, `processData`. The model names what the value *is structurally*; name what it *means*: `unpaidInvoices`, `retryDelayMs`. If you can't name the domain fact, you haven't understood the line \u2014 which is the thing worth fixing.\n\n### Version-suffixed names\n\n`fetchDataV2`, `handleClickNew`, `EnhancedButton`, `utils-new.ts`. These exist because the old thing was kept alongside the new one. Replace the old implementation, update its callers, and take its name. The one exception is published public API \u2014 an npm package's exports, a served endpoint \u2014 where callers exist you can't update; keep a deprecated alias there and only there.\n\n## Structure\n\n### One-call wrappers\n\nA helper that only forwards its arguments to another function is indirection with no policy. Inline it; extract again when there's a second caller or real logic to own.\n\n### Speculative flexibility\n\nAn options object with one caller passing one value. An interface with a single implementation. Config flags for scenarios the task doesn't have. Every unused degree of freedom is something the next reader must rule out before they understand the code. Build for the current caller; generalize on the second real use.\n\n### Duplicate helpers\n\nA reimplemented formatter, validator, or permission check that already exists \u2014 the model didn't search the repo, so it wrote its own. Before adding any utility, search for the existing owner of that job.\n\n### Unrequested compatibility shims\n\nDeprecated aliases, re-exports, \"keeping the old signature just in case\" when every caller lives in this repo. Update the callers instead \u2014 that's what makes it one repo.\n\n### Dead scaffolding\n\nHelpers from an approach that was abandoned mid-task. Unused imports and variables. `TODO: implement error handling` stubs. After the solution works, do a minimum-patch pass: everything not load-bearing for the final approach gets deleted.\n\n## Logging\n\n`console.log('here')` and entry/exit logs (`entering processOrder`) are debug leftovers \u2014 delete before finishing. `console.log('\u2705 Successfully initialized!')` is ceremony; emoji and celebration in log output is one of the strongest single tells. Log the facts an operator needs, in the repo's existing log style, or log nothing.\n\n## Tests\n\n### Never delete a test to pass it\n\nDeleting, skipping, or weakening an assertion to make a run green destroys the report of the bug. Fix the implementation \u2014 or, if the contract genuinely changed, say so explicitly and update the test to assert the new contract.\n\n### Tautological tests\n\nReproducing the implementation's calculation inside the test and comparing the two passes even when both are wrong. Assert an independently known outcome, at the public boundary.\n\n## Scope\n\nReformatting, renaming, or refactoring code the task didn't touch buries the real change in the diff and makes review slower and riskier. Keep the patch minimal; propose unrelated cleanup as its own change.\n\n## Final audit\n\n- [ ] Every surviving comment states something the code cannot\n- [ ] No catch swallows a failure; no fallback hides a broken primary path\n- [ ] No cast silences the compiler without a stated invariant\n- [ ] No name carries `V2`, `New`, or `Enhanced`; the old implementation is gone\n- [ ] No helper duplicates an existing one; no wrapper just forwards\n- [ ] No debug logs, no dead code, no TODO stubs, no commented-out blocks\n- [ ] No test was weakened to pass\n- [ ] The diff touches only what the task required\n- [ ] The result reads like the surrounding codebase wrote it\ninvoice.mjs\n"
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc 'cat <home>/.agents/skills/pstack-unslop/SKILL.md'",
+            "detail": "---\nname: pstack-unslop\ndescription: Cut AI tells from any writing. Must always apply.\ndisable-model-invocation: true\nmetadata:\n  opencode/autoinvoke: false\n  opencode/slash: true\n---\n\n# Unslop\n\nEdit text to remove AI patterns and add human voice.\n\n## Process\n\n1. Scan for the patterns below.\n2. Rewrite. Preserve meaning, match intended tone.\n3. Add soul (see next section).\n4. Self-audit: \"What makes this obviously AI generated?\" Fix remaining tells.\n\n## Adding soul\n\nRemoving patterns is half the job. Sterile, voiceless writing is just as obvious.\n\n- **Have opinions.** React to facts instead of neutrally listing pros and cons.\n- **Vary rhythm.** Short sentences. Then longer ones that take their time. Mix it up.\n- **Acknowledge complexity.** \"Impressive but also kind of unsettling\" beats \"impressive.\"\n- **Use \"I\" when it fits.** First person isn't unprofessional.\n- **Let some mess in.** Perfect structure looks machine-made.\n- **Be specific.** Not \"this is concerning\" but \"there's something unsettling about agents churning away at 3am.\"\n\n## Patterns to detect and fix\n\n### Content\n\n1. **Puffery.** \"pivotal moment\", \"testament to\", \"evolving landscape\", \"setting the stage for\", \"indelible mark\", \"deeply rooted\". Cut puffery, state what happened.\n2. **Name-dropping.** Listing media outlets without context. Pick one, say what was said.\n3. **Superficial -ing phrases.** \"highlighting...\", \"ensuring...\", \"reflecting...\", \"showcasing...\", \"fostering...\". Delete or expand with real sources.\n4. **Promotional language.** \"nestled\", \"vibrant\", \"breathtaking\", \"groundbreaking\", \"renowned\", \"stunning\", \"must-visit\". Use neutral descriptions.\n5. **Vague attributions.** \"Experts believe\", \"Industry reports suggest\", \"Some critics argue\". Name the source or delete.\n6. **Formulaic challenges.** \"Despite challenges... continues to thrive.\" Replace with specific facts.\n\n### Language\n\n7. **AI vocabulary.** Additionally, crucial, delve, enduring, enhance, fostering, garner, interplay, intricate, landscape (abstract), pivotal, showcase, tapestry (abstract), testament, underscore, vibrant. Replace with plain words.\n8. **Fancy ways to say \"is\".** \"serves as\", \"stands as\", \"boasts\", \"features\". Just say \"is\" or \"has\".\n9. **\"Not just X, but Y.\"** State the point directly instead.\n10. **Rule of three.** Forcing ideas into groups of three. Use the natural number.\n11. **Synonym cycling.** Protagonist, main character, central figure, hero all in one paragraph. Pick one, repeat it.\n12. **False ranges.** \"from X to Y\" where X and Y aren't on a meaningful scale. List topics directly.\n\n### Style\n\n13. **Em dash overuse.** Avoid em dashes entirely. Use periods or commas only (no parentheses, no en dashes, no hyphen-as-dash substitutes). Em dashes are an AI tell, and reaching for parentheses instead just trades one tell for another. If a thought needs separation, end the sentence or use a comma.\n14. **Colon overuse.** Colons are fine before a list or example. Not as mid-sentence connectors. \"If you're coming from traditional automation: instead of registering event handlers, you describe conditions\" adds nothing with the colon. Rewrite to let the point stand on its own without comparison framing. \"Describing when the scheduler should fire works best as plain English.\" Same meaning, no crutch punctuation.\n15. **Boldface overuse.** Don't bold every proper noun or acronym.\n16. **Inline-header lists.** The tell is a bold label and colon that restates the line: \"**Performance:** Performance improved...\". Convert those to prose. A bold lead-in that ends in a period, names the item, and is followed by genuinely new detail (\"**Schema in TypeScript.** Tables live in one file.\") is fine, not a tell.\n17. **Title case headings.** Use sentence case.\n18. **Decorative emojis.** Remove from headings and bullets.\n19. **Curly quotes.** Replace with straight quotes.\n\n### Communication artifacts\n\n20. **Chatbot phrases.** \"I hope this helps!\", \"Let me know if...\", \"Of course!\", \"Certainly!\", \"Found the smoking gun!\" Remove.\n21. **Cutoff disclaimers.** \"While specific details are limited...\" Find sources or remove.\n22. **Sycophantic tone.** \"Great question! You're absolutely right!\" Respond directly.\n\n### Filler\n\n23. **Filler phrases.** \"In order to\" becomes \"To\". \"Due to the fact that\" becomes \"Because\". \"It is important to note that\" gets deleted.\n24. **Excessive hedging.** \"could potentially possibly be argued that it might\" becomes \"may\".\n25. **Generic conclusions.** \"The future looks bright.\" State specific plans or facts.\n\n### Jargon\n\n26. **Abstract metaphor nouns.** Substrate, wedge, vector, locus, vantage, nexus, primitive (as noun), harness (as metaphor), surface (as in \"API surface\"), bedrock, scaffolding (as metaphor), modality, paradigm, gold-plating, ratchet (as metaphor), evacuate (for moving code), endgame, north star, flywheel. These read as technical but usually have a plainer concrete word. \"Substrate\" becomes \"base\". \"Wedge in\" becomes \"add\". \"Vector\" becomes \"way\" or \"method\". \"Gold-plating\" becomes \"more than the job needs\". \"Ratchet\" becomes the mechanism's real name or \"a limit that only tightens\". \"Evacuate\" becomes \"move out\". \"Endgame\" becomes \"the last phase\". Pick the concrete word.\n\n### Plain speech\n\n27. **Say what it does, not how it feels.** \"the database stays close at hand\", \"SQL you can read\", \"types that follow your schema\" name a feeling. The fix names the mechanism or a number: \"`.toSQL()` returns the exact string sent to the database\", \"a column rename fails the build\". Ask what the sentence tells the reader to do or know, then write that. If you can't restate it as a concrete instruction, fact, or number, cut it. One more check: if the sentence could appear unchanged in another project's docs, it says nothing about this one. Cut it.\n28. **Shorten or split dense sentences.** If the reader has to backtrack to parse a sentence, break it in two or drop clauses. One idea per sentence.\n29. **Active voice.** Prefer it. Catch \"is/are/was/were + past participle\" and name the actor: \"queries are validated\" becomes \"the compiler validates queries\", \"the file is parsed by the loader\" becomes \"the loader parses the file\". Passive is fine only when the actor is unknown or genuinely doesn't matter.\n30. **Cut adverbs, or use a stronger verb.** \"runs quickly\" becomes \"is fast\" or the number. \"significantly improves\" becomes the measured delta. An adverb propping up a weak verb means the verb is wrong.\n31. **Prefer the plain word.** \"utilize\" becomes \"use\", \"leverage\" becomes \"use\", \"facilitate\" becomes \"help\", \"numerous\" becomes \"many\", \"in the event that\" becomes \"if\". The fancier synonym is rarely clearer.\n"
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc 'cat invoice.mjs; git status --short; ls -la'",
+            "detail": "// Calculate the total\nexport function totalCents(lines) {\n  // Initialize the total\n  let total = 0;\n  // Loop through each line\n  for (const line of lines) {\n    // Add price times quantity\n    total += line.priceCents * line.quantity;\n  }\n  // Return the result\n  return total;\n}\nfunction unusedEnhancedTotalV2(lines) { return totalCents(lines); }\n// TODO: implement totals later\nfatal: not a git repository (or any of the parent directories): .git\ntotal 8\ndrwxr-xr-x@ 4 sergiydybskiy  wheel  128 Nov 10 13:31 .\ndrwxr-xr-x@ 5 sergiydybskiy  wheel  160 Nov 10 13:31 ..\ndrwxr-xr-x@ 3 sergiydybskiy  wheel   96 Nov 10 13:31 .agents\n-rw-r--r--@ 1 sergiydybskiy  wheel  383 Nov 10 13:31 invoice.mjs\n"
+          },
+          {
+            "kind": "assistant_text",
+            "text": "I\u2019m using `emil-unslop-code` to remove comments that repeat the code and an unused wrapper. The calculation and export will stay the same.",
+            "is_delta": false
+          },
+          {
+            "kind": "tool_call",
+            "name": "file_change",
+            "summary": "file change",
+            "detail": "{\"id\":\"item_5\",\"type\":\"file_change\",\"changes\":[{\"path\":\"/private/tmp/skill-assistant-expanded-verification/data-emil-unslop-code/runs/08c5cd88-ebd1-4c50-94c8-2c2769bc9702/trial-1/workspace-37P3zA/invoice.mjs\",\"kind\":\"update\"}],\"status\":\"completed\"}"
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc \"node --input-type=module <<'JS'\nimport assert from 'node:assert/strict';\nimport { totalCents } from './invoice.mjs';\nassert.equal(totalCents([]), 0);\nassert.equal(totalCents([{ priceCents: 1250, quantity: 2 }]), 2500);\nassert.equal(totalCents([{ priceCents: 199, quantity: 3 }, { priceCents: 250, quantity: 2 }]), 1097);\nassert.equal(totalCents([{ priceCents: 0, quantity: 5 }, { priceCents: 999, quantity: 0 }]), 0);\nconsole.log('Passed 4 invoice total checks.');\nJS\"",
+            "detail": "Passed 4 invoice total checks.\n"
+          },
+          {
+            "kind": "assistant_text",
+            "text": "Cleaned `invoice.mjs` with the requested skill. Removed redundant comments, the unused wrapper, and the stale TODO. Preserved the `totalCents` export and calculation.\n\nAll four invoice checks passed. No network access or package installation.",
+            "is_delta": false
+          }
+        ]
+      },
+      "judge": null,
+      "checks": [
+        {
+          "check_id": "loaded",
+          "name": "Native evidence shows the target skill loaded",
+          "status": "passed",
+          "reason": "Native events show the target skill was loaded",
+          "evidence": "Loaded"
+        },
+        {
+          "check_id": "behavior",
+          "name": "Known totals, empty list and input preservation",
+          "status": "passed",
+          "reason": "Expected command exit 0; got Some(0)",
+          "evidence": "\n"
+        },
+        {
+          "check_id": "cleanup",
+          "name": "Narrated comments and unused helper removed",
+          "status": "passed",
+          "reason": "Expected command exit 0; got Some(0)",
+          "evidence": "\n"
+        }
+      ],
+      "outcome": "passed",
+      "artifacts": [
+        {
+          "path": "invoice.mjs",
+          "sha256": "4a120837f7b10761be9aa93b094f4ebcd96a420bfadaba16b8c537292c335a1e",
+          "bytes": 151,
+          "text": "export function totalCents(lines) {\n  let total = 0;\n  for (const line of lines) {\n    total += line.priceCents * line.quantity;\n  }\n  return total;\n}\n",
+          "change": "changed"
+        }
+      ],
+      "reviews": [],
+      "error": null
+    },
+    {
+      "id": "trial-2",
+      "case_id": "failure",
+      "variant_id": "codex",
+      "repetition": 1,
+      "state": "finished",
+      "started_at": "2026-11-10T18:31:29.703445Z",
+      "finished_at": "2026-11-10T18:31:57.604981Z",
+      "client_version": "codex-cli 0.167.0",
+      "client_binary": "<home>/.vite-plus/bin/codex",
+      "isolation": "Fresh session and workspace; user config is ignored. Existing login is used. Other user or bundled skills may remain available. Compare as an environment test.",
+      "skill_hash": "1f2831a009bc311c6316aa91aa2f080eedc1493c37be9469e644666d47f0d50f",
+      "result": {
+        "state": "completed",
+        "exit_code": 0,
+        "duration_ms": 27494,
+        "output": "Cleaned `load-invoices.mjs` using the skill. Kept `loadInvoices(fetchInvoices)`.\n\nRemoved the catch and empty-list fallback. Failures now reach the caller; successful empty lists pass through unchanged.\n\nLocal checks passed. No network use or package installation.",
+        "error": null,
+        "skill_loaded": "yes",
+        "usage": {
+          "input_tokens": 124299,
+          "cached_input_tokens": 104064,
+          "output_tokens": 734,
+          "cost_usd": null,
+          "source": "codex.turn.completed",
+          "reported_model": null
+        },
+        "events": [
+          {
+            "kind": "assistant_text",
+            "text": "I\u2019ll read the skill, clean `load-invoices.mjs`, and check that failures reach the caller and successful empty responses return an empty list.",
+            "is_delta": false
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc \"pwd; cat .agents/skills/emil-unslop-code/SKILL.md; rg --files -g '\"'!node_modules'\"' -g '\"'!'\"\\\\.git' | head -60\"",
+            "detail": "/private/tmp/skill-assistant-expanded-verification/data-emil-unslop-code/runs/08c5cd88-ebd1-4c50-94c8-2c2769bc9702/trial-2/workspace-3WTQ4a\n---\nname: emil-unslop-code\ndescription: \"Strip the tells that mark code as AI-generated \u2014 narrated comments, try-catch theater, silent fallbacks, dead scaffolding, `as any` \u2014 then make the diff read like the codebase it lands in. Use when cleaning up agent-written code, before opening a PR, when a diff \\\"looks AI-generated\\\", or as a pass after any generated change. Triggers on: code slop, AI slop, slop, de-slop, unslop, clean up this code, obvious comments, redundant comments, narrated comments, commented-out code, stale comments, try-catch, swallowed error, silent failure, fallback, defensive, null checks, as any, ts-ignore, non-null assertion, console.log, debug logs, TODO, dead code, unused imports, duplicate helper, one-call wrapper, V2, enhanced, legacy alias, backwards compatibility, minimal diff, drive-by changes, tautological test, skipped test, \\\"reads like Copilot wrote it\\\".\"\n---\n\n# Unslop Code\n\nNobody flags AI code for one bad line. They recognize the accumulation: a comment narrating every statement, a try-catch around code that can't throw, a fallback to an empty array, a helper that already exists two files over. Each choice is defensible alone; together they're a watermark. The cause is mechanical: models were trained where code that *runs* wins, so they over-defend, over-comment, and over-scaffold \u2014 everything that makes a snippet survive in isolation makes it slop inside a codebase.\n\nSlop is rarely buggy. It compiles, it passes tests, and it still costs you: it buries intent, hides real failures behind quiet fallbacks, and doubles the surface the next reader has to hold in their head. This skill is a pass over any generated change, and the default fix for almost every pattern in it is deletion, not rewriting.\n\n## The pass\n\n1. Scan the diff (or file) for the patterns below, in order: comments, defense, types, naming, structure, logging, tests, scope.\n2. Fix by deleting first. Rewrite only where behavior must survive. When removing a cast, catch, or fallback forces a choice about what happens on bad input, choose the loud failure \u2014 a throw or a failed build \u2014 over the quiet wrong answer.\n3. Match the room: mirror the surrounding codebase's comment density, naming, and error-handling idiom. Slop is relative \u2014 a comment style that's normal in one repo is noise in another.\n4. Final read: \"What here would make a reviewer suspect a model wrote this?\" Fix it. Repeat until the answer is nothing.\n\n## Comments\n\nComments carry the strongest signal, and one test covers all of them: **does this comment state something the code cannot?** A constraint, a unit, a tradeoff, the bug it works around \u2014 keep. Everything else \u2014 delete.\n\n### Comments that narrate\n\n`// increment the counter` above `count++`. `// Loop through each item`. `// Return the result`. The model comments the way it was rewarded to in training: constantly. Narration restates the next line and doubles the code's length for zero information. Delete every one.\n\n### Comments that talk to the reviewer\n\n`// Updated to use the new API`. `// Removed the old implementation`. `// Now handles null`. `// NEW:`, `// Fixed:`. These describe the *diff*, not the code \u2014 and the moment the change merges they describe nothing, because the next reader never saw the old version. That explanation belongs in the commit message. Delete.\n\n### Comments that lie\n\nA comment describing behavior the code no longer has, a parameter that was removed, a step that moved elsewhere. Worse than no comment, because a reader trusts it over the code. When editing any region, re-read every comment in it and delete or correct the ones the edit invalidated.\n\n### Section dividers and numbered steps\n\n`// ===== Helpers =====`, `// Step 1: parse input`. A function that needs numbered steps needs extracted functions with those names instead. Delete the divider, or do the extraction.\n\n### Docstrings that restate the signature\n\n`@param userId - the ID of the user`. Bytes, not information. Document constraints, units, side effects, and surprising behavior \u2014 or document nothing.\n\n### Commented-out code and summary blocks\n\nDelete commented-out code; git has it, and \"kept just in case\" is what version control is for. Delete file-level blocks that list everything the code below does; they go stale on the first edit and nobody reads them.\n\n## Defensive theater\n\nModels over-defend because defensive code \"succeeds\" more often. In a real codebase the defense inverts: it hides bugs instead of preventing them.\n\n### Checks against impossible states\n\nA null check on a value the type system, the constructor, or the three lines above already guarantee. `if (!user) return;` after a call that throws when user is missing. Trust the invariant \u2014 and if it genuinely isn't guaranteed, fix the type once instead of checking at every call site.\n\n### Catch theater\n\nCatching only to log and rethrow unchanged. An empty catch. `catch (e) { console.error(e) }` that swallows the failure and continues as if it succeeded. Handle errors once, at a real boundary, adding context \u2014 or don't catch at all. A stack trace beats a log line plus corrupted state.\n\n### Silent fallbacks\n\n`catch { return [] }`. `?? defaultValue` masking a failed fetch. A simpler backup code path for when the real one fails. This is the most dangerous pattern on the list, because the fallback keeps tests green while the primary path is broken \u2014 you can no longer tell what you're actually running. Let it fail loudly, unless degraded behavior is an explicit product decision, and then make the degraded state visible to the user.\n\n### Validation at every layer\n\nThe same null-and-range check repeated in the handler, the service, and the helper. Validate untrusted input once at the boundary, then pass a trusted value through \u2014 repetition just means three places to update when the rule changes.\n\n### Condition padding\n\n`x !== null && x !== undefined && x !== ''` where one check suffices. `=== true` on a boolean. `a?.b?.c` chains on values guaranteed to exist. Write the check the invariant actually needs, not the one that looks safest.\n\n## Type escape hatches\n\n`as any`, `as unknown as X`, `@ts-ignore`, a non-null `!` used to silence an error instead of fixing it. The compiler error was information; the cast deletes it and moves the failure to runtime, where it lands on a user. Parse or validate at the boundary and let the correct type flow through. A cast survives the pass only with a comment stating the invariant that makes it safe.\n\n## Naming\n\n### Generic names\n\n`data`, `result`, `item`, `temp`, `handler`, `processData`. The model names what the value *is structurally*; name what it *means*: `unpaidInvoices`, `retryDelayMs`. If you can't name the domain fact, you haven't understood the line \u2014 which is the thing worth fixing.\n\n### Version-suffixed names\n\n`fetchDataV2`, `handleClickNew`, `EnhancedButton`, `utils-new.ts`. These exist because the old thing was kept alongside the new one. Replace the old implementation, update its callers, and take its name. The one exception is published public API \u2014 an npm package's exports, a served endpoint \u2014 where callers exist you can't update; keep a deprecated alias there and only there.\n\n## Structure\n\n### One-call wrappers\n\nA helper that only forwards its arguments to another function is indirection with no policy. Inline it; extract again when there's a second caller or real logic to own.\n\n### Speculative flexibility\n\nAn options object with one caller passing one value. An interface with a single implementation. Config flags for scenarios the task doesn't have. Every unused degree of freedom is something the next reader must rule out before they understand the code. Build for the current caller; generalize on the second real use.\n\n### Duplicate helpers\n\nA reimplemented formatter, validator, or permission check that already exists \u2014 the model didn't search the repo, so it wrote its own. Before adding any utility, search for the existing owner of that job.\n\n### Unrequested compatibility shims\n\nDeprecated aliases, re-exports, \"keeping the old signature just in case\" when every caller lives in this repo. Update the callers instead \u2014 that's what makes it one repo.\n\n### Dead scaffolding\n\nHelpers from an approach that was abandoned mid-task. Unused imports and variables. `TODO: implement error handling` stubs. After the solution works, do a minimum-patch pass: everything not load-bearing for the final approach gets deleted.\n\n## Logging\n\n`console.log('here')` and entry/exit logs (`entering processOrder`) are debug leftovers \u2014 delete before finishing. `console.log('\u2705 Successfully initialized!')` is ceremony; emoji and celebration in log output is one of the strongest single tells. Log the facts an operator needs, in the repo's existing log style, or log nothing.\n\n## Tests\n\n### Never delete a test to pass it\n\nDeleting, skipping, or weakening an assertion to make a run green destroys the report of the bug. Fix the implementation \u2014 or, if the contract genuinely changed, say so explicitly and update the test to assert the new contract.\n\n### Tautological tests\n\nReproducing the implementation's calculation inside the test and comparing the two passes even when both are wrong. Assert an independently known outcome, at the public boundary.\n\n## Scope\n\nReformatting, renaming, or refactoring code the task didn't touch buries the real change in the diff and makes review slower and riskier. Keep the patch minimal; propose unrelated cleanup as its own change.\n\n## Final audit\n\n- [ ] Every surviving comment states something the code cannot\n- [ ] No catch swallows a failure; no fallback hides a broken primary path\n- [ ] No cast silences the compiler without a stated invariant\n- [ ] No name carries `V2`, `New`, or `Enhanced`; the old implementation is gone\n- [ ] No helper duplicates an existing one; no wrapper just forwards\n- [ ] No debug logs, no dead code, no TODO stubs, no commented-out blocks\n- [ ] No test was weakened to pass\n- [ ] The diff touches only what the task required\n- [ ] The result reads like the surrounding codebase wrote it\nload-invoices.mjs\n"
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc 'cat <home>/.agents/skills/pstack-unslop/SKILL.md'",
+            "detail": "---\nname: pstack-unslop\ndescription: Cut AI tells from any writing. Must always apply.\ndisable-model-invocation: true\nmetadata:\n  opencode/autoinvoke: false\n  opencode/slash: true\n---\n\n# Unslop\n\nEdit text to remove AI patterns and add human voice.\n\n## Process\n\n1. Scan for the patterns below.\n2. Rewrite. Preserve meaning, match intended tone.\n3. Add soul (see next section).\n4. Self-audit: \"What makes this obviously AI generated?\" Fix remaining tells.\n\n## Adding soul\n\nRemoving patterns is half the job. Sterile, voiceless writing is just as obvious.\n\n- **Have opinions.** React to facts instead of neutrally listing pros and cons.\n- **Vary rhythm.** Short sentences. Then longer ones that take their time. Mix it up.\n- **Acknowledge complexity.** \"Impressive but also kind of unsettling\" beats \"impressive.\"\n- **Use \"I\" when it fits.** First person isn't unprofessional.\n- **Let some mess in.** Perfect structure looks machine-made.\n- **Be specific.** Not \"this is concerning\" but \"there's something unsettling about agents churning away at 3am.\"\n\n## Patterns to detect and fix\n\n### Content\n\n1. **Puffery.** \"pivotal moment\", \"testament to\", \"evolving landscape\", \"setting the stage for\", \"indelible mark\", \"deeply rooted\". Cut puffery, state what happened.\n2. **Name-dropping.** Listing media outlets without context. Pick one, say what was said.\n3. **Superficial -ing phrases.** \"highlighting...\", \"ensuring...\", \"reflecting...\", \"showcasing...\", \"fostering...\". Delete or expand with real sources.\n4. **Promotional language.** \"nestled\", \"vibrant\", \"breathtaking\", \"groundbreaking\", \"renowned\", \"stunning\", \"must-visit\". Use neutral descriptions.\n5. **Vague attributions.** \"Experts believe\", \"Industry reports suggest\", \"Some critics argue\". Name the source or delete.\n6. **Formulaic challenges.** \"Despite challenges... continues to thrive.\" Replace with specific facts.\n\n### Language\n\n7. **AI vocabulary.** Additionally, crucial, delve, enduring, enhance, fostering, garner, interplay, intricate, landscape (abstract), pivotal, showcase, tapestry (abstract), testament, underscore, vibrant. Replace with plain words.\n8. **Fancy ways to say \"is\".** \"serves as\", \"stands as\", \"boasts\", \"features\". Just say \"is\" or \"has\".\n9. **\"Not just X, but Y.\"** State the point directly instead.\n10. **Rule of three.** Forcing ideas into groups of three. Use the natural number.\n11. **Synonym cycling.** Protagonist, main character, central figure, hero all in one paragraph. Pick one, repeat it.\n12. **False ranges.** \"from X to Y\" where X and Y aren't on a meaningful scale. List topics directly.\n\n### Style\n\n13. **Em dash overuse.** Avoid em dashes entirely. Use periods or commas only (no parentheses, no en dashes, no hyphen-as-dash substitutes). Em dashes are an AI tell, and reaching for parentheses instead just trades one tell for another. If a thought needs separation, end the sentence or use a comma.\n14. **Colon overuse.** Colons are fine before a list or example. Not as mid-sentence connectors. \"If you're coming from traditional automation: instead of registering event handlers, you describe conditions\" adds nothing with the colon. Rewrite to let the point stand on its own without comparison framing. \"Describing when the scheduler should fire works best as plain English.\" Same meaning, no crutch punctuation.\n15. **Boldface overuse.** Don't bold every proper noun or acronym.\n16. **Inline-header lists.** The tell is a bold label and colon that restates the line: \"**Performance:** Performance improved...\". Convert those to prose. A bold lead-in that ends in a period, names the item, and is followed by genuinely new detail (\"**Schema in TypeScript.** Tables live in one file.\") is fine, not a tell.\n17. **Title case headings.** Use sentence case.\n18. **Decorative emojis.** Remove from headings and bullets.\n19. **Curly quotes.** Replace with straight quotes.\n\n### Communication artifacts\n\n20. **Chatbot phrases.** \"I hope this helps!\", \"Let me know if...\", \"Of course!\", \"Certainly!\", \"Found the smoking gun!\" Remove.\n21. **Cutoff disclaimers.** \"While specific details are limited...\" Find sources or remove.\n22. **Sycophantic tone.** \"Great question! You're absolutely right!\" Respond directly.\n\n### Filler\n\n23. **Filler phrases.** \"In order to\" becomes \"To\". \"Due to the fact that\" becomes \"Because\". \"It is important to note that\" gets deleted.\n24. **Excessive hedging.** \"could potentially possibly be argued that it might\" becomes \"may\".\n25. **Generic conclusions.** \"The future looks bright.\" State specific plans or facts.\n\n### Jargon\n\n26. **Abstract metaphor nouns.** Substrate, wedge, vector, locus, vantage, nexus, primitive (as noun), harness (as metaphor), surface (as in \"API surface\"), bedrock, scaffolding (as metaphor), modality, paradigm, gold-plating, ratchet (as metaphor), evacuate (for moving code), endgame, north star, flywheel. These read as technical but usually have a plainer concrete word. \"Substrate\" becomes \"base\". \"Wedge in\" becomes \"add\". \"Vector\" becomes \"way\" or \"method\". \"Gold-plating\" becomes \"more than the job needs\". \"Ratchet\" becomes the mechanism's real name or \"a limit that only tightens\". \"Evacuate\" becomes \"move out\". \"Endgame\" becomes \"the last phase\". Pick the concrete word.\n\n### Plain speech\n\n27. **Say what it does, not how it feels.** \"the database stays close at hand\", \"SQL you can read\", \"types that follow your schema\" name a feeling. The fix names the mechanism or a number: \"`.toSQL()` returns the exact string sent to the database\", \"a column rename fails the build\". Ask what the sentence tells the reader to do or know, then write that. If you can't restate it as a concrete instruction, fact, or number, cut it. One more check: if the sentence could appear unchanged in another project's docs, it says nothing about this one. Cut it.\n28. **Shorten or split dense sentences.** If the reader has to backtrack to parse a sentence, break it in two or drop clauses. One idea per sentence.\n29. **Active voice.** Prefer it. Catch \"is/are/was/were + past participle\" and name the actor: \"queries are validated\" becomes \"the compiler validates queries\", \"the file is parsed by the loader\" becomes \"the loader parses the file\". Passive is fine only when the actor is unknown or genuinely doesn't matter.\n30. **Cut adverbs, or use a stronger verb.** \"runs quickly\" becomes \"is fast\" or the number. \"significantly improves\" becomes the measured delta. An adverb propping up a weak verb means the verb is wrong.\n31. **Prefer the plain word.** \"utilize\" becomes \"use\", \"leverage\" becomes \"use\", \"facilitate\" becomes \"help\", \"numerous\" becomes \"many\", \"in the event that\" becomes \"if\". The fancier synonym is rarely clearer.\n"
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc \"cat load-invoices.mjs; git status --short; rg --files --hidden -g 'AGENTS.md' -g '\"'!'\"\\\\.git'\"",
+            "detail": "export async function loadInvoices(fetchInvoices) {\n  try {\n    const data = await fetchInvoices();\n    return data ?? [];\n  } catch (error) {\n    return [];\n  }\n}\nfatal: not a git repository (or any of the parent directories): .git\n"
+          },
+          {
+            "kind": "assistant_text",
+            "text": "The function turns both fetch failures and null responses into `[]`. I\u2019m using the requested `emil-unslop-code` skill to remove those fallbacks. I\u2019m also applying `pstack-unslop` to keep the report plain.",
+            "is_delta": false
+          },
+          {
+            "kind": "tool_call",
+            "name": "file_change",
+            "summary": "file change",
+            "detail": "{\"id\":\"item_5\",\"type\":\"file_change\",\"changes\":[{\"path\":\"/private/tmp/skill-assistant-expanded-verification/data-emil-unslop-code/runs/08c5cd88-ebd1-4c50-94c8-2c2769bc9702/trial-2/workspace-3WTQ4a/load-invoices.mjs\",\"kind\":\"update\"}],\"status\":\"completed\"}"
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc \"node --input-type=module <<'NODE'\nimport assert from 'node:assert/strict';\nimport { loadInvoices } from './load-invoices.mjs';\n\nconst invoices = [{ id: 'invoice-1' }];\nassert.strictEqual(await loadInvoices(async () => invoices), invoices);\nconst emptyInvoices = [];\nassert.strictEqual(await loadInvoices(async () => emptyInvoices), emptyInvoices);\nconst failure = new Error('Fetch failed');\nawait assert.rejects(loadInvoices(async () => { throw failure; }), error => error === failure);\nawait assert.rejects(loadInvoices(() => { throw failure; }), error => error === failure);\nassert.strictEqual(await loadInvoices(async () => null), null);\nassert.strictEqual(await loadInvoices(async () => undefined), undefined);\nconsole.log('Passed: invoice results, successful empty response, async and sync failures, no nullish fallback.');\nNODE\n\"",
+            "detail": "Passed: invoice results, successful empty response, async and sync failures, no nullish fallback.\n"
+          },
+          {
+            "kind": "assistant_text",
+            "text": "Cleaned `load-invoices.mjs` using the skill. Kept `loadInvoices(fetchInvoices)`.\n\nRemoved the catch and empty-list fallback. Failures now reach the caller; successful empty lists pass through unchanged.\n\nLocal checks passed. No network use or package installation.",
+            "is_delta": false
+          }
+        ]
+      },
+      "judge": null,
+      "checks": [
+        {
+          "check_id": "loaded",
+          "name": "Native evidence shows the target skill loaded",
+          "status": "passed",
+          "reason": "Native events show the target skill was loaded",
+          "evidence": "Loaded"
+        },
+        {
+          "check_id": "contract",
+          "name": "Failures propagate and successful values survive",
+          "status": "passed",
+          "reason": "Expected command exit 0; got Some(0)",
+          "evidence": "\n"
+        }
+      ],
+      "outcome": "passed",
+      "artifacts": [
+        {
+          "path": "load-invoices.mjs",
+          "sha256": "7603ec39bfbd0aeb9cb6031e8ca6c658d0b180cff8f550687d369ae3edf1e096",
+          "bytes": 80,
+          "text": "export async function loadInvoices(fetchInvoices) {\n  return fetchInvoices();\n}\n",
+          "change": "changed"
+        }
+      ],
+      "reviews": [],
+      "error": null
+    }
+  ],
+  "error": null
+}

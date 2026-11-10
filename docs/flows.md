@@ -78,3 +78,5 @@ Skipped, with the reason:
 - Park for every agent on a dotagents skill: it runs `dotagents remove` through the process spawner.
 - Remove of a manual skill: core refuses it, so a fork-owned skill is timed instead.
 - Install, update, uninstall: they run npx or the network.
+
+| Skill test suite | Skill page → Assistant → Task (`skill-assistant` flag, off by default) | `lab_save_suite`, `lab_start`, `lab_run`, `lab_cancel`, `lab_review`, `lab_export` | `apps/desktop/src/components/SkillLab/SkillLab.test.tsx` (task-first setup, saved suites, draft recovery on return, invalid JSON across cases and views, frozen-input replay, review drafts, flag-off entry, return during run, import rejection); `crates/skill-studio-eval/src/engine.rs` (frozen input, recovery, human review) |

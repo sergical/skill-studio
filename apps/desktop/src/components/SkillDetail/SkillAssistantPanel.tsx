@@ -886,6 +886,7 @@ function AskComposer({
       <Textarea
         ref={textareaRef}
         className="resize-none rounded-sm border-border bg-bg-tertiary px-2.5 py-2 text-small text-text-primary focus-visible:border-border-focus focus-visible:ring-0"
+        aria-label="Question about this skill"
         placeholder="Ask about this skill…"
         rows={2}
         value={prompt}
@@ -910,7 +911,7 @@ function AskComposer({
           </Button>
         ) : (
           <Button size="sm" onClick={onRun} disabled={!prompt.trim()}>
-            Run
+            Ask
           </Button>
         )}
       </div>
@@ -1197,29 +1198,35 @@ export function SkillAssistantPanel({
 
   const isRunning = state.status === "running" || isPreparing;
   const hasTranscript = skillAgentRunHasTranscript(state);
-  const canAudit = rawContent !== null && !isPluginManaged && !isRunning;
   const candidateProjects = testCandidateProjects(skill, snapshot?.projects ?? []);
   const isTestRunning =
     testPhase === "preparing" || testPhase === "running" || testPhase === "judging";
+  const isBusy = isRunning || isTestRunning;
+  const canAudit = rawContent !== null && !isPluginManaged && !isBusy;
 
   if (showHistory) {
     return <SkillRunHistory skillName={skill.name} onClose={onCloseHistory} />;
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <SelectControl
-        ariaLabel="Agent"
-        value={harness}
-        onValueChange={(value) => {
-          if (isSkillAssistantHarness(value)) handleSelectHarness(value);
-        }}
-        items={harnessSelectItemsForSkill}
-        leadingIcon={<HarnessIcon harness={harness} size={14} />}
-      />
-      <Button variant="outline" size="sm" className="self-start" onClick={onOpenHistory}>
-        Runs
-      </Button>
+    <div className="flex flex-col gap-5">
+      <h2 className="text-title font-semibold">Improve this skill</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <SelectControl
+          size="lg"
+          ariaLabel="Agent"
+          disabled={isBusy}
+          value={harness}
+          onValueChange={(value) => {
+            if (isSkillAssistantHarness(value)) handleSelectHarness(value);
+          }}
+          items={harnessSelectItemsForSkill}
+          leadingIcon={<HarnessIcon harness={harness} size={14} />}
+        />
+        <Button variant="ghost" onClick={onOpenHistory}>
+          Past conversations
+        </Button>
+      </div>
 
       {hasTranscript ? (
         <SkillAgentTranscript state={state} />
@@ -1252,52 +1259,49 @@ export function SkillAssistantPanel({
         onDeleteScratchFolder={handleDeleteScratchFolder}
       />
 
-      <div id="skill-assistant-test-toggle-region">
-        {showTestForm ? (
-          <SkillTestForm
-            skill={skill}
-            otherOwnSkills={otherOwnSkills}
-            candidateProjects={candidateProjects}
-            isRunning={isTestRunning}
-            onRun={handleRunTest}
-          />
-        ) : (
-          <AskComposer
-            textareaRef={textareaRef}
-            prompt={prompt}
-            onPromptChange={setPrompt}
-            onKeyDown={handleKeyDown}
-            isRunning={isRunning}
-            sessionId={state.sessionId}
-            onNewSession={handleNewSession}
-            onRun={handleRun}
-            onCancel={() => cancel()}
-          />
-        )}
-      </div>
-
-      <div className="flex gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="flex-1"
-          onClick={handleAudit}
-          disabled={!canAudit}
-        >
-          Audit
-        </Button>
-        <Button
-          variant={showTestForm ? "default" : "outline"}
-          size="sm"
-          className="flex-1"
-          onClick={() => setShowTestForm((open) => !open)}
-          disabled={isRunning}
-          aria-expanded={showTestForm}
-          aria-controls="skill-assistant-test-toggle-region"
-        >
-          Test
-        </Button>
-      </div>
+      {!showTestForm && !isTestRunning && (
+        <AskComposer
+          textareaRef={textareaRef}
+          prompt={prompt}
+          onPromptChange={setPrompt}
+          onKeyDown={handleKeyDown}
+          isRunning={isRunning}
+          sessionId={state.sessionId}
+          onNewSession={handleNewSession}
+          onRun={handleRun}
+          onCancel={() => cancel()}
+        />
+      )}
+      <details className="rounded-md border border-border p-4">
+        <summary className="cursor-pointer text-body font-medium">Advanced tools</summary>
+        <div className="space-y-4 pt-4">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={handleAudit} disabled={!canAudit}>
+              Review skill instructions
+            </Button>
+            <Button
+              variant={showTestForm ? "default" : "outline"}
+              onClick={() => setShowTestForm((open) => !open)}
+              disabled={isBusy}
+              aria-expanded={showTestForm}
+              aria-controls="skill-assistant-test-toggle-region"
+            >
+              Test in a project
+            </Button>
+          </div>
+          <div id="skill-assistant-test-toggle-region">
+            {showTestForm && (
+              <SkillTestForm
+                skill={skill}
+                otherOwnSkills={otherOwnSkills}
+                candidateProjects={candidateProjects}
+                isRunning={isBusy}
+                onRun={handleRunTest}
+              />
+            )}
+          </div>
+        </div>
+      </details>
     </div>
   );
 }

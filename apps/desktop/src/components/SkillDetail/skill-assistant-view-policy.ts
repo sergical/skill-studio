@@ -1,6 +1,6 @@
 // ============================================================================
 // Skill Studio - Assistant view policy
-// Controls whether the open Assistant drawer shows its main panel or Runs.
+// Controls history navigation within the skill improvement view.
 // ============================================================================
 
 import { useState } from "react";
@@ -13,7 +13,7 @@ type SkillAssistantPanelAction =
   | "close-runs"
   | "change-skill";
 
-/** Selects the Assistant panel mode after one drawer or Runs navigation action. */
+/** Selects the Assistant panel mode after one workspace or Runs navigation action. */
 export function nextSkillAssistantPanelMode(
   current: SkillAssistantPanelMode,
   action: SkillAssistantPanelAction,
@@ -31,7 +31,7 @@ export function nextSkillAssistantPanelMode(
   }
 }
 
-/** Owns Assistant drawer and Runs navigation, resetting the nested view when its skill changes. */
+/** Owns Assistant workspace and improvement history navigation, resetting the nested view when its skill changes. */
 export function useSkillAssistantNavigation(
   skillName: string | undefined,
   setIsAssistantOpen: (isOpen: boolean) => void,

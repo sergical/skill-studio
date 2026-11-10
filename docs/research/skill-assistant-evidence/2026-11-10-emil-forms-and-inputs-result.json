@@ -1,0 +1,315 @@
+{
+  "schema_version": 1,
+  "id": "9a4c82b5-23f3-4c8f-9fa8-c96ff1aaa049",
+  "suite": {
+    "schema_version": 1,
+    "id": "emil-forms-and-inputs-acceptance",
+    "name": "Installed skill: emil-forms-and-inputs",
+    "skill_path": "<home>/.agents/skills/emil-forms-and-inputs",
+    "cases": [
+      {
+        "id": "semantics",
+        "name": "Fix a signup form",
+        "prompt": "Improve signup.html using this skill. Keep a single email signup form and submit action. Use plain HTML and inline CSS only. Work only in this task folder. Do not use the network or install packages.",
+        "mode": "explicit",
+        "files": [
+          {
+            "path": "signup.html",
+            "content": "<!doctype html><html lang=\"en\"><head><style>input {font-size:12px;outline:none}</style></head><body><div><input placeholder=\"Email\"><div onclick=\"alert('saved')\">Subscribe</div></div></body></html>"
+          }
+        ],
+        "checks": [
+          {
+            "id": "loaded",
+            "name": "Native evidence shows the target skill loaded",
+            "assertion": {
+              "kind": "skill_loaded",
+              "expected": true
+            }
+          },
+          {
+            "id": "semantics",
+            "name": "Form, email label, submit button, focus and font size",
+            "assertion": {
+              "kind": "command",
+              "program": "node",
+              "args": [
+                "--input-type=module",
+                "-e",
+                "import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs'; const s=readFileSync('signup.html','utf8'); assert.match(s,/<form[\\s>]/i); assert.match(s,/<input[^>]*type=[\"']email[\"']/i); assert.match(s,/<label[\\s>]/i); assert.match(s,/<button[^>]*type=[\"']submit[\"']/i); assert.match(s,/font-size\\s*:\\s*(16px|1rem)/i); assert.match(s,/:focus-visible/); const input=s.match(/<input[^>]*>/i)[0]; const id=input.match(/id=[\"']([^\"']+)/)?.[1]; assert.ok((id && s.includes('for=\"'+id+'\"')) || /<label[^>]*>[\\s\\S]*<input[^>]*>[\\s\\S]*<\\/label>/i.test(s));"
+              ],
+              "expected_exit": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "duplicate-submit",
+        "name": "Handle concurrent form submission",
+        "prompt": "Fix submit.mjs using this skill. Keep createSubmitHandler(save, setBusy) returning an async handler. Prevent concurrent saves; release the busy state after either success or failure and let errors reach the caller. Work only in this task folder. Do not use the network or install packages.",
+        "mode": "explicit",
+        "files": [
+          {
+            "path": "submit.mjs",
+            "content": "export function createSubmitHandler(save, setBusy) {\n  return async function submit(event) {\n    event.preventDefault();\n    setBusy(true);\n    await save();\n    setBusy(false);\n  };\n}\n"
+          }
+        ],
+        "checks": [
+          {
+            "id": "loaded",
+            "name": "Native evidence shows the target skill loaded",
+            "assertion": {
+              "kind": "skill_loaded",
+              "expected": true
+            }
+          },
+          {
+            "id": "lifecycle",
+            "name": "One pending save, failure recovery, and later retry",
+            "assertion": {
+              "kind": "command",
+              "program": "node",
+              "args": [
+                "--input-type=module",
+                "-e",
+                "import assert from 'node:assert/strict'; import {createSubmitHandler} from './submit.mjs'; let calls=0, resolve; const states=[]; const handler=createSubmitHandler(()=>{calls++;return new Promise(r=>resolve=r)},v=>states.push(v)); let prevented=0; const event={preventDefault(){prevented++}}; const first=handler(event); await handler(event); assert.equal(calls,1); resolve(); await first; assert.equal(states.at(-1),false); const next=handler(event); assert.equal(calls,2); resolve(); await next; const error=new Error('save failed'); let failures=0; const fail=createSubmitHandler(async()=>{failures++;throw error},v=>states.push(v)); await assert.rejects(fail(event),e=>e===error); assert.equal(states.at(-1),false); await assert.rejects(fail(event),e=>e===error); assert.equal(failures,2); assert.ok(prevented>=3);"
+              ],
+              "expected_exit": 0
+            }
+          }
+        ]
+      }
+    ],
+    "variants": [
+      {
+        "id": "codex",
+        "name": "Codex",
+        "client": "codex",
+        "model": null,
+        "skill": {
+          "kind": "candidate"
+        }
+      }
+    ],
+    "repetitions": 1,
+    "timeout_seconds": 180,
+    "judge": null
+  },
+  "input_hash": "4da4992d207340dcf75fc9acb08cb9283ec462755567e0ea8bcb7bb5af1dd087",
+  "created_at": "2026-11-10T18:31:00.565794Z",
+  "finished_at": "2026-11-10T18:32:11.640221Z",
+  "state": "completed",
+  "trials": [
+    {
+      "id": "trial-1",
+      "case_id": "semantics",
+      "variant_id": "codex",
+      "repetition": 1,
+      "state": "finished",
+      "started_at": "2026-11-10T18:31:01.168889Z",
+      "finished_at": "2026-11-10T18:31:43.952729Z",
+      "client_version": "codex-cli 0.167.0",
+      "client_binary": "<home>/.vite-plus/bin/codex",
+      "isolation": "Fresh session and workspace; user config is ignored. Existing login is used. Other user or bundled skills may remain available. Compare as an environment test.",
+      "skill_hash": "ca1dbdbf77da8804512da3d12729e1b87418f3b6b8d48bd5cb91e845a9836fc1",
+      "result": {
+        "state": "completed",
+        "exit_code": 0,
+        "duration_ms": 41502,
+        "output": "Updated [signup.html](signup.html) with an associated label, native email validation, 16px input text, visible keyboard focus, and one submit button.\n\nUses only HTML and inline CSS. Local checks passed. Submission targets the current page; a signup service is not connected.",
+        "error": null,
+        "skill_loaded": "yes",
+        "usage": {
+          "input_tokens": 122030,
+          "cached_input_tokens": 102016,
+          "output_tokens": 1476,
+          "cost_usd": null,
+          "source": "codex.turn.completed",
+          "reported_model": null
+        },
+        "events": [
+          {
+            "kind": "assistant_text",
+            "text": "I\u2019ll read the forms skill and `signup.html`, then improve the form within your HTML and CSS limits.",
+            "is_delta": false
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc \"pwd; rg --files -g 'signup.html' -g 'AGENTS.md' -g 'SKILL.md' -g '*test*' -g 'package.json'\"",
+            "detail": "/private/tmp/skill-assistant-expanded-verification/data-emil-forms-and-inputs/runs/9a4c82b5-23f3-4c8f-9fa8-c96ff1aaa049/trial-1/workspace-eQfZoM\nsignup.html\n"
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc 'cat .agents/skills/emil-forms-and-inputs/SKILL.md'",
+            "detail": "---\nname: emil-forms-and-inputs\ndescription: \"Build forms, inputs, buttons, and controls that feel right \u2014 label association, 16px inputs to stop iOS zoom, focus states, validation timing, loading/disabled button states, Enter and Cmd+Enter submission, and autofocus rules. Use when building or reviewing any form, text input, textarea, search field, login/signup flow, settings page, checkout, button, checkbox, or submit handler. Triggers on: form, input, textarea, select, button, checkbox, radio, toggle, submit, onSubmit, validation, error message, placeholder, label, autofocus, autocomplete, spellcheck, iOS zoom, font-size 16px, focus ring, focus-visible, loading state, disabled, double submit, duplicate request, Enter to submit, Cmd+Enter, keyboard shortcut, destructive action, confirmation, delete, clear button, input icon, prefix, suffix, search field, login form, signup form, 1Password, password manager.\"\n---\n\n# Forms & Inputs\n\nForms are where users do real work, and they notice every rough edge: the label that doesn't focus the input, the page that zooms on iOS, the button that fires twice, the Enter key that does nothing. None of these are hard to fix \u2014 they're just easy to forget. Wire up the semantics the platform gives you (`<form>`, `<label>`, `<button>`), then layer on the details below. Where CSS is involved, implement it in the project's existing styling system (Tailwind, CSS Modules, styled-components \u2014 whatever is already there); the values matter, the syntax doesn't.\n\n## Core Principles\n\n### 1. Every input gets an associated label\n\nClicking the label must focus the input:\n\n```html\n<label for=\"email\">Email</label>\n<input id=\"email\" type=\"email\" />\n\n<!-- Or wrap the input -->\n<label>\n  Email\n  <input type=\"email\" />\n</label>\n```\n\n### 2. Use the right input type\n\n```html\n<input type=\"email\" />    <input type=\"password\" />\n<input type=\"tel\" />      <input type=\"url\" />\n<input type=\"number\" />   <input type=\"search\" />\n```\n\nThis gets you the right mobile keyboard, browser validation, and autofill behavior for free.\n\n### 3. Input font size \u2265 16px, always\n\nInputs smaller than 16px cause iOS Safari to zoom in on focus. Set it globally:\n\n```css\ninput, textarea, select {\n  font-size: 16px;\n}\n```\n\nIf the design calls for smaller text, keep the computed font-size at 16px on touch devices and scale visually some other way \u2014 never below 16px.\n\n### 4. Visible focus states\n\nEvery input and control needs a clear focus state. Style `:focus-visible` (not bare `:focus`) so keyboard users get a ring without mouse users seeing one on every click, and never `outline: none` without a replacement:\n\n```css\ninput:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; }\n```\n\n### 5. Kill noisy browser behaviors when they don't help\n\nDisable `spellcheck` and `autocomplete` most of the time for cleaner UX (usernames, search fields, codes, slugs \u2014 anything that isn't a real address/identity field). Keep autocomplete ON for email, name, address, and payment fields \u2014 there it genuinely helps. Disable 1Password's overlay on fields where it doesn't belong:\n\n```html\n<input type=\"text\" spellcheck=\"false\" autocomplete=\"off\" />\n<input data-lpignore=\"true\" data-1p-ignore />\n```\n\n### 6. Input decorations overlay the input, they don't sit beside it\n\nPrefix/suffix icons and labels should be absolutely positioned on top of the input (with padding making room), not rendered as sibling elements \u2014 otherwise clicking them does nothing and the \"input\" border lies about the hit area:\n\n```css\n.input-wrapper {\n  position: relative;\n}\n\n.input-icon {\n  position: absolute;\n  left: 12px;\n  top: 50%;\n  transform: translateY(-50%);\n  pointer-events: none;\n}\n\n.input-field { padding-left: 40px; }\n```\n\nClickable decorations (like a clear button) should refocus the input:\n\n```jsx\n<button\n  className=\"input-icon-button\"\n  onClick={() => inputRef.current?.focus()}\n>\n  <SearchIcon />\n</button>\n```\n\n### 7. Autofocus: yes in modals, never on touch\n\nAutofocus the first input when a modal opens (if the modal contains one). Do NOT autofocus on touch devices \u2014 it pops the keyboard open unexpectedly:\n\n```jsx\nconst isTouchDevice = 'ontouchstart' in window;\n\n<input autoFocus={!isTouchDevice} />\n```\n\n### 8. Always wrap inputs in a `<form>` \u2014 Enter must submit\n\n```jsx\n<form onSubmit={handleSubmit}>\n  <input type=\"text\" />\n  <button type=\"submit\">Submit</button>\n</form>\n```\n\nFor textareas (where Enter inserts a newline), support `Cmd+Enter` (Mac) / `Ctrl+Enter` (Windows) to submit:\n\n```jsx\nfunction handleKeyDown(e) {\n  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {\n    handleSubmit();\n  }\n}\n```\n\n### 9. Buttons are `<button>` elements \u2014 with a loading state\n\nNever put click handlers on elements that aren't buttons:\n\n```html\n<!-- Good -->\n<button onClick={handleClick}>Click me</button>\n<!-- Bad -->\n<div onClick={handleClick}>Click me</div>\n<span onClick={handleClick}>Click me</span>\n```\n\nDisable the button while submitting to prevent duplicate network requests, and say what's happening:\n\n```jsx\nconst [isSubmitting, setIsSubmitting] = useState(false);\n\n<button\n  disabled={isSubmitting}\n  onClick={async () => {\n    setIsSubmitting(true);\n    await submitForm();\n    setIsSubmitting(false);\n  }}\n>\n  {isSubmitting ? 'Submitting...' : 'Submit'}\n</button>\n```\n\nMake buttons feel pressable with a subtle scale on `:active`:\n\n```css\n.button:active { transform: scale(0.97); }\n```\n\nIf a button's action has a keyboard shortcut, surface it as a tooltip:\n\n```jsx\n<Tooltip content=\"Save (Cmd+S)\">\n  <button onClick={save}>Save</button>\n</Tooltip>\n```\n\n### 10. Validate late, not on every keystroke\n\nDon't flag a field as invalid while the user is still typing their first attempt \u2014 validate on blur or on submit. Once a field HAS shown an error, switch to validating on change so the error clears the moment they fix it (\"reward early, punish late\").\n\nColocate error messages with the field that caused them \u2014 not in a summary at the top:\n\n```jsx\n<div className=\"field\">\n  <input type=\"email\" aria-invalid={!!error} />\n  {error && <span className=\"error\">{error}</span>}\n</div>\n```\n\n### 11. No dead zones on checkboxes and controls\n\nThe label, the control, AND the gap between them must all be clickable:\n\n```css\n.checkbox-wrapper {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  cursor: pointer;\n}\n\n/* Make the entire row clickable, not just the checkbox */\n.checkbox-wrapper label { cursor: pointer; flex: 1; }\n```\n\nOr wrap everything in one label:\n\n```html\n<label class=\"checkbox-row\">\n  <input type=\"checkbox\" />\n  <span>Remember me</span>\n</label>\n```\n\n### 12. Destructive actions require confirmation\n\n```jsx\nfunction handleDelete() {\n  if (confirm('Are you sure you want to delete this?')) deleteItem();\n}\n```\n\n`confirm()` is the floor \u2014 use a proper confirmation modal for real products.\n\n### 13. Prefill everything you can\n\nUse the logged-in user's data to prefill forms whenever possible. When linking to a form, prefill it from the request context \u2014 e.g. a \"Change username\" link should land on a form prefilled with: \"I'd like to change my username to:\"\n\n### 14. Build on accessible primitives\n\nUse Base UI for accessible component primitives. If it doesn't fit the codebase, use whatever does \u2014 but the accessibility bar (focus management, ARIA, keyboard support) is non-negotiable.\n\n## Checklist\n\n- [ ] Every input has a label that focuses it on click\n- [ ] Correct `type` attribute on every input\n- [ ] `font-size: 16px` minimum on inputs, textareas, selects\n- [ ] Visible `:focus-visible` state on all controls\n- [ ] `spellcheck=\"false\"` / `autocomplete=\"off\"` where autofill is noise\n- [ ] Icons/decorations absolutely positioned over the input, clicks refocus it\n- [ ] Autofocus in modals, suppressed on touch devices\n- [ ] Inputs wrapped in `<form>`; Enter submits; Cmd/Ctrl+Enter submits textareas\n- [ ] Real `<button>` elements; disabled + loading text during submission\n- [ ] `:active { transform: scale(0.97) }` for press feedback\n- [ ] Errors validate on blur/submit and render next to their field\n- [ ] Checkbox rows fully clickable \u2014 no dead zones\n- [ ] Destructive actions confirmed before executing\n- [ ] Forms prefilled from user data and link context\n- [ ] Styling written in the project's existing styling system\n\n## Common Mistakes\n\n- Icon rendered as a sibling of the input, so clicking it does nothing\n- 14px input text that zooms the whole page on iPhone\n- Submit button that stays enabled and fires the request twice\n- A lone input with no `<form>`, so Enter silently does nothing\n- Error summary at the top of the form instead of next to the broken field; validating on every keystroke, yelling \"invalid email\" after one character\n- Autofocus on mobile shoving the keyboard into the user's face\n- `<div onClick>` \"buttons\" invisible to keyboards and screen readers\n"
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc 'cat signup.html; git status --short'",
+            "detail": "<!doctype html><html lang=\"en\"><head><style>input {font-size:12px;outline:none}</style></head><body><div><input placeholder=\"Email\"><div onclick=\"alert('saved')\">Subscribe</div></div></body></html>fatal: not a git repository (or any of the parent directories): .git\n"
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc 'cat <home>/.agents/skills/pstack-unslop/SKILL.md'",
+            "detail": "---\nname: pstack-unslop\ndescription: Cut AI tells from any writing. Must always apply.\ndisable-model-invocation: true\nmetadata:\n  opencode/autoinvoke: false\n  opencode/slash: true\n---\n\n# Unslop\n\nEdit text to remove AI patterns and add human voice.\n\n## Process\n\n1. Scan for the patterns below.\n2. Rewrite. Preserve meaning, match intended tone.\n3. Add soul (see next section).\n4. Self-audit: \"What makes this obviously AI generated?\" Fix remaining tells.\n\n## Adding soul\n\nRemoving patterns is half the job. Sterile, voiceless writing is just as obvious.\n\n- **Have opinions.** React to facts instead of neutrally listing pros and cons.\n- **Vary rhythm.** Short sentences. Then longer ones that take their time. Mix it up.\n- **Acknowledge complexity.** \"Impressive but also kind of unsettling\" beats \"impressive.\"\n- **Use \"I\" when it fits.** First person isn't unprofessional.\n- **Let some mess in.** Perfect structure looks machine-made.\n- **Be specific.** Not \"this is concerning\" but \"there's something unsettling about agents churning away at 3am.\"\n\n## Patterns to detect and fix\n\n### Content\n\n1. **Puffery.** \"pivotal moment\", \"testament to\", \"evolving landscape\", \"setting the stage for\", \"indelible mark\", \"deeply rooted\". Cut puffery, state what happened.\n2. **Name-dropping.** Listing media outlets without context. Pick one, say what was said.\n3. **Superficial -ing phrases.** \"highlighting...\", \"ensuring...\", \"reflecting...\", \"showcasing...\", \"fostering...\". Delete or expand with real sources.\n4. **Promotional language.** \"nestled\", \"vibrant\", \"breathtaking\", \"groundbreaking\", \"renowned\", \"stunning\", \"must-visit\". Use neutral descriptions.\n5. **Vague attributions.** \"Experts believe\", \"Industry reports suggest\", \"Some critics argue\". Name the source or delete.\n6. **Formulaic challenges.** \"Despite challenges... continues to thrive.\" Replace with specific facts.\n\n### Language\n\n7. **AI vocabulary.** Additionally, crucial, delve, enduring, enhance, fostering, garner, interplay, intricate, landscape (abstract), pivotal, showcase, tapestry (abstract), testament, underscore, vibrant. Replace with plain words.\n8. **Fancy ways to say \"is\".** \"serves as\", \"stands as\", \"boasts\", \"features\". Just say \"is\" or \"has\".\n9. **\"Not just X, but Y.\"** State the point directly instead.\n10. **Rule of three.** Forcing ideas into groups of three. Use the natural number.\n11. **Synonym cycling.** Protagonist, main character, central figure, hero all in one paragraph. Pick one, repeat it.\n12. **False ranges.** \"from X to Y\" where X and Y aren't on a meaningful scale. List topics directly.\n\n### Style\n\n13. **Em dash overuse.** Avoid em dashes entirely. Use periods or commas only (no parentheses, no en dashes, no hyphen-as-dash substitutes). Em dashes are an AI tell, and reaching for parentheses instead just trades one tell for another. If a thought needs separation, end the sentence or use a comma.\n14. **Colon overuse.** Colons are fine before a list or example. Not as mid-sentence connectors. \"If you're coming from traditional automation: instead of registering event handlers, you describe conditions\" adds nothing with the colon. Rewrite to let the point stand on its own without comparison framing. \"Describing when the scheduler should fire works best as plain English.\" Same meaning, no crutch punctuation.\n15. **Boldface overuse.** Don't bold every proper noun or acronym.\n16. **Inline-header lists.** The tell is a bold label and colon that restates the line: \"**Performance:** Performance improved...\". Convert those to prose. A bold lead-in that ends in a period, names the item, and is followed by genuinely new detail (\"**Schema in TypeScript.** Tables live in one file.\") is fine, not a tell.\n17. **Title case headings.** Use sentence case.\n18. **Decorative emojis.** Remove from headings and bullets.\n19. **Curly quotes.** Replace with straight quotes.\n\n### Communication artifacts\n\n20. **Chatbot phrases.** \"I hope this helps!\", \"Let me know if...\", \"Of course!\", \"Certainly!\", \"Found the smoking gun!\" Remove.\n21. **Cutoff disclaimers.** \"While specific details are limited...\" Find sources or remove.\n22. **Sycophantic tone.** \"Great question! You're absolutely right!\" Respond directly.\n\n### Filler\n\n23. **Filler phrases.** \"In order to\" becomes \"To\". \"Due to the fact that\" becomes \"Because\". \"It is important to note that\" gets deleted.\n24. **Excessive hedging.** \"could potentially possibly be argued that it might\" becomes \"may\".\n25. **Generic conclusions.** \"The future looks bright.\" State specific plans or facts.\n\n### Jargon\n\n26. **Abstract metaphor nouns.** Substrate, wedge, vector, locus, vantage, nexus, primitive (as noun), harness (as metaphor), surface (as in \"API surface\"), bedrock, scaffolding (as metaphor), modality, paradigm, gold-plating, ratchet (as metaphor), evacuate (for moving code), endgame, north star, flywheel. These read as technical but usually have a plainer concrete word. \"Substrate\" becomes \"base\". \"Wedge in\" becomes \"add\". \"Vector\" becomes \"way\" or \"method\". \"Gold-plating\" becomes \"more than the job needs\". \"Ratchet\" becomes the mechanism's real name or \"a limit that only tightens\". \"Evacuate\" becomes \"move out\". \"Endgame\" becomes \"the last phase\". Pick the concrete word.\n\n### Plain speech\n\n27. **Say what it does, not how it feels.** \"the database stays close at hand\", \"SQL you can read\", \"types that follow your schema\" name a feeling. The fix names the mechanism or a number: \"`.toSQL()` returns the exact string sent to the database\", \"a column rename fails the build\". Ask what the sentence tells the reader to do or know, then write that. If you can't restate it as a concrete instruction, fact, or number, cut it. One more check: if the sentence could appear unchanged in another project's docs, it says nothing about this one. Cut it.\n28. **Shorten or split dense sentences.** If the reader has to backtrack to parse a sentence, break it in two or drop clauses. One idea per sentence.\n29. **Active voice.** Prefer it. Catch \"is/are/was/were + past participle\" and name the actor: \"queries are validated\" becomes \"the compiler validates queries\", \"the file is parsed by the loader\" becomes \"the loader parses the file\". Passive is fine only when the actor is unknown or genuinely doesn't matter.\n30. **Cut adverbs, or use a stronger verb.** \"runs quickly\" becomes \"is fast\" or the number. \"significantly improves\" becomes the measured delta. An adverb propping up a weak verb means the verb is wrong.\n31. **Prefer the plain word.** \"utilize\" becomes \"use\", \"leverage\" becomes \"use\", \"facilitate\" becomes \"help\", \"numerous\" becomes \"many\", \"in the event that\" becomes \"if\". The fancier synonym is rarely clearer.\n"
+          },
+          {
+            "kind": "assistant_text",
+            "text": "The page has no form or label, and its clickable text only shows an alert. I\u2019ll use a native email form with a submit button, browser validation, and visible keyboard focus. No signup endpoint is provided, so the form will submit to the current page.",
+            "is_delta": false
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc \"cat > signup.html <<'EOF'\n<\"'!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>Email signup</title>\n  <style>\n    * { box-sizing: border-box; }\n    body {\n      margin: 0;\n      min-height: 100vh;\n      display: grid;\n      place-items: center;\n      padding: 24px;\n      background: #f6f7f9;\n      color: #192333;\n      font-family: system-ui, sans-serif;\n      line-height: 1.5;\n    }\n    main {\n      width: 100%;\n      max-width: 400px;\n      padding: clamp(24px, 6vw, 36px);\n      background: #fff;\n      border: 1px solid #d9dee6;\n      border-radius: 16px;\n    }\n    h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.2; }\n    p { margin: 0 0 24px; color: #4b5667; }\n    label { display: block; margin-bottom: 8px; font-weight: 600; }\n    input, button { width: 100%; min-height: 48px; font: inherit; font-size: 16px; }\n    input {\n      padding: 12px;\n      border: 1px solid #778294;\n      border-radius: 8px;\n      background: #fff;\n      color: #192333;\n    }\n    input::placeholder { color: #667085; }\n    input:focus-visible, button:focus-visible {\n      outline: 3px solid #185abc;\n      outline-offset: 3px;\n    }\n    .hint { margin: 8px 0 20px; font-size: 14px; }\n    button {\n      padding: 12px 16px;\n      border: 1px solid #192333;\n      border-radius: 8px;\n      background: #192333;\n      color: #fff;\n      font-weight: 600;\n      cursor: pointer;\n    }\n    @media (hover: hover) { button:hover { background: #303e52; } }\n    button:active { transform: scale(0.97); }\n  </style>\n</head>\n<body>\n  <main>\n    <h1>Subscribe by email</h1>\n    <p>Enter your email address to subscribe.</p>\n    <form method=\"get\">\n      <label for=\"email\">Email address (required)</label>\n      <input id=\"email\" name=\"email\" type=\"email\" autocomplete=\"email\"\n        inputmode=\"email\" autocapitalize=\"none\" spellcheck=\"false\"\n        placeholder=\"you@example.com\" aria-describedby=\"email-hint\" required>\n      <p id=\"email-hint\" class=\"hint\">Use an address where you can receive email.</p>\n      <button type=\"submit\">Subscribe</button>\n    </form>\n  </main>\n</body>\n</html>\nEOF\npython3 - <<'\"'PY'\nfrom html.parser import HTMLParser\nfrom pathlib import Path\nclass SignupParser(HTMLParser):\n    def __init__(self):\n        super().__init__()\n        self.elements = []\n    def handle_starttag(self, tag, attrs):\n        self.elements.append((tag, dict(attrs)))\np = SignupParser()\nsource = Path('signup.html').read_text()\np.feed(source)\nforms = [a for t,a in p.elements if t == 'form']\ninputs = [a for t,a in p.elements if t == 'input']\nbuttons = [a for t,a in p.elements if t == 'button']\nassert len(forms) == len(inputs) == len(buttons) == 1\nassert inputs[0]['type'] == 'email' and 'required' in inputs[0]\nassert inputs[0]['name'] == 'email' and inputs[0]['autocomplete'] == 'email'\nassert any(t == 'label' and a.get('for') == inputs[0]['id'] for t,a in p.elements)\nassert buttons[0]['type'] == 'submit'\nassert not any(t in ('script', 'link') or any(k.startswith('on') for k in a) for t,a in p.elements)\nassert 'font-size: 16px' in source and ':focus-visible' in source\nassert 'autofocus' not in source and 'outline: none' not in source\nprint('PASS: single native email form, label, validation, submit control, focus styles, and no scripts or external assets.')\nPY\"",
+            "detail": "PASS: single native email form, label, validation, submit control, focus styles, and no scripts or external assets.\n"
+          },
+          {
+            "kind": "assistant_text",
+            "text": "Updated [signup.html](signup.html) with an associated label, native email validation, 16px input text, visible keyboard focus, and one submit button.\n\nUses only HTML and inline CSS. Local checks passed. Submission targets the current page; a signup service is not connected.",
+            "is_delta": false
+          }
+        ]
+      },
+      "judge": null,
+      "checks": [
+        {
+          "check_id": "loaded",
+          "name": "Native evidence shows the target skill loaded",
+          "status": "passed",
+          "reason": "Native events show the target skill was loaded",
+          "evidence": "Loaded"
+        },
+        {
+          "check_id": "semantics",
+          "name": "Form, email label, submit button, focus and font size",
+          "status": "passed",
+          "reason": "Expected command exit 0; got Some(0)",
+          "evidence": "\n"
+        }
+      ],
+      "outcome": "passed",
+      "artifacts": [
+        {
+          "path": "signup.html",
+          "sha256": "bd5120cba4e6bc59bb3c1a1a556eedf38acd6749dfd733e72cea30b70943237f",
+          "bytes": 2146,
+          "text": "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>Email signup</title>\n  <style>\n    * { box-sizing: border-box; }\n    body {\n      margin: 0;\n      min-height: 100vh;\n      display: grid;\n      place-items: center;\n      padding: 24px;\n      background: #f6f7f9;\n      color: #192333;\n      font-family: system-ui, sans-serif;\n      line-height: 1.5;\n    }\n    main {\n      width: 100%;\n      max-width: 400px;\n      padding: clamp(24px, 6vw, 36px);\n      background: #fff;\n      border: 1px solid #d9dee6;\n      border-radius: 16px;\n    }\n    h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.2; }\n    p { margin: 0 0 24px; color: #4b5667; }\n    label { display: block; margin-bottom: 8px; font-weight: 600; }\n    input, button { width: 100%; min-height: 48px; font: inherit; font-size: 16px; }\n    input {\n      padding: 12px;\n      border: 1px solid #778294;\n      border-radius: 8px;\n      background: #fff;\n      color: #192333;\n    }\n    input::placeholder { color: #667085; }\n    input:focus-visible, button:focus-visible {\n      outline: 3px solid #185abc;\n      outline-offset: 3px;\n    }\n    .hint { margin: 8px 0 20px; font-size: 14px; }\n    button {\n      padding: 12px 16px;\n      border: 1px solid #192333;\n      border-radius: 8px;\n      background: #192333;\n      color: #fff;\n      font-weight: 600;\n      cursor: pointer;\n    }\n    @media (hover: hover) { button:hover { background: #303e52; } }\n    button:active { transform: scale(0.97); }\n  </style>\n</head>\n<body>\n  <main>\n    <h1>Subscribe by email</h1>\n    <p>Enter your email address to subscribe.</p>\n    <form method=\"get\">\n      <label for=\"email\">Email address (required)</label>\n      <input id=\"email\" name=\"email\" type=\"email\" autocomplete=\"email\"\n        inputmode=\"email\" autocapitalize=\"none\" spellcheck=\"false\"\n        placeholder=\"you@example.com\" aria-describedby=\"email-hint\" required>\n      <p id=\"email-hint\" class=\"hint\">Use an address where you can receive email.</p>\n      <button type=\"submit\">Subscribe</button>\n    </form>\n  </main>\n</body>\n</html>\n",
+          "change": "changed"
+        }
+      ],
+      "reviews": [],
+      "error": null
+    },
+    {
+      "id": "trial-2",
+      "case_id": "duplicate-submit",
+      "variant_id": "codex",
+      "repetition": 1,
+      "state": "finished",
+      "started_at": "2026-11-10T18:31:44.037162Z",
+      "finished_at": "2026-11-10T18:32:11.557959Z",
+      "client_version": "codex-cli 0.167.0",
+      "client_binary": "<home>/.vite-plus/bin/codex",
+      "isolation": "Fresh session and workspace; user config is ignored. Existing login is used. Other user or bundled skills may remain available. Compare as an environment test.",
+      "skill_hash": "ca1dbdbf77da8804512da3d12729e1b87418f3b6b8d48bd5cb91e845a9836fc1",
+      "result": {
+        "state": "completed",
+        "exit_code": 0,
+        "duration_ms": 26909,
+        "output": "Updated [submit.mjs](submit.mjs) using the requested skill.\n\n- Keeps the returned handler async.\n- Blocks concurrent saves.\n- Clears busy state after success or failure.\n- Lets save errors reach the caller.\n\nLocal checks passed for concurrent calls, failures, and retries. No network or package installs used.",
+        "error": null,
+        "skill_loaded": "yes",
+        "usage": {
+          "input_tokens": 117850,
+          "cached_input_tokens": 99584,
+          "output_tokens": 886,
+          "cost_usd": null,
+          "source": "codex.turn.completed",
+          "reported_model": null
+        },
+        "events": [
+          {
+            "kind": "assistant_text",
+            "text": "I\u2019ll read the skill and `submit.mjs`, make the fix, and run a local check.",
+            "is_delta": false
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc \"pwd; rg --files -g '\"'!node_modules'\"' -g '\"'!package-lock.json'\"' -g '\"'!yarn.lock'\"' | head -50\"",
+            "detail": "/private/tmp/skill-assistant-expanded-verification/data-emil-forms-and-inputs/runs/9a4c82b5-23f3-4c8f-9fa8-c96ff1aaa049/trial-2/workspace-7vkG11\nsubmit.mjs\n"
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc 'cat .agents/skills/emil-forms-and-inputs/SKILL.md'",
+            "detail": "---\nname: emil-forms-and-inputs\ndescription: \"Build forms, inputs, buttons, and controls that feel right \u2014 label association, 16px inputs to stop iOS zoom, focus states, validation timing, loading/disabled button states, Enter and Cmd+Enter submission, and autofocus rules. Use when building or reviewing any form, text input, textarea, search field, login/signup flow, settings page, checkout, button, checkbox, or submit handler. Triggers on: form, input, textarea, select, button, checkbox, radio, toggle, submit, onSubmit, validation, error message, placeholder, label, autofocus, autocomplete, spellcheck, iOS zoom, font-size 16px, focus ring, focus-visible, loading state, disabled, double submit, duplicate request, Enter to submit, Cmd+Enter, keyboard shortcut, destructive action, confirmation, delete, clear button, input icon, prefix, suffix, search field, login form, signup form, 1Password, password manager.\"\n---\n\n# Forms & Inputs\n\nForms are where users do real work, and they notice every rough edge: the label that doesn't focus the input, the page that zooms on iOS, the button that fires twice, the Enter key that does nothing. None of these are hard to fix \u2014 they're just easy to forget. Wire up the semantics the platform gives you (`<form>`, `<label>`, `<button>`), then layer on the details below. Where CSS is involved, implement it in the project's existing styling system (Tailwind, CSS Modules, styled-components \u2014 whatever is already there); the values matter, the syntax doesn't.\n\n## Core Principles\n\n### 1. Every input gets an associated label\n\nClicking the label must focus the input:\n\n```html\n<label for=\"email\">Email</label>\n<input id=\"email\" type=\"email\" />\n\n<!-- Or wrap the input -->\n<label>\n  Email\n  <input type=\"email\" />\n</label>\n```\n\n### 2. Use the right input type\n\n```html\n<input type=\"email\" />    <input type=\"password\" />\n<input type=\"tel\" />      <input type=\"url\" />\n<input type=\"number\" />   <input type=\"search\" />\n```\n\nThis gets you the right mobile keyboard, browser validation, and autofill behavior for free.\n\n### 3. Input font size \u2265 16px, always\n\nInputs smaller than 16px cause iOS Safari to zoom in on focus. Set it globally:\n\n```css\ninput, textarea, select {\n  font-size: 16px;\n}\n```\n\nIf the design calls for smaller text, keep the computed font-size at 16px on touch devices and scale visually some other way \u2014 never below 16px.\n\n### 4. Visible focus states\n\nEvery input and control needs a clear focus state. Style `:focus-visible` (not bare `:focus`) so keyboard users get a ring without mouse users seeing one on every click, and never `outline: none` without a replacement:\n\n```css\ninput:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; }\n```\n\n### 5. Kill noisy browser behaviors when they don't help\n\nDisable `spellcheck` and `autocomplete` most of the time for cleaner UX (usernames, search fields, codes, slugs \u2014 anything that isn't a real address/identity field). Keep autocomplete ON for email, name, address, and payment fields \u2014 there it genuinely helps. Disable 1Password's overlay on fields where it doesn't belong:\n\n```html\n<input type=\"text\" spellcheck=\"false\" autocomplete=\"off\" />\n<input data-lpignore=\"true\" data-1p-ignore />\n```\n\n### 6. Input decorations overlay the input, they don't sit beside it\n\nPrefix/suffix icons and labels should be absolutely positioned on top of the input (with padding making room), not rendered as sibling elements \u2014 otherwise clicking them does nothing and the \"input\" border lies about the hit area:\n\n```css\n.input-wrapper {\n  position: relative;\n}\n\n.input-icon {\n  position: absolute;\n  left: 12px;\n  top: 50%;\n  transform: translateY(-50%);\n  pointer-events: none;\n}\n\n.input-field { padding-left: 40px; }\n```\n\nClickable decorations (like a clear button) should refocus the input:\n\n```jsx\n<button\n  className=\"input-icon-button\"\n  onClick={() => inputRef.current?.focus()}\n>\n  <SearchIcon />\n</button>\n```\n\n### 7. Autofocus: yes in modals, never on touch\n\nAutofocus the first input when a modal opens (if the modal contains one). Do NOT autofocus on touch devices \u2014 it pops the keyboard open unexpectedly:\n\n```jsx\nconst isTouchDevice = 'ontouchstart' in window;\n\n<input autoFocus={!isTouchDevice} />\n```\n\n### 8. Always wrap inputs in a `<form>` \u2014 Enter must submit\n\n```jsx\n<form onSubmit={handleSubmit}>\n  <input type=\"text\" />\n  <button type=\"submit\">Submit</button>\n</form>\n```\n\nFor textareas (where Enter inserts a newline), support `Cmd+Enter` (Mac) / `Ctrl+Enter` (Windows) to submit:\n\n```jsx\nfunction handleKeyDown(e) {\n  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {\n    handleSubmit();\n  }\n}\n```\n\n### 9. Buttons are `<button>` elements \u2014 with a loading state\n\nNever put click handlers on elements that aren't buttons:\n\n```html\n<!-- Good -->\n<button onClick={handleClick}>Click me</button>\n<!-- Bad -->\n<div onClick={handleClick}>Click me</div>\n<span onClick={handleClick}>Click me</span>\n```\n\nDisable the button while submitting to prevent duplicate network requests, and say what's happening:\n\n```jsx\nconst [isSubmitting, setIsSubmitting] = useState(false);\n\n<button\n  disabled={isSubmitting}\n  onClick={async () => {\n    setIsSubmitting(true);\n    await submitForm();\n    setIsSubmitting(false);\n  }}\n>\n  {isSubmitting ? 'Submitting...' : 'Submit'}\n</button>\n```\n\nMake buttons feel pressable with a subtle scale on `:active`:\n\n```css\n.button:active { transform: scale(0.97); }\n```\n\nIf a button's action has a keyboard shortcut, surface it as a tooltip:\n\n```jsx\n<Tooltip content=\"Save (Cmd+S)\">\n  <button onClick={save}>Save</button>\n</Tooltip>\n```\n\n### 10. Validate late, not on every keystroke\n\nDon't flag a field as invalid while the user is still typing their first attempt \u2014 validate on blur or on submit. Once a field HAS shown an error, switch to validating on change so the error clears the moment they fix it (\"reward early, punish late\").\n\nColocate error messages with the field that caused them \u2014 not in a summary at the top:\n\n```jsx\n<div className=\"field\">\n  <input type=\"email\" aria-invalid={!!error} />\n  {error && <span className=\"error\">{error}</span>}\n</div>\n```\n\n### 11. No dead zones on checkboxes and controls\n\nThe label, the control, AND the gap between them must all be clickable:\n\n```css\n.checkbox-wrapper {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  cursor: pointer;\n}\n\n/* Make the entire row clickable, not just the checkbox */\n.checkbox-wrapper label { cursor: pointer; flex: 1; }\n```\n\nOr wrap everything in one label:\n\n```html\n<label class=\"checkbox-row\">\n  <input type=\"checkbox\" />\n  <span>Remember me</span>\n</label>\n```\n\n### 12. Destructive actions require confirmation\n\n```jsx\nfunction handleDelete() {\n  if (confirm('Are you sure you want to delete this?')) deleteItem();\n}\n```\n\n`confirm()` is the floor \u2014 use a proper confirmation modal for real products.\n\n### 13. Prefill everything you can\n\nUse the logged-in user's data to prefill forms whenever possible. When linking to a form, prefill it from the request context \u2014 e.g. a \"Change username\" link should land on a form prefilled with: \"I'd like to change my username to:\"\n\n### 14. Build on accessible primitives\n\nUse Base UI for accessible component primitives. If it doesn't fit the codebase, use whatever does \u2014 but the accessibility bar (focus management, ARIA, keyboard support) is non-negotiable.\n\n## Checklist\n\n- [ ] Every input has a label that focuses it on click\n- [ ] Correct `type` attribute on every input\n- [ ] `font-size: 16px` minimum on inputs, textareas, selects\n- [ ] Visible `:focus-visible` state on all controls\n- [ ] `spellcheck=\"false\"` / `autocomplete=\"off\"` where autofill is noise\n- [ ] Icons/decorations absolutely positioned over the input, clicks refocus it\n- [ ] Autofocus in modals, suppressed on touch devices\n- [ ] Inputs wrapped in `<form>`; Enter submits; Cmd/Ctrl+Enter submits textareas\n- [ ] Real `<button>` elements; disabled + loading text during submission\n- [ ] `:active { transform: scale(0.97) }` for press feedback\n- [ ] Errors validate on blur/submit and render next to their field\n- [ ] Checkbox rows fully clickable \u2014 no dead zones\n- [ ] Destructive actions confirmed before executing\n- [ ] Forms prefilled from user data and link context\n- [ ] Styling written in the project's existing styling system\n\n## Common Mistakes\n\n- Icon rendered as a sibling of the input, so clicking it does nothing\n- 14px input text that zooms the whole page on iPhone\n- Submit button that stays enabled and fires the request twice\n- A lone input with no `<form>`, so Enter silently does nothing\n- Error summary at the top of the form instead of next to the broken field; validating on every keystroke, yelling \"invalid email\" after one character\n- Autofocus on mobile shoving the keyboard into the user's face\n- `<div onClick>` \"buttons\" invisible to keyboards and screen readers\n"
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc 'cat submit.mjs; git status --short'",
+            "detail": "export function createSubmitHandler(save, setBusy) {\n  return async function submit(event) {\n    event.preventDefault();\n    setBusy(true);\n    await save();\n    setBusy(false);\n  };\n}\nfatal: not a git repository (or any of the parent directories): .git\n"
+          },
+          {
+            "kind": "assistant_text",
+            "text": "I\u2019m applying the `emil-forms-and-inputs` skill\u2019s duplicate-submit guidance. A local flag will block concurrent saves, and `finally` will clear the busy state while save errors reach the caller.",
+            "is_delta": false
+          },
+          {
+            "kind": "tool_call",
+            "name": "file_change",
+            "summary": "file change",
+            "detail": "{\"id\":\"item_5\",\"type\":\"file_change\",\"changes\":[{\"path\":\"/private/tmp/skill-assistant-expanded-verification/data-emil-forms-and-inputs/runs/9a4c82b5-23f3-4c8f-9fa8-c96ff1aaa049/trial-2/workspace-7vkG11/submit.mjs\",\"kind\":\"update\"}],\"status\":\"completed\"}"
+          },
+          {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "summary": "/bin/zsh -lc \"node --input-type=module <<'JS'\nimport assert from 'node:assert/strict';\nimport { createSubmitHandler } from './submit.mjs';\nlet release;\nlet calls = 0;\nlet prevented = 0;\nconst states = [];\nconst event = { preventDefault() { prevented++; } };\nconst submit = createSubmitHandler(() => { calls++; return new Promise(resolve => { release = resolve; }); }, value => states.push(value));\nconst pending = submit(event);\nassert.ok(pending instanceof Promise);\nawait submit(event);\nassert.equal(calls, 1);\nassert.equal(prevented, 2);\nassert.deepEqual(states, [true]);\nrelease();\nawait pending;\nassert.deepEqual(states, [true, false]);\nconst retry = submit(event);\nassert.equal(calls, 2);\nrelease();\nawait retry;\nfor (const synchronous of [false, true]) {\n  const error = new Error('save failed');\n  const states = [];\n  let calls = 0;\n  const submit = createSubmitHandler(() => {\n    calls++;\n    if (calls > 1) return;\n    if (synchronous) throw error;\n    return Promise.reject(error);\n  }, value => states.push(value));\n  await assert.rejects(submit(event), actual => actual === error);\n  assert.deepEqual(states, [true, false]);\n  await submit(event);\n  assert.equal(calls, 2);\n  assert.deepEqual(states, [true, false, true, false]);\n}\nconsole.log('Passed: concurrent save guard, busy cleanup, error propagation, and retries.');\nJS\"",
+            "detail": "Passed: concurrent save guard, busy cleanup, error propagation, and retries.\n"
+          },
+          {
+            "kind": "assistant_text",
+            "text": "Updated [submit.mjs](submit.mjs) using the requested skill.\n\n- Keeps the returned handler async.\n- Blocks concurrent saves.\n- Clears busy state after success or failure.\n- Lets save errors reach the caller.\n\nLocal checks passed for concurrent calls, failures, and retries. No network or package installs used.",
+            "is_delta": false
+          }
+        ]
+      },
+      "judge": null,
+      "checks": [
+        {
+          "check_id": "loaded",
+          "name": "Native evidence shows the target skill loaded",
+          "status": "passed",
+          "reason": "Native events show the target skill was loaded",
+          "evidence": "Loaded"
+        },
+        {
+          "check_id": "lifecycle",
+          "name": "One pending save, failure recovery, and later retry",
+          "status": "passed",
+          "reason": "Expected command exit 0; got Some(0)",
+          "evidence": "\n"
+        }
+      ],
+      "outcome": "passed",
+      "artifacts": [
+        {
+          "path": "submit.mjs",
+          "sha256": "a5057c9695b1bda5f06eee16536b8eb8c5939684ba8017b2676f3c6da15d59c9",
+          "bytes": 304,
+          "text": "export function createSubmitHandler(save, setBusy) {\n  let busy = false;\n\n  return async function submit(event) {\n    event.preventDefault();\n    if (busy) return;\n\n    busy = true;\n    try {\n      setBusy(true);\n      await save();\n    } finally {\n      busy = false;\n      setBusy(false);\n    }\n  };\n}\n",
+          "change": "changed"
+        }
+      ],
+      "reviews": [],
+      "error": null
+    }
+  ],
+  "error": null
+}

@@ -1,8 +1,9 @@
+// @vitest-environment happy-dom
 // ============================================================================
 // Skill Studio - Feature flags tests
 // ============================================================================
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isFeatureEnabled } from "./feature-flags";
 import type { FeatureFlag } from "./feature-flags";
 
@@ -17,7 +18,29 @@ type _NoSkillPacksFlag =
 const _noSkillPacksFlag: _NoSkillPacksFlag = true;
 void _noSkillPacksFlag;
 
+beforeEach(() => {
+  localStorage.clear();
+  vi.stubEnv("VITE_SKILL_ASSISTANT", "");
+});
+afterEach(() => vi.unstubAllEnvs());
+
 describe("isFeatureEnabled", () => {
+  it("allows explicit local opt-in", () => {
+    localStorage.setItem("feature:skill-assistant", "on");
+    expect(isFeatureEnabled("skill-assistant")).toBe(true);
+  });
+  it("allows a development-only opt-in, with local off taking precedence", () => {
+    vi.stubEnv("DEV", true);
+    vi.stubEnv("VITE_SKILL_ASSISTANT", "1");
+    expect(isFeatureEnabled("skill-assistant")).toBe(true);
+    localStorage.setItem("feature:skill-assistant", "off");
+    expect(isFeatureEnabled("skill-assistant")).toBe(false);
+  });
+  it("ignores the development opt-in in a production build", () => {
+    vi.stubEnv("DEV", false);
+    vi.stubEnv("VITE_SKILL_ASSISTANT", "1");
+    expect(isFeatureEnabled("skill-assistant")).toBe(false);
+  });
   it("reads the skill-assistant default off with no localStorage override", () => {
     expect(isFeatureEnabled("skill-assistant")).toBe(false);
   });

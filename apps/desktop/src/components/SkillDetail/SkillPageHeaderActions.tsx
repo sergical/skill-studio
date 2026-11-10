@@ -7,10 +7,9 @@
 // ============================================================================
 
 import type { ReactNode, RefObject } from "react";
-import { GitFork, MoreHorizontal, PanelRight } from "lucide-react";
+import { GitFork, MoreHorizontal, Sparkles } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import { MenuControl, MenuItem, MenuSeparator } from "../ui/MenuControl";
-import { SKILL_ASSISTANT_DRAWER_ID } from "./SkillAssistantDrawer";
 import type { SkillPageAction, SkillPageActions } from "./skill-page-actions";
 
 // The header bar is 40px tall with gap-2 between controls: the hit area
@@ -39,7 +38,7 @@ interface SkillPageHeaderActionsProps {
   assistantEnabled: boolean;
   isAssistantOpen: boolean;
   onOpenAssistant: () => void;
-  /** So the drawer can return focus here when it closes. */
+  /** Returns focus here from the Assistant workspace. */
   assistantTriggerRef: RefObject<HTMLButtonElement | null>;
 }
 
@@ -74,10 +73,10 @@ export function SkillPageHeaderActions({
           className={`${SECONDARY_BUTTON_CLASS} aria-expanded:border-border-focus aria-expanded:text-accent`}
           onClick={onOpenAssistant}
           aria-expanded={isAssistantOpen}
-          aria-controls={isAssistantOpen ? SKILL_ASSISTANT_DRAWER_ID : undefined}
+          aria-controls={isAssistantOpen ? "skill-assistant-workspace" : undefined}
           aria-label="Assistant"
         >
-          <PanelRight size={16} />
+          <Sparkles size={16} aria-hidden />
           <span>Assistant</span>
         </Button>
       )}

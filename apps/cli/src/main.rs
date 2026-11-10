@@ -92,6 +92,8 @@ struct Cli {
 // follow.
 #[derive(Subcommand)]
 enum Command {
+    /// Test skills through installed clients with saved cases and evidence.
+    Test(skill_studio_eval::cli::EvalArgs),
     /// List every skill installed for your agents.
     Scan {
         #[command(flatten)]
@@ -697,6 +699,7 @@ fn main() -> ExitCode {
             time,
         ),
         Command::Schema { out } => output::write_schemas(out),
+        Command::Test(args) => skill_studio_eval::cli::entry(args),
         Command::Health { timing_log, json } => run_health(timing_log, json),
         Command::Watch { scope, since, json } => run_watch(&scope, since, json, time),
     }

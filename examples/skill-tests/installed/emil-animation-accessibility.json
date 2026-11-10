@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "id": "emil-animation-accessibility-acceptance",
+  "name": "Installed skill: emil-animation-accessibility",
+  "skill_path": "emil-animation-accessibility",
+  "cases": [
+    {
+      "id": "modal",
+      "name": "Keep meaning without movement",
+      "prompt": "Update modal.css using this skill. Preserve the normal opening animation. Add reduced-motion treatment that retains a visible entrance without movement. Disable the purely decorative idle loop under reduced motion. Work only in this task folder. Do not use the network or install packages.",
+      "mode": "explicit",
+      "files": [
+        {
+          "path": "modal.css",
+          "content": "@keyframes enter { from { opacity: 0; transform: translateY(24px) scale(.9); } to { opacity: 1; transform: translateY(0) scale(1); } }\n@keyframes float { to { transform: translateY(-12px); } }\n.modal { animation: enter 200ms ease-out; }\n.decoration { animation: float 2s ease-in-out infinite alternate; }\n"
+        }
+      ],
+      "checks": [
+        {
+          "id": "loaded",
+          "name": "Native evidence shows the target skill loaded",
+          "assertion": {
+            "kind": "skill_loaded",
+            "expected": true
+          }
+        },
+        {
+          "id": "variants",
+          "name": "Reduced-motion media query, fade and stopped decorative motion",
+          "assertion": {
+            "kind": "command",
+            "program": "node",
+            "args": [
+              "--input-type=module",
+              "-e",
+              "import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs'; const s=readFileSync('modal.css','utf8'); assert.match(s,/@media\\s*\\(prefers-reduced-motion:\\s*reduce\\)/); assert.match(s,/@keyframes\\s+enter/); assert.match(s,/translateY/); const reduced=s.slice(s.indexOf('@media')); assert.match(reduced,/\\.decoration\\s*\\{[^}]*animation(?:-name)?\\s*:\\s*none/); const modal=reduced.match(/\\.modal\\s*\\{([^}]+)\\}/)?.[1]; assert.ok(modal); const name=modal.match(/animation(?:-name)?\\s*:\\s*([\\w-]+)/)?.[1]; assert.ok(name && name!=='none' && name!=='enter'); const start=s.indexOf('@keyframes '+name); assert.ok(start>=0); const frames=s.slice(start,s.indexOf('}',s.indexOf('}',start)+1)+1); assert.match(frames,/opacity/); assert.doesNotMatch(frames,/transform|translate|scale/);"
+            ],
+            "expected_exit": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "scroll",
+      "name": "Respect live reduced-motion preference",
+      "prompt": "Update scroll.mjs using this skill. Keep scrollToSection(element). Respect the current motion preference on each call without removing scrolling or changing the destination. Work only in this task folder. Do not use the network or install packages.",
+      "mode": "explicit",
+      "files": [
+        {
+          "path": "scroll.mjs",
+          "content": "export function scrollToSection(element) {\n  element.scrollIntoView({behavior: 'smooth', block: 'start'});\n}\n"
+        }
+      ],
+      "checks": [
+        {
+          "id": "loaded",
+          "name": "Native evidence shows the target skill loaded",
+          "assertion": {
+            "kind": "skill_loaded",
+            "expected": true
+          }
+        },
+        {
+          "id": "preference",
+          "name": "Smooth only without reduced motion; preference can change",
+          "assertion": {
+            "kind": "command",
+            "program": "node",
+            "args": [
+              "--input-type=module",
+              "-e",
+              "import assert from 'node:assert/strict'; import {scrollToSection} from './scroll.mjs'; let reduce=true; const queries=[]; globalThis.matchMedia=q=>{queries.push(q);return {matches:q.includes('no-preference')?!reduce:reduce}}; globalThis.window=globalThis; const seen=[]; const element={scrollIntoView:options=>seen.push(options)}; scrollToSection(element); assert.ok(['auto','instant'].includes(seen[0].behavior)); assert.equal(seen[0].block,'start'); reduce=false; scrollToSection(element); assert.equal(seen[1].behavior,'smooth'); reduce=true; scrollToSection(element); assert.ok(['auto','instant'].includes(seen[2].behavior)); assert.ok(queries.every(q=>q.includes('prefers-reduced-motion')));"
+            ],
+            "expected_exit": 0
+          }
+        }
+      ]
+    }
+  ],
+  "variants": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "client": "codex",
+      "model": null,
+      "skill": {
+        "kind": "candidate"
+      }
+    }
+  ],
+  "repetitions": 1,
+  "timeout_seconds": 180,
+  "judge": null
+}
