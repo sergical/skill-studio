@@ -42,7 +42,7 @@ pub async fn split_skill(
         let harnesses = parse_harnesses(&harnesses)?;
         let names = skill_names_for_deployments([&deployment_id]);
         let rt = super::core_runtime::build_runtime_write()?;
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = ops::split(
             &rt,
             &ctx,
@@ -117,7 +117,7 @@ pub async fn turn_off_for_agent(
         let request = agent_off_request(&target, &agent)?;
         let names = skill_names_for_deployments([&request.deployment_id]);
         let rt = super::core_runtime::build_runtime_write()?;
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = skill_studio_core::ops_agent_off::turn_off_for_agent(&rt, &ctx, &request);
         let envelope =
             ResultEnvelope::from_result(Operation::TurnOffForAgent, &rt.scope, &ctx, result);
@@ -139,7 +139,7 @@ pub async fn turn_off_check(
     crate::timing_log::time_command_blocking(&app, "turn_off_check", move || {
         let request = agent_off_request(&target, &agent)?;
         let rt = super::core_runtime::build_runtime_write()?;
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         skill_studio_core::ops_agent_off::turn_off_check(&rt, &ctx, &request).map_err(|e| e.message)
     })
     .await

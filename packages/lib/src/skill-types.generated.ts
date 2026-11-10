@@ -127,6 +127,7 @@ export type AgentIdentity = string;
  * One repair `fix_skill` applied.
  */
 export type FixApplied = {
+  kind: "frontmatter_repair";
   /**
    * Deployment written.
    */
@@ -135,7 +136,6 @@ export type FixApplied = {
    * History event.
    */
   event_id: string;
-  kind: "frontmatter_repair";
 };
 /**
  * Lexical skill name: the directory name that holds `SKILL.md`.
@@ -376,8 +376,8 @@ export interface Deployment {
         kind: "canonical";
       }
     | {
-        deployment_id: string;
         kind: "linked-to";
+        deployment_id: string;
       }
     | {
         kind: "independent";

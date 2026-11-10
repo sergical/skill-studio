@@ -175,7 +175,7 @@ pub fn run_op_envelope<T: Outcome + serde::Serialize>(
     with_history: bool,
     call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
 ) -> ResultEnvelope<T> {
-    let correlation_id = CorrelationId(ulid::Ulid::new().to_string());
+    let correlation_id = CorrelationId(ulid::Ulid::generate().to_string());
     match build_runtime(with_history) {
         Ok(rt) => {
             let ctx = OpContext::uncancellable(correlation_id);
