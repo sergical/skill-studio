@@ -1161,35 +1161,3 @@ async fn server_info_names_skill_studio() {
     assert_eq!(server.version, env!("CARGO_PKG_VERSION"));
     std::fs::remove_dir_all(&home).ok();
 }
-
-#[tokio::test]
-async fn mcp_scan_over_stdio_releases_its_lease_without_sweeping_unrelated_stale_files() {
-    let home = tempfile::tempdir().unwrap();
-    let lease_root = home.path().join(".history/leases");
-    std::fs::create_dir_all(&lease_root).unwrap();
-    let stale = lease_root.join("abandoned.lock");
-    std::fs::write(&stale, "4294967295|0").unwrap();
-    let home_arg = home.path().to_str().unwrap();
-    let env = [
-        ("SKILL_STUDIO_FIXTURE", home_arg),
-        ("HOME", home_arg),
-        ("SKILL_STUDIO_HOME", home_arg),
-        ("SKILL_STUDIO_TELEMETRY", "0"),
-    ];
-    let (client, _) = connect(&env).await;
-    let result = call_scan(&client, None).await;
-    client.cancel().await.expect("close the MCP session");
-    assert_eq!(result["status"], "ok", "{result}");
-    assert!(stale.exists(), "an MCP read must not sweep unrelated files");
-    assert!(
-        std::fs::read_dir(&lease_root)
-            .unwrap()
-            .filter(|entry| entry.as_ref().unwrap().path() != stale)
-            .all(|entry| entry
-                .unwrap()
-                .path()
-                .extension()
-                .is_none_or(|extension| extension != "lock")),
-        "MCP scan left a released root lease file"
-    );
-}

@@ -1190,34 +1190,3 @@ fn split_writes_the_chosen_copy_and_drops_the_rest_or_names_the_envelope() {
         .symlink_metadata()
         .is_err());
 }
-
-#[test]
-fn cli_scan_releases_its_lease_without_sweeping_unrelated_stale_files() {
-    let home = tempfile::tempdir().unwrap();
-    let lease_root = home.path().join(".history/leases");
-    std::fs::create_dir_all(&lease_root).unwrap();
-    let stale = lease_root.join("abandoned.lock");
-    std::fs::write(&stale, "4294967295|0").unwrap();
-    let home_arg = home.path().to_str().unwrap();
-    let result = run_with_env(
-        &["scan", "--fixture", home_arg, "--json"],
-        &[
-            ("HOME", home_arg),
-            ("SKILL_STUDIO_HOME", home_arg),
-            ("SKILL_STUDIO_TELEMETRY", "0"),
-        ],
-    );
-    assert_eq!(result.status, 0, "{}", result.json);
-    assert!(stale.exists(), "a CLI read must not sweep unrelated files");
-    assert!(
-        std::fs::read_dir(&lease_root)
-            .unwrap()
-            .filter(|entry| entry.as_ref().unwrap().path() != stale)
-            .all(|entry| entry
-                .unwrap()
-                .path()
-                .extension()
-                .is_none_or(|extension| extension != "lock")),
-        "CLI scan left a released root lease file"
-    );
-}

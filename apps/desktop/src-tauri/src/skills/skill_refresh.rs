@@ -115,8 +115,8 @@ pub struct WatchPath {
 #[derive(Clone)]
 pub struct SkillRefreshState {
     pub snapshot: Arc<RwLock<Option<SkillSnapshot>>>,
-    /// Held for the duration of a rebuild so the background loop and the
-    /// synchronous command-triggered rebuilds never run concurrently.
+    /// Serializes skill-folder reads and snapshot publication. Invocation
+    /// indexing runs outside this mutex.
     rebuild_lock: Arc<Mutex<()>>,
     /// Something that can affect the skills list, project list, or plugin
     /// caches changed; the next rebuild should be a full one.
@@ -193,6 +193,15 @@ impl SkillRefreshState {
             cache_path: PathBuf::new(),
             runs_root: PathBuf::new(),
             update_check_path: PathBuf::new(),
+        }
+    }
+
+    pub(crate) fn fixture_with_paths(snapshot: SkillSnapshot, paths: BuildPaths<'_>) -> Self {
+        Self {
+            cache_path: paths.cache_path.to_path_buf(),
+            runs_root: paths.runs_root.to_path_buf(),
+            update_check_path: paths.update_check_path.to_path_buf(),
+            ..Self::fixture(snapshot)
         }
     }
 }
@@ -632,25 +641,32 @@ pub fn rebuild_snapshot_now(
     state: &SkillRefreshState,
 ) -> Result<SkillSnapshot, String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    rebuild_snapshot_at(&home, state, |built| {
+        app.emit(SNAPSHOT_EVENT, built)
+            .map_err(|error| format!("failed to emit {SNAPSHOT_EVENT}: {error}"))
+    })
+}
+
+pub(crate) fn rebuild_snapshot_at(
+    home: &Path,
+    state: &SkillRefreshState,
+    publish: impl FnOnce(&SkillSnapshot) -> Result<(), String>,
+) -> Result<SkillSnapshot, String> {
     let (scan_lease, _guard) = loop {
         let scan_lease =
-            acquire_rebuild_lease(&super::write_lease::WriteLease::default(), state, &home)?;
+            acquire_rebuild_lease(&super::write_lease::WriteLease::default(), state, home)?;
         if let Some(guards) = try_rebuild_lock(state, scan_lease)? {
             break guards;
         }
     };
 
-    let mut invocation_index = state
-        .invocation_index
-        .lock()
-        .map_err(|e| format!("invocation index lock poisoned: {e}"))?;
     // Captured once and threaded through stats/heatmap/scanned_at/mark_built_at
     // below, so a rebuild that straddles an hour boundary doesn't record the
     // new hour against cutoffs computed for the old one.
     let now = Utc::now();
-    let (mut built, report) = build_snapshot_releasing(
-        &home,
-        &mut invocation_index,
+    let (mut built, _) = build_snapshot_releasing(
+        home,
+        None,
         BuildPaths {
             cache_path: &state.cache_path,
             runs_root: &state.runs_root,
@@ -660,38 +676,23 @@ pub fn rebuild_snapshot_now(
         Some(scan_lease),
         || {},
     );
-    drop(invocation_index);
-
-    if report.incomplete {
-        state.invocations_dirty.store(true, Ordering::SeqCst);
-    }
-
-    if built.scan_partial {
-        let previous = state
-            .snapshot
-            .read()
-            .map_err(|e| format!("snapshot lock poisoned: {e}"))?
-            .clone();
-        if let Some(previous) = previous {
+    let previous = state
+        .snapshot
+        .read()
+        .map_err(|error| format!("snapshot lock poisoned: {error}"))?
+        .clone();
+    if let Some(previous) = previous {
+        if built.scan_partial {
             built = merge_partial_scan_snapshot(built, &previous);
         }
+        built.invocations = previous.invocations;
+        built.heatmap = previous.heatmap;
     }
+    state.invocations_dirty.store(true, Ordering::SeqCst);
 
-    let built = publish_skill_snapshot(app, state, built)?;
-    state.mark_built_at(now);
-    Ok(built)
-}
-
-/// Publish one snapshot while the caller holds `rebuild_lock`. This is the
-/// only place that assigns revisions or replaces the current projection.
-fn publish_skill_snapshot(
-    app: &AppHandle,
-    state: &SkillRefreshState,
-    built: SkillSnapshot,
-) -> Result<SkillSnapshot, String> {
     let built = store_skill_snapshot(state, built)?;
-    app.emit(SNAPSHOT_EVENT, &built)
-        .map_err(|e| format!("failed to emit {SNAPSHOT_EVENT}: {e}"))?;
+    publish(&built)?;
+    state.mark_built_at(now);
     Ok(built)
 }
 
@@ -1077,40 +1078,52 @@ fn sort_snapshot_skills(skills: &mut [InstalledSkill]) {
 /// case of "a transcript changed" so a burst of agent activity doesn't
 /// trigger a full directory rescan every few seconds.
 fn rebuild_invocations_only(app: &AppHandle, state: &SkillRefreshState) -> Result<(), String> {
-    let _guard = state
-        .rebuild_lock
-        .lock()
-        .map_err(|e| format!("rebuild lock poisoned: {e}"))?;
-
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    rebuild_invocations_at(
+        &home,
+        state,
+        || {},
+        |built| {
+            app.emit(SNAPSHOT_EVENT, built)
+                .map_err(|error| format!("failed to emit {SNAPSHOT_EVENT}: {error}"))
+        },
+    )
+}
 
-    // Read once, before taking the index lock: `known_skills` only exists if
-    // a full snapshot has already been built, and reusing it here (rather
-    // than rescanning skill directories) is what makes this path cheaper
-    // than `rebuild_snapshot_now`.
-    let known_skills: Option<BTreeSet<String>> = {
+pub(crate) fn rebuild_invocations_at(
+    home: &Path,
+    state: &SkillRefreshState,
+    before_indexing: impl FnOnce(),
+    publish: impl FnOnce(&SkillSnapshot) -> Result<(), String>,
+) -> Result<(), String> {
+    let (revision, known_skills): (u64, BTreeSet<String>) = {
         let guard = state
             .snapshot
             .read()
-            .map_err(|e| format!("snapshot lock poisoned: {e}"))?;
-        guard
-            .as_ref()
-            .map(|snapshot| snapshot.skills.iter().map(|s| s.name.clone()).collect())
+            .map_err(|error| format!("snapshot lock poisoned: {error}"))?;
+        let Some(snapshot) = guard.as_ref() else {
+            return Ok(());
+        };
+        (
+            snapshot.revision,
+            snapshot
+                .skills
+                .iter()
+                .map(|skill| skill.name.clone())
+                .collect(),
+        )
     };
 
-    let sources = DiscoverySources::read(&skill_studio_host::RealFs, &home);
+    let sources = DiscoverySources::read(&skill_studio_host::RealFs, home);
     let mut invocation_index = state
         .invocation_index
         .lock()
         .map_err(|e| format!("invocation index lock poisoned: {e}"))?;
-    let report = invocation_index.refresh(&home, &sources);
+    before_indexing();
+    let report = invocation_index.refresh(home, &sources);
     if let Err(e) = invocation_index.save(&state.cache_path) {
         eprintln!("skill refresh: failed to save invocation cache: {e}");
     }
-
-    let Some(known_skills) = known_skills else {
-        return Ok(()); // no full snapshot yet; the next full rebuild covers this
-    };
 
     // Captured once and threaded through stats/heatmap/scanned_at/mark_built_at
     // below, so a rebuild that straddles an hour boundary doesn't record the
@@ -1128,6 +1141,10 @@ fn rebuild_invocations_only(app: &AppHandle, state: &SkillRefreshState) -> Resul
         state.invocations_dirty.store(true, Ordering::SeqCst);
     }
 
+    let _guard = state
+        .rebuild_lock
+        .lock()
+        .map_err(|error| format!("rebuild lock poisoned: {error}"))?;
     let built = {
         let guard = state
             .snapshot
@@ -1136,13 +1153,18 @@ fn rebuild_invocations_only(app: &AppHandle, state: &SkillRefreshState) -> Resul
         let Some(snapshot) = guard.as_ref() else {
             return Ok(()); // the snapshot was cleared between the two reads above
         };
+        if snapshot.revision != revision {
+            state.invocations_dirty.store(true, Ordering::SeqCst);
+            return Ok(());
+        }
         let mut built = snapshot.clone();
         built.invocations = invocations;
         built.heatmap = heatmap;
         built.scanned_at = now.to_rfc3339();
         built
     };
-    publish_skill_snapshot(app, state, built)?;
+    let built = store_skill_snapshot(state, built)?;
+    publish(&built)?;
     state.mark_built_at(now);
     Ok(())
 }
@@ -1247,7 +1269,6 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
             }
             reconcile_watchers_from_snapshot(&home, &state, &mut debouncer, &mut watched);
         },
-        &super::core_runtime::data_root().join("leases"),
         super::core_runtime::build_runtime_write,
     );
     run_startup_doctor_pass(&app);
@@ -1412,18 +1433,17 @@ fn next_refresh_step(tick: RefreshTick) -> RefreshStep {
 /// `App<MockRuntime>`, not the `App<Wry>` this crate's `AppHandle` alias
 /// requires, and making every function on this call path generic over
 /// `Runtime` is out of scope here). The sweep call is deliberately *not*
-/// injected - it's hard-wired to `run_startup_sweeps` right here,
+/// injected - it's hard-wired to `run_startup_quarantine_sweep` right here,
 /// so a test that deletes or reorders it exercises this production body
 /// directly, rather than a test-owned closure that would stay green under
 /// that mutation. Only `build_runtime` - the sweep's own seam, already used
 /// without a real `AppHandle` - is passed through.
 fn first_scan_then_sweep(
     rebuild: &mut dyn FnMut(),
-    lease_root: &Path,
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
 ) {
     rebuild();
-    run_startup_sweeps(lease_root, build_runtime);
+    run_startup_quarantine_sweep(build_runtime);
 }
 
 /// The startup quarantine sweep unit 3.9b's `run_refresh_loop` runs once,
@@ -1435,15 +1455,9 @@ fn first_scan_then_sweep(
 /// only - a project's own `.agents/skills` quarantine directory is swept the
 /// next time that project's own `remove` runs; sweeping every tracked
 /// project here as well is a follow-up, not part of the happy path.
-fn run_startup_sweeps(
-    lease_root: &Path,
+fn run_startup_quarantine_sweep(
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
 ) {
-    if let Err(error) =
-        skill_studio_host::FileLease::new(lease_root.to_path_buf()).sweep_stale_files()
-    {
-        eprintln!("skill refresh: startup lease sweep failed: {error}");
-    }
     let rt = match build_runtime() {
         Ok(rt) => rt,
         Err(e) => {
@@ -1514,7 +1528,7 @@ fn run_startup_doctor_pass(app: &AppHandle) {
 /// The startup doctor sweep's body, split from [`run_startup_doctor_pass`] so
 /// a test can drive it without a real `AppHandle` (which only a running
 /// Tauri app can construct) - the same split `harness_first_run::detect_with_runtime`
-/// and `run_startup_sweeps` use. `build_runtime` and `on_result`
+/// and `run_startup_quarantine_sweep` use. `build_runtime` and `on_result`
 /// are both parameters rather than fixed to the real adapters, so a test can
 /// record which thread built the runtime and confirm it isn't the test's own
 /// thread.
@@ -2241,16 +2255,18 @@ pub fn build_snapshot(
     paths: BuildPaths,
     now: DateTime<Utc>,
 ) -> (SkillSnapshot, SkillUseRefreshReport) {
-    build_snapshot_releasing(home, invocation_index, paths, now, None, || {})
+    build_snapshot_releasing(home, Some(invocation_index), paths, now, None, || {})
 }
 
-/// `build_snapshot` that drops `scan_lease` once the skill folders are read.
+/// Drops `scan_lease` once the skill folders are read. An absent index leaves
+/// invocation fields empty; managed refreshes carry the previous fields and
+/// schedule indexing separately.
 /// Transcript indexing, database queries and cache writes have no time limit
 /// and read nothing a skill write changes, so a write must not wait on them.
 /// `after_scan_reads` runs right after the drop; tests use it to pause there.
 fn build_snapshot_releasing(
     home: &Path,
-    invocation_index: &mut SkillInvocationIndex,
+    invocation_index: Option<&mut SkillInvocationIndex>,
     paths: BuildPaths,
     now: DateTime<Utc>,
     scan_lease: Option<super::write_lease::ScanLeaseGuard>,
@@ -2316,20 +2332,32 @@ fn build_snapshot_releasing(
     drop(scan_lease);
     after_scan_reads();
 
-    let invocations_start = Instant::now();
-    let sources = DiscoverySources::read(&skill_studio_host::RealFs, home);
-    let report = invocation_index.refresh(home, &sources);
-    if let Err(e) = invocation_index.save(cache_path) {
-        eprintln!("skill refresh: failed to save invocation cache: {e}");
-    }
-    let invocations_ms = invocations_start.elapsed().as_millis();
-
-    let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
+    let skill_names: Vec<String> = skills.iter().map(|skill| skill.name.clone()).collect();
     let known_skills: BTreeSet<String> = skill_names.iter().cloned().collect();
-    let use_filter = SkillUseFilter {
-        known_skills: &known_skills,
-        sources: &sources,
+    let invocations_start = Instant::now();
+    let (invocations, heatmap, report) = if let Some(index) = invocation_index {
+        let sources = DiscoverySources::read(&skill_studio_host::RealFs, home);
+        let report = index.refresh(home, &sources);
+        if let Err(error) = index.save(cache_path) {
+            eprintln!("skill refresh: failed to save invocation cache: {error}");
+        }
+        let filter = SkillUseFilter {
+            known_skills: &known_skills,
+            sources: &sources,
+        };
+        (
+            index.stats_at(now, &filter),
+            index.heatmap_at(365, now, &filter),
+            report,
+        )
+    } else {
+        (
+            Vec::new(),
+            InvocationHeatmap::default(),
+            SkillUseRefreshReport::default(),
+        )
     };
+    let invocations_ms = invocations_start.elapsed().as_millis();
     let last_test_start = Instant::now();
     let last_test_by_skill = skill_run_history::read_last_test_index(runs_root, &skill_names)
         .into_iter()
@@ -2344,8 +2372,8 @@ fn build_snapshot_releasing(
             .into_iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect(),
-        invocations: invocation_index.stats_at(now, &use_filter),
-        heatmap: invocation_index.heatmap_at(365, now, &use_filter),
+        invocations,
+        heatmap,
         scanned_at: now.to_rfc3339(),
         last_test_by_skill,
         update_check,
@@ -5477,7 +5505,7 @@ mod tests {
                 let mut index = SkillInvocationIndex::default();
                 build_snapshot_releasing(
                     home,
-                    &mut index,
+                    Some(&mut index),
                     BuildPaths {
                         cache_path: &cache_path,
                         runs_root: home,
@@ -5790,13 +5818,13 @@ mod tests {
     /// calls `first_scan_then_sweep` - the exact function `run_refresh_loop`'s
     /// first iteration calls - with a test-owned `rebuild` closure but the
     /// production `sweep` step: `first_scan_then_sweep` hard-wires the sweep
-    /// call to `run_startup_sweeps` itself rather than accepting it
+    /// call to `run_startup_quarantine_sweep` itself rather than accepting it
     /// as a parameter, so this test can't pass its own stand-in for the
     /// sweep the way an earlier version of this test passed its own stand-in
     /// for both steps - that version stayed green under three mutations a
     /// reviewer found by hand: swapping `rebuild`/`sweep` at the production
     /// call site, deleting the sweep call, and reordering it. Only
-    /// `build_runtime` - `run_startup_sweeps`'s own seam - is
+    /// `build_runtime` - `run_startup_quarantine_sweep`'s own seam - is
     /// injected here, so a deleted or reordered sweep call inside
     /// `first_scan_then_sweep` shows up as a missing or misordered `"sweep"`
     /// entry in `recorded`, not just in a scaffold this test owns.
@@ -5823,7 +5851,6 @@ mod tests {
         let build_runtime_log = StdArc::clone(&log);
 
         let handle = std::thread::spawn(move || {
-            let fixture = tempfile::tempdir().unwrap();
             first_scan_then_sweep(
                 &mut || {
                     scan_log
@@ -5831,7 +5858,6 @@ mod tests {
                         .unwrap()
                         .push(("scan", std::thread::current().id()));
                 },
-                &fixture.path().join("leases"),
                 move || {
                     // `build_runtime` is reached after lease cleanup and
                     // before touching `ops::sweep_quarantine`,
@@ -5929,29 +5955,5 @@ mod tests {
             "the startup sweep did not deliver ops::doctor's violation to on_result: {:?}",
             report.violations
         );
-    }
-    #[test]
-    fn startup_lease_sweep_runs_after_the_first_snapshot_instead_of_leaving_stale_files() {
-        let fixture = tempfile::tempdir().unwrap();
-        let leases = fixture.path().join("leases");
-        fs::create_dir_all(&leases).unwrap();
-        let stale = leases.join("abandoned.lock");
-        fs::write(&stale, "4294967295|0").unwrap();
-        let mut scanned = false;
-        first_scan_then_sweep(
-            &mut || {
-                assert!(
-                    stale.exists(),
-                    "lease cleanup ran before the first inventory"
-                );
-                scanned = true;
-            },
-            &leases,
-            || {
-                assert!(!stale.exists(), "startup left a stale lease file");
-                Err("fixture stops before quarantine work".to_string())
-            },
-        );
-        assert!(scanned);
     }
 }
