@@ -118,9 +118,10 @@ rules are firm:
   `~/.cargo/build/`, least recently used first, above a 40 GB total, below
   30 GB free disk, or after 3 days. It never empties a folder used in the last
   hour, a folder whose lock Cargo holds, a folder that a running `cargo` builds
-  into (it asks `cargo metadata` in that process's working directory, because
-  Cargo releases its lock before tests run), or a folder that a process runs
-  from. It holds the folder's locks while it checks and deletes, and keeps the
+  into (it runs `cargo metadata` with that process's working directory,
+  `--manifest-path`, and `CARGO_HOME`, because Cargo releases its lock before
+  tests run; when it cannot tell, it empties nothing), or a folder that a
+  process runs from. It holds the folder's locks while it checks and deletes, and keeps the
   lock files. The cap is an eviction threshold: builds that run at the same
   time can go over it. Run it every 15 minutes with launchd (macOS):
 

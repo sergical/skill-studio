@@ -11,8 +11,10 @@
 # A folder is in use while:
 #   - Cargo holds one of its `<profile>/.cargo-lock` files (compiling),
 #   - a running `cargo` has it as its build directory (found with
-#     `cargo metadata` in the process's working directory; this covers test
-#     runs, which start after Cargo releases its locks), or
+#     `cargo metadata` in the process's working directory, with its
+#     `--manifest-path` and `CARGO_HOME`; this covers test runs, which start
+#     after Cargo releases its locks; `--config`, `-Z`, `-C`, or
+#     `CARGO_BUILD_BUILD_DIR` make the build directory unknown), or
 #   - a process runs from a path inside it.
 # To empty a folder, this script takes its locks first, checks the other two
 # conditions while it holds them, and deletes everything except the lock
@@ -73,22 +75,73 @@ sub cwd_of {
     return undef;
 }
 
-my %build_dir_of_cwd;
+# Arguments and environment of a process, or an empty list when unreadable.
+# macOS `ps -E` prints the environment after the arguments; it prints nothing
+# for processes it may not inspect.
+sub invocation {
+    my ($pid) = @_;
+    if (open(my $cmd, '<', "/proc/$pid/cmdline")) {
+        my @args = split /\0/, do { local $/; <$cmd> };
+        open(my $environ, '<', "/proc/$pid/environ") or return;
+        my %env = map { /^([^=]*)=(.*)$/s ? ($1, $2) : () } split /\0/, do { local $/; <$environ> };
+        return (\@args, \%env);
+    }
+    chomp(my $args = `ps -ww -o args= -p $pid 2>/dev/null`);
+    chomp(my $all  = `ps -E -ww -o command= -p $pid 2>/dev/null`);
+    return unless length($args) && index($all, "$args ") == 0;
+    my $env = substr($all, length($args) + 1);
+    return unless $env =~ /^[A-Za-z_]\w*=/;
+    my %env;
+    while ($env =~ /(?:^|\s)(CARGO_HOME|CARGO_BUILD_BUILD_DIR|HOME)=(\S*)/g) {
+        my ($name, $value) = ($1, $2);
+        # A value with a space would be cut short here: treat it as unknown.
+        $value = undef unless substr($env, pos($env)) =~ /^(?:\s+[A-Za-z_]\w*=|\s*$)/;
+        $env{$name} = $value;
+    }
+    return ([split ' ', $args], \%env);
+}
+
+# CARGO_HOME and `cargo metadata` arguments that select the same build
+# directory as the process, or an empty list when that is unknown.
+sub workspace_args {
+    my ($cwd, $args, $env) = @_;
+    return if exists $env->{CARGO_BUILD_BUILD_DIR};
+    my $home = exists $env->{CARGO_HOME} ? $env->{CARGO_HOME}
+             : defined $env->{HOME}      ? "$env->{HOME}/.cargo"
+             :                             undef;
+    $home = realpath($home) if defined $home;
+    return unless defined $home;
+    my @extra;
+    for (my $i = 1; $i < @$args; $i++) {
+        my $arg = $args->[$i];
+        last if $arg eq '--';
+        return if $arg =~ /^(?:--config|-Z|-C)/;
+        next unless $arg =~ /^--manifest-path(?:=(.*))?$/;
+        my $path = $1 // $args->[++$i];
+        return unless defined $path && $path =~ m{(?:^|/)Cargo\.toml$};
+        push @extra, '--manifest-path', $path =~ m{^/} ? $path : "$cwd/$path";
+    }
+    return ($home, @extra);
+}
+
+my %build_dir_of;
 sub build_dir_for {
-    my ($cwd) = @_;
-    return $build_dir_of_cwd{$cwd} if exists $build_dir_of_cwd{$cwd};
+    my ($cwd, $home, @extra) = @_;
+    my $key = join("\0", $cwd, $home, @extra);
+    return $build_dir_of{$key} if exists $build_dir_of{$key};
     my $pid = open(my $out, '-|');
     return undef unless defined $pid;
     if (!$pid) {
         chdir($cwd) or exit 1;
         open(STDERR, '>', '/dev/null');
+        $ENV{CARGO_HOME} = $home;
         $ENV{RUSTUP_AUTO_INSTALL} = '0';
-        exec($cargo_bin, qw(metadata --no-deps --format-version 1 --offline)) or exit 1;
+        exec($cargo_bin, qw(metadata --no-deps --format-version 1 --offline), @extra) or exit 1;
     }
     my $json = do { local $/; <$out> };
-    close($out) or return $build_dir_of_cwd{$cwd} = undef;
+    close($out) or return $build_dir_of{$key} = undef;
     my ($dir) = ($json // '') =~ /"build_directory":"([^"\\]*)"/;
-    return $build_dir_of_cwd{$cwd} = defined $dir ? realpath($dir) // $dir : undef;
+    return $build_dir_of{$key} = defined $dir ? realpath($dir) // $dir : undef;
 }
 
 # Build directories of every running cargo, or undef when one is unknown.
@@ -97,9 +150,12 @@ sub active_build_dirs {
     for my $pid (map { /(\d+)/ ? $1 : () } `pgrep -x cargo`) {
         next if $pid == $$;
         my $cwd = cwd_of($pid);
-        next if !defined $cwd && !kill(0, $pid);    # exited meanwhile
-        return undef unless defined $cwd;
-        my $dir = build_dir_for($cwd);
+        my ($args, $env) = invocation($pid);
+        next if !(defined $cwd && $args) && !kill(0, $pid);    # exited meanwhile
+        return undef unless defined $cwd && $args;
+        my @selection = workspace_args($cwd, $args, $env);
+        return undef unless @selection;
+        my $dir = build_dir_for($cwd, @selection);
         return undef unless defined $dir;
         $dirs{$dir} = 1;
     }
