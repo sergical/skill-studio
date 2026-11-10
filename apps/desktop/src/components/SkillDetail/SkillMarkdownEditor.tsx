@@ -2,14 +2,14 @@
 // SkillMarkdownEditor - Raw SKILL.md textarea with a line-number gutter and Save/Cancel
 // ============================================================================
 
-import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState } from "react";
 import { Save, X } from "lucide-react";
 import { Button, Textarea } from "@skill-studio/ui";
 import { DiscardChangesDialog } from "./DiscardChangesDialog";
 import {
   contentForSave,
   isContentDirty,
-  isLineUnchanged,
+  isYamlDiagnosticCurrent,
   lineRange,
   normalizeLineEndings,
 } from "./skill-editor-lines";
@@ -131,9 +131,10 @@ export function SkillMarkdownEditor({
   const markRef = useRef<HTMLDivElement>(null);
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
   const [layout, setLayout] = useState<GutterLayout | null>(null);
+  const diagnosticId = useId();
   const lineCount = content.split("\n").length;
   const markedLine =
-    highlightLine !== undefined && isLineUnchanged(content, initialContent, highlightLine)
+    highlightLine !== undefined && isYamlDiagnosticCurrent(content, initialContent, highlightLine)
       ? highlightLine
       : undefined;
   const markTop =
@@ -248,7 +249,9 @@ export function SkillMarkdownEditor({
       <div className="flex items-center justify-end gap-3">
         <div className="mr-auto flex gap-3 text-caption">
           {markedLine !== undefined && (
-            <span className="text-error">Line {markedLine} breaks the YAML frontmatter</span>
+            <span id={diagnosticId} className="text-error">
+              Line {markedLine} breaks the YAML frontmatter
+            </span>
           )}
           {isDirty && <span className="text-warning">Unsaved changes</span>}
         </div>
@@ -299,6 +302,7 @@ export function SkillMarkdownEditor({
             <div
               ref={markRef}
               aria-hidden="true"
+              data-testid="yaml-error-band"
               className="pointer-events-none absolute inset-x-0 border-l-2 border-error bg-error-soft"
               style={{ top: markTop, height: layout.heights[markedLine - 1] }}
             />
@@ -310,6 +314,8 @@ export function SkillMarkdownEditor({
             value={content}
             onChange={(e) => handleContentChange(e.target.value)}
             onScroll={(e) => syncScroll(e.currentTarget.scrollTop)}
+            aria-describedby={markedLine === undefined ? undefined : diagnosticId}
+            aria-invalid={markedLine === undefined ? undefined : true}
             spellCheck={false}
           />
         </div>

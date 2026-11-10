@@ -38,17 +38,24 @@ export function contentForSave(content: string, initialRaw: string): string {
   return initialRaw.includes("\r\n") ? content.replace(/\r?\n/g, "\r\n") : content;
 }
 
+/** The frontmatter through its closing `---` line, or all of `content` when it has none. */
+function frontmatterBlock(content: string): string {
+  return /^---\n[\s\S]*?\n---(?:\n|$)/.exec(content)?.[0] ?? content;
+}
+
 /**
- * Whether 1-based `line` still reads the same in the textarea's LF `content` as
- * in the file as read. Edits elsewhere keep it the same; editing the line, or
- * adding or removing a line above it, does not.
+ * Whether the YAML diagnostic for 1-based `line` still applies: the frontmatter
+ * reads the same in the textarea's LF `content` as in the file as read, and the
+ * line still exists. A YAML error can come from a line other than the one the
+ * parser names, so any frontmatter edit clears the diagnostic.
  */
-export function isLineUnchanged(content: string, initialRaw: string, line: number): boolean {
-  const before = lineRange(initialRaw, line);
-  const after = lineRange(content, line);
-  if (!before || !after) return false;
+export function isYamlDiagnosticCurrent(
+  content: string,
+  initialRaw: string,
+  line: number,
+): boolean {
   return (
-    content.slice(after.start, after.end) ===
-    normalizeLineEndings(initialRaw).slice(before.start, before.end)
+    lineRange(content, line) !== null &&
+    frontmatterBlock(content) === frontmatterBlock(normalizeLineEndings(initialRaw))
   );
 }

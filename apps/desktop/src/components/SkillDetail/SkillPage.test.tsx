@@ -180,6 +180,37 @@ describe("SkillPage editor entry points", () => {
     expect(screen.queryByText("Line 3 breaks the YAML frontmatter")).toBeNull();
   });
 
+  it("fixing_the_YAML_on_another_frontmatter_line_clears_the_red_mark_so_a_fixed_file_is_not_still_flagged_as_broken", async () => {
+    renderPage(BROKEN_SKILL_MD, [YAML_VIOLATION]);
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const editor = await openedEditor();
+    await waitFor(() => expect(editor.selectionStart).toBe(lineOffsets(BROKEN_SKILL_MD, 3).start));
+    const lineTwoEnd = lineOffsets(BROKEN_SKILL_MD, 2).end;
+    editor.setSelectionRange(lineTwoEnd, lineTwoEnd);
+
+    await userEvent.type(editor, "x", { skipClick: true, initialSelectionStart: lineTwoEnd });
+
+    expect(editor.value.split("\n")[1]).toBe("name: find-bugsx");
+    expect(screen.queryByText("Line 3 breaks the YAML frontmatter")).toBeNull();
+  });
+
+  it("editing_the_body_keeps_the_red_mark_and_the_textarea_names_the_error_so_a_screen_reader_user_hears_which_line_is_broken", async () => {
+    renderPage(BROKEN_SKILL_MD, [YAML_VIOLATION]);
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const editor = await openedEditor();
+    await waitFor(() => expect(editor.selectionStart).toBe(lineOffsets(BROKEN_SKILL_MD, 3).start));
+    const end = BROKEN_SKILL_MD.length;
+    editor.setSelectionRange(end, end);
+
+    await userEvent.type(editor, "x", { skipClick: true, initialSelectionStart: end });
+
+    expect(editor.value.endsWith("# Find bugsx")).toBe(true);
+    expect(editor.getAttribute("aria-invalid")).toBe("true");
+    expect(editor.getAttribute("aria-describedby")).toBe(
+      screen.getByText("Line 3 breaks the YAML frontmatter").id,
+    );
+  });
+
   it("clicking_Edit_on_a_skill_without_a_YAML_error_shows_no_red_mark_so_the_editor_does_not_flag_a_line_that_is_fine", async () => {
     renderPage(CLEAN_SKILL_MD, []);
     await userEvent.click(await screen.findByRole("button", { name: "Edit" }));

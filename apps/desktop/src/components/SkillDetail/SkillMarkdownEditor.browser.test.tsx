@@ -39,9 +39,19 @@ it("opening_the_editor_on_a_broken_wrapped_line_paints_a_visible_red_band_over_e
   // An opaque textarea background would hide the band painted behind it.
   expect(getComputedStyle(textarea).backgroundColor).toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
 
-  const band = textarea.parentElement!.querySelector<HTMLElement>('[aria-hidden="true"]')!;
+  const band = page.getByTestId("yaml-error-band").element();
+  const bandStyle = getComputedStyle(band);
+  // The band must paint: an opaque-enough fill and the red left border.
+  expect(bandStyle.backgroundColor).not.toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
+  expect(Number(bandStyle.opacity)).toBeGreaterThan(0.5);
+  expect(bandStyle.borderLeftColor).not.toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
+  expect(Number.parseFloat(bandStyle.borderLeftWidth)).toBeGreaterThan(0);
+
   const rowHeight = Number.parseFloat(getComputedStyle(textarea).lineHeight);
-  const { height } = band.getBoundingClientRect();
+  const bandBox = band.getBoundingClientRect();
   // The description wraps at 760px, so its band covers more than one row.
-  expect(height).toBeGreaterThan(rowHeight * 1.5);
+  expect(bandBox.height).toBeGreaterThan(rowHeight * 1.5);
+  // Line 3's number in the gutter starts the band's row.
+  const gutterLine = page.getByText("3", { exact: true }).element();
+  expect(Math.abs(bandBox.top - gutterLine.getBoundingClientRect().top)).toBeLessThan(1);
 });
