@@ -311,7 +311,7 @@ export function UsageSection() {
   return (
     <>
       <h2 {...stylex.props(homeSectionStyles.title)}>Use it your way.</h2>
-      <div {...stylex.props(styles.layout)}>
+      <div {...stylex.props(homeSectionStyles.columns)}>
         <div
           role="tablist"
           aria-label="Ways to use Skill Studio"
@@ -406,17 +406,15 @@ const settle = "cubic-bezier(0.32, 0.72, 0, 1)";
 const blink = stylex.keyframes({ "50%": { opacity: 0 } });
 
 const styles = stylex.create({
-  layout: {
-    display: "grid",
-    gap: 24,
-    gridTemplateColumns: "260px minmax(0,1fr)",
-    "@media (max-width: 860px)": { gridTemplateColumns: "1fr" },
-  },
   tabs: {
     display: "flex",
     flexDirection: "column",
     gap: 6,
-    "@media (max-width: 860px)": { display: "grid", gridTemplateColumns: "repeat(3, 1fr)" },
+    "@media (max-width: 760px)": {
+      display: "grid",
+      gridTemplateColumns: "repeat(3, 1fr)",
+      marginBottom: 24,
+    },
   },
   tab: {
     alignItems: "center",
@@ -437,7 +435,7 @@ const styles = stylex.create({
       "background-color 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out",
     ":hover": { backgroundColor: siteTokens.surface, color: siteTokens.text },
     ":focus-visible": { outline: `2px solid ${siteTokens.text}`, outlineOffset: 2 },
-    "@media (max-width: 860px)": { justifyContent: "center", minHeight: 48 },
+    "@media (max-width: 760px)": { justifyContent: "center", minHeight: 48 },
   },
   tabOn: {
     backgroundColor: siteTokens.surface,
@@ -454,7 +452,7 @@ const styles = stylex.create({
     justifyContent: "center",
     transition: "background-color 150ms ease-out, color 150ms ease-out",
     width: 36,
-    "@media (max-width: 860px)": { height: 28, width: 28 },
+    "@media (max-width: 760px)": { height: 28, width: 28 },
   },
   tabIconOn: {
     backgroundColor: siteTokens.accent,
@@ -463,7 +461,7 @@ const styles = stylex.create({
   },
   tabText: { display: "flex", flexDirection: "column", gap: 2 },
   tabLabel: { fontSize: 15, fontWeight: 640 },
-  tabBlurb: { fontSize: 13, lineHeight: 1.35, "@media (max-width: 860px)": { display: "none" } },
+  tabBlurb: { fontSize: 13, lineHeight: 1.35, "@media (max-width: 760px)": { display: "none" } },
   panel: { display: "flex", flexDirection: "column", gap: 16, minWidth: 0 },
   window: {
     backgroundColor: "oklch(0.16 0.02 290)",

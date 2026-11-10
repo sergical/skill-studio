@@ -56,7 +56,7 @@ const questions: ReadonlyArray<{ question: string; answer: ReactNode }> = [
 
 export function FaqSection() {
   return (
-    <div {...stylex.props(styles.layout)}>
+    <div {...stylex.props(section.columns)}>
       <div>
         <h2 {...stylex.props(section.title, styles.title)}>Questions.</h2>
         <a href={DOCS_URL} {...stylex.props(section.textLink)}>
@@ -80,17 +80,6 @@ export function FaqSection() {
 }
 
 const styles = stylex.create({
-  layout: {
-    alignItems: "start",
-    display: "grid",
-    gap: 64,
-    gridTemplateColumns: "300px minmax(0, 1fr)",
-    "@media (min-width: 761px) and (max-width: 1000px)": {
-      gap: 32,
-      gridTemplateColumns: "260px minmax(0, 1fr)",
-    },
-    "@media (max-width: 760px)": { gap: 0, gridTemplateColumns: "1fr" },
-  },
   title: {
     marginBottom: 12,
     "@media (max-width: 760px)": { marginBottom: 8 },
