@@ -596,7 +596,9 @@ pub(crate) fn plan_park(
 ) -> Result<Option<DotagentsPark>, CoreError> {
     if !matches!(
         deployment.owner_kind,
-        LifecycleOwnerKind::Dotagents | LifecycleOwnerKind::WildcardDotagents
+        LifecycleOwnerKind::Dotagents
+            | LifecycleOwnerKind::WildcardDotagents
+            | LifecycleOwnerKind::Ambiguous
     ) {
         return Ok(None);
     }

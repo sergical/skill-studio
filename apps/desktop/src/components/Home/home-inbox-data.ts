@@ -125,8 +125,7 @@ interface UpdateAllTally {
   skillsSucceeded: number;
   /** True when a stop request left skills unattempted; `skillsSucceeded` then counts only skills that finished. */
   stopped?: boolean;
-  /** The first failed target's message, so the toast can say why. */
-  firstError: string | null;
+  errors: string[];
   /** Skills whose pull left conflict markers; set only when there are any. */
   conflicted?: string[];
 }
@@ -140,16 +139,13 @@ export function updateAllTitle(tally: UpdateAllTally): string {
   return tally.stopped ? `Stopped. ${counts}.` : counts;
 }
 
-/** "1 failed: <first error>" for the toast, or `undefined` when nothing failed. Counts skills, matching the toast title; a skill with any failed copy counts once. */
+/** "1 failed: <reasons>" for the toast, or `undefined` when nothing failed. Counts skills, matching the toast title; a skill with any failed copy counts once. */
 export function updateAllFailureMessage(tally: UpdateAllTally): string | undefined {
   if (tally.failures === 0) return undefined;
   const failedSkills = tally.skillsAttempted - tally.skillsSucceeded;
-  if (!tally.firstError) return `${failedSkills} failed`;
-  const reason =
-    tally.firstError.length > MAX_ERROR_LENGTH
-      ? `${tally.firstError.slice(0, MAX_ERROR_LENGTH - 1)}…`
-      : tally.firstError;
-  return `${failedSkills} failed: ${reason}`;
+  if (tally.errors.length === 0) return `${failedSkills} failed`;
+  const reasons = tally.errors;
+  return `${failedSkills} failed: ${reasons.map((reason) => (reason.length > MAX_ERROR_LENGTH ? `${reason.slice(0, MAX_ERROR_LENGTH - 1)}…` : reason)).join("; ")}`;
 }
 
 /**
@@ -223,12 +219,12 @@ export async function updateAllOutdatedSkills(
     failures: 0,
     skillsAttempted: forks.length + ownerSkillNames.size,
     skillsSucceeded: 0,
-    firstError: null,
+    errors: [],
   };
   let pluginsDone = 0;
   const fail = (count: number, message: string) => {
     tally.failures += count;
-    tally.firstError ??= message;
+    if (!tally.errors.includes(message)) tally.errors.push(message);
   };
   // A skill whose copies failed keeps its plugins untouched, and so does every other skill
   // sharing one of those plugins. They leave the total too, so progress still reaches it.
@@ -322,10 +318,7 @@ export async function updateAllOutdatedSkills(
         failedSkillNames.add(item.skill);
         copyFailedNames.add(item.skill);
       }
-      if (failedItems.length > 0) {
-        const first = failedItems[0];
-        fail(failedItems.length, outcome.errors[first.skill] ?? `${first.skill} failed`);
-      }
+      for (const item of failedItems) fail(1, outcome.errors[item.skill] ?? `${item.skill} failed`);
     } catch (error) {
       // Every skill in the rejected batch failed, including a forked skill's other copies.
       for (const skill of skills) {
@@ -380,7 +373,7 @@ export async function updateAllOutdatedSkills(
           failedSkillNames.add(skill.name);
         }
       }
-      fail(plugins.failures.length, plugins.failures[0].message);
+      for (const failure of plugins.failures) fail(1, failure.message);
     }
   }
 
