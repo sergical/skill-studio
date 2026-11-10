@@ -1,8 +1,8 @@
 import { useEffect, useReducer } from "react";
 import type { ClientInfo, RunRecord, RunSummary, TestSuite } from "@skill-studio/lib";
-import { labApi } from "../../lib/skill-lab-api";
-import { activeRun, id, newSuite } from "./lab-model";
-import type { JsonDrafts } from "./lab-json-drafts";
+import { labApi } from "../lib/skill-api";
+import { activeRun, id, newSuite } from "../components/SkillLab/lab-model";
+import type { JsonDrafts } from "../components/SkillLab/lab-json-drafts";
 
 export type LabTab = "setup" | "history" | "result" | "improve";
 

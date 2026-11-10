@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, Textarea } from "@skill-studio/ui";
 import type { TestSuite } from "@skill-studio/lib";
-import { useSkillLab, type LabTab } from "./useSkillLab";
+import { useSkillLab, type LabTab } from "../../hooks/useSkillLab";
 import { SelectControl } from "../ui/SelectControl";
 import { newSuite } from "./lab-model";
 import { RunResults } from "./RunResults";

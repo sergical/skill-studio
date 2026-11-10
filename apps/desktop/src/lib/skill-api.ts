@@ -9,6 +9,10 @@ import { listen } from "@tauri-apps/api/event";
 import { recordIpcCall } from "./perf-marks";
 import { isUpdateAllRunning, plainBusyMessage } from "./skill-busy-message";
 import type {
+  ClientInfo,
+  RunRecord,
+  RunSummary,
+  TestSuite,
   AddMethodDefaults,
   AddSkillOperationEvent,
   AddSkillRequest,
@@ -926,3 +930,20 @@ export async function dataFolderStatus(): Promise<string | null> {
 export async function checkSkillUpdatesNow(): Promise<SkillSnapshot["update_check"]> {
   return callCommand<SkillSnapshot["update_check"]>("check_skill_updates_now");
 }
+
+export const labApi = {
+  clients: () => callCommand<ClientInfo[]>("lab_clients"),
+  suites: (skillPath: string) => callCommand<TestSuite[]>("lab_suites", { skillPath }),
+  save: (suite: TestSuite) => callCommand<void>("lab_save_suite", { suite }),
+  import: (json: string) => callCommand<TestSuite>("lab_import_suite", { json }),
+  start: (suite: TestSuite) => callCommand<string>("lab_start", { suite }),
+  cancel: (id: string) => callCommand<void>("lab_cancel", { id }),
+  runs: (skillPath: string) => callCommand<RunSummary[]>("lab_runs", { skillPath }),
+  run: (id: string) => callCommand<RunRecord>("lab_run", { id }),
+  review: (id: string, trialId: string, accepted: boolean, reason: string) =>
+    callCommand<RunRecord>("lab_review", { id, trialId, accepted, reason }),
+  export: (id: string, suiteOnly: boolean) => callCommand<string>("lab_export", { id, suiteOnly }),
+  saveExport: (name: string, json: string) =>
+    callCommand<boolean>("lab_save_export", { name, json }),
+  delete: (id: string) => callCommand<void>("lab_delete_run", { id }),
+};
