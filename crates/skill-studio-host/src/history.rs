@@ -135,7 +135,14 @@ pub struct SqliteHistoryStore {
 impl SqliteHistoryStore {
     fn open(db_path: &Path) -> Result<Self, CoreError> {
         let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent).map_err(|e| CoreError::io(parent, e))?;
+        crate::with_data_folder(parent, || {
+            Self::open_locked(db_path).map_err(|e| e.to_string())
+        })
+        .map_err(|message| CoreError::new(ErrorCode::Io, message))
+    }
+
+    fn open_locked(db_path: &Path) -> Result<Self, CoreError> {
+        let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
         let conn = Connection::open(db_path).map_err(sql_err)?;
         // The desktop's `EventStore` opens this same file from a second
         // connection (`core_runtime::history_db_path`); WAL lets both read

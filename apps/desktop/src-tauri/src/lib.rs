@@ -48,17 +48,15 @@ pub use skills::*;
 pub fn open_event_store_at(
     app_data_dir: &Path,
     data_root: &Path,
-) -> Option<skills::event_store::EventStore> {
+) -> Result<skills::event_store::EventStore, String> {
     let db_path = skills::core_runtime::history_db_path(data_root);
-    let store = skills::event_store::EventStore::open_with_db(app_data_dir, &db_path)
-        .map_err(|e| eprintln!("[event_store] failed to open: {e}"))
-        .ok()?;
+    let store = skills::event_store::EventStore::open_with_db(app_data_dir, &db_path)?;
     match store.import_legacy_events() {
         Ok(0) => {}
         Ok(imported) => eprintln!("[event_store] imported {imported} legacy event(s)"),
         Err(e) => eprintln!("[event_store] failed to import legacy events: {e}"),
     }
-    Some(store)
+    Ok(store)
 }
 
 /// Reconciles any row `store` was left holding `pending` by a crash (unit
@@ -336,9 +334,10 @@ pub fn run() {
 
             // The version gate must run before the event-store opener or background writers.
             let (data_folder_message, event_store) = match app.path().app_data_dir() {
-                Ok(app_data) => skills::data_folder_status::check_and_open(&app_data, || {
-                    open_event_store_at(&app_data, &skills::core_runtime::data_root())
-                }),
+                Ok(app_data) => skills::data_folder_status::check_and_open(
+                    &app_data,
+                    &skills::core_runtime::data_root(),
+                ),
                 Err(error) => (
                     Some(format!("Could not resolve the data folder: {error}")),
                     None,

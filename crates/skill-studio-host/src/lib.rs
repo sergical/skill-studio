@@ -49,8 +49,9 @@ mod usage_report;
 pub use builder::{default_ports, default_ports_with_discovery, default_ports_with_history};
 pub use clock::SystemClock;
 pub use data_folder_version::{
-    check_compatible, migrate, newer_data_folder_message, read_version, Fs as DataFolderFs,
-    MigrationError, NewerDataFolder, RealFs as RealDataFolderFs, CURRENT_DATA_VERSION,
+    check_compatible, migrate, newer_data_folder_message, read_version, with_data_folder,
+    with_data_folders, Fs as DataFolderFs, MigrationError, NewerDataFolder,
+    RealFs as RealDataFolderFs, CURRENT_DATA_VERSION,
 };
 pub use discovery::{
     codex_home, discover_skill_projects, discovery_harnesses, opencode_config_dir,

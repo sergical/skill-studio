@@ -1247,3 +1247,53 @@ async fn harnesses_stdio_reads_claude_install_method_from_fixture_home_or_report
         .unwrap()
         .contains(config.to_str().unwrap()));
 }
+
+#[tokio::test]
+async fn mcp_park_refuses_newer_history_without_file_changes_or_opens_incompatible_sqlite() {
+    let (_dir, home) = live_home();
+    let deployment = deployment_id_in_root(&home, "gamma", "universal");
+    let history = home.join(".skill-studio/history");
+    std::fs::create_dir_all(&history).unwrap();
+    let db = history.join("events.sqlite3");
+    std::fs::write(&db, b"").unwrap();
+    let marker = history.join("schema_version");
+    let newer = skill_studio_host::CURRENT_DATA_VERSION + 1;
+    std::fs::write(&marker, format!("{newer}\n")).unwrap();
+    let snapshot = || {
+        [&db, &marker].map(|path| {
+            (
+                std::fs::read(path).unwrap(),
+                std::fs::metadata(path).unwrap().modified().unwrap(),
+            )
+        })
+    };
+    let before = snapshot();
+    let (client, _) = connect(&[
+        ("HOME", home.to_str().unwrap()),
+        ("SKILL_STUDIO_HOME", home.to_str().unwrap()),
+        ("SKILL_STUDIO_TELEMETRY", "off"),
+    ])
+    .await;
+    let result = call_tool(
+        &client,
+        "park",
+        serde_json::json!({"deployment_id": deployment}),
+    )
+    .await;
+    client.cancel().await.unwrap();
+    assert_ne!(result["status"], "ok");
+    let message = result.to_string();
+    assert!(
+        message.contains(&format!("folder is version {newer}")),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "up to version {}",
+            skill_studio_host::CURRENT_DATA_VERSION
+        )),
+        "{message}"
+    );
+    assert_eq!(before, snapshot());
+    assert_eq!(std::fs::read_dir(&history).unwrap().count(), 2);
+}

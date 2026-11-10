@@ -1267,3 +1267,54 @@ fn harnesses_cli_reads_claude_install_method_from_fixture_home_or_reports_unknow
         .unwrap()
         .contains(config.to_str().unwrap()));
 }
+
+#[test]
+fn cli_park_refuses_newer_history_without_file_changes_or_opens_incompatible_sqlite() {
+    let (_dir, home) = parkable_live_home();
+    let deployment = deployment_id_in_root(&home, "gamma", "universal");
+    let history = home.join(".skill-studio/history");
+    std::fs::create_dir_all(&history).unwrap();
+    let db = history.join("events.sqlite3");
+    std::fs::write(&db, b"").unwrap();
+    let marker = history.join("schema_version");
+    let newer = skill_studio_host::CURRENT_DATA_VERSION + 1;
+    std::fs::write(&marker, format!("{newer}\n")).unwrap();
+    let snapshot = || {
+        [&db, &marker].map(|path| {
+            (
+                std::fs::read(path).unwrap(),
+                std::fs::metadata(path).unwrap().modified().unwrap(),
+            )
+        })
+    };
+    let before = snapshot();
+    let result = run_with_env(
+        &[
+            "park",
+            "--home",
+            home.to_str().unwrap(),
+            "--deployment-id",
+            &deployment,
+            "--json",
+        ],
+        &[
+            ("HOME", home.to_str().unwrap()),
+            ("SKILL_STUDIO_TELEMETRY", "off"),
+        ],
+    );
+    assert_ne!(result.status, 0);
+    let message = result.json.to_string();
+    assert!(
+        message.contains(&format!("folder is version {newer}")),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "up to version {}",
+            skill_studio_host::CURRENT_DATA_VERSION
+        )),
+        "{message}"
+    );
+    assert_eq!(before, snapshot());
+    assert_eq!(std::fs::read_dir(&history).unwrap().count(), 2);
+}

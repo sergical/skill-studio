@@ -93,6 +93,72 @@ impl Fs for RealFs {
     }
 }
 
+/// Holds the data-folder lock through validation, migration, and opening.
+/// The lock file stays in place so all processes lock the same inode.
+pub fn with_data_folder<T>(
+    folder: &Path,
+    open: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    with_data_folders(&[folder], open)
+}
+
+/// Validates all folders before migrating any, with locks in path order.
+pub fn with_data_folders<T>(
+    folders: &[&Path],
+    open: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    with_data_folders_before_lock(folders, || {}, open)
+}
+
+fn with_data_folders_before_lock<T>(
+    folders: &[&Path],
+    before_lock: impl FnOnce(),
+    open: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let validate = |folder: &Path| {
+        let version = read_version(&RealFs, folder).map_err(|error| {
+            format!(
+                "Could not read the data folder version at {}: {error}",
+                folder.display()
+            )
+        })?;
+        check_compatible(version, CURRENT_DATA_VERSION).map_err(newer_data_folder_message)?;
+        Ok::<u32, String>(version)
+    };
+    let mut folders = folders.to_vec();
+    folders.sort_unstable();
+    folders.dedup();
+    // Refusal of an already newer folder must not create even a lock file.
+    for folder in &folders {
+        validate(folder)?;
+    }
+    before_lock();
+    let mut locks = Vec::new();
+    for folder in &folders {
+        std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(folder.join(".data-folder.lock"))
+            .map_err(|error| format!("Migrating {}: {error}", folder.display()))?;
+        lock.lock().map_err(|error| error.to_string())?;
+        locks.push(lock);
+    }
+    let versions = folders
+        .iter()
+        .map(|folder| validate(folder))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (folder, version) in folders.iter().zip(versions) {
+        if version < CURRENT_DATA_VERSION {
+            migrate(&RealFs, folder, version, CURRENT_DATA_VERSION)
+                .map_err(|error| format!("Migrating {}: {error}", folder.display()))?;
+        }
+    }
+    open()
+}
+
 /// One version migration step: turns a folder at version `from` into
 /// `from + 1`. `run` does whatever that step needs beyond the marker
 /// itself - [`migrate`] writes the marker only after every step through
@@ -253,6 +319,81 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
+
+    #[test]
+    fn startup_open_holds_folder_lock_through_migration_and_sqlite_or_allows_a_newer_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        with_data_folder(dir.path(), || {
+            assert_eq!(
+                read_version(&RealFs, dir.path()).unwrap(),
+                CURRENT_DATA_VERSION
+            );
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "data_folder_version::tests::competing_process_cannot_lock_during_startup_open_or_migrations_can_race"])
+                .env("SKILL_STUDIO_LOCK_PROBE", dir.path())
+                .output().unwrap();
+            assert!(child.status.success(), "{}", String::from_utf8_lossy(&child.stdout));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn competing_process_cannot_lock_during_startup_open_or_migrations_can_race() {
+        let Some(folder) = std::env::var_os("SKILL_STUDIO_LOCK_PROBE") else {
+            return;
+        };
+        let competing = std::fs::File::open(Path::new(&folder).join(".data-folder.lock")).unwrap();
+        assert!(matches!(
+            competing.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+    }
+
+    #[test]
+    fn startup_waiting_on_newer_migration_refuses_without_lowering_marker_or_opens_stale_version_zero(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().to_path_buf();
+        let lock = std::fs::File::create(folder.join(".data-folder.lock")).unwrap();
+        lock.lock().unwrap();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+        let older = std::thread::spawn(move || {
+            with_data_folders_before_lock(
+                &[&folder],
+                || {
+                    ready_tx.send(()).unwrap();
+                    continue_rx.recv().unwrap();
+                },
+                || Err::<(), _>("incompatible opener ran".to_owned()),
+            )
+        });
+        ready_rx.recv().unwrap();
+        let marker = dir.path().join("schema_version");
+        std::fs::write(&marker, b"2\n").unwrap();
+        let before = (
+            std::fs::read(&marker).unwrap(),
+            std::fs::metadata(&marker).unwrap().modified().unwrap(),
+        );
+        continue_tx.send(()).unwrap();
+        drop(lock);
+        let error = older.join().unwrap().unwrap_err();
+        assert_eq!(
+            error,
+            newer_data_folder_message(NewerDataFolder {
+                folder_version: 2,
+                app_version: CURRENT_DATA_VERSION
+            })
+        );
+        assert_eq!(
+            before,
+            (
+                std::fs::read(&marker).unwrap(),
+                std::fs::metadata(&marker).unwrap().modified().unwrap()
+            )
+        );
+    }
 
     /// Extracts every run of ASCII digits in `text`, in order, as `u32`s -
     /// used to assert on the version numbers a message names without
