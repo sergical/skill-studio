@@ -488,6 +488,7 @@ pub fn run() {
             skills::event_commands::make_skill_independent_copy,
             skills::event_commands::repair_skill_link,
             // Background refresh / invocation snapshot
+            skills::skill_update_check::check_skill_updates_now,
             skills::skill_refresh::get_skill_snapshot,
             skills::skill_refresh::request_skill_rescan,
             skills::skill_refresh::rescan_skills_now,

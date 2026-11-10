@@ -23,6 +23,7 @@ import { PageShell } from "../Shell/PageShell";
 import { InfoPopover } from "../ui/InfoPopover";
 import { MaterializeRootDialog } from "../ui/MaterializeRootDialog";
 import { TooltipControl } from "../ui/TooltipControl";
+import { HomeUpdateCheck } from "./HomeUpdateCheck";
 import { HomeInboxGrid } from "./HomeInboxGroups";
 import { buildHomeRowPlan, computeHomeGroups } from "./home-inbox-data";
 import type { HomeFilter } from "./home-inbox-data";
@@ -396,6 +397,8 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
         toggleFilter={toggleFilter}
         onLearnMore={() => setActiveView({ kind: "learn", section: "broken" })}
       />
+
+      <HomeUpdateCheck summary={snapshot.update_check} />
 
       <InvocationCostCard
         inv={inv}

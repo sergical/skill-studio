@@ -199,6 +199,7 @@ const EXPECTED_WRAPPER_COMMANDS = {
     command: "make_skill_independent_copy",
   },
   repairSkillLink: { kind: "command", command: "repair_skill_link" },
+  checkSkillUpdatesNow: { kind: "command", command: "check_skill_updates_now" },
   getSkillSnapshot: { kind: "command", command: "get_skill_snapshot" },
   requestSkillRescan: {
     kind: "command",

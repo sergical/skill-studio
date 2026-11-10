@@ -319,21 +319,16 @@ export async function removeSkill(target: LifecycleTarget): Promise<RemoveOutcom
   return callCommand("remove_skill", { target });
 }
 
-/**
- * Update a skill through whichever method owns it (dotagents or skills.sh -
- * `build_update_request` routes every other owner, including Copy, to
- * "Update is not available") - `skill_studio_core::ops::update` under the
- * hood, off the UI thread. `updateSkillOwners` (skill-lifecycle-target.ts)
- * reads only
- * `success`/`error`; a thrown rejection (an `Err` from the command) is
- * caught there too, so a `success: true` literal on the happy path is
- * enough - no caller reads `UpdateOutcome`'s own fields.
- */
+/** Update one lifecycle owner. Tauri failures reject; equal tree hashes mean already current. */
 export async function updateSkill(
   target: LifecycleTarget,
-): Promise<{ success: boolean; error?: string | null }> {
-  await callCommand<UpdateOutcome>("update_skill", { target });
-  return { success: true };
+): Promise<{ success: true; outcome: UpdateOutcome; alreadyCurrent: boolean }> {
+  const outcome = await callCommand<UpdateOutcome>("update_skill", { target });
+  return {
+    success: true,
+    outcome,
+    alreadyCurrent: outcome.tree_hash_before === outcome.tree_hash_after,
+  };
 }
 
 /**
@@ -925,4 +920,9 @@ export function onUpdateStatus(cb: (status: UpdateStatus) => void): Promise<() =
  */
 export async function dataFolderStatus(): Promise<string | null> {
   return callCommand("data_folder_status");
+}
+
+/** Check installed skill sources now and publish a fresh snapshot. */
+export async function checkSkillUpdatesNow(): Promise<SkillSnapshot["update_check"]> {
+  return callCommand<SkillSnapshot["update_check"]>("check_skill_updates_now");
 }
