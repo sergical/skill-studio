@@ -142,14 +142,14 @@ pub struct SkillRefreshState {
 }
 
 impl SkillRefreshState {
-    pub(crate) fn update_check_projects(&self, home: &Path) -> Vec<PathBuf> {
+    pub(crate) fn update_check_projects(&self, home: &Path) -> Result<Vec<PathBuf>, String> {
         self.snapshot
             .read()
             .ok()
             .and_then(|snapshot| snapshot.as_ref().map(|snapshot| snapshot.projects.clone()))
             .map_or_else(
                 || effective_project_paths(home),
-                |projects| projects.into_iter().map(PathBuf::from).collect(),
+                |projects| Ok(projects.into_iter().map(PathBuf::from).collect()),
             )
     }
 
@@ -623,7 +623,7 @@ fn acquire_rebuild_lease(
     home: &Path,
 ) -> Result<super::write_lease::ScanLeaseGuard, String> {
     lease
-        .acquire_scan_lease(home, &effective_project_paths(home))
+        .acquire_scan_lease(home, &effective_project_paths(home)?)
         .inspect_err(|_| state.mark_skills_dirty())
 }
 
@@ -997,7 +997,7 @@ fn reconcile_skill_names_at(
     let reconcile_start = Instant::now();
     let (_scan_lease, _guard) = loop {
         let Ok(scan_lease) = super::write_lease::WriteLease::default()
-            .acquire_scan_lease(home, &effective_project_paths(home))
+            .acquire_scan_lease(home, &effective_project_paths(home)?)
         else {
             state.mark_skills_dirty();
             return Ok(());
@@ -1333,7 +1333,7 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
 
     // Start watching before the initial scan so a change made while the
     // first scan is running is never missed.
-    let initial_projects = effective_project_paths(&home);
+    let initial_projects = effective_project_paths(&home).unwrap_or_default();
     reconcile_watchers(
         &mut debouncer,
         &mut watched,
@@ -1641,7 +1641,10 @@ fn reconcile_watchers_from_snapshot(
         .and_then(|guard| guard.as_ref().map(|s| s.projects.clone()))
     {
         Some(projects) => projects.into_iter().map(PathBuf::from).collect(),
-        None => effective_project_paths(home),
+        None => match effective_project_paths(home) {
+            Ok(projects) => projects,
+            Err(_) => return,
+        },
     };
     reconcile_watchers(debouncer, watched, &desired_watch_paths(home, &projects));
 }
@@ -2347,8 +2350,19 @@ pub(crate) fn resolve_project_paths(
 
 /// The project set a snapshot is built from: discovered projects, resolved
 /// against the user's saved additions/exclusions.
-pub(crate) fn effective_project_paths(home: &Path) -> Vec<PathBuf> {
-    resolve_project_paths(home, skill_studio_host::discover_skill_projects(home))
+pub(crate) fn effective_project_paths(home: &Path) -> Result<Vec<PathBuf>, String> {
+    let registry = super::skill_fork_registry::read_fork_registry(home)
+        .map_err(|error| format!("Could not resolve projects from lifecycle registry: {error}"))?;
+    Ok(registry
+        .projects
+        .resolve(
+            &skill_studio_host::RealFs,
+            home,
+            skill_studio_host::discover_skill_projects(home),
+        )
+        .into_iter()
+        .map(|root| root.lexical)
+        .collect())
 }
 
 /// Build a fresh snapshot from `home`, refreshing the invocation index along
@@ -2389,7 +2403,7 @@ fn build_snapshot_releasing(
         update_check_path,
     } = paths;
     let projects_start = Instant::now();
-    let project_paths = effective_project_paths(home);
+    let project_paths = effective_project_paths(home)?;
     let projects_ms = projects_start.elapsed().as_millis();
 
     let scan_start = Instant::now();
@@ -2415,14 +2429,9 @@ fn build_snapshot_releasing(
 
     let lock_fs = skill_studio_host::RealFs::new();
     let lock = lock_file::read_lock_file(&lock_fs, &lock_file::lock_file_path(home))
-        .unwrap_or_else(|e| {
-            eprintln!("skill refresh: failed to read lock file: {e}");
-            lock_file::SkillLockFile {
-                version: 3,
-                skills: std::collections::HashMap::new(),
-            }
-        });
-    let fork_registry = super::skill_fork_registry::read_fork_registry_or_default(home);
+        .map_err(|error| format!("Skill refresh could not read lock file: {error}"))?;
+    let fork_registry = super::skill_fork_registry::read_fork_registry(home)
+        .map_err(|error| format!("Skill refresh could not read lifecycle registry: {error}"))?;
     let assembly_start = Instant::now();
     let mut skills = skill_assembly::assemble_installed_skills(&core_skills, &lock);
     let assembly_ms = assembly_start.elapsed().as_millis();
@@ -4517,6 +4526,15 @@ mod tests {
     #[test]
     fn startup_update_during_cache_load_keeps_project_badges_and_fork_notes_or_prunes_unknown_projects(
     ) {
+        startup_project_cache_check(false);
+    }
+
+    #[test]
+    fn startup_update_keeps_manual_project_cache_and_reports_error_when_registry_is_malformed() {
+        startup_project_cache_check(true);
+    }
+
+    fn startup_project_cache_check(malformed_registry: bool) {
         use super::super::skill_update_check::{CommitLookup, TreeLookup, UpstreamAhead};
 
         struct OfflineLookup;
@@ -4598,14 +4616,43 @@ resolved_commit = "old"
         );
         entered_rx.recv().unwrap();
         assert!(state.snapshot.read().unwrap().is_none());
-        skill_update_check::run_update_check_with_projects(
-            &home,
-            &state.update_check_projects(&home),
-            &app_data,
-            &OfflineLookup,
-            &OfflineLookup,
-            None,
+        if malformed_registry {
+            fs::write(home.join(".agents/skill-studio.json"), "{").unwrap();
+        }
+        let background = super::super::background_work::BackgroundState::default();
+        let events = Mutex::new(Vec::new());
+        let result = background.run(
+            super::super::background_work::BackgroundWorker::UpdateCheck,
+            || {
+                let projects = state.update_check_projects(&home)?;
+                skill_update_check::run_update_check_with_projects(
+                    &home,
+                    &projects,
+                    &app_data,
+                    &OfflineLookup,
+                    &OfflineLookup,
+                    None,
+                );
+                Ok(())
+            },
+            |status| events.lock().unwrap().push(status.clone()),
         );
+        if malformed_registry {
+            assert!(result.unwrap_err().contains("resolve projects"));
+            assert!(events
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .tasks
+                .iter()
+                .any(|task| task
+                    .last_error
+                    .as_ref()
+                    .is_some_and(|error| error.contains("resolve projects"))));
+        } else {
+            result.unwrap();
+        }
         release_tx.send(()).unwrap();
         worker.join().unwrap();
 
@@ -6417,6 +6464,122 @@ resolved_commit = "old"
             names(&published)
         );
         assert!(published.revision > before.revision);
+    }
+
+    #[test]
+    fn full_refresh_keeps_good_snapshot_and_reports_error_when_skills_lock_is_unreadable() {
+        assert_metadata_read_failure_keeps_snapshot(false);
+    }
+
+    #[test]
+    fn full_refresh_keeps_good_snapshot_and_reports_error_when_lifecycle_registry_is_unreadable() {
+        assert_metadata_read_failure_keeps_snapshot(true);
+    }
+
+    fn assert_metadata_read_failure_keeps_snapshot(registry: bool) {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let skill = home.join(".agents/skills/alpha");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: alpha\ndescription: fixture\n---\nbody",
+        )
+        .unwrap();
+        let mut saved = super::super::skill_fork_registry::ForkRegistry::default();
+        saved.forks.insert(
+            "alpha".into(),
+            super::super::skill_fork_registry::ForkRecord {
+                deployment_id: super::super::skill_deployment::deployment_id(
+                    "alpha",
+                    "global",
+                    super::super::skill_deployment::SkillDestination::Universal,
+                    "universal",
+                    None,
+                    &skill,
+                ),
+                skill_dir: skill.clone(),
+                forked_at: "2026-01-01T00:00:00Z".into(),
+                origin_tool: super::super::skill_fork_registry::OriginTool::Dotagents,
+                origin_source: "owner/alpha".into(),
+                repo: "owner/alpha".into(),
+                path: "skills/alpha".into(),
+                declared_ref: None,
+                base_commit: "a".repeat(40),
+            },
+        );
+        super::super::skill_fork_registry::write_fork_registry(&home, &saved).unwrap();
+        fs::write(
+            lock_file::lock_file_path(&home),
+            serde_json::json!({
+                "version": 3,
+                "skills": { "alpha": {
+                    "source": "owner/alpha", "sourceType": "github",
+                    "sourceUrl": "https://github.com/owner/alpha",
+                    "skillPath": "skills/alpha/SKILL.md", "skillFolderHash": "abc",
+                    "installedAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"
+                }}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let state = fixture_state();
+        let build = || {
+            build_snapshot_releasing(
+                &home,
+                None,
+                BuildPaths {
+                    cache_path: &state.cache_path,
+                    runs_root: &state.runs_root,
+                    update_check_path: &state.update_check_path,
+                },
+                Utc::now(),
+                None,
+                || {},
+            )
+            .map(|(snapshot, _)| snapshot)
+        };
+        let before = rebuild_snapshot_with(&state, Utc::now(), build, |_| Ok(())).unwrap();
+        assert!(!before.skills.is_empty());
+        let broken = if registry {
+            super::super::skill_fork_registry::fork_registry_path(&home)
+        } else {
+            lock_file::lock_file_path(&home)
+        };
+        fs::remove_file(&broken).unwrap();
+        fs::create_dir_all(&broken).unwrap();
+        let background = super::super::background_work::BackgroundState::default();
+        let events = Mutex::new(Vec::new());
+        let result = background.run(
+            super::super::background_work::BackgroundWorker::Scan,
+            || {
+                rebuild_snapshot_with(&state, Utc::now(), build, |_| {
+                    panic!("failed metadata reached publication")
+                })
+            },
+            |status| events.lock().unwrap().push(status.clone()),
+        );
+        let error = result.unwrap_err();
+        assert!(
+            error.contains(if registry {
+                "lifecycle registry"
+            } else {
+                "lock file"
+            }),
+            "{error}"
+        );
+        assert_eq!(
+            serde_json::to_value(state.snapshot.read().unwrap().as_ref().unwrap()).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
+        assert!(events
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .tasks
+            .iter()
+            .any(|task| task.last_error.as_ref() == Some(&error)));
     }
 
     #[test]
