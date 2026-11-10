@@ -343,6 +343,7 @@ impl<'a> PlanWriter<'a> {
         path: &Path,
         staged: &Path,
         staged_binding: (u64, u64),
+        published_fingerprint: Option<crate::identity::Fingerprint>,
         quarantined: Option<PathBuf>,
     ) -> Result<(), CoreError> {
         self.journal.record_step(
@@ -352,6 +353,7 @@ impl<'a> PlanWriter<'a> {
                 path: path.to_path_buf(),
                 staged: staged.to_path_buf(),
                 staged_binding,
+                published_fingerprint,
                 quarantined,
             },
         )
@@ -538,6 +540,7 @@ pub fn reconcile_with_history(
                     staged,
                     staged_binding,
                     quarantined: Some(displaced),
+                    ..
                 } = step
                 {
                     let root = Root::open(fs, plan.root.clone())
@@ -546,11 +549,12 @@ pub fn reconcile_with_history(
                         confine_to_root(&root, &plan.root, target)
                             .map_err(|e| CoreError::io(target, e))?;
                     }
-                    let landed = fs
-                        .fsops_device_inode(path)
-                        .map_err(|e| CoreError::io(path, e))?
-                        == *staged_binding;
-                    let source = if !landed {
+                    let binding = match fs.fsops_device_inode(path) {
+                        Ok(binding) => Some(binding),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(e) => return Err(CoreError::io(path, e)),
+                    };
+                    let source = if binding.is_some_and(|binding| binding != *staged_binding) {
                         path
                     } else if fs.symlink_metadata(displaced).is_ok() {
                         displaced
@@ -721,6 +725,7 @@ fn reverse_steps(
                 path,
                 staged,
                 staged_binding,
+                published_fingerprint,
                 quarantined,
             } => {
                 let landed = match fs.fsops_device_inode(path) {
@@ -739,6 +744,14 @@ fn reverse_steps(
                     // the preceding `Stage` step's own reversal removes
                     // the still-unswapped staged folder.
                     continue;
+                }
+                let current = crate::events::fingerprint_path(fs, path)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                if published_fingerprint.is_none() || current != *published_fingerprint {
+                    return Err(std::io::Error::other(format!(
+                        "recovery conflict: published content changed at {}",
+                        path.display()
+                    )));
                 }
                 match quarantined {
                     Some(quarantined) if fs.symlink_metadata(quarantined).is_ok() => {
@@ -1569,6 +1582,62 @@ mod tests {
             "plan {} must be Interrupted since its backup could not be read back, was {:?}",
             unresolvable.0,
             after_unresolvable.status
+        );
+    }
+
+    #[test]
+    fn restart_preserves_edited_new_folder_or_removes_work_without_a_quarantine() {
+        let fixture = FixtureBuilder::new()
+            .dir("/journal")
+            .dir("/root")
+            .build_fs();
+        let root = Root::open(&fixture, PathBuf::from("/root")).unwrap();
+        let journal = journal_over(Arc::new(fixture.clone()));
+        let lease = FakeLease::default();
+        let g = guard(&lease);
+        let id = PlanId("new-folder-crash".into());
+        let plan = PlanWriter::begin(
+            &journal,
+            &g,
+            id.clone(),
+            Utc::now(),
+            "new folder",
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .unwrap();
+        let staged = fsops::stage(
+            &root,
+            &plan,
+            &[(PathBuf::from("SKILL.md"), b"published".to_vec())],
+        )
+        .unwrap();
+        fsops::swap(
+            &root,
+            &plan,
+            Path::new("skill"),
+            &staged,
+            Path::new(".trash"),
+        )
+        .unwrap();
+        drop(plan);
+        fixture
+            .fsops_remove_file(Path::new("/root/skill/SKILL.md"))
+            .unwrap();
+        fixture
+            .fsops_write_new_file(Path::new("/root/skill/SKILL.md"), b"later work")
+            .unwrap();
+        let report = reconcile(&journal, &g, &fixture).unwrap();
+        assert!(
+            report.interrupted.iter().any(|plan| plan.id == id),
+            "recovery failed to report drift"
+        );
+        assert_eq!(
+            fixture
+                .read_capped(Path::new("/root/skill/SKILL.md"), 100)
+                .unwrap(),
+            b"later work",
+            "recovery removed the edited new folder"
         );
     }
 

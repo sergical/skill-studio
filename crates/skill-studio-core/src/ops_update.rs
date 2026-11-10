@@ -426,6 +426,32 @@ fn update_skills_sh_staged(
     req: &UpdateRequest,
     destination: &Path,
 ) -> Result<(), CoreError> {
+    let deployments = session
+        .fresh
+        .skills
+        .iter()
+        .find(|skill| skill.name == req.skill)
+        .map(|skill| skill.deployments.as_slice())
+        .unwrap_or_default();
+    let selected_owner = deployments
+        .iter()
+        .find(|copy| copy.path == destination)
+        .and_then(|copy| copy.owner_id.as_ref())
+        .map(crate::identity::OwnerId::as_str);
+    let eligible_copies: Vec<PathBuf> = deployments
+        .iter()
+        .filter(|copy| {
+            copy.root.scope == req.scope
+                && crate::lock_file::update_copy_is_eligible(
+                    selected_owner,
+                    copy.owner_id.as_ref().map(crate::identity::OwnerId::as_str),
+                    copy.owner_kind == crate::identity::LifecycleOwnerKind::Manual,
+                    copy.destination == crate::identity::SkillDestination::PerHarness,
+                    copy.is_symlink || copy.shared_via_whole_dir_link || copy.plugin.is_some(),
+                )
+        })
+        .map(|copy| copy.path.clone())
+        .collect();
     let fs = rt.ports.fs.as_ref();
     let stage = ops_install::journal_root(&rt.scope.home.lexical)
         .join(format!("cli-{}", rt.ports.ids.next_event_id().0));
@@ -543,6 +569,9 @@ fn update_skills_sh_staged(
                 .symlink_metadata(&live)
                 .is_ok_and(|facts| facts.kind == crate::ports::FileKind::Dir)
             {
+                if !eligible_copies.contains(&live) {
+                    continue;
+                }
                 if let Some(displaced) = update_copy_in_plan(rt, &plan, &dir, &req.skill, &files)? {
                     session
                         .store

@@ -64,22 +64,16 @@ fn update_local_edits(
     }
     let mut verdict = folder_local_edits(fs, lock, skill_name, Path::new(&deployment.path));
     for copy in deployments {
-        if copy.path == deployment.path
-            || copy.scope != "global"
-            || copy.is_symlink
-            || copy.plugin.is_some()
-        {
+        if copy.path == deployment.path || copy.scope != "global" {
             continue;
         }
-        let same_owner = deployment
-            .owner_id
-            .as_deref()
-            .is_some_and(|owner| copy.owner_id.as_deref() == Some(owner));
-        // A copy-mode edit loses its inferred owner, but the skills CLI can still replace that folder.
-        let unclaimed_agent_copy = copy.owner_id.is_none()
-            && copy.owner_kind == LifecycleOwnerKind::Manual
-            && copy.destination == super::skill_deployment::SkillDestination::PerHarness;
-        if !same_owner && !unclaimed_agent_copy {
+        if !lock_file::update_copy_is_eligible(
+            deployment.owner_id.as_deref(),
+            copy.owner_id.as_deref(),
+            copy.owner_kind == LifecycleOwnerKind::Manual,
+            copy.destination == super::skill_deployment::SkillDestination::PerHarness,
+            copy.is_symlink || copy.shared_via_whole_dir_link || copy.plugin.is_some(),
+        ) {
             continue;
         }
         let checked = folder_local_edits(fs, lock, skill_name, Path::new(&copy.path));

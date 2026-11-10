@@ -91,9 +91,9 @@ pub(crate) fn merge(
                 .cloned()
                 .collect()
         };
-        let values = |rows: Vec<toml_edit::Table>| -> Result<Vec<toml::Value>, CoreError> {
+        let values = |rows: Vec<toml_edit::Table>| -> Result<Vec<toml::Table>, CoreError> {
             rows.iter()
-                .map(|row| row.to_string().parse::<toml::Value>().map_err(invalid))
+                .map(|row| toml::from_str::<toml::Table>(&row.to_string()).map_err(invalid))
                 .collect()
         };
         if values(rows(&live))? != values(rows(&before))? {
@@ -116,7 +116,11 @@ pub(crate) fn merge(
         let entry = |doc: &toml_edit::DocumentMut| {
             doc.get("skills")
                 .and_then(|t| t.get(name))
-                .map(|entry| entry.to_string().parse::<toml::Value>().map_err(invalid))
+                .map(|entry| {
+                    let mut document = toml_edit::DocumentMut::new();
+                    document.insert("entry", entry.clone());
+                    toml::from_str::<toml::Table>(&document.to_string()).map_err(invalid)
+                })
                 .transpose()
         };
         if entry(&live)? != entry(&before)? {

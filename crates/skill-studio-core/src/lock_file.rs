@@ -347,10 +347,48 @@ fn newest_modified(fs: &dyn ScopeFs, dir: &Path) -> Option<chrono::DateTime<chro
     newest
 }
 
+/// Selects the real copies that a skills.sh update can replace.
+pub fn update_copy_is_eligible(
+    selected_owner: Option<&str>,
+    copy_owner: Option<&str>,
+    manual: bool,
+    per_harness: bool,
+    protected: bool,
+) -> bool {
+    !protected
+        && (selected_owner.is_some_and(|owner| copy_owner == Some(owner))
+            || (copy_owner.is_none() && manual && per_harness))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testing::FixtureBuilder;
+
+    #[test]
+    fn update_selection_excludes_named_foreign_owner_or_warns_for_copies_it_overwrites() {
+        assert!(!super::update_copy_is_eligible(
+            Some("skills-sh"),
+            Some("other-owner"),
+            false,
+            true,
+            false
+        ));
+        assert!(super::update_copy_is_eligible(
+            Some("skills-sh"),
+            Some("skills-sh"),
+            false,
+            true,
+            false
+        ));
+        assert!(super::update_copy_is_eligible(
+            Some("skills-sh"),
+            None,
+            true,
+            true,
+            false
+        ));
+    }
 
     #[test]
     fn missing_lock_file_yields_empty_default() {

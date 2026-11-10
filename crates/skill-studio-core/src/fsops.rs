@@ -464,10 +464,18 @@ pub fn swap_retaining(
         .fsops_device_inode(&staged.path)
         .fs_err(&staged.path)?;
 
+    let published_fingerprint =
+        crate::events::fingerprint_path(root.fs, &staged.path).map_err(FsOpsError::Journal)?;
     match old_facts {
         None => {
-            plan.record_swap(&final_path, &staged.path, staged_binding, None)
-                .map_err(FsOpsError::Journal)?;
+            plan.record_swap(
+                &final_path,
+                &staged.path,
+                staged_binding,
+                published_fingerprint,
+                None,
+            )
+            .map_err(FsOpsError::Journal)?;
             root.fs
                 .fsops_rename(&staged.path, &final_path)
                 .fs_err(&final_path)?;
@@ -505,6 +513,7 @@ pub fn swap_retaining(
                 &final_path,
                 &staged.path,
                 staged_binding,
+                published_fingerprint,
                 Some(quarantine_target.clone()),
             )
             .map_err(FsOpsError::Journal)?;

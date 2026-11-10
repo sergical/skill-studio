@@ -787,6 +787,9 @@ pub enum PlanStep {
         /// `staged`'s device and inode, captured right before the exchange
         /// - the identity `path` will carry once the exchange lands.
         staged_binding: (u64, u64),
+        /// Content expected at the published path; absent in older journals.
+        #[serde(default)]
+        published_fingerprint: Option<crate::identity::Fingerprint>,
         /// Where `swap` intends to move the folder that sits at `path`
         /// before the exchange, when one is there - `swap` never deletes
         /// it, only relocates it inside the root, so reversal restores from

@@ -3089,3 +3089,129 @@ fn ledger_crash_recovery(write: bool, drift: bool) {
     session.finish(&rt, &ctx());
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn skills_sh_update_preserves_foreign_owned_copy_or_overwrites_another_owner() {
+    let home = unique_temp_dir("update_foreign_owner");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "before");
+    std::fs::write(
+        home.join(".agents/.skill-lock.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "version": 3, "skills": {"delta": {"source": "owner/repo", "sourceType": "github",
+            "sourceUrl": "https://github.com/owner/repo", "skillFolderHash": "old",
+            "installedAt": "2020-01-01", "updatedAt": "2020-01-01"}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let rt = runtime_for(&home, "v2");
+    ops::install(
+        &rt,
+        &ctx(),
+        &InstallRequest {
+            skill: SkillName("delta".into()),
+            method: InstallMethod::Copy,
+            scope: RootScope::Global,
+            harnesses: vec![AgentId::from("codex")],
+            destination: skill_studio_core::identity::SkillDestination::PerHarness,
+            files: copy_request("delta", "foreign").files,
+            source: None,
+            trust_identity: None,
+            trust_confirmed: false,
+            save_as_preference: false,
+            link_mode: InstallLinkMode::Copy,
+        },
+    )
+    .unwrap();
+    let agent = home.join(".codex/skills/delta");
+    let before = std::fs::read(agent.join("SKILL.md")).unwrap();
+    let inventory = ops::scan(&rt, &ctx(), &Default::default()).unwrap();
+    let copies = &inventory
+        .skills
+        .iter()
+        .find(|skill| skill.name.0 == "delta")
+        .unwrap()
+        .deployments;
+    let foreign = copies.iter().find(|copy| copy.path == agent).unwrap();
+    assert_eq!(
+        foreign.owner_kind,
+        LifecycleOwnerKind::Copy,
+        "fixture must have a foreign managed copy"
+    );
+    assert!(copies
+        .iter()
+        .any(|copy| copy.owner_kind == LifecycleOwnerKind::SkillsSh && copy.owner_id.is_some()));
+    ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh)).unwrap();
+    assert_eq!(
+        std::fs::read(agent.join("SKILL.md")).unwrap(),
+        before,
+        "Update overwrote a foreign owner"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn update_restart_preserves_edited_published_tree_or_deletes_work_after_crash() {
+    restart_after_swap(false);
+}
+
+#[test]
+fn update_restart_with_deleted_folder_allows_unrelated_update_or_blocks_all_mutations() {
+    restart_after_swap(true);
+}
+
+fn restart_after_swap(delete: bool) {
+    let home = unique_temp_dir("restart_drift");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "before");
+    seed_installed_skill(&home, "other", "before");
+    let shared = dir_of(&home, "delta");
+    let db = home.join(".agents/skill-studio/events.db");
+    let rt = runtime_with_history(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"))),
+        Arc::new(CrashRetentionHistory(SqliteHistoryOpener::new(db.clone()))),
+    );
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh))
+    }))
+    .is_err());
+    if delete {
+        std::fs::remove_dir_all(&shared).unwrap();
+    } else {
+        std::fs::write(shared.join("SKILL.md"), "work after crash").unwrap();
+    }
+    let ids = rt.ports.ids.clone();
+    drop(rt);
+    let mut rt = runtime_with_history(
+        &home,
+        Arc::new(RealFs::new()),
+        None,
+        Arc::new(SqliteHistoryOpener::new(db)),
+    );
+    rt.ports.ids = ids;
+    ops::update(&rt, &ctx(), &copy_request("other", "v2")).unwrap();
+    if !delete {
+        assert_eq!(
+            std::fs::read_to_string(shared.join("SKILL.md")).unwrap(),
+            "work after crash",
+            "recovery deleted later work"
+        );
+        let journal = skill_studio_core::journal::FsJournal::new(
+            home.join(".agents/skill-studio-journal"),
+            rt.ports.fs.clone(),
+        );
+        use skill_studio_core::ports::Journal;
+        assert!(
+            journal
+                .all()
+                .unwrap()
+                .iter()
+                .any(|plan| plan.status == skill_studio_core::ports::PlanStatus::Interrupted),
+            "recovery must report a conflict"
+        );
+    }
+    std::fs::remove_dir_all(home).unwrap();
+}
