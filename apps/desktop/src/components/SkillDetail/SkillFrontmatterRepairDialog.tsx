@@ -48,6 +48,7 @@ export function SkillFrontmatterRepairDialog({
   onEditManually,
 }: SkillFrontmatterRepairDialogProps) {
   const [applying, setApplying] = useState<FrontmatterRepairApplyMode | null>(null);
+  const [choiceError, setChoiceError] = useState<string | null>(null);
   const addToast = useAppStore((state) => state.addToast);
   // One controller per open dialog: its request generation must outlive re-renders.
   // oxlint-disable-next-line react/hook-use-state -- created once per mount and never replaced
@@ -56,7 +57,10 @@ export function SkillFrontmatterRepairDialog({
       previewSkillFrontmatterRepair,
       target,
       initialPreview,
-      (message) => addToast({ type: "error", title: "Couldn't preview this option", message }),
+      (message) => {
+        setChoiceError(message);
+        addToast({ type: "error", title: "Couldn't preview this option", message });
+      },
     ),
   );
   const choiceState = useSyncExternalStore(choices.subscribe, choices.getState);
@@ -103,13 +107,21 @@ export function SkillFrontmatterRepairDialog({
                 key={choice}
                 variant={choiceState.selectedChoice === choice ? "default" : "outline"}
                 aria-pressed={choiceState.selectedChoice === choice}
-                onClick={() => choices.choose(choice)}
+                onClick={() => {
+                  setChoiceError(null);
+                  choices.choose(choice);
+                }}
                 disabled={applying !== null}
               >
                 {label}
               </Button>
             ))}
           </div>
+        )}
+        {choiceError && (
+          <p role="alert" className="m-0 text-small text-warning">
+            {choiceError}
+          </p>
         )}
         <div className="max-h-[55vh] overflow-auto rounded-sm border border-border-subtle">
           <PatchDiff
