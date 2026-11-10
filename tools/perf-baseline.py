@@ -128,10 +128,12 @@ def build_and_run(args, target, binaries):
     subprocess.run(["cargo", "build", "--release", "--all-features", "-p", "skill-studio", "--example", "perf_snapshot"], check=True)
     shutil.copy2(target / "examples/perf_snapshot", binaries / "examples/perf_snapshot")
     target = binaries
+    source_sha = command(["git", "rev-parse", "HEAD"])
+    source_dirty = bool(command(["git", "status", "--porcelain"]))
     wait_for_cargo_idle()
     mac = platform.system() == "Darwin"
-    report = {"git_sha": command(["git", "rev-parse", "HEAD"]),
-              "dirty": bool(command(["git", "status", "--porcelain"])),
+    report = {"git_sha": source_sha,
+              "dirty": source_dirty,
               "os": command(["sw_vers"]) if mac else platform.platform(),
               "cpu": command(["sysctl", "-n", "machdep.cpu.brand_string"]) if mac else platform.processor(),
               "memory_bytes": int(command(["sysctl", "-n", "hw.memsize"])) if mac else os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"),
