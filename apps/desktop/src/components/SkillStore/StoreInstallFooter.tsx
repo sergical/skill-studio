@@ -33,7 +33,6 @@ export function StoreInstallFooter({
   if (operation?.phase === "needs-trust") {
     return (
       <TrustConfirmFooter
-        packTrust={undefined}
         untrustedIdentity={operation.untrusted_source?.identity}
         trustBusy={trustBusy}
         onCancel={onDeclineTrust}

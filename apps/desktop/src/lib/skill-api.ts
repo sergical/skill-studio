@@ -18,7 +18,6 @@ import type {
   AppVersion,
   BulkTargetResult,
   DiscoverySourceSetting,
-  ImportResult,
   FixSkillOutcome,
   ForkRecord,
   FrontmatterRepairApplyMode,
@@ -34,8 +33,6 @@ import type {
   LifecycleTarget,
   InvocationPolicy,
   InvocationTarget,
-  PackImportPreflightResult,
-  PackImportRequest,
   PaginatedSkillsResponse,
   ProjectFolder,
   PullResult,
@@ -473,33 +470,6 @@ export async function pullForkUpstream(target: LifecycleTarget): Promise<PullRes
  */
 export async function unforkSkill(target: LifecycleTarget): Promise<void> {
   return callCommand("unfork_skill", { target });
-}
-
-// ============================================================================
-// Share Packs API
-// ============================================================================
-
-/**
- * Preflight and import a pack from a GitHub repo or local folder. Remote
- * repository identities pause for explicit trust before any install.
- */
-export async function importSkillPack(
-  request: PackImportRequest,
-): Promise<PackImportPreflightResult> {
-  return callCommand("import_skill_pack", { request });
-}
-
-/** Confirm the exact repository list returned by pack import preflight. */
-export async function confirmSkillPackTrust(
-  confirmationToken: string,
-  request: PackImportRequest,
-): Promise<ImportResult> {
-  return callCommand("confirm_skill_pack_trust", { confirmationToken, request });
-}
-
-/** Consume a pending pack trust prompt and remove its unchanged local snapshot. */
-export async function abandonPackImportTrust(confirmationToken: string): Promise<boolean> {
-  return callCommand("abandon_pack_import_trust", { confirmationToken });
 }
 
 // ============================================================================
