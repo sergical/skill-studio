@@ -316,6 +316,8 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     async (command, rawPayload) => {
       const payload = isObjectInvokeArgs(rawPayload) ? rawPayload : {};
       switch (command) {
+        case "check_skill_updates_now":
+          return currentSnapshot.update_check;
         case "get_skill_snapshot":
           return currentSnapshot;
         case "get_installed_skills":

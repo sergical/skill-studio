@@ -3,6 +3,8 @@
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
+import eventKindsSource from "../../../../../crates/skill-studio-core/src/events.rs?raw";
+import historyComponentSource from "./SkillHistorySection.tsx?raw";
 import type { SkillEvent } from "@skill-studio/lib";
 import {
   canRestoreSkillEvent,
@@ -53,7 +55,9 @@ describe("eventLabel", () => {
   });
 
   it("a_plain_split_row_keeps_the_split_label_or_every_split_would_read_as_a_turn_off", () => {
-    expect(eventLabel({ ...event(false), kind: "split", harness: null }, null)).toBe("split");
+    expect(eventLabel({ ...event(false), kind: "split", harness: null }, null)).toBe(
+      "Split into agent copies",
+    );
   });
 });
 
@@ -61,4 +65,20 @@ describe("kindLabel", () => {
   it("the_quarantine_prune_event_reads_quarantine_pruned_not_quarantine_prune", () => {
     expect(kindLabel("quarantine_prune")).toBe("Quarantine pruned");
   });
+});
+
+it("Activity covers each journal kind with a readable label and explicit icon or leaves a new kind raw", () => {
+  const wireKinds = [...eventKindsSource.matchAll(/EventKind::\w+ => "([^"]+)"/g)].map(
+    (match) => match[1],
+  );
+  const icons = historyComponentSource.slice(
+    historyComponentSource.indexOf("function iconForKind"),
+    historyComponentSource.indexOf("function restoreDescription"),
+  );
+  const cases = new Set([...icons.matchAll(/case "([^"]+)":/g)].map((match) => match[1]));
+  expect(wireKinds.length).toBeGreaterThan(0);
+  for (const kind of wireKinds) {
+    expect(kindLabel(kind), kind).not.toBe(kind.replace(/_/g, " "));
+    expect(cases.has(kind), kind).toBe(true);
+  }
 });
