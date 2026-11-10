@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS events (
     restorable  INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_events_skill ON events(skill, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 
 CREATE TABLE IF NOT EXISTS materialized_roots (
     root_path   TEXT PRIMARY KEY,
@@ -169,7 +170,7 @@ impl SqliteHistoryStore {
     /// Merges `patch`'s top-level keys into the JSON object stored in
     /// `column` for event `id`. A missing or non-object value is left as-is.
     fn patch_json_column(
-        &self,
+        &mut self,
         column: JsonColumn,
         id: &EventId,
         patch: &serde_json::Value,
@@ -187,8 +188,11 @@ impl SqliteHistoryStore {
                 "UPDATE events SET inverse = ?1 WHERE id = ?2",
             ),
         };
-        let stored: Option<String> = self
+        let transaction = self
             .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(sql_err)?;
+        let stored: Option<String> = transaction
             .query_row(select, params![id.0], |row| row.get(0))
             .map_err(sql_err)?;
         let Some(stored) = stored else {
@@ -203,10 +207,10 @@ impl SqliteHistoryStore {
             obj.insert(key.clone(), patch_value.clone());
         }
         let updated = serde_json::to_string(&value).map_err(json_err)?;
-        self.conn
+        transaction
             .execute(update, params![updated, id.0])
             .map_err(sql_err)?;
-        Ok(())
+        transaction.commit().map_err(sql_err)
     }
 }
 
@@ -874,6 +878,150 @@ mod tests {
             payload,
             inverse,
             backup_dir: None,
+        }
+    }
+
+    #[test]
+    fn history_open_indexes_timestamp_pages_and_keeps_tie_order_or_sorts_the_whole_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("events.sqlite3");
+        let store = SqliteHistoryStore::open(&path).unwrap();
+        store
+            .conn
+            .execute("DROP INDEX IF EXISTS idx_events_ts", [])
+            .unwrap();
+        let fixtures = [
+            ("old", "2026-01-01T00:00:00Z"),
+            ("tied-first", "2026-02-01T00:00:00Z"),
+            ("tied-last", "2026-02-01T00:00:00Z"),
+        ];
+        for (id, ts) in fixtures {
+            store.conn.execute("INSERT INTO events (id,ts,kind,skill,payload,status) VALUES (?1,?2,'install','alpha','{}','done')", params![id, ts]).unwrap();
+        }
+        drop(store);
+        let store = SqliteHistoryStore::open(&path).unwrap();
+        let plan: Vec<String> = store
+            .conn
+            .prepare("EXPLAIN QUERY PLAN SELECT * FROM events ORDER BY ts DESC,rowid DESC LIMIT 2")
+            .unwrap()
+            .query_map([], |row| row.get(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|line| line.contains("idx_events_ts")),
+            "timestamp index missing: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|line| line.contains("TEMP B-TREE")),
+            "page still sorts the store: {plan:?}"
+        );
+        let rows = store
+            .list(&EventFilter {
+                skill: None,
+                limit: 2,
+                after: None,
+            })
+            .unwrap();
+        assert_eq!(
+            rows.iter().map(|row| row.id.0.as_str()).collect::<Vec<_>>(),
+            fixtures
+                .iter()
+                .rev()
+                .take(2)
+                .map(|(id, _)| *id)
+                .collect::<Vec<_>>()
+        );
+        let tail = store
+            .list(&EventFilter {
+                skill: None,
+                limit: 2,
+                after: Some(rows[1].id.clone()),
+            })
+            .unwrap();
+        assert_eq!(
+            tail.iter().map(|row| row.id.0.as_str()).collect::<Vec<_>>(),
+            vec![fixtures[0].0]
+        );
+    }
+
+    std::thread_local! {
+        static PATCH_WAIT: std::cell::RefCell<Option<(std::sync::mpsc::Sender<()>,std::sync::mpsc::Receiver<()>)>> = const { std::cell::RefCell::new(None) };
+    }
+
+    fn wait_for_competing_patch(_: i32) -> bool {
+        PATCH_WAIT.with(|slot| match slot.borrow_mut().take() {
+            Some((waiting, release)) => waiting.send(()).is_ok() && release.recv().is_ok(),
+            None => false,
+        })
+    }
+
+    #[test]
+    fn concurrent_history_patches_keep_both_payload_and_inverse_keys_or_lose_a_committed_edit() {
+        for column in [JsonColumn::Payload, JsonColumn::Inverse] {
+            let tmp = tempfile::tempdir().unwrap();
+            let scope = scope_for(tmp.path());
+            let guard = guard_for(tmp.path(), &scope);
+            let path = tmp.path().join("events.sqlite3");
+            let mut store = SqliteHistoryStore::open(&path).unwrap();
+            let id = EventId("patch-target".into());
+            store
+                .record(
+                    &guard,
+                    &id,
+                    &draft(
+                        EventKind::Install,
+                        "alpha",
+                        serde_json::json!({"base":true}),
+                        Some(serde_json::json!({"base":true})),
+                    ),
+                )
+                .unwrap();
+            let mut first = Connection::open(&path).unwrap();
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+            let (start_tx, start_rx) = std::sync::mpsc::channel();
+            let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                store
+                    .conn
+                    .busy_handler(Some(wait_for_competing_patch))
+                    .unwrap();
+                PATCH_WAIT.with(|slot| slot.replace(Some((waiting_tx, release_rx))));
+                ready_tx.send(()).unwrap();
+                start_rx.recv().unwrap();
+                let result = match column {
+                    JsonColumn::Payload => {
+                        store.patch_payload(&guard, &id, serde_json::json!({"second":true}))
+                    }
+                    JsonColumn::Inverse => {
+                        store.patch_inverse(&guard, &id, serde_json::json!({"second":true}))
+                    }
+                };
+                result.unwrap();
+                let row = store.get(&id).unwrap().unwrap();
+                match column {
+                    JsonColumn::Payload => row.payload,
+                    JsonColumn::Inverse => row.inverse.unwrap(),
+                }
+            });
+            ready_rx.recv().unwrap();
+            let transaction = first
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            start_tx.send(()).unwrap();
+            waiting_rx.recv().unwrap();
+            let sql = match column {
+                JsonColumn::Payload => "UPDATE events SET payload = '{\"base\":true,\"first\":true}' WHERE id = 'patch-target'",
+                JsonColumn::Inverse => "UPDATE events SET inverse = '{\"base\":true,\"first\":true}' WHERE id = 'patch-target'",
+            };
+            transaction.execute(sql, []).unwrap();
+            transaction.commit().unwrap();
+            release_tx.send(()).unwrap();
+            assert_eq!(
+                worker.join().unwrap(),
+                serde_json::json!({"base":true,"first":true,"second":true})
+            );
         }
     }
 
