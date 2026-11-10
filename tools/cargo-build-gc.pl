@@ -4,71 +4,123 @@
 # Expects `build.build-dir = "{cargo-cache-home}/build/{workspace-path-hash}"`,
 # which gives each workspace (each git worktree) one folder:
 #   $CARGO_HOME/build/<xx>/<hash>/
-# Deletes whole folders, least recently used first. Deleting one only costs a
-# rebuild.
+# Empties whole folders, least recently used first. Emptying one only costs a
+# rebuild. This is an eviction threshold, not a hard bound: folders in use
+# are never touched, so builds that run at the same time can go over the cap.
 #
-# A folder is in use while Cargo holds its `.cargo-lock` (compiling) or while
-# a process runs from inside it (Cargo releases the lock before it runs test
-# binaries). To delete, this script takes every lock of the folder, checks for
-# processes, and renames the folder away while it holds the locks. A Cargo
-# that starts later waits on the lock, then builds into a new folder.
+# A folder is in use while:
+#   - Cargo holds one of its `<profile>/.cargo-lock` files (compiling),
+#   - a running `cargo` has it as its build directory (found with
+#     `cargo metadata` in the process's working directory; this covers test
+#     runs, which start after Cargo releases its locks), or
+#   - a process runs from a path inside it.
+# To empty a folder, this script takes its locks first, checks the other two
+# conditions while it holds them, and deletes everything except the lock
+# files. A Cargo that waits on a lock then gets the same lock file and builds
+# from scratch. Any failed check skips the folder.
 #
-#   CARGO_BUILD_GC_CAP_GB    total size cap (default 40)
-#   CARGO_BUILD_GC_FLOOR_GB  free-disk floor (default 30)
-#   CARGO_BUILD_GC_MAX_DAYS  delete folders not used for this long (default 3)
-#   CARGO_BUILD_GC_DRY_RUN=1 print what would go, delete nothing
+#   CARGO_BUILD_GC_CAP_GB       total size cap (default 40)
+#   CARGO_BUILD_GC_FLOOR_GB     free-disk floor (default 30)
+#   CARGO_BUILD_GC_MAX_DAYS     empty folders not used for this long (default 3)
+#   CARGO_BUILD_GC_MIN_IDLE_MIN never empty folders used more recently (default 60)
+#   CARGO_BUILD_GC_DRY_RUN=1    print what would go, change nothing
 use strict;
 use warnings;
 use Cwd qw(realpath);
 use Fcntl qw(:flock);
+use File::Basename qw(dirname);
 use File::Glob qw(bsd_glob);
 use File::Path qw(make_path remove_tree);
 use POSIX qw(strftime);
 
 my $KB_PER_GB = 1024 * 1024;
-my $cap_kb   = ($ENV{CARGO_BUILD_GC_CAP_GB}   // 40) * $KB_PER_GB;
-my $floor_kb = ($ENV{CARGO_BUILD_GC_FLOOR_GB} // 30) * $KB_PER_GB;
-my $max_age  = ($ENV{CARGO_BUILD_GC_MAX_DAYS} // 3) * 86400;
-my $dry_run  = ($ENV{CARGO_BUILD_GC_DRY_RUN}  // '') eq '1';
+my $cap_kb    = ($ENV{CARGO_BUILD_GC_CAP_GB}   // 40) * $KB_PER_GB;
+my $floor_kb  = ($ENV{CARGO_BUILD_GC_FLOOR_GB} // 30) * $KB_PER_GB;
+my $max_age   = ($ENV{CARGO_BUILD_GC_MAX_DAYS} // 3) * 86400;
+my $min_idle  = ($ENV{CARGO_BUILD_GC_MIN_IDLE_MIN} // 60) * 60;
+my $dry_run   = ($ENV{CARGO_BUILD_GC_DRY_RUN} // '') eq '1';
 
 my $cargo_home = $ENV{CARGO_HOME} // "$ENV{HOME}/.cargo";
+my $cargo_bin  = "$cargo_home/bin/cargo";
 my $root       = realpath("$cargo_home/build");
 exit 0 unless defined $root && -d $root;
-my $trash = "$root/.gc-trash";
-my $seen  = "$root/.gc-last-busy";
+my $seen = "$root/.gc-last-busy";
 
 sub logline { print strftime('%F %T', localtime), " @_\n" }
 
-# Leftovers from a run that stopped between rename and delete.
-remove_tree($trash) unless $dry_run;
+open(my $instance, '>>', "$root/.gc.lock") or die "cannot open $root/.gc.lock: $!\n";
+exit 0 unless flock($instance, LOCK_EX | LOCK_NB);
 
-my @commands = `ps -ax -o command=`;
-die "ps failed\n" if $?;
-
-sub runs_from {
-    my ($ws) = @_;
-    return scalar grep { index($_, "$ws/") >= 0 } @commands;
-}
-
-# Returns open, exclusively locked handles for every lock of the folder, or
+# Returns exclusively locked handles for every Cargo lock in the folder, or
 # undef when Cargo holds one of them.
 sub lock_all {
     my ($ws) = @_;
     my @held;
-    for my $path (map { bsd_glob($_) } "$ws/*/.cargo-lock", "$ws/*/*/.cargo-lock") {
+    for my $path (map { bsd_glob("$ws/$_") } '*/.cargo-lock', '*/*/.cargo-lock') {
         next if -l $path;
-        open(my $fh, '<', $path) or next;
+        open(my $fh, '<', $path) or return undef;
         flock($fh, LOCK_EX | LOCK_NB) or return undef;
-        push @held, $fh;
+        push @held, { fh => $fh, dir => dirname($path) };
     }
     return \@held;
 }
 
-sub busy {
+sub cwd_of {
+    my ($pid) = @_;
+    my $link = readlink("/proc/$pid/cwd");
+    return $link if defined $link;
+    for (`lsof -a -d cwd -p $pid -Fn 2>/dev/null`) { return $1 if /^n(.+)/ }
+    return undef;
+}
+
+my %build_dir_of_cwd;
+sub build_dir_for {
+    my ($cwd) = @_;
+    return $build_dir_of_cwd{$cwd} if exists $build_dir_of_cwd{$cwd};
+    my $pid = open(my $out, '-|');
+    return undef unless defined $pid;
+    if (!$pid) {
+        chdir($cwd) or exit 1;
+        open(STDERR, '>', '/dev/null');
+        $ENV{RUSTUP_AUTO_INSTALL} = '0';
+        exec($cargo_bin, qw(metadata --no-deps --format-version 1 --offline)) or exit 1;
+    }
+    my $json = do { local $/; <$out> };
+    close($out) or return $build_dir_of_cwd{$cwd} = undef;
+    my ($dir) = ($json // '') =~ /"build_directory":"([^"\\]*)"/;
+    return $build_dir_of_cwd{$cwd} = defined $dir ? realpath($dir) // $dir : undef;
+}
+
+# Build directories of every running cargo, or undef when one is unknown.
+sub active_build_dirs {
+    my %dirs;
+    for my $pid (map { /(\d+)/ ? $1 : () } `pgrep -x cargo`) {
+        next if $pid == $$;
+        my $cwd = cwd_of($pid);
+        next if !defined $cwd && !kill(0, $pid);    # exited meanwhile
+        return undef unless defined $cwd;
+        my $dir = build_dir_for($cwd);
+        return undef unless defined $dir;
+        $dirs{$dir} = 1;
+    }
+    return \%dirs;
+}
+
+sub runs_from {
     my ($ws) = @_;
-    my $locks = lock_all($ws);
-    return 1 unless $locks;
-    return runs_from($ws) ? 1 : 0;
+    my @commands = `ps -ax -ww -o command=`;
+    return 1 if $?;
+    return scalar grep { index($_, "$ws/") >= 0 } @commands;
+}
+
+# Why the folder is in use, or '' when it is free. Call with its locks held.
+sub in_use {
+    my ($ws) = @_;
+    my $active = active_build_dirs();
+    return 'a running cargo has an unknown build directory' unless $active;
+    return 'a running cargo builds here' if $active->{$ws};
+    return 'a process runs from it' if runs_from($ws);
+    return '';
 }
 
 sub mtime { my @s = lstat($_[0]); return @s ? $s[9] : 0 }
@@ -84,17 +136,27 @@ sub last_used {
 }
 
 sub size_kb {
-    my $out = `du -sk "$_[0]"`;
-    return ($out =~ /^(\d+)/) ? $1 : 0;
+    my $out = `du -sk "$_[0]" 2>/dev/null`;
+    return ($out =~ /^(\d+)/) ? $1 : undef;
 }
 
 sub free_kb {
     my @lines = `df -k "$root"`;
     my @cols  = split ' ', ($lines[1] // '');
-    return $cols[3] // 0;
+    die "df failed for $root\n" unless defined $cols[3] && $cols[3] =~ /^\d+$/;
+    return $cols[3];
+}
+
+sub mark_busy {
+    my ($id) = @_;
+    return if $dry_run;
+    make_path($seen);
+    if (open(my $mark, '>>', "$seen/$id")) { close($mark) }
+    utime(undef, undef, "$seen/$id");
 }
 
 my $now = time;
+my $active_now = active_build_dirs() // {};
 my @workspaces;
 opendir(my $rd, $root) or die "cannot read $root: $!\n";
 for my $shard (grep { /^[0-9a-f]{2}$/ } readdir($rd)) {
@@ -106,13 +168,11 @@ for my $shard (grep { /^[0-9a-f]{2}$/ } readdir($rd)) {
         next if -l $ws || !-d _;
         my $real = realpath($ws);
         next unless defined $real && $real eq $ws;
+        my $kb = size_kb($ws);
+        if (!defined $kb) { logline("skip $ws: du failed"); next }
         my $id = "$shard$name";
-        if (busy($ws)) {
-            make_path($seen);
-            if (open(my $mark, '>>', "$seen/$id")) { close($mark) }
-            utime(undef, undef, "$seen/$id");
-        }
-        push @workspaces, { ws => $ws, id => $id, used => last_used($ws, $id), kb => size_kb($ws) };
+        mark_busy($id) if !lock_all($ws) || $active_now->{$ws} || runs_from($ws);
+        push @workspaces, { ws => $ws, id => $id, used => last_used($ws, $id), kb => $kb };
     }
     closedir($dh);
 }
@@ -120,34 +180,49 @@ closedir($rd);
 
 my $total = 0;
 $total += $_->{kb} for @workspaces;
-my $deleted = 0;
+my $freed = 0;
 
 for my $w (sort { $a->{used} <=> $b->{used} } @workspaces) {
     my $age = $now - $w->{used};
+    next if $age < $min_idle || $w->{kb} < 1024;
     my $why =
-        $age > $max_age                         ? 'not used for ' . int($age / 86400) . ' days'
-      : $total > $cap_kb                        ? 'over cap'
-      : (free_kb() < $floor_kb && $age > 3600)  ? 'below free-disk floor'
-      :                                           undef;
+        $age > $max_age                    ? 'not used for ' . int($age / 86400) . ' days'
+      : $total > $cap_kb                   ? 'over cap'
+      : free_kb() + $freed < $floor_kb     ? 'below free-disk floor'
+      :                                      undef;
     next unless $why;
 
     my $locks = lock_all($w->{ws});
-    if (!$locks || runs_from($w->{ws})) {
-        logline("skip $w->{ws} ($why): in use");
+    my $busy  = $locks ? in_use($w->{ws}) : 'Cargo holds its lock';
+    if ($busy) {
+        logline("skip $w->{ws} ($why): $busy");
         next;
     }
-    logline("delete $w->{ws} ($why, " . int($w->{kb} / 1024) . ' MB)');
-    $total -= $w->{kb};
-    next if $dry_run;
+    if ($dry_run) {
+        logline("would empty $w->{ws} ($why, " . int($w->{kb} / 1024) . ' MB)');
+        $total -= $w->{kb};
+        $freed += $w->{kb};
+        next;
+    }
 
-    make_path($trash);
-    my $dest = "$trash/$w->{id}-$$";
-    rename($w->{ws}, $dest) or do { logline("rename failed for $w->{ws}: $!"); next };
+    my @failed;
+    for my $lock (@$locks) {
+        opendir(my $pd, $lock->{dir}) or next;
+        for my $entry (grep { $_ ne '.' && $_ ne '..' && $_ ne '.cargo-lock' } readdir($pd)) {
+            remove_tree("$lock->{dir}/$entry", { error => \my $err });
+            push @failed, "$lock->{dir}/$entry" if $err && @$err;
+        }
+        closedir($pd);
+    }
     undef $locks;
-    remove_tree($dest);
-    $deleted++;
+    my $left = size_kb($w->{ws}) // $w->{kb};
+    $total -= $w->{kb} - $left;
     unlink("$seen/$w->{id}");
-    rmdir(($w->{ws} =~ m{^(.*)/[^/]+$})[0]);
+    logline("emptied $w->{ws} ($why, " . int(($w->{kb} - $left) / 1024) . ' MB freed)'
+        . (@failed ? '; could not delete: ' . join(', ', @failed) : ''));
 }
 
-logline(sprintf('kept %d folders, %.1f GB; %.1f GB free', @workspaces - $deleted, $total / $KB_PER_GB, free_kb() / $KB_PER_GB));
+my $note = $total > $cap_kb ? ' (over cap: the rest is in use or used within the idle window)' : '';
+logline(sprintf('%d folders, %.1f GB%s; %.1f GB free',
+    scalar(@workspaces), $total / $KB_PER_GB, $note, (free_kb() + $freed) / $KB_PER_GB)
+    . ($dry_run ? ' (projected)' : ''));

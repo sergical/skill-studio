@@ -114,20 +114,24 @@ rules are firm:
   other's final binaries.
 
 - **Delete old build folders automatically.** Cargo never deletes them.
-  `tools/cargo-build-gc.pl` deletes whole worktree folders under
+  `tools/cargo-build-gc.pl` empties whole worktree folders under
   `~/.cargo/build/`, least recently used first, above a 40 GB total, below
-  30 GB free disk, or after 3 days. It skips a folder while Cargo holds its
-  lock or a process runs from it (Cargo releases the lock before it runs test
-  binaries), and holds the lock while it moves the folder away. Run it every 15
-  minutes with launchd (macOS):
+  30 GB free disk, or after 3 days. It never empties a folder used in the last
+  hour, a folder whose lock Cargo holds, a folder that a running `cargo` builds
+  into (it asks `cargo metadata` in that process's working directory, because
+  Cargo releases its lock before tests run), or a folder that a process runs
+  from. It holds the folder's locks while it checks and deletes, and keeps the
+  lock files. The cap is an eviction threshold: builds that run at the same
+  time can go over it. Run it every 15 minutes with launchd (macOS):
 
   ```bash
   install -m 755 tools/cargo-build-gc.pl ~/.local/bin/cargo-build-gc
-  # LaunchAgent: ProgramArguments ~/.local/bin/cargo-build-gc, StartInterval 900
+  # LaunchAgent: ProgramArguments = absolute path to cargo-build-gc
+  # (launchd does not expand ~), StartInterval 900
   ```
 
   `pnpm run clean:target` runs it once. `CARGO_BUILD_GC_DRY_RUN=1` shows what
-  it would delete.
+  it would empty and changes nothing.
 
 - **Clean up when the work is done.** When a worktree's PR merges or closes, or
   the session ends with its work pushed, run `git worktree remove <path>`. If
