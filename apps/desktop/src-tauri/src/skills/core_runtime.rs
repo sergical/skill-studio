@@ -206,7 +206,6 @@ mod data_root_tests {
 #[cfg(test)]
 mod probe_cache_tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn repeated_desktop_detection_reuses_unchanged_versions_or_spawns_twice() {
@@ -214,12 +213,31 @@ mod probe_cache_tests {
         let bin = home.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
         let program = bin.join("claude");
+        let source = bin.join("probe.c");
         std::fs::write(
-            &program,
-            "#!/usr/bin/python3\nimport sys\nif sys.argv[1:] == ['--version']:\n    with open(sys.argv[0] + '.calls', 'a') as f: f.write('called\\n')\nprint('1.2.3')\n",
+            &source,
+            r#"#include <stdio.h>
+#include <string.h>
+int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "--version") == 0) {
+        char calls[4096];
+        snprintf(calls, sizeof(calls), "%s.calls", argv[0]);
+        FILE *f = fopen(calls, "a");
+        if (!f) return 1;
+        fputs("called\n", f); fclose(f);
+    }
+    puts("1.2.3"); return 0;
+}
+"#,
         )
         .unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(std::process::Command::new("/usr/bin/cc")
+            .arg(&source)
+            .arg("-o")
+            .arg(&program)
+            .status()
+            .unwrap()
+            .success());
         assert!(std::process::Command::new(&program)
             .output()
             .unwrap()

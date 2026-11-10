@@ -35,7 +35,7 @@ impl ProbeKey {
         let path = std::path::absolute(path).ok()?;
         let target = std::fs::canonicalize(&path).ok()?;
         let facts = std::fs::metadata(&target).ok()?;
-        if !facts.is_file() || is_shell_launcher(&target)? {
+        if !facts.is_file() || !is_native_executable(&target)? {
             return None;
         }
         let modified = facts.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
@@ -53,27 +53,43 @@ impl ProbeKey {
         })
     }
 }
-fn is_shell_launcher(path: &Path) -> Option<bool> {
-    let mut header = Vec::new();
-    std::fs::File::open(path)
-        .ok()?
-        .take(256)
-        .read_to_end(&mut header)
-        .ok()?;
-    let header = String::from_utf8_lossy(&header);
-    let Some(shebang) = header
-        .lines()
-        .next()
-        .and_then(|line| line.strip_prefix("#!"))
-    else {
+fn is_native_executable(path: &Path) -> Option<bool> {
+    let mut magic = [0; 4];
+    let mut file = std::fs::File::open(path).ok()?;
+    if file.read_exact(&mut magic).is_err() {
         return Some(false);
+    }
+    Some(matches!(
+        magic,
+        [0x7f, b'E', b'L', b'F']
+            | [0xfe, 0xed, 0xfa, 0xce | 0xcf]
+            | [0xce | 0xcf, 0xfa, 0xed, 0xfe]
+            | [0xca, 0xfe, 0xba, 0xbe | 0xbf]
+            | [0xbe | 0xbf, 0xba, 0xfe, 0xca]
+    ))
+}
+
+fn cache_path_confined(file: &Path) -> bool {
+    let Some(parent) = file.parent() else {
+        return false;
     };
-    Some(shebang.split_whitespace().any(|word| {
-        matches!(
-            Path::new(word).file_name().and_then(|name| name.to_str()),
-            Some("sh" | "bash" | "zsh" | "dash" | "ksh" | "mksh" | "ash" | "fish" | "csh" | "tcsh")
-        )
-    }))
+    let Some(home) = parent.parent() else {
+        return false;
+    };
+    let Ok(home) = home.canonicalize() else {
+        return false;
+    };
+    [parent, file]
+        .into_iter()
+        .all(|path| match std::fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                !metadata.file_type().is_symlink()
+                    && path
+                        .canonicalize()
+                        .is_ok_and(|resolved| resolved.starts_with(&home))
+            }
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        })
 }
 #[derive(Serialize, Deserialize)]
 struct Entry {
@@ -93,8 +109,11 @@ pub(crate) struct ProbeCache {
 impl ProbeCache {
     pub(crate) fn load(file: PathBuf) -> Self {
         let mut bytes = Vec::new();
-        let entries = std::fs::File::open(&file)
+        let entries = cache_path_confined(&file)
+            .then(|| std::fs::File::open(&file))
+            .transpose()
             .ok()
+            .flatten()
             .and_then(|input| {
                 input.take(MAX_BYTES + 1).read_to_end(&mut bytes).ok()?;
                 if bytes.len() as u64 > MAX_BYTES {
@@ -157,7 +176,13 @@ fn write_cache(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = file
         .parent()
         .ok_or_else(|| std::io::Error::other("cache has no parent"))?;
+    if !cache_path_confined(file) {
+        return Ok(());
+    }
     std::fs::create_dir_all(parent)?;
+    if !cache_path_confined(file) {
+        return Ok(());
+    }
     let temp = parent.join(format!(".probe-cache-{}.tmp", ulid::Ulid::generate()));
     let result = (|| {
         let mut output = std::fs::OpenOptions::new()
@@ -178,8 +203,8 @@ fn write_cache(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn shell_launchers_bypass_cache_while_symlinked_programs_keep_keys_or_cache_obsolete_backends()
-    {
+    fn non_native_launchers_bypass_cache_while_symlinked_binaries_keep_keys_or_cache_obsolete_backends(
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let program = dir.path().join("program");
         let link = dir.path().join("link");
@@ -189,6 +214,9 @@ mod tests {
             "#!/usr/bin/env -S bash",
             "#!/bin/zsh",
             "#!/bin/dash",
+            "#!/usr/bin/python3",
+            "#!/usr/bin/env node",
+            "plain text",
         ] {
             std::fs::write(&program, format!("{header}\nexec backend --version\n")).unwrap();
             assert!(
@@ -196,11 +224,40 @@ mod tests {
                 "shell launcher received a cache key: {header}"
             );
         }
-        std::fs::write(&program, "#!/usr/bin/env node\nconsole.log('1.2.3')\n").unwrap();
+        std::fs::write(&program, b"\x7fELFnative").unwrap();
         assert!(
             ProbeKey::read(&link).is_some(),
             "symlinked program lost its cache key"
         );
+    }
+
+    #[test]
+    fn caching_under_symlinked_home_entries_skips_writes_or_modifies_an_outside_file() {
+        for symlink_directory in [true, false] {
+            let home = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let parent = home.path().join(".skill-studio");
+            let file = parent.join("version-probes.json");
+            let victim = outside.path().join("version-probes.json");
+            std::fs::write(&victim, b"untouched").unwrap();
+            if symlink_directory {
+                std::os::unix::fs::symlink(outside.path(), &parent).unwrap();
+            } else {
+                std::fs::create_dir(&parent).unwrap();
+                std::os::unix::fs::symlink(&victim, &file).unwrap();
+            }
+            let program = home.path().join("program");
+            std::fs::write(&program, b"\x7fELFfixture").unwrap();
+            ProbeCache::load(file.clone()).put(ProbeKey::read(&program).unwrap(), &output());
+            assert_eq!(std::fs::read(&victim).unwrap(), b"untouched");
+            assert!(
+                std::fs::symlink_metadata(if symlink_directory { &parent } else { &file })
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 1);
+        }
     }
 
     fn output() -> ProcessOutput {
@@ -217,12 +274,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("program");
         let replacement = dir.path().join("replacement");
-        std::fs::write(&path, b"first").unwrap();
+        std::fs::write(&path, b"\x7fELFfirst").unwrap();
         let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
         let before = ProbeKey::read(&path).unwrap();
         let mut cache = ProbeCache::default();
         cache.put(before.clone(), &output());
-        std::fs::write(&replacement, b"other").unwrap();
+        std::fs::write(&replacement, b"\x7fELFother").unwrap();
         std::fs::File::options()
             .write(true)
             .open(&replacement)
@@ -249,8 +306,8 @@ mod tests {
         let first = dir.path().join("first");
         let second = dir.path().join("second");
         let shim = dir.path().join("shim");
-        std::fs::write(&first, b"first").unwrap();
-        std::fs::write(&second, b"other").unwrap();
+        std::fs::write(&first, b"\x7fELFfirst").unwrap();
+        std::fs::write(&second, b"\x7fELFother").unwrap();
         let modified = std::fs::metadata(&first).unwrap().modified().unwrap();
         std::fs::File::options()
             .write(true)
@@ -281,9 +338,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("program");
         let alias = dir.path().join("alias");
-        std::fs::write(&path, b"one").unwrap();
+        std::fs::write(&path, b"\x7fELFone").unwrap();
         let key = ProbeKey::read(&path).unwrap();
-        let file = dir.path().join("cache.json");
+        let file = dir.path().join(".skill-studio/cache.json");
         let mut cache = ProbeCache::load(file.clone());
         cache.put(key.clone(), &output());
         let reopened = ProbeCache::load(file);
@@ -308,7 +365,7 @@ mod tests {
             reopened.get(&changed_time).is_none(),
             "mtime change reused stale output"
         );
-        std::fs::write(&path, b"larger").unwrap();
+        std::fs::write(&path, b"\x7fELFlarger").unwrap();
         assert!(
             reopened.get(&ProbeKey::read(&path).unwrap()).is_none(),
             "size change reused stale output"
@@ -319,7 +376,7 @@ mod tests {
     {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("program");
-        std::fs::write(&path, b"fixture").unwrap();
+        std::fs::write(&path, b"\x7fELFfixture").unwrap();
         let key = ProbeKey::read(&path).unwrap();
         for failed in [
             ProcessOutput {

@@ -276,23 +276,23 @@ fn broken_node_reason(node: &Path, path: &OsString) -> Option<String> {
     let mut child = spawn_retrying_busy(&mut command).ok()?;
     let stderr_reader = child.stderr.take().map(spawn_drain::<ChildStderr>);
     let start = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if start.elapsed() < NODE_VERSION_TIMEOUT => {
+    let exited = loop {
+        match child_exited_unreaped(&child) {
+            Ok(true) => break true,
+            Ok(false) if start.elapsed() < NODE_VERSION_TIMEOUT => {
                 std::thread::sleep(POLL_INTERVAL);
             }
-            _ => {
-                #[cfg(unix)]
-                let _ = kill_process_tree(child.id());
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = join_killed_reader(stderr_reader, KILLED_READER_GRACE);
-                return None;
-            }
+            _ => break false,
         }
     };
-    let (_, stderr) = readers_after_exit(child.id(), None, stderr_reader, KILLED_READER_GRACE);
+    let tree_stopped = kill_process_tree(child.id());
+    let _ = child.kill();
+    let status = child.wait();
+    let stderr = join_killed_reader(stderr_reader, KILLED_READER_GRACE);
+    if !exited || !tree_stopped {
+        return None;
+    }
+    let status = status.ok()?;
     if status.success() {
         return None;
     }
@@ -409,10 +409,18 @@ fn kill_process_tree(pid: u32) -> bool {
         }
         index += 1;
     }
-    for child in descendants.iter().rev() {
-        if let Some(process) = system.process(*child) {
-            process.kill();
-        }
+    let identities: Vec<_> = descendants
+        .iter()
+        .filter_map(|pid| {
+            system.process(*pid).map(|process| ProcessIdentity {
+                pid: *pid,
+                start: process.start_time(),
+                parent: process.parent(),
+            })
+        })
+        .collect();
+    for identity in identities.iter().rev() {
+        signal_snapshot_process(identity, &identities, &mut system);
     }
     let _ = kill_process_group(pid);
     for _ in 0..100 {
@@ -450,28 +458,61 @@ fn join_killed_reader(reader: Option<PipeDrain>, grace: Duration) -> Vec<u8> {
     reader.handle.join().unwrap_or_default()
 }
 
-fn readers_after_exit(
-    pid: u32,
-    stdout: Option<PipeDrain>,
-    stderr: Option<PipeDrain>,
-    grace: Duration,
-) -> (Vec<u8>, Vec<u8>) {
-    let finished = || {
-        stdout.as_ref().is_none_or(PipeDrain::is_finished)
-            && stderr.as_ref().is_none_or(PipeDrain::is_finished)
-    };
-    let deadline = Instant::now() + grace;
-    while !finished() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
+#[derive(Clone)]
+struct ProcessIdentity {
+    pid: sysinfo::Pid,
+    start: u64,
+    parent: Option<sysinfo::Pid>,
+}
+
+fn signal_snapshot_process(
+    identity: &ProcessIdentity,
+    snapshot: &[ProcessIdentity],
+    system: &mut sysinfo::System,
+) -> bool {
+    let pids: Vec<_> = snapshot.iter().map(|entry| entry.pid).collect();
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&pids),
+        true,
+        sysinfo::ProcessRefreshKind::nothing().without_tasks(),
+    );
+    identity_chain_matches(identity, snapshot, system)
+        && system
+            .process(identity.pid)
+            .is_some_and(sysinfo::Process::kill)
+}
+
+fn identity_chain_matches(
+    identity: &ProcessIdentity,
+    snapshot: &[ProcessIdentity],
+    system: &sysinfo::System,
+) -> bool {
+    let mut current = identity;
+    loop {
+        if !system.process(current.pid).is_some_and(|process| {
+            process.start_time() == current.start && process.parent() == current.parent
+        }) {
+            return false;
+        }
+        let Some(parent) = snapshot
+            .iter()
+            .find(|entry| Some(entry.pid) == current.parent)
+        else {
+            return true;
+        };
+        current = parent;
     }
-    if !finished() {
-        #[cfg(unix)]
-        let _ = kill_process_group(pid);
-    }
-    (
-        join_killed_reader(stdout, grace),
-        join_killed_reader(stderr, grace),
+}
+
+fn child_exited_unreaped(child: &Child) -> std::io::Result<bool> {
+    use rustix::process::{waitid, Pid, WaitId, WaitIdOptions};
+    // WNOWAIT retains the leader PID and PGID until cleanup has signalled the group.
+    waitid(
+        WaitId::Pid(Pid::from_child(child)),
+        WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
     )
+    .map(|status| status.is_some())
+    .map_err(Into::into)
 }
 
 impl ProcessSpawner for RealProcessSpawner {
@@ -558,27 +599,30 @@ impl ProcessSpawner for RealProcessSpawner {
             if self.clock.monotonic().saturating_sub(start) >= deadline {
                 break Ok(None);
             }
-            match child.try_wait() {
-                Ok(Some(status)) => break Ok(Some(status)),
-                Ok(None) => std::thread::sleep(POLL_INTERVAL),
+            match child_exited_unreaped(&child) {
+                Ok(true) => break Ok(Some(())),
+                Ok(false) => std::thread::sleep(POLL_INTERVAL),
                 Err(e) => break Err(CoreError::io(Path::new(&spec.program), e)),
             }
         };
-        let status = match exit_status {
-            Ok(Some(status)) => status,
+        let tree_stopped = kill_process_tree(child.id());
+        let _ = child.kill();
+        let status = child
+            .wait()
+            .map_err(|e| CoreError::io(Path::new(&spec.program), e))?;
+        if !tree_stopped {
+            join_killed_reader(stdout_reader, self.reader_grace);
+            join_killed_reader(stderr_reader, self.reader_grace);
+            return Err(CoreError::new(
+                skill_studio_core::ErrorCode::Io,
+                "probe process tree did not stop",
+            ));
+        }
+        match exit_status {
+            Ok(Some(())) => {}
             stopped => {
-                #[cfg(unix)]
-                let tree_stopped = kill_process_tree(child.id());
-                let _ = child.kill();
-                let _ = child.wait();
                 let stdout = join_killed_reader(stdout_reader, self.reader_grace);
                 let stderr = join_killed_reader(stderr_reader, self.reader_grace);
-                if !tree_stopped {
-                    return Err(CoreError::new(
-                        skill_studio_core::ErrorCode::Io,
-                        "probe process tree did not stop",
-                    ));
-                }
                 return stopped.map(|_| ProcessOutput {
                     status: None,
                     stdout: String::from_utf8_lossy(&stdout).into_owned(),
@@ -586,9 +630,9 @@ impl ProcessSpawner for RealProcessSpawner {
                     timed_out: true,
                 });
             }
-        };
-        let (stdout, stderr) =
-            readers_after_exit(child.id(), stdout_reader, stderr_reader, self.reader_grace);
+        }
+        let stdout = join_killed_reader(stdout_reader, self.reader_grace);
+        let stderr = join_killed_reader(stderr_reader, self.reader_grace);
         let output = self.describe_failed_npx(
             spec,
             &program,
@@ -666,6 +710,91 @@ mod tests {
     }
 
     #[test]
+    fn normal_exit_with_redirected_child_stops_the_group_or_leaves_a_probe_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fixture = ProbeFixture {
+            pid: tmp.path().join("pid"),
+            release: tmp.path().join("release"),
+        };
+        let spec = ProcessSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "sleep 600 >/dev/null 2>&1 & echo $! > \"$1\"; echo 1.2.3".into(),
+                "probe".into(),
+                fixture.pid.display().to_string(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+        };
+        let result = RealProcessSpawner::new().run(&spec, &NeverCancel);
+        let pid = std::fs::read_to_string(&fixture.pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let alive = process_running(pid);
+        drop(fixture);
+        assert_eq!(result.unwrap().stdout.trim(), "1.2.3");
+        assert!(!alive, "redirected child survived normal exit");
+    }
+
+    #[test]
+    fn cleanup_rechecks_snapshot_identity_or_signals_a_reused_pid_or_parent() {
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+        let mut system = System::new().unwrap();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+        let mut child = Command::new("/bin/sleep").arg("600").spawn().unwrap();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+        let process = system.process(Pid::from_u32(child.id())).unwrap();
+        let identity = ProcessIdentity {
+            pid: process.pid(),
+            start: process.start_time(),
+            parent: process.parent(),
+        };
+        let mut reused = identity.clone();
+        reused.start += 1;
+        let signalled_reuse =
+            signal_snapshot_process(&reused, std::slice::from_ref(&reused), &mut system);
+        let survived_reuse = child.try_wait().unwrap().is_none();
+        let mut reparented = identity;
+        reparented.parent = None;
+        let signalled_reparenting =
+            signal_snapshot_process(&reparented, std::slice::from_ref(&reparented), &mut system);
+        let survived_reparenting = child.try_wait().unwrap().is_none();
+        let _ = child.kill();
+        child.wait().unwrap();
+        assert!(
+            !signalled_reuse && survived_reuse,
+            "signalled a PID with a changed start time"
+        );
+        assert!(
+            !signalled_reparenting && survived_reparenting,
+            "signalled a PID with a changed parent chain"
+        );
+    }
+
+    #[test]
+    fn exit_poll_keeps_leader_waitable_or_allows_pgid_reuse_before_cleanup() {
+        let mut child = Command::new("/usr/bin/true").spawn().unwrap();
+        while !child_exited_unreaped(&child).unwrap() {
+            std::thread::yield_now();
+        }
+        let still_waitable = child_exited_unreaped(&child);
+        child.wait().unwrap();
+        assert!(still_waitable.unwrap());
+    }
+
+    #[test]
     fn cancelling_an_escaping_grandchild_stops_it_or_leaves_the_probe_running() {
         let tmp = tempfile::tempdir().unwrap();
         let fixture = ProbeFixture {
@@ -675,8 +804,9 @@ mod tests {
         let script = r"import os, sys, time
 if os.fork() == 0:
     os.setsid()
-    with open(sys.argv[1], 'w') as f:
+    with open(sys.argv[1] + '.tmp', 'w') as f:
         f.write(str(os.getpid()))
+    os.rename(sys.argv[1] + '.tmp', sys.argv[1])
     while not os.path.exists(sys.argv[2]):
         time.sleep(0.01)
     os._exit(0)
@@ -699,7 +829,7 @@ while True:
             reader_grace: Duration::ZERO,
             ..RealProcessSpawner::new()
         };
-        let result = spawner.run(&spec, &CancelWhenReady(fixture.pid.clone()));
+        let result = spawner.run(&spec, &CancelWhenPidReady(fixture.pid.clone()));
         let pid = std::fs::read_to_string(&fixture.pid)
             .unwrap()
             .trim()
@@ -741,10 +871,61 @@ while True:
         }
     }
 
+    #[test]
+    fn replacing_a_python_launchers_backend_under_the_same_path_returns_the_new_version_or_reuses_stale_output(
+    ) {
+        let home = tempfile::tempdir().unwrap();
+        let launcher = home.path().join("launcher");
+        let backend = home.path().join("backend");
+        std::fs::write(&launcher, "#!/usr/bin/python3\nimport subprocess\nsubprocess.run(['backend', '--version'], check=True)\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let spec = ProcessSpec {
+            program: launcher.display().to_string(),
+            args: vec!["--version".into()],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+        };
+        for version in ["1.2.3", "4.5.6"] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(&backend, format!("#!/bin/sh\necho {version}\n")).unwrap();
+            std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let spawner =
+                RealProcessSpawner::for_home(home.path(), vec![home.path().to_path_buf()]);
+            assert_eq!(
+                spawner.run(&spec, &NeverCancel).unwrap().stdout.trim(),
+                version,
+                "shell launcher reused the replaced backend's version"
+            );
+        }
+    }
+
     fn write_program(path: &Path) {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::write(path, "#!/usr/bin/python3\nimport sys\nwith open(sys.argv[0] + '.calls', 'a') as f: f.write('called\\n')\nprint('1.2.3')\n").unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let source = path.with_extension("c");
+        std::fs::write(
+            &source,
+            r#"#include <stdio.h>
+int main(int argc, char **argv) {
+    char calls[4096];
+    snprintf(calls, sizeof(calls), "%s.calls", argv[0]);
+    FILE *f = fopen(calls, "a");
+    if (!f) return 1;
+    fputs("called\n", f); fclose(f);
+    puts("1.2.3"); return 0;
+}
+"#,
+        )
+        .unwrap();
+        assert!(Command::new("/usr/bin/cc")
+            .arg(&source)
+            .arg("-o")
+            .arg(path)
+            .status()
+            .unwrap()
+            .success());
     }
 
     #[test]
@@ -877,10 +1058,30 @@ while True:
         );
     }
 
+    struct CancelWhenPidReady(PathBuf);
+    impl CancelToken for CancelWhenPidReady {
+        fn is_cancelled(&self) -> bool {
+            std::fs::read_to_string(&self.0).is_ok_and(|value| value.trim().parse::<u32>().is_ok())
+        }
+    }
+
+    #[test]
+    fn escaped_child_readiness_waits_for_a_parseable_pid_or_cancels_before_pid_publication() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("ready");
+        let cancel = CancelWhenPidReady(path.clone());
+        std::fs::write(&path, "").unwrap();
+        assert!(!cancel.is_cancelled());
+        std::fs::write(&path, "pending").unwrap();
+        assert!(!cancel.is_cancelled());
+        std::fs::write(&path, "123").unwrap();
+        assert!(cancel.is_cancelled());
+    }
+
     struct CancelWhenReady(PathBuf);
     impl CancelToken for CancelWhenReady {
         fn is_cancelled(&self) -> bool {
-            self.0.exists()
+            std::fs::read_to_string(&self.0).is_ok_and(|value| !value.trim().is_empty())
         }
     }
 
