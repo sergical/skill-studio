@@ -43,7 +43,7 @@ fn mcp_subcommand_answers_initialize_and_tools_list_over_stdio() {
     });
     let next = || -> serde_json::Value {
         let line = lines
-            .recv_timeout(Duration::from_secs(60))
+            .recv_timeout(Duration::from_mins(1))
             .expect("the server should answer within a minute");
         serde_json::from_str(&line)
             .unwrap_or_else(|e| panic!("stdout line is not JSON ({e}): {line}"))

@@ -316,9 +316,7 @@ fn walkdir(dir: &Path) -> Vec<PathBuf> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            let is_symlink = fs::symlink_metadata(&path)
-                .map(|m| m.file_type().is_symlink())
-                .unwrap_or(false);
+            let is_symlink = fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
             if is_symlink {
                 out.push(path);
             } else if path.is_dir() {

@@ -57,14 +57,25 @@ if printf '%s\n' "$assets" | grep -qx 'latest.json'; then
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
   gh release download "$tag" --pattern 'latest.json' --dir "$tmp" --clobber
+  # tauri-action 1.x writes each asset's API URL (.../releases/assets/<id>),
+  # which stays valid when the draft is published; the updater sends
+  # Accept: application/octet-stream, so GitHub serves the file. A tag
+  # download URL also works. A draft's untagged-... download URL does not.
+  updater_urls="$(gh release view "$tag" --json assets | jq -r --arg t "/releases/download/$tag/" \
+    '.assets[] | select(.name | endswith(".app.tar.gz")) | .apiUrl, (.url | select(contains($t)))')"
+  first_url=""
   for platform in darwin-aarch64 darwin-x86_64; do
     if ! jq -e --arg p "$platform" '.platforms[$p].url and .platforms[$p].signature' "$tmp/latest.json" >/dev/null; then
       problems+=("latest.json has no url+signature entry for $platform")
-    elif ! jq -e --arg p "$platform" --arg t "/releases/download/$tag/" '.platforms[$p].url | contains($t)' "$tmp/latest.json" >/dev/null; then
-      # Draft assets carry untagged-... URLs; a manifest still naming one
-      # would point every installed app at a dead download once published.
-      problems+=("latest.json url for $platform does not point at /releases/download/$tag/")
+      continue
     fi
+    url="$(jq -r --arg p "$platform" '.platforms[$p].url' "$tmp/latest.json")"
+    if ! printf '%s\n' "$updater_urls" | grep -qxF "$url"; then
+      problems+=("latest.json url for $platform is not an updater archive of release $tag: $url")
+    elif [[ "$url" == "$first_url" ]]; then
+      problems+=("latest.json names the same archive for darwin-aarch64 and $platform")
+    fi
+    first_url="$url"
   done
 else
   problems+=("missing latest.json updater manifest")

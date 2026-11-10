@@ -23,7 +23,7 @@ pub const DOCTOR_EVENT: &str = "skills://doctor";
 /// The shared body: build a correlation id, run `ops::doctor`, and unwrap
 /// its envelope the way every other desktop command does.
 pub(crate) fn run_doctor(rt: &Runtime) -> Result<DoctorReport, String> {
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::doctor(rt, &ctx, &DoctorRequest {});
     let envelope = ResultEnvelope::from_result(Operation::Doctor, &rt.scope, &ctx, result);
     super::core_runtime::to_command_result(envelope)

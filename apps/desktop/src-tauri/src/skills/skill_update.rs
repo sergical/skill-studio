@@ -20,13 +20,13 @@ use tauri::{AppHandle, Emitter, Manager};
 
 /// How often the background loop rechecks once it has already checked once
 /// (the launch check is the first `due()` call, always true).
-pub const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
+pub const UPDATE_CHECK_INTERVAL: Duration = Duration::from_hours(4);
 
 /// How often the background loop wakes to ask `UpdateCheckScheduler` whether
 /// `UPDATE_CHECK_INTERVAL` has elapsed. Short relative to the interval so the
 /// loop's own sleep never meaningfully delays the four-hour recheck; not a
 /// wall-clock assertion any test depends on.
-const LOOP_POLL_INTERVAL: Duration = Duration::from_secs(60);
+const LOOP_POLL_INTERVAL: Duration = Duration::from_mins(1);
 
 /// Event the Settings "Version" card subscribes to, so an automatic launch
 /// or four-hour check (no direct caller awaiting a command response) still
@@ -510,7 +510,7 @@ mod tests {
     /// before its first update check instead of checking on launch.
     #[test]
     fn due_is_true_on_the_first_call_covering_the_launch_check() {
-        let scheduler = UpdateCheckScheduler::new(FakeClock::new(), Duration::from_secs(60));
+        let scheduler = UpdateCheckScheduler::new(FakeClock::new(), Duration::from_mins(1));
         assert!(scheduler.due());
     }
 
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn due_is_false_until_the_interval_elapses_then_true_again() {
         let clock = FakeClock::new();
-        let scheduler = UpdateCheckScheduler::new(clock, Duration::from_secs(60));
+        let scheduler = UpdateCheckScheduler::new(clock, Duration::from_mins(1));
         assert!(scheduler.due());
         assert!(!scheduler.due(), "should not be due again immediately");
         scheduler.clock.advance(Duration::from_secs(59));

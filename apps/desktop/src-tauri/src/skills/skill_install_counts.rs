@@ -29,7 +29,7 @@ pub const REQUEST_SPACING: Duration = Duration::from_millis(250);
 
 /// How long a failed or not-public answer blocks new requests for the same
 /// repo or skill. It only ever blocks a call, so it cannot leak anything.
-const NEGATIVE_TTL: Duration = Duration::from_secs(60 * 60);
+const NEGATIVE_TTL: Duration = Duration::from_hours(1);
 
 /// A hung connection must not hold a lookup open; a timeout is a failed
 /// fetch like any other and takes the stale-cache fallback.
@@ -895,7 +895,7 @@ mod tests {
 
         for visibility in [
             Ok(Visibility::NotPublic),
-            Ok(Visibility::RateLimited(Duration::from_secs(60))),
+            Ok(Visibility::RateLimited(Duration::from_mins(1))),
             Err("unreachable".to_string()),
         ] {
             let api = FakeApi::with_visibility(Some(5), visibility);
@@ -1077,10 +1077,8 @@ mod tests {
     async fn a_github_rate_limit_blocks_calls_until_its_deadline() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("install-counts.json");
-        let api = FakeApi::with_visibility(
-            Some(5),
-            Ok(Visibility::RateLimited(Duration::from_secs(60))),
-        );
+        let api =
+            FakeApi::with_visibility(Some(5), Ok(Visibility::RateLimited(Duration::from_mins(1))));
         let shared = scheduler();
 
         let first = lookup_with(&api, &shared, &path, "one", 1_000).await;
@@ -1108,7 +1106,7 @@ mod tests {
             }
             async fn installs(&self, _source: &str, _name: &str) -> Result<u32, InstallsFailure> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                Err(InstallsFailure::RateLimited(Duration::from_secs(60)))
+                Err(InstallsFailure::RateLimited(Duration::from_mins(1)))
             }
         }
         let dir = tempfile::tempdir().unwrap();

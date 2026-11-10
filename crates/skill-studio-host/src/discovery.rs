@@ -728,11 +728,11 @@ mod tests {
         let now = SystemTime::now();
         fs::File::open(&valid)
             .unwrap()
-            .set_modified(now - std::time::Duration::from_secs(120))
+            .set_modified(now - std::time::Duration::from_mins(2))
             .unwrap();
         fs::File::open(&invalid)
             .unwrap()
-            .set_modified(now - std::time::Duration::from_secs(60))
+            .set_modified(now - std::time::Duration::from_mins(1))
             .unwrap();
         fs::File::open(&empty).unwrap().set_modified(now).unwrap();
 
@@ -844,7 +844,7 @@ mod tests {
         let now = SystemTime::now();
         fs::File::open(&older)
             .unwrap()
-            .set_modified(now - std::time::Duration::from_secs(60))
+            .set_modified(now - std::time::Duration::from_mins(1))
             .unwrap();
         fs::File::open(&newer).unwrap().set_modified(now).unwrap();
 
@@ -920,7 +920,7 @@ mod tests {
         let now = std::time::SystemTime::now();
         fs::File::open(&older)
             .unwrap()
-            .set_modified(now - std::time::Duration::from_secs(3600))
+            .set_modified(now - std::time::Duration::from_hours(1))
             .unwrap();
         fs::File::open(&newer).unwrap().set_modified(now).unwrap();
 
@@ -984,7 +984,7 @@ mod tests {
         let now = std::time::SystemTime::now();
         fs::File::open(&older)
             .unwrap()
-            .set_modified(now - std::time::Duration::from_secs(3600))
+            .set_modified(now - std::time::Duration::from_hours(1))
             .unwrap();
         fs::File::open(&newer).unwrap().set_modified(now).unwrap();
 

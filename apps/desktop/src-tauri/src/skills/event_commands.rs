@@ -225,7 +225,7 @@ fn core_restore_event_at(
 ) -> Result<(), String> {
     let rt = super::core_runtime::build_runtime_write_at(home, data_root)?;
     let ctx = skill_studio_core::ports::OpContext::uncancellable(
-        skill_studio_core::identity::CorrelationId(ulid::Ulid::new().to_string()),
+        skill_studio_core::identity::CorrelationId(ulid::Ulid::generate().to_string()),
     );
     let result = skill_studio_core::ops::restore_event(
         &rt,

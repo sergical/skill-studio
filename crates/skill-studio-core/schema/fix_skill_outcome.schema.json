@@ -48,6 +48,10 @@
           "description": "A frontmatter repair was written, the same write\n`apply_frontmatter_repair` performs.",
           "type": "object",
           "properties": {
+            "kind": {
+              "type": "string",
+              "const": "frontmatter_repair"
+            },
             "deployment_id": {
               "description": "Deployment written.",
               "$ref": "#/$defs/DeploymentId"
@@ -55,10 +59,6 @@
             "event_id": {
               "description": "History event.",
               "$ref": "#/$defs/EventId"
-            },
-            "kind": {
-              "type": "string",
-              "const": "frontmatter_repair"
             }
           },
           "required": [
