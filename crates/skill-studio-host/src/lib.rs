@@ -23,12 +23,7 @@
 #![deny(missing_docs)]
 // `deny`, not `forbid`, so `fs::macos_exchange` can locally `#[allow(unsafe_code)]`
 // for `renamex_np` (atomic path exchange, no safe `std` wrapper - see its
-// module doc for what the `unsafe` block promises), and so the XDG/env-
-// override tests for OpenCode discovery can locally `#[allow(unsafe_code)]`
-// around the process-global env var mutation (`std::env::set_var` needs
-// `unsafe` on this toolchain) needed to cover the real `std::env::var_os`
-// call sites - there is no other seam to test them through without
-// threading an env-lookup port through every adapter for one test.
+// module doc for what the `unsafe` block promises).
 #![deny(unsafe_code)]
 
 mod builder;
