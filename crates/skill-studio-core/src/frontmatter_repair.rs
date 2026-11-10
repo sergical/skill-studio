@@ -681,4 +681,43 @@ mod tests {
             assert!(matches(expected), "{kind} matcher rejects its message");
         }
     }
+
+    #[test]
+    fn choosing_model_only_allows_the_other_multiline_key_or_refuses_a_safe_fix() {
+        let content = "---\nname: sample\ndescription: d\ndisable-model-invocation: true\nuser-invocable:\n  false\n---\nBody.\n";
+        let (proposed, _) = propose_repair(
+            FrontmatterRepairKind::InvocationConflict,
+            content,
+            "sample",
+            Some(InvocationConflictChoice::ModelOnly),
+        )
+        .unwrap();
+        assert!(!proposed.contains("disable-model-invocation"));
+        assert!(proposed.contains("user-invocable:\n  false"));
+        assert!(propose_repair(
+            FrontmatterRepairKind::InvocationConflict,
+            content,
+            "sample",
+            None
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn repair_preserves_extension_values_or_the_post_check_misses_an_anchor_change() {
+        let content = "---\nname: sample\ndescription: d\nx-default: &mode true\ndisable-model-invocation: true\nuser-invocable: &mode false\nx-agent: *mode\n---\nBody.\n";
+        let proposed =
+            propose_conflict_repair(content, "sample", InvocationConflictChoice::UserOnly).unwrap();
+        assert!(!violations_of("sample", &proposed)
+            .iter()
+            .any(|v| violation_is_invocation_conflict(v)));
+        let error = propose_repair(
+            FrontmatterRepairKind::InvocationConflict,
+            content,
+            "sample",
+            Some(InvocationConflictChoice::UserOnly),
+        )
+        .unwrap_err();
+        assert!(error.contains("another key"), "{error}");
+    }
 }
