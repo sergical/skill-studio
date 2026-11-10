@@ -142,6 +142,17 @@ pub struct SkillRefreshState {
 }
 
 impl SkillRefreshState {
+    pub(crate) fn update_check_projects(&self, home: &Path) -> Vec<PathBuf> {
+        self.snapshot
+            .read()
+            .ok()
+            .and_then(|snapshot| snapshot.as_ref().map(|snapshot| snapshot.projects.clone()))
+            .map_or_else(
+                || effective_project_paths(home),
+                |projects| projects.into_iter().map(PathBuf::from).collect(),
+            )
+    }
+
     /// True when something that can affect the skills list, project list, or
     /// plugin caches changed since the last rebuild and the background loop
     /// hasn't picked it up yet - see `get_installed_skills`, which uses this
@@ -4501,6 +4512,106 @@ mod tests {
             runs_root: PathBuf::from("/dev/null"),
             update_check_path: PathBuf::from("/dev/null"),
         }
+    }
+
+    #[test]
+    fn startup_update_during_cache_load_keeps_project_badges_and_fork_notes_or_prunes_unknown_projects(
+    ) {
+        use super::super::skill_update_check::{CommitLookup, TreeLookup, UpstreamAhead};
+
+        struct OfflineLookup;
+        impl CommitLookup for OfflineLookup {
+            fn latest_commit(
+                &self,
+                _: &str,
+                _: &str,
+                _: Option<&str>,
+            ) -> Result<Option<(String, String)>, String> {
+                Err("offline".into())
+            }
+        }
+        impl TreeLookup for OfflineLookup {
+            fn tree_shas_at_head_uncached(
+                &self,
+                _: &str,
+            ) -> Result<std::collections::HashMap<String, String>, String> {
+                panic!("dotagents owners do not need tree lookups")
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let project = tmp.path().join("project");
+        let app_data = tmp.path().join("data");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        write_tracked_projects(&home, std::slice::from_ref(&project), &[]);
+        fs::write(
+            project.join("agents.lock"),
+            r#"
+[skills.project-skill]
+source = "me/project-fork"
+resolved_path = "skills/project-skill"
+resolved_commit = "old"
+"#,
+        )
+        .unwrap();
+        let mut seeded = skill_update_check::run_update_check_with_projects(
+            &home,
+            std::slice::from_ref(&project),
+            &app_data,
+            &OfflineLookup,
+            &OfflineLookup,
+            None,
+        );
+        assert_eq!(seeded.owners.len(), 1);
+        let owner_id = seeded.owners.keys().next().unwrap().clone();
+        seeded.owners.get_mut(&owner_id).unwrap().latest_commit = Some("new".into());
+        seeded.upstream_ahead.insert(
+            "me/project-fork".into(),
+            UpstreamAhead {
+                repo: "me/project-fork".into(),
+                upstream_repo: "them/original".into(),
+                behind_by: 3,
+                compare_url: "https://github.com/them/original/compare/main".into(),
+                owner_ids: vec![owner_id.clone()],
+            },
+        );
+        fs::write(
+            skill_update_check::update_check_path(&app_data),
+            serde_json::to_vec(&seeded).unwrap(),
+        )
+        .unwrap();
+
+        let mut state = fixture_state();
+        state.cache_path = tmp.path().join("invocations.json");
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker = spawn_refresh_initialization(
+            state.clone(),
+            move |_| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                SkillInvocationIndex::default()
+            },
+            |_| {},
+        );
+        entered_rx.recv().unwrap();
+        assert!(state.snapshot.read().unwrap().is_none());
+        skill_update_check::run_update_check_with_projects(
+            &home,
+            &state.update_check_projects(&home),
+            &app_data,
+            &OfflineLookup,
+            &OfflineLookup,
+            None,
+        );
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+
+        let stored = skill_update_check::read_update_check_store(&app_data);
+        assert!(skill_update_check::has_update(&stored.owners[&owner_id]));
+        assert_eq!(stored.upstream_ahead, seeded.upstream_ahead);
     }
 
     #[test]

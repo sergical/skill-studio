@@ -1701,15 +1701,7 @@ pub fn check_now(
         &app_data,
         super::background_work::state(),
         || {
-            let project_paths: Vec<PathBuf> = refresh_state
-                .snapshot
-                .read()
-                .ok()
-                .and_then(|snapshot| snapshot.as_ref().map(|snapshot| snapshot.projects.clone()))
-                .unwrap_or_default()
-                .into_iter()
-                .map(PathBuf::from)
-                .collect();
+            let project_paths = refresh_state.update_check_projects(&home);
             let store = run_update_check_now(&home, &project_paths, &app_data);
             skill_refresh::request_snapshot_rebuild(app);
             update_check_result(&store)
