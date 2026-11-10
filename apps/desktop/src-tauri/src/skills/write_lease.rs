@@ -14,6 +14,8 @@ use std::time::Duration;
 use skill_studio_core::ports::{ExclusiveGuard, LeaseKey, LeaseMode, LeaseProvider};
 use skill_studio_host::FileLease;
 
+use super::core_runtime;
+
 thread_local! {
     /// Leases over the home the current thread holds, write or scan. The
     /// guards are `!Send` (they own a `Box<dyn LeaseHandle>`), so each drops
