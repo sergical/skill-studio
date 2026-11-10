@@ -2852,6 +2852,7 @@ pub async fn update_plugin(
     harness: String,
     scope: String,
     project_path: Option<String>,
+    skip_marketplace_refresh: Option<bool>,
     app: tauri::AppHandle,
 ) -> Result<super::skill_plugin_lifecycle::PluginUpdateResult, String> {
     let timing_app = app.clone();
@@ -2864,7 +2865,12 @@ pub async fn update_plugin(
                 &scope,
                 project_path.as_deref(),
             )?;
-            super::skill_plugin_lifecycle::update_plugin_with(
+            let update = if skip_marketplace_refresh.unwrap_or(false) {
+                super::skill_plugin_lifecycle::update_plugin_without_refresh_with
+            } else {
+                super::skill_plugin_lifecycle::update_plugin_with
+            };
+            update(
                 &RealCommandRunner::new(),
                 &plugin_id,
                 &scope,

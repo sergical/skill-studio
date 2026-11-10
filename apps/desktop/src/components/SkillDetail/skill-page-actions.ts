@@ -92,8 +92,9 @@ export async function runHeaderUpdate<
   }
   await guard.requestUpdate(skill, {
     skipPlugins: true,
-    onFinished: async ({ success }) => {
-      if (success) await updateSkillPluginsWithToasts(skill, addToast, updatePluginInstall);
+    onFinished: async ({ success, failure }) => {
+      if (success || failure === "fork-pull")
+        await updateSkillPluginsWithToasts(skill, addToast, updatePluginInstall);
     },
   });
 }
