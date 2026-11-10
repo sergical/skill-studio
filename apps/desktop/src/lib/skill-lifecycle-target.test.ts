@@ -476,6 +476,7 @@ describe("skill update owner targets", () => {
     expect(summary).toEqual({
       attempted: 2,
       succeeded: 1,
+      alreadyCurrent: 0,
       failures: [{ ownerId: "owner:v1/project/%2Fp/x", message: "project update failed" }],
     });
   });

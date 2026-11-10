@@ -251,6 +251,11 @@ const EXPECTED_WRAPPER_COMMANDS = {
     registeredInLibRs: true,
   },
   repairSkillLink: { kind: "command", command: "repair_skill_link", registeredInLibRs: true },
+  checkSkillUpdatesNow: {
+    kind: "command",
+    command: "check_skill_updates_now",
+    registeredInLibRs: true,
+  },
   getSkillSnapshot: { kind: "command", command: "get_skill_snapshot", registeredInLibRs: true },
   requestSkillRescan: {
     kind: "command",

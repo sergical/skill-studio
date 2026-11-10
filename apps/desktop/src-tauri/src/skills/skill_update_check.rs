@@ -6,17 +6,11 @@
 // file's `skillFolderHash` against the source repo's tree SHA at HEAD for
 // that path (unit 3.4: one `gh api` tree call per source repo, cached across
 // every skills.sh candidate from that repo, not one commits call per skill).
-// Runs on a 6 h timer (`spawn_update_check_loop`); no manual "Check now" is
-// exposed to the frontend. Results persist at
+// Runs on a 6 h timer and from Home’s Check now. Results persist at
 // `<app data>/skill-studio/update-check.json` so `skill_refresh::build_snapshot`
 // can read them without shelling out on every rebuild. Read-only GitHub
 // access via the user's own `gh` login; the app stores no tokens.
 //
-// The 6 h background loop (`spawn_update_check_loop`) is the only trigger for
-// a full check; there is no `check_skill_updates_now` command exposed to the
-// frontend. `update_skill`/`update_all_skills` instead call
-// `clear_owner_after_update` right after a successful `ops::update`, which
-// drops the owner's persisted state directly rather than re-running `gh api`.
 // ============================================================================
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -1616,6 +1610,19 @@ pub fn check_now(
 
     skill_refresh::request_snapshot_rebuild(app);
     Ok(summarize(&store))
+}
+
+#[tauri::command]
+pub async fn check_skill_updates_now(app: AppHandle) -> Result<UpdateCheckSummary, String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "check_skill_updates_now", move || {
+        check_now(
+            &app,
+            &app.state::<UpdateCheckState>(),
+            &app.state::<skill_refresh::SkillRefreshState>(),
+        )
+    })
+    .await
 }
 
 /// Write the just-updated commit into `owner_id`'s persisted update-check

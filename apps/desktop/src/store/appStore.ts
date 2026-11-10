@@ -8,8 +8,9 @@ import { defaultSkillListFilter, isProjectPattern, isProjectScope } from "@skill
 import type { SkillListFilter } from "@skill-studio/lib";
 import { ALL_ACTIVITY, USAGE_WINDOWS } from "@skill-studio/lib";
 import type { ActivityFilter, UsageWindow } from "@skill-studio/lib";
-import type { Toast, TrackedProjects } from "@skill-studio/lib";
+import type { Toast, TrackedProjects, SkillSnapshot } from "@skill-studio/lib";
 import { addToast } from "../lib/toast";
+import { checkSkillUpdatesNow } from "../lib/skill-api";
 import { EMPTY_NAV_HISTORY, recordNavigation, stepBack, stepForward } from "../lib/nav-history";
 import type {
   DefaultDeploymentPaths,
@@ -175,6 +176,8 @@ interface AppState {
   /** What's actually painted right now - resolves "system" against the OS, and follows it live. */
   resolvedTheme: ResolvedTheme;
   setTheme: (theme: Theme) => void;
+
+  checkSkillUpdates: () => Promise<SkillSnapshot["update_check"]>;
 
   // === Add-skill Sheet ===
   addSkillSheet: { open: boolean; prefill?: string };
@@ -429,6 +432,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     }
   },
+
+  checkSkillUpdates: checkSkillUpdatesNow,
 
   addSkillSheet: { open: false },
   openAddSkillSheet: (prefill) => set({ addSkillSheet: { open: true, prefill } }),

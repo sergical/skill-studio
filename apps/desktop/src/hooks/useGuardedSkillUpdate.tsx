@@ -41,6 +41,7 @@ interface PendingUpdate {
 /** How a single-owner update ended, for callers that report it their own way. */
 export interface UpdateFinish {
   success: boolean;
+  alreadyCurrent?: boolean;
   error?: string;
 }
 
@@ -78,7 +79,7 @@ export function useGuardedSkillUpdate() {
           const result = await updateSkill(scopeTarget);
           finish = {
             success: result.success,
-            error: result.error ?? "Update command failed without an error message.",
+            alreadyCurrent: result.alreadyCurrent,
           };
         } catch (error) {
           finish = {
@@ -98,6 +99,7 @@ export function useGuardedSkillUpdate() {
       addToast(skillUpdateToast(skill.name, summary));
       await onFinished?.({
         success: summary.failures.length === 0,
+        alreadyCurrent: summary.attempted > 0 && summary.alreadyCurrent === summary.attempted,
         error: summary.failures.map((failure) => failure.message).join("; "),
       });
     };
