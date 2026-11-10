@@ -83,7 +83,8 @@ these verification notes.
 
 The open-writer tests open a writable handle before replacement. A callback
 writes through that handle after the displaced-file comparison has read its
-bytes. Config, lock, and ignore edits must survive. Four later Turn on attempts
+bytes. A second write through a cloned handle runs after Park returns, so it
+also runs after the comparison. Config, lock, and ignore edits must survive. Four later Turn on attempts
 must report the retained path and leave one pending file for that target.
 
 The repeated-failure tests inject write, file-sync, and exchange errors after

@@ -2730,7 +2730,7 @@ fn failed_turn_on_after_directory_sync_keeps_skill_unlisted_or_install_revives_i
 }
 
 #[test]
-fn failed_turn_on_retains_only_external_recovery_copy_or_loses_edit_and_grows_storage() {
+fn failed_turn_on_restores_external_edit_and_bounds_recovery_or_loses_edit_and_grows_storage() {
     let (home, stub) = dotagents_home("park_external_recovery", EXPLICIT_TOML);
     let (rt, fs) = fault_runtime(&home, stub.clone());
     park_foo(&rt);
@@ -2786,16 +2786,19 @@ fn assert_open_writer_survives(target_name: &str) {
         .append(true)
         .open(&target)
         .unwrap();
+    let mut late_writer = writer.try_clone().unwrap();
     let armed = fs.clone();
     fs.before_write_once(target.clone(), move || {
         armed.after_recovery_read_once(move || writer.write_all(b"\n# open writer edit\n"));
         Ok(())
     });
     park_foo(&rt);
+    late_writer.write_all(b"# edit after comparison\n").unwrap();
     let pending = recovery_files(&home)
         .into_iter()
         .find(|p| read(p).contains("# open writer edit"))
         .expect("open-handle edit must survive cleanup");
+    assert!(read(&pending).contains("# edit after comparison"));
     for _ in 0..4 {
         let error = ops::unpark(
             &rt,

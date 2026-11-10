@@ -959,7 +959,10 @@ fn clean_pending(rt: &Runtime, guard: &ExclusiveGuard, path: &Path) -> Result<()
         let name = entry.name.as_str();
         if let Some(expected) = name.strip_prefix(&prefix) {
             let pending = parent.join(&entry.name);
-            if content_hash(read_text(fs, &pending)?.as_deref()) != expected {
+            let bytes = fs
+                .read_capped(&pending, crate::dotagents_ledger::DOTAGENTS_FILE_MAX_BYTES)
+                .map_err(|e| CoreError::io(&pending, e))?;
+            if crate::identity::Fingerprint::of_bytes(&bytes).bare_hex() != expected {
                 return Err(CoreError::new(
                     ErrorCode::DriftConflict,
                     format!(
