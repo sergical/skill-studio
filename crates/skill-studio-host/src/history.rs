@@ -529,6 +529,12 @@ impl HistoryStore for SqliteHistoryStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)
     }
 
+    fn completed_lock_captures(&self) -> Result<Vec<EventRecord>, CoreError> {
+        let mut stmt = self.conn.prepare("SELECT * FROM events WHERE status = 'done' AND kind = 'restore' AND json_type(payload, '$.agents_lock_publication') = 'object' ORDER BY rowid ASC").map_err(sql_err)?;
+        let rows = stmt.query_map([], row_from).map_err(sql_err)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)
+    }
+
     fn held_restore_claims(&self) -> Result<Vec<HeldRestoreClaim>, CoreError> {
         let mut stmt = self
             .conn

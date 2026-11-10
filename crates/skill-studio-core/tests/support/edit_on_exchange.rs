@@ -6,6 +6,11 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 pub struct EditOnExchange {
+    pub late_write: bool,
+    pub captured_reads: AtomicUsize,
+    pub rollback_mode: u8,
+    pub rollback_linked: std::sync::atomic::AtomicBool,
+    pub rollback_synced: std::sync::atomic::AtomicBool,
     pub path: PathBuf,
     pub trigger: PathBuf,
     pub bytes: Vec<u8>,
@@ -30,8 +35,19 @@ impl EditOnExchange {
 }
 impl ScopeFs for EditOnExchange {
     fn fsops_hard_link(&self, from: &Path, to: &Path) -> io::Result<()> {
-        if self.writer_on_publication && from.extension().is_some_and(|ext| ext == "restored") {
+        if !self.late_write
+            && self.writer_on_publication
+            && from.extension().is_some_and(|ext| ext == "restored")
+        {
             self.write_descriptor()?;
+        }
+        if self.rollback_mode != 0 && from.extension().is_none() {
+            if self.rollback_mode == 2 {
+                return Err(io::Error::other("rollback failed"));
+            }
+            RealFs::new().fsops_hard_link(from, to)?;
+            self.rollback_linked.store(true, Ordering::SeqCst);
+            return Ok(());
         }
         RealFs::new().fsops_hard_link(from, to)?;
         assert!(
@@ -58,7 +74,18 @@ impl ScopeFs for EditOnExchange {
         RealFs::new().read_dir(path)
     }
     fn read_capped(&self, path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
-        RealFs::new().read_capped(path, max_bytes)
+        let bytes = RealFs::new().read_capped(path, max_bytes)?;
+        if self.late_write
+            && path.file_name().is_some_and(|name| {
+                name.to_string_lossy()
+                    .starts_with(".agents-lock-before-restore-")
+            })
+            && path.extension().is_none()
+            && self.captured_reads.fetch_add(1, Ordering::SeqCst) == 2
+        {
+            self.write_descriptor()?;
+        }
+        Ok(bytes)
     }
     fn read_prefix(&self, path: &Path, limit: u64) -> io::Result<(Vec<u8>, bool)> {
         RealFs::new().read_prefix(path, limit)
@@ -101,12 +128,18 @@ impl ScopeFs for EditOnExchange {
         RealFs::new().fsops_device_inode(path)
     }
     fn fsops_fsync_file(&self, path: &Path) -> io::Result<()> {
-        if !self.writer_on_publication && path.extension().is_some_and(|ext| ext == "restored") {
+        if !self.late_write
+            && !self.writer_on_publication
+            && path.extension().is_some_and(|ext| ext == "restored")
+        {
             self.write_descriptor()?;
         }
         RealFs::new().fsops_fsync_file(path)
     }
     fn fsops_fsync_dir(&self, path: &Path) -> io::Result<()> {
+        if self.rollback_linked.load(Ordering::SeqCst) {
+            self.rollback_synced.store(true, Ordering::SeqCst);
+        }
         RealFs::new().fsops_fsync_dir(path)
     }
     fn fsops_create_dir(&self, path: &Path) -> io::Result<()> {
@@ -121,6 +154,9 @@ impl ScopeFs for EditOnExchange {
         bytes: &[u8],
         mode: u32,
     ) -> io::Result<()> {
+        if self.rollback_mode != 0 && path.extension().is_some_and(|ext| ext == "restored") {
+            return Err(io::Error::other("staging failed"));
+        }
         RealFs::new().fsops_write_new_file_with_mode(path, bytes, mode)
     }
     fn fsops_rename(&self, from: &Path, to: &Path) -> io::Result<()> {

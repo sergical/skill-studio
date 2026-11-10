@@ -1429,6 +1429,12 @@ impl skill_studio_core::ports::HistoryStore for PatchlessStore {
     ) -> Result<Vec<skill_studio_core::events::EventRecord>, skill_studio_core::CoreError> {
         self.0.pending()
     }
+    fn completed_lock_captures(
+        &self,
+    ) -> Result<Vec<skill_studio_core::events::EventRecord>, skill_studio_core::error::CoreError>
+    {
+        self.0.completed_lock_captures()
+    }
     fn held_restore_claims(
         &self,
     ) -> Result<Vec<skill_studio_core::ports::HeldRestoreClaim>, skill_studio_core::CoreError> {
@@ -2828,7 +2834,15 @@ fn covered_lock_restore_race(mode: u8) {
     let other = home.join(UNIVERSAL_ROOT_RELATIVE).join("other/SKILL.md");
     let event_id = result.items[1].outcome.as_ref().unwrap().event_id.clone();
     assert_ne!(event_id, result.items[0].outcome.as_ref().unwrap().event_id);
-    rt.ports.fs = Arc::new(edit_on_exchange::EditOnExchange {
+    if mode == 10 {
+        std::fs::remove_file(&lock).unwrap();
+    }
+    let hooked_fs = Arc::new(edit_on_exchange::EditOnExchange {
+        late_write: mode == 9,
+        captured_reads: Default::default(),
+        rollback_mode: if mode >= 11 { mode - 10 } else { 0 },
+        rollback_linked: Default::default(),
+        rollback_synced: Default::default(),
         trigger: match mode {
             0 => other.parent().unwrap().to_path_buf(),
             1 => lock.clone(),
@@ -2837,22 +2851,119 @@ fn covered_lock_restore_race(mode: u8) {
         path: lock.clone(),
         bytes: lock_text("external-delta", "new-other").into_bytes(),
         reads: Default::default(),
-        writer: (mode == 2 || mode == 6)
+        writer: (mode == 2 || mode == 6 || mode == 9)
             .then(|| Mutex::new(std::fs::OpenOptions::new().write(true).open(&lock).unwrap())),
         crash_after_capture: (3..=5).contains(&mode),
         writer_on_publication: mode == 6,
-        crash_after_publication: mode >= 7,
+        crash_after_publication: (7..=8).contains(&mode),
     });
+    rt.ports.fs = hooked_fs.clone();
     let restored = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ops::restore_event(
             &rt,
             &ctx(),
             &RestoreRequest {
                 event_id: event_id.clone(),
-                force: false,
+                force: mode == 10,
             },
         )
     }));
+    if mode >= 9 {
+        let restored = restored.unwrap();
+        if mode >= 11 {
+            restored.unwrap_err();
+            if mode == 11 {
+                assert!(
+                    hooked_fs
+                        .rollback_synced
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                    "rollback link was not synced"
+                );
+                assert!(lock.exists());
+            } else {
+                assert!(!lock.exists());
+            }
+            let history = rt
+                .ports
+                .history
+                .open(
+                    &rt.scope,
+                    skill_studio_core::ports::HistoryAccess::ReadIfExists,
+                )
+                .unwrap()
+                .unwrap();
+            assert!(
+                !history.pending().unwrap().is_empty(),
+                "failed rollback lost recovery event"
+            );
+            assert!(
+                history
+                    .get(&event_id)
+                    .unwrap()
+                    .unwrap()
+                    .reverted_by
+                    .is_some(),
+                "failed rollback released claim"
+            );
+            drop(history);
+            rt.ports.fs = Arc::new(RealFs::new());
+            drop(MutationSession::begin(&rt, &ctx()).unwrap());
+            assert!(lock.exists());
+        } else {
+            let outcome = restored.unwrap();
+            rt.ports.fs = Arc::new(RealFs::new());
+            if mode == 9 {
+                let error = MutationSession::begin(&rt, &ctx())
+                    .err()
+                    .expect("late descriptor write was ignored");
+                assert_eq!(error.code, ErrorCode::DriftConflict);
+                let captured = error.path.unwrap();
+                assert!(error.message.contains(captured.to_str().unwrap()));
+                assert!(std::fs::read_to_string(&captured)
+                    .unwrap()
+                    .contains("external-delta"));
+                let history = rt
+                    .ports
+                    .history
+                    .open(
+                        &rt.scope,
+                        skill_studio_core::ports::HistoryAccess::ReadIfExists,
+                    )
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    history
+                        .get(&outcome.restore_event_id)
+                        .unwrap()
+                        .unwrap()
+                        .status,
+                    skill_studio_core::events::EventStatus::Done
+                );
+                let restore = history.get(&outcome.restore_event_id).unwrap().unwrap();
+                let expected: Vec<u8> = serde_json::from_value(
+                    restore.payload["agents_lock_publication"]["captured"].clone(),
+                )
+                .unwrap();
+                drop(history);
+                std::fs::write(&captured, expected).unwrap();
+                drop(MutationSession::begin(&rt, &ctx()).unwrap());
+                assert!(!captured.exists(), "unchanged capture was not cleaned up");
+            } else {
+                let doc: toml::Value =
+                    toml::from_str(&std::fs::read_to_string(&lock).unwrap()).unwrap();
+                assert_eq!(
+                    doc["skills"]["other"]["resolved_commit"].as_str(),
+                    Some("old-other")
+                );
+                assert!(std::fs::read_to_string(&other)
+                    .unwrap()
+                    .contains("Body at v1"));
+                drop(MutationSession::begin(&rt, &ctx()).unwrap());
+            }
+        }
+        std::fs::remove_dir_all(home).unwrap();
+        return;
+    }
     if mode >= 7 {
         assert!(restored.is_err());
         assert!(lock.exists());
@@ -3157,4 +3268,21 @@ fn covered_undo_after_publication_recovers_and_allows_next_mutation_or_blocks_on
 #[test]
 fn covered_undo_after_publication_preserves_external_edit_as_drift_or_accepts_changed_lock() {
     covered_lock_restore_race(8);
+}
+
+#[test]
+fn covered_undo_late_descriptor_write_blocks_next_mutation_or_silently_loses_edit() {
+    covered_lock_restore_race(9);
+}
+#[test]
+fn covered_force_undo_absent_lock_restores_row_or_fails_after_restoring_folder() {
+    covered_lock_restore_race(10);
+}
+#[test]
+fn covered_undo_staging_failure_syncs_rollback_or_loses_lock_after_crash() {
+    covered_lock_restore_race(11);
+}
+#[test]
+fn covered_undo_failed_rollback_retains_recovery_claim_or_strands_missing_lock() {
+    covered_lock_restore_race(12);
 }

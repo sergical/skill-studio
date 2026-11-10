@@ -5048,25 +5048,14 @@ fn restore_event_body(
                 &restore_id,
                 serde_json::json!({ "displaced_agents_lock": displaced }),
             )?;
-            if let Err(error) = crate::ops_dotagents_history::commit_restore(
+            crate::ops_dotagents_history::commit_restore(
                 rt,
                 restore,
                 &displaced,
                 &session.guard,
                 session.store.as_mut(),
                 &restore_id,
-            ) {
-                session
-                    .store
-                    .release_revert(&session.guard, &target.id, &restore_id)?;
-                session.store.finish(
-                    &session.guard,
-                    &restore_id,
-                    crate::events::EventStatus::Failed,
-                    None,
-                )?;
-                return Err(error);
-            }
+            )?;
         }
     }
 
