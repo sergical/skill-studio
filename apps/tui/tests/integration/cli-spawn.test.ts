@@ -22,7 +22,10 @@ import { run } from "../../src/cli-transport.ts";
 import type { Inventory } from "../../src/cli-types.ts";
 
 const REPO_ROOT = new URL("../../../..", import.meta.url).pathname;
-const CLI_BIN = join(REPO_ROOT, "target/debug/skill-studio");
+const CLI_BIN = join(
+  process.env["CARGO_TARGET_DIR"] ?? join(REPO_ROOT, "target"),
+  "debug/skill-studio",
+);
 
 let homeDir: string;
 
