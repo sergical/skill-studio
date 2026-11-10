@@ -263,28 +263,29 @@ pub fn init(app: &AppHandle) -> SkillRefreshState {
 
 /// Instant read of the current snapshot from managed state.
 #[tauri::command]
-// Tauri commands deserialize their arguments fresh per invocation, so `app`
-// can't be borrowed from the caller - it must be owned.
-#[allow(clippy::needless_pass_by_value)]
-pub fn get_skill_snapshot(
-    state: tauri::State<SkillRefreshState>,
+pub async fn get_skill_snapshot(
+    state: tauri::State<'_, SkillRefreshState>,
     app: tauri::AppHandle,
-) -> Option<SkillSnapshot> {
-    crate::timing_log::time_command(&app, "get_skill_snapshot", move || {
-        state.snapshot.read().ok().and_then(|guard| guard.clone())
+) -> Result<Option<SkillSnapshot>, String> {
+    let snapshot = state.snapshot.clone();
+    crate::timing_log::time_command_blocking(&app, "get_skill_snapshot", move || {
+        snapshot
+            .read()
+            .map(|guard| guard.clone())
+            .map_err(|error| format!("snapshot lock poisoned: {error}"))
     })
+    .await
 }
 
-/// Ask the background thread to rebuild the snapshot. Returns immediately;
-/// the rebuild happens asynchronously and a fresh `SNAPSHOT_EVENT` follows.
+/// Wait for a rebuild so the caller receives any failure.
 #[tauri::command]
-// Tauri commands deserialize their arguments fresh per invocation, so `app`
-// can't be borrowed from the caller - it must be owned.
-#[allow(clippy::needless_pass_by_value)]
-pub fn request_skill_rescan(state: tauri::State<SkillRefreshState>, app: tauri::AppHandle) {
-    crate::timing_log::time_command(&app, "request_skill_rescan", move || {
-        state.skills_dirty.store(true, Ordering::SeqCst);
-    });
+pub async fn request_skill_rescan(app: tauri::AppHandle) -> Result<(), String> {
+    let timing_app = app.clone();
+    crate::timing_log::time_command_blocking(&timing_app, "request_skill_rescan", move || {
+        let state = app.state::<SkillRefreshState>();
+        rebuild_snapshot_now(&app, &state).map(|_| ())
+    })
+    .await
 }
 
 /// Rebuild the snapshot now and return it. A caller that needs the scan that
@@ -293,7 +294,7 @@ pub fn request_skill_rescan(state: tauri::State<SkillRefreshState>, app: tauri::
 /// rebuilds) bump it without reading skill folders. `rebuild_lock` makes the
 /// scan start after the caller's write; other listeners get the snapshot
 /// through `SNAPSHOT_EVENT` as usual.
-#[tauri::command]
+#[tauri::command(async)]
 pub async fn rescan_skills_now(app: tauri::AppHandle) -> Result<SkillSnapshot, String> {
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(&timing_app, "rescan_skills_now", move || {
@@ -569,7 +570,7 @@ fn set_discovery_source_at(
 /// Returns the saved switches; a full rebuild follows on the background
 /// thread when the switch actually changed, and its snapshot drops or regains
 /// the folders only that harness's history named.
-#[tauri::command]
+#[tauri::command(async)]
 pub async fn set_discovery_source(
     harness: String,
     enabled: bool,
@@ -630,6 +631,30 @@ fn try_rebuild_lock(
     }
 }
 
+fn activity_sources(home: &Path) -> Result<DiscoverySources, String> {
+    let registry = super::skill_fork_registry::read_fork_registry(home)?;
+    let mut sources = registry.discovery;
+    if let Some(choice) = registry.harnesses {
+        for harness in skill_studio_host::discovery_harnesses() {
+            if !choice.kept.iter().any(|kept| kept == harness) {
+                sources.set(harness, false);
+            }
+        }
+    }
+    Ok(sources)
+}
+
+fn activity_sources_or_disabled(home: &Path) -> DiscoverySources {
+    activity_sources(home).unwrap_or_else(|error| {
+        eprintln!("skill refresh: could not read activity sources: {error}");
+        let mut sources = DiscoverySources::default();
+        for harness in skill_studio_host::discovery_harnesses() {
+            sources.set(harness, false);
+        }
+        sources
+    })
+}
+
 /// Build a full snapshot right now on the calling thread, store it, and emit
 /// `SNAPSHOT_EVENT`. Used both by the background loop's full-rebuild path and
 /// by commands that need the caller's next read to see fresh data (a new
@@ -640,10 +665,12 @@ pub fn rebuild_snapshot_now(
     app: &AppHandle,
     state: &SkillRefreshState,
 ) -> Result<SkillSnapshot, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    rebuild_snapshot_at(&home, state, |built| {
-        app.emit(SNAPSHOT_EVENT, built)
-            .map_err(|error| format!("failed to emit {SNAPSHOT_EVENT}: {error}"))
+    super::background_work::run(app, super::background_work::BackgroundWorker::Scan, || {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        rebuild_snapshot_at(&home, state, |built| {
+            app.emit(SNAPSHOT_EVENT, built)
+                .map_err(|error| format!("failed to emit {SNAPSHOT_EVENT}: {error}"))
+        })
     })
 }
 
@@ -664,7 +691,8 @@ pub(crate) fn rebuild_snapshot_at(
     // below, so a rebuild that straddles an hour boundary doesn't record the
     // new hour against cutoffs computed for the old one.
     let now = Utc::now();
-    let (mut built, _) = build_snapshot_releasing(
+    rebuild_snapshot_with(state, now, || {
+    let (built, _) = build_snapshot_releasing(
         home,
         None,
         BuildPaths {
@@ -676,6 +704,17 @@ pub(crate) fn rebuild_snapshot_at(
         Some(scan_lease),
         || {},
     );
+        Ok(built)
+    }, publish)
+}
+
+fn rebuild_snapshot_with(
+    state: &SkillRefreshState,
+    now: DateTime<Utc>,
+    build: impl FnOnce() -> Result<SkillSnapshot, String>,
+    publish: impl FnOnce(&SkillSnapshot) -> Result<(), String>,
+) -> Result<SkillSnapshot, String> {
+    let mut built = build()?;
     let previous = state
         .snapshot
         .read()
@@ -1078,6 +1117,14 @@ fn sort_snapshot_skills(skills: &mut [InstalledSkill]) {
 /// case of "a transcript changed" so a burst of agent activity doesn't
 /// trigger a full directory rescan every few seconds.
 fn rebuild_invocations_only(app: &AppHandle, state: &SkillRefreshState) -> Result<(), String> {
+    super::background_work::run(
+        app,
+        super::background_work::BackgroundWorker::Invocations,
+        || rebuild_invocations_only_body(app, state),
+    )
+}
+
+fn rebuild_invocations_only_body(app: &AppHandle, state: &SkillRefreshState) -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     rebuild_invocations_at(
         &home,
@@ -1114,7 +1161,7 @@ pub(crate) fn rebuild_invocations_at(
         )
     };
 
-    let sources = DiscoverySources::read(&skill_studio_host::RealFs, home);
+    let sources = activity_sources(home)?;
     let mut invocation_index = state
         .invocation_index
         .lock()
@@ -1232,7 +1279,11 @@ fn invocation_cache_path(app: &AppHandle) -> PathBuf {
 #[allow(clippy::needless_pass_by_value)]
 fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
     let Some(home) = dirs::home_dir() else {
-        eprintln!("skill refresh: could not find home directory, giving up");
+        super::background_work::record_failure(
+            &app,
+            super::background_work::BackgroundWorker::Scan,
+            "Could not find the home folder to check your skills.".into(),
+        );
         return;
     };
     let claude_projects_dir = home.join(".claude/projects");
@@ -1241,7 +1292,11 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
     let mut debouncer = match new_debouncer(DEBOUNCE, tx) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("skill refresh: failed to start filesystem watcher: {e}");
+            super::background_work::record_failure(
+                &app,
+                super::background_work::BackgroundWorker::Scan,
+                format!("Could not watch for skill changes: {e}"),
+            );
             return;
         }
     };
@@ -2364,7 +2419,7 @@ fn build_snapshot_releasing(
     let known_skills: BTreeSet<String> = skill_names.iter().cloned().collect();
     let invocations_start = Instant::now();
     let (invocations, heatmap, report) = if let Some(index) = invocation_index {
-        let sources = DiscoverySources::read(&skill_studio_host::RealFs, home);
+        let sources = activity_sources_or_disabled(home);
         let report = index.refresh(home, &sources);
         if let Err(error) = index.save(cache_path) {
             eprintln!("skill refresh: failed to save invocation cache: {error}");
@@ -6062,5 +6117,147 @@ mod tests {
             "the startup sweep did not deliver ops::doctor's violation to on_result: {:?}",
             report.violations
         );
+    }
+    #[test]
+    fn scan_over_budget_keeps_the_last_snapshot_and_never_publishes_an_empty_list() {
+        use skill_studio_core::dto::{Completeness, ScanRequest};
+        use skill_studio_core::harness::HarnessCatalog;
+        use skill_studio_core::ports::{OpContext, Runtime};
+        use skill_studio_core::testing::{FakeClock, TickingClock};
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().canonicalize().unwrap();
+        let estate = skill_studio_core::bench_estate::estate(400, 1);
+        estate.builder.materialize(&home).unwrap();
+        let mut scope = skill_studio_core::RuntimeScope::fixture(&home);
+        scope.projects = skill_studio_core::scope::ProjectSelection::Explicit {
+            paths: estate
+                .project_dirs
+                .iter()
+                .map(|project| home.join(project))
+                .collect(),
+        };
+        let mut ports = skill_studio_host::default_ports(
+            dir.path().join("leases"),
+            Arc::new(HarnessCatalog::builtin()),
+        );
+        ports.clock = Arc::new(FakeClock::at(0));
+        let runtime = Runtime::new(&scope, ports.clone()).unwrap();
+        let context = OpContext::uncancellable(skill_studio_core::identity::CorrelationId(
+            "budget-test".into(),
+        ));
+        let full =
+            skill_studio_core::ops::scan(&runtime, &context, &ScanRequest::default()).unwrap();
+        assert_eq!(full.completeness, Completeness::Complete);
+        assert_eq!(full.skills.len(), estate.stats.skill_count);
+        scope.read_timeout_ms = 1;
+        ports.clock = Arc::new(TickingClock::at(0));
+        let limited = Runtime::new(&scope, ports).unwrap();
+        let partial =
+            skill_studio_core::ops::scan(&limited, &context, &ScanRequest::default()).unwrap();
+        assert_eq!(partial.completeness, Completeness::Partial);
+        assert!(partial.skills.len() < full.skills.len());
+        assert!(!partial.unread_roots.is_empty());
+        let lock = lock_file::read_lock_file(
+            &skill_studio_host::RealFs::new(),
+            &lock_file::lock_file_path(&home),
+        )
+        .unwrap();
+        let mut good = fixture_snapshot(&home.join("unused"));
+        good.skills = skill_assembly::assemble_installed_skills(&full.skills, &lock);
+        good.projects = full
+            .projects
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect();
+        let state = fixture_state();
+        let before = store_skill_snapshot(&state, good).unwrap();
+        let mut candidate = before.clone();
+        candidate.skills = skill_assembly::assemble_installed_skills(&partial.skills, &lock);
+        candidate.scan_partial = true;
+        candidate.unread_roots = partial.unread_roots;
+        candidate.scan_observations = partial
+            .observations
+            .iter()
+            .map(describe_observation)
+            .collect();
+        let published = rebuild_snapshot_with(
+            &state,
+            Utc::now(),
+            || Ok(candidate),
+            |_| Ok(()),
+        )
+        .unwrap();
+        let names = |snapshot: &SkillSnapshot| {
+            snapshot
+                .skills
+                .iter()
+                .map(|skill| skill.name.clone())
+                .collect::<BTreeSet<_>>()
+        };
+        assert!(names(&before).is_subset(&names(&published)));
+        assert!(!published.skills.is_empty());
+        assert!(published.skills.len() >= before.skills.len());
+        assert!(published.scan_partial);
+        assert_eq!(
+            names(state.snapshot.read().unwrap().as_ref().unwrap()),
+            names(&published)
+        );
+        assert!(published.revision > before.revision);
+    }
+
+    #[test]
+    fn failed_rebuild_returns_its_error_and_preserves_the_published_snapshot_or_silently_clears_the_list(
+    ) {
+        let state = fixture_state();
+        let before =
+            store_skill_snapshot(&state, fixture_snapshot(Path::new("/fixture/alpha"))).unwrap();
+        let result = rebuild_snapshot_with(
+            &state,
+            Utc::now(),
+            || Err("fixture rebuild failed".into()),
+            |_| panic!("a failed build reached publication"),
+        );
+        assert_eq!(result.unwrap_err(), "fixture rebuild failed");
+        assert_eq!(
+            state.snapshot.read().unwrap().as_ref().unwrap().revision,
+            before.revision
+        );
+    }
+    #[test]
+    fn a_harness_removed_in_first_run_is_never_read_for_activity() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let sessions = home.join(".claude/projects/fixture");
+        fs::create_dir_all(&sessions).unwrap();
+        fs::create_dir_all(home.join(".agents")).unwrap();
+        let transcript = format!(
+            "{{\"type\":\"user\",\"timestamp\":\"{}\",\"message\":{{\"content\":\"/alpha\"}}}}\n",
+            Utc::now().to_rfc3339()
+        );
+        fs::write(sessions.join("session.jsonl"), &transcript).unwrap();
+        let mut discovery = DiscoverySources::default();
+        for harness in
+            skill_studio_host::discovery_harnesses().filter(|harness| *harness != "claude-code")
+        {
+            discovery.set(harness, false);
+        }
+        let write_choice = |kept: Vec<&str>| {
+            fs::write(home.join(".agents/skill-studio.json"), serde_json::to_vec(&serde_json::json!({"version":4,"discovery":discovery,"harnesses":{"kept":kept,"search_project_folders":true,"saved_at":Utc::now().to_rfc3339()}})).unwrap()).unwrap();
+        };
+        write_choice(Vec::new());
+        let mut index = SkillInvocationIndex::default();
+        let disabled = index.refresh(home, &activity_sources(home).unwrap());
+        assert_eq!(
+            disabled.files_reparsed, 0,
+            "an agent removed in first run was read"
+        );
+        assert_eq!(disabled.bytes_read, 0);
+        write_choice(vec!["claude-code"]);
+        let enabled = index.refresh(home, &activity_sources(home).unwrap());
+        assert!(
+            enabled.files_reparsed > 0,
+            "the fixture was not readable when enabled"
+        );
+        assert!(enabled.bytes_read >= transcript.len() as u64);
     }
 }

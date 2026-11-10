@@ -505,30 +505,6 @@ mod tests {
         assert_eq!(prev_rows[0]["command"], "two");
     }
 
-    /// Names allowed to stay a sync `pub fn` command, with the reason each
-    /// one never blocks the main thread for long.
-    const SYNC_ALLOWLIST: &[(&str, &str)] = &[
-        ("app_version", "in-memory state only"),
-        ("get_skill_snapshot", "in-memory state only"),
-        ("request_skill_rescan", "in-memory state only"),
-        ("get_agent_targets", "in-memory state only"),
-        ("cancel_skill_agent_run", "in-memory state only"),
-        ("start_add_skill_operation", "in-memory state only"),
-        ("start_add_skills_operation", "in-memory state only"),
-        ("get_add_skill_operation", "in-memory state only"),
-        ("cancel_add_skill_operation", "in-memory state only"),
-        ("cancel_update_all", "in-memory state only"),
-        ("report_frontend_error", "in-memory state only"),
-        (
-            "open_skill_path",
-            "#[tauri::command(async)], Tauri dispatches it off the main thread",
-        ),
-        (
-            "set_preferred_editor",
-            "#[tauri::command(async)], Tauri dispatches it off the main thread",
-        ),
-    ];
-
     /// Every `.rs` file under `dir`, recursively.
     fn rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
         for entry in
@@ -554,55 +530,59 @@ mod tests {
         after_fn.split(['(', '<', ' ']).next()
     }
 
-    /// A new command that does file, process, or database work on the main
-    /// thread fails this test.
-    #[test]
-    fn every_tauri_command_is_async_unless_allowlisted() {
-        let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut files = Vec::new();
-        rs_files(&src_dir, &mut files);
-
+    fn commands_on_main(source: &str) -> Vec<String> {
+        let lines: Vec<_> = source.lines().map(str::trim).collect();
         let mut failures = Vec::new();
-        for file in &files {
-            let source = std::fs::read_to_string(file)
-                .unwrap_or_else(|e| panic!("could not read {}: {e}", file.display()));
-            let lines: Vec<&str> = source.lines().collect();
-            for (i, line) in lines.iter().enumerate() {
-                let trimmed = line.trim();
-                let is_async_attr = trimmed == "#[tauri::command(async)]";
-                if trimmed != "#[tauri::command]" && !is_async_attr {
-                    continue;
-                }
-                let Some(fn_line) = lines[i + 1..]
-                    .iter()
-                    .map(|l| l.trim())
-                    .find(|l| !l.is_empty())
-                else {
-                    continue;
-                };
-                let Some(name) = fn_name(fn_line) else {
-                    continue;
-                };
-                if fn_line.starts_with("pub async fn ") {
-                    continue;
-                }
-                match SYNC_ALLOWLIST.iter().find(|(n, _)| *n == name) {
-                    Some((_, reason)) if *reason != "in-memory state only" && !is_async_attr => {
-                        failures.push(format!(
-                            "{}: {name} is allowlisted as {reason} but is not `#[tauri::command(async)]`",
-                            file.display()
-                        ));
-                    }
-                    Some(_) => {}
-                    None => failures.push(format!(
-                        "{}: {name} is a sync `#[tauri::command]` and not in SYNC_ALLOWLIST; \
-                         file/process/database work must be `pub async fn`",
-                        file.display()
-                    )),
+        for (index, attribute) in lines.iter().enumerate() {
+            if !attribute.starts_with("#[tauri::command") {
+                continue;
+            }
+            let asynchronous = attribute.contains("(async)") || attribute.contains("(async,");
+            let declaration = lines[index + 1..]
+                .iter()
+                .find(|line| fn_name(line).is_some());
+            if let Some(declaration) = declaration {
+                if !asynchronous && !declaration.starts_with("pub async fn ") {
+                    failures.push(fn_name(declaration).unwrap().to_string());
                 }
             }
         }
+        failures
+    }
+
+    #[test]
+    fn every_tauri_command_dispatches_off_main_or_names_the_command_that_can_block_the_ui() {
+        let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rs_files(&src_dir, &mut files);
+        let failures: Vec<_> = files
+            .iter()
+            .flat_map(|file| {
+                let source = std::fs::read_to_string(file).unwrap();
+                commands_on_main(&source)
+                    .into_iter()
+                    .map(|name| {
+                        format!("{}: {name} must use async command dispatch", file.display())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn a_sync_command_behind_comments_and_attributes_fails_the_dispatch_guard_or_silently_blocks_main(
+    ) {
+        let attribute = ["#[tauri", "::command]"].concat();
+        let source = format!(
+            "{attribute}\n// fixture context\n#[allow(dead_code)]\npub fn startup_scan() {{}}"
+        );
+        assert_eq!(commands_on_main(&source), vec!["startup_scan"]);
+        assert!(commands_on_main(&source.replace("pub fn", "pub async fn")).is_empty());
+        assert!(commands_on_main(
+            &source.replace(&attribute, &["#[tauri", "::command(async)]"].concat())
+        )
+        .is_empty());
     }
 
     #[test]

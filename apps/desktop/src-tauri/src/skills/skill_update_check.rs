@@ -1703,7 +1703,11 @@ pub fn spawn_update_check_loop(app: AppHandle) {
         std::thread::sleep(INITIAL_DELAY);
         loop {
             let refresh_state = app.state::<skill_refresh::SkillRefreshState>();
-            if let Err(e) = check_now(&app, &state, &refresh_state) {
+            if let Err(e) = super::background_work::run(
+                &app,
+                super::background_work::BackgroundWorker::UpdateCheck,
+                || check_now(&app, &state, &refresh_state),
+            ) {
                 eprintln!("skill update check: check failed: {e}");
             }
             std::thread::sleep(UPDATE_CHECK_INTERVAL);

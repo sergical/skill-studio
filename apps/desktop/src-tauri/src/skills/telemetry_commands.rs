@@ -103,7 +103,7 @@ fn set_telemetry_enabled_at_with(
 /// stays the authoritative consent check: this is only a courtesy that skips
 /// the count, not a second copy of the gate.
 #[allow(clippy::needless_pass_by_value)] // Tauri's command extractor requires owned arguments.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn report_frontend_error(
     component: String,
     kind: String,

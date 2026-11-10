@@ -62,6 +62,12 @@ const EXPECTED_WRAPPER_COMMANDS = {
     kind: "command",
     command: "remove_skill_project",
   },
+  getBackgroundStatus: {
+    kind: "command",
+    command: "get_background_status",
+    registeredInLibRs: true,
+  },
+  onBackgroundStatus: { kind: "event", event: "skills://background-status" },
   getDiscoverySources: {
     kind: "command",
     command: "get_discovery_sources",

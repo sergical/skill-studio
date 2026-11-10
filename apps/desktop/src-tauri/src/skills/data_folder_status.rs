@@ -81,7 +81,7 @@ pub fn data_folder_writable(app: &tauri::AppHandle) -> bool {
 
 /// The blocking message [`check_and_migrate`] set at startup, if any - the
 /// frontend calls this before rendering its normal chrome (`App.tsx`).
-#[tauri::command]
+#[tauri::command(async)]
 // Tauri commands deserialize their arguments fresh per invocation, so
 // `state` can't be borrowed from the caller - it must be owned.
 #[allow(clippy::needless_pass_by_value)]
