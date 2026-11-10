@@ -157,8 +157,11 @@ fn turning_off_codex_keeps_every_other_agent_live_and_parks_the_codex_copy_in_on
     assert_eq!(outcome.parked_path, parked);
     assert_eq!(std::fs::read(parked.join("SKILL.md")).unwrap(), SKILL_MD);
     assert_eq!(
-        std::fs::read_to_string(home.join(".agents/skills-parked/codex/.origin/gamma")).unwrap(),
-        ".codex/skills"
+        std::fs::read_to_string(home.join(".agents/skills-parked/codex/.origin/gamma"))
+            .unwrap()
+            .lines()
+            .next(),
+        Some(".codex/skills")
     );
     assert!(std::fs::symlink_metadata(home.join(".codex/skills/gamma")).is_err());
     for live in READERS_BESIDES_CODEX {

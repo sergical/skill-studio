@@ -1484,3 +1484,94 @@ fn cross_volume_park_keeps_replaced_source_during_sync_or_deletes_external_folde
     assert!(live.join("SKILL.md").is_file());
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[path = "../../../apps/cli/tests/support/park_display.rs"]
+mod park_display;
+
+#[test]
+fn park_scan_keeps_each_project_owner_or_names_the_lost_type() {
+    use skill_studio_core::identity::LifecycleOwnerKind;
+    for (label, expected) in [
+        ("dotagents", LifecycleOwnerKind::Dotagents),
+        ("wildcard_dotagents", LifecycleOwnerKind::WildcardDotagents),
+        ("in_repo", LifecycleOwnerKind::InRepo),
+    ] {
+        let home = unique_temp_dir("park_display_owner");
+        let project = park_display::project(&home, label);
+        let live = project.join(".agents/skills/foo");
+        let rt = runtime(&home, std::slice::from_ref(&project));
+        let original = live_copy(&rt, "foo", &live);
+        assert_eq!(original.owner_kind, expected, "fixture {label}");
+        ops::park(
+            &rt,
+            &ctx(),
+            &ParkRequest {
+                deployment_id: original.id,
+            },
+        )
+        .unwrap();
+        let parked = parked_copy(&rt, "foo", &RootKind::Universal);
+        assert_eq!(parked.owner_kind, expected, "lost {label}");
+        assert_eq!(parked.owner_id, original.owner_id, "lost {label} owner id");
+        assert_eq!(
+            parked.source_kind, original.source_kind,
+            "lost {label} source"
+        );
+        assert_eq!(parked.parked_origin.unwrap().scope, original.root.scope);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+}
+
+#[test]
+fn turn_on_claude_copy_returns_the_restored_id_or_names_the_parked_id() {
+    let home = unique_temp_dir("turn_on_display_id");
+    let live = home.join(".claude/skills/foo");
+    park_display::skill(&live);
+    let rt = runtime(&home, &[]);
+    let original = live_copy(&rt, "foo", &live);
+    ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: original.id.clone(),
+        },
+    )
+    .unwrap();
+    let parked = parked_copy(&rt, "foo", &RootKind::Harness(AgentId::CLAUDE_CODE.into()));
+    let result = ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked.id,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.deployment_id, original.id);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn copy_update_after_split_explains_the_skill_page_instead_of_an_absent_shared_copy() {
+    let home = unique_temp_dir("split_update_display");
+    park_display::skill(&home.join(".claude/skills/foo"));
+    let rt = runtime(&home, &[]);
+    let error = ops::update(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::UpdateRequest {
+            skill: SkillName("foo".to_string()),
+            method: skill_studio_core::dto::InstallMethod::Copy,
+            scope: RootScope::Global,
+            files: Vec::new(),
+            source: None,
+            ref_pin: None,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.message.contains("Skill Studio") && error.message.contains("Update"),
+        "{}",
+        error.message
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}

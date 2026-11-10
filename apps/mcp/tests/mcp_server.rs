@@ -1341,3 +1341,100 @@ async fn mcp_cross_volume_park_unpark_preserves_all_bytes_and_modes() {
     assert_eq!(park_volume::modes(&live), before_modes);
     assert_eq!(park_volume::bytes(&live), before_bytes);
 }
+
+#[path = "../../cli/tests/support/park_display.rs"]
+mod park_display;
+
+fn displayed_foo(inventory: &serde_json::Value) -> serde_json::Value {
+    inventory["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "foo")
+        .unwrap()["deployments"][0]
+        .clone()
+}
+
+#[tokio::test]
+async fn mcp_park_scan_keeps_project_and_original_owner_or_names_the_lost_type() {
+    for owner in ["dotagents", "wildcard_dotagents", "in_repo"] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().canonicalize().unwrap();
+        let project = park_display::project(&home, owner);
+        let (client, _) = connect(&[
+            ("HOME", home.to_str().unwrap()),
+            ("SKILL_STUDIO_HOME", home.to_str().unwrap()),
+            ("SKILL_STUDIO_PROJECT", project.to_str().unwrap()),
+        ])
+        .await;
+        let original =
+            displayed_foo(&call_tool(&client, "scan", serde_json::json!({})).await["data"]);
+        let parked = call_tool(
+            &client,
+            "park",
+            serde_json::json!({"deployment_id": original["id"]}),
+        )
+        .await;
+        assert_eq!(parked["status"], "ok", "{parked}");
+        let current =
+            displayed_foo(&call_tool(&client, "scan", serde_json::json!({})).await["data"]);
+        client.cancel().await.ok();
+        assert_eq!(
+            current["owner_kind"], original["owner_kind"],
+            "lost {owner}"
+        );
+        assert_eq!(current["owner_id"], original["owner_id"]);
+        assert_eq!(current["source_kind"], original["source_kind"]);
+        assert_eq!(current["parked_origin"]["scope"], original["root"]["scope"]);
+    }
+}
+
+#[tokio::test]
+async fn mcp_turn_on_claude_copy_names_the_restored_id_or_names_the_parked_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    park_display::skill(&home.join(".claude/skills/foo"));
+    let (client, _) = connect(&[
+        ("HOME", home.to_str().unwrap()),
+        ("SKILL_STUDIO_HOME", home.to_str().unwrap()),
+    ])
+    .await;
+    let original = displayed_foo(&call_tool(&client, "scan", serde_json::json!({})).await["data"]);
+    let result = call_tool(
+        &client,
+        "park",
+        serde_json::json!({"deployment_id": original["id"]}),
+    )
+    .await;
+    assert_eq!(result["status"], "ok", "{result}");
+    let id = deployment_id_via_mcp(&client, "foo", "parked").await;
+    let result = call_tool(&client, "unpark", serde_json::json!({"deployment_id": id})).await;
+    client.cancel().await.ok();
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(result["data"]["deployment_id"], original["id"]);
+}
+
+#[tokio::test]
+async fn mcp_copy_update_after_split_points_to_update_on_the_skill_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    park_display::skill(&home.join(".claude/skills/foo"));
+    let (client, _) = connect(&[
+        ("HOME", home.to_str().unwrap()),
+        ("SKILL_STUDIO_HOME", home.to_str().unwrap()),
+    ])
+    .await;
+    let result = call_tool(
+        &client,
+        "update",
+        serde_json::json!({"skill":"foo", "method":"copy", "scope":{"scope":"global"}, "files":[]}),
+    )
+    .await;
+    client.cancel().await.ok();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../cli/tests/golden/update-split-display.json"
+    ))
+    .unwrap();
+    assert_ne!(result["status"], "ok");
+    assert_eq!(result["errors"][0]["message"], expected["message"]);
+}

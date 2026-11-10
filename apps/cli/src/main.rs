@@ -1670,6 +1670,15 @@ fn resolve_target(
         .iter()
         .filter(|deployment| kind.accepts(deployment))
         .collect();
+    if matches.is_empty() && matches!(kind, TargetKind::Park) {
+        if let Some(plugin) = skill.deployments.iter().find(|d| d.plugin.is_some()) {
+            return Err(skill_studio_core::CoreError::new(
+                skill_studio_core::ErrorCode::Unsupported,
+                "a plugin copy cannot be parked; turn it off with /plugin in the agent",
+            )
+            .at(&plugin.path));
+        }
+    }
     match matches.as_slice() {
         [] => Err(skill_studio_core::CoreError::new(
             skill_studio_core::ErrorCode::InvalidRequest,
