@@ -34,6 +34,25 @@ a status field, a phase enum, or a busy flag.
 | Home "Update all" stop | `apps/desktop/src/hooks/skillBatchUpdates.ts` (`stopHomeUpdateAll`)           | `running → stopping → stopped`. The stop request is a promise; each phase boundary waits for it. A Cancel that does not reach the backend returns the batch to `running`, so Cancel shows again and no work is skipped.                                                                                                                                                                                                                                                    | `a_cancel_that_fails_to_reach_the_backend_keeps_the_whole_batch_running_or_the_ui_offers_cancel_while_it_stops`, `a_cancel_still_in_flight_at_a_phase_boundary_decides_nothing_until_it_lands_or_the_batch_skips_work_nothing_stopped` |
 | Confirm dialog busy    | `packages/ui/src/components/alert-dialog.tsx` (`busy`)                        | `open → busy → closed`. While `busy`, Escape and outside clicks do not close the dialog. Used by Remove, Uninstall plugin, Park copy, Left behind, and the store Remove confirm.                                                                                                                                                                                                                                                                                           | `AlertDialogBusy.test.tsx`                                                                                                                                                                                                             |
 
+## Dotagents rollback recovery
+
+A rollback retains its original input under a name that records the expected
+live output hash. Before Park or Turn on reads the files, it recovers each
+`-rollback-staging` file. If the live output still matches, recovery exchanges
+the original input back and retains the displaced output. If the output changed,
+the operation reports a conflict and keeps both files.
+
+A failed Park that detects drift also leaves this pending rollback state.
+Another Park cannot proceed until recovery succeeds or the person merges the
+retained input with the current file and explicitly removes the pending file.
+This prevents a later Park record from losing dotagents management.
+
+The integration tests
+`failed_park_then_retry_requires_recovery_or_turn_on_loses_management` and
+`failed_turn_on_then_rollback_crash_retry_park_turn_on_restores_management_or_stale_rollback_unlists_skill`
+cover drift, explicit recovery, interrupted rollback, retry, and the next
+Park and Turn on cycle.
+
 ## Checked and left as is
 
 | Item                                             | Where                                                                    | Why it stays                                                                                                                                                                                             |

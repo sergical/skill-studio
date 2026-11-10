@@ -856,7 +856,32 @@ pub(crate) fn restore_originals(
     guard: &ExclusiveGuard,
     plan: &DotagentsPark,
 ) -> Result<(), CoreError> {
-    restore_files(rt, guard, &plan.changes.borrow())
+    let files = plan.changes.borrow();
+    for edit in files.iter().rev() {
+        if read_text(rt.ports.fs.as_ref(), &edit.before.path)?.as_deref()
+            == Some(edit.after.as_str())
+        {
+            continue;
+        }
+        if let Some(recovery) = &edit.recovery {
+            let retained =
+                available_recovery_path(rt, &edit.before.path, Some(&edit.after), Some(recovery))?;
+            let pending = PathBuf::from(format!("{}-rollback-staging", retained.display()));
+            let source = crate::ports::confine(&rt.scope, rt.ports.fs.as_ref(), recovery)?;
+            let destination = crate::ports::confine(&rt.scope, rt.ports.fs.as_ref(), &pending)?;
+            rt.ports
+                .fs
+                .rename(guard, &source, &destination)
+                .map_err(|e| CoreError::io(recovery, e))?;
+            if let Some(parent) = edit.before.path.parent() {
+                rt.ports
+                    .fs
+                    .fsops_fsync_dir(parent)
+                    .map_err(|e| CoreError::io(parent, e))?;
+            }
+        }
+    }
+    restore_files(rt, guard, &files)
 }
 
 /// Writes every snapshot back and reports the first failure after trying all.
@@ -1378,6 +1403,7 @@ pub(crate) fn turn_on(
     .into_iter()
     .flatten()
     {
+        recover_rollback(rt, guard, path)?;
         clean_pending(rt, guard, path)?;
     }
     let mut changed = Vec::new();

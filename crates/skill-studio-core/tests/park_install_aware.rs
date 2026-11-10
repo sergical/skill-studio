@@ -2508,7 +2508,7 @@ fn fault_runtime(
 }
 
 #[test]
-fn failed_park_refuses_to_overwrite_config_changed_after_its_write_and_keeps_backup() {
+fn failed_park_then_retry_requires_recovery_or_turn_on_loses_management() {
     let (home, stub) = dotagents_home("park_rollback_drift", EXPLICIT_TOML);
     let (rt, fs) = fault_runtime(&home, stub.clone());
     let config = stub.toml_path();
@@ -2535,6 +2535,76 @@ fn failed_park_refuses_to_overwrite_config_changed_after_its_write_and_keeps_bac
     assert!(paths_under(&home.join(".history"))
         .iter()
         .any(|path| std::fs::read(path).is_ok_and(|bytes| bytes == EXPLICIT_TOML.as_bytes())));
+    assert!(stub.skill_dir("foo").join("SKILL.md").is_file());
+    let error = ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: live_copy(&rt, "foo").id,
+        },
+    )
+    .expect_err("retry must require recovery before it can lose management");
+    assert_eq!(error.code, skill_studio_core::ErrorCode::DriftConflict);
+    assert_eq!(read(&stub.toml_path()), current);
+    let pending = recovery_files(&home)
+        .into_iter()
+        .find(|path| path.to_string_lossy().ends_with("-rollback-staging"))
+        .expect("unresolved rollback must remain recoverable");
+    // Explicit recovery merges the retained entry with the concurrent comment.
+    std::fs::write(
+        stub.toml_path(),
+        format!("{}# concurrent after write\n", read(&pending)),
+    )
+    .unwrap();
+    std::fs::remove_file(pending).unwrap();
+    park_foo(&rt);
+    unpark_foo(&rt);
+    assert!(read(&stub.toml_path()).contains("name = \"foo\""));
+    assert!(read(&stub.toml_path()).contains("# concurrent after write"));
+    assert!(read(&stub.lock_path()).contains("[skills.foo]"));
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn failed_turn_on_then_rollback_crash_retry_park_turn_on_restores_management_or_stale_rollback_unlists_skill(
+) {
+    let (home, stub) = dotagents_home("turn_on_rollback_crash_retry", EXPLICIT_TOML);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    park_foo(&rt);
+    let armed = fs.clone();
+    let child_home = home.clone();
+    let parked_config = read(&stub.toml_path());
+    fs.before_write_once(stub.lock_path(), move || {
+        let recovery = recovery_files(&child_home)
+            .into_iter()
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(".agents.toml-park-recovery-")
+                    && read(path) == parked_config
+            })
+            .unwrap();
+        armed.after_rename_once(recovery, || {
+            panic!("injected crash during Turn on rollback")
+        });
+        Err(std::io::Error::other("injected lock failure"))
+    });
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unpark_foo(&rt);
+    }));
+    assert!(crashed.is_err());
+    assert!(recovery_files(&home)
+        .iter()
+        .any(|path| path.to_string_lossy().ends_with("-rollback-staging")));
+    unpark_foo(&rt);
+    park_foo(&rt);
+    unpark_foo(&rt);
+    assert!(
+        read(&stub.toml_path()).contains("name = \"foo\""),
+        "stale rollback lost dotagents management"
+    );
+    assert!(read(&stub.lock_path()).contains("[skills.foo]"));
     assert!(stub.skill_dir("foo").join("SKILL.md").is_file());
     std::fs::remove_dir_all(home).unwrap();
 }
