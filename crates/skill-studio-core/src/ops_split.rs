@@ -112,6 +112,9 @@ pub(crate) fn split_body(
     let session = MutationSession::begin_for_deployment(rt, ctx, &req.deployment_id);
     ctx.take_timing();
     let mut session = session?;
+    if let Some(hook) = agent_off {
+        crate::ops_agent_off::validate_split_under_lease(rt, &session.fresh, req, hook.agent)?;
+    }
 
     let deployment = session.resolve_exact(&req.deployment_id)?.clone();
     if deployment.root.kind != RootKind::Universal {

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use crate::dto::{
     AgentOffCheck, AgentOffOutcome, AgentOffRefusal, AgentOffRequest, DeploymentDto,
-    InstalledSkillDto, ParkCheckRequest, ScanRequest, SplitRequest,
+    InstalledSkillDto, Inventory, ParkCheckRequest, ScanRequest, SplitRequest,
 };
 use crate::error::{CoreError, ErrorCode};
 use crate::harness::{RootRole, ScopeLevel};
@@ -365,7 +365,39 @@ fn plan(
             timings: false,
         },
     )?;
-    let skill = ops::resolve_skill(&inventory, &req.deployment_id)?;
+    plan_from_inventory(rt, &inventory, req)
+}
+
+pub(crate) fn validate_split_under_lease(
+    rt: &Runtime,
+    inventory: &Inventory,
+    req: &SplitRequest,
+    agent: &AgentId,
+) -> Result<(), CoreError> {
+    let current = plan_from_inventory(
+        rt,
+        inventory,
+        &AgentOffRequest {
+            deployment_id: req.deployment_id.clone(),
+            agent: agent.clone(),
+        },
+    )?
+    .map_err(|refused| CoreError::new(ErrorCode::Unsupported, refused.reason))?;
+    if current.harnesses != req.harnesses {
+        return Err(CoreError::new(
+            ErrorCode::DriftConflict,
+            "the agents that read this skill changed; check its Locations and try again",
+        ));
+    }
+    Ok(())
+}
+
+fn plan_from_inventory(
+    rt: &Runtime,
+    inventory: &Inventory,
+    req: &AgentOffRequest,
+) -> Result<Result<Plan, AgentOffRefusal>, CoreError> {
+    let skill = ops::resolve_skill(inventory, &req.deployment_id)?;
     let deployment = skill
         .deployments
         .iter()
