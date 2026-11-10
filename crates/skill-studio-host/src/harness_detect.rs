@@ -4,8 +4,10 @@
 use crate::probe_cache::{ProbeCache, ProbeKey};
 use std::ffi::OsString;
 use std::io::Read;
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -57,11 +59,7 @@ fn retry_when_busy<T>(mut attempt: impl FnMut() -> std::io::Result<T>) -> std::i
     }
 }
 
-/// How long the timeout path waits for a reader thread to see EOF after
-/// killing the child's whole process group, before giving up on it and
-/// returning whatever was collected so far (possibly nothing). Bounded so a
-/// reader that somehow never sees EOF can't turn the very deadline this
-/// spawner exists to enforce into a second, unbounded hang.
+/// Time allowed for EOF after process cleanup before stopping the readers.
 const KILLED_READER_GRACE: Duration = Duration::from_millis(250);
 
 /// Runs a child process with `std::process::Command` and waits for it to
@@ -81,6 +79,7 @@ pub struct RealProcessSpawner {
     isolated_home: Option<PathBuf>,
     clock: Arc<dyn skill_studio_core::ports::Clock>,
     probes: Mutex<ProbeCache>,
+    reader_grace: Duration,
 }
 
 impl RealProcessSpawner {
@@ -91,7 +90,14 @@ impl RealProcessSpawner {
             isolated_home: None,
             clock: Arc::new(crate::clock::SystemClock::new()),
             probes: Mutex::new(ProbeCache::default()),
+            reader_grace: KILLED_READER_GRACE,
         }
+    }
+
+    /// Builds a production spawner whose cache is confined to the selected home.
+    pub fn for_home(home: &Path, search_dirs: Vec<PathBuf>) -> Self {
+        Self::with_search_path(search_dirs)
+            .with_probe_cache(home.join(".skill-studio/version-probes.json"))
     }
 
     /// Reuses version probes across instances through an app-owned cache file.
@@ -281,12 +287,12 @@ fn broken_node_reason(node: &Path, path: &OsString) -> Option<String> {
                 let _ = kill_process_group(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = join_killed_reader(stderr_reader);
+                let _ = join_killed_reader(stderr_reader, KILLED_READER_GRACE);
                 return None;
             }
         }
     };
-    let (_, stderr) = readers_after_exit(child.id(), None, stderr_reader);
+    let (_, stderr) = readers_after_exit(child.id(), None, stderr_reader, KILLED_READER_GRACE);
     if status.success() {
         return None;
     }
@@ -302,18 +308,59 @@ impl Default for RealProcessSpawner {
     }
 }
 
-/// Spawns a thread that drains `pipe` to a `Vec<u8>`. Must start before the
+/// A reader with an explicit stop signal. Must start before the
 /// caller polls the child for exit: a child that writes more than the pipe
 /// buffer (about 64 KB) and isn't read blocks on that write forever, so
 /// `try_wait` would never see it exit and the caller would always hit its
 /// deadline instead of its real completion.
-fn spawn_drain<R: Read + Send + 'static>(pipe: R) -> JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let mut pipe = pipe;
-        let mut buf = Vec::new();
-        let _ = pipe.read_to_end(&mut buf);
-        buf
-    })
+struct PipeDrain {
+    stop: Arc<AtomicBool>,
+    handle: JoinHandle<Vec<u8>>,
+}
+
+impl PipeDrain {
+    fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
+}
+
+fn spawn_drain<R: Read + AsFd + Send + 'static>(mut pipe: R) -> PipeDrain {
+    let stop = Arc::new(AtomicBool::new(false));
+    let cancelled = stop.clone();
+    let handle = std::thread::spawn(move || {
+        use rustix::event::{poll, PollFd, PollFlags, Timespec};
+        let mut output = Vec::new();
+        let mut buffer = [0; 8192];
+        loop {
+            let mut descriptors = [PollFd::new(&pipe, PollFlags::IN)];
+            let timeout = Timespec {
+                tv_sec: 0,
+                tv_nsec: 10_000_000,
+            };
+            match poll(&mut descriptors, Some(&timeout)) {
+                Ok(0) => {
+                    if cancelled.load(Ordering::Acquire) {
+                        break;
+                    }
+                    continue;
+                }
+                Ok(_) => {}
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(_) => break,
+            }
+            match pipe.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => output.extend_from_slice(&buffer[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+            if cancelled.load(Ordering::Acquire) {
+                break;
+            }
+        }
+        output
+    });
+    PipeDrain { stop, handle }
 }
 
 /// Kills every process in `pid`'s process group (set via `process_group(0)`
@@ -339,36 +386,31 @@ fn kill_process_group(pid: u32) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// Joins `handle` if it finishes within [`KILLED_READER_GRACE`], else
-/// abandons it and returns nothing collected. Only used after the child's
-/// whole process group has already been killed, so the pipe's write end is
-/// expected to close almost immediately - the bound exists for the case
-/// where, for whatever reason, it doesn't.
-fn join_killed_reader(handle: Option<JoinHandle<Vec<u8>>>) -> Vec<u8> {
-    let Some(handle) = handle else {
+// A descendant can start a new session and retain the write end after a group kill.
+// Stop polling and close our read end before joining in that case.
+fn join_killed_reader(reader: Option<PipeDrain>, grace: Duration) -> Vec<u8> {
+    let Some(reader) = reader else {
         return Vec::new();
     };
-    let deadline = Instant::now() + KILLED_READER_GRACE;
-    while !handle.is_finished() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
+    let deadline = Instant::now() + grace;
+    while !reader.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(POLL_INTERVAL);
     }
-    if handle.is_finished() {
-        handle.join().unwrap_or_default()
-    } else {
-        Vec::new()
-    }
+    reader.stop.store(true, Ordering::Release);
+    reader.handle.join().unwrap_or_default()
 }
 
 fn readers_after_exit(
     pid: u32,
-    stdout: Option<JoinHandle<Vec<u8>>>,
-    stderr: Option<JoinHandle<Vec<u8>>>,
+    stdout: Option<PipeDrain>,
+    stderr: Option<PipeDrain>,
+    grace: Duration,
 ) -> (Vec<u8>, Vec<u8>) {
     let finished = || {
-        stdout.as_ref().is_none_or(JoinHandle::is_finished)
-            && stderr.as_ref().is_none_or(JoinHandle::is_finished)
+        stdout.as_ref().is_none_or(PipeDrain::is_finished)
+            && stderr.as_ref().is_none_or(PipeDrain::is_finished)
     };
-    let deadline = Instant::now() + KILLED_READER_GRACE;
+    let deadline = Instant::now() + grace;
     while !finished() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -376,7 +418,10 @@ fn readers_after_exit(
         #[cfg(unix)]
         let _ = kill_process_group(pid);
     }
-    (join_killed_reader(stdout), join_killed_reader(stderr))
+    (
+        join_killed_reader(stdout, grace),
+        join_killed_reader(stderr, grace),
+    )
 }
 
 impl ProcessSpawner for RealProcessSpawner {
@@ -400,7 +445,7 @@ impl ProcessSpawner for RealProcessSpawner {
                     .map(|dir| dir.join(&program))
                     .find(|path| is_executable_file(path))
             };
-            path.and_then(|path| ProbeKey::read(&path))
+            path.and_then(|path| ProbeKey::read_with_path(&path, self.effective_path(spec)))
         } else {
             None
         };
@@ -449,10 +494,8 @@ impl ProcessSpawner for RealProcessSpawner {
 
         // Drain both pipes concurrently with the poll loop below, not after
         // it: see `spawn_drain`'s doc comment.
-        let stdout_reader: Option<JoinHandle<Vec<u8>>> =
-            child.stdout.take().map(spawn_drain::<ChildStdout>);
-        let stderr_reader: Option<JoinHandle<Vec<u8>>> =
-            child.stderr.take().map(spawn_drain::<ChildStderr>);
+        let stdout_reader: Option<PipeDrain> = child.stdout.take().map(spawn_drain::<ChildStdout>);
+        let stderr_reader: Option<PipeDrain> = child.stderr.take().map(spawn_drain::<ChildStderr>);
 
         let deadline = Duration::from_millis(spec.timeout_ms);
         let exit_status = loop {
@@ -478,8 +521,8 @@ impl ProcessSpawner for RealProcessSpawner {
                 let _ = kill_process_group(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
-                let stdout = join_killed_reader(stdout_reader);
-                let stderr = join_killed_reader(stderr_reader);
+                let stdout = join_killed_reader(stdout_reader, self.reader_grace);
+                let stderr = join_killed_reader(stderr_reader, self.reader_grace);
                 return stopped.map(|_| ProcessOutput {
                     status: None,
                     stdout: String::from_utf8_lossy(&stdout).into_owned(),
@@ -488,7 +531,8 @@ impl ProcessSpawner for RealProcessSpawner {
                 });
             }
         };
-        let (stdout, stderr) = readers_after_exit(child.id(), stdout_reader, stderr_reader);
+        let (stdout, stderr) =
+            readers_after_exit(child.id(), stdout_reader, stderr_reader, self.reader_grace);
         let output = self.describe_failed_npx(
             spec,
             &program,
@@ -519,6 +563,93 @@ mod tests {
 
     fn write_script(path: &Path, body: &str) {
         crate::test_scripts::write_fake_executable(path, body);
+    }
+
+    #[test]
+    fn absolute_shim_uses_each_effective_path_or_reuses_the_previous_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shim = tmp.path().join("shim");
+        write_script(&shim, "exec backend --version");
+        for (name, version) in [("first", "1.2.3"), ("second", "4.5.6")] {
+            let bin = tmp.path().join(name);
+            std::fs::create_dir(&bin).unwrap();
+            write_script(&bin.join("backend"), &format!("echo {version}"));
+        }
+        for (name, version) in [("first", "1.2.3"), ("second", "4.5.6")] {
+            let spawner = RealProcessSpawner::for_home(tmp.path(), vec![tmp.path().join(name)]);
+            let spec = ProcessSpec {
+                program: shim.display().to_string(),
+                args: vec!["--version".into()],
+                cwd: None,
+                env: Vec::new(),
+                timeout_ms: 30_000,
+            };
+            assert_eq!(
+                spawner.run(&spec, &NeverCancel).unwrap().stdout.trim(),
+                version,
+                "shim reused the version from the previous PATH"
+            );
+        }
+    }
+
+    #[test]
+    fn cancelling_an_escaping_grandchild_joins_the_reader_and_closes_its_pipe_or_leaks_a_thread() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ready = tmp.path().join("ready");
+        let closed = tmp.path().join("closed");
+        let release = tmp.path().join("release");
+        let script = r"import os, sys, time
+if os.fork() == 0:
+    os.setsid()
+    with open(sys.argv[1], 'w') as f:
+        f.write(str(os.getpid()))
+    while not os.path.exists(sys.argv[3]):
+        time.sleep(0.01)
+    outcome = 'open'
+    try:
+        os.write(1, b'probe')
+    except BrokenPipeError:
+        outcome = 'closed'
+    with open(sys.argv[2], 'w') as f:
+        f.write(outcome)
+    os._exit(0)
+while True:
+    time.sleep(1)
+";
+        let spec = ProcessSpec {
+            program: "/usr/bin/python3".into(),
+            args: vec![
+                "-c".into(),
+                script.into(),
+                ready.display().to_string(),
+                closed.display().to_string(),
+                release.display().to_string(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+        };
+        let spawner = RealProcessSpawner {
+            reader_grace: Duration::ZERO,
+            ..RealProcessSpawner::new()
+        };
+        let result = spawner.run(&spec, &CancelWhenReady(ready));
+        assert!(
+            matches!(result, Err(error) if error.code == skill_studio_core::ErrorCode::Cancelled)
+        );
+        std::fs::write(release, b"release").unwrap();
+        let outcome = loop {
+            if let Ok(outcome) = std::fs::read_to_string(&closed) {
+                if !outcome.is_empty() {
+                    break outcome;
+                }
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        };
+        assert_eq!(
+            outcome, "closed",
+            "probe returned with a blocked reader still holding the pipe"
+        );
     }
 
     #[test]
@@ -693,9 +824,15 @@ mod tests {
         };
         let (send, recv) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
-            send.send(RealProcessSpawner::new().run(&spec, &NeverCancel))
+            send.send(
+                RealProcessSpawner {
+                    reader_grace: Duration::ZERO,
+                    ..RealProcessSpawner::new()
+                }
+                .run(&spec, &NeverCancel),
+            )
         });
-        let result = recv.recv_timeout(Duration::from_secs(15));
+        let result = recv.recv();
         std::fs::write(release, b"release").unwrap();
         worker.join().unwrap().ok();
         let output = result
@@ -1002,13 +1139,12 @@ mod tests {
         };
         let (send, recv) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || send.send(spawner.run(&spec, &NeverCancel)));
-        let result = recv.recv_timeout(Duration::from_secs(15));
+        let result = recv.recv();
         let pid = std::fs::read_to_string(&pid_file)
             .unwrap_or_default()
             .trim()
             .parse::<u32>();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while pid.as_ref().is_ok_and(|pid| process_running(*pid)) && Instant::now() < deadline {
+        while pid.as_ref().is_ok_and(|pid| process_running(*pid)) {
             std::thread::sleep(POLL_INTERVAL);
         }
         let alive = pid.as_ref().is_ok_and(|pid| process_running(*pid));

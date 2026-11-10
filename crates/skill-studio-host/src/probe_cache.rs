@@ -1,7 +1,9 @@
 //! Successful version probes, invalidated by executable identity.
 use serde::{Deserialize, Serialize};
 use skill_studio_core::ports::ProcessOutput;
+use std::ffi::OsString;
 use std::io::{Read, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -13,14 +15,23 @@ pub(crate) struct ProbeKey {
     path: PathBuf,
     target: PathBuf,
     size: u64,
+    device: u64,
+    inode: u64,
+    changed_secs: i64,
+    changed_nanos: i64,
+    effective_path: OsString,
     modified_secs: u64,
     modified_nanos: u32,
 }
 impl ProbeKey {
     pub(crate) fn is_current(&self) -> bool {
-        Self::read(&self.path).as_ref() == Some(self)
+        Self::read_with_path(&self.path, self.effective_path.clone()).as_ref() == Some(self)
     }
+    #[cfg(test)]
     pub(crate) fn read(path: &Path) -> Option<Self> {
+        Self::read_with_path(path, OsString::new())
+    }
+    pub(crate) fn read_with_path(path: &Path, effective_path: OsString) -> Option<Self> {
         let path = std::path::absolute(path).ok()?;
         let target = std::fs::canonicalize(&path).ok()?;
         let facts = std::fs::metadata(&target).ok()?;
@@ -32,6 +43,11 @@ impl ProbeKey {
             path,
             target,
             size: facts.len(),
+            device: facts.dev(),
+            inode: facts.ino(),
+            changed_secs: facts.ctime(),
+            changed_nanos: facts.ctime_nsec(),
+            effective_path,
             modified_secs: modified.as_secs(),
             modified_nanos: modified.subsec_nanos(),
         })
@@ -147,6 +163,37 @@ mod tests {
             timed_out: false,
         }
     }
+    #[test]
+    fn replacing_the_same_path_with_equal_size_and_mtime_invalidates_the_probe_or_returns_stale_output(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("program");
+        let replacement = dir.path().join("replacement");
+        std::fs::write(&path, b"first").unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let before = ProbeKey::read(&path).unwrap();
+        let mut cache = ProbeCache::default();
+        cache.put(before.clone(), &output());
+        std::fs::write(&replacement, b"other").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let after = ProbeKey::read(&path).unwrap();
+        assert_eq!(before.size, after.size);
+        assert_eq!(
+            (before.modified_secs, before.modified_nanos),
+            (after.modified_secs, after.modified_nanos)
+        );
+        assert!(
+            cache.get(&after).is_none(),
+            "same-path replacement reused stale output"
+        );
+    }
+
     #[test]
     fn retargeting_a_shim_with_equal_size_and_mtime_invalidates_the_probe_or_returns_the_old_binary_version(
     ) {

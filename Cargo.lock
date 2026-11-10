@@ -4477,6 +4477,7 @@ dependencies = [
  "percent-encoding",
  "reqwest",
  "rusqlite",
+ "rustix",
  "sentry",
  "serde",
  "serde_json",

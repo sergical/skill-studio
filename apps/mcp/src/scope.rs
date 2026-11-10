@@ -57,7 +57,7 @@ pub fn resolve() -> (RuntimeScope, PathBuf) {
 }
 
 pub(crate) fn process_spawner(home: &Path) -> skill_studio_host::RealProcessSpawner {
-    let spawner = skill_studio_host::RealProcessSpawner::new();
+    let spawner = skill_studio_host::RealProcessSpawner::for_home(home, Vec::new());
     if std::env::var_os("SKILL_STUDIO_FIXTURE").is_some()
         || std::env::var_os("SKILL_STUDIO_HOME").is_some()
     {

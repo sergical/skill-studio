@@ -180,3 +180,44 @@ fn cursor_capabilities_and_detection_choose_the_same_specific_runner_or_name_the
         }
     }
 }
+
+#[test]
+fn repeated_detection_on_cli_and_mcp_reuses_unchanged_versions_or_spawns_twice() {
+    use std::os::unix::fs::PermissionsExt;
+    for surface in ["cli", "mcp"] {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let program = bin.join("claude");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo called >> \"$0.calls\"; fi\necho 1.2.3\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(std::process::Command::new(&program)
+            .output()
+            .unwrap()
+            .status
+            .success());
+        let env = vec![(
+            "PATH".to_string(),
+            format!("{}:/usr/bin:/bin", bin.display()),
+        )];
+        for _ in 0..2 {
+            if surface == "cli" {
+                cli_with_env(home.path(), &["harnesses"], &env);
+            } else {
+                mcp_with_env(home.path(), "harnesses", &json!({}), &env);
+            }
+        }
+        assert_eq!(
+            std::fs::read_to_string(bin.join("claude.calls"))
+                .unwrap()
+                .lines()
+                .count(),
+            1,
+            "{surface} detection spawned the unchanged binary twice"
+        );
+    }
+}
