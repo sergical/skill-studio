@@ -120,7 +120,7 @@ fn write_cache(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .parent()
         .ok_or_else(|| std::io::Error::other("cache has no parent"))?;
     std::fs::create_dir_all(parent)?;
-    let temp = parent.join(format!(".probe-cache-{}.tmp", ulid::Ulid::new()));
+    let temp = parent.join(format!(".probe-cache-{}.tmp", ulid::Ulid::generate()));
     let result = (|| {
         let mut output = std::fs::OpenOptions::new()
             .write(true)

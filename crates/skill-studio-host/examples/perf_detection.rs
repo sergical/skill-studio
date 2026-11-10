@@ -61,6 +61,7 @@ fn sample(home: &Path, bin: &Path, cache: Option<&Path>) -> serde_json::Value {
             .all(|row| row.version.value.is_some()),
         "{report:?}"
     );
+    drop(rt);
     serde_json::json!({"elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,"load_average":load,"cargo_processes":cargo,"rustc_processes":rustc})
 }
 
