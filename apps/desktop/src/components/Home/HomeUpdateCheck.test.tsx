@@ -104,3 +104,43 @@ it("Check now settles every success and failure transition or keeps an old resul
   }
   expect(request).toBe(outcomes.length);
 });
+
+it("Check now that returns an undated summary yields to a newer dated snapshot instead of keeping Home on not checked yet", async () => {
+  const unchecked = {
+    checked_at: null,
+    gh_status: "ok" as const,
+    message: null,
+    updates_available: 0,
+    upstream_ahead: [],
+  };
+  const snapshot = {
+    ...buildHarnessSnapshot(),
+    skills: [],
+    invocations: [],
+    update_check: unchecked,
+  };
+  mockIPC((command) => {
+    if (command !== "check_skill_updates_now") throw new Error(`Unexpected ${command}`);
+    return unchecked;
+  });
+  const user = userEvent.setup();
+  const view = render(
+    <HomeView snapshot={snapshot} isLoading={false} active onSelectSkill={() => {}} />,
+  );
+  await user.click(screen.getByRole("button", { name: "Check now" }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Check now" }).hasAttribute("disabled")).toBe(false),
+  );
+  view.rerender(
+    <HomeView
+      snapshot={{
+        ...snapshot,
+        update_check: { ...unchecked, checked_at: "2026-11-10T00:00:00Z", updates_available: 2 },
+      }}
+      isLoading={false}
+      active
+      onSelectSkill={() => {}}
+    />,
+  );
+  expect(await screen.findByText("2 updates available")).toBeTruthy();
+});

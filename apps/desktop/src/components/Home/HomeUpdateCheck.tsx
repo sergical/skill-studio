@@ -21,11 +21,10 @@ export function HomeUpdateCheck({ summary }: { summary: SkillSnapshot["update_ch
     },
     { kind: "initial" },
   );
+  const resultAt = result.kind === "checked" ? result.summary.checked_at : null;
   const latest =
     result.kind === "checked" &&
-    (!summary.checked_at ||
-      !result.summary.checked_at ||
-      result.summary.checked_at >= summary.checked_at)
+    (!summary.checked_at || (resultAt !== null && resultAt >= summary.checked_at))
       ? result.summary
       : summary;
   const status =
