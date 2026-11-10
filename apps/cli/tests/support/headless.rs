@@ -43,13 +43,18 @@ pub fn cli_request(
     if scoped {
         command.arg("--home").arg(home);
     }
-    let output = command
+    command
         .arg("--json")
         .env("HOME", home)
         .env("SKILL_STUDIO_TELEMETRY", "0")
         .envs(env.iter().map(|(key, value)| (key, value)))
         .current_dir(home)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = skill_studio_host::spawn_retrying_busy(&mut command)
+        .unwrap()
+        .wait_with_output()
         .unwrap();
     serde_json::from_slice(&output.stdout)
         .unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&output.stderr)))
@@ -79,7 +84,7 @@ pub fn mcp_request(
     if scoped {
         command.env("SKILL_STUDIO_HOME", home);
     }
-    let mut child = command
+    command
         .arg("mcp")
         .env("HOME", home)
         .env("SKILL_STUDIO_TELEMETRY", "0")
@@ -88,9 +93,8 @@ pub fn mcp_request(
         .current_dir(home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::null());
+    let mut child = skill_studio_host::spawn_retrying_busy(&mut command).unwrap();
     let mut input = child.stdin.take().unwrap();
     let mut output = BufReader::new(child.stdout.take().unwrap());
     let mut line = String::new();

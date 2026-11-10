@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdout, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -80,6 +80,7 @@ pub struct RealProcessSpawner {
     /// neither `npx` nor the `node` its `#!/usr/bin/env node` shebang needs
     /// can be found.
     search_dirs: Vec<PathBuf>,
+    isolated_home: Option<PathBuf>,
 }
 
 impl RealProcessSpawner {
@@ -87,6 +88,7 @@ impl RealProcessSpawner {
     pub fn new() -> Self {
         RealProcessSpawner {
             search_dirs: Vec::new(),
+            isolated_home: None,
         }
     }
 
@@ -97,7 +99,50 @@ impl RealProcessSpawner {
     /// so the spawn agrees with whatever `find_binary` already promised the
     /// caller was there.
     pub fn with_search_path(search_dirs: Vec<PathBuf>) -> Self {
-        RealProcessSpawner { search_dirs }
+        RealProcessSpawner {
+            search_dirs,
+            isolated_home: None,
+        }
+    }
+
+    /// Confines inherited npm and Git configuration to an explicit home scope.
+    #[must_use]
+    pub fn with_isolated_home(mut self, home: PathBuf) -> Self {
+        self.isolated_home = Some(home);
+        self
+    }
+
+    fn isolate_environment(&self, command: &mut Command) {
+        let Some(home) = &self.isolated_home else {
+            return;
+        };
+        let keys: Vec<_> = std::env::vars_os()
+            .map(|(key, _)| key)
+            .chain(command.get_envs().map(|(key, _)| key.to_os_string()))
+            .filter(|key| {
+                let key = key.to_string_lossy().to_ascii_lowercase();
+                key.starts_with("npm_config_")
+                    || key == "git_config"
+                    || key.starts_with("git_config_")
+            })
+            .collect();
+        for key in keys {
+            command.env_remove(key);
+        }
+        for (name, path) in [
+            ("cache", home.join(".npm")),
+            ("userconfig", home.join(".npmrc")),
+            ("globalconfig", home.join(".npm-global/etc/npmrc")),
+            ("prefix", home.join(".npm-global")),
+        ] {
+            command
+                .env(format!("npm_config_{name}"), &path)
+                .env(format!("NPM_CONFIG_{}", name.to_ascii_uppercase()), path);
+        }
+        command
+            .env("HOME", home)
+            .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
+            .env("GIT_CONFIG_NOSYSTEM", "1");
     }
 
     /// Resolves `program` to an absolute path under `search_dirs` when it is
@@ -319,6 +364,7 @@ impl ProcessSpawner for RealProcessSpawner {
         if !self.search_dirs.is_empty() && !spec.env.iter().any(|(key, _)| key == "PATH") {
             command.env("PATH", self.child_path());
         }
+        self.isolate_environment(&mut command);
         // No stdin: the MCP server's JSON-RPC stream must not reach a child,
         // and a CLI that asks a question then fails instead of waiting.
         command

@@ -155,7 +155,7 @@ fn build_runtime(with_history: bool) -> Result<Runtime, CoreError> {
         }
         ports.tools = Some(Arc::new(skill_studio_host::PathToolLookup::new()));
     }
-    ports.spawner = Some(Arc::new(skill_studio_host::RealProcessSpawner::new()));
+    ports.spawner = Some(Arc::new(scope::process_spawner(&runtime_scope.home_root)));
     if !with_history && runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture {
         // Fixture scopes name their own projects explicitly; discovery would
         // otherwise walk the real machine's transcripts for a fake home.

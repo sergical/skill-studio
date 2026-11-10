@@ -288,20 +288,6 @@ fn find_nested_symlink(fs: &dyn ScopeFs, dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// The env the CLI child gets: `HOME`, plus for skills.sh the vars it reads agent folders
-/// from, pinned to the folders [`crate::skills_cli_agents`] backs up.
-fn cli_env(rt: &Runtime, owner_kind: LifecycleOwnerKind) -> Vec<(String, String)> {
-    let home = &rt.scope.home.lexical;
-    let mut env = vec![("HOME".to_string(), home.display().to_string())];
-    if owner_kind == LifecycleOwnerKind::SkillsSh {
-        env.extend(crate::skills_cli_agents::cli_env_pins(
-            home,
-            &rt.scope.codex_home,
-        ));
-    }
-    env
-}
-
 /// Runs `owner_kind`'s `remove` argv through the spawner port and checks
 /// `path` no longer exists - mirrors `ops_install_cli::install_via_cli`'s
 /// own post-call check, in reverse.
@@ -330,7 +316,10 @@ fn remove_via_cli(
         program: "npx".to_string(),
         args,
         cwd,
-        env: cli_env(rt, owner_kind),
+        env: crate::skills_cli_agents::cli_environment(
+            &rt.scope.home.lexical,
+            &rt.scope.codex_home,
+        ),
         timeout_ms: 120_000,
     };
     let output = spawner.run(&spec, ctx.cancel.as_ref())?;
