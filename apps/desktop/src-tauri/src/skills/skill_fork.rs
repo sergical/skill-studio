@@ -3436,19 +3436,18 @@ mod tests {
     #[test]
     fn run_npx_with_a_cwd_runs_the_process_there_or_names_the_ignored_cwd() {
         let bin_dir = tempfile::tempdir().expect("fake bin dir");
-        // A link to a system binary, not a freshly written script: running a
+        // A link to the system shell, not a freshly written script: running a
         // just-written script can stall for minutes on macOS hosts that scan
-        // new executables. `touch` given a relative name creates it in the
-        // process's cwd, which is what this test needs to observe.
-        std::os::unix::fs::symlink("/usr/bin/touch", bin_dir.path().join("npx"))
-            .expect("link fake npx");
+        // new executables. Not `touch` either: uutils multi-call coreutils
+        // (Ubuntu CI) refuse to run under another name.
+        std::os::unix::fs::symlink("/bin/sh", bin_dir.path().join("npx")).expect("link fake npx");
 
         let target_dir = tempfile::tempdir().expect("target cwd");
         let spawner =
             skill_studio_host::RealProcessSpawner::with_search_path(vec![bin_dir.path().into()]);
         let result = run_npx_with_spawner(
             &spawner,
-            &["cwd-marker".to_string()],
+            &["-c".to_string(), ": > cwd-marker".to_string()],
             Some(target_dir.path()),
         );
 
