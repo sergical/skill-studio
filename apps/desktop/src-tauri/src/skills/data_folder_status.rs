@@ -22,7 +22,7 @@ pub struct DataFolderStatusState(pub Mutex<Option<String>>);
 /// Reads `app_data`'s version marker, migrates it forward in place when it
 /// is older than [`skill_studio_host::CURRENT_DATA_VERSION`], and returns
 /// the blocking message when it is newer. Called once, before
-/// `lib.rs::open_event_store`, so a migration always lands before anything
+/// `lib.rs::open_event_store_at`, so a migration always lands before anything
 /// else touches the folder, and a newer folder is never opened at all.
 pub fn check_and_migrate(app_data: &Path) -> Option<String> {
     let fs = skill_studio_host::RealDataFolderFs::new();
@@ -65,6 +65,16 @@ pub fn check_and_migrate(app_data: &Path) -> Option<String> {
     None
 }
 
+/// Checks the folder before invoking the data-layer opener used by startup.
+pub fn check_and_open<T>(
+    app_data: &Path,
+    open: impl FnOnce() -> Option<T>,
+) -> (Option<String>, Option<T>) {
+    let message = check_and_migrate(app_data);
+    let store = if message.is_none() { open() } else { None };
+    (message, store)
+}
+
 /// True when no [`DataFolderStatusState`] message is set for `app` - the
 /// timing log ([`crate::timing_log::record_command`]) and the update-check
 /// writer (`skill_update_check::check_now`) both consult this before
@@ -93,11 +103,57 @@ pub fn data_folder_status(state: tauri::State<'_, DataFolderStatusState>) -> Opt
 mod tests {
     use super::*;
 
+    #[test]
+    fn newer_folder_startup_refuses_the_event_store_or_opens_an_incompatible_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_data = dir.path().join("app");
+        let data_root = dir.path().join("home");
+        std::fs::create_dir(&app_data).unwrap();
+        let current = skill_studio_host::CURRENT_DATA_VERSION;
+        let newer = current.checked_add(1).unwrap();
+        let marker = format!("{newer}\n");
+        std::fs::write(app_data.join("schema_version"), &marker).unwrap();
+        let mut opens = 0;
+        let (message, store) = check_and_open(&app_data, || {
+            opens += 1;
+            crate::open_event_store_at(&app_data, &data_root)
+        });
+        assert_eq!(
+            opens, 0,
+            "incompatible startup reached the real database opener"
+        );
+        assert!(store.is_none());
+        let message = message.expect("startup must explain the incompatible folder");
+        assert!(message.contains(&newer.to_string()), "{message}");
+        assert!(message.contains(&current.to_string()), "{message}");
+        assert_eq!(
+            std::fs::read_to_string(app_data.join("schema_version")).unwrap(),
+            marker
+        );
+        assert_eq!(std::fs::read_dir(&app_data).unwrap().count(), 1);
+        assert!(!data_root.exists());
+    }
+
+    #[test]
+    fn compatible_folder_startup_opens_the_event_store_or_blocks_usable_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_data = dir.path().join("app");
+        let data_root = dir.path().join("home");
+        let mut opens = 0;
+        let (message, store) = check_and_open(&app_data, || {
+            opens += 1;
+            crate::open_event_store_at(&app_data, &data_root)
+        });
+        assert!(message.is_none(), "{message:?}");
+        assert_eq!(opens, 1);
+        assert!(
+            store.is_some(),
+            "compatible startup must open the real event store"
+        );
+    }
+
     /// A marker file that doesn't hold a decimal version blocks startup with
-    /// a message naming the path and the read error, the same as a folder
-    /// this build refuses as too new - `lib.rs::run` skips `open_event_store`
-    /// whenever `check_and_migrate` returns `Some`, so this also stands in
-    /// for "never opens the event store".
+    /// a message naming the path and the read error.
     #[test]
     fn corrupt_version_marker_blocks_startup_or_names_the_read_error() {
         let dir = tempfile::tempdir().expect("tempdir");
