@@ -1,0 +1,4257 @@
+{
+  "string_table": [
+    "UNKNOWN",
+    "start",
+    "skill_studio::build_runtime",
+    "build_runtime<skill_studio_core::dto::Inventory>",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/apps/cli/src/main.rs",
+    "skill_studio::main",
+    "main",
+    "skill_studio::run_scan",
+    "run_scan",
+    "core::ptr::drop_in_place<skill_studio_core::ops::ResultEnvelope<skill_studio_core::dto::Inventory>>",
+    "drop_in_place<core::option::Option<skill_studio_core::dto::Inventory>>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/ptr/mod.rs",
+    "drop_in_place<skill_studio_core::ops::ResultEnvelope<skill_studio_core::dto::Inventory>>",
+    "core::ptr::drop_in_place<skill_studio_core::dto::Inventory>",
+    "drop_in_place<[skill_studio_core::dto::InstalledSkillDto]>",
+    "drop<skill_studio_core::dto::InstalledSkillDto, alloc::alloc::Global>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/vec/mod.rs",
+    "drop_in_place<alloc::vec::Vec<skill_studio_core::dto::InstalledSkillDto, alloc::alloc::Global>>",
+    "drop_in_place<skill_studio_core::dto::Inventory>",
+    "serde_core::ser::SerializeMap::serialize_entry",
+    "capacity<alloc::alloc::Global>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/raw_vec/mod.rs",
+    "needs_to_grow<alloc::alloc::Global>",
+    "reserve<alloc::alloc::Global>",
+    "reserve<u8, alloc::alloc::Global>",
+    "append_elements<u8, alloc::alloc::Global>",
+    "spec_extend<u8, alloc::alloc::Global>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/vec/spec_extend.rs",
+    "extend_from_slice<u8, alloc::alloc::Global>",
+    "write_all<alloc::alloc::Global>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/io/impls.rs",
+    "write_all<alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "begin_object_key<serde_json::ser::CompactFormatter, &mut alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.151/src/ser.rs",
+    "serialize_key<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, str>",
+    "serialize_entry<serde_json::ser::Compound<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, str, core::option::Option<skill_studio_core::frontmatter::SkillFrontmatter>>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.229/src/ser/mod.rs",
+    "serialize_some<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, std::path::PathBuf>",
+    "serialize<std::path::PathBuf, &mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.229/src/ser/impls.rs",
+    "serialize_value<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, core::option::Option<std::path::PathBuf>>",
+    "serialize_entry<serde_json::ser::Compound<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, str, core::option::Option<std::path::PathBuf>>",
+    "serialize<skill_studio_core::dto::InstalledSkillDto, &mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>>",
+    "serialize_element<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, &skill_studio_core::dto::InstalledSkillDto>",
+    "{closure#0}<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_core::dto::InstalledSkillDto, alloc::alloc::Global>>",
+    "{closure#0}<&skill_studio_core::dto::InstalledSkillDto, core::result::Result<(), serde_json::error::Error>, serde_core::ser::Serializer::collect_seq::{closure_env#0}<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_core::dto::InstalledSkillDto, alloc::alloc::Global>>>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/iter/traits/iterator.rs",
+    "try_fold<core::slice::iter::Iter<skill_studio_core::dto::InstalledSkillDto>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<&skill_studio_core::dto::InstalledSkillDto, core::result::Result<(), serde_json::error::Error>, serde_core::ser::Serializer::collect_seq::{closure_env#0}<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_core::dto::InstalledSkillDto, alloc::alloc::Global>>>, core::result::Result<(), serde_json::error::Error>>",
+    "try_for_each<core::slice::iter::Iter<skill_studio_core::dto::InstalledSkillDto>, serde_core::ser::Serializer::collect_seq::{closure_env#0}<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_core::dto::InstalledSkillDto, alloc::alloc::Global>>, core::result::Result<(), serde_json::error::Error>>",
+    "collect_seq<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_core::dto::InstalledSkillDto, alloc::alloc::Global>>",
+    "serialize_value<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, alloc::vec::Vec<skill_studio_core::dto::InstalledSkillDto, alloc::alloc::Global>>",
+    "serialize_entry<serde_json::ser::Compound<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, str, alloc::vec::Vec<skill_studio_core::dto::InstalledSkillDto, alloc::alloc::Global>>",
+    "serialize_some<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, skill_studio_core::dto::Inventory>",
+    "serialize<skill_studio_core::dto::Inventory, &mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>>",
+    "serialize_value<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, core::option::Option<skill_studio_core::dto::Inventory>>",
+    "serialize_entry<serde_json::ser::Compound<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, str, core::option::Option<skill_studio_core::dto::Inventory>>",
+    "serialize<skill_studio_core::dto::DeploymentDto, &mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>>",
+    "serialize_element<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, &skill_studio_core::dto::DeploymentDto>",
+    "{closure#0}<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_core::dto::DeploymentDto, alloc::alloc::Global>>",
+    "{closure#0}<&skill_studio_core::dto::DeploymentDto, core::result::Result<(), serde_json::error::Error>, serde_core::ser::Serializer::collect_seq::{closure_env#0}<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_core::dto::DeploymentDto, alloc::alloc::Global>>>",
+    "try_fold<core::slice::iter::Iter<skill_studio_core::dto::DeploymentDto>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<&skill_studio_core::dto::DeploymentDto, core::result::Result<(), serde_json::error::Error>, serde_core::ser::Serializer::collect_seq::{closure_env#0}<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_core::dto::DeploymentDto, alloc::alloc::Global>>>, core::result::Result<(), serde_json::error::Error>>",
+    "try_for_each<core::slice::iter::Iter<skill_studio_core::dto::DeploymentDto>, serde_core::ser::Serializer::collect_seq::{closure_env#0}<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_core::dto::DeploymentDto, alloc::alloc::Global>>, core::result::Result<(), serde_json::error::Error>>",
+    "collect_seq<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, &alloc::vec::Vec<skill_studio_core::dto::DeploymentDto, alloc::alloc::Global>>",
+    "serialize_value<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, alloc::vec::Vec<skill_studio_core::dto::DeploymentDto, alloc::alloc::Global>>",
+    "serialize_entry<serde_json::ser::Compound<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, str, alloc::vec::Vec<skill_studio_core::dto::DeploymentDto, alloc::alloc::Global>>",
+    "format_escaped_str<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>",
+    "serialize_str<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>",
+    "serialize<serde_json::ser::MapKeySerializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>>",
+    "serialize_entry<serde_json::ser::Compound<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>, str, core::option::Option<alloc::string::String>>",
+    "serde_json::ser::format_escaped_str_contents",
+    "format_escaped_str_contents<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>",
+    "skill_studio::output::print_json",
+    "to_writer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, skill_studio_core::ops::ResultEnvelope<skill_studio_core::dto::Inventory>>",
+    "to_vec<skill_studio_core::ops::ResultEnvelope<skill_studio_core::dto::Inventory>>",
+    "to_string<skill_studio_core::ops::ResultEnvelope<skill_studio_core::dto::Inventory>>",
+    "print_json<skill_studio_core::dto::Inventory>",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/apps/cli/src/output.rs",
+    "core::ptr::drop_in_place<skill_studio_core::dto::DeploymentDto>",
+    "drop_in_place<alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String, alloc::alloc::Global>>",
+    "drop_in_place<skill_studio_core::dto::DeploymentDto>",
+    "core::ptr::drop_in_place<skill_studio_core::dto::InstalledSkillDto>",
+    "drop_in_place<[skill_studio_core::dto::DeploymentDto]>",
+    "drop<skill_studio_core::dto::DeploymentDto, alloc::alloc::Global>",
+    "drop_in_place<alloc::vec::Vec<skill_studio_core::dto::DeploymentDto, alloc::alloc::Global>>",
+    "drop_in_place<skill_studio_core::dto::InstalledSkillDto>",
+    "skill_studio_core::ops::_::<impl serde_core::ser::Serialize for skill_studio_core::ops::ResultEnvelope<T>>::serialize",
+    "serialize_field<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, core::option::Option<skill_studio_core::dto::Inventory>>",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/crates/skill-studio-core/src/ops.rs",
+    "<alloc::collections::btree::map::BTreeMap<K,V,A> as core::ops::drop::Drop>::drop",
+    "dealloc",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/alloc.rs",
+    "deallocate",
+    "deallocate<alloc::alloc::Global>",
+    "drop<u8, alloc::alloc::Global>",
+    "drop_in_place<alloc::raw_vec::RawVec<u8, alloc::alloc::Global>>",
+    "drop_in_place<alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "drop_in_place<alloc::string::String>",
+    "assume_init_drop<alloc::string::String>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/mem/maybe_uninit.rs",
+    "drop<alloc::string::String>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/collections/btree/node.rs",
+    "drop_in_place<alloc::collections::btree::node::{impl#57}::drop_key_val::Dropper<alloc::string::String>>",
+    "drop_key_val<alloc::string::String, alloc::string::String, alloc::collections::btree::node::marker::LeafOrInternal>",
+    "drop<alloc::string::String, alloc::string::String, alloc::alloc::Global>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/collections/btree/map.rs",
+    "drop_in_place<alloc::collections::btree::map::IntoIter<alloc::string::String, alloc::string::String, alloc::alloc::Global>>",
+    "drop<alloc::collections::btree::map::IntoIter<alloc::string::String, alloc::string::String, alloc::alloc::Global>>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/mem/mod.rs",
+    "skill_studio_core::dto::_::<impl serde_core::ser::Serialize for skill_studio_core::dto::Inventory>::serialize",
+    "serialize_field<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, alloc::vec::Vec<skill_studio_core::dto::InstalledSkillDto, alloc::alloc::Global>>",
+    "serialize<&mut serde_json::ser::Serializer<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>>",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/crates/skill-studio-core/src/dto.rs",
+    "skill_studio_core::dto::_::<impl serde_core::ser::Serialize for skill_studio_core::dto::DeploymentDto>::serialize",
+    "serialize_field<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, std::path::PathBuf>",
+    "skill_studio_core::dto::_::<impl serde_core::ser::Serialize for skill_studio_core::dto::InstalledSkillDto>::serialize",
+    "serialize_field<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter, core::option::Option<alloc::string::String>>",
+    "serde_core::ser::impls::<impl serde_core::ser::Serialize for std::path::PathBuf>::serialize",
+    "std::rt::lang_start::{{closure}}",
+    "{closure#0}<std::process::ExitCode>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/rt.rs",
+    "skill_studio_core::frontmatter::_::<impl serde_core::ser::Serialize for skill_studio_core::frontmatter::SkillFrontmatter>::serialize",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/crates/skill-studio-core/src/frontmatter.rs",
+    "std::sys::backtrace::__rust_begin_short_backtrace",
+    "call_once<fn() -> std::process::ExitCode, ()>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/ops/function.rs",
+    "_rust_begin_short_backtrace<fn() -> std::process::ExitCode, std::process::ExitCode>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sys/backtrace.rs",
+    "skill_studio_core::identity::_::<impl serde_core::ser::Serialize for skill_studio_core::identity::LifecycleOwnerKind>::serialize",
+    "serialize_unit_variant<&mut alloc::vec::Vec<u8, alloc::alloc::Global>, serde_json::ser::CompactFormatter>",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/crates/skill-studio-core/src/identity.rs",
+    "skill_studio_core::identity::_::<impl serde_core::ser::Serialize for skill_studio_core::identity::SourceKind>::serialize",
+    "__rustc::__rust_no_alloc_shim_is_unstable_v2",
+    "<skill_studio_host::fs::RealFs as skill_studio_core::ports::ScopeFs>::read_capped",
+    "metadata<&std::path::Path>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/fs.rs",
+    "read_capped",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/crates/skill-studio-host/src/fs.rs",
+    "<skill_studio_host::fs::RealFs as skill_studio_core::ports::ScopeFs>::read_prefix",
+    "open<&std::path::Path>",
+    "read_prefix",
+    "<skill_studio_host::fs::RealFs as skill_studio_core::ports::ScopeFs>::symlink_metadata",
+    "symlink_metadata<&std::path::Path>",
+    "symlink_metadata",
+    "<skill_studio_host::fs::RealFs as skill_studio_core::ports::ScopeFs>::read_dir",
+    "read_dir<&std::path::Path>",
+    "read_dir",
+    "<skill_studio_host::lease::FileLease as skill_studio_core::ports::LeaseProvider>::acquire",
+    "open<&std::path::PathBuf>",
+    "acquire",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/crates/skill-studio-host/src/lease.rs",
+    "std::io::default_read_to_end::small_probe_read",
+    "read<std::fs::File>",
+    "read<&mut std::fs::File>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/io/mod.rs",
+    "small_probe_read<std::io::Take<&mut std::fs::File>>",
+    "std::io::default_read_to_end",
+    "default_read_to_end<std::io::Take<&mut std::fs::File>>",
+    "<std::path::PathBuf as core::cmp::PartialEq>::eq",
+    "eq<core::iter::adapters::rev::Rev<std::path::Components>, core::iter::adapters::rev::Rev<std::path::Components>>",
+    "eq",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/path.rs",
+    "alloc::vec::Vec<T,A>::dedup_by",
+    "{closure#6}<alloc::vec::Vec<std::path::PathBuf, alloc::alloc::Global>>",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/crates/skill-studio-core/src/tracked_projects.rs",
+    "dedup_by<skill_studio_core::scope::PhysicalRoot, alloc::alloc::Global, skill_studio_core::tracked_projects::{impl#0}::resolve::{closure_env#6}<alloc::vec::Vec<std::path::PathBuf, alloc::alloc::Global>>>",
+    "<alloc::vec::Vec<T,A> as core::clone::Clone>::clone",
+    "alloc",
+    "alloc_impl",
+    "allocate",
+    "try_allocate_in<alloc::alloc::Global>",
+    "with_capacity_in<alloc::alloc::Global>",
+    "with_capacity_in<skill_studio_core::harness::ScopeLevel, alloc::alloc::Global>",
+    "to_vec<skill_studio_core::harness::ScopeLevel, alloc::alloc::Global>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/slice.rs",
+    "to_vec_in<skill_studio_core::harness::ScopeLevel, alloc::alloc::Global>",
+    "clone<skill_studio_core::harness::ScopeLevel, alloc::alloc::Global>",
+    "<alloc::vec::Vec<T> as alloc::vec::spec_from_iter::SpecFromIter<T,I>>::from_iter",
+    "try_fold<core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<skill_studio_core::scope::PhysicalRoot, core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>, fn(skill_studio_core::scope::PhysicalRoot) -> core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>>, core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/iter/adapters/mod.rs",
+    "try_for_each<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>>, fn(skill_studio_core::scope::PhysicalRoot) -> core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>, core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>>",
+    "next<core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>>",
+    "extend_desugared<skill_studio_core::scope::PhysicalRoot, alloc::alloc::Global, core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>>>",
+    "spec_extend<skill_studio_core::scope::PhysicalRoot, core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>>, alloc::alloc::Global>",
+    "from_iter<skill_studio_core::scope::PhysicalRoot, core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>>>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/vec/spec_from_iter_nested.rs",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/vec/spec_from_iter.rs",
+    "skill_studio_core::ops::scan_inner",
+    "read",
+    "scan_inner",
+    "skill_studio_core::ops::in_git_repo",
+    "ancestor_holds",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/crates/skill-studio-core/src/ports.rs",
+    "in_git_repo",
+    "skill_studio_core::ops::SkillMdBytes::read_capped",
+    "equal<u8, u8>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/slice/cmp.rs",
+    "eq<u8, u8>",
+    "eq<[u8], [u8]>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/cmp.rs",
+    "eq<std::path::Path, std::path::Path>",
+    "skill_studio_core::ops::scan_targets::{{closure}}",
+    "insert<(skill_studio_core::identity::RootScope, skill_studio_core::identity::RootKind, std::path::PathBuf), std::hash::random::RandomState, alloc::alloc::Global>",
+    "/rust/deps/hashbrown-0.15.5/src/set.rs",
+    "insert<(skill_studio_core::identity::RootScope, skill_studio_core::identity::RootKind, std::path::PathBuf), std::hash::random::RandomState>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/collections/hash/set.rs",
+    "{closure#0}",
+    "skill_studio_core::ops::deployment_id",
+    "encode_id_path",
+    "deployment_id",
+    "skill_studio_core::ops::read_skill_md",
+    "join<&str>",
+    "read_skill_md",
+    "skill_studio_core::ops::codex_path_form",
+    "codex_path_form",
+    "skill_studio_core::ops::process_entries",
+    "join<&alloc::string::String>",
+    "process_entries",
+    "skill_studio_core::ops::scan_one_target",
+    "scan_one_target",
+    "skill_studio_core::ops::root_dir_missing",
+    "root_dir_missing",
+    "skill_studio_core::ops::insert_deployment",
+    "push_mut<skill_studio_core::dto::DeploymentDto, alloc::alloc::Global>",
+    "push<skill_studio_core::dto::DeploymentDto, alloc::alloc::Global>",
+    "insert_deployment",
+    "skill_studio_core::ops::parked_scan_targets::{{closure}}",
+    "{closure#1}",
+    "skill_studio_core::ops::walk_folder_for_facts",
+    "walk_folder_for_facts",
+    "skill_studio_core::ops::walk_for_plugin_roots",
+    "walk_for_plugin_roots",
+    "skill_studio_core::ops::content_hash_from_walk",
+    "content_hash_from_walk",
+    "skill_studio_core::ops::scan_one_plugin_target",
+    "scan_one_plugin_target",
+    "skill_studio_core::ops::timed_read_root_entries",
+    "read_root_entries",
+    "timed_read_root_entries",
+    "skill_studio_core::ops::scan",
+    "scan",
+    "skill_studio_core::ops::scan_body",
+    "scan_body",
+    "<alloc::string::String as core::fmt::Write>::write_str",
+    "write_str",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/string.rs",
+    "alloc::str::<impl str>::replace",
+    "push_str",
+    "replace<char>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/str.rs",
+    "<skill_studio_core::ops::ContentFacts as core::clone::Clone>::clone",
+    "clone<alloc::string::String, alloc::string::String, alloc::alloc::Global>",
+    "clone",
+    "<skill_studio_core::frontmatter::SkillFrontmatter as core::clone::Clone>::clone",
+    "clone<alloc::string::String>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/option.rs",
+    "<alloc::collections::btree::map::BTreeMap<K,V> as core::iter::traits::collect::FromIterator<(K,V)>>::from_iter",
+    "try_new_uninit_in<alloc::collections::btree::node::LeafNode<alloc::string::String, alloc::string::String>, alloc::alloc::Global>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/boxed.rs",
+    "new_uninit_in<alloc::collections::btree::node::LeafNode<alloc::string::String, alloc::string::String>, alloc::alloc::Global>",
+    "new<alloc::string::String, alloc::string::String, alloc::alloc::Global>",
+    "new_leaf<alloc::string::String, alloc::string::String, alloc::alloc::Global>",
+    "bulk_build_from_sorted_iter<alloc::string::String, alloc::string::String, alloc::alloc::Global, alloc::vec::Vec<(alloc::string::String, alloc::string::String), alloc::alloc::Global>>",
+    "from_iter<alloc::string::String, alloc::string::String, core::iter::adapters::filter_map::FilterMap<serde_yaml::mapping::IntoIter, skill_studio_core::frontmatter::frontmatter_fields::{closure_env#0}>>",
+    "skill_studio_core::identity::sha256_hex",
+    "sha256_hex",
+    "skill_studio_core::identity::Fingerprint::of_bytes",
+    "of_bytes",
+    "<std::path::PathBuf as core::hash::Hash>::hash",
+    "hash<std::hash::random::DefaultHasher>",
+    "<core::hash::sip::Hasher<S> as core::hash::Hasher>::write",
+    "copy_nonoverlapping<u8>",
+    "u8to64_le",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/hash/sip.rs",
+    "write<core::hash::sip::Sip13Rounds>",
+    "<alloc::collections::btree::map::BTreeMap<K,V,A> as core::clone::Clone>::clone::clone_subtree",
+    "clone_subtree<alloc::string::String, alloc::string::String, alloc::alloc::Global>",
+    "assume_init_drop<alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "drop<alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "drop_in_place<alloc::collections::btree::node::{impl#57}::drop_key_val::Dropper<alloc::vec::Vec<u8, alloc::alloc::Global>>>",
+    "drop_key_val<std::path::PathBuf, alloc::vec::Vec<u8, alloc::alloc::Global>, alloc::collections::btree::node::marker::LeafOrInternal>",
+    "drop<std::path::PathBuf, alloc::vec::Vec<u8, alloc::alloc::Global>, alloc::alloc::Global>",
+    "drop_in_place<alloc::collections::btree::map::IntoIter<std::path::PathBuf, alloc::vec::Vec<u8, alloc::alloc::Global>, alloc::alloc::Global>>",
+    "drop<alloc::collections::btree::map::IntoIter<std::path::PathBuf, alloc::vec::Vec<u8, alloc::alloc::Global>, alloc::alloc::Global>>",
+    "core::hash::BuildHasher::hash_one",
+    "hash<std::path::PathBuf, std::hash::random::DefaultHasher>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/hash/mod.rs",
+    "hash_one<std::hash::random::RandomState, &std::path::PathBuf>",
+    "hash<skill_studio_core::identity::RootScope, skill_studio_core::identity::RootKind, std::path::PathBuf, std::hash::random::DefaultHasher>",
+    "hash<(skill_studio_core::identity::RootScope, skill_studio_core::identity::RootKind, std::path::PathBuf), std::hash::random::DefaultHasher>",
+    "hash_one<std::hash::random::RandomState, &(skill_studio_core::identity::RootScope, skill_studio_core::identity::RootKind, std::path::PathBuf)>",
+    "core::slice::sort::stable::drift::sort",
+    "create_run<skill_studio_core::ports::DirEntryFacts, alloc::slice::{impl#0}::sort_by::{closure_env#0}<skill_studio_core::ports::DirEntryFacts, skill_studio_core::ops::read_root_entries::{closure_env#1}>>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/slice/sort/stable/drift.rs",
+    "sort<skill_studio_core::ports::DirEntryFacts, alloc::slice::{impl#0}::sort_by::{closure_env#0}<skill_studio_core::ports::DirEntryFacts, skill_studio_core::ops::read_root_entries::{closure_env#1}>>",
+    "serde_yaml::de::Deserializer::de",
+    "de<skill_studio_core::frontmatter::SkillFrontmatter, serde_yaml::de::{impl#2}::deserialize_struct::{closure_env#0}<skill_studio_core::frontmatter::_::{impl#0}::deserialize::__Visitor>>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_yaml-0.9.34+deprecated/src/de.rs",
+    "de<serde_yaml::value::Value, serde_yaml::de::{impl#2}::deserialize_any::{closure_env#0}<serde_yaml::value::de::{impl#0}::deserialize::ValueVisitor>>",
+    "serde_yaml::de::visit_untagged_scalar",
+    "with_capacity_in<u8, alloc::alloc::Global>",
+    "to_vec<u8, alloc::alloc::Global>",
+    "to_vec_in<u8, alloc::alloc::Global>",
+    "to_vec<u8>",
+    "to_owned<u8>",
+    "to_owned",
+    "visit_str<serde_yaml::error::Error>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_yaml-0.9.34+deprecated/src/value/de.rs",
+    "visit_borrowed_str<serde_yaml::value::de::{impl#0}::deserialize::ValueVisitor, serde_yaml::error::Error>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.229/src/de/mod.rs",
+    "visit_untagged_scalar<serde_yaml::value::de::{impl#0}::deserialize::ValueVisitor>",
+    "serde_yaml::de::DeserializerFromEvents::visit_mapping",
+    "visit_mapping<skill_studio_core::frontmatter::_::{impl#0}::deserialize::__Visitor>",
+    "<serde_yaml::de::MapAccess as serde_core::de::MapAccess>::next_key_seed",
+    "deserialize<&mut serde_yaml::de::DeserializerFromEvents>",
+    "deserialize<serde_yaml::value::Value, &mut serde_yaml::de::DeserializerFromEvents>",
+    "next_key_seed<core::marker::PhantomData<serde_yaml::value::Value>>",
+    "<&mut serde_yaml::de::DeserializerFromEvents as serde_core::de::Deserializer>::deserialize_any",
+    "visit_scalar<serde_yaml::value::de::{impl#0}::deserialize::ValueVisitor>",
+    "deserialize_any<serde_yaml::value::de::{impl#0}::deserialize::ValueVisitor>",
+    "<&mut serde_yaml::de::DeserializerFromEvents as serde_core::de::Deserializer>::deserialize_map",
+    "deserialize_map<skill_studio_core::frontmatter::_::{impl#0}::deserialize::__Visitor>",
+    "<&mut serde_yaml::de::DeserializerFromEvents as serde_core::de::Deserializer>::deserialize_str",
+    "{closure#0}<serde_core::de::impls::StringVisitor>",
+    "map_err<alloc::string::String, serde_yaml::error::Error, serde_yaml::error::Error, serde_yaml::de::{impl#10}::deserialize_str::{closure_env#0}<serde_core::de::impls::StringVisitor>>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/result.rs",
+    "deserialize_str<serde_core::de::impls::StringVisitor>",
+    "<&mut serde_yaml::de::DeserializerFromEvents as serde_core::de::Deserializer>::deserialize_option",
+    "deserialize_string<serde_core::de::impls::StringVisitor>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.229/src/de/impls.rs",
+    "visit_some<alloc::string::String, &mut serde_yaml::de::DeserializerFromEvents>",
+    "deserialize_option<serde_core::de::impls::OptionVisitor<alloc::string::String>>",
+    "skill_studio_core::ports::acquire_shared",
+    "acquire_shared",
+    "skill_studio_core::ports::ancestor_holds",
+    "skill_studio_core::ports::Runtime::new",
+    "new",
+    "skill_studio_core::ports::Runtime::run",
+    "run<skill_studio_core::dto::Inventory, skill_studio_core::ops::scan::{closure_env#0}>",
+    "skill_studio_core::scope::NormalizedScope::normalize_with_discovery",
+    "from_iter<skill_studio_core::scope::PhysicalRoot, skill_studio_core::error::CoreError, alloc::vec::Vec<skill_studio_core::scope::PhysicalRoot, alloc::alloc::Global>, core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>>",
+    "collect<core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>, core::result::Result<alloc::vec::Vec<skill_studio_core::scope::PhysicalRoot, alloc::alloc::Global>, skill_studio_core::error::CoreError>>",
+    "normalize_with_discovery",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/crates/skill-studio-core/src/scope.rs",
+    "skill_studio_core::scope::NormalizedScope::contains",
+    "any<core::iter::adapters::chain::Chain<core::iter::sources::once::Once<&skill_studio_core::scope::PhysicalRoot>, core::slice::iter::Iter<skill_studio_core::scope::PhysicalRoot>>, skill_studio_core::scope::{impl#2}::contains::{closure_env#0}>",
+    "contains",
+    "<skill_studio_core::ports::ScopedReads as skill_studio_core::ports::ScopeFs>::symlink_metadata",
+    "core::ptr::drop_in_place<skill_studio_core::ops::ContentFacts>",
+    "drop_in_place<skill_studio_core::ops::ContentFacts>",
+    "core::iter::traits::iterator::Iterator::eq_by",
+    "eq_by<core::iter::adapters::rev::Rev<std::path::Components>, core::iter::adapters::rev::Rev<std::path::Components>, core::iter::traits::iterator::Iterator::eq::{closure_env#0}<core::iter::adapters::rev::Rev<std::path::Components>, core::iter::adapters::rev::Rev<std::path::Components>>>",
+    "core::slice::sort::stable::driftsort_main",
+    "driftsort_main<skill_studio_core::ports::DirEntryFacts, alloc::slice::{impl#0}::sort_by::{closure_env#0}<skill_studio_core::ports::DirEntryFacts, skill_studio_core::ops::read_root_entries::{closure_env#1}>, alloc::vec::Vec<skill_studio_core::ports::DirEntryFacts, alloc::alloc::Global>>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/slice/sort/stable/mod.rs",
+    "<std::path::Component as core::cmp::PartialEq>::eq",
+    "<hashbrown::raw::RawTable<T,A> as core::ops::drop::Drop>::drop",
+    "drop_in_place<skill_studio_core::ops::CachedSkillRead>",
+    "drop_in_place<(std::path::PathBuf, skill_studio_core::ops::CachedSkillRead)>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/ptr/mut_ptr.rs",
+    "drop<(std::path::PathBuf, skill_studio_core::ops::CachedSkillRead)>",
+    "/rust/deps/hashbrown-0.15.5/src/raw/mod.rs",
+    "drop_elements<(std::path::PathBuf, skill_studio_core::ops::CachedSkillRead)>",
+    "drop_inner_table<(std::path::PathBuf, skill_studio_core::ops::CachedSkillRead), alloc::alloc::Global>",
+    "drop<(std::path::PathBuf, skill_studio_core::ops::CachedSkillRead), alloc::alloc::Global>",
+    "hashbrown::map::HashMap<K,V,S,A>::insert",
+    "insert<std::path::PathBuf, skill_studio_core::ops::CachedSkillRead, std::hash::random::RandomState, alloc::alloc::Global>",
+    "/rust/deps/hashbrown-0.15.5/src/map.rs",
+    "make_hash<(skill_studio_core::identity::RootScope, skill_studio_core::identity::RootKind, std::path::PathBuf), std::hash::random::RandomState>",
+    "insert<(skill_studio_core::identity::RootScope, skill_studio_core::identity::RootKind, std::path::PathBuf), (), std::hash::random::RandomState, alloc::alloc::Global>",
+    "core::slice::sort::stable::quicksort::quicksort",
+    "quicksort<skill_studio_core::ports::DirEntryFacts, alloc::slice::{impl#0}::sort_by::{closure_env#0}<skill_studio_core::ports::DirEntryFacts, skill_studio_core::ops::read_root_entries::{closure_env#1}>>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/slice/sort/stable/quicksort.rs",
+    "<serde_yaml::libyaml::util::Owned<T,Init> as core::ops::drop::Drop>::drop",
+    "drop_in_place<serde_yaml::libyaml::parser::ParserPinned>",
+    "drop_in_place<alloc::boxed::Box<serde_yaml::libyaml::parser::ParserPinned, alloc::alloc::Global>>",
+    "drop<serde_yaml::libyaml::parser::ParserPinned, serde_yaml::libyaml::parser::ParserPinned>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_yaml-0.9.34+deprecated/src/libyaml/util.rs",
+    "skill_studio_core::ownership::read_scope_ledgers",
+    "read_scope_ledgers",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/crates/skill-studio-core/src/ownership.rs",
+    "skill_studio_core::ownership::read_toml_document",
+    "read_toml_document",
+    "<serde_yaml::value::de::<impl serde_core::de::Deserialize for serde_yaml::value::Value>::deserialize::ValueVisitor as serde_core::de::Visitor>::visit_map",
+    "next_key<serde_yaml::de::MapAccess, serde_yaml::value::Value>",
+    "visit_map<&mut serde_yaml::de::MapAccess>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_yaml-0.9.34+deprecated/src/mapping.rs",
+    "deserialize_any<&mut serde_yaml::de::MapAccess, serde_yaml::mapping::{impl#20}::deserialize::Visitor>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.229/src/de/value.rs",
+    "deserialize_map<&mut serde_yaml::de::MapAccess, serde_yaml::mapping::{impl#20}::deserialize::Visitor>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.229/src/macros.rs",
+    "deserialize<serde_core::de::value::MapAccessDeserializer<&mut serde_yaml::de::MapAccess>>",
+    "skill_studio_core::frontmatter::parse_frontmatter",
+    "next_inclusive<char>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/str/iter.rs",
+    "next<char>",
+    "next<&str, core::str::iter::SplitInclusive<char>, core::str::LinesMap>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/iter/adapters/map.rs",
+    "next",
+    "parse_frontmatter",
+    "skill_studio_core::frontmatter::frontmatter_fields",
+    "frontmatter_fields",
+    "skill_studio_core::harness::read_claude_skill_overrides",
+    "read_claude_skill_overrides",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/crates/skill-studio-core/src/harness.rs",
+    "<core::str::pattern::CharSearcher as core::str::pattern::Searcher>::next_match",
+    "next_match",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/str/pattern.rs",
+    "skill_studio_core::lock_file::read_lock_file",
+    "read_lock_file",
+    "/Users/sergiydybskiy/.t3/worktrees/skill-studio/t3-e01e334e-81a146aa0ecdbf30/crates/skill-studio-core/src/lock_file.rs",
+    "std::sync::once::Once::call_once_force::{{closure}}",
+    "{closure#0}<core::option::Option<tiktoken_rs::vendor_tiktoken::CoreBPE>, skill_studio_core::ops::tokenizer::{closure_env#0}>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sync/once_lock.rs",
+    "{closure#0}<core::option::Option<tiktoken_rs::vendor_tiktoken::CoreBPE>, std::sync::once_lock::{impl#0}::get_or_init::{closure_env#0}<core::option::Option<tiktoken_rs::vendor_tiktoken::CoreBPE>, skill_studio_core::ops::tokenizer::{closure_env#0}>, !>",
+    "{closure#0}<std::sync::once_lock::{impl#0}::initialize::{closure_env#0}<core::option::Option<tiktoken_rs::vendor_tiktoken::CoreBPE>, std::sync::once_lock::{impl#0}::get_or_init::{closure_env#0}<core::option::Option<tiktoken_rs::vendor_tiktoken::CoreBPE>, skill_studio_core::ops::tokenizer::{closure_env#0}>, !>>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sync/once.rs",
+    "core::iter::adapters::try_process",
+    "collect<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>>, alloc::vec::Vec<skill_studio_core::scope::PhysicalRoot, alloc::alloc::Global>>",
+    "{closure#0}<skill_studio_core::scope::PhysicalRoot, skill_studio_core::error::CoreError, alloc::vec::Vec<skill_studio_core::scope::PhysicalRoot, alloc::alloc::Global>, core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>>",
+    "try_process<core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>, skill_studio_core::scope::PhysicalRoot, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>, core::result::{impl#26}::from_iter::{closure_env#0}<skill_studio_core::scope::PhysicalRoot, skill_studio_core::error::CoreError, alloc::vec::Vec<skill_studio_core::scope::PhysicalRoot, alloc::alloc::Global>, core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>>, alloc::vec::Vec<skill_studio_core::scope::PhysicalRoot, alloc::alloc::Global>>",
+    "<core::iter::adapters::map::Map<I,F> as core::iter::traits::iterator::Iterator>::try_fold",
+    "physical",
+    "{closure#0}<&std::path::PathBuf, core::result::Result<skill_studio_core::scope::PhysicalRoot, skill_studio_core::error::CoreError>, (), core::ops::control_flow::ControlFlow<core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>, ()>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}, core::iter::adapters::{impl#0}::try_fold::{closure_env#0}<core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<skill_studio_core::scope::PhysicalRoot, core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>, fn(skill_studio_core::scope::PhysicalRoot) -> core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>>, core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>>>",
+    "try_fold<core::slice::iter::Iter<std::path::PathBuf>, (), core::iter::adapters::map::map_try_fold::{closure_env#0}<&std::path::PathBuf, core::result::Result<skill_studio_core::scope::PhysicalRoot, skill_studio_core::error::CoreError>, (), core::ops::control_flow::ControlFlow<core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>, ()>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}, core::iter::adapters::{impl#0}::try_fold::{closure_env#0}<core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<skill_studio_core::scope::PhysicalRoot, core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>, fn(skill_studio_core::scope::PhysicalRoot) -> core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>>, core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>>>, core::ops::control_flow::ControlFlow<core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>, ()>>",
+    "try_fold<core::result::Result<skill_studio_core::scope::PhysicalRoot, skill_studio_core::error::CoreError>, core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}, (), core::iter::adapters::{impl#0}::try_fold::{closure_env#0}<core::iter::adapters::map::Map<core::slice::iter::Iter<std::path::PathBuf>, skill_studio_core::scope::{impl#2}::normalize_with_discovery::{closure_env#0}>, core::result::Result<core::convert::Infallible, skill_studio_core::error::CoreError>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<skill_studio_core::scope::PhysicalRoot, core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>, fn(skill_studio_core::scope::PhysicalRoot) -> core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>>, core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>>, core::ops::control_flow::ControlFlow<core::ops::control_flow::ControlFlow<skill_studio_core::scope::PhysicalRoot, ()>, ()>>",
+    "<core::iter::adapters::chain::Chain<A,B> as core::iter::traits::iterator::Iterator>::try_fold",
+    "starts_with<&std::path::PathBuf>",
+    "{closure#0}<&skill_studio_core::scope::PhysicalRoot, skill_studio_core::scope::{impl#2}::contains::{closure_env#0}>",
+    "call_mut<((), &skill_studio_core::scope::PhysicalRoot), core::iter::traits::iterator::Iterator::any::check::{closure_env#0}<&skill_studio_core::scope::PhysicalRoot, skill_studio_core::scope::{impl#2}::contains::{closure_env#0}>>",
+    "try_fold<core::iter::sources::once::Once<&skill_studio_core::scope::PhysicalRoot>, (), &mut core::iter::traits::iterator::Iterator::any::check::{closure_env#0}<&skill_studio_core::scope::PhysicalRoot, skill_studio_core::scope::{impl#2}::contains::{closure_env#0}>, core::ops::control_flow::ControlFlow<(), ()>>",
+    "try_fold<core::iter::sources::once::Once<&skill_studio_core::scope::PhysicalRoot>, core::slice::iter::Iter<skill_studio_core::scope::PhysicalRoot>, (), core::iter::traits::iterator::Iterator::any::check::{closure_env#0}<&skill_studio_core::scope::PhysicalRoot, skill_studio_core::scope::{impl#2}::contains::{closure_env#0}>, core::ops::control_flow::ControlFlow<(), ()>>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/iter/adapters/chain.rs",
+    "ulid::time::<impl ulid::Ulid>::new",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ulid-1.2.1/src/time.rs",
+    "serde_yaml::loader::Loader::next_document",
+    "next_document",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_yaml-0.9.34+deprecated/src/loader.rs",
+    "serde_yaml::loader::Loader::new",
+    "serde_yaml::libyaml::parser::Parser::new",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_yaml-0.9.34+deprecated/src/libyaml/parser.rs",
+    "serde_yaml::libyaml::parser::Parser::next",
+    "drop",
+    "unsafe_libyaml::scanner::yaml_parser_fetch_more_tokens",
+    "CACHE",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unsafe-libyaml-0.2.11/src/scanner.rs",
+    "yaml_parser_fetch_next_token",
+    "yaml_parser_fetch_more_tokens",
+    "unsafe_libyaml::scanner::yaml_parser_fetch_plain_scalar",
+    "malloc",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unsafe-libyaml-0.2.11/src/lib.rs",
+    "yaml_malloc",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unsafe-libyaml-0.2.11/src/api.rs",
+    "yaml_parser_scan_plain_scalar",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unsafe-libyaml-0.2.11/src/macros.rs",
+    "yaml_parser_fetch_plain_scalar",
+    "unsafe_libyaml::scanner::READ",
+    "READ",
+    "unsafe_libyaml::api::yaml_parser_delete",
+    "free",
+    "yaml_free",
+    "yaml_parser_delete",
+    "unsafe_libyaml::api::yaml_string_extend",
+    "realloc",
+    "yaml_realloc",
+    "yaml_string_extend",
+    "unsafe_libyaml::api::yaml_parser_initialize",
+    "yaml_parser_initialize",
+    "unsafe_libyaml::parser::yaml_parser_parse",
+    "PEEK_TOKEN",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unsafe-libyaml-0.2.11/src/parser.rs",
+    "yaml_parser_parse_stream_start",
+    "yaml_parser_state_machine",
+    "yaml_parser_parse",
+    "unsafe_libyaml::parser::yaml_parser_parse_node",
+    "yaml_parser_parse_node",
+    "unsafe_libyaml::parser::yaml_parser_process_directives",
+    "yaml_parser_process_directives",
+    "unsafe_libyaml::parser::yaml_parser_append_tag_directive",
+    "yaml_strdup",
+    "yaml_parser_append_tag_directive",
+    "unsafe_libyaml::parser::yaml_parser_parse_document_start",
+    "yaml_parser_parse_document_start",
+    "unsafe_libyaml::parser::yaml_parser_parse_block_mapping_key",
+    "yaml_parser_parse_block_mapping_key",
+    "unsafe_libyaml::externs::strdup",
+    "strdup",
+    "unsafe_libyaml::reader::yaml_parser_update_buffer",
+    "yaml_parser_update_buffer",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unsafe-libyaml-0.2.11/src/reader.rs",
+    "unsafe_libyaml::reader::yaml_parser_update_raw_buffer",
+    "yaml_parser_update_raw_buffer",
+    "fancy_regex::vm::run_with",
+    "run_with<str, (usize, usize), fancy_regex::vm::run_spans::{closure_env#0}<str>>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fancy-regex-0.19.2/src/vm.rs",
+    "fancy_regex::vm::run_spans::{{closure}}",
+    "{closure#0}<str>",
+    "regex_automata::meta::regex::Regex::search_half",
+    "get_which_captures",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/meta/regex.rs",
+    "captures_disabled",
+    "search_half",
+    "core::ptr::drop_in_place<regex_automata::util::pool::PoolGuard<fancy_regex::vm::Scratch,fn() .> fancy_regex::vm::Scratch>>",
+    "drop_in_place<regex_automata::util::pool::PoolGuard<fancy_regex::vm::Scratch, fn() -> fancy_regex::vm::Scratch>>",
+    "tiktoken_rs::vendor_tiktoken::_byte_pair_merge",
+    "with_capacity_in<(usize, u32), alloc::alloc::Global>",
+    "with_capacity<(usize, u32)>",
+    "byte_pair_merge",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tiktoken-rs-0.12.1/src/vendor_tiktoken.rs",
+    "tiktoken_rs::vendor_tiktoken::byte_pair_encode",
+    "byte_pair_encode",
+    "tiktoken_rs::vendor_tiktoken::CoreBPE::encode_with_special_tokens",
+    "encode_with_special_tokens",
+    "tiktoken_rs::vendor_tiktoken::CoreBPE::encode",
+    "encode",
+    "tiktoken_rs::patched_tiktoken::<impl tiktoken_rs::vendor_tiktoken::CoreBPE>::new",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tiktoken-rs-0.12.1/src/patched_tiktoken.rs",
+    "hashbrown::raw::RawIterRange<T>::fold_impl",
+    "as_slice<u8, alloc::alloc::Global>",
+    "deref<u8, alloc::alloc::Global>",
+    "clone<u8, alloc::alloc::Global>",
+    "{closure#0}<(&alloc::vec::Vec<u8, alloc::alloc::Global>, &u32), (u32, alloc::vec::Vec<u8, alloc::alloc::Global>), (), tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#1}, core::iter::traits::iterator::Iterator::for_each::call::{closure_env#0}<(u32, alloc::vec::Vec<u8, alloc::alloc::Global>), hashbrown::map::{impl#82}::extend::{closure_env#0}<u32, alloc::vec::Vec<u8, alloc::alloc::Global>, rustc_hash::FxBuildHasher, alloc::alloc::Global, core::iter::adapters::map::Map<std::collections::hash::map::Iter<alloc::vec::Vec<u8, alloc::alloc::Global>, u32>, tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#1}>>>>",
+    "{closure#0}<alloc::vec::Vec<u8, alloc::alloc::Global>, u32, (), core::iter::adapters::map::map_fold::{closure_env#0}<(&alloc::vec::Vec<u8, alloc::alloc::Global>, &u32), (u32, alloc::vec::Vec<u8, alloc::alloc::Global>), (), tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#1}, core::iter::traits::iterator::Iterator::for_each::call::{closure_env#0}<(u32, alloc::vec::Vec<u8, alloc::alloc::Global>), hashbrown::map::{impl#82}::extend::{closure_env#0}<u32, alloc::vec::Vec<u8, alloc::alloc::Global>, rustc_hash::FxBuildHasher, alloc::alloc::Global, core::iter::adapters::map::Map<std::collections::hash::map::Iter<alloc::vec::Vec<u8, alloc::alloc::Global>, u32>, tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#1}>>>>>",
+    "fold_impl<(alloc::vec::Vec<u8, alloc::alloc::Global>, u32), hashbrown::map::{impl#44}::fold::{closure_env#0}<alloc::vec::Vec<u8, alloc::alloc::Global>, u32, (), core::iter::adapters::map::map_fold::{closure_env#0}<(&alloc::vec::Vec<u8, alloc::alloc::Global>, &u32), (u32, alloc::vec::Vec<u8, alloc::alloc::Global>), (), tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#1}, core::iter::traits::iterator::Iterator::for_each::call::{closure_env#0}<(u32, alloc::vec::Vec<u8, alloc::alloc::Global>), hashbrown::map::{impl#82}::extend::{closure_env#0}<u32, alloc::vec::Vec<u8, alloc::alloc::Global>, rustc_hash::FxBuildHasher, alloc::alloc::Global, core::iter::adapters::map::Map<std::collections::hash::map::Iter<alloc::vec::Vec<u8, alloc::alloc::Global>, u32>, tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#1}>>>>>, ()>",
+    "<alloc::vec::Vec<T> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<T,I>>::from_iter",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fancy-regex-0.19.2/src/lib.rs",
+    "{closure#3}",
+    "{closure#0}<usize, fancy_regex::Regex, (), tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#3}, core::iter::traits::iterator::Iterator::for_each::call::{closure_env#0}<fancy_regex::Regex, alloc::vec::{impl#20}::extend_trusted::{closure_env#0}<fancy_regex::Regex, alloc::alloc::Global, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#3}>>>>",
+    "fold<core::ops::range::Range<usize>, (), core::iter::adapters::map::map_fold::{closure_env#0}<usize, fancy_regex::Regex, (), tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#3}, core::iter::traits::iterator::Iterator::for_each::call::{closure_env#0}<fancy_regex::Regex, alloc::vec::{impl#20}::extend_trusted::{closure_env#0}<fancy_regex::Regex, alloc::alloc::Global, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#3}>>>>>",
+    "fold<fancy_regex::Regex, core::ops::range::Range<usize>, tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#3}, (), core::iter::traits::iterator::Iterator::for_each::call::{closure_env#0}<fancy_regex::Regex, alloc::vec::{impl#20}::extend_trusted::{closure_env#0}<fancy_regex::Regex, alloc::alloc::Global, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#3}>>>>",
+    "for_each<core::iter::adapters::map::Map<core::ops::range::Range<usize>, tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#3}>, alloc::vec::{impl#20}::extend_trusted::{closure_env#0}<fancy_regex::Regex, alloc::alloc::Global, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#3}>>>",
+    "extend_trusted<fancy_regex::Regex, alloc::alloc::Global, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#3}>>",
+    "spec_extend<fancy_regex::Regex, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#3}>, alloc::alloc::Global>",
+    "from_iter<fancy_regex::Regex, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tiktoken_rs::patched_tiktoken::{impl#4}::new::{closure_env#3}>>",
+    "cloned<alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "next<std::collections::hash::map::Keys<alloc::vec::Vec<u8, alloc::alloc::Global>, u32>, alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/iter/adapters/cloned.rs",
+    "extend_desugared<alloc::vec::Vec<u8, alloc::alloc::Global>, alloc::alloc::Global, core::iter::adapters::cloned::Cloned<std::collections::hash::map::Keys<alloc::vec::Vec<u8, alloc::alloc::Global>, u32>>>",
+    "spec_extend<alloc::vec::Vec<u8, alloc::alloc::Global>, core::iter::adapters::cloned::Cloned<std::collections::hash::map::Keys<alloc::vec::Vec<u8, alloc::alloc::Global>, u32>>, alloc::alloc::Global>",
+    "from_iter<alloc::vec::Vec<u8, alloc::alloc::Global>, core::iter::adapters::cloned::Cloned<std::collections::hash::map::Keys<alloc::vec::Vec<u8, alloc::alloc::Global>, u32>>>",
+    "tiktoken_rs::tiktoken_ext::openai_public::cl100k_base",
+    "cl100k_base",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tiktoken-rs-0.12.1/src/tiktoken_ext/openai_public.rs",
+    "vreinterpret_u64_u8",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/../../stdarch/crates/core_arch/src/arm_shared/neon/generated.rs",
+    "match_tag",
+    "/rust/deps/hashbrown-0.15.5/src/control/group/neon.rs",
+    "find_or_find_insert_slot_inner",
+    "find_or_find_insert_slot<(u32, alloc::vec::Vec<u8, alloc::alloc::Global>), alloc::alloc::Global, hashbrown::map::equivalent_key::{closure_env#0}<u32, u32, alloc::vec::Vec<u8, alloc::alloc::Global>>, hashbrown::map::make_hasher::{closure_env#0}<u32, alloc::vec::Vec<u8, alloc::alloc::Global>, rustc_hash::FxBuildHasher>>",
+    "find_or_find_insert_slot<u32, alloc::vec::Vec<u8, alloc::alloc::Global>, rustc_hash::FxBuildHasher, alloc::alloc::Global, u32>",
+    "insert<u32, alloc::vec::Vec<u8, alloc::alloc::Global>, rustc_hash::FxBuildHasher, alloc::alloc::Global>",
+    "find_or_find_insert_slot<(alloc::vec::Vec<u8, alloc::alloc::Global>, u32), alloc::alloc::Global, hashbrown::map::equivalent_key::{closure_env#0}<alloc::vec::Vec<u8, alloc::alloc::Global>, alloc::vec::Vec<u8, alloc::alloc::Global>, u32>, hashbrown::map::make_hasher::{closure_env#0}<alloc::vec::Vec<u8, alloc::alloc::Global>, u32, rustc_hash::FxBuildHasher>>",
+    "find_or_find_insert_slot<alloc::vec::Vec<u8, alloc::alloc::Global>, u32, rustc_hash::FxBuildHasher, alloc::alloc::Global, alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "insert<alloc::vec::Vec<u8, alloc::alloc::Global>, u32, rustc_hash::FxBuildHasher, alloc::alloc::Global>",
+    "<fancy_regex::RegexImpl as core::clone::Clone>::clone",
+    "core::slice::sort::shared::smallsort::sort4_stable",
+    "compare<u8>",
+    "partial_compare<u8>",
+    "partial_cmp<u8>",
+    "partial_cmp<u8, alloc::alloc::Global, alloc::alloc::Global>",
+    "lt<alloc::vec::Vec<u8, alloc::alloc::Global>, alloc::vec::Vec<u8, alloc::alloc::Global>>",
+    "call_mut<fn(&alloc::vec::Vec<u8, alloc::alloc::Global>, &alloc::vec::Vec<u8, alloc::alloc::Global>) -> bool, (&alloc::vec::Vec<u8, alloc::alloc::Global>, &alloc::vec::Vec<u8, alloc::alloc::Global>)>",
+    "sort4_stable<alloc::vec::Vec<u8, alloc::alloc::Global>, fn(&alloc::vec::Vec<u8, alloc::alloc::Global>, &alloc::vec::Vec<u8, alloc::alloc::Global>) -> bool>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/slice/sort/shared/smallsort.rs",
+    "core::slice::sort::shared::smallsort::small_sort_general_with_scratch",
+    "small_sort_general_with_scratch<alloc::vec::Vec<u8, alloc::alloc::Global>, fn(&alloc::vec::Vec<u8, alloc::alloc::Global>, &alloc::vec::Vec<u8, alloc::alloc::Global>) -> bool>",
+    "fancy_regex::Matches<S>::next_with",
+    "next_with<str, fancy_regex::{impl#1}::next::{closure_env#0}<str>, fancy_regex::Match>",
+    "fancy_regex::Regex::find_input_raw",
+    "find_input_raw<str>",
+    "driftsort_main<alloc::vec::Vec<u8, alloc::alloc::Global>, fn(&alloc::vec::Vec<u8, alloc::alloc::Global>, &alloc::vec::Vec<u8, alloc::alloc::Global>) -> bool, alloc::vec::Vec<alloc::vec::Vec<u8, alloc::alloc::Global>, alloc::alloc::Global>>",
+    "stable_quicksort<alloc::vec::Vec<u8, alloc::alloc::Global>, fn(&alloc::vec::Vec<u8, alloc::alloc::Global>, &alloc::vec::Vec<u8, alloc::alloc::Global>) -> bool>",
+    "sort<alloc::vec::Vec<u8, alloc::alloc::Global>, fn(&alloc::vec::Vec<u8, alloc::alloc::Global>, &alloc::vec::Vec<u8, alloc::alloc::Global>) -> bool>",
+    "core::slice::sort::shared::pivot::median3_rec",
+    "median3_rec<alloc::vec::Vec<u8, alloc::alloc::Global>, fn(&alloc::vec::Vec<u8, alloc::alloc::Global>, &alloc::vec::Vec<u8, alloc::alloc::Global>) -> bool>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/slice/sort/shared/pivot.rs",
+    "small_sort<alloc::vec::Vec<u8, alloc::alloc::Global>, fn(&alloc::vec::Vec<u8, alloc::alloc::Global>, &alloc::vec::Vec<u8, alloc::alloc::Global>) -> bool>",
+    "quicksort<alloc::vec::Vec<u8, alloc::alloc::Global>, fn(&alloc::vec::Vec<u8, alloc::alloc::Global>, &alloc::vec::Vec<u8, alloc::alloc::Global>) -> bool>",
+    "base64::engine::Engine::decode::inner",
+    "alloc_zeroed",
+    "allocate_zeroed",
+    "with_capacity_zeroed_in<alloc::alloc::Global>",
+    "with_capacity_zeroed_in<u8, alloc::alloc::Global>",
+    "from_elem<alloc::alloc::Global>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/vec/spec_from_elem.rs",
+    "from_elem<u8>",
+    "inner<base64::engine::general_purpose::GeneralPurpose>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base64-0.22.1/src/engine/mod.rs",
+    "base64::engine::general_purpose::decode_suffix::decode_suffix",
+    "next<u8>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/slice/iter/macros.rs",
+    "next<core::slice::iter::Iter<u8>>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/iter/adapters/enumerate.rs",
+    "decode_suffix",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base64-0.22.1/src/engine/general_purpose/decode_suffix.rs",
+    "<base64::engine::general_purpose::GeneralPurpose as base64::engine::Engine>::internal_decode",
+    "new<u8>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/slice/iter.rs",
+    "chunks_exact<u8>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/slice/mod.rs",
+    "decode_helper",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base64-0.22.1/src/engine/general_purpose/decode.rs",
+    "internal_decode",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base64-0.22.1/src/engine/general_purpose/mod.rs",
+    "fancy_regex::vm::State::stack_push",
+    "index<usize>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/slice/index.rs",
+    "index<usize, usize>",
+    "index<usize, usize, alloc::alloc::Global>",
+    "get",
+    "stack_push",
+    "fancy_regex::vm::State::backtrack_cut",
+    "len<fancy_regex::vm::Branch, alloc::alloc::Global>",
+    "backtrack_cut",
+    "fancy_regex::vm::State::pop",
+    "pop<fancy_regex::vm::Save, alloc::alloc::Global>",
+    "pop",
+    "fancy_regex::vm::State::push",
+    "push",
+    "fancy_regex::vm::State::save",
+    "save",
+    "fancy_regex::vm::State::reset",
+    "write<usize>",
+    "extend_with<usize, alloc::alloc::Global>",
+    "resize<usize, alloc::alloc::Global>",
+    "reset",
+    "fancy_regex::vm::State::stack_pop",
+    "as_slice<usize, alloc::alloc::Global>",
+    "deref<usize, alloc::alloc::Global>",
+    "stack_pop",
+    "fancy_regex::Regex::new_options",
+    "new_options",
+    "fancy_regex::Regex::new",
+    "fancy_regex::compile::DelegateBuilder::build_delegate",
+    "build_delegate",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fancy-regex-0.19.2/src/compile.rs",
+    "fancy_regex::compile::DelegateBuilder::push",
+    "fancy_regex::compile::options_to_rabuilder",
+    "options_to_rabuilder",
+    "fancy_regex::compile::compile_inner_from_hir",
+    "compile_inner_from_hir",
+    "fancy_regex::compile::compile",
+    "compile",
+    "fancy_regex::compile::Compiler::compile_delegates",
+    "compile_delegates",
+    "fancy_regex::compile::Compiler::visit",
+    "visit",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fancy-regex-0.19.2/src/to_hir.rs",
+    "{closure#0}<&fancy_regex::Expr, core::option::Option<regex_syntax::hir::Hir>, (), core::ops::control_flow::ControlFlow<core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>, ()>, fancy_regex::to_hir::expr_to_hir::{closure_env#1}, core::iter::adapters::{impl#0}::try_fold::{closure_env#0}<core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#1}>, core::option::Option<core::convert::Infallible>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<regex_syntax::hir::Hir, core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>, fn(regex_syntax::hir::Hir) -> core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>>, core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>>>",
+    "try_fold<core::slice::iter::Iter<fancy_regex::Expr>, (), core::iter::adapters::map::map_try_fold::{closure_env#0}<&fancy_regex::Expr, core::option::Option<regex_syntax::hir::Hir>, (), core::ops::control_flow::ControlFlow<core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>, ()>, fancy_regex::to_hir::expr_to_hir::{closure_env#1}, core::iter::adapters::{impl#0}::try_fold::{closure_env#0}<core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#1}>, core::option::Option<core::convert::Infallible>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<regex_syntax::hir::Hir, core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>, fn(regex_syntax::hir::Hir) -> core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>>, core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>>>, core::ops::control_flow::ControlFlow<core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>, ()>>",
+    "try_fold<core::option::Option<regex_syntax::hir::Hir>, core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#1}, (), core::iter::adapters::{impl#0}::try_fold::{closure_env#0}<core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#1}>, core::option::Option<core::convert::Infallible>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<regex_syntax::hir::Hir, core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>, fn(regex_syntax::hir::Hir) -> core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>>, core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>>, core::ops::control_flow::ControlFlow<core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>, ()>>",
+    "try_fold<core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#1}>, core::option::Option<core::convert::Infallible>, (), core::iter::traits::iterator::Iterator::try_for_each::call::{closure_env#0}<regex_syntax::hir::Hir, core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>, fn(regex_syntax::hir::Hir) -> core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>>, core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>>",
+    "try_for_each<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#1}>, core::option::Option<core::convert::Infallible>>, fn(regex_syntax::hir::Hir) -> core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>, core::ops::control_flow::ControlFlow<regex_syntax::hir::Hir, ()>>",
+    "next<core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#1}>, core::option::Option<core::convert::Infallible>>",
+    "from_iter<regex_syntax::hir::Hir, core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#1}>, core::option::Option<core::convert::Infallible>>>",
+    "fancy_regex::to_hir::expr_to_hir",
+    "from_iter<regex_syntax::hir::Hir, core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#0}>, core::option::Option<core::convert::Infallible>>>",
+    "collect<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#0}>, core::option::Option<core::convert::Infallible>>, alloc::vec::Vec<regex_syntax::hir::Hir, alloc::alloc::Global>>",
+    "{closure#0}<regex_syntax::hir::Hir, alloc::vec::Vec<regex_syntax::hir::Hir, alloc::alloc::Global>, core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#0}>>",
+    "try_process<core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#0}>, regex_syntax::hir::Hir, core::option::Option<core::convert::Infallible>, core::option::{impl#39}::from_iter::{closure_env#0}<regex_syntax::hir::Hir, alloc::vec::Vec<regex_syntax::hir::Hir, alloc::alloc::Global>, core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#0}>>, alloc::vec::Vec<regex_syntax::hir::Hir, alloc::alloc::Global>>",
+    "from_iter<regex_syntax::hir::Hir, alloc::vec::Vec<regex_syntax::hir::Hir, alloc::alloc::Global>, core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#0}>>",
+    "collect<core::iter::adapters::map::Map<core::slice::iter::Iter<fancy_regex::Expr>, fancy_regex::to_hir::expr_to_hir::{closure_env#0}>, core::option::Option<alloc::vec::Vec<regex_syntax::hir::Hir, alloc::alloc::Global>>>",
+    "expr_to_hir",
+    "fancy_regex::to_hir::parse_fragment",
+    "parse_fragment",
+    "regex_automata::meta::strategy::new",
+    "build_many_from_hir<&regex_syntax::hir::Hir>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/nfa/thompson/compiler.rs",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/meta/strategy.rs",
+    "<regex_automata::meta::strategy::Core as regex_automata::meta::strategy::Strategy>::search_half",
+    "try_search_fwd",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/hybrid/dfa.rs",
+    "try_search_half_fwd",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/meta/wrappers.rs",
+    "<regex_automata::meta::strategy::Core as regex_automata::meta::strategy::Strategy>::create_cache",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/hybrid/regex.rs",
+    "create_cache",
+    "map<&regex_automata::meta::wrappers::HybridEngine, regex_automata::hybrid::regex::Cache, regex_automata::meta::wrappers::{impl#11}::new::{closure_env#0}>",
+    "<core::iter::adapters::map::Map<I,F> as core::iter::traits::iterator::Iterator>::next",
+    "{closure#1}<&regex_syntax::hir::Hir>",
+    "call_once<(&&regex_syntax::hir::Hir), regex_automata::nfa::thompson::compiler::{impl#4}::compile::{closure_env#1}<&regex_syntax::hir::Hir>>",
+    "map<&&regex_syntax::hir::Hir, core::result::Result<regex_automata::nfa::thompson::compiler::ThompsonRef, regex_automata::nfa::thompson::error::BuildError>, &mut regex_automata::nfa::thompson::compiler::{impl#4}::compile::{closure_env#1}<&regex_syntax::hir::Hir>>",
+    "next<core::result::Result<regex_automata::nfa::thompson::compiler::ThompsonRef, regex_automata::nfa::thompson::error::BuildError>, core::slice::iter::Iter<&regex_syntax::hir::Hir>, regex_automata::nfa::thompson::compiler::{impl#4}::compile::{closure_env#1}<&regex_syntax::hir::Hir>>",
+    "regex_automata::nfa::thompson::compiler::Utf8Compiler::compile_from",
+    "compile_from",
+    "regex_automata::nfa::thompson::compiler::Utf8Compiler::add",
+    "add",
+    "regex_automata::nfa::thompson::compiler::Utf8Compiler::compile",
+    "len<regex_automata::nfa::thompson::map::Utf8BoundedEntry, alloc::alloc::Global>",
+    "hash",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/nfa/thompson/map.rs",
+    "regex_automata::nfa::thompson::compiler::Compiler::c_alt_iter",
+    "call_once<(&regex_syntax::hir::Hir), regex_automata::nfa::thompson::compiler::{impl#4}::c_alt_slice::{closure_env#1}>",
+    "map<&regex_syntax::hir::Hir, core::result::Result<regex_automata::nfa::thompson::compiler::ThompsonRef, regex_automata::nfa::thompson::error::BuildError>, &mut regex_automata::nfa::thompson::compiler::{impl#4}::c_alt_slice::{closure_env#1}>",
+    "next<core::result::Result<regex_automata::nfa::thompson::compiler::ThompsonRef, regex_automata::nfa::thompson::error::BuildError>, core::slice::iter::Iter<regex_syntax::hir::Hir>, regex_automata::nfa::thompson::compiler::{impl#4}::c_alt_slice::{closure_env#1}>",
+    "c_alt_iter<core::iter::adapters::map::Map<core::slice::iter::Iter<regex_syntax::hir::Hir>, regex_automata::nfa::thompson::compiler::{impl#4}::c_alt_slice::{closure_env#1}>>",
+    "regex_automata::nfa::thompson::compiler::Compiler::c_at_least",
+    "c_at_least",
+    "regex_automata::nfa::thompson::compiler::Compiler::c",
+    "call_once<(&regex_syntax::hir::Hir), regex_automata::nfa::thompson::compiler::{impl#4}::c::{closure_env#0}>",
+    "map<&regex_syntax::hir::Hir, core::result::Result<regex_automata::nfa::thompson::compiler::ThompsonRef, regex_automata::nfa::thompson::error::BuildError>, &mut regex_automata::nfa::thompson::compiler::{impl#4}::c::{closure_env#0}>",
+    "next<core::result::Result<regex_automata::nfa::thompson::compiler::ThompsonRef, regex_automata::nfa::thompson::error::BuildError>, core::slice::iter::Iter<regex_syntax::hir::Hir>, regex_automata::nfa::thompson::compiler::{impl#4}::c::{closure_env#0}>",
+    "c_concat<core::iter::adapters::map::Map<core::slice::iter::Iter<regex_syntax::hir::Hir>, regex_automata::nfa::thompson::compiler::{impl#4}::c::{closure_env#0}>>",
+    "c",
+    "regex_automata::nfa::thompson::compiler::Compiler::c_cap",
+    "c_cap",
+    "regex_automata::nfa::thompson::compiler::Compiler::compile",
+    "c_alt_iter<core::iter::adapters::map::Map<core::slice::iter::Iter<&regex_syntax::hir::Hir>, regex_automata::nfa::thompson::compiler::{impl#4}::compile::{closure_env#1}<&regex_syntax::hir::Hir>>>",
+    "compile<&regex_syntax::hir::Hir>",
+    "regex_automata::util::determinize::next",
+    "iter_nfa_state_ids<regex_automata::util::determinize::next::{closure_env#0}>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/util/determinize/state.rs",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/util/determinize/mod.rs",
+    "regex_automata::hybrid::search::find_fwd",
+    "get_earliest",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/util/search.rs",
+    "find_fwd",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/hybrid/search.rs",
+    "regex_automata::hybrid::dfa::Cache::new",
+    "alloc::raw_vec::RawVecInner<A>::try_allocate_in",
+    "regex_automata::meta::regex::Builder::build_from_hir",
+    "build_from_hir",
+    "regex_automata::meta::regex::Builder::configure",
+    "configure",
+    "<regex_automata::meta::regex::Regex as core::clone::Clone>::clone",
+    "exchange_malloc",
+    "new<regex_automata::util::pool::inner::Pool<regex_automata::meta::regex::Cache, alloc::boxed::Box<(dyn core::ops::function::Fn<(), Output=regex_automata::meta::regex::Cache> + core::marker::Send + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe + core::panic::unwind_safe::UnwindSafe), alloc::alloc::Global>>>",
+    "with_capacity<regex_automata::meta::regex::Cache, alloc::boxed::Box<(dyn core::ops::function::Fn<(), Output=regex_automata::meta::regex::Cache> + core::marker::Send + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe + core::panic::unwind_safe::UnwindSafe), alloc::alloc::Global>>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/util/pool.rs",
+    "regex_automata::util::sparse_set::SparseSets::new",
+    "reserve<regex_automata::util::primitives::StateID, alloc::alloc::Global>",
+    "extend_with<regex_automata::util::primitives::StateID, alloc::alloc::Global>",
+    "resize<regex_automata::util::primitives::StateID, alloc::alloc::Global>",
+    "resize",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/util/sparse_set.rs",
+    "regex_automata::util::determinize::state::Repr::iter_nfa_state_ids",
+    "index<regex_automata::util::primitives::StateID>",
+    "index<regex_automata::util::primitives::StateID, usize>",
+    "index<regex_automata::util::primitives::StateID, usize, alloc::alloc::Global>",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/util/primitives.rs",
+    "insert",
+    "regex_syntax::hir::Hir::concat",
+    "drop<regex_syntax::hir::PropertiesI, alloc::alloc::Global>",
+    "drop_in_place<alloc::boxed::Box<regex_syntax::hir::PropertiesI, alloc::alloc::Global>>",
+    "drop_in_place<regex_syntax::hir::Properties>",
+    "drop_in_place<regex_syntax::hir::Hir>",
+    "into_parts",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-syntax-0.8.11/src/hir/mod.rs",
+    "concat",
+    "regex_syntax::parser::ParserBuilder::build",
+    "build",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-syntax-0.8.11/src/ast/parse.rs",
+    "/Users/sergiydybskiy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-syntax-0.8.11/src/parser.rs",
+    "__rustc::__rdl_alloc",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/alloc.rs",
+    "__rustc::__rdl_alloc_zeroed",
+    "std::sys::alloc::unix::<impl core::alloc::global::GlobalAlloc for std::alloc::System>::alloc_zeroed",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sys/alloc/unix.rs",
+    "std::fs::OpenOptions::_open",
+    "std::sys::fs::unix::File::open::{{closure}}",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sys/fs/unix.rs",
+    "std::sys::pal::common::small_c_string::run_with_cstr_stack",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sys/pal/common/small_c_string.rs",
+    "std::sys::pal::common::small_c_string::run_with_cstr",
+    "std::sys::pal::common::small_c_string::run_path_with_cstr",
+    "std::sys::fs::unix::File::open",
+    "std::fs::read::inner",
+    "std::fs::OpenOptions::open",
+    "std::fs::File::open",
+    "std::fs::DirEntry::file_name",
+    "alloc::alloc::alloc",
+    "alloc::alloc::Global::alloc_impl",
+    "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+    "alloc::raw_vec::RawVecInner<A>::with_capacity_in",
+    "alloc::raw_vec::RawVec<T,A>::with_capacity_in",
+    "alloc::vec::Vec<T,A>::with_capacity_in",
+    "<T as alloc::slice::<impl [T]>::to_vec_in::ConvertVec>::to_vec",
+    "alloc::slice::<impl [T]>::to_vec_in",
+    "alloc::slice::<impl [T]>::to_vec",
+    "std::sys::os_str::bytes::Slice::to_owned",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sys/os_str/bytes.rs",
+    "std::ffi::os_str::OsStr::to_os_string",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/ffi/os_str.rs",
+    "std::sys::fs::unix::DirEntry::file_name",
+    "std::io::error::Error::new",
+    "alloc::slice::<impl alloc::borrow::ToOwned for [T]>::to_owned",
+    "alloc::str::<impl alloc::borrow::ToOwned for str>::to_owned",
+    "<alloc::string::String as core::convert::From<&str>>::from",
+    "alloc::boxed::convert::<impl core::convert::From<&str> for alloc::boxed::Box<dyn core::error::Error+core::marker::Sync+core::marker::Send>>::from",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/boxed/convert.rs",
+    "<T as core::convert::Into<U>>::into",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/convert/mod.rs",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/io/error.rs",
+    "std::io::stdio::_print",
+    "<std::io::stdio::Stdout as std::io::Write>::write_fmt",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/io/stdio.rs",
+    "std::io::stdio::print_to",
+    "std::rt::lang_start_internal",
+    "core::ops::function::impls::<impl core::ops::function::FnOnce<A> for &F>::call_once",
+    "std::panicking::catch_unwind::do_call",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/panicking.rs",
+    "std::panicking::catch_unwind",
+    "std::panic::catch_unwind",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/panic.rs",
+    "std::rt::lang_start_internal::{{closure}}",
+    "std::sys::fs::canonicalize",
+    "core::ops::function::Fn::call",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sys/fs/mod.rs",
+    "std::sys::fs::symlink_metadata",
+    "std::sys::fs::unix::canonicalize",
+    "std::sys::fs::unix::File::open_c",
+    "std::sys::fs::unix::File::open_c::{{closure}}",
+    "std::sys::pal::unix::cvt_r",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sys/pal/unix/mod.rs",
+    "std::sys::fs::metadata",
+    "std::sys::fs::unix::stat",
+    "std::sys::fs::read_dir",
+    "std::sys::fs::unix::readdir::{{closure}}",
+    "std::sys::fs::unix::readdir",
+    "std::sys::pal::unix::os::split_paths::into_pathbuf",
+    "<std::path::PathBuf as core::convert::From<&T>>::from",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sys/pal/unix/os.rs",
+    "std::sys::pal::unix::time::Timespec::now",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sys/pal/unix/time.rs",
+    "std::path::Components::len_before_body",
+    "std::path::Components::parse_next_component_back",
+    "<core::slice::iter::Iter<T> as core::iter::traits::double_ended::DoubleEndedIterator>::next_back",
+    "<core::slice::iter::Iter<T> as core::iter::traits::iterator::Iterator>::rposition",
+    "std::path::Components::as_path",
+    "std::path::Components::trim_right",
+    "std::path::Path::_starts_with",
+    "std::path::Path::components",
+    "std::path::Path::_strip_prefix",
+    "std::path::iter_after",
+    "std::path::Path::_join",
+    "std::time::Instant::elapsed",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/time.rs",
+    "<std::fs::File as std::io::Read>::read",
+    "std::sys::fd::unix::FileDesc::read",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sys/fd/unix.rs",
+    "std::sys::fs::unix::File::read",
+    "<&std::fs::File as std::io::Read>::read",
+    "<std::fs::File as std::io::Read>::read_buf",
+    "std::sys::fd::unix::FileDesc::read_buf",
+    "std::sys::fs::unix::File::read_buf",
+    "<&std::fs::File as std::io::Read>::read_buf",
+    "alloc::sync::Arc<T,A>::drop_slow",
+    "core::ptr::drop_in_place<std::sys::fs::unix::Dir>",
+    "core::ptr::drop_in_place<std::sys::fs::unix::InnerReadDir>",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/sync.rs",
+    "<&std::io::stdio::Stdout as std::io::Write>::write_fmt",
+    "std::io::default_write_fmt",
+    "std::io::Write::write_fmt",
+    "<std::io::stdio::StdoutLock as std::io::Write>::write_all",
+    "<std::io::buffered::linewritershim::LineWriterShim<W> as std::io::Write>::write_all",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/io/buffered/linewritershim.rs",
+    "<std::io::buffered::linewriter::LineWriter<W> as std::io::Write>::write_all",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/io/buffered/linewriter.rs",
+    "<std::sys::fs::unix::Dir as core::ops::drop::Drop>::drop",
+    "<std::fs::ReadDir as core::iter::traits::iterator::Iterator>::next",
+    "<std::sys::fs::unix::ReadDir as core::iter::traits::iterator::Iterator>::next",
+    "<std::path::Components as core::iter::traits::iterator::Iterator>::next",
+    "<std::io::default_write_fmt::Adapter<T> as core::fmt::Write>::write_str",
+    "<std::path::Components as core::iter::traits::double_ended::DoubleEndedIterator>::next_back",
+    "core::ptr::copy_nonoverlapping",
+    "alloc::vec::Vec<T,A>::append_elements",
+    "<alloc::vec::Vec<T,A> as alloc::vec::spec_extend::SpecExtend<&T,core::slice::iter::Iter<T>>>::spec_extend",
+    "alloc::vec::Vec<T,A>::extend_from_slice",
+    "alloc::string::String::push_str",
+    "alloc::fmt::format::format_inner",
+    "core::fmt::Arguments::estimated_capacity",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/fmt/mod.rs",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/alloc/src/fmt.rs",
+    "alloc::string::String::from_utf8_lossy",
+    "<alloc::string::String as core::clone::Clone>::clone",
+    "core::ffi::c_str::CStr::from_bytes_with_nul",
+    "core::slice::memchr::memchr_naive",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/slice/memchr.rs",
+    "core::slice::memchr::memchr_aligned::runtime",
+    "core::slice::memchr::memchr_aligned",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/intrinsics/mod.rs",
+    "core::slice::memchr::memchr",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/ffi/c_str.rs",
+    "core::fmt::num::<impl core::fmt::LowerHex for u8>::fmt",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/fmt/num.rs",
+    "core::fmt::write",
+    "core::str::converts::from_utf8",
+    "core::str::validations::run_utf8_validation",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/str/validations.rs",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/str/converts.rs",
+    "core::ptr::const_ptr::<impl *const T>::addr",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/ptr/const_ptr.rs",
+    "core::ptr::align_offset",
+    "core::ptr::const_ptr::<impl *const T>::align_offset",
+    "core::slice::memchr::memrchr",
+    "core::slice::memchr::contains_zero_byte",
+    "<core::str::lossy::Utf8Chunks as core::iter::traits::iterator::Iterator>::next",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/str/lossy.rs",
+    "alloc::raw_vec::RawVecInner<A>::finish_grow",
+    "grow_impl",
+    "grow",
+    "finish_grow<alloc::alloc::Global>",
+    "alloc::raw_vec::RawVecInner<A>::reserve::do_reserve_and_handle",
+    "unlikely",
+    "checked_add",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/core/src/num/uint_macros.rs",
+    "grow_amortized<alloc::alloc::Global>",
+    "do_reserve_and_handle<alloc::alloc::Global>",
+    "alloc::raw_vec::RawVec<T,A>::grow_one",
+    "grow_one<alloc::alloc::Global>",
+    "grow_one<skill_studio_core::dto::DeploymentDto, alloc::alloc::Global>",
+    "std::sync::once_lock::OnceLock<T>::initialize",
+    "call_once_force<std::sync::once_lock::{impl#0}::initialize::{closure_env#0}<core::option::Option<tiktoken_rs::vendor_tiktoken::CoreBPE>, std::sync::once_lock::{impl#0}::get_or_init::{closure_env#0}<core::option::Option<tiktoken_rs::vendor_tiktoken::CoreBPE>, skill_studio_core::ops::tokenizer::{closure_env#0}>, !>>",
+    "initialize<core::option::Option<tiktoken_rs::vendor_tiktoken::CoreBPE>, std::sync::once_lock::{impl#0}::get_or_init::{closure_env#0}<core::option::Option<tiktoken_rs::vendor_tiktoken::CoreBPE>, skill_studio_core::ops::tokenizer::{closure_env#0}>, !>",
+    "hashbrown::raw::RawTable<T,A>::reserve_rehash",
+    "lowest_set_bit",
+    "/rust/deps/hashbrown-0.15.5/src/control/bitmask.rs",
+    "next_impl",
+    "resize_inner<alloc::alloc::Global>",
+    "reserve_rehash_inner<alloc::alloc::Global>",
+    "reserve_rehash<(alloc::vec::Vec<u8, alloc::alloc::Global>, u32), alloc::alloc::Global, hashbrown::map::make_hasher::{closure_env#0}<alloc::vec::Vec<u8, alloc::alloc::Global>, u32, rustc_hash::FxBuildHasher>>",
+    "regex_automata::util::pool::inner::Pool<T,F>::get_slow",
+    "call<(), (dyn core::ops::function::Fn<(), Output=regex_automata::meta::regex::Cache> + core::marker::Send + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe + core::panic::unwind_safe::UnwindSafe), alloc::alloc::Global>",
+    "get_slow<regex_automata::meta::regex::Cache, alloc::boxed::Box<(dyn core::ops::function::Fn<(), Output=regex_automata::meta::regex::Cache> + core::marker::Send + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe + core::panic::unwind_safe::UnwindSafe), alloc::alloc::Global>>",
+    "regex_automata::hybrid::dfa::Lazy::cache_next_state",
+    "cache_next_state",
+    "grow_one<u32, alloc::alloc::Global>",
+    "std::io::buffered::bufwriter::BufWriter<W>::write_all_cold",
+    "std::sys::fd::unix::FileDesc::write",
+    "<std::sys::stdio::unix::Stdout as std::io::Write>::write",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sys/stdio/unix.rs",
+    "std::io::Write::write_all",
+    "<std::io::stdio::StdoutRaw as std::io::Write>::write_all",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/io/buffered/bufwriter.rs",
+    "std::sys::sync::once::queue::Once::call",
+    "/rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library/std/src/sys/sync/once/queue.rs",
+    "alloc::raw_vec::RawVecInner<A>::grow_amortized",
+    "mach_absolute_time",
+    "__getattrlist",
+    "__open",
+    "close",
+    "__open_nocancel",
+    "__close_nocancel",
+    "__getdirentries64",
+    "readlink",
+    "write",
+    "lstat",
+    "stat",
+    "open",
+    "fstatfs",
+    "mach_vm_reclaim_try_cancel",
+    "open$NOCANCEL",
+    "_platform_strnlen",
+    "_platform_memcmp",
+    "_platform_strlcat",
+    "_platform_memset",
+    "_platform_memmove",
+    "_pthread_mutex_lock_init_slow",
+    "_pthread_mutex_check_init_slow"
+  ],
+  "data": [
+    {
+      "debug_name": "dyld",
+      "debug_id": "0263b88e-0b22-3b33-bbc0-483be879b513",
+      "code_id": "0263B88E0B223B33BBC0483BE879B513",
+      "symbol_table": [{ "rva": 125332, "size": 7096, "symbol": 1 }],
+      "known_addresses": [[132323, 0]]
+    },
+    {
+      "debug_name": "measured-cli",
+      "debug_id": "d4fb811f-bf2d-3c51-aa7c-a84bb5d1e322",
+      "code_id": "D4FB811FBF2D3C51AA7CA84BB5D1E322",
+      "symbol_table": [
+        {
+          "rva": 30672,
+          "size": 2580,
+          "symbol": 2,
+          "frames": [{ "function": 3, "file": 4, "line": 754 }]
+        },
+        {
+          "rva": 65448,
+          "size": 16408,
+          "symbol": 5,
+          "frames": [{ "function": 6, "file": 4, "line": 517 }]
+        },
+        {
+          "rva": 93724,
+          "size": 868,
+          "symbol": 7,
+          "frames": [{ "function": 8, "file": 4, "line": 816 }]
+        },
+        {
+          "rva": 108912,
+          "size": 340,
+          "symbol": 9,
+          "frames": [
+            { "function": 10, "file": 11, "line": 805 },
+            { "function": 12, "file": 11, "line": 805 }
+          ]
+        },
+        {
+          "rva": 119312,
+          "size": 636,
+          "symbol": 13,
+          "frames": [
+            { "function": 14, "file": 11, "line": 805 },
+            { "function": 15, "file": 16, "line": 4047 },
+            { "function": 17, "file": 11, "line": 805 },
+            { "function": 18, "file": 11, "line": 805 }
+          ]
+        },
+        { "rva": 217660, "size": 64, "symbol": 6 },
+        {
+          "rva": 232544,
+          "size": 504,
+          "symbol": 19,
+          "frames": [
+            { "function": 20, "file": 21, "line": 509 },
+            { "function": 22, "file": 21, "line": 655 },
+            { "function": 23, "file": 21, "line": 562 },
+            { "function": 24, "file": 21, "line": 327 },
+            { "function": 24, "file": 16, "line": 1338 },
+            { "function": 25, "file": 16, "line": 2798 },
+            { "function": 26, "file": 27, "line": 55 },
+            { "function": 28, "file": 16, "line": 3325 },
+            { "function": 29, "file": 30, "line": 504 },
+            { "function": 31, "file": 30, "line": 78 },
+            { "function": 32, "file": 33, "line": 1891 },
+            { "function": 34, "file": 33, "line": 628 },
+            { "function": 35, "file": 36, "line": 1860 }
+          ]
+        },
+        {
+          "rva": 244020,
+          "size": 504,
+          "symbol": 19,
+          "frames": [
+            { "function": 37, "file": 33, "line": 280 },
+            { "function": 38, "file": 39, "line": 109 },
+            { "function": 40, "file": 33, "line": 656 },
+            { "function": 41, "file": 36, "line": 1861 }
+          ]
+        },
+        {
+          "rva": 251944,
+          "size": 692,
+          "symbol": 19,
+          "frames": [
+            { "function": 42, "file": 39, "line": 472 },
+            { "function": 43, "file": 33, "line": 502 },
+            { "function": 44, "file": 36, "line": 1303 },
+            { "function": 45, "file": 46, "line": 2485 },
+            { "function": 47, "file": 46, "line": 2427 },
+            { "function": 48, "file": 46, "line": 2488 },
+            { "function": 49, "file": 36, "line": 1303 },
+            { "function": 42, "file": 39, "line": 203 },
+            { "function": 50, "file": 33, "line": 656 },
+            { "function": 51, "file": 36, "line": 1861 }
+          ]
+        },
+        {
+          "rva": 258132,
+          "size": 504,
+          "symbol": 19,
+          "frames": [
+            { "function": 52, "file": 33, "line": 280 },
+            { "function": 53, "file": 39, "line": 109 },
+            { "function": 54, "file": 33, "line": 656 },
+            { "function": 55, "file": 36, "line": 1861 }
+          ]
+        },
+        {
+          "rva": 263884,
+          "size": 692,
+          "symbol": 19,
+          "frames": [
+            { "function": 56, "file": 39, "line": 472 },
+            { "function": 57, "file": 33, "line": 502 },
+            { "function": 58, "file": 36, "line": 1303 },
+            { "function": 59, "file": 46, "line": 2485 },
+            { "function": 60, "file": 46, "line": 2427 },
+            { "function": 61, "file": 46, "line": 2488 },
+            { "function": 62, "file": 36, "line": 1303 },
+            { "function": 56, "file": 39, "line": 203 },
+            { "function": 63, "file": 33, "line": 656 },
+            { "function": 64, "file": 36, "line": 1861 }
+          ]
+        },
+        {
+          "rva": 267732,
+          "size": 640,
+          "symbol": 19,
+          "frames": [
+            { "function": 65, "file": 33, "line": 2075 },
+            { "function": 66, "file": 33, "line": 191 },
+            { "function": 66, "file": 33, "line": 805 },
+            { "function": 67, "file": 39, "line": 46 },
+            { "function": 34, "file": 33, "line": 632 },
+            { "function": 68, "file": 36, "line": 1860 }
+          ]
+        },
+        {
+          "rva": 281384,
+          "size": 556,
+          "symbol": 69,
+          "frames": [{ "function": 70, "file": 33, "line": 2079 }]
+        },
+        {
+          "rva": 300452,
+          "size": 380,
+          "symbol": 71,
+          "frames": [
+            { "function": 72, "file": 33, "line": 2183 },
+            { "function": 73, "file": 33, "line": 2218 },
+            { "function": 74, "file": 33, "line": 2249 },
+            { "function": 75, "file": 76, "line": 29 }
+          ]
+        },
+        {
+          "rva": 336444,
+          "size": 984,
+          "symbol": 77,
+          "frames": [
+            { "function": 78, "file": 11, "line": 805 },
+            { "function": 79, "file": 11, "line": 805 }
+          ]
+        },
+        {
+          "rva": 339748,
+          "size": 248,
+          "symbol": 80,
+          "frames": [
+            { "function": 81, "file": 11, "line": 805 },
+            { "function": 82, "file": 16, "line": 4047 },
+            { "function": 83, "file": 11, "line": 805 },
+            { "function": 84, "file": 11, "line": 805 }
+          ]
+        },
+        {
+          "rva": 359608,
+          "size": 424,
+          "symbol": 85,
+          "frames": [
+            { "function": 86, "file": 33, "line": 697 },
+            { "function": 53, "file": 87, "line": 304 }
+          ]
+        },
+        {
+          "rva": 412140,
+          "size": 184,
+          "symbol": 88,
+          "frames": [
+            { "function": 89, "file": 90, "line": 115 },
+            { "function": 91, "file": 90, "line": 272 },
+            { "function": 92, "file": 21, "line": 834 },
+            { "function": 93, "file": 21, "line": 404 },
+            { "function": 94, "file": 11, "line": 805 },
+            { "function": 95, "file": 11, "line": 805 },
+            { "function": 96, "file": 11, "line": 805 },
+            { "function": 97, "file": 98, "line": 809 },
+            { "function": 99, "file": 100, "line": 1201 },
+            { "function": 101, "file": 11, "line": 805 },
+            { "function": 102, "file": 100, "line": 1214 },
+            { "function": 103, "file": 104, "line": 1754 },
+            { "function": 105, "file": 11, "line": 805 },
+            { "function": 106, "file": 107, "line": 967 },
+            { "function": 103, "file": 104, "line": 208 }
+          ]
+        },
+        {
+          "rva": 490280,
+          "size": 340,
+          "symbol": 108,
+          "frames": [
+            { "function": 109, "file": 33, "line": 697 },
+            { "function": 110, "file": 111, "line": 256 }
+          ]
+        },
+        {
+          "rva": 495436,
+          "size": 1148,
+          "symbol": 112,
+          "frames": [
+            { "function": 113, "file": 33, "line": 697 },
+            { "function": 110, "file": 111, "line": 154 }
+          ]
+        },
+        {
+          "rva": 502488,
+          "size": 312,
+          "symbol": 114,
+          "frames": [
+            { "function": 115, "file": 33, "line": 697 },
+            { "function": 110, "file": 111, "line": 245 }
+          ]
+        },
+        {
+          "rva": 548304,
+          "size": 256,
+          "symbol": 116,
+          "frames": [
+            { "function": 65, "file": 33, "line": 2075 },
+            { "function": 66, "file": 33, "line": 191 },
+            { "function": 110, "file": 39, "line": 46 },
+            { "function": 110, "file": 39, "line": 914 },
+            { "function": 110, "file": 39, "line": 927 }
+          ]
+        },
+        {
+          "rva": 558092,
+          "size": 28,
+          "symbol": 117,
+          "frames": [{ "function": 118, "file": 119, "line": 206 }]
+        },
+        {
+          "rva": 585180,
+          "size": 396,
+          "symbol": 120,
+          "frames": [
+            { "function": 115, "file": 33, "line": 697 },
+            { "function": 110, "file": 121, "line": 16 }
+          ]
+        },
+        {
+          "rva": 590076,
+          "size": 20,
+          "symbol": 122,
+          "frames": [
+            { "function": 123, "file": 124, "line": 250 },
+            { "function": 125, "file": 126, "line": 158 }
+          ]
+        },
+        {
+          "rva": 617092,
+          "size": 988,
+          "symbol": 127,
+          "frames": [
+            { "function": 65, "file": 33, "line": 2075 },
+            { "function": 66, "file": 33, "line": 191 },
+            { "function": 128, "file": 33, "line": 220 },
+            { "function": 110, "file": 129, "line": 382 }
+          ]
+        },
+        {
+          "rva": 620840,
+          "size": 696,
+          "symbol": 130,
+          "frames": [{ "function": 110, "file": 129, "line": 426 }]
+        },
+        { "rva": 631944, "size": 4, "symbol": 131 },
+        {
+          "rva": 3172048,
+          "size": 256,
+          "symbol": 132,
+          "frames": [
+            { "function": 133, "file": 134, "line": 2620 },
+            { "function": 135, "file": 136, "line": 93 }
+          ]
+        },
+        {
+          "rva": 3172304,
+          "size": 284,
+          "symbol": 137,
+          "frames": [
+            { "function": 138, "file": 134, "line": 1798 },
+            { "function": 138, "file": 134, "line": 534 },
+            { "function": 139, "file": 136, "line": 108 }
+          ]
+        },
+        {
+          "rva": 3173684,
+          "size": 472,
+          "symbol": 140,
+          "frames": [
+            { "function": 141, "file": 134, "line": 2655 },
+            { "function": 142, "file": 136, "line": 59 }
+          ]
+        },
+        {
+          "rva": 3174660,
+          "size": 928,
+          "symbol": 143,
+          "frames": [
+            { "function": 144, "file": 134, "line": 3194 },
+            { "function": 145, "file": 136, "line": 72 }
+          ]
+        },
+        {
+          "rva": 3228156,
+          "size": 3636,
+          "symbol": 146,
+          "frames": [
+            { "function": 147, "file": 134, "line": 1798 },
+            { "function": 148, "file": 149, "line": 147 }
+          ]
+        },
+        {
+          "rva": 3276280,
+          "size": 548,
+          "symbol": 150,
+          "frames": [
+            { "function": 151, "file": 30, "line": 16 },
+            { "function": 152, "file": 153, "line": 3045 },
+            { "function": 154, "file": 153, "line": 430 }
+          ]
+        },
+        {
+          "rva": 3276828,
+          "size": 892,
+          "symbol": 155,
+          "frames": [{ "function": 156, "file": 153, "line": 445 }]
+        },
+        {
+          "rva": 6649900,
+          "size": 356,
+          "symbol": 157,
+          "frames": [
+            { "function": 158, "file": 46, "line": 3787 },
+            { "function": 159, "file": 160, "line": 1011 },
+            { "function": 159, "file": 160, "line": 2195 }
+          ]
+        },
+        {
+          "rva": 6654952,
+          "size": 368,
+          "symbol": 161,
+          "frames": [
+            { "function": 162, "file": 163, "line": 279 },
+            { "function": 164, "file": 16, "line": 2432 }
+          ]
+        },
+        {
+          "rva": 6656532,
+          "size": 120,
+          "symbol": 165,
+          "frames": [
+            { "function": 166, "file": 90, "line": 95 },
+            { "function": 167, "file": 90, "line": 190 },
+            { "function": 168, "file": 90, "line": 251 },
+            { "function": 169, "file": 21, "line": 468 },
+            { "function": 170, "file": 21, "line": 419 },
+            { "function": 171, "file": 21, "line": 187 },
+            { "function": 171, "file": 16, "line": 929 },
+            { "function": 172, "file": 173, "line": 445 },
+            { "function": 174, "file": 173, "line": 398 },
+            { "function": 175, "file": 16, "line": 3573 }
+          ]
+        },
+        {
+          "rva": 6701800,
+          "size": 572,
+          "symbol": 176,
+          "frames": [
+            { "function": 177, "file": 178, "line": 192 },
+            { "function": 179, "file": 46, "line": 2488 },
+            { "function": 180, "file": 178, "line": 174 },
+            { "function": 181, "file": 16, "line": 3793 },
+            { "function": 182, "file": 27, "line": 17 },
+            { "function": 183, "file": 184, "line": 41 },
+            { "function": 183, "file": 185, "line": 33 }
+          ]
+        },
+        {
+          "rva": 6707640,
+          "size": 14640,
+          "symbol": 186,
+          "frames": [
+            { "function": 187, "file": 87, "line": 1941 },
+            { "function": 188, "file": 87, "line": 425 }
+          ]
+        },
+        {
+          "rva": 6722280,
+          "size": 248,
+          "symbol": 189,
+          "frames": [
+            { "function": 190, "file": 191, "line": 217 },
+            { "function": 192, "file": 87, "line": 2827 }
+          ]
+        },
+        {
+          "rva": 6734240,
+          "size": 540,
+          "symbol": 193,
+          "frames": [
+            { "function": 194, "file": 195, "line": 152 },
+            { "function": 196, "file": 195, "line": 17 },
+            { "function": 197, "file": 198, "line": 2090 },
+            { "function": 159, "file": 160, "line": 1005 },
+            { "function": 159, "file": 160, "line": 3585 },
+            { "function": 199, "file": 198, "line": 2090 },
+            { "function": 135, "file": 87, "line": 2451 }
+          ]
+        },
+        {
+          "rva": 6736700,
+          "size": 1080,
+          "symbol": 200,
+          "frames": [
+            { "function": 201, "file": 202, "line": 1093 },
+            { "function": 203, "file": 204, "line": 917 },
+            { "function": 205, "file": 87, "line": 1580 }
+          ]
+        },
+        {
+          "rva": 6737780,
+          "size": 684,
+          "symbol": 206,
+          "frames": [
+            { "function": 207, "file": 87, "line": 2349 },
+            { "function": 208, "file": 87, "line": 2365 }
+          ]
+        },
+        {
+          "rva": 6745400,
+          "size": 7384,
+          "symbol": 209,
+          "frames": [
+            { "function": 210, "file": 160, "line": 2956 },
+            { "function": 211, "file": 87, "line": 1466 }
+          ]
+        },
+        {
+          "rva": 6761212,
+          "size": 672,
+          "symbol": 212,
+          "frames": [{ "function": 213, "file": 87, "line": 2003 }]
+        },
+        {
+          "rva": 6779704,
+          "size": 15956,
+          "symbol": 214,
+          "frames": [
+            { "function": 215, "file": 160, "line": 2956 },
+            { "function": 216, "file": 87, "line": 1067 }
+          ]
+        },
+        {
+          "rva": 6795932,
+          "size": 3100,
+          "symbol": 217,
+          "frames": [{ "function": 218, "file": 87, "line": 706 }]
+        },
+        {
+          "rva": 6801828,
+          "size": 272,
+          "symbol": 219,
+          "frames": [{ "function": 220, "file": 87, "line": 763 }]
+        },
+        {
+          "rva": 6804016,
+          "size": 716,
+          "symbol": 221,
+          "frames": [
+            { "function": 222, "file": 16, "line": 2646 },
+            { "function": 223, "file": 16, "line": 2564 },
+            { "function": 224, "file": 87, "line": 1426 }
+          ]
+        },
+        {
+          "rva": 6830180,
+          "size": 1336,
+          "symbol": 225,
+          "frames": [{ "function": 226, "file": 87, "line": 1643 }]
+        },
+        {
+          "rva": 6835144,
+          "size": 2700,
+          "symbol": 227,
+          "frames": [{ "function": 228, "file": 87, "line": 2577 }]
+        },
+        {
+          "rva": 6837844,
+          "size": 1020,
+          "symbol": 229,
+          "frames": [{ "function": 230, "file": 87, "line": 1888 }]
+        },
+        {
+          "rva": 6838864,
+          "size": 2352,
+          "symbol": 231,
+          "frames": [{ "function": 232, "file": 87, "line": 2700 }]
+        },
+        {
+          "rva": 6843280,
+          "size": 9648,
+          "symbol": 233,
+          "frames": [{ "function": 234, "file": 87, "line": 838 }]
+        },
+        {
+          "rva": 6854920,
+          "size": 600,
+          "symbol": 235,
+          "frames": [
+            { "function": 236, "file": 87, "line": 1005 },
+            { "function": 237, "file": 87, "line": 992 }
+          ]
+        },
+        {
+          "rva": 6871356,
+          "size": 52,
+          "symbol": 238,
+          "frames": [{ "function": 239, "file": 87, "line": 397 }]
+        },
+        {
+          "rva": 6875440,
+          "size": 428,
+          "symbol": 240,
+          "frames": [{ "function": 241, "file": 87, "line": 402 }]
+        },
+        {
+          "rva": 6901072,
+          "size": 128,
+          "symbol": 242,
+          "frames": [{ "function": 243, "file": 244, "line": 3322 }]
+        },
+        {
+          "rva": 6901200,
+          "size": 356,
+          "symbol": 157,
+          "frames": [
+            { "function": 158, "file": 46, "line": 3787 },
+            { "function": 159, "file": 160, "line": 1011 },
+            { "function": 159, "file": 160, "line": 2195 }
+          ]
+        },
+        {
+          "rva": 6901556,
+          "size": 488,
+          "symbol": 245,
+          "frames": [
+            { "function": 23, "file": 21, "line": 564 },
+            { "function": 24, "file": 21, "line": 327 },
+            { "function": 24, "file": 16, "line": 1338 },
+            { "function": 25, "file": 16, "line": 2798 },
+            { "function": 26, "file": 27, "line": 55 },
+            { "function": 28, "file": 16, "line": 3325 },
+            { "function": 246, "file": 244, "line": 1112 },
+            { "function": 247, "file": 248, "line": 288 }
+          ]
+        },
+        {
+          "rva": 6903332,
+          "size": 428,
+          "symbol": 249,
+          "frames": [
+            { "function": 250, "file": 104, "line": 306 },
+            { "function": 251, "file": 87, "line": 2721 }
+          ]
+        },
+        {
+          "rva": 6907652,
+          "size": 624,
+          "symbol": 252,
+          "frames": [
+            { "function": 253, "file": 254, "line": 2201 },
+            { "function": 251, "file": 121, "line": 22 }
+          ]
+        },
+        {
+          "rva": 6911636,
+          "size": 320,
+          "symbol": 255,
+          "frames": [
+            { "function": 166, "file": 90, "line": 95 },
+            { "function": 167, "file": 90, "line": 190 },
+            { "function": 168, "file": 90, "line": 251 },
+            { "function": 256, "file": 257, "line": 503 },
+            { "function": 258, "file": 257, "line": 470 },
+            { "function": 259, "file": 100, "line": 87 },
+            { "function": 260, "file": 100, "line": 225 },
+            { "function": 259, "file": 100, "line": 592 },
+            { "function": 261, "file": 104, "line": 1551 },
+            { "function": 262, "file": 104, "line": 2363 }
+          ]
+        },
+        {
+          "rva": 6925728,
+          "size": 1616,
+          "symbol": 263,
+          "frames": [{ "function": 264, "file": 129, "line": 587 }]
+        },
+        {
+          "rva": 6928096,
+          "size": 188,
+          "symbol": 265,
+          "frames": [{ "function": 266, "file": 129, "line": 461 }]
+        },
+        {
+          "rva": 6966956,
+          "size": 628,
+          "symbol": 267,
+          "frames": [
+            { "function": 268, "file": 160, "line": 3644 },
+            { "function": 268, "file": 160, "line": 2234 }
+          ]
+        },
+        {
+          "rva": 6981588,
+          "size": 488,
+          "symbol": 269,
+          "frames": [
+            { "function": 270, "file": 11, "line": 547 },
+            { "function": 271, "file": 272, "line": 104 },
+            { "function": 273, "file": 272, "line": 297 }
+          ]
+        },
+        {
+          "rva": 7021516,
+          "size": 1164,
+          "symbol": 274,
+          "frames": [{ "function": 275, "file": 104, "line": 257 }]
+        },
+        {
+          "rva": 7024240,
+          "size": 196,
+          "symbol": 88,
+          "frames": [
+            { "function": 89, "file": 90, "line": 115 },
+            { "function": 91, "file": 90, "line": 272 },
+            { "function": 92, "file": 21, "line": 834 },
+            { "function": 93, "file": 21, "line": 404 },
+            { "function": 94, "file": 11, "line": 805 },
+            { "function": 95, "file": 11, "line": 805 },
+            { "function": 276, "file": 98, "line": 809 },
+            { "function": 277, "file": 100, "line": 1201 },
+            { "function": 278, "file": 11, "line": 805 },
+            { "function": 279, "file": 100, "line": 1214 },
+            { "function": 280, "file": 104, "line": 1754 },
+            { "function": 281, "file": 11, "line": 805 },
+            { "function": 282, "file": 107, "line": 967 },
+            { "function": 280, "file": 104, "line": 208 }
+          ]
+        },
+        {
+          "rva": 7036240,
+          "size": 276,
+          "symbol": 283,
+          "frames": [
+            { "function": 284, "file": 285, "line": 942 },
+            { "function": 286, "file": 285, "line": 700 }
+          ]
+        },
+        {
+          "rva": 7037108,
+          "size": 432,
+          "symbol": 283,
+          "frames": [
+            { "function": 287, "file": 285, "line": 894 },
+            { "function": 288, "file": 285, "line": 942 },
+            { "function": 289, "file": 285, "line": 700 }
+          ]
+        },
+        {
+          "rva": 7062992,
+          "size": 1440,
+          "symbol": 290,
+          "frames": [
+            { "function": 291, "file": 292, "line": 255 },
+            { "function": 293, "file": 292, "line": 64 }
+          ]
+        },
+        {
+          "rva": 7092916,
+          "size": 1384,
+          "symbol": 294,
+          "frames": [{ "function": 295, "file": 296, "line": 124 }]
+        },
+        {
+          "rva": 7094300,
+          "size": 1308,
+          "symbol": 294,
+          "frames": [{ "function": 297, "file": 296, "line": 123 }]
+        },
+        {
+          "rva": 7102872,
+          "size": 596,
+          "symbol": 298,
+          "frames": [
+            { "function": 166, "file": 90, "line": 95 },
+            { "function": 167, "file": 90, "line": 190 },
+            { "function": 168, "file": 90, "line": 251 },
+            { "function": 169, "file": 21, "line": 468 },
+            { "function": 170, "file": 21, "line": 419 },
+            { "function": 299, "file": 21, "line": 187 },
+            { "function": 299, "file": 16, "line": 929 },
+            { "function": 300, "file": 173, "line": 445 },
+            { "function": 301, "file": 173, "line": 398 },
+            { "function": 302, "file": 173, "line": 374 },
+            { "function": 303, "file": 173, "line": 838 },
+            { "function": 304, "file": 248, "line": 211 },
+            { "function": 305, "file": 306, "line": 60 },
+            { "function": 307, "file": 308, "line": 1547 },
+            { "function": 309, "file": 296, "line": 1143 }
+          ]
+        },
+        {
+          "rva": 7103468,
+          "size": 2760,
+          "symbol": 310,
+          "frames": [{ "function": 311, "file": 296, "line": 551 }]
+        },
+        {
+          "rva": 7113300,
+          "size": 256,
+          "symbol": 312,
+          "frames": [
+            { "function": 313, "file": 306, "line": 119 },
+            { "function": 314, "file": 308, "line": 825 },
+            { "function": 315, "file": 296, "line": null }
+          ]
+        },
+        {
+          "rva": 7241280,
+          "size": 1992,
+          "symbol": 316,
+          "frames": [
+            { "function": 317, "file": 296, "line": 862 },
+            { "function": 318, "file": 296, "line": 1232 }
+          ]
+        },
+        {
+          "rva": 7244408,
+          "size": 500,
+          "symbol": 319,
+          "frames": [{ "function": 320, "file": 296, "line": 1667 }]
+        },
+        {
+          "rva": 7244908,
+          "size": 540,
+          "symbol": 321,
+          "frames": [
+            { "function": 322, "file": 296, "line": 1492 },
+            { "function": 323, "file": 324, "line": 968 },
+            { "function": 325, "file": 296, "line": 1492 }
+          ]
+        },
+        {
+          "rva": 7246372,
+          "size": 888,
+          "symbol": 326,
+          "frames": [
+            { "function": 327, "file": 296, "line": 1499 },
+            { "function": 313, "file": 328, "line": 693 },
+            { "function": 329, "file": 328, "line": 905 },
+            { "function": 330, "file": 296, "line": 1555 }
+          ]
+        },
+        {
+          "rva": 7445272,
+          "size": 364,
+          "symbol": 331,
+          "frames": [{ "function": 332, "file": 191, "line": 539 }]
+        },
+        {
+          "rva": 7445636,
+          "size": 880,
+          "symbol": 333,
+          "frames": [{ "function": 190, "file": 191, "line": 163 }]
+        },
+        {
+          "rva": 7455192,
+          "size": 384,
+          "symbol": 334,
+          "frames": [{ "function": 335, "file": 191, "line": 1195 }]
+        },
+        {
+          "rva": 7461128,
+          "size": 2752,
+          "symbol": 336,
+          "frames": [
+            { "function": 205, "file": 87, "line": 397 },
+            { "function": 337, "file": 191, "line": 1243 }
+          ]
+        },
+        {
+          "rva": 7514072,
+          "size": 3996,
+          "symbol": 338,
+          "frames": [
+            { "function": 339, "file": 324, "line": 2151 },
+            { "function": 340, "file": 46, "line": 2028 },
+            { "function": 341, "file": 342, "line": 294 }
+          ]
+        },
+        {
+          "rva": 7518340,
+          "size": 216,
+          "symbol": 343,
+          "frames": [
+            { "function": 344, "file": 46, "line": 2827 },
+            { "function": 345, "file": 342, "line": 387 }
+          ]
+        },
+        {
+          "rva": 7543944,
+          "size": 128,
+          "symbol": 346,
+          "frames": [{ "function": 142, "file": 191, "line": 205 }]
+        },
+        {
+          "rva": 7584752,
+          "size": 180,
+          "symbol": 347,
+          "frames": [
+            { "function": 78, "file": 11, "line": 805 },
+            { "function": 348, "file": 11, "line": 805 }
+          ]
+        },
+        {
+          "rva": 7591320,
+          "size": 252,
+          "symbol": 349,
+          "frames": [{ "function": 350, "file": 46, "line": 3804 }]
+        },
+        {
+          "rva": 7595208,
+          "size": 300,
+          "symbol": 351,
+          "frames": [{ "function": 352, "file": 353, "line": 135 }]
+        },
+        {
+          "rva": 7597656,
+          "size": 308,
+          "symbol": 354,
+          "frames": [{ "function": 159, "file": 160, "line": 500 }]
+        },
+        {
+          "rva": 7602552,
+          "size": 420,
+          "symbol": 355,
+          "frames": [
+            { "function": 356, "file": 11, "line": 805 },
+            { "function": 357, "file": 11, "line": 805 },
+            { "function": 357, "file": 358, "line": 1400 },
+            { "function": 359, "file": 360, "line": 505 },
+            { "function": 361, "file": 360, "line": 2106 },
+            { "function": 362, "file": 360, "line": 2161 },
+            { "function": 363, "file": 360, "line": 3349 }
+          ]
+        },
+        {
+          "rva": 7611496,
+          "size": 752,
+          "symbol": 364,
+          "frames": [{ "function": 365, "file": 366, "line": 1790 }]
+        },
+        {
+          "rva": 7614892,
+          "size": 636,
+          "symbol": 364,
+          "frames": [
+            { "function": 367, "file": 366, "line": 258 },
+            { "function": 368, "file": 366, "line": 1791 }
+          ]
+        },
+        {
+          "rva": 7652308,
+          "size": 1088,
+          "symbol": 369,
+          "frames": [{ "function": 370, "file": 371, "line": 16 }]
+        },
+        {
+          "rva": 7675292,
+          "size": 140,
+          "symbol": 372,
+          "frames": [
+            { "function": 373, "file": 11, "line": 805 },
+            { "function": 374, "file": 11, "line": 805 },
+            { "function": 375, "file": 376, "line": 46 }
+          ]
+        },
+        {
+          "rva": 7740420,
+          "size": 2040,
+          "symbol": 377,
+          "frames": [{ "function": 378, "file": 379, "line": 75 }]
+        },
+        {
+          "rva": 7742460,
+          "size": 436,
+          "symbol": 380,
+          "frames": [{ "function": 381, "file": 379, "line": 114 }]
+        },
+        {
+          "rva": 7798584,
+          "size": 1040,
+          "symbol": 382,
+          "frames": [
+            { "function": 383, "file": 308, "line": 1901 },
+            { "function": 383, "file": 308, "line": 1991 },
+            { "function": 384, "file": 385, "line": 814 },
+            { "function": 386, "file": 387, "line": 1632 },
+            { "function": 388, "file": 389, "line": 132 },
+            { "function": 390, "file": 385, "line": 830 },
+            { "function": 384, "file": 306, "line": 105 }
+          ]
+        },
+        {
+          "rva": 7802920,
+          "size": 1432,
+          "symbol": 391,
+          "frames": [
+            { "function": 392, "file": 393, "line": 684 },
+            { "function": 394, "file": 393, "line": 1426 },
+            { "function": 395, "file": 396, "line": 107 },
+            { "function": 397, "file": 393, "line": 1173 },
+            { "function": 398, "file": 121, "line": 122 }
+          ]
+        },
+        {
+          "rva": 7804352,
+          "size": 1000,
+          "symbol": 399,
+          "frames": [
+            { "function": 270, "file": 11, "line": 547 },
+            { "function": 25, "file": 16, "line": 2800 },
+            { "function": 26, "file": 27, "line": 55 },
+            { "function": 28, "file": 16, "line": 3325 },
+            { "function": 246, "file": 244, "line": 1112 },
+            { "function": 400, "file": 121, "line": 172 }
+          ]
+        },
+        {
+          "rva": 7885068,
+          "size": 944,
+          "symbol": 401,
+          "frames": [{ "function": 402, "file": 403, "line": 1543 }]
+        },
+        {
+          "rva": 7900068,
+          "size": 456,
+          "symbol": 404,
+          "frames": [{ "function": 405, "file": 406, "line": 433 }]
+        },
+        {
+          "rva": 7960052,
+          "size": 2524,
+          "symbol": 407,
+          "frames": [{ "function": 408, "file": 409, "line": 95 }]
+        },
+        {
+          "rva": 8135044,
+          "size": 256,
+          "symbol": 410,
+          "frames": [
+            { "function": 205, "file": 87, "line": 2463 },
+            { "function": 411, "file": 412, "line": 315 },
+            { "function": 413, "file": 412, "line": 528 },
+            { "function": 414, "file": 415, "line": 217 }
+          ]
+        },
+        {
+          "rva": 8141072,
+          "size": 288,
+          "symbol": 416,
+          "frames": [
+            { "function": 183, "file": 16, "line": 3689 },
+            { "function": 417, "file": 46, "line": 2028 },
+            { "function": 418, "file": 324, "line": 2151 },
+            { "function": 419, "file": 178, "line": 160 }
+          ]
+        },
+        {
+          "rva": 8210500,
+          "size": 512,
+          "symbol": 420,
+          "frames": [
+            { "function": 421, "file": 342, "line": 465 },
+            { "function": 205, "file": 342, "line": 293 },
+            { "function": 422, "file": 396, "line": 95 },
+            { "function": 423, "file": 46, "line": 2427 },
+            { "function": 424, "file": 396, "line": 121 }
+          ]
+        },
+        {
+          "rva": 8212052,
+          "size": 216,
+          "symbol": 425,
+          "frames": [
+            { "function": 426, "file": 160, "line": 2724 },
+            { "function": 205, "file": 342, "line": 387 },
+            { "function": 427, "file": 46, "line": 2823 },
+            { "function": 428, "file": 124, "line": 298 },
+            { "function": 429, "file": 46, "line": 2427 },
+            { "function": 430, "file": 431, "line": 106 }
+          ]
+        },
+        {
+          "rva": 8362940,
+          "size": 160,
+          "symbol": 432,
+          "frames": [{ "function": 335, "file": 433, "line": 15 }]
+        },
+        {
+          "rva": 8392028,
+          "size": 2580,
+          "symbol": 434,
+          "frames": [{ "function": 435, "file": 436, "line": 60 }]
+        },
+        {
+          "rva": 8394608,
+          "size": 720,
+          "symbol": 437,
+          "frames": [{ "function": 335, "file": 436, "line": 38 }]
+        },
+        {
+          "rva": 8397976,
+          "size": 344,
+          "symbol": 438,
+          "frames": [{ "function": 335, "file": 439, "line": 72 }]
+        },
+        {
+          "rva": 8398320,
+          "size": 1520,
+          "symbol": 440,
+          "frames": [{ "function": 397, "file": 439, "line": 91 }]
+        },
+        {
+          "rva": 8404028,
+          "size": 140,
+          "symbol": 372,
+          "frames": [
+            { "function": 441, "file": 439, "line": 199 },
+            { "function": 373, "file": 11, "line": 805 },
+            { "function": 374, "file": 11, "line": 805 },
+            { "function": 375, "file": 376, "line": 46 }
+          ]
+        },
+        {
+          "rva": 8432264,
+          "size": 3380,
+          "symbol": 442,
+          "frames": [
+            { "function": 443, "file": 444, "line": 29 },
+            { "function": 445, "file": 444, "line": 214 },
+            { "function": 446, "file": 444, "line": 205 }
+          ]
+        },
+        {
+          "rva": 8438488,
+          "size": 2776,
+          "symbol": 447,
+          "frames": [
+            { "function": 166, "file": 90, "line": 95 },
+            { "function": 448, "file": 449, "line": 86 },
+            { "function": 450, "file": 451, "line": 26 },
+            { "function": 452, "file": 453, "line": 38 },
+            { "function": 454, "file": 444, "line": 917 }
+          ]
+        },
+        {
+          "rva": 8444600,
+          "size": 364,
+          "symbol": 455,
+          "frames": [{ "function": 456, "file": 453, "line": 56 }]
+        },
+        {
+          "rva": 8472328,
+          "size": 460,
+          "symbol": 457,
+          "frames": [
+            { "function": 89, "file": 90, "line": 115 },
+            { "function": 458, "file": 449, "line": 114 },
+            { "function": 459, "file": 451, "line": 39 },
+            { "function": 460, "file": 453, "line": 16 }
+          ]
+        },
+        {
+          "rva": 8472788,
+          "size": 304,
+          "symbol": 461,
+          "frames": [
+            { "function": 462, "file": 90, "line": 135 },
+            { "function": 462, "file": 449, "line": 102 },
+            { "function": 463, "file": 451, "line": 31 },
+            { "function": 464, "file": 451, "line": 55 }
+          ]
+        },
+        {
+          "rva": 8473608,
+          "size": 700,
+          "symbol": 465,
+          "frames": [
+            { "function": 166, "file": 90, "line": 95 },
+            { "function": 448, "file": 449, "line": 86 },
+            { "function": 450, "file": 451, "line": 26 },
+            { "function": 466, "file": 453, "line": 4 }
+          ]
+        },
+        {
+          "rva": 8480260,
+          "size": 2540,
+          "symbol": 467,
+          "frames": [
+            { "function": 468, "file": 469, "line": 38 },
+            { "function": 470, "file": 469, "line": 180 },
+            { "function": 471, "file": 469, "line": 115 },
+            { "function": 472, "file": 469, "line": 80 }
+          ]
+        },
+        {
+          "rva": 8482800,
+          "size": 2020,
+          "symbol": 473,
+          "frames": [
+            { "function": 468, "file": 469, "line": 38 },
+            { "function": 474, "file": 469, "line": 414 }
+          ]
+        },
+        {
+          "rva": 8484820,
+          "size": 952,
+          "symbol": 475,
+          "frames": [
+            { "function": 166, "file": 90, "line": 95 },
+            { "function": 448, "file": 449, "line": 86 },
+            { "function": 450, "file": 451, "line": 26 },
+            { "function": 476, "file": 453, "line": 373 }
+          ]
+        },
+        {
+          "rva": 8485772,
+          "size": 304,
+          "symbol": 477,
+          "frames": [
+            { "function": 478, "file": 451, "line": 47 },
+            { "function": 479, "file": 469, "line": 1349 }
+          ]
+        },
+        {
+          "rva": 8486076,
+          "size": 884,
+          "symbol": 480,
+          "frames": [{ "function": 481, "file": 469, "line": 241 }]
+        },
+        {
+          "rva": 8487868,
+          "size": 820,
+          "symbol": 482,
+          "frames": [
+            { "function": 468, "file": 469, "line": 38 },
+            { "function": 483, "file": 469, "line": 829 }
+          ]
+        },
+        {
+          "rva": 8491552,
+          "size": 120,
+          "symbol": 484,
+          "frames": [
+            { "function": 166, "file": 90, "line": 95 },
+            { "function": 448, "file": 449, "line": 86 },
+            { "function": 485, "file": 449, "line": 170 }
+          ]
+        },
+        {
+          "rva": 8491688,
+          "size": 1816,
+          "symbol": 486,
+          "frames": [{ "function": 487, "file": 488, "line": 158 }]
+        },
+        {
+          "rva": 8493504,
+          "size": 260,
+          "symbol": 489,
+          "frames": [{ "function": 490, "file": 488, "line": 145 }]
+        },
+        {
+          "rva": 8602408,
+          "size": 11428,
+          "symbol": 491,
+          "frames": [{ "function": 492, "file": 493, "line": 1034 }]
+        },
+        {
+          "rva": 8613836,
+          "size": 60,
+          "symbol": 494,
+          "frames": [{ "function": 495, "file": 493, "line": 1013 }]
+        },
+        {
+          "rva": 8613896,
+          "size": 516,
+          "symbol": 496,
+          "frames": [
+            { "function": 497, "file": 498, "line": 3152 },
+            { "function": 499, "file": 498, "line": 2019 },
+            { "function": 500, "file": 498, "line": 979 }
+          ]
+        },
+        {
+          "rva": 8616940,
+          "size": 1796,
+          "symbol": 501,
+          "frames": [{ "function": 502, "file": 11, "line": 805 }]
+        },
+        {
+          "rva": 8624336,
+          "size": 2536,
+          "symbol": 503,
+          "frames": [
+            { "function": 166, "file": 90, "line": 95 },
+            { "function": 167, "file": 90, "line": 190 },
+            { "function": 168, "file": 90, "line": 251 },
+            { "function": 169, "file": 21, "line": 468 },
+            { "function": 170, "file": 21, "line": 419 },
+            { "function": 504, "file": 21, "line": 187 },
+            { "function": 504, "file": 16, "line": 929 },
+            { "function": 505, "file": 16, "line": 519 },
+            { "function": 506, "file": 507, "line": 149 }
+          ]
+        },
+        {
+          "rva": 8626872,
+          "size": 4380,
+          "symbol": 508,
+          "frames": [{ "function": 509, "file": 507, "line": 211 }]
+        },
+        {
+          "rva": 8631252,
+          "size": 568,
+          "symbol": 510,
+          "frames": [{ "function": 511, "file": 507, "line": 675 }]
+        },
+        {
+          "rva": 8631820,
+          "size": 2916,
+          "symbol": 512,
+          "frames": [{ "function": 513, "file": 507, "line": 394 }]
+        },
+        {
+          "rva": 8634736,
+          "size": 1588,
+          "symbol": 514,
+          "frames": [{ "function": 335, "file": 515, "line": 70 }]
+        },
+        {
+          "rva": 8642020,
+          "size": 320,
+          "symbol": 516,
+          "frames": [
+            { "function": 517, "file": 16, "line": 1637 },
+            { "function": 518, "file": 16, "line": 3553 },
+            { "function": 519, "file": 16, "line": 3573 },
+            { "function": 226, "file": 515, "line": 81 },
+            { "function": 520, "file": 396, "line": 88 },
+            { "function": 521, "file": 366, "line": 3190 },
+            { "function": 522, "file": 360, "line": 3557 }
+          ]
+        },
+        {
+          "rva": 8643388,
+          "size": 344,
+          "symbol": 523,
+          "frames": [
+            { "function": 251, "file": 524, "line": 160 },
+            { "function": 525, "file": 515, "line": 102 },
+            { "function": 526, "file": 396, "line": 88 },
+            { "function": 527, "file": 46, "line": 2603 },
+            { "function": 528, "file": 396, "line": 128 },
+            { "function": 529, "file": 46, "line": 828 },
+            { "function": 530, "file": 16, "line": 3825 },
+            { "function": 531, "file": 27, "line": 26 },
+            { "function": 532, "file": 184, "line": 60 }
+          ]
+        },
+        {
+          "rva": 8644004,
+          "size": 720,
+          "symbol": 523,
+          "frames": [
+            { "function": 169, "file": 21, "line": null },
+            { "function": 170, "file": 21, "line": 419 },
+            { "function": 299, "file": 21, "line": 187 },
+            { "function": 299, "file": 16, "line": 929 },
+            { "function": 300, "file": 173, "line": 445 },
+            { "function": 301, "file": 173, "line": 398 },
+            { "function": 519, "file": 16, "line": 3573 },
+            { "function": 533, "file": 254, "line": 2082 },
+            { "function": 534, "file": 535, "line": 41 },
+            { "function": 536, "file": 16, "line": 3793 },
+            { "function": 537, "file": 27, "line": 17 },
+            { "function": 538, "file": 184, "line": 41 }
+          ]
+        },
+        {
+          "rva": 8649152,
+          "size": 1984,
+          "symbol": 539,
+          "frames": [
+            { "function": 392, "file": 393, "line": 684 },
+            { "function": 394, "file": 393, "line": 1426 },
+            { "function": 395, "file": 396, "line": 107 },
+            { "function": 397, "file": 393, "line": 1173 },
+            { "function": 540, "file": 541, "line": 98 }
+          ]
+        },
+        {
+          "rva": 8651212,
+          "size": 456,
+          "symbol": 404,
+          "frames": [{ "function": 405, "file": 406, "line": 433 }]
+        },
+        {
+          "rva": 8652500,
+          "size": 508,
+          "symbol": 364,
+          "frames": [
+            { "function": 542, "file": 543, "line": 45147 },
+            { "function": 544, "file": 545, "line": 73 },
+            { "function": 546, "file": 360, "line": 1707 },
+            { "function": 547, "file": 360, "line": 1158 },
+            { "function": 548, "file": 366, "line": 1812 },
+            { "function": 549, "file": 366, "line": 1792 }
+          ]
+        },
+        {
+          "rva": 8653008,
+          "size": 820,
+          "symbol": 364,
+          "frames": [
+            { "function": 542, "file": 543, "line": 45147 },
+            { "function": 544, "file": 545, "line": 73 },
+            { "function": 546, "file": 360, "line": 1707 },
+            { "function": 550, "file": 360, "line": 1158 },
+            { "function": 551, "file": 366, "line": 1812 },
+            { "function": 552, "file": 366, "line": 1792 }
+          ]
+        },
+        {
+          "rva": 8657132,
+          "size": 328,
+          "symbol": 553,
+          "frames": [{ "function": 251, "file": 524, "line": 171 }]
+        },
+        {
+          "rva": 8658052,
+          "size": 384,
+          "symbol": 554,
+          "frames": [
+            { "function": 555, "file": 195, "line": 328 },
+            { "function": 556, "file": 195, "line": 242 },
+            { "function": 557, "file": 195, "line": 53 },
+            { "function": 558, "file": 16, "line": 4024 },
+            { "function": 559, "file": 198, "line": 1399 },
+            { "function": 560, "file": 124, "line": 166 },
+            { "function": 561, "file": 562, "line": 626 }
+          ]
+        },
+        {
+          "rva": 8658692,
+          "size": 1024,
+          "symbol": 563,
+          "frames": [{ "function": 564, "file": 562, "line": 254 }]
+        },
+        {
+          "rva": 8660248,
+          "size": 372,
+          "symbol": 565,
+          "frames": [
+            { "function": 495, "file": 524, "line": 289 },
+            { "function": 566, "file": 524, "line": 245 }
+          ]
+        },
+        {
+          "rva": 8660620,
+          "size": 1240,
+          "symbol": 567,
+          "frames": [{ "function": 568, "file": 524, "line": 1448 }]
+        },
+        {
+          "rva": 8666148,
+          "size": 320,
+          "symbol": 351,
+          "frames": [{ "function": 569, "file": 353, "line": 135 }]
+        },
+        {
+          "rva": 8675544,
+          "size": 1500,
+          "symbol": 290,
+          "frames": [
+            { "function": 570, "file": 292, "line": 270 },
+            { "function": 571, "file": 292, "line": 118 }
+          ]
+        },
+        {
+          "rva": 8677388,
+          "size": 348,
+          "symbol": 572,
+          "frames": [{ "function": 573, "file": 574, "line": 67 }]
+        },
+        {
+          "rva": 8677736,
+          "size": 1232,
+          "symbol": 369,
+          "frames": [
+            { "function": 575, "file": 562, "line": 61 },
+            { "function": 576, "file": 371, "line": 27 }
+          ]
+        },
+        {
+          "rva": 8680600,
+          "size": 404,
+          "symbol": 577,
+          "frames": [
+            { "function": 578, "file": 90, "line": 178 },
+            { "function": 167, "file": 90, "line": 190 },
+            { "function": 579, "file": 90, "line": 257 },
+            { "function": 169, "file": 21, "line": 470 },
+            { "function": 580, "file": 21, "line": 443 },
+            { "function": 581, "file": 21, "line": 208 },
+            { "function": 582, "file": 583, "line": 51 },
+            { "function": 584, "file": 16, "line": 3475 },
+            { "function": 585, "file": 586, "line": 250 }
+          ]
+        },
+        {
+          "rva": 8681288,
+          "size": 1072,
+          "symbol": 587,
+          "frames": [
+            { "function": 588, "file": 589, "line": 179 },
+            { "function": 590, "file": 591, "line": 80 },
+            { "function": 592, "file": 593, "line": 31 }
+          ]
+        },
+        {
+          "rva": 8682360,
+          "size": 1740,
+          "symbol": 594,
+          "frames": [
+            { "function": 595, "file": 596, "line": 1868 },
+            { "function": 597, "file": 598, "line": 1240 },
+            { "function": 599, "file": 600, "line": 98 },
+            { "function": 601, "file": 602, "line": 177 }
+          ]
+        },
+        {
+          "rva": 8719488,
+          "size": 224,
+          "symbol": 603,
+          "frames": [
+            { "function": 604, "file": 605, "line": 267 },
+            { "function": 606, "file": 605, "line": 18 },
+            { "function": 607, "file": 16, "line": 3628 },
+            { "function": 608, "file": 493, "line": 718 },
+            { "function": 609, "file": 493, "line": 728 }
+          ]
+        },
+        {
+          "rva": 8719712,
+          "size": 1036,
+          "symbol": 610,
+          "frames": [
+            { "function": 611, "file": 16, "line": 2912 },
+            { "function": 612, "file": 493, "line": 759 }
+          ]
+        },
+        {
+          "rva": 8720800,
+          "size": 292,
+          "symbol": 613,
+          "frames": [
+            { "function": 614, "file": 16, "line": 2710 },
+            { "function": 615, "file": 493, "line": 686 }
+          ]
+        },
+        {
+          "rva": 8721092,
+          "size": 276,
+          "symbol": 616,
+          "frames": [{ "function": 617, "file": 493, "line": 671 }]
+        },
+        {
+          "rva": 8721368,
+          "size": 388,
+          "symbol": 618,
+          "frames": [{ "function": 619, "file": 493, "line": 696 }]
+        },
+        {
+          "rva": 8721756,
+          "size": 272,
+          "symbol": 620,
+          "frames": [
+            { "function": 621, "file": 11, "line": 1944 },
+            { "function": 622, "file": 16, "line": 3427 },
+            { "function": 623, "file": 16, "line": 3298 },
+            { "function": 624, "file": 493, "line": 662 }
+          ]
+        },
+        {
+          "rva": 8722028,
+          "size": 116,
+          "symbol": 625,
+          "frames": [
+            { "function": 626, "file": 16, "line": 1637 },
+            { "function": 627, "file": 16, "line": 3553 },
+            { "function": 607, "file": 16, "line": 3628 },
+            { "function": 608, "file": 493, "line": 718 },
+            { "function": 628, "file": 493, "line": 740 }
+          ]
+        },
+        {
+          "rva": 8729528,
+          "size": 2480,
+          "symbol": 629,
+          "frames": [{ "function": 630, "file": 524, "line": 1263 }]
+        },
+        {
+          "rva": 8732008,
+          "size": 224,
+          "symbol": 631,
+          "frames": [{ "function": 335, "file": 524, "line": 1170 }]
+        },
+        {
+          "rva": 8743964,
+          "size": 1160,
+          "symbol": 632,
+          "frames": [{ "function": 633, "file": 634, "line": 1443 }]
+        },
+        {
+          "rva": 8745124,
+          "size": 392,
+          "symbol": 635,
+          "frames": [{ "function": 617, "file": 634, "line": 1383 }]
+        },
+        {
+          "rva": 8745516,
+          "size": 464,
+          "symbol": 636,
+          "frames": [{ "function": 637, "file": 634, "line": 1087 }]
+        },
+        {
+          "rva": 8745980,
+          "size": 376,
+          "symbol": 638,
+          "frames": [{ "function": 639, "file": 634, "line": 1046 }]
+        },
+        {
+          "rva": 8747772,
+          "size": 2044,
+          "symbol": 640,
+          "frames": [{ "function": 641, "file": 634, "line": 1310 }]
+        },
+        {
+          "rva": 8752364,
+          "size": 2104,
+          "symbol": 642,
+          "frames": [{ "function": 643, "file": 634, "line": 866 }]
+        },
+        {
+          "rva": 8760136,
+          "size": 6152,
+          "symbol": 644,
+          "frames": [{ "function": 645, "file": 634, "line": 225 }]
+        },
+        {
+          "rva": 8791192,
+          "size": 612,
+          "symbol": 176,
+          "frames": [
+            { "function": 226, "file": 646, "line": 123 },
+            { "function": 647, "file": 396, "line": 95 },
+            { "function": 648, "file": 46, "line": 2427 },
+            { "function": 649, "file": 396, "line": 121 },
+            { "function": 650, "file": 178, "line": 192 },
+            { "function": 651, "file": 46, "line": 2488 },
+            { "function": 652, "file": 178, "line": 174 },
+            { "function": 653, "file": 184, "line": 24 },
+            { "function": 653, "file": 185, "line": 33 }
+          ]
+        },
+        {
+          "rva": 8842008,
+          "size": 2372,
+          "symbol": 654,
+          "frames": [
+            { "function": 655, "file": 16, "line": 3689 },
+            { "function": 656, "file": 46, "line": 2028 },
+            { "function": 657, "file": 254, "line": 2643 },
+            { "function": 658, "file": 178, "line": 160 },
+            { "function": 659, "file": 254, "line": 2643 },
+            { "function": 660, "file": 46, "line": 2028 },
+            { "function": 661, "file": 646, "line": 117 }
+          ]
+        },
+        {
+          "rva": 8844380,
+          "size": 256,
+          "symbol": 662,
+          "frames": [{ "function": 663, "file": 646, "line": 178 }]
+        },
+        {
+          "rva": 8909716,
+          "size": 8732,
+          "symbol": 664,
+          "frames": [
+            { "function": 665, "file": 666, "line": 903 },
+            { "function": 335, "file": 667, "line": 475 },
+            { "function": 335, "file": 667, "line": 158 }
+          ]
+        },
+        {
+          "rva": 8933932,
+          "size": 516,
+          "symbol": 668,
+          "frames": [
+            { "function": 669, "file": 670, "line": 595 },
+            { "function": 671, "file": 672, "line": 654 },
+            { "function": 500, "file": 667, "line": 759 }
+          ]
+        },
+        {
+          "rva": 8934448,
+          "size": 544,
+          "symbol": 673,
+          "frames": [
+            { "function": 335, "file": 674, "line": 614 },
+            { "function": 675, "file": 674, "line": 192 },
+            { "function": 205, "file": 672, "line": 773 },
+            { "function": 676, "file": 254, "line": 1164 },
+            { "function": 335, "file": 672, "line": 773 },
+            { "function": 675, "file": 672, "line": 526 },
+            { "function": 675, "file": 667, "line": 686 }
+          ]
+        },
+        {
+          "rva": 8942004,
+          "size": 832,
+          "symbol": 677,
+          "frames": [
+            { "function": 678, "file": 666, "line": 1002 },
+            { "function": 679, "file": 124, "line": 310 },
+            { "function": 680, "file": 254, "line": 1164 },
+            { "function": 681, "file": 396, "line": 107 }
+          ]
+        },
+        {
+          "rva": 8943464,
+          "size": 480,
+          "symbol": 682,
+          "frames": [{ "function": 683, "file": 666, "line": 1822 }]
+        },
+        {
+          "rva": 8943944,
+          "size": 500,
+          "symbol": 684,
+          "frames": [{ "function": 685, "file": 666, "line": 1813 }]
+        },
+        {
+          "rva": 8945136,
+          "size": 756,
+          "symbol": 686,
+          "frames": [
+            { "function": 687, "file": 16, "line": 2912 },
+            { "function": 688, "file": 689, "line": 150 },
+            { "function": 641, "file": 666, "line": 1832 }
+          ]
+        },
+        {
+          "rva": 8948368,
+          "size": 1348,
+          "symbol": 690,
+          "frames": [
+            { "function": 226, "file": 666, "line": 1079 },
+            { "function": 691, "file": 124, "line": 310 },
+            { "function": 692, "file": 254, "line": 1164 },
+            { "function": 693, "file": 396, "line": 107 },
+            { "function": 694, "file": 666, "line": 1114 }
+          ]
+        },
+        {
+          "rva": 8949716,
+          "size": 2352,
+          "symbol": 695,
+          "frames": [{ "function": 696, "file": 666, "line": 1301 }]
+        },
+        {
+          "rva": 8952192,
+          "size": 7532,
+          "symbol": 697,
+          "frames": [
+            { "function": 205, "file": 666, "line": 1030 },
+            { "function": 698, "file": 124, "line": 310 },
+            { "function": 699, "file": 254, "line": 1164 },
+            { "function": 700, "file": 396, "line": 107 },
+            { "function": 701, "file": 666, "line": 1045 },
+            { "function": 702, "file": 666, "line": 1030 }
+          ]
+        },
+        {
+          "rva": 8960184,
+          "size": 1044,
+          "symbol": 703,
+          "frames": [{ "function": 704, "file": 666, "line": 1157 }]
+        },
+        {
+          "rva": 8961320,
+          "size": 2148,
+          "symbol": 705,
+          "frames": [
+            { "function": 706, "file": 666, "line": 1110 },
+            { "function": 707, "file": 666, "line": 1000 }
+          ]
+        },
+        {
+          "rva": 9034564,
+          "size": 2196,
+          "symbol": 708,
+          "frames": [
+            { "function": 709, "file": 710, "line": 172 },
+            { "function": 397, "file": 711, "line": 121 }
+          ]
+        },
+        {
+          "rva": 9042716,
+          "size": 9420,
+          "symbol": 712,
+          "frames": [
+            { "function": 713, "file": 714, "line": 719 },
+            { "function": 715, "file": 716, "line": 41 }
+          ]
+        },
+        {
+          "rva": 9087168,
+          "size": 388,
+          "symbol": 717,
+          "frames": [{ "function": 335, "file": 670, "line": 1881 }]
+        },
+        {
+          "rva": 9137840,
+          "size": 192,
+          "symbol": 718,
+          "frames": [{ "function": 169, "file": 21, "line": 449 }]
+        },
+        {
+          "rva": 9143532,
+          "size": 1036,
+          "symbol": 719,
+          "frames": [
+            { "function": 665, "file": 498, "line": 3685 },
+            { "function": 720, "file": 498, "line": 3615 }
+          ]
+        },
+        {
+          "rva": 9147568,
+          "size": 720,
+          "symbol": 721,
+          "frames": [{ "function": 722, "file": 498, "line": 3732 }]
+        },
+        {
+          "rva": 9165744,
+          "size": 484,
+          "symbol": 723,
+          "frames": [
+            { "function": 166, "file": 90, "line": 95 },
+            { "function": 167, "file": 90, "line": 190 },
+            { "function": 168, "file": 90, "line": 251 },
+            { "function": 724, "file": 90, "line": 352 },
+            { "function": 725, "file": 257, "line": 262 },
+            { "function": 726, "file": 727, "line": 180 },
+            { "function": 251, "file": 498, "line": 1922 }
+          ]
+        },
+        {
+          "rva": 9175924,
+          "size": 776,
+          "symbol": 728,
+          "frames": [
+            { "function": 23, "file": 21, "line": 564 },
+            { "function": 729, "file": 21, "line": 327 },
+            { "function": 729, "file": 16, "line": 1338 },
+            { "function": 730, "file": 16, "line": 3416 },
+            { "function": 731, "file": 16, "line": 3298 },
+            { "function": 732, "file": 733, "line": 136 },
+            { "function": 335, "file": 733, "line": 119 },
+            { "function": 335, "file": 733, "line": 48 }
+          ]
+        },
+        {
+          "rva": 9177528,
+          "size": 500,
+          "symbol": 734,
+          "frames": [
+            { "function": 735, "file": 605, "line": 267 },
+            { "function": 736, "file": 605, "line": 18 },
+            { "function": 737, "file": 16, "line": 3628 },
+            { "function": 735, "file": 738, "line": 575 },
+            { "function": 345, "file": 733, "line": 198 },
+            { "function": 739, "file": 733, "line": 173 },
+            { "function": 205, "file": 711, "line": 122 },
+            { "function": 709, "file": 710, "line": 534 }
+          ]
+        },
+        {
+          "rva": 9348956,
+          "size": 3144,
+          "symbol": 740,
+          "frames": [
+            { "function": 89, "file": 90, "line": 115 },
+            { "function": 91, "file": 90, "line": 272 },
+            { "function": 741, "file": 257, "line": 1686 },
+            { "function": 742, "file": 11, "line": 805 },
+            { "function": 743, "file": 11, "line": 805 },
+            { "function": 744, "file": 11, "line": 805 },
+            { "function": 745, "file": 746, "line": 239 },
+            { "function": 747, "file": 746, "line": 464 }
+          ]
+        },
+        {
+          "rva": 9435164,
+          "size": 140,
+          "symbol": 748,
+          "frames": [
+            { "function": 749, "file": 750, "line": 152 },
+            { "function": 749, "file": 751, "line": 38 }
+          ]
+        },
+        {
+          "rva": 9616660,
+          "size": 108,
+          "symbol": 752,
+          "frames": [{ "function": 752, "file": 753, "line": 398 }]
+        },
+        {
+          "rva": 9617168,
+          "size": 144,
+          "symbol": 754,
+          "frames": [
+            { "function": 755, "file": 756, "line": 35 },
+            { "function": 754, "file": 753, "line": 435 }
+          ]
+        },
+        {
+          "rva": 9643848,
+          "size": 236,
+          "symbol": 757,
+          "frames": [
+            { "function": 758, "file": 759, "line": 1200 },
+            { "function": 760, "file": 761, "line": 48 },
+            { "function": 762, "file": 761, "line": 28 },
+            { "function": 763, "file": 761, "line": 18 },
+            { "function": 764, "file": 759, "line": 1200 },
+            { "function": 757, "file": 134, "line": 1802 }
+          ]
+        },
+        {
+          "rva": 9645428,
+          "size": 508,
+          "symbol": 765,
+          "frames": [
+            { "function": 758, "file": 759, "line": 1200 },
+            { "function": 760, "file": 761, "line": 48 },
+            { "function": 762, "file": 761, "line": 28 },
+            { "function": 763, "file": 761, "line": 18 },
+            { "function": 764, "file": 759, "line": 1200 },
+            { "function": 757, "file": 134, "line": 1802 },
+            { "function": 766, "file": 134, "line": 1798 },
+            { "function": 767, "file": 134, "line": 534 },
+            { "function": 765, "file": 134, "line": 306 }
+          ]
+        },
+        {
+          "rva": 9646540,
+          "size": 112,
+          "symbol": 768,
+          "frames": [
+            { "function": 769, "file": 90, "line": 95 },
+            { "function": 770, "file": 90, "line": 190 },
+            { "function": 771, "file": 90, "line": 251 },
+            { "function": 718, "file": 21, "line": 468 },
+            { "function": 772, "file": 21, "line": 419 },
+            { "function": 773, "file": 21, "line": 187 },
+            { "function": 774, "file": 16, "line": 929 },
+            { "function": 775, "file": 173, "line": 445 },
+            { "function": 776, "file": 173, "line": 398 },
+            { "function": 777, "file": 173, "line": 374 },
+            { "function": 778, "file": 779, "line": 316 },
+            { "function": 780, "file": 781, "line": 987 },
+            { "function": 782, "file": 759, "line": 900 },
+            { "function": 768, "file": 134, "line": 2522 }
+          ]
+        },
+        {
+          "rva": 9649664,
+          "size": 288,
+          "symbol": 783,
+          "frames": [
+            { "function": 718, "file": 21, "line": null },
+            { "function": 772, "file": 21, "line": 419 },
+            { "function": 773, "file": 21, "line": 187 },
+            { "function": 774, "file": 16, "line": 929 },
+            { "function": 775, "file": 173, "line": 445 },
+            { "function": 776, "file": 173, "line": 398 },
+            { "function": 777, "file": 173, "line": 374 },
+            { "function": 784, "file": 173, "line": 838 },
+            { "function": 785, "file": 248, "line": 211 },
+            { "function": 786, "file": 244, "line": 3089 },
+            { "function": 787, "file": 788, "line": 670 },
+            { "function": 789, "file": 790, "line": 778 },
+            { "function": 783, "file": 791, "line": 575 }
+          ]
+        },
+        {
+          "rva": 9652804,
+          "size": 224,
+          "symbol": 792,
+          "frames": [
+            { "function": 793, "file": 794, "line": 808 },
+            { "function": 795, "file": 794, "line": 1164 },
+            { "function": 792, "file": 794, "line": 1275 }
+          ]
+        },
+        {
+          "rva": 9654424,
+          "size": 1748,
+          "symbol": 796,
+          "frames": [
+            { "function": 797, "file": 124, "line": 287 },
+            { "function": 798, "file": 799, "line": 590 },
+            { "function": 800, "file": 799, "line": 553 },
+            { "function": 801, "file": 802, "line": 359 },
+            { "function": 803, "file": 119, "line": 175 },
+            { "function": 798, "file": 799, "line": 590 },
+            { "function": 800, "file": 799, "line": 553 },
+            { "function": 801, "file": 802, "line": 359 },
+            { "function": 796, "file": 119, "line": 171 }
+          ]
+        },
+        {
+          "rva": 9661644,
+          "size": 176,
+          "symbol": 804,
+          "frames": [
+            { "function": 805, "file": 124, "line": 79 },
+            { "function": 760, "file": 761, "line": 48 },
+            { "function": 762, "file": 761, "line": 28 },
+            { "function": 763, "file": 761, "line": 18 },
+            { "function": 804, "file": 806, "line": 150 }
+          ]
+        },
+        {
+          "rva": 9662124,
+          "size": 296,
+          "symbol": 807,
+          "frames": [
+            { "function": 760, "file": 761, "line": 47 },
+            { "function": 762, "file": 761, "line": 28 },
+            { "function": 763, "file": 761, "line": 18 },
+            { "function": 807, "file": 806, "line": 118 }
+          ]
+        },
+        {
+          "rva": 9663620,
+          "size": 192,
+          "symbol": 808,
+          "frames": [{ "function": 808, "file": 759, "line": 2103 }]
+        },
+        {
+          "rva": 9663812,
+          "size": 416,
+          "symbol": 809,
+          "frames": [
+            { "function": 810, "file": 759, "line": 1212 },
+            { "function": 811, "file": 812, "line": 315 },
+            { "function": 809, "file": 759, "line": 1212 }
+          ]
+        },
+        {
+          "rva": 9666172,
+          "size": 296,
+          "symbol": 813,
+          "frames": [
+            { "function": 814, "file": 759, "line": 2081 },
+            { "function": 805, "file": 124, "line": 79 },
+            { "function": 760, "file": 761, "line": 48 },
+            { "function": 762, "file": 761, "line": 28 },
+            { "function": 763, "file": 761, "line": 18 },
+            { "function": 813, "file": 806, "line": 114 }
+          ]
+        },
+        {
+          "rva": 9666468,
+          "size": 404,
+          "symbol": 815,
+          "frames": [
+            { "function": 816, "file": 759, "line": 1993 },
+            { "function": 760, "file": 761, "line": 48 },
+            { "function": 762, "file": 761, "line": 28 },
+            { "function": 763, "file": 761, "line": 18 },
+            { "function": 817, "file": 759, "line": 1993 },
+            { "function": 815, "file": 806, "line": 70 }
+          ]
+        },
+        {
+          "rva": 9673900,
+          "size": 136,
+          "symbol": 818,
+          "frames": [
+            { "function": 769, "file": 90, "line": 95 },
+            { "function": 770, "file": 90, "line": 190 },
+            { "function": 771, "file": 90, "line": 251 },
+            { "function": 718, "file": 21, "line": 468 },
+            { "function": 772, "file": 21, "line": 419 },
+            { "function": 773, "file": 21, "line": 187 },
+            { "function": 774, "file": 16, "line": 929 },
+            { "function": 775, "file": 173, "line": 445 },
+            { "function": 776, "file": 173, "line": 398 },
+            { "function": 777, "file": 173, "line": 374 },
+            { "function": 778, "file": 779, "line": 316 },
+            { "function": 780, "file": 781, "line": 987 },
+            { "function": 819, "file": 160, "line": 1936 },
+            { "function": 818, "file": 820, "line": 203 }
+          ]
+        },
+        {
+          "rva": 9675624,
+          "size": 276,
+          "symbol": 821,
+          "frames": [{ "function": 821, "file": 822, "line": 99 }]
+        },
+        {
+          "rva": 9690900,
+          "size": 396,
+          "symbol": 823,
+          "frames": [{ "function": 823, "file": 160, "line": null }]
+        },
+        {
+          "rva": 9691296,
+          "size": 300,
+          "symbol": 824,
+          "frames": [
+            { "function": 825, "file": 589, "line": 25 },
+            { "function": 826, "file": 589, "line": 382 },
+            { "function": 824, "file": 160, "line": 762 }
+          ]
+        },
+        {
+          "rva": 9691596,
+          "size": 816,
+          "symbol": 827,
+          "frames": [
+            { "function": 828, "file": 160, "line": 785 },
+            { "function": 827, "file": 160, "line": 700 }
+          ]
+        },
+        {
+          "rva": 9693268,
+          "size": 408,
+          "symbol": 829,
+          "frames": [
+            { "function": 830, "file": 160, "line": 3115 },
+            { "function": 829, "file": 160, "line": 2728 }
+          ]
+        },
+        {
+          "rva": 9693676,
+          "size": 540,
+          "symbol": 831,
+          "frames": [
+            { "function": 832, "file": 160, "line": 286 },
+            { "function": 831, "file": 160, "line": 2694 }
+          ]
+        },
+        {
+          "rva": 9694740,
+          "size": 412,
+          "symbol": 833,
+          "frames": [{ "function": 833, "file": 160, "line": 2959 }]
+        },
+        {
+          "rva": 9699900,
+          "size": 108,
+          "symbol": 834,
+          "frames": [{ "function": 834, "file": 835, "line": 391 }]
+        },
+        {
+          "rva": 9711236,
+          "size": 84,
+          "symbol": 836,
+          "frames": [
+            { "function": 837, "file": 838, "line": 113 },
+            { "function": 839, "file": 759, "line": 1528 },
+            { "function": 840, "file": 134, "line": 1297 },
+            { "function": 836, "file": 134, "line": 1457 }
+          ]
+        },
+        {
+          "rva": 9711320,
+          "size": 120,
+          "symbol": 841,
+          "frames": [
+            { "function": 842, "file": 838, "line": 179 },
+            { "function": 843, "file": 759, "line": 1545 },
+            { "function": 844, "file": 134, "line": 1318 },
+            { "function": 841, "file": 134, "line": 1463 }
+          ]
+        },
+        {
+          "rva": 9775724,
+          "size": 192,
+          "symbol": 845,
+          "frames": [
+            { "function": 846, "file": 11, "line": 805 },
+            { "function": 847, "file": 11, "line": 805 },
+            { "function": 845, "file": 848, "line": 1933 }
+          ]
+        },
+        {
+          "rva": 9806584,
+          "size": 400,
+          "symbol": 849,
+          "frames": [
+            { "function": 850, "file": 153, "line": 639 },
+            { "function": 851, "file": 153, "line": 1954 },
+            { "function": 849, "file": 794, "line": 834 }
+          ]
+        },
+        {
+          "rva": 9809332,
+          "size": 584,
+          "symbol": 852,
+          "frames": [
+            { "function": 853, "file": 854, "line": 269 },
+            { "function": 855, "file": 856, "line": 209 },
+            { "function": 852, "file": 794, "line": 860 }
+          ]
+        },
+        {
+          "rva": 9809916,
+          "size": 308,
+          "symbol": 354,
+          "frames": [{ "function": 354, "file": 160, "line": 500 }]
+        },
+        {
+          "rva": 9811996,
+          "size": 200,
+          "symbol": 857,
+          "frames": [{ "function": 857, "file": 759, "line": 882 }]
+        },
+        {
+          "rva": 9814772,
+          "size": 396,
+          "symbol": 858,
+          "frames": [
+            { "function": 859, "file": 759, "line": 821 },
+            { "function": 858, "file": 134, "line": 2384 }
+          ]
+        },
+        {
+          "rva": 9816260,
+          "size": 868,
+          "symbol": 860,
+          "frames": [{ "function": 860, "file": 160, "line": 889 }]
+        },
+        {
+          "rva": 9817424,
+          "size": 80,
+          "symbol": 861,
+          "frames": [{ "function": 861, "file": 153, "line": 628 }]
+        },
+        {
+          "rva": 9820336,
+          "size": 836,
+          "symbol": 862,
+          "frames": [{ "function": 862, "file": 160, "line": 944 }]
+        },
+        {
+          "rva": 9865820,
+          "size": 120,
+          "symbol": 242,
+          "frames": [
+            { "function": 863, "file": 11, "line": 547 },
+            { "function": 864, "file": 16, "line": 2800 },
+            { "function": 865, "file": 27, "line": 55 },
+            { "function": 866, "file": 16, "line": 3325 },
+            { "function": 867, "file": 244, "line": 1112 },
+            { "function": 242, "file": 244, "line": 3320 }
+          ]
+        },
+        {
+          "rva": 9866280,
+          "size": 452,
+          "symbol": 868,
+          "frames": [
+            { "function": 869, "file": 870, "line": null },
+            { "function": 868, "file": 871, "line": 646 }
+          ]
+        },
+        {
+          "rva": 9869864,
+          "size": 564,
+          "symbol": 872,
+          "frames": [{ "function": 872, "file": 244, "line": 625 }]
+        },
+        {
+          "rva": 9870684,
+          "size": 136,
+          "symbol": 873,
+          "frames": [
+            { "function": 769, "file": 90, "line": 95 },
+            { "function": 770, "file": 90, "line": 190 },
+            { "function": 771, "file": 90, "line": 251 },
+            { "function": 718, "file": 21, "line": 468 },
+            { "function": 772, "file": 21, "line": 419 },
+            { "function": 773, "file": 21, "line": 187 },
+            { "function": 774, "file": 16, "line": 929 },
+            { "function": 775, "file": 173, "line": 445 },
+            { "function": 776, "file": 173, "line": 398 },
+            { "function": 165, "file": 16, "line": 3573 },
+            { "function": 873, "file": 244, "line": 2351 }
+          ]
+        },
+        {
+          "rva": 9873724,
+          "size": 240,
+          "symbol": 874,
+          "frames": [
+            { "function": 875, "file": 876, "line": 40 },
+            { "function": 877, "file": 876, "line": 104 },
+            { "function": 878, "file": 879, "line": 2435 },
+            { "function": 880, "file": 876, "line": 31 },
+            { "function": 874, "file": 881, "line": 352 }
+          ]
+        },
+        {
+          "rva": 9879100,
+          "size": 116,
+          "symbol": 882,
+          "frames": [{ "function": 882, "file": 883, "line": null }]
+        },
+        {
+          "rva": 9887176,
+          "size": 488,
+          "symbol": 884,
+          "frames": [{ "function": 884, "file": 870, "line": 1481 }]
+        },
+        {
+          "rva": 9921504,
+          "size": 628,
+          "symbol": 885,
+          "frames": [
+            { "function": 886, "file": 887, "line": 242 },
+            { "function": 885, "file": 888, "line": 91 }
+          ]
+        },
+        {
+          "rva": 9922968,
+          "size": 220,
+          "symbol": 878,
+          "frames": [
+            { "function": 889, "file": 890, "line": 159 },
+            { "function": 891, "file": 11, "line": 2288 },
+            { "function": 892, "file": 890, "line": 1303 },
+            { "function": 877, "file": 876, "line": 69 },
+            { "function": 878, "file": 879, "line": 2435 }
+          ]
+        },
+        {
+          "rva": 9923188,
+          "size": 288,
+          "symbol": 893,
+          "frames": [
+            { "function": 894, "file": 876, "line": 19 },
+            { "function": 893, "file": 876, "line": 151 }
+          ]
+        },
+        {
+          "rva": 9936480,
+          "size": 448,
+          "symbol": 895,
+          "frames": [{ "function": 895, "file": 896, "line": null }]
+        },
+        {
+          "rva": 9974936,
+          "size": 196,
+          "symbol": 897,
+          "frames": [
+            { "function": 462, "file": 90, "line": 135 },
+            { "function": 898, "file": 90, "line": 223 },
+            { "function": 899, "file": 90, "line": 285 },
+            { "function": 900, "file": 21, "line": 752 }
+          ]
+        },
+        {
+          "rva": 9975132,
+          "size": 152,
+          "symbol": 901,
+          "frames": [
+            { "function": 902, "file": 879, "line": 457 },
+            { "function": 903, "file": 904, "line": 642 },
+            { "function": 905, "file": 21, "line": 688 },
+            { "function": 906, "file": 21, "line": 557 }
+          ]
+        },
+        {
+          "rva": 10034260,
+          "size": 104,
+          "symbol": 907,
+          "frames": [
+            { "function": 905, "file": 21, "line": 698 },
+            { "function": 908, "file": 21, "line": 577 },
+            { "function": 909, "file": 21, "line": 336 }
+          ]
+        },
+        {
+          "rva": 10034676,
+          "size": 196,
+          "symbol": 897,
+          "frames": [
+            { "function": 462, "file": 90, "line": 135 },
+            { "function": 898, "file": 90, "line": 223 },
+            { "function": 899, "file": 90, "line": 285 },
+            { "function": 900, "file": 21, "line": 752 }
+          ]
+        },
+        {
+          "rva": 10034872,
+          "size": 152,
+          "symbol": 901,
+          "frames": [
+            { "function": 905, "file": 21, "line": 698 },
+            { "function": 906, "file": 21, "line": 557 }
+          ]
+        },
+        {
+          "rva": 10064904,
+          "size": 84,
+          "symbol": 910,
+          "frames": [
+            { "function": 911, "file": 415, "line": 217 },
+            { "function": 912, "file": 412, "line": 527 }
+          ]
+        },
+        {
+          "rva": 10081188,
+          "size": 1020,
+          "symbol": 913,
+          "frames": [
+            { "function": 914, "file": 915, "line": 50 },
+            { "function": 397, "file": 915, "line": 113 },
+            { "function": 916, "file": 360, "line": 3776 },
+            { "function": 397, "file": 360, "line": 3831 },
+            { "function": 917, "file": 360, "line": 2787 },
+            { "function": 918, "file": 360, "line": 2670 },
+            { "function": 919, "file": 360, "line": 991 }
+          ]
+        },
+        {
+          "rva": 10085004,
+          "size": 196,
+          "symbol": 897,
+          "frames": [
+            { "function": 462, "file": 90, "line": 135 },
+            { "function": 898, "file": 90, "line": 223 },
+            { "function": 899, "file": 90, "line": 285 },
+            { "function": 900, "file": 21, "line": 752 }
+          ]
+        },
+        {
+          "rva": 10085200,
+          "size": 152,
+          "symbol": 901,
+          "frames": [
+            { "function": 905, "file": 21, "line": 698 },
+            { "function": 906, "file": 21, "line": 557 }
+          ]
+        },
+        {
+          "rva": 10085352,
+          "size": 728,
+          "symbol": 920,
+          "frames": [
+            { "function": 921, "file": 257, "line": 2019 },
+            { "function": 922, "file": 727, "line": 630 }
+          ]
+        },
+        {
+          "rva": 10100824,
+          "size": 2228,
+          "symbol": 923,
+          "frames": [{ "function": 924, "file": 670, "line": 2126 }]
+        },
+        {
+          "rva": 10106520,
+          "size": 196,
+          "symbol": 897,
+          "frames": [
+            { "function": 166, "file": 90, "line": 95 },
+            { "function": 167, "file": 90, "line": 190 },
+            { "function": 168, "file": 90, "line": 251 },
+            { "function": 900, "file": 21, "line": 755 }
+          ]
+        },
+        {
+          "rva": 10106716,
+          "size": 152,
+          "symbol": 901,
+          "frames": [
+            { "function": 905, "file": 21, "line": 698 },
+            { "function": 906, "file": 21, "line": 557 }
+          ]
+        },
+        {
+          "rva": 10111112,
+          "size": 104,
+          "symbol": 907,
+          "frames": [
+            { "function": 905, "file": 21, "line": 698 },
+            { "function": 908, "file": 21, "line": 577 },
+            { "function": 925, "file": 21, "line": 336 }
+          ]
+        },
+        {
+          "rva": 10111840,
+          "size": 196,
+          "symbol": 897,
+          "frames": [
+            { "function": 462, "file": 90, "line": 135 },
+            { "function": 898, "file": 90, "line": 223 },
+            { "function": 899, "file": 90, "line": 285 },
+            { "function": 900, "file": 21, "line": 752 }
+          ]
+        },
+        {
+          "rva": 10122104,
+          "size": 292,
+          "symbol": 926,
+          "frames": [
+            { "function": 927, "file": 838, "line": 346 },
+            { "function": 928, "file": 929, "line": 51 },
+            { "function": 930, "file": 153, "line": 1837 },
+            { "function": 931, "file": 794, "line": 159 },
+            { "function": 926, "file": 932, "line": 415 }
+          ]
+        },
+        {
+          "rva": 10124204,
+          "size": 536,
+          "symbol": 933,
+          "frames": [{ "function": 933, "file": 934, "line": 220 }]
+        },
+        {
+          "rva": 10140488,
+          "size": 196,
+          "symbol": 897,
+          "frames": [{ "function": 897, "file": 21, "line": 740 }]
+        },
+        {
+          "rva": 10140684,
+          "size": 140,
+          "symbol": 901,
+          "frames": [
+            { "function": 935, "file": 21, "line": 698 },
+            { "function": 901, "file": 21, "line": 557 }
+          ]
+        },
+        {
+          "rva": 10141640,
+          "size": 140,
+          "symbol": 897,
+          "frames": [{ "function": 897, "file": 21, "line": 740 }]
+        },
+        {
+          "rva": 10141780,
+          "size": 120,
+          "symbol": 901,
+          "frames": [
+            { "function": 935, "file": 21, "line": 698 },
+            { "function": 901, "file": 21, "line": 557 }
+          ]
+        }
+      ],
+      "known_addresses": [
+        [31215, 0],
+        [66563, 1],
+        [93791, 2],
+        [93883, 2],
+        [93975, 2],
+        [94039, 2],
+        [94287, 2],
+        [108963, 3],
+        [119363, 4],
+        [217711, 5],
+        [232596, 6],
+        [232835, 6],
+        [244311, 7],
+        [252291, 8],
+        [258423, 9],
+        [264155, 10],
+        [267871, 11],
+        [268055, 11],
+        [281444, 12],
+        [281456, 12],
+        [281820, 12],
+        [281859, 12],
+        [300523, 13],
+        [300611, 13],
+        [337187, 14],
+        [339851, 15],
+        [359819, 16],
+        [412303, 17],
+        [490379, 18],
+        [495631, 19],
+        [495743, 19],
+        [495911, 19],
+        [496107, 19],
+        [496443, 19],
+        [502615, 20],
+        [502643, 20],
+        [548407, 21],
+        [558107, 22],
+        [585307, 23],
+        [590087, 24],
+        [617783, 25],
+        [621256, 26],
+        [631944, 27],
+        [3172107, 28],
+        [3172279, 28],
+        [3172367, 29],
+        [3172443, 29],
+        [3172531, 29],
+        [3173731, 30],
+        [3173736, 30],
+        [3174727, 31],
+        [3174835, 31],
+        [3174879, 31],
+        [3174979, 31],
+        [3175067, 31],
+        [3175235, 31],
+        [3228891, 32],
+        [3276367, 33],
+        [3276564, 33],
+        [3276631, 33],
+        [3276663, 33],
+        [3276975, 34],
+        [3277259, 34],
+        [3277508, 34],
+        [3277567, 34],
+        [6650223, 35],
+        [6655031, 36],
+        [6656603, 37],
+        [6702115, 38],
+        [6708419, 39],
+        [6708747, 39],
+        [6708823, 39],
+        [6709151, 39],
+        [6710631, 39],
+        [6710819, 39],
+        [6711315, 39],
+        [6713475, 39],
+        [6713543, 39],
+        [6713611, 39],
+        [6717683, 39],
+        [6719115, 39],
+        [6722355, 40],
+        [6734451, 41],
+        [6734667, 41],
+        [6737035, 42],
+        [6737883, 43],
+        [6738191, 43],
+        [6745491, 44],
+        [6745499, 44],
+        [6745539, 44],
+        [6746019, 44],
+        [6746527, 44],
+        [6746739, 44],
+        [6746863, 44],
+        [6747095, 44],
+        [6747211, 44],
+        [6747271, 44],
+        [6747659, 44],
+        [6747683, 44],
+        [6748291, 44],
+        [6748383, 44],
+        [6748443, 44],
+        [6749183, 44],
+        [6749359, 44],
+        [6749579, 44],
+        [6749671, 44],
+        [6750275, 44],
+        [6751063, 44],
+        [6761303, 45],
+        [6780163, 46],
+        [6780215, 46],
+        [6780303, 46],
+        [6781228, 46],
+        [6781703, 46],
+        [6782011, 46],
+        [6782787, 46],
+        [6783783, 46],
+        [6783915, 46],
+        [6786135, 46],
+        [6786211, 46],
+        [6790012, 46],
+        [6790223, 46],
+        [6791399, 46],
+        [6796395, 47],
+        [6796459, 47],
+        [6796671, 47],
+        [6796895, 47],
+        [6798227, 47],
+        [6801867, 48],
+        [6804451, 49],
+        [6830447, 50],
+        [6835271, 51],
+        [6835591, 51],
+        [6836403, 51],
+        [6836683, 51],
+        [6836707, 51],
+        [6837915, 52],
+        [6838131, 52],
+        [6838227, 52],
+        [6838503, 52],
+        [6839319, 53],
+        [6840080, 53],
+        [6840383, 53],
+        [6843727, 54],
+        [6843831, 54],
+        [6843991, 54],
+        [6845735, 54],
+        [6847411, 54],
+        [6848399, 54],
+        [6849747, 54],
+        [6855043, 55],
+        [6855471, 55],
+        [6871395, 56],
+        [6875651, 57],
+        [6875691, 57],
+        [6901152, 58],
+        [6901523, 59],
+        [6901851, 60],
+        [6903415, 61],
+        [6903427, 61],
+        [6907739, 62],
+        [6907912, 62],
+        [6911731, 63],
+        [6926256, 64],
+        [6926288, 64],
+        [6926456, 64],
+        [6926460, 64],
+        [6926472, 64],
+        [6928127, 65],
+        [6967136, 66],
+        [6967167, 66],
+        [6981688, 67],
+        [7022055, 68],
+        [7022067, 68],
+        [7024411, 69],
+        [7036319, 70],
+        [7037335, 71],
+        [7063255, 72],
+        [7093219, 73],
+        [7093535, 73],
+        [7093859, 73],
+        [7093895, 73],
+        [7094563, 74],
+        [7094607, 74],
+        [7094907, 74],
+        [7095227, 74],
+        [7103363, 75],
+        [7103468, 76],
+        [7104631, 76],
+        [7113483, 77],
+        [7241427, 78],
+        [7241711, 78],
+        [7242399, 78],
+        [7244711, 79],
+        [7245044, 80],
+        [7246635, 81],
+        [7445407, 82],
+        [7445699, 83],
+        [7445759, 83],
+        [7445779, 83],
+        [7445780, 83],
+        [7446167, 83],
+        [7446187, 83],
+        [7446255, 83],
+        [7455291, 84],
+        [7461543, 85],
+        [7514607, 86],
+        [7514923, 86],
+        [7518407, 87],
+        [7518427, 87],
+        [7518447, 87],
+        [7518511, 87],
+        [7543983, 88],
+        [7544043, 88],
+        [7584783, 89],
+        [7591320, 90],
+        [7591383, 90],
+        [7591415, 90],
+        [7591491, 90],
+        [7595303, 91],
+        [7597684, 92],
+        [7602663, 93],
+        [7611520, 94],
+        [7614943, 95],
+        [7652308, 96],
+        [7675315, 97],
+        [7740535, 98],
+        [7741399, 98],
+        [7742511, 99],
+        [7798755, 100],
+        [7799071, 100],
+        [7803007, 101],
+        [7803731, 101],
+        [7803767, 101],
+        [7803999, 101],
+        [7805007, 102],
+        [7805195, 102],
+        [7805283, 102],
+        [7885235, 103],
+        [7900068, 104],
+        [7960119, 105],
+        [8135091, 106],
+        [8141131, 107],
+        [8210623, 108],
+        [8212123, 109],
+        [8212143, 109],
+        [8212207, 109],
+        [8212227, 109],
+        [8362940, 110],
+        [8392231, 111],
+        [8393647, 111],
+        [8394775, 112],
+        [8398031, 113],
+        [8398048, 113],
+        [8398451, 114],
+        [8399500, 114],
+        [8404051, 115],
+        [8432463, 116],
+        [8435403, 116],
+        [8438939, 117],
+        [8439276, 117],
+        [8439308, 117],
+        [8439336, 117],
+        [8439360, 117],
+        [8439416, 117],
+        [8439464, 117],
+        [8439675, 117],
+        [8439695, 117],
+        [8440107, 117],
+        [8440168, 117],
+        [8440528, 117],
+        [8440655, 117],
+        [8440795, 117],
+        [8440931, 117],
+        [8444620, 118],
+        [8444632, 118],
+        [8444644, 118],
+        [8444655, 118],
+        [8444656, 118],
+        [8444880, 118],
+        [8444884, 118],
+        [8444936, 118],
+        [8472407, 119],
+        [8472471, 119],
+        [8472903, 120],
+        [8473723, 121],
+        [8473783, 121],
+        [8473903, 121],
+        [8480399, 122],
+        [8480687, 122],
+        [8481523, 122],
+        [8482499, 122],
+        [8482848, 123],
+        [8484935, 124],
+        [8485347, 124],
+        [8485931, 125],
+        [8486387, 126],
+        [8488039, 127],
+        [8491623, 128],
+        [8491728, 129],
+        [8492168, 129],
+        [8492460, 129],
+        [8492500, 129],
+        [8492600, 129],
+        [8492835, 129],
+        [8493664, 130],
+        [8602687, 131],
+        [8602956, 131],
+        [8603072, 131],
+        [8603128, 131],
+        [8603200, 131],
+        [8603548, 131],
+        [8603567, 131],
+        [8603588, 131],
+        [8603608, 131],
+        [8603640, 131],
+        [8603919, 131],
+        [8603931, 131],
+        [8604739, 131],
+        [8604919, 131],
+        [8605604, 131],
+        [8605615, 131],
+        [8606319, 131],
+        [8607011, 131],
+        [8612743, 131],
+        [8612783, 131],
+        [8613888, 132],
+        [8613916, 133],
+        [8614092, 133],
+        [8614172, 133],
+        [8614215, 133],
+        [8614339, 133],
+        [8617024, 134],
+        [8624443, 135],
+        [8625524, 135],
+        [8625656, 135],
+        [8625848, 135],
+        [8625876, 135],
+        [8625912, 135],
+        [8626112, 135],
+        [8626316, 135],
+        [8626575, 135],
+        [8626616, 135],
+        [8626636, 135],
+        [8626696, 135],
+        [8627255, 136],
+        [8627311, 136],
+        [8631479, 137],
+        [8632168, 138],
+        [8632352, 138],
+        [8632731, 138],
+        [8633068, 138],
+        [8633216, 138],
+        [8633279, 138],
+        [8633300, 138],
+        [8633351, 138],
+        [8633475, 138],
+        [8633503, 138],
+        [8634795, 139],
+        [8635407, 139],
+        [8635535, 139],
+        [8635615, 139],
+        [8636035, 139],
+        [8642152, 140],
+        [8642187, 140],
+        [8642219, 140],
+        [8642247, 140],
+        [8642288, 140],
+        [8643579, 141],
+        [8644483, 142],
+        [8644495, 142],
+        [8644527, 142],
+        [8644588, 142],
+        [8649323, 143],
+        [8649416, 143],
+        [8649420, 143],
+        [8649503, 143],
+        [8649595, 143],
+        [8649635, 143],
+        [8649864, 143],
+        [8649899, 143],
+        [8649927, 143],
+        [8649947, 143],
+        [8649967, 143],
+        [8650427, 143],
+        [8651248, 144],
+        [8651480, 144],
+        [8651484, 144],
+        [8651519, 144],
+        [8651520, 144],
+        [8651540, 144],
+        [8651556, 144],
+        [8651587, 144],
+        [8651624, 144],
+        [8651636, 144],
+        [8652604, 145],
+        [8652672, 145],
+        [8652868, 145],
+        [8652900, 145],
+        [8652904, 145],
+        [8653296, 146],
+        [8653392, 146],
+        [8653456, 146],
+        [8653656, 146],
+        [8653755, 146],
+        [8657263, 147],
+        [8658107, 148],
+        [8658223, 148],
+        [8658255, 148],
+        [8658799, 149],
+        [8658811, 149],
+        [8659003, 149],
+        [8659044, 149],
+        [8659075, 149],
+        [8659076, 149],
+        [8659092, 149],
+        [8659148, 149],
+        [8659247, 149],
+        [8659327, 149],
+        [8659328, 149],
+        [8659352, 149],
+        [8659475, 149],
+        [8659548, 149],
+        [8659556, 149],
+        [8659564, 149],
+        [8660355, 150],
+        [8660680, 151],
+        [8660704, 151],
+        [8666403, 152],
+        [8677011, 153],
+        [8677479, 154],
+        [8677503, 154],
+        [8677527, 154],
+        [8677559, 154],
+        [8677607, 154],
+        [8677819, 155],
+        [8678087, 155],
+        [8678259, 155],
+        [8678296, 155],
+        [8678300, 155],
+        [8678316, 155],
+        [8678399, 155],
+        [8678440, 155],
+        [8678503, 155],
+        [8680703, 156],
+        [8680704, 156],
+        [8680763, 156],
+        [8681312, 157],
+        [8681388, 157],
+        [8681476, 157],
+        [8681660, 157],
+        [8681844, 157],
+        [8681868, 157],
+        [8681880, 157],
+        [8681968, 157],
+        [8682076, 157],
+        [8683312, 158],
+        [8683491, 158],
+        [8683964, 158],
+        [8719580, 159],
+        [8719659, 159],
+        [8719748, 160],
+        [8720832, 161],
+        [8721112, 162],
+        [8721124, 162],
+        [8721148, 162],
+        [8721356, 162],
+        [8721396, 163],
+        [8721580, 163],
+        [8721851, 164],
+        [8722044, 165],
+        [8722060, 165],
+        [8730855, 166],
+        [8732207, 167],
+        [8744515, 168],
+        [8744543, 168],
+        [8745271, 169],
+        [8745751, 170],
+        [8746015, 171],
+        [8746031, 171],
+        [8748683, 172],
+        [8752699, 173],
+        [8753119, 173],
+        [8761667, 174],
+        [8762139, 174],
+        [8764407, 174],
+        [8791275, 175],
+        [8791491, 175],
+        [8842195, 176],
+        [8842263, 176],
+        [8843383, 176],
+        [8844475, 177],
+        [8910907, 178],
+        [8912751, 178],
+        [8914307, 178],
+        [8934103, 179],
+        [8934244, 179],
+        [8934639, 180],
+        [8942235, 181],
+        [8943663, 182],
+        [8944111, 183],
+        [8945276, 184],
+        [8948699, 185],
+        [8949919, 186],
+        [8952631, 187],
+        [8953195, 187],
+        [8953559, 187],
+        [8954579, 187],
+        [8954927, 187],
+        [8956575, 187],
+        [8960447, 188],
+        [8961943, 189],
+        [9034663, 190],
+        [9042824, 191],
+        [9043140, 191],
+        [9045044, 191],
+        [9045096, 191],
+        [9045236, 191],
+        [9045288, 191],
+        [9045296, 191],
+        [9045328, 191],
+        [9045332, 191],
+        [9045448, 191],
+        [9045572, 191],
+        [9045636, 191],
+        [9045775, 191],
+        [9046740, 191],
+        [9046880, 191],
+        [9051260, 191],
+        [9087295, 192],
+        [9137840, 193],
+        [9143811, 194],
+        [9147568, 195],
+        [9165995, 196],
+        [9176251, 197],
+        [9177784, 198],
+        [9349499, 199],
+        [9435164, 200],
+        [9616660, 201],
+        [9617168, 202],
+        [9643987, 203],
+        [9645591, 204],
+        [9645823, 204],
+        [9646587, 205],
+        [9649719, 206],
+        [9649768, 206],
+        [9652895, 207],
+        [9655447, 208],
+        [9661763, 209],
+        [9662199, 210],
+        [9662263, 210],
+        [9662272, 210],
+        [9662339, 210],
+        [9663655, 211],
+        [9663783, 211],
+        [9664071, 212],
+        [9666311, 213],
+        [9666591, 214],
+        [9673975, 215],
+        [9675624, 216],
+        [9691048, 217],
+        [9691352, 218],
+        [9692271, 219],
+        [9693380, 220],
+        [9693424, 220],
+        [9693459, 220],
+        [9693471, 220],
+        [9693496, 220],
+        [9693532, 220],
+        [9693536, 220],
+        [9693563, 220],
+        [9693564, 220],
+        [9693883, 221],
+        [9693895, 221],
+        [9693956, 221],
+        [9694183, 221],
+        [9694740, 222],
+        [9694831, 222],
+        [9694880, 222],
+        [9694971, 222],
+        [9699900, 223],
+        [9699927, 223],
+        [9711267, 224],
+        [9711371, 225],
+        [9775747, 226],
+        [9806651, 227],
+        [9809395, 228],
+        [9809787, 228],
+        [9809944, 229],
+        [9809972, 229],
+        [9810007, 229],
+        [9812023, 230],
+        [9812031, 230],
+        [9814851, 231],
+        [9814871, 231],
+        [9815039, 231],
+        [9815131, 231],
+        [9816260, 232],
+        [9816272, 232],
+        [9816308, 232],
+        [9816344, 232],
+        [9816436, 232],
+        [9816440, 232],
+        [9816448, 232],
+        [9816456, 232],
+        [9816468, 232],
+        [9816500, 232],
+        [9816588, 232],
+        [9816604, 232],
+        [9816616, 232],
+        [9817447, 233],
+        [9820499, 234],
+        [9820504, 234],
+        [9865879, 235],
+        [9865927, 235],
+        [9866352, 236],
+        [9866615, 236],
+        [9869915, 237],
+        [9870759, 238],
+        [9870776, 238],
+        [9870791, 238],
+        [9873888, 239],
+        [9879164, 240],
+        [9879203, 240],
+        [9887272, 241],
+        [9887447, 241],
+        [9887551, 241],
+        [9921632, 242],
+        [9922968, 243],
+        [9923000, 243],
+        [9923032, 243],
+        [9923044, 243],
+        [9923080, 243],
+        [9923112, 243],
+        [9923128, 243],
+        [9923140, 243],
+        [9923152, 243],
+        [9923164, 243],
+        [9923180, 243],
+        [9923368, 244],
+        [9936520, 245],
+        [9936888, 245],
+        [9975043, 246],
+        [9975168, 247],
+        [10034319, 248],
+        [10034783, 249],
+        [10034811, 249],
+        [10034979, 250],
+        [10064975, 251],
+        [10081652, 252],
+        [10081656, 252],
+        [10081696, 252],
+        [10081716, 252],
+        [10081816, 252],
+        [10081844, 252],
+        [10081920, 252],
+        [10081952, 252],
+        [10082008, 252],
+        [10085111, 253],
+        [10085307, 254],
+        [10085435, 255],
+        [10100987, 256],
+        [10106655, 257],
+        [10106823, 258],
+        [10111171, 259],
+        [10111947, 260],
+        [10122283, 261],
+        [10124467, 262],
+        [10140496, 263],
+        [10140595, 263],
+        [10140771, 264],
+        [10141640, 265],
+        [10141699, 265],
+        [10141847, 266]
+      ]
+    },
+    {
+      "debug_name": "libsystem_kernel.dylib",
+      "debug_id": "ee805b14-29f2-360d-9a2c-3221a1211833",
+      "code_id": "EE805B1429F2360D9A2C3221A1211833",
+      "symbol_table": [
+        { "rva": 4256, "size": 132, "symbol": 936 },
+        { "rva": 5684, "size": 44, "symbol": 937 },
+        { "rva": 5772, "size": 44, "symbol": 938 },
+        { "rva": 6376, "size": 44, "symbol": 939 },
+        { "rva": 6420, "size": 44, "symbol": 187 },
+        { "rva": 6464, "size": 44, "symbol": 940 },
+        { "rva": 9596, "size": 44, "symbol": 941 },
+        { "rva": 10684, "size": 44, "symbol": 942 },
+        { "rva": 12628, "size": 44, "symbol": 943 },
+        { "rva": 18476, "size": 44, "symbol": 944 },
+        { "rva": 51288, "size": 44, "symbol": 945 },
+        { "rva": 51332, "size": 44, "symbol": 946 },
+        { "rva": 51376, "size": 200, "symbol": 947 },
+        { "rva": 51576, "size": 44, "symbol": 948 },
+        { "rva": 82420, "size": 468, "symbol": 949 },
+        { "rva": 89124, "size": 200, "symbol": 950 }
+      ],
+      "known_addresses": [
+        [4272, 0],
+        [4364, 0],
+        [4368, 0],
+        [5692, 1],
+        [5724, 1],
+        [5780, 2],
+        [6384, 3],
+        [6428, 4],
+        [6472, 5],
+        [9604, 6],
+        [10692, 7],
+        [12636, 8],
+        [18484, 9],
+        [51296, 10],
+        [51340, 11],
+        [51439, 12],
+        [51440, 12],
+        [51584, 13],
+        [82679, 14],
+        [89187, 15]
+      ]
+    },
+    {
+      "debug_name": "libsystem_platform.dylib",
+      "debug_id": "3af14164-15fe-3623-9ee3-46de29fd5b5a",
+      "code_id": "3AF1416415FE36239EE346DE29FD5B5A",
+      "symbol_table": [
+        { "rva": 2592, "size": 160, "symbol": 951 },
+        { "rva": 3856, "size": 288, "symbol": 952 },
+        { "rva": 6284, "size": 156, "symbol": 953 },
+        { "rva": 12432, "size": 212, "symbol": 954 },
+        { "rva": 13152, "size": 736, "symbol": 955 }
+      ],
+      "known_addresses": [
+        [2664, 0],
+        [3856, 1],
+        [3888, 1],
+        [3996, 1],
+        [4004, 1],
+        [4020, 1],
+        [4024, 1],
+        [4032, 1],
+        [4048, 1],
+        [4052, 1],
+        [4064, 1],
+        [4092, 1],
+        [4096, 1],
+        [4116, 1],
+        [4128, 1],
+        [4136, 1],
+        [6343, 2],
+        [6387, 2],
+        [12572, 3],
+        [12592, 3],
+        [12612, 3],
+        [12640, 3],
+        [13152, 4],
+        [13196, 4],
+        [13240, 4],
+        [13332, 4],
+        [13356, 4],
+        [13572, 4],
+        [13580, 4],
+        [13588, 4],
+        [13596, 4],
+        [13604, 4],
+        [13612, 4]
+      ]
+    },
+    {
+      "debug_name": "libsystem_pthread.dylib",
+      "debug_id": "a58beabd-7ac0-35f8-bcff-e4ffbd79e938",
+      "code_id": "A58BEABD7AC035F8BCFFE4FFBD79E938",
+      "symbol_table": [
+        { "rva": 5380, "size": 188, "symbol": 956 },
+        { "rva": 5568, "size": 584, "symbol": 957 }
+      ],
+      "known_addresses": [
+        [5439, 0],
+        [6076, 1]
+      ]
+    }
+  ]
+}

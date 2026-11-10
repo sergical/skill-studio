@@ -494,6 +494,13 @@ struct TargetArgs {
 }
 
 fn main() -> ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("--perf-build-id") {
+        println!(
+            "{}",
+            option_env!("SKILL_STUDIO_PERF_BUILD").unwrap_or("unmarked")
+        );
+        return ExitCode::SUCCESS;
+    }
     // Parse before telemetry starts: `mcp` reports as its own surface, and
     // `run_stdio` sets that up itself.
     let cli = Cli::parse();
