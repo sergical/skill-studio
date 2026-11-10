@@ -95,3 +95,31 @@ or wall-clock gates.
 The cycle test now requires one pending file per target after each cycle.
 Rollback tests accept a recovered external edit in the live file. Rollback
 retains its displaced output rather than a second copy of the recovered input.
+
+## Final validation after both base updates
+
+The branch merges base head `e51256447047ba8d38d547d9bc0e133f1f313869`.
+Both sides' tests remain, including whitespace-only ignore lines and an ignore
+edit after the config exchange.
+
+All six new regression tests failed with the original production helper restored
+once. All three open-handle edits lost their recovery copy. The write, file-sync,
+and exchange failure tests each found a staging file. The test target reported
+61 passes and eight failures, including two assertions changed for deferred
+cleanup.
+
+The debug validation commands waited for the shared artifact lock for 30 minutes.
+Only this task's queued commands were stopped. Validation then used `--release`
+in the same required shared target folder, with a unique workspace compiler
+wrapper. No other target folder was created and no other agent's process was
+stopped.
+
+Passed on the merged source:
+
+- `cargo fmt --all --check`
+- `cargo test -p skill-studio-core --all-features --release --test park_install_aware`: 71 passed
+- `cargo clippy --workspace --all-targets --all-features --release -- -D warnings`
+- `cargo test -p skill-studio-core --all-features --release`: 749 passed
+
+The simplification pass found no worthwhile simplification. The same checks passed
+again after that pass. Final diff review found no further issue. CI also runs the full suite in its default test profile.
