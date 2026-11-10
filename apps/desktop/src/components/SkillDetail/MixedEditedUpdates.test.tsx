@@ -7,6 +7,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, expect, it } from "vitest";
 import { Button } from "@skill-studio/ui";
 import { Toaster, toast } from "sonner";
+import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
 import { deployment, skill } from "../../dev/harness/skill-fixture";
 import { HomeInboxGrid } from "../Home/HomeInboxGroups";
 import { computeHomeGroups } from "../Home/home-inbox-data";
@@ -22,16 +23,27 @@ const updates = ["alpha", "beta"].map((name) => {
     deployments: [
       {
         ...deployment({
-          agent: name === "alpha" ? "shared" : "Codex",
-          path:
-            name === "alpha" ? `/fixture/.agents/skills/${name}` : `/fixture/.codex/skills/${name}`,
+          agent: "shared",
+          path: `/fixture/.agents/skills/${name}`,
           scope: "global",
           owner_kind: "skills-sh",
-          backing: { kind: name === "alpha" ? "canonical" : "independent" },
+          backing: { kind: "canonical" },
         }),
         owner_id: owner,
-        destination: name === "alpha" ? "universal" : "per-harness",
+        destination: "universal",
       },
+      ...(name === "beta"
+        ? [
+            deployment({
+              agent: "Codex",
+              path: `/fixture/.codex/skills/${name}`,
+              scope: "global",
+              owner_kind: "manual",
+              backing: { kind: "independent" },
+              destination: "per-harness",
+            }),
+          ]
+        : []),
     ],
     update_owner_ids: [owner],
     update_owners: [{ owner_id: owner, latest_commit: "new", latest_commit_at: null }],
@@ -179,3 +191,36 @@ it.each(
     expect(screen.queryByRole("alertdialog")).toBeNull();
   },
 );
+
+function SingleUpdate() {
+  const { requestUpdate, dialog } = useGuardedSkillUpdate();
+  return (
+    <>
+      <Button onClick={() => void requestUpdate(updates[1])}>Update copy</Button>
+      {dialog}
+    </>
+  );
+}
+
+it("single_copy_update_keeps_edits_on_cancel_and_requires_overwrite_or_fork_loses_them", async () => {
+  const writes: string[] = [];
+  mockIPC((command) => {
+    if (command === "skill_local_edits") return [{ checked: true, edited: true }];
+    if (command === "update_skill") {
+      writes.push(command);
+      return { success: true };
+    }
+    throw new Error(`unexpected ${command}`);
+  });
+  const user = userEvent.setup();
+  render(<SingleUpdate />);
+  await user.click(screen.getByRole("button", { name: "Update copy" }));
+  await screen.findByRole("alertdialog");
+  expect(screen.queryByRole("button", { name: /Fork/ })).toBeNull();
+  expect(screen.getByText(/no independent agent copies/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(writes).toEqual([]);
+  await user.click(screen.getByRole("button", { name: "Update copy" }));
+  await user.click(await screen.findByRole("button", { name: "Overwrite edits" }));
+  await waitFor(() => expect(writes).toEqual(["update_skill"]));
+});
