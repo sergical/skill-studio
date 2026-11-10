@@ -170,9 +170,8 @@ fn repair_folder_name(
     Ok(resolved_name.to_string())
 }
 
-/// A name fix on a real folder moves the mismatch to any other deployment
-/// that reaches the same `SKILL.md` under a different folder name, so it is
-/// refused while one exists.
+/// A name fix must not break a peer whose folder name currently matches.
+/// An already mismatched peer does not block the repair.
 fn refuse_name_fix_with_differently_named_peer(
     peer_paths: &[PathBuf],
     deployment: &Deployment,
@@ -187,10 +186,22 @@ fn refuse_name_fix_with_differently_named_peer(
     let Ok(real) = fs::canonicalize(&deployment.path) else {
         return Ok(());
     };
-    let real_name = real.file_name();
+    let content = fs::read_to_string(Path::new(&deployment.path).join("SKILL.md"))
+        .map_err(|error| format!("Failed to read SKILL.md: {error}"))?;
+    let current_name = match skill_studio_core::frontmatter::parse_frontmatter(&content) {
+        skill_studio_core::frontmatter::FrontmatterParseResult::Valid(parsed) => parsed.name,
+        _ => None,
+    };
+    let Some(current_name) = current_name else {
+        return Ok(());
+    };
     for other in peer_paths {
         let same_real = fs::canonicalize(other).is_ok_and(|resolved| resolved == real);
-        if same_real && other.file_name() != real_name {
+        if same_real
+            && other
+                .file_name()
+                .is_some_and(|name| name == current_name.as_str())
+        {
             return Err(format!(
                 "Another copy at {} reaches this SKILL.md under a different folder name, so fixing the name here would break it. Rename or remove that link first.",
                 other.display()
@@ -249,12 +260,13 @@ fn validate_bound_preview(
 
 fn begin_bound_frontmatter_repair_transaction(
     deployment: &Deployment,
-    _peer_paths: &[PathBuf],
+    peer_paths: &[PathBuf],
     expected_content_fingerprint: &str,
     expected_proposal_id: &str,
     kind: FrontmatterRepairKind,
     choice: Option<InvocationConflictChoice>,
 ) -> Result<(SkillMdWriteTransaction, FrontmatterRepairPreview), String> {
+    refuse_name_fix_with_differently_named_peer(peer_paths, deployment, kind)?;
     let transaction = begin_skill_md_write_transaction()?;
     let preview = validate_bound_preview(
         deployment,
@@ -282,9 +294,6 @@ fn exact_target<'a>(
     Ok(deployment)
 }
 
-/// Previews from the published snapshot, never a rescan: the apply step
-/// re-checks the file's fingerprint, so a stale snapshot cannot write a wrong
-/// file, and a full rebuild per call took minutes when the page re-asked.
 fn name_fix_peer_paths(
     snapshot: &skill_refresh::SkillSnapshot,
     deployment: &Deployment,
@@ -303,18 +312,24 @@ fn with_cached_repair_target<T>(
     target: &LifecycleTarget,
     operation: impl FnOnce(Deployment, Vec<PathBuf>) -> Result<T, String>,
 ) -> Result<T, String> {
-    let guard = refresh_state
-        .snapshot
-        .read()
-        .map_err(|_| "Skill snapshot is unavailable".to_string())?;
-    let snapshot = guard
-        .as_ref()
-        .ok_or("Skills are still loading; no snapshot to preview from")?;
-    let deployment = exact_target(snapshot, target)?.clone();
-    let peers = name_fix_peer_paths(snapshot, &deployment);
+    let (deployment, peers) = {
+        let guard = refresh_state
+            .snapshot
+            .read()
+            .map_err(|_| "Skill snapshot is unavailable".to_string())?;
+        let snapshot = guard
+            .as_ref()
+            .ok_or("Skills are still loading; no snapshot to preview from")?;
+        let deployment = exact_target(snapshot, target)?.clone();
+        let peers = name_fix_peer_paths(snapshot, &deployment);
+        (deployment, peers)
+    };
     operation(deployment, peers)
 }
 
+/// Previews from the published snapshot, never a rescan: the apply step
+/// re-checks the file's fingerprint, so a stale snapshot cannot write a wrong
+/// file, and a full rebuild per call took minutes when the page re-asked.
 fn preview_from_cached_snapshot(
     refresh_state: &SkillRefreshState,
     target: &LifecycleTarget,
@@ -501,11 +516,6 @@ pub async fn apply_skill_frontmatter_repair(
             let snapshot =
                 super::skill_lifecycle::rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
             let deployment = exact_target(&snapshot, &target)?.clone();
-            refuse_name_fix_with_differently_named_peer(
-                &name_fix_peer_paths(&snapshot, &deployment),
-                &deployment,
-                kind,
-            )?;
             let skill_md = PathBuf::from(&deployment.path).join("SKILL.md");
             let name = super::skill_deployment::parse_deployment_id(&deployment.id)
                 .map(|id| id.name)

@@ -52,7 +52,7 @@ it("a refused invocation choice shows its reason and a safe choice can apply or 
   const writes: unknown[] = [];
   mockIPC((command, args) => {
     if (command === "preview_skill_frontmatter_repair") {
-      if (args?.choice === "user-only")
+      if (args && "choice" in args && args.choice === "user-only")
         throw new Error("The user-invocable value is not a single-line scalar");
       return {
         ...initial,
