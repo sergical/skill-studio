@@ -414,9 +414,4 @@ pub fn assert_recorded_lock(home: &Path, own: &serde_json::Value, unrelated: &se
     assert_eq!(&lock["skills"]["unrelated"], unrelated);
 }
 
-pub fn cli_binary() -> PathBuf {
-    std::env::var_os("SKILL_STUDIO_TEST_BINARY").map_or_else(
-        || PathBuf::from(env!("CARGO_BIN_EXE_skill-studio")),
-        PathBuf::from,
-    )
-}
+
