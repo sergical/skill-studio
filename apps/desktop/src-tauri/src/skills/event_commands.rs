@@ -22,14 +22,22 @@ use tauri::Manager;
 
 pub struct EventStoreState(
     pub std::sync::Arc<Mutex<Option<EventStore>>>,
-    std::sync::Arc<std::sync::OnceLock<()>>,
+    std::sync::Arc<std::sync::OnceLock<StartupRecoveryOutcome>>,
 );
 
-struct RecoveryReady(std::sync::Arc<std::sync::OnceLock<()>>);
+#[derive(Debug)]
+pub(crate) enum StartupRecoveryOutcome {
+    Completed,
+    Failed(String),
+}
+
+struct RecoveryReady(std::sync::Arc<std::sync::OnceLock<StartupRecoveryOutcome>>);
 
 impl Drop for RecoveryReady {
     fn drop(&mut self) {
-        let _ = self.0.set(());
+        let _ = self.0.set(StartupRecoveryOutcome::Failed(
+            "Startup recovery stopped before it completed.".into(),
+        ));
     }
 }
 
@@ -38,7 +46,7 @@ impl EventStoreState {
     /// another writer; commands wait on this same mutex until it finishes.
     pub fn with_recovery(
         store: Option<EventStore>,
-        recover: impl FnOnce(&EventStore) + Send + 'static,
+        recover: impl FnOnce(&EventStore) -> Result<(), String> + Send + 'static,
     ) -> Result<Self, String> {
         let state = std::sync::Arc::new(Mutex::new(store));
         let worker_state = state.clone();
@@ -48,14 +56,20 @@ impl EventStoreState {
         std::thread::Builder::new()
             .name("skill-studio-recovery".into())
             .spawn(move || {
-                let _ready = RecoveryReady(worker_completed);
+                let _ready = RecoveryReady(worker_completed.clone());
                 if let Ok(guard) = worker_state.lock() {
                     if started.send(()).is_err() {
                         return;
                     }
-                    if let Some(store) = guard.as_ref() {
-                        recover(store);
-                    }
+                    let result = guard.as_ref().map_or(Ok(()), recover);
+                    let outcome = match result {
+                        Ok(()) => StartupRecoveryOutcome::Completed,
+                        Err(error) => {
+                            eprintln!("[event_store] startup recovery failed: {error}");
+                            StartupRecoveryOutcome::Failed(error)
+                        }
+                    };
+                    let _ = worker_completed.set(outcome);
                 }
             })
             .map_err(|error| error.to_string())?;
@@ -63,7 +77,9 @@ impl EventStoreState {
         Ok(Self(state, completed))
     }
 
-    pub(crate) fn recovery_ready(&self) -> std::sync::Arc<std::sync::OnceLock<()>> {
+    pub(crate) fn recovery_ready(
+        &self,
+    ) -> std::sync::Arc<std::sync::OnceLock<StartupRecoveryOutcome>> {
         self.1.clone()
     }
 }
@@ -71,10 +87,14 @@ impl EventStoreState {
 fn locked_store(
     state: &EventStoreState,
 ) -> Result<std::sync::MutexGuard<'_, Option<EventStore>>, String> {
-    state
+    let guard = state
         .0
         .lock()
-        .map_err(|e| format!("event store lock poisoned: {e}"))
+        .map_err(|error| format!("event store lock poisoned: {error}"))?;
+    if let Some(StartupRecoveryOutcome::Failed(error)) = state.1.get() {
+        return Err(format!("Startup recovery failed: {error}"));
+    }
+    Ok(guard)
 }
 
 /// `backup_dir` is written by both stores as the same relative shape
@@ -894,6 +914,7 @@ mod tests {
             entered.send(()).unwrap();
             resume.recv().unwrap();
             recovered.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
         })
         .unwrap();
         recovery_entered.recv().unwrap();
@@ -917,6 +938,20 @@ mod tests {
         attempt.recv().unwrap();
         release.send(()).unwrap();
         command.join().unwrap();
+    }
+
+    #[test]
+    fn a_failed_startup_recovery_refuses_store_commands_or_runs_a_write_after_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = EventStore::open(directory.path()).unwrap();
+        let state =
+            EventStoreState::with_recovery(Some(store), |_| Err("fixture recovery failed".into()))
+                .unwrap();
+        state.recovery_ready().wait();
+        let error = locked_store(&state)
+            .err()
+            .expect("failed recovery must keep store commands closed");
+        assert!(error.contains("fixture recovery failed"), "{error}");
     }
 
     #[test]

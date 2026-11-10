@@ -180,7 +180,7 @@ fn reconcile_event_store_at_startup(
 fn reconcile_core_journal_at_startup(
     store: &skills::event_store::EventStore,
     guard: &skills::write_lease::WriteLeaseGuard,
-) {
+) -> Result<(), String> {
     let fs = skill_studio_host::RealFs::new();
     match skill_studio_core::journal::reconcile(store, guard.as_exclusive_guard(), &fs) {
         Ok(report) => {
@@ -195,12 +195,16 @@ fn reconcile_core_journal_at_startup(
                     interrupted.id, interrupted.error
                 );
             }
+            if !report.interrupted.is_empty() {
+                return Err("Desktop journal recovery did not finish. Resolve the interrupted plans before writing.".into());
+            }
             for id in &report.resolved_without_steps {
                 eprintln!("[event_store] core journal plan {id:?} had no steps - marked failed");
             }
         }
-        Err(e) => eprintln!("[event_store] core journal reconcile failed: {e}"),
+        Err(error) => return Err(error.to_string()),
     }
+    Ok(())
 }
 
 /// When `SKILL_STUDIO_FIXTURE` names a directory, points every `HOME`
@@ -365,28 +369,22 @@ pub fn run() {
             };
             let recovery_state =
                 skills::event_commands::EventStoreState::with_recovery(event_store, |store| {
-                    let recovery = (|| -> Result<(), String> {
-                        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-                        let runtime =
-                            skills::core_runtime::build_runtime_write_at_with_search_dirs(
-                                &home,
-                                &skills::core_runtime::data_root(),
-                                Vec::new(),
-                            )?;
-                        let lease = skills::write_lease::WriteLease::default();
-                        let guard = lease.acquire_for_startup(&runtime.scope.lease_keys())?;
-                        reconcile_event_store_at_startup(store, &home, &guard);
-                        reconcile_core_journal_at_startup(store, &guard);
-                        skill_studio_core::journal::reconcile_scope_journal(
-                            &runtime,
-                            guard.as_exclusive_guard(),
-                        )
-                        .map_err(|error| error.to_string())?;
-                        Ok(())
-                    })();
-                    if let Err(error) = recovery {
-                        eprintln!("[event_store] startup recovery failed: {error}");
-                    }
+                    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+                    let runtime = skills::core_runtime::build_runtime_write_at_with_search_dirs(
+                        &home,
+                        &skills::core_runtime::data_root(),
+                        Vec::new(),
+                    )?;
+                    let lease = skills::write_lease::WriteLease::default();
+                    let guard = lease.acquire_for_startup(&runtime.scope.lease_keys())?;
+                    reconcile_event_store_at_startup(store, &home, &guard);
+                    reconcile_core_journal_at_startup(store, &guard)?;
+                    skill_studio_core::journal::reconcile_scope_journal(
+                        &runtime,
+                        guard.as_exclusive_guard(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    Ok(())
                 })
                 .map_err(std::io::Error::other)?;
             app.manage(recovery_state);

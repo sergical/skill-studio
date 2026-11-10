@@ -21,6 +21,9 @@ use std::path::PathBuf;
 /// standalone `cargo test -p skill-studio` needs `cargo build -p
 /// skill-studio-cli` run first.
 pub fn cli_binary_path() -> PathBuf {
+    if let Some(binary) = std::env::var_os("SKILL_STUDIO_TEST_BINARY") {
+        return PathBuf::from(binary);
+    }
     let profile = if cfg!(debug_assertions) {
         "debug"
     } else {

@@ -1558,7 +1558,9 @@ mod tests {
         let lease = skill_studio_host::FileLease::new(lease_dir);
         let handle = skill_studio_core::ports::LeaseProvider::acquire(
             &lease,
-            &[],
+            &[skill_studio_core::ports::LeaseKey {
+                canonical_root: root_path.canonicalize().unwrap(),
+            }],
             skill_studio_core::ports::LeaseMode::Exclusive,
             std::time::Duration::from_secs(5),
         )

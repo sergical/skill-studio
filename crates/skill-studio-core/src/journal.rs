@@ -720,6 +720,18 @@ pub fn reconcile_scope_journal(
         rt.ports.fs.clone(),
     );
     let report = reconcile(&journal, guard, rt.ports.fs.as_ref())?;
+    if !report.interrupted.is_empty() {
+        let plans = report
+            .interrupted
+            .iter()
+            .map(|plan| plan.id.0.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(CoreError::new(
+            ErrorCode::Incomplete,
+            format!("Recovery did not finish for plans: {plans}. No new write ran."),
+        ));
+    }
     trim_backups(&journal, guard, rt.ports.clock.now())?;
     Ok(report)
 }
@@ -1613,7 +1625,7 @@ mod tests {
         Arc::new(fixture.build_fs())
     }
 
-    fn run_primitive_plan(kind: &str, fs: Arc<dyn ScopeFs>, guard: &ExclusiveGuard) {
+    fn run_primitive_plan(kind: &str, fs: &Arc<dyn ScopeFs>, guard: &ExclusiveGuard) {
         let journal = journal_over(fs.clone());
         let root = Root::open(fs.as_ref(), PathBuf::from("/root")).unwrap();
         let plan = PlanWriter::begin(
@@ -1723,14 +1735,15 @@ mod tests {
         ] {
             let guard = guard(&FakeLease::default());
             let counted = Arc::new(CrashFs::new(primitive_fixture(kind), 0));
-            run_primitive_plan(kind, counted.clone(), &guard);
+            let counted_port: Arc<dyn ScopeFs> = counted.clone();
+            run_primitive_plan(kind, &counted_port, &guard);
             for cut in 1..=counted.calls() {
                 let fs = primitive_fixture(kind);
                 let before = complete_snapshot(fs.as_ref(), Path::new("/root"));
-                let crashing = Arc::new(CrashFs::new(fs.clone(), cut));
+                let crashing: Arc<dyn ScopeFs> = Arc::new(CrashFs::new(fs.clone(), cut));
                 assert!(
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_primitive_plan(
-                        kind, crashing, &guard
+                        kind, &crashing, &guard
                     )))
                     .is_err(),
                     "{kind} cut {cut}"
@@ -1769,13 +1782,13 @@ mod tests {
         ] {
             let guard = guard(&FakeLease::default());
             let fs = primitive_fixture(kind);
-            run_primitive_plan(kind, fs.clone(), &guard);
+            run_primitive_plan(kind, &fs, &guard);
             let counted = Arc::new(CrashFs::new(fs, 0));
             reconcile(&journal_over(counted.clone()), &guard, counted.as_ref()).unwrap();
             for cut in 1..=counted.calls() {
                 let fs = primitive_fixture(kind);
                 let before = complete_snapshot(fs.as_ref(), Path::new("/root"));
-                run_primitive_plan(kind, fs.clone(), &guard);
+                run_primitive_plan(kind, &fs, &guard);
                 let crashing = Arc::new(CrashFs::new(fs.clone(), cut));
                 assert!(
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reconcile(
@@ -1818,7 +1831,7 @@ mod tests {
         ] {
             let guard = guard(&FakeLease::default());
             let fs = primitive_fixture(kind);
-            run_primitive_plan(kind, fs.clone(), &guard);
+            run_primitive_plan(kind, &fs, &guard);
             let counted = Arc::new(CrashFs::new(fs, 0));
             journal_over(counted.clone())
                 .finish(&guard, &PlanId("matrix".into()), PlanStatus::Done)
@@ -1826,7 +1839,7 @@ mod tests {
             for cut in 1..=counted.calls() {
                 let fs = primitive_fixture(kind);
                 let before = complete_snapshot(fs.as_ref(), Path::new("/root"));
-                run_primitive_plan(kind, fs.clone(), &guard);
+                run_primitive_plan(kind, &fs, &guard);
                 let after = complete_snapshot(fs.as_ref(), Path::new("/root"));
                 let crashing = journal_over(Arc::new(CrashFs::new(fs.clone(), cut)));
                 assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(

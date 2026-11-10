@@ -20,7 +20,7 @@ use std::time::Duration;
 #[test]
 fn mcp_subcommand_answers_initialize_and_tools_list_over_stdio() {
     let home = tempfile::tempdir().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+    let mut child = Command::new(undo_fixtures::cli_binary())
         .arg("mcp")
         .env("HOME", home.path())
         .env("SKILL_STUDIO_HOME", home.path())
@@ -108,7 +108,7 @@ struct UndoMcp {
 
 impl UndoMcp {
     fn new(home: &std::path::Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+        let mut child = Command::new(undo_fixtures::cli_binary())
             .arg("mcp")
             .env("HOME", home)
             .env("SKILL_STUDIO_HOME", home)
@@ -274,5 +274,40 @@ fn mcp_history_and_restore_report_backup_expired_or_offer_a_missing_backup() {
     assert_eq!(
         std::fs::read(home.path().join(".agents/skills/alpha/SKILL.md")).unwrap(),
         live
+    );
+}
+
+#[test]
+fn mcp_history_and_restore_refuse_unfinished_recovery_or_write_over_an_interrupted_plan() {
+    let home = tempfile::tempdir().unwrap();
+    let foreign = tempfile::tempdir().unwrap();
+    std::fs::write(foreign.path().join("sentinel"), b"foreign bytes stay").unwrap();
+    let event = undo_fixtures::interrupted_plan_before_restore(home.path(), foreign.path());
+    let mut mcp = UndoMcp::new(home.path());
+    assert_eq!(
+        mcp.call("list_events", &serde_json::json!({}))["data"][0]["id"],
+        event.0
+    );
+    let result = mcp.call(
+        "restore_event",
+        &serde_json::json!({"event_id":event.0,"force":true}),
+    );
+    assert_eq!(result["errors"][0]["code"], "incomplete", "{result}");
+    assert!(
+        result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Recovery"),
+        "{result}"
+    );
+    undo_fixtures::assert_secondary_replacement(home.path());
+    assert!(!home.path().join(".agents/skills/alpha").exists());
+    assert_eq!(
+        std::fs::read(foreign.path().join("sentinel")).unwrap(),
+        b"foreign bytes stay"
+    );
+    assert_eq!(
+        mcp.call("list_events", &serde_json::json!({}))["data"][0]["id"],
+        event.0
     );
 }

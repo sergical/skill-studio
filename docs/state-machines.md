@@ -80,11 +80,13 @@ cut every filesystem mutation and flush, then run recovery.
 
 ## Startup recovery readiness
 
-`EventStoreState` publishes one empty `OnceLock<()>` before commands can run.
+`EventStoreState` publishes one empty `OnceLock<StartupRecoveryOutcome>` before
+commands can run.
 The recovery worker holds the event store and waits for the home and every
 trusted project write lease. The timing wrappers wait for that same once-only
-gate. Worker completion sets it, including on unwind, so a poisoned store
-returns an error instead of leaving commands blocked forever. After startup,
+gate. The worker publishes success or failure before releasing the store. Its
+drop guard publishes failure on unwind, so commands return a reason instead of
+waiting forever. After startup,
 commands do not wait on an active write's event-store mutex to cancel it.
 
 `a_command_during_startup_waits_for_recovery_or_reads_the_unrecovered_store`
@@ -92,3 +94,16 @@ uses channels to hold recovery while a command arrives.
 `startup_recovery_holds_home_and_project_leases_or_reverses_a_project_under_only_home`
 checks both real lease files. Pending and interrupted plans recover before the
 startup gate opens; one failed status write does not stop later plans.
+
+### Desktop startup recovery gate
+
+| State | Stored outcome | Command behavior | Next state |
+| --- | --- | --- | --- |
+| Recovering | Outcome not published; worker owns the store mutex | Wait for the worker | Ready or Failed |
+| Ready | Completed | Store commands may run | Terminal for this startup |
+| Failed | Failed with a reason | Store commands return that reason | Restart retries recovery |
+
+The worker owns the mutex before Tauri receives the state. It publishes the
+outcome before releasing the mutex. Its drop guard publishes failure if the
+worker unwinds. Core writes also retry journal recovery under the write lease
+and refuse to start while any plan remains interrupted.

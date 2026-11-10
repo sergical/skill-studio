@@ -1460,21 +1460,7 @@ impl MutationSession {
             rt.ports.fs.as_ref(),
             rt.ports.sink.as_ref(),
         )?;
-        // Sweeps `install`'s `Copy` staging journal for a plan an earlier
-        // crash left `Pending`, per `docs/action-map/plan.md`'s Correction
-        // for units 3.5/3.6/3.9: nothing wires a journal into `Ports` yet,
-        // so `begin` - the one seam every mutating op (and, once wired, the
-        // desktop startup pass) already runs through - opens and reconciles
-        // it directly instead. Always rooted under the scope home, not the
-        // op's own target scope: the root is only bookkeeping for the
-        // primitive, not where its writes land, so one root per home lets
-        // every op sweep it regardless of which project it targets.
-        let install_journal_root = crate::ops_install::journal_root(&rt.scope.home.lexical);
-        let install_journal =
-            crate::journal::FsJournal::new(install_journal_root, rt.ports.fs.clone());
-        let reconciliation =
-            crate::journal::reconcile(&install_journal, &guard, rt.ports.fs.as_ref())?;
-        crate::journal::trim_backups(&install_journal, &guard, rt.ports.clock.now())?;
+        let reconciliation = crate::journal::reconcile_scope_journal(rt, &guard)?;
         store.retain_backups(
             &guard,
             rt.ports.clock.now(),
