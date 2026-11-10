@@ -1,8 +1,8 @@
 # Performance baseline
 
-Status: provisional: recorded under load. The initial command reused a CLI binary from the shared target. These CLI samples will be replaced. Per-sample load context was not captured.
+Status: provisional: Cargo-idle samples. The owner will provide the final reference window after wave 1.
 
-Commit: `c205022785ad40db6530dedc99b542d16630a326`. Dirty: False.
+Commit: `15c1fbda980cb84d05bd51bd04c9b1d475bc540e`. Dirty: False.
 
 Hardware: Apple M3 Max; 36 GiB RAM.
 
@@ -10,43 +10,43 @@ ProductName: macOS; ProductVersion: 26.7; BuildVersion: 25G229
 
 Fresh runtime and reused runtime; OS cache uncontrolled, not cold disk. MCP persistent after initialize. Empty history.
 
-| Fixture     | Metric                       |   N |       Median |           p95 |           Max |
-| ----------- | ---------------------------- | --: | -----------: | ------------: | ------------: |
-| small       | core_scan_fresh_runtime_ms   |  10 |        7.511 |        43.805 |        43.805 |
-| small       | core_scan_warm_runtime_ms    |  10 |        6.166 |         8.005 |         8.005 |
-| small       | cli_scan_ms                  |  10 |       60.779 |       507.652 |       507.652 |
-| small       | cli_scan_peak_rss_bytes      |  10 | 38232064.000 |  38273024.000 |  38273024.000 |
-| small       | cli_doctor_ms                |  10 |       78.763 |       182.786 |       182.786 |
-| small       | cli_doctor_peak_rss_bytes    |  10 | 37642240.000 |  38174720.000 |  38174720.000 |
-| small       | cli_history_ms               |  10 |       22.713 |        69.793 |        69.793 |
-| small       | cli_history_peak_rss_bytes   |  10 |  9084928.000 |   9109504.000 |   9109504.000 |
-| small       | mcp_scan_round_trip_ms       |  10 |       33.456 |       109.806 |       109.806 |
-| small       | desktop_first_list_ipc_bytes |  10 |    49171.000 |     49171.000 |     49171.000 |
-| real-shaped | core_scan_fresh_runtime_ms   |  10 |      130.493 |       284.396 |       284.396 |
-| real-shaped | core_scan_warm_runtime_ms    |  10 |      125.570 |       282.836 |       282.836 |
-| real-shaped | cli_scan_ms                  |  10 |      187.611 |       237.567 |       237.567 |
-| real-shaped | cli_scan_peak_rss_bytes      |  10 | 41426944.000 |  42516480.000 |  42516480.000 |
-| real-shaped | cli_doctor_ms                |  10 |      209.178 |       320.028 |       320.028 |
-| real-shaped | cli_doctor_peak_rss_bytes    |  10 | 41320448.000 |  41713664.000 |  41713664.000 |
-| real-shaped | cli_history_ms               |  10 |       18.273 |        88.728 |        88.728 |
-| real-shaped | cli_history_peak_rss_bytes   |  10 |  9158656.000 |   9224192.000 |   9224192.000 |
-| real-shaped | mcp_scan_round_trip_ms       |  10 |      167.068 |       176.702 |       176.702 |
-| real-shaped | desktop_first_list_ipc_bytes |  10 |   937686.000 |    937686.000 |    937686.000 |
-| large       | core_scan_fresh_runtime_ms   |  10 |     3054.489 |      5806.937 |      5806.937 |
-| large       | core_scan_warm_runtime_ms    |  10 |     3314.300 |      5945.625 |      5945.625 |
-| large       | cli_scan_ms                  |  10 |     6452.130 |     14170.320 |     14170.320 |
-| large       | cli_scan_peak_rss_bytes      |  10 | 90390528.000 | 102973440.000 | 102973440.000 |
-| large       | cli_doctor_ms                |  10 |     9917.582 |     16423.646 |     16423.646 |
-| large       | cli_doctor_peak_rss_bytes    |  10 | 75759616.000 |  88211456.000 |  88211456.000 |
-| large       | cli_history_ms               |  10 |      100.402 |       252.822 |       252.822 |
-| large       | cli_history_peak_rss_bytes   |  10 |  9846784.000 |   9879552.000 |   9879552.000 |
-| large       | mcp_scan_round_trip_ms       |  10 |     2911.085 |      4360.681 |      4360.681 |
-| large       | desktop_first_list_ipc_bytes |  10 | 12456104.000 |  12456104.000 |  12456104.000 |
+| Fixture     | Metric                       |   N |        Median |           p95 |           Max |
+| ----------- | ---------------------------- | --: | ------------: | ------------: | ------------: |
+| small       | core_scan_fresh_runtime_ms   |  10 |         4.532 |        45.779 |        45.779 |
+| small       | core_scan_warm_runtime_ms    |  10 |         4.541 |         4.873 |         4.873 |
+| small       | cli_scan_ms                  |  10 |        60.255 |       608.386 |       608.386 |
+| small       | cli_scan_peak_rss_bytes      |  10 |  37675008.000 |  37748736.000 |  37748736.000 |
+| small       | cli_doctor_ms                |  10 |        57.225 |        64.670 |        64.670 |
+| small       | cli_doctor_peak_rss_bytes    |  10 |  37699584.000 |  38207488.000 |  38207488.000 |
+| small       | cli_history_ms               |  10 |        13.034 |        14.349 |        14.349 |
+| small       | cli_history_peak_rss_bytes   |  10 |   9043968.000 |   9093120.000 |   9093120.000 |
+| small       | mcp_scan_round_trip_ms       |  10 |         9.299 |        38.812 |        38.812 |
+| small       | desktop_first_list_ipc_bytes |  10 |     49171.000 |     49171.000 |     49171.000 |
+| real-shaped | core_scan_fresh_runtime_ms   |  10 |        76.724 |       112.326 |       112.326 |
+| real-shaped | core_scan_warm_runtime_ms    |  10 |        76.784 |        79.217 |        79.217 |
+| real-shaped | cli_scan_ms                  |  10 |       169.252 |       180.437 |       180.437 |
+| real-shaped | cli_scan_peak_rss_bytes      |  10 |  41148416.000 |  42221568.000 |  42221568.000 |
+| real-shaped | cli_doctor_ms                |  10 |       165.819 |       171.647 |       171.647 |
+| real-shaped | cli_doctor_peak_rss_bytes    |  10 |  41074688.000 |  41697280.000 |  41697280.000 |
+| real-shaped | cli_history_ms               |  10 |        14.805 |        15.968 |        15.968 |
+| real-shaped | cli_history_peak_rss_bytes   |  10 |   9125888.000 |   9158656.000 |   9158656.000 |
+| real-shaped | mcp_scan_round_trip_ms       |  10 |       131.605 |       162.324 |       162.324 |
+| real-shaped | desktop_first_list_ipc_bytes |  10 |    937689.000 |    937689.000 |    937689.000 |
+| large       | core_scan_fresh_runtime_ms   |  10 |      2414.543 |      2530.081 |      2530.081 |
+| large       | core_scan_warm_runtime_ms    |  10 |      2437.664 |      2540.055 |      2540.055 |
+| large       | cli_scan_ms                  |  10 |      2025.658 |      2106.350 |      2106.350 |
+| large       | cli_scan_peak_rss_bytes      |  10 | 101285888.000 | 103645184.000 | 103645184.000 |
+| large       | cli_doctor_ms                |  10 |      2029.893 |      2105.659 |      2105.659 |
+| large       | cli_doctor_peak_rss_bytes    |  10 |  87162880.000 |  88719360.000 |  88719360.000 |
+| large       | cli_history_ms               |  10 |        55.849 |        59.335 |        59.335 |
+| large       | cli_history_peak_rss_bytes   |  10 |   9748480.000 |   9830400.000 |   9830400.000 |
+| large       | mcp_scan_round_trip_ms       |  10 |      2163.742 |      2179.980 |      2179.980 |
+| large       | desktop_first_list_ipc_bytes |  10 |  12456104.000 |  12456104.000 |  12456104.000 |
 
-Host load affects these timings. The recorded local baseline ran alongside other builds and tests.
+Before samples, `pgrep -x cargo` returned no PIDs. Other host load is uncontrolled.
 
 small: desktop returned 20 skills; MCP returned partial inventories in 0/10 calls. Partial timings do not measure a complete scan.
 
 real-shaped: desktop returned 378 skills; MCP returned partial inventories in 0/10 calls. Partial timings do not measure a complete scan.
 
-large: desktop returned 5000 skills; MCP returned partial inventories in 10/10 calls. Partial timings do not measure a complete scan.
+large: desktop returned 5000 skills; MCP returned partial inventories in 7/10 calls. Partial timings do not measure a complete scan.

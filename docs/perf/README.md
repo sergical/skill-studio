@@ -1,6 +1,6 @@
 # Performance measurements
 
-The current local baseline is provisional: recorded under load. The initial CLI samples reused a shared binary and need replacement. Sample-level load context and a final quiet baseline are pending.
+The current baseline is provisional. Cargo was idle before each fixture. `baseline.json` records the check and a load snapshot taken during the large fixture. The final reference window follows wave 1. The CLI was built explicitly for this run.
 
 Run `pnpm run perf:baseline` from the repository root. Set `CARGO_TARGET_DIR`
 to the shared build folder first. The command builds release executables and
@@ -52,3 +52,5 @@ results. A partial scan is not a complete inventory benchmark.
 The runner copies each executable out of the shared target folder before it
 measures it. Other worktrees can then build without replacing that executable
 during the sample run. Timing still includes contention from other processes.
+
+The profile metadata records the copied executable hash, source commit, load average, Cargo process counts before and after, and `DEVELOPER_DIR`. The SVG flame graph is generated from the same sampled stacks as the summary table.
