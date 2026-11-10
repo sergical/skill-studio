@@ -162,7 +162,7 @@ pub fn skills_sh_universal_add_args(
         return Err("That install option is only for the shared Universal folder".to_string());
     }
     let mut args = vec![
-        "skills".to_string(),
+        skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string(),
         "add".to_string(),
         repo_source.to_string(),
         "--yes".to_string(),
@@ -1766,6 +1766,28 @@ mod tests {
             .unwrap()
     }
 
+    #[test]
+    fn fork_remove_uses_the_pinned_cli_or_names_the_unpinned_package() {
+        for scope in [InstallScope::Global, InstallScope::Project] {
+            let args =
+                super::super::skill_lifecycle::skills_sh_remove_args_for_scope("alpha", scope);
+            assert_eq!(
+                args[0], "skills@1.7.0",
+                "fork removal must use the audited CLI"
+            );
+        }
+    }
+
+    #[test]
+    fn unfork_reinstall_uses_the_pinned_cli_or_names_the_unpinned_package() {
+        let (args, _) =
+            skills_sh_universal_add_args("owner/repo", Some("alpha"), &universal_global()).unwrap();
+        assert_eq!(
+            args[0], "skills@1.7.0",
+            "unfork reinstall must use the audited CLI"
+        );
+    }
+
     // Moved from `skill_install_plan.rs` (unit 3.5c) alongside
     // `skills_sh_universal_add_args` itself.
     fn universal_global() -> SkillInstallSpec {
@@ -1784,7 +1806,7 @@ mod tests {
         assert_eq!(
             argv,
             vec![
-                "skills",
+                "skills@1.7.0",
                 "add",
                 "o/r",
                 "--yes",
@@ -3531,7 +3553,7 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "skills",
+                "skills@1.7.0",
                 "add",
                 "obra/find-bugs@v1.2.3",
                 "--yes",

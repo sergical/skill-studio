@@ -1290,8 +1290,10 @@ fn cli_add_matches_the_npx_skills_add_trace_byte_for_byte_apart_from_timestamps_
         "install_via_cli must call npx exactly once"
     );
     let (args, cwd) = &recorded[0];
+    let mut pinned_args = trace.args.clone();
+    pinned_args[0] = "skills@1.7.0".to_string();
     assert_eq!(
-        args, &trace.args,
+        args, &pinned_args,
         "install_via_cli's argv drifted from the recorded skills.sh trace"
     );
     assert_eq!(
