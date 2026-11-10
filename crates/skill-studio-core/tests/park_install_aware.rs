@@ -2646,11 +2646,36 @@ fn assert_last_moment_edit_is_recoverable(rollback: bool, ignore: bool) {
             .is_ok_and(|text| text.contains("# external edit at replacement"))),
         "replacement erased the external edit"
     );
+    if !rollback {
+        assert!(
+            read(&path).contains("# external edit at replacement"),
+            "rollback did not restore the displaced input"
+        );
+        assert!(
+            !read(&stub.toml_path()).contains("name = \"foo\""),
+            "failed Turn on relisted foo"
+        );
+        assert!(parked_copy(&rt, "foo").path.join("SKILL.md").is_file());
+        assert!(!stub.skill_dir("foo").exists());
+    }
+    let recovery = paths_under(&home)
+        .into_iter()
+        .find(|p| {
+            p.file_name()
+                .is_some_and(|name| name.to_string_lossy().contains("park-recovery-"))
+                && std::fs::read_to_string(p)
+                    .is_ok_and(|text| text.contains("# external edit at replacement"))
+        })
+        .expect("external edit needs a recovery copy");
+    assert!(result
+        .unwrap_err()
+        .message
+        .contains(&recovery.display().to_string()));
     std::fs::remove_dir_all(home).unwrap();
 }
 
 #[test]
-fn turn_on_keeps_config_edit_at_replacement_or_loses_external_comment() {
+fn failed_turn_on_at_config_replacement_keeps_skill_unlisted_or_install_revives_it() {
     assert_last_moment_edit_is_recoverable(false, false);
 }
 #[test]
@@ -2660,4 +2685,81 @@ fn turn_on_keeps_ignore_edit_at_replacement_or_loses_external_comment() {
 #[test]
 fn failed_park_keeps_config_edit_at_rollback_replacement_or_loses_external_comment() {
     assert_last_moment_edit_is_recoverable(true, false);
+}
+
+#[test]
+fn park_turn_on_cycles_remove_redundant_recovery_files_or_grow_storage() {
+    let (home, stub) = dotagents_home("park_recovery_cycles", EXPLICIT_TOML);
+    write_gitignore(&home);
+    let rt = runtime(&home, stub, true);
+    for _ in 0..4 {
+        park_foo(&rt);
+        unpark_foo(&rt);
+        assert!(
+            !paths_under(&home).iter().any(|path| path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().contains("park-recovery-"))),
+            "unchanged inputs left recovery files"
+        );
+    }
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn failed_turn_on_after_directory_sync_keeps_skill_unlisted_or_install_revives_it() {
+    let (home, stub) = dotagents_home("park_sync_failure", EXPLICIT_TOML);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    park_foo(&rt);
+    let armed = fs.clone();
+    fs.before_write_once(stub.toml_path(), move || {
+        armed.fail_next_fsops_fsync_dir();
+        Ok(())
+    });
+    ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked_copy(&rt, "foo").id,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        !read(&stub.toml_path()).contains("name = \"foo\""),
+        "failed Turn on relisted foo"
+    );
+    assert!(parked_copy(&rt, "foo").path.join("SKILL.md").is_file());
+    dotagents_install(&stub);
+    assert!(!stub.skill_dir("foo").exists());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn failed_turn_on_retains_only_external_recovery_copy_or_loses_edit_and_grows_storage() {
+    let (home, stub) = dotagents_home("park_external_recovery", EXPLICIT_TOML);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    park_foo(&rt);
+    let config = stub.toml_path();
+    let target = config.clone();
+    fs.before_write_once(config, move || {
+        std::fs::write(&target, read(&target) + "# unique external edit\n")
+    });
+    let error = ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked_copy(&rt, "foo").id,
+        },
+    )
+    .unwrap_err();
+    let recovery: Vec<_> = paths_under(&home)
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().contains("park-recovery-"))
+        })
+        .collect();
+    assert_eq!(recovery.len(), 1, "only the external edit needs recovery");
+    assert!(read(&recovery[0]).contains("# unique external edit"));
+    assert!(error.message.contains(&recovery[0].display().to_string()));
+    std::fs::remove_dir_all(home).unwrap();
 }

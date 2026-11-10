@@ -21,6 +21,7 @@ pub(crate) struct FileSnapshot {
 pub(crate) struct FileEdit {
     before: FileSnapshot,
     after: String,
+    recovery: Option<PathBuf>,
 }
 
 /// A `name = "*"` entry that supplied the skill, found again by what it
@@ -732,7 +733,7 @@ pub(crate) fn unlist(
         .at(&plan.config));
     }
     let rendered = render_checked(&plan.config, &doc, text.contains("\r\n"))?;
-    write_park_file(rt, guard, plan, &plan.config, before, rendered)?;
+    write_park_file(rt, guard, plan, &plan.config, before.as_deref(), &rendered)?;
 
     if let Some(text) = read_text(fs, &plan.lock)? {
         let mut doc = parse(&plan.lock, &text)?;
@@ -750,7 +751,7 @@ pub(crate) fn unlist(
             .is_some();
         if removed {
             let rendered = render_checked(&plan.lock, &doc, text.contains("\r\n"))?;
-            write_park_file(rt, guard, plan, &plan.lock, Some(text), rendered)?;
+            write_park_file(rt, guard, plan, &plan.lock, Some(&text), &rendered)?;
         }
     }
     if let Some(text) = read_text(fs, &plan.gitignore)? {
@@ -776,7 +777,7 @@ pub(crate) fn unlist(
                     .any(|own| line.trim_end_matches(['\r', '\n']) == own)
             })
             .collect();
-        write_park_file(rt, guard, plan, &plan.gitignore, Some(text), kept)?;
+        write_park_file(rt, guard, plan, &plan.gitignore, Some(&text), &kept)?;
     }
     Ok(())
 }
@@ -786,27 +787,27 @@ fn write_park_file(
     guard: &ExclusiveGuard,
     plan: &DotagentsPark,
     path: &Path,
-    before: Option<String>,
-    after: String,
+    before: Option<&str>,
+    after: &str,
 ) -> Result<(), CoreError> {
-    if before.as_deref() == Some(&after) {
+    if before == Some(after) {
         return Ok(());
     }
-    if read_text(rt.ports.fs.as_ref(), path)? != before {
+    if read_text(rt.ports.fs.as_ref(), path)?.as_deref() != before {
         return Err(CoreError::new(
             ErrorCode::DriftConflict,
             "the file changed during Park; scan and try again",
         )
         .at(path));
     }
-    write_text(rt, guard, path, before.as_deref(), &after)?;
-    plan.changes.borrow_mut().push(FileEdit {
-        before: FileSnapshot {
-            path: path.to_path_buf(),
-            text: before,
-        },
+    write_text(
+        rt,
+        guard,
+        path,
+        before,
         after,
-    });
+        &mut plan.changes.borrow_mut(),
+    )?;
     Ok(())
 }
 
@@ -861,7 +862,17 @@ pub(crate) fn restore_files(
                     "a file changed after this operation wrote it; its backup is retained and the current file was kept").at(&file.path));
             }
             match &file.text {
-                Some(text) => write_text(rt, guard, &file.path, Some(&edit.after), text),
+                Some(text) => {
+                    let displaced = edit.recovery.as_ref().map(|path| read_text(fs, path)).transpose()?.flatten();
+                    write_text(rt, guard, &file.path, Some(&edit.after), displaced.as_deref().unwrap_or(text), &mut Vec::new())?;
+                    if displaced.as_deref() == Some(text) {
+                        if let Some(path) = &edit.recovery {
+                            let scoped = crate::ports::confine(&rt.scope, fs, path)?;
+                            fs.remove_file(guard, &scoped).map_err(|e| CoreError::io(path, e))?;
+                        }
+                    }
+                    Ok(())
+                },
                 None => Err(CoreError::new(ErrorCode::DriftConflict,
                     "rollback retained the newly created file and its backup instead of deleting it").at(&file.path)),
             }
@@ -920,14 +931,23 @@ fn write_text(
     path: &Path,
     expected: Option<&str>,
     text: &str,
+    changed: &mut Vec<FileEdit>,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
     let scoped = crate::ports::confine_write_through(&rt.scope, fs, path)?;
     let path = scoped.as_path();
     if expected.is_none() {
-        return fs
-            .fsops_write_new_file(path, text.as_bytes())
-            .map_err(|e| CoreError::io(path, e));
+        fs.fsops_write_new_file(path, text.as_bytes())
+            .map_err(|e| CoreError::io(path, e))?;
+        changed.push(FileEdit {
+            before: FileSnapshot {
+                path: path.to_path_buf(),
+                text: None,
+            },
+            after: text.to_string(),
+            recovery: None,
+        });
+        return Ok(());
     }
     let displaced = path.with_file_name(format!(
         ".{}-park-recovery-{}",
@@ -948,12 +968,19 @@ fn write_text(
         .map_err(|e| CoreError::io(&displaced, e))?;
     fs.fsops_exchange(&displaced, path)
         .map_err(|e| CoreError::io(path, e))?;
+    let completed = changed.len();
+    changed.push(FileEdit {
+        before: FileSnapshot {
+            path: path.to_path_buf(),
+            text: expected.map(str::to_string),
+        },
+        after: text.to_string(),
+        recovery: Some(displaced.clone()),
+    });
     if let Some(parent) = path.parent() {
         fs.fsops_fsync_dir(parent)
             .map_err(|e| CoreError::io(parent, e))?;
     }
-    // Keep the displaced inode even after success: an external writer may
-    // still hold an open descriptor and write to it after the exchange.
     if read_text(fs, &displaced)?.as_deref() != expected {
         return Err(CoreError::new(
             ErrorCode::DriftConflict,
@@ -964,6 +991,9 @@ fn write_text(
         )
         .at(path));
     }
+    fs.remove_file(guard, &staged)
+        .map_err(|e| CoreError::io(&displaced, e))?;
+    changed[completed].recovery = None;
     Ok(())
 }
 
@@ -1176,21 +1206,14 @@ fn write_back(
     rt: &Runtime,
     guard: &ExclusiveGuard,
     path: &Path,
-    current: Option<String>,
+    current: Option<&str>,
     text: &str,
     changed: &mut Vec<FileEdit>,
 ) -> Result<(), CoreError> {
-    if current.as_deref() == Some(text) {
+    if current == Some(text) {
         return Ok(());
     }
-    write_text(rt, guard, path, current.as_deref(), text)?;
-    changed.push(FileEdit {
-        before: FileSnapshot {
-            path: path.to_path_buf(),
-            text: current,
-        },
-        after: text.to_string(),
-    });
+    write_text(rt, guard, path, current, text, changed)?;
     Ok(())
 }
 
@@ -1225,7 +1248,7 @@ fn turn_on_files(
                 rt,
                 guard,
                 &recorded.config,
-                Some(current),
+                Some(&current),
                 original,
                 changed,
             )?;
@@ -1256,7 +1279,7 @@ fn turn_on_files(
                     rt,
                     guard,
                     &recorded.config,
-                    Some(current),
+                    Some(&current),
                     &rendered,
                     changed,
                 )?;
@@ -1274,10 +1297,10 @@ fn turn_on_files(
                 originals,
             );
             if let Some(original) = wholesale {
-                write_back(rt, guard, lock, Some(current), original, changed)?;
+                write_back(rt, guard, lock, Some(&current), original, changed)?;
             } else if let Some(lock_entry) = &recorded.lock_entry {
                 if let Some(text) = with_lock_entry(lock, &current, skill, lock_entry)? {
-                    write_back(rt, guard, lock, Some(current), &text, changed)?;
+                    write_back(rt, guard, lock, Some(&current), &text, changed)?;
                 }
             }
         }
@@ -1293,15 +1316,15 @@ fn turn_on_files(
             originals,
         );
         if let Some(original) = wholesale {
-            write_back(rt, guard, gitignore, current, original, changed)?;
+            write_back(rt, guard, gitignore, current.as_deref(), original, changed)?;
         } else {
-            let merge = if current == ignore_input {
+            let merge = if current.as_deref() == ignore_input {
                 ignore_merge
             } else {
-                planned_ignore_merge(recorded, originals, skill, current)?
+                planned_ignore_merge(recorded, originals, skill, current.as_deref())?
             };
             if let Some((text, before)) = merge {
-                write_back(rt, guard, gitignore, Some(before), &text, changed)?;
+                write_back(rt, guard, gitignore, Some(&before), &text, changed)?;
             }
         }
     }

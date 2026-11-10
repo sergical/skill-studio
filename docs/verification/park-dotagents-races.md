@@ -39,3 +39,38 @@ test failed and the injected concurrent comment was absent from agents.toml.
 Restoring the guard made the exact test pass. The ignore-rule reorder case was
 also checked against origin/main and already passed, so that added test was
 removed. Every remaining new race test fails without its fix.
+
+## Failed Turn on and recovery storage
+
+The replacement helper records a completed exchange before directory sync or
+conflict detection can fail. Rollback restores the displaced input through the
+same guarded exchange. Matching recovery copies are removed; displaced external
+edits keep a recovery file whose path is included in the conflict error.
+
+With the production fix reverted once, the install-aware target had 58 passing
+and five failing tests. The failures were:
+
+- `failed_turn_on_at_config_replacement_keeps_skill_unlisted_or_install_revives_it`
+  and `turn_on_keeps_ignore_edit_at_replacement_or_loses_external_comment`:
+  rollback did not restore the displaced input.
+- `failed_turn_on_after_directory_sync_keeps_skill_unlisted_or_install_revives_it`:
+  the failed Turn on left the skill listed.
+- `park_turn_on_cycles_remove_redundant_recovery_files_or_grow_storage`:
+  unchanged inputs left recovery files after the first cycle.
+- `failed_turn_on_retains_only_external_recovery_copy_or_loses_edit_and_grows_storage`:
+  three recovery files remained instead of the one with the external edit.
+
+The tests use filesystem callbacks and four Park / Turn on cycles. They have no
+sleeps or wall-clock gates. Local builds use a unique workspace wrapper path in
+the required shared target folder to prevent reuse of another worktree's core
+library.
+
+Final local checks passed: `cargo fmt --all --check`, workspace Clippy with all
+targets/features and `-D warnings`, and all 63 install-aware Park tests on the
+final source. The full core suite passed 366 tests before the local run was
+stopped after more than 30 minutes of cumulative shared-lock and loader waits.
+No test failure was reported in that run. CI runs the full core suite.
+
+The post-green simplification pass found no worthwhile simplification. Final
+review kept the changes within the replacement helper, its callers, tests, and
+these verification notes.
