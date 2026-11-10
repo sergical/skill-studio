@@ -149,6 +149,10 @@ impl SqliteHistoryStore {
             .map_err(sql_err)?;
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(sql_err)?;
+        conn.pragma_update(None, "synchronous", "FULL")
+            .map_err(sql_err)?;
+        conn.pragma_update(None, "fullfsync", true)
+            .map_err(sql_err)?;
         // `reverted_by` is claimed before the restore row that references it
         // exists (see `claim_revert`), so foreign key enforcement on that
         // column must stay off - matches the desktop's `event_store::open`.
@@ -426,6 +430,38 @@ impl HistoryStore for SqliteHistoryStore {
                 ],
             )
             .map_err(sql_err)?;
+        Ok(())
+    }
+
+    fn record_quarantine(
+        &self,
+        _guard: &ExclusiveGuard,
+        from: &Path,
+        to: &Path,
+        quarantine: &Path,
+    ) -> Result<(), CoreError> {
+        let entry = serde_json::json!({
+            "phase": "retain_before_rename", "from": from, "to": to, "path": quarantine,
+        });
+        let changed = self.conn.execute(
+            "UPDATE events SET payload = json_insert(json_insert(payload, '$.quarantines', json('[]')), '$.quarantines[#]', json(?1))
+             WHERE id = (SELECT id FROM events WHERE status = 'pending' ORDER BY rowid DESC LIMIT 1)",
+            params![entry.to_string()],
+        ).map_err(sql_err)?;
+        if changed != 1 {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "quarantine requires a pending event",
+            ));
+        }
+        for parent in [Some(self.root.as_path()), self.root.parent()]
+            .into_iter()
+            .flatten()
+        {
+            fs::File::open(parent)
+                .and_then(|dir| dir.sync_all())
+                .map_err(|e| CoreError::io(parent, e))?;
+        }
         Ok(())
     }
 

@@ -12,47 +12,33 @@ use skill_studio_core::ports::{
 };
 
 fn probe_mode_preservation(parent: &Path) -> io::Result<bool> {
-    let dir = parent.join(format!(
+    let path = parent.join(format!(
         ".park-mode-probe-{}-{}",
         std::process::id(),
         TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
-    fs::create_dir(&dir)?;
-    let path = dir.join("file");
-    let checked = (|| {
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
-        for mode in [0o640, 0o751] {
-            if !mode_change_supported(file.set_permissions(fs::Permissions::from_mode(mode)))?
-                || file.metadata()?.mode() & 0o7777 != mode
-            {
-                return Ok(false);
-            }
+    probe_mode_file(&path, || Ok(()))
+}
+
+fn probe_mode_file(
+    path: &Path,
+    before_create: impl FnOnce() -> io::Result<()>,
+) -> io::Result<bool> {
+    before_create()?;
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    // Unlink has no portable compare-inode operation. Keep the empty probe
+    // rather than risk deleting a replacement inserted after an identity check.
+    for mode in [0o640, 0o751] {
+        if !mode_change_supported(file.set_permissions(fs::Permissions::from_mode(mode)))?
+            || file.metadata()?.mode() & 0o7777 != mode
+        {
+            return Ok(false);
         }
-        for mode in [0o710, 0o750] {
-            if !mode_change_supported(fs::set_permissions(&dir, fs::Permissions::from_mode(mode)))?
-                || fs::metadata(&dir)?.mode() & 0o7777 != mode
-            {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    })();
-    let cleanup = fs::remove_file(&path)
-        .or_else(|e| {
-            if e.kind() == io::ErrorKind::NotFound {
-                Ok(())
-            } else {
-                Err(e)
-            }
-        })
-        .and_then(|()| fs::remove_dir(&dir));
-    match checked {
-        Ok(supported) => cleanup.map(|()| supported),
-        Err(e) => Err(e),
     }
+    Ok(true)
 }
 
 fn mode_change_supported(result: io::Result<()>) -> io::Result<bool> {
@@ -617,5 +603,29 @@ mod tests {
             "fsops_symlink must create a real link pointing at the target, not return Ok \
              without creating anything"
         );
+    }
+}
+
+#[cfg(test)]
+mod probe_races {
+    use super::*;
+
+    #[test]
+    fn mode_probe_keeps_racing_file_or_deletes_foreign_bytes() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("probe");
+        assert!(probe_mode_file(&path, || fs::write(&path, b"foreign")).is_err());
+        assert_eq!(fs::read(path).unwrap(), b"foreign");
+    }
+
+    #[test]
+    fn mode_probe_keeps_symlink_target_or_deletes_foreign_bytes() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("probe");
+        let foreign = parent.path().join("foreign");
+        fs::write(&foreign, b"foreign").unwrap();
+        assert!(probe_mode_file(&path, || std::os::unix::fs::symlink(&foreign, &path)).is_err());
+        assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read(foreign).unwrap(), b"foreign");
     }
 }

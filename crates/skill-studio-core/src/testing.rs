@@ -846,6 +846,8 @@ type FsHook = Box<dyn FnOnce() -> std::io::Result<()> + Send>;
 pub struct FailingFs {
     full_sync_calls: AtomicU64,
     after_full_sync: Mutex<Option<FsHook>>,
+    after_new_file: Mutex<Option<(PathBuf, FsHook)>>,
+    after_inode: Mutex<Option<(PathBuf, FsHook)>>,
     before_create_for: Mutex<Option<(PathBuf, FsHook)>>,
     before_rename_from: Mutex<Option<(PathBuf, FsHook)>>,
     after_read_for: Mutex<Option<(PathBuf, FsHook)>>,
@@ -911,6 +913,8 @@ impl FailingFs {
         FailingFs {
             full_sync_calls: AtomicU64::new(0),
             after_full_sync: Mutex::new(None),
+            after_new_file: Mutex::new(None),
+            after_inode: Mutex::new(None),
             before_create_for: Mutex::new(None),
             before_rename_from: Mutex::new(None),
             after_read_for: Mutex::new(None),
@@ -1011,6 +1015,24 @@ impl FailingFs {
         hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
     ) {
         *self.before_create_for.lock().expect("hook lock") = Some((path, Box::new(hook)));
+    }
+
+    /// Runs after exclusive file creation, before the caller can inspect its path.
+    pub fn after_new_file_once(
+        &self,
+        path: PathBuf,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.after_new_file.lock().expect("hook lock") = Some((path, Box::new(hook)));
+    }
+
+    /// Runs after reading identity, before the caller can act on that identity.
+    pub fn after_inode_once(
+        &self,
+        path: PathBuf,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.after_inode.lock().expect("hook lock") = Some((path, Box::new(hook)));
     }
 
     fn run_hook(slot: &Mutex<Option<(PathBuf, FsHook)>>, path: &Path) -> std::io::Result<()> {
@@ -1397,8 +1419,11 @@ impl ScopeFs for FailingFs {
                 "FailingFs: injected fsops_device_inode failure",
             ));
         }
-        self.inner.fsops_device_inode(path)
+        let identity = self.inner.fsops_device_inode(path)?;
+        Self::run_hook(&self.after_inode, path)?;
+        Ok(identity)
     }
+
     fn fsops_fsync_file(&self, path: &Path) -> std::io::Result<()> {
         self.inner.fsops_fsync_file(path)
     }
@@ -1464,7 +1489,9 @@ impl ScopeFs for FailingFs {
                 .inner
                 .fsops_write_new_file_with_mode(path, &flipped, mode);
         }
-        self.inner.fsops_write_new_file_with_mode(path, bytes, mode)
+        self.inner
+            .fsops_write_new_file_with_mode(path, bytes, mode)?;
+        Self::run_hook(&self.after_new_file, path)
     }
     fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
         if self.fail_next_fsops_rename.swap(false, Ordering::SeqCst) {

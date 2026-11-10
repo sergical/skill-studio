@@ -397,8 +397,8 @@ pub trait ScopeFs: Send + Sync {
             "directory modes are not supported",
         ))
     }
-    /// Probes whether the destination preserves Unix modes. May create and
-    /// remove a temporary directory under `path`.
+    /// Probes whether the destination preserves Unix modes. May retain an
+    /// empty probe file under `path`.
     fn fsops_preserves_modes(&self, _path: &Path) -> std::io::Result<bool> {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
@@ -635,6 +635,19 @@ pub trait HistoryStore: Send {
         id: &EventId,
         draft: &EventDraft,
     ) -> Result<(), CoreError>;
+    /// Durably records a retained cross-volume backup before its rename.
+    fn record_quarantine(
+        &self,
+        _guard: &ExclusiveGuard,
+        _from: &Path,
+        _to: &Path,
+        _quarantine: &Path,
+    ) -> Result<(), CoreError> {
+        Err(CoreError::new(
+            crate::error::ErrorCode::Unsupported,
+            "durable quarantine journal is unavailable",
+        ))
+    }
     /// Sets the final status and the post-mutation fingerprint.
     fn finish(
         &mut self,
@@ -984,6 +997,8 @@ pub enum CoreNotice {
     Recovered {
         /// Ids now marked `interrupted`.
         events: Vec<EventId>,
+        /// Retained backups from interrupted cross-volume moves.
+        retained_quarantines: Vec<PathBuf>,
     },
 }
 

@@ -113,23 +113,22 @@ fn copy_verify_remove(
     let preserves_modes = fs
         .fsops_preserves_modes(parent)
         .map_err(|e| CoreError::io(parent, e))?;
-    let mut owned = Vec::new();
-    let copied = copy_tree(
-        rt,
-        from,
-        to,
-        &mut tree,
-        preserves_modes,
-        facts.mode,
-        &mut owned,
-    )
-    .and_then(|()| {
-        verify_copy(fs, to, &tree, preserves_modes, facts.mode).map_err(|e| CoreError::io(to, e))
-    })
-    .and_then(|()| flush_tree(fs, to, &tree).map_err(|e| CoreError::io(to, e)));
+    let copied = copy_tree(rt, from, to, &mut tree, preserves_modes, facts.mode)
+        .and_then(|()| {
+            verify_copy(fs, to, &tree, preserves_modes, facts.mode)
+                .map_err(|e| CoreError::io(to, e))
+        })
+        .and_then(|()| flush_tree(fs, to, &tree).map_err(|e| CoreError::io(to, e)));
     if let Err(e) = copied {
-        cleanup_copy(rt, session, &owned);
-        return Err(e);
+        return Err(CoreError::new(
+            e.code,
+            format!(
+                "{}; incomplete destination retained at {}",
+                e.message,
+                to.display()
+            ),
+        )
+        .at(to));
     }
 
     // Conflict copies must never enter the trash sweeper's namespace.
@@ -137,13 +136,18 @@ fn copy_verify_remove(
         ".park-quarantine-{}",
         crate::fsops::unique_suffix()
     ));
+    session
+        .store
+        .record_quarantine(&session.guard, from, to, &trash)?;
+    let source_parent = from.parent().unwrap_or(from);
+    fs.fsops_fsync_dir(source_parent)
+        .map_err(|e| CoreError::io(source_parent, e))?;
     let scoped_from = confine(&rt.scope, fs, from)?;
     let scoped_trash = confine(&rt.scope, fs, &trash)?;
     if let Err(e) = fs.rename(&session.guard, &scoped_from, &scoped_trash) {
         if fs.fsops_device_inode(from).ok() == Some(source_binding)
             && verify_copy(fs, from, &tree, true, facts.mode).is_ok()
         {
-            cleanup_copy(rt, session, &owned);
             return Err(CoreError::io(from, e));
         }
         return Err(CoreError::new(
@@ -152,6 +156,8 @@ fn copy_verify_remove(
         )
         .at(from));
     }
+    fs.fsops_fsync_dir(source_parent)
+        .map_err(|e| CoreError::io(&trash, e))?;
     let rechecked = (|| {
         if fs.symlink_metadata(&trash)?.kind != FileKind::Dir
             || fs.fsops_device_inode(&trash)? != source_binding
@@ -175,11 +181,8 @@ fn copy_verify_remove(
         .at(&trash));
     }
 
-    // The copy is complete and the source is out of the way. A failed delete
-    // costs disk space, not correctness, so it is not an error.
-    if let Ok(disposable) = move_to_trash(rt, session, &trash) {
-        remove_trash(rt, session, &disposable);
-    }
+    // Open handles can still write after any hash pass. The journal names
+    // this backup, which must never enter the trash sweeper's namespace.
     Ok(())
 }
 
@@ -295,12 +298,10 @@ fn copy_tree(
     tree: &mut [TreeEntry],
     preserves_modes: bool,
     root_mode: Option<u32>,
-    owned: &mut Vec<OwnedEntry>,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
     confine(&rt.scope, fs, to)?;
     fs.fsops_create_dir(to).map_err(|e| CoreError::io(to, e))?;
-    owned.push(OwnedEntry::capture(fs, to, FileKind::Dir)?);
     for entry in tree.iter_mut() {
         let source = from.join(&entry.relative);
         let dest = to.join(&entry.relative);
@@ -320,7 +321,6 @@ fn copy_tree(
             written.map_err(|e| CoreError::io(&dest, e))?;
             entry.hash = Some(Sha256::digest(&bytes).to_vec());
         }
-        owned.push(OwnedEntry::capture(fs, &dest, entry.kind)?);
     }
     if preserves_modes {
         for entry in tree.iter().rev().filter(|e| e.kind == FileKind::Dir) {
@@ -413,60 +413,4 @@ fn remove_tree(rt: &Runtime, session: &MutationSession, root: &Path) -> Result<(
     confine(&rt.scope, fs, root)?;
     fs.fsops_remove_dir(root)
         .map_err(|e| CoreError::io(root, e))
-}
-
-struct OwnedEntry {
-    path: PathBuf,
-    kind: FileKind,
-    binding: (u64, u64),
-}
-
-impl OwnedEntry {
-    fn capture(fs: &dyn ScopeFs, path: &Path, kind: FileKind) -> Result<Self, CoreError> {
-        Ok(Self {
-            path: path.to_path_buf(),
-            kind,
-            binding: fs
-                .fsops_device_inode(path)
-                .map_err(|e| CoreError::io(path, e))?,
-        })
-    }
-
-    fn matches(&self, fs: &dyn ScopeFs) -> bool {
-        fs.symlink_metadata(&self.path)
-            .is_ok_and(|facts| facts.kind == self.kind)
-            && fs
-                .fsops_device_inode(&self.path)
-                .is_ok_and(|binding| binding == self.binding)
-    }
-}
-
-fn cleanup_copy(rt: &Runtime, session: &MutationSession, owned: &[OwnedEntry]) {
-    let fs = rt.ports.fs.as_ref();
-    if owned
-        .iter()
-        .filter(|entry| entry.kind == FileKind::Dir)
-        .any(|entry| !entry.matches(fs))
-    {
-        return;
-    }
-    for entry in owned.iter().filter(|entry| entry.kind == FileKind::Dir) {
-        if confine(&rt.scope, fs, &entry.path).is_err() {
-            return;
-        }
-        if let Ok(facts) = fs.symlink_metadata(&entry.path) {
-            if let Some(mode) = facts.mode {
-                let _ = fs.fsops_set_directory_mode(&entry.path, (mode & 0o7777) | 0o700);
-            }
-        }
-    }
-    for entry in owned.iter().rev().filter(|entry| entry.matches(fs)) {
-        if let Ok(scoped) = confine(&rt.scope, fs, &entry.path) {
-            if entry.kind == FileKind::Dir {
-                let _ = fs.fsops_remove_dir(&entry.path);
-            } else {
-                let _ = fs.remove_file(&session.guard, &scoped);
-            }
-        }
-    }
 }

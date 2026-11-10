@@ -403,6 +403,8 @@ pub struct RecoveryReport {
     /// `interrupted` flip, no auto-completion), so this is always empty
     /// today; a caller must not depend on it being populated yet.
     pub completed: Vec<EventId>,
+    /// Retained source backups named by interrupted moves. Never deleted by recovery.
+    pub retained_quarantines: Vec<PathBuf>,
 }
 
 /// Flips every `pending` row to `interrupted`, and releases the revert
@@ -425,7 +427,6 @@ pub fn recover_interrupted(
     fs: &dyn ScopeFs,
     sink: &dyn EventSink,
 ) -> Result<RecoveryReport, CoreError> {
-    let _ = fs;
     let mut report = RecoveryReport::default();
     // The releases come first: a crash before the flip leaves the row
     // `pending`, so the next pass flips it.
@@ -433,12 +434,28 @@ pub fn recover_interrupted(
         release_restore_claim(guard, store, &claim)?;
     }
     for row in store.pending()? {
+        if let Some(entries) = row
+            .payload
+            .get("quarantines")
+            .and_then(serde_json::Value::as_array)
+        {
+            for path in entries
+                .iter()
+                .filter_map(|entry| entry.get("path").and_then(serde_json::Value::as_str))
+            {
+                let path = PathBuf::from(path);
+                if fs.symlink_metadata(&path).is_ok() {
+                    report.retained_quarantines.push(path);
+                }
+            }
+        }
         store.finish(guard, &row.id, EventStatus::Interrupted, None)?;
         report.interrupted.push(row.id);
     }
     if !report.interrupted.is_empty() {
         sink.notify(CoreNotice::Recovered {
             events: report.interrupted.clone(),
+            retained_quarantines: report.retained_quarantines.clone(),
         });
     }
     Ok(report)

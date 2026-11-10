@@ -96,3 +96,29 @@ Local acceptance, also repeated after simplification:
 - `cargo test --release -p skill-studio-core --all-features --test park_any_copy --test park_install_aware --test agent_off`: 126 passed.
 
 Builds use Command Line Tools, the shared target folder, and a temporary `HOME`.
+
+## Review fixes for PR 491
+
+Cross-volume moves retain the quarantined source as a backup. Open file handles
+can write after verification. The event records the backup path and the
+`retain_before_rename` phase before the rename. SQLite uses FULL synchronous
+writes and macOS fullfsync. The journal directory and source parent are synced.
+Recovery reports existing backups and keeps their bytes.
+
+Failed copies now stay at the destination reported in the error. Cleanup cannot
+prove ownership across a path replacement and unlink, so the move no longer
+captures destination ownership or deletes failed copies. This also keeps foreign
+entries inserted before identity capture or after an identity check.
+
+The mode probe creates one empty file exclusively and changes permissions
+through its creation handle. It retains the empty file because unlink cannot
+exclude replacement after an identity check. No probe directory is created.
+
+Deterministic tests cover writes through an open handle after hashing, both
+destination replacement points, a probe creation race, a probe symlink
+replacement, and interruption immediately after the quarantine rename.
+
+The four new core tests fail with `park_move.rs` restored from `6df5b679`.
+Both new probe tests fail when unconditional path cleanup is restored in the
+probe test hook. The fixes were restored after these checks. All tests use
+temporary home directories.

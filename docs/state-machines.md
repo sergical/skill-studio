@@ -34,6 +34,13 @@ a status field, a phase enum, or a busy flag.
 | Home "Update all" stop | `apps/desktop/src/hooks/skillBatchUpdates.ts` (`stopHomeUpdateAll`)           | `running → stopping → stopped`. The stop request is a promise; each phase boundary waits for it. A Cancel that does not reach the backend returns the batch to `running`, so Cancel shows again and no work is skipped.                                                                                                                                                                                                                                                    | `a_cancel_that_fails_to_reach_the_backend_keeps_the_whole_batch_running_or_the_ui_offers_cancel_while_it_stops`, `a_cancel_still_in_flight_at_a_phase_boundary_decides_nothing_until_it_lands_or_the_batch_skips_work_nothing_stopped` |
 | Confirm dialog busy    | `packages/ui/src/components/alert-dialog.tsx` (`busy`)                        | `open → busy → closed`. While `busy`, Escape and outside clicks do not close the dialog. Used by Remove, Uninstall plugin, Park copy, Left behind, and the store Remove confirm.                                                                                                                                                                                                                                                                                           | `AlertDialogBusy.test.tsx`                                                                                                                                                                                                             |
 
+Cross-volume Park records `quarantines[]` in its pending event before it renames
+the source. Each entry has phase `retain_before_rename`, the source, destination,
+and backup path. The backup stays after success or failure. Recovery marks a
+pending event interrupted and reports existing backups in `retained_quarantines`.
+The interruption guard is
+`cross_volume_park_reports_quarantine_after_interruption_or_hides_latest_bytes`.
+
 ## Checked and left as is
 
 | Item                                             | Where                                                                    | Why it stays                                                                                                                                                                                             |

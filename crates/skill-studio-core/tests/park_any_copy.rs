@@ -685,11 +685,9 @@ fn park_across_volumes_copies_verifies_and_removes_the_source() {
 
 /// Flow: park a project copy across volumes, with one file that cannot be
 /// read halfway through the copy. Expectation: park fails, the source is
-/// untouched, and no parked folder (not even the empty project key folder)
-/// is left. Failure: a partial copy or an empty key folder stays behind, or
-/// the source loses files.
+/// untouched. The partial destination stays for inspection.
 #[test]
-fn failed_cross_volume_park_leaves_the_source_whole_and_no_parked_folders() {
+fn failed_cross_volume_park_keeps_source_and_partial_copy_or_deletes_uncertain_entries() {
     use std::os::unix::fs::PermissionsExt;
     let home = unique_temp_dir("park_any_exdev_fail");
     let project = home.join("work/app");
@@ -722,8 +720,8 @@ fn failed_cross_volume_park_leaves_the_source_whole_and_no_parked_folders() {
     assert!(live.join("SKILL.md").exists());
     assert!(live.join("z-unreadable.md").exists());
     assert!(
-        !home.join(PARKED_ROOT_RELATIVE).exists(),
-        "no partial copy or key folder may remain"
+        home.join(PARKED_ROOT_RELATIVE).exists(),
+        "the partial copy must remain for inspection"
     );
     std::fs::remove_dir_all(&home).ok();
 }
@@ -993,14 +991,8 @@ fn leftover_trash(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Flow: park across volumes, and the delete of the old folder fails after
-/// the copy was verified. Expectation: park still succeeds, the parked copy
-/// is whole, its `.origin` marker stays, no live copy is listed, and the
-/// leftover `.park-trash-*` folder holds no `SKILL.md` an agent could load.
-/// Failure: park reports an error and undoes the marker and links while the
-/// copy already sits in the parked folder, leaving a half-deleted source.
 #[test]
-fn park_across_volumes_succeeds_when_deleting_the_old_folder_fails() {
+fn park_across_volumes_retains_source_backup_or_loses_open_handle_writes() {
     let home = unique_temp_dir("park_any_exdev_delete_fails");
     let live = home.join(".codex/skills/foo");
     write_skill(&live, "foo");
@@ -1026,18 +1018,13 @@ fn park_across_volumes_succeeds_when_deleting_the_old_folder_fails() {
     assert!(deployments(&rt, "foo")
         .iter()
         .all(|d| d.root.kind == RootKind::Parked));
-    let trash = leftover_trash(&home.join(".codex/skills"));
-    assert_eq!(trash.len(), 1, "the failed delete leaves one hidden folder");
-    assert!(!trash[0].join("SKILL.md").exists());
+    let backup = quarantine_in(&home.join(".codex/skills"));
+    assert!(backup.join("SKILL.md").exists());
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// Flow: the same, for unpark. Expectation: unpark succeeds, the skill is
-/// back at its origin, and the leftover trash folder in the parked slot holds
-/// no `SKILL.md`. Failure: unpark errors after the copy landed, so the
-/// journal row says failed while the skill is live again.
 #[test]
-fn unpark_across_volumes_succeeds_when_deleting_the_parked_folder_fails() {
+fn unpark_across_volumes_retains_source_backup_or_loses_open_handle_writes() {
     let home = unique_temp_dir("park_any_exdev_unpark_delete_fails");
     let live = home.join(".codex/skills/foo");
     write_skill(&live, "foo");
@@ -1058,9 +1045,8 @@ fn unpark_across_volumes_succeeds_when_deleting_the_parked_folder_fails() {
 
     assert_eq!(restored.restored_path, live);
     assert!(live.join("SKILL.md").exists());
-    let trash = leftover_trash(&home.join(PARKED_ROOT_RELATIVE).join("codex"));
-    assert_eq!(trash.len(), 1, "the failed delete leaves one hidden folder");
-    assert!(!trash[0].join("SKILL.md").exists());
+    let backup = quarantine_in(&home.join(PARKED_ROOT_RELATIVE).join("codex"));
+    assert!(backup.join("SKILL.md").exists());
     std::fs::remove_dir_all(&home).ok();
 }
 
@@ -1095,10 +1081,9 @@ fn park_sweeps_stale_trash_folders_in_the_roots_it_touches() {
 
 /// Flow: a cross-volume park where the copy verifies but the rename of the
 /// source to the trash name fails. Expectation: park fails, the copy at the
-/// parked path is removed, the source is whole. Failure: a verified copy and
-/// the source both stay, so one skill exists twice.
+/// parked path and source are retained for inspection.
 #[test]
-fn cross_volume_park_removes_the_copy_when_moving_the_source_aside_fails() {
+fn cross_volume_park_keeps_the_copy_when_moving_the_source_aside_fails() {
     let home = unique_temp_dir("park_any_exdev_trash_rename");
     let live = home.join(".codex/skills/foo");
     write_skill(&live, "foo");
@@ -1112,7 +1097,7 @@ fn cross_volume_park_removes_the_copy_when_moving_the_source_aside_fails() {
     assert!(result.is_err());
     assert!(live.join("SKILL.md").exists());
     assert!(leftover_trash(&home.join(".codex/skills")).is_empty());
-    assert!(!home.join(PARKED_ROOT_RELATIVE).exists());
+    assert!(home.join(PARKED_ROOT_RELATIVE).exists());
     std::fs::remove_dir_all(&home).ok();
 }
 
@@ -1170,7 +1155,7 @@ fn cross_volume_park_refuses_a_skill_that_is_a_link() {
 }
 
 /// Flow: a cross-volume park where one copied file comes out wrong.
-/// Expectation: park fails, the source is whole, no parked folder is left.
+/// Expectation: park fails and retains the source and failed copy.
 /// Failure: the bad copy is trusted and the good source is deleted.
 #[test]
 fn cross_volume_park_rejects_a_copy_whose_content_differs() {
@@ -1188,7 +1173,7 @@ fn cross_volume_park_rejects_a_copy_whose_content_differs() {
     assert!(std::fs::read_to_string(live.join("SKILL.md"))
         .unwrap()
         .contains("Body."));
-    assert!(!home.join(PARKED_ROOT_RELATIVE).exists());
+    assert!(home.join(PARKED_ROOT_RELATIVE).exists());
     std::fs::remove_dir_all(&home).ok();
 }
 
@@ -1359,7 +1344,7 @@ fn cross_volume_park_keeps_source_when_full_sync_fails() {
     );
     assert!(result.is_err());
     assert_eq!(std::fs::read(live.join("SKILL.md")).unwrap(), original);
-    assert!(!home.join(".agents/skills-parked/codex/foo").exists());
+    assert!(home.join(".agents/skills-parked/codex/foo").exists());
     assert_eq!(fs.full_sync_calls(), 1);
     std::fs::remove_dir_all(home).unwrap();
 }
@@ -1635,7 +1620,7 @@ fn cross_volume_park_refuses_cleanup_of_replaced_destination_or_deletes_foreign_
 }
 
 #[test]
-fn cross_volume_park_cleans_only_created_entries_or_removes_foreign_file() {
+fn cross_volume_park_keeps_failed_copy_or_removes_foreign_file() {
     let home = unique_temp_dir("park_cleanup_foreign_entry");
     let live = home.join(".codex/skills/foo");
     write_skill(&live, "foo");
@@ -1652,7 +1637,7 @@ fn cross_volume_park_cleans_only_created_entries_or_removes_foreign_file() {
     });
     assert!(ops::park(&rt, &ctx(), &ParkRequest { deployment_id: id }).is_err());
     assert_eq!(std::fs::read_to_string(foreign).unwrap(), "foreign");
-    assert!(!copy.join("SKILL.md").exists());
+    assert!(copy.join("SKILL.md").exists());
     assert!(live.join("SKILL.md").exists());
     std::fs::remove_dir_all(home).unwrap();
 }
@@ -1718,5 +1703,173 @@ fn cross_volume_park_keeps_edit_while_hashing_later_file_or_deletes_already_hash
         std::fs::read(kept.join("SKILL.md")).unwrap(),
         b"external edit"
     );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+fn quarantine_in(parent: &Path) -> PathBuf {
+    std::fs::read_dir(parent)
+        .unwrap()
+        .map(Result::unwrap)
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".park-quarantine-")
+        })
+        .expect("retained source backup is missing")
+        .path()
+}
+
+#[test]
+fn cross_volume_park_keeps_open_handle_edit_after_hash_or_deletes_latest_bytes() {
+    use std::io::{Seek, SeekFrom, Write};
+    let home = unique_temp_dir("park_open_handle");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    std::fs::write(live.join("notes.txt"), "last file").unwrap();
+    let mut writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(live.join("SKILL.md"))
+        .unwrap();
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    let id = live_copy(&rt, "foo", &live).id;
+    fs.fail_next_rename_cross_device();
+    let injected = fs.clone();
+    let parent = live.parent().unwrap().to_path_buf();
+    let backup_parent = parent.clone();
+    fs.after_rename_once(live, move || {
+        let backup = quarantine_in(&parent);
+        injected.after_read_once(backup.join("notes.txt"), move || {
+            writer.seek(SeekFrom::Start(0))?;
+            writer.write_all(b"latest bytes")?;
+            writer.set_len(12)
+        });
+        Ok(())
+    });
+    ops::park(&rt, &ctx(), &ParkRequest { deployment_id: id }).unwrap();
+    assert_eq!(
+        std::fs::read(quarantine_in(&backup_parent).join("SKILL.md")).unwrap(),
+        b"latest bytes"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn cross_volume_park_reports_quarantine_after_interruption_or_hides_latest_bytes() {
+    use skill_studio_core::ports::{HistoryAccess, HistoryOpener};
+    let home = unique_temp_dir("park_quarantine_interruption");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let mut rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    let sink = Arc::new(RecordingSink::default());
+    rt.ports.sink = sink.clone();
+    let id = live_copy(&rt, "foo", &live).id;
+    fs.fail_next_rename_cross_device();
+    let parent = live.parent().unwrap().to_path_buf();
+    let check_parent = parent.clone();
+    let db = home.join(".history/events.sqlite3");
+    let scope = rt.scope.clone();
+    fs.after_rename_once(live, move || {
+        let store = SqliteHistoryOpener::new(db)
+            .open(&scope, HistoryAccess::ReadWrite)
+            .unwrap()
+            .unwrap();
+        let payload = store.pending().unwrap().pop().unwrap().payload;
+        assert_eq!(
+            payload["quarantines"][0]["path"],
+            quarantine_in(&parent).to_string_lossy().as_ref()
+        );
+        assert_eq!(payload["quarantines"][0]["phase"], "retain_before_rename");
+        panic!("injected interruption after quarantine rename");
+    });
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ops::park(
+            &rt,
+            &ctx(),
+            &ParkRequest { deployment_id: id }
+        )))
+        .is_err()
+    );
+    let guard =
+        skill_studio_core::ports::acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+    let mut store = rt
+        .ports
+        .history
+        .open(&rt.scope, HistoryAccess::ReadWrite)
+        .unwrap()
+        .unwrap();
+    let report = skill_studio_core::events::recover_interrupted(
+        &guard,
+        store.as_mut(),
+        fs.as_ref(),
+        rt.ports.sink.as_ref(),
+    )
+    .unwrap();
+    let backup = quarantine_in(&check_parent);
+    assert_eq!(report.retained_quarantines, vec![backup.clone()]);
+    assert!(sink.notices().iter().any(|notice| matches!(notice,
+        skill_studio_core::ports::CoreNotice::Recovered { retained_quarantines, .. }
+        if retained_quarantines == &vec![backup.clone()])));
+    assert!(backup.join("SKILL.md").is_file());
+    let rows = store
+        .list(&skill_studio_core::events::EventFilter {
+            limit: 10,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(rows.iter().any(|row| row.status
+        == skill_studio_core::events::EventStatus::Interrupted
+        && row.payload["quarantines"][0]["path"] == backup.to_string_lossy().as_ref()));
+    drop(store);
+    drop(guard);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn cross_volume_park_keeps_file_replaced_before_capture_or_deletes_foreign_inode() {
+    destination_cleanup_race(false);
+}
+
+#[test]
+fn cross_volume_park_keeps_file_replaced_after_identity_check_or_deletes_foreign_inode() {
+    destination_cleanup_race(true);
+}
+
+fn destination_cleanup_race(after_identity: bool) {
+    let home = unique_temp_dir("park_destination_identity_race");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    let id = live_copy(&rt, "foo", &live).id;
+    fs.fail_next_rename_cross_device();
+    let copy = home.join(".agents/skills-parked/codex/foo/SKILL.md");
+    let replacement = copy.clone();
+    let old = home.join("original-copy");
+    let replace = move || {
+        std::fs::rename(&replacement, old)?;
+        std::fs::write(replacement, "foreign inode")
+    };
+    if after_identity {
+        let injected = fs.clone();
+        let path = copy.clone();
+        fs.after_full_sync_once(move || {
+            injected.after_inode_once(path, replace);
+            Err(std::io::Error::other("sync failure before cleanup"))
+        });
+    } else {
+        fs.after_new_file_once(copy.clone(), replace);
+    }
+    assert!(ops::park(&rt, &ctx(), &ParkRequest { deployment_id: id }).is_err());
+    assert!(
+        copy.exists(),
+        "cleanup deleted a destination without exclusive ownership"
+    );
+    if !after_identity {
+        assert_eq!(std::fs::read(&copy).unwrap(), b"foreign inode");
+    }
+    assert!(live.join("SKILL.md").exists());
     std::fs::remove_dir_all(home).unwrap();
 }
