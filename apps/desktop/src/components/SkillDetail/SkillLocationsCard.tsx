@@ -7,6 +7,7 @@
 // under react-doctor's line cap.
 // ============================================================================
 
+import { useLayoutEffect, useRef } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import { MaterializeRootDialog } from "../ui/MaterializeRootDialog";
@@ -63,6 +64,17 @@ function PendingSpinner() {
  * skill's shared file forks first, same rule as the SKILL.md editor, so an invocation change sticks.
  */
 export function SkillLocationsCard({ skill, onCompareCopies }: SkillLocationsCardProps) {
+  const root = useRef<HTMLDivElement>(null);
+  const focused = useRef<{ element: Element; key: string } | null>(null);
+  useLayoutEffect(() => {
+    const previous = focused.current;
+    if (!previous || previous.element.isConnected || document.activeElement !== document.body)
+      return;
+    const slot = Array.from(
+      root.current?.querySelectorAll<HTMLElement>("[data-location-switch]") ?? [],
+    ).find((element) => element.dataset.locationSwitch === previous.key);
+    slot?.querySelector<HTMLElement>('[role="switch"]')?.focus();
+  });
   const actions = useLocationActions(skill, onCompareCopies);
 
   const groups = buildScopeGroups(skill);
@@ -74,7 +86,16 @@ export function SkillLocationsCard({ skill, onCompareCopies }: SkillLocationsCar
   const presence = scopePresence(skill.deployments);
 
   return (
-    <div className="flex flex-col gap-1 rounded-lg border border-border-subtle p-4">
+    <div
+      ref={root}
+      onFocusCapture={(event) => {
+        const slot = event.target.closest<HTMLElement>("[data-location-switch]");
+        focused.current = slot?.dataset.locationSwitch
+          ? { element: event.target, key: slot.dataset.locationSwitch }
+          : null;
+      }}
+      className="flex flex-col gap-1 rounded-lg border border-border-subtle p-4"
+    >
       <div
         id="skill-locations-heading"
         tabIndex={-1}
@@ -194,7 +215,8 @@ export function SkillLocationsCard({ skill, onCompareCopies }: SkillLocationsCar
           skillName={skill.name}
           deployment={actions.parkRequest.deployment}
           scopeLabel={actions.parkRequest.scopeLabel}
-          onClose={actions.closeParkRequest}
+          onClose={() => actions.closeParkRequest()}
+          onParked={() => actions.closeParkRequest(true)}
         />
       )}
       {actions.leftBehindRequest && (

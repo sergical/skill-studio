@@ -66,7 +66,7 @@ interface UseLocationActionsResult {
   closePluginUninstallRequest: () => void;
   /** Set while a project copy's Park is pending its confirm. */
   parkRequest: { deployment: Deployment; scopeLabel: string } | null;
-  closeParkRequest: () => void;
+  closeParkRequest: (parked?: boolean) => void;
   /** Set while "Keep live" or "Keep parked" is pending its confirm. */
   leftBehindRequest: { choice: LeftBehindChoice; pair: LeftBehindPair } | null;
   closeLeftBehindRequest: () => void;
@@ -146,6 +146,7 @@ export function useLocationActions(
   const [parkRequest, setParkRequest] = useState<{
     deployment: Deployment;
     scopeLabel: string;
+    settle: (parked: boolean) => void;
   } | null>(null);
   const [leftBehindRequest, setLeftBehindRequest] = useState<{
     choice: LeftBehindChoice;
@@ -251,8 +252,13 @@ export function useLocationActions(
       case "park":
         // A project copy leaves a repository, so it confirms first; a global one parks at once.
         if (action.projectPath !== null) {
-          setParkRequest({ deployment: action.deployment, scopeLabel: action.scopeLabel });
-          return Promise.resolve(true);
+          return new Promise((settle) => {
+            setParkRequest({
+              deployment: action.deployment,
+              scopeLabel: action.scopeLabel,
+              settle,
+            });
+          });
         }
         return runWithErrorToast("Couldn't park skill", () =>
           parkSkill({ deployment_id: action.deployment.id }),
@@ -346,7 +352,10 @@ export function useLocationActions(
     pluginUninstallRequest,
     closePluginUninstallRequest: () => setPluginUninstallRequest(null),
     parkRequest,
-    closeParkRequest: () => setParkRequest(null),
+    closeParkRequest: (parked = false) => {
+      parkRequest?.settle(parked);
+      setParkRequest(null);
+    },
     leftBehindRequest,
     closeLeftBehindRequest: () => setLeftBehindRequest(null),
     splitRequest,

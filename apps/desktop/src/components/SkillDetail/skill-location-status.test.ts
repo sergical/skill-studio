@@ -332,7 +332,7 @@ describe("buildScopeGroups", () => {
     expect(skillRollup(skill, [global]).level).toBe("off");
 
     const markup = renderGroup(global);
-    expect(markup).toContain('aria-label="Universal folder copy"');
+    expect(markup).toContain('aria-label="Global · Universal folder copy"');
     expect(markup.match(/role="switch"/g)).toHaveLength(1);
     expect(markup).toContain('aria-checked="false"');
     expect(buildInvocationFiles([global])).toEqual([]);
@@ -1123,7 +1123,13 @@ describe("promoteToGlobal", () => {
 describe("rowSwitchView", () => {
   // Flow: a global park runs at once. Failure caught: the switch stays on while the copy is being parked.
   it("shows the target state and busy while a direct action is pending", () => {
-    expect(rowSwitchView({ checked: true, changesAtOnce: true, phase: "pending" })).toEqual({
+    expect(
+      rowSwitchView({
+        checked: true,
+        changesAtOnce: true,
+        phase: { kind: "pending", target: false },
+      }),
+    ).toEqual({
       shown: false,
       busy: true,
     });
@@ -1131,7 +1137,13 @@ describe("rowSwitchView", () => {
 
   // Failure caught: a project park flips off, then back on as its confirm dialog opens.
   it("keeps the current state, busy, while a confirm-first action is pending", () => {
-    expect(rowSwitchView({ checked: true, changesAtOnce: false, phase: "pending" })).toEqual({
+    expect(
+      rowSwitchView({
+        checked: true,
+        changesAtOnce: false,
+        phase: { kind: "pending", target: false },
+      }),
+    ).toEqual({
       shown: true,
       busy: true,
     });
@@ -1139,7 +1151,9 @@ describe("rowSwitchView", () => {
 
   // Failure caught: the switch bounces back to its old state before the refreshed row arrives.
   it("holds the target state, busy, after a direct action succeeds", () => {
-    expect(rowSwitchView({ checked: false, changesAtOnce: true, phase: "held" })).toEqual({
+    expect(
+      rowSwitchView({ checked: false, changesAtOnce: true, phase: { kind: "held", target: true } }),
+    ).toEqual({
       shown: true,
       busy: true,
     });
@@ -1147,20 +1161,19 @@ describe("rowSwitchView", () => {
 
   // Failure caught: an idle switch stays disabled or shows a stale state.
   it("shows the current state and is not busy when idle", () => {
-    expect(rowSwitchView({ checked: true, changesAtOnce: true, phase: "idle" })).toEqual({
+    expect(rowSwitchView({ checked: true, changesAtOnce: true, phase: { kind: "idle" } })).toEqual({
       shown: true,
       busy: false,
     });
   });
 
-  // Failure caught: a confirm-first or failed action holds the switch busy, or a direct one bounces.
   it.each([
     [true, true, "held"],
-    [true, false, "idle"],
+    [true, false, "held"],
     [false, true, "idle"],
     [false, false, "idle"],
-  ] as const)("after ok=%s changesAtOnce=%s the switch is %s", (ok, changesAtOnce, expected) => {
-    expect(phaseAfter(ok, changesAtOnce)).toBe(expected);
+  ] as const)("after ok=%s target=%s the switch is %s", (ok, target, expected) => {
+    expect(phaseAfter(ok, target)).toEqual(ok ? { kind: expected, target } : { kind: expected });
   });
 });
 
@@ -1181,7 +1194,7 @@ describe("Locations row switch markup", () => {
     const markup = renderGroup(global);
     expect(markup).toContain('role="switch"');
     expect(markup).toContain('aria-checked="true"');
-    expect(markup).toContain('aria-label="Claude Code copy"');
+    expect(markup).toContain('aria-label="Global · Claude Code copy"');
   });
 
   // Failure caught: the shared folder switch does not say it acts on every agent.
@@ -1189,7 +1202,7 @@ describe("Locations row switch markup", () => {
     const [global] = buildScopeGroups(fixtureSkill());
     const markup = renderGroup(global);
     expect(markup).toContain('aria-checked="true"');
-    expect(markup).toContain('aria-label="Universal folder for every agent"');
+    expect(markup).toContain('aria-label="Global · Universal folder for every agent"');
   });
 
   // Failure caught: the turn-off-for-one-agent row shows no switch, or names it by the off action.
@@ -1206,7 +1219,7 @@ describe("Locations row switch markup", () => {
         ],
       }),
     );
-    expect(switchChecked(renderGroup(global), "Claude Code")).toBe("true");
+    expect(switchChecked(renderGroup(global), "Global · Claude Code")).toBe("true");
   });
 
   // Flow: Codex's config.toml turns off a real Codex copy. Failure caught: the row shows an on
@@ -1224,8 +1237,10 @@ describe("Locations row switch markup", () => {
     );
     const [global] = buildScopeGroups(fixtureSkill({ deployments: [codex] }));
     const markup = renderGroup(global);
-    expect(switchChecked(markup, "Codex copy")).toBe("false");
-    expect(markup.match(/<[^>]*aria-label="Codex copy"[^>]*>/)?.[0]).toContain("aria-disabled");
+    expect(switchChecked(markup, "Global · Codex copy")).toBe("false");
+    expect(markup.match(/<[^>]*aria-label="Global · Codex copy"[^>]*>/)?.[0]).toContain(
+      "aria-disabled",
+    );
     const row = global.rows.find((r) => r.harness === "codex")!;
     expect(rowMenu(row, global.label).entries.map((entry) => entry.label)).toContain(
       "Park this copy",
