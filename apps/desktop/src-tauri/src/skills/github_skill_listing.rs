@@ -536,7 +536,6 @@ mod tests {
     /// lookup forever.
     #[tokio::test]
     async fn a_stalled_github_request_is_abandoned_at_its_timeout() {
-        use std::time::Instant;
         use tokio::io::AsyncReadExt;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -554,19 +553,14 @@ mod tests {
             token: None,
             timeout: Duration::from_millis(250),
         };
-        let started = Instant::now();
-        let err = api
-            .get_json(&format!("http://{addr}/repos/owner/repo"))
-            .await
-            .unwrap_err();
+        let err = tokio::time::timeout(
+            Duration::from_secs(5),
+            api.get_json(&format!("http://{addr}/repos/owner/repo")),
+        )
+        .await
+        .expect("Add Skill must return its own timeout error instead of hanging")
+        .unwrap_err();
 
-        // The server accepted the connection and read the request, so the only
-        // way `get_json` can return is the client's own bound.
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "a stalled request must be abandoned at its bound, took {:?}",
-            started.elapsed()
-        );
         assert!(!err.is_empty(), "a bounded fetch still reports its failure");
         held.abort();
     }
