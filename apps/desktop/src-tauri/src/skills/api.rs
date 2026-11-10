@@ -600,7 +600,6 @@ mod tests {
     /// forever.
     #[tokio::test]
     async fn a_stalled_upstream_request_is_abandoned_at_its_timeout() {
-        use std::time::Instant;
         use tokio::io::AsyncReadExt;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -616,19 +615,17 @@ mod tests {
 
         let bound = Duration::from_millis(250);
         let client = client_with_timeout(bound).unwrap();
-        let started = Instant::now();
-        let err = client
-            .get(format!("http://{addr}/api/v1/skills/search?q=x&limit=1"))
-            .send()
-            .await
-            .unwrap_err();
+        let err = tokio::time::timeout(
+            Duration::from_secs(5),
+            client
+                .get(format!("http://{addr}/api/v1/skills/search?q=x&limit=1"))
+                .send(),
+        )
+        .await
+        .expect("Skill Store discovery must return its own timeout error instead of hanging")
+        .unwrap_err();
 
         assert!(err.is_timeout(), "{err}");
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "a stalled request must be abandoned at its bound, took {:?}",
-            started.elapsed()
-        );
         held.abort();
     }
 
