@@ -363,72 +363,111 @@ fn spawn_drain<R: Read + AsFd + Send + 'static>(mut pipe: R) -> PipeDrain {
     PipeDrain { stop, handle }
 }
 
-/// Kills every process in `pid`'s process group (set via `process_group(0)`
-/// at spawn below), not just `pid` itself. `npx` runs the installed package
-/// in a `node` grandchild that inherits the pipe's write end; a lone
-/// `child.kill()` only signals the direct child, leaving that grandchild
-/// running and the pipe held open, so the reader thread's `read_to_end`
-/// would never see EOF. Shells out to the `kill` binary rather than
-/// `libc::kill` so this crate doesn't need unsafe code for it (the same
-/// tradeoff `lease.rs`'s liveness probe makes with `sysinfo`). Uses the
-/// POSIX `-s KILL -- -<pid>` form rather than `-KILL -<pid>`: procps `kill`
-/// (Linux) reads a bare negative pid as an option and rejects it, where
-/// `-- -<pid>` unambiguously marks it as the operand. Returns whether the
-/// group kill itself succeeded; the caller still calls `child.kill()` on
-/// the direct child regardless, so `child.wait()` can't block even if this
-/// returns `false` (missing `kill` binary, a parsing difference, ...).
+#[cfg(unix)]
+fn signal_process_group(pid: u32, signal: rustix::process::Signal) -> bool {
+    rustix::process::Pid::from_raw(pid.cast_signed())
+        .is_some_and(|pid| rustix::process::kill_process_group(pid, signal).is_ok())
+}
+
 #[cfg(unix)]
 fn kill_process_group(pid: u32) -> bool {
-    let group = format!("-{pid}");
-    std::process::Command::new("/bin/kill")
-        .args(["-s", "KILL", "--", &group])
-        .status()
-        .is_ok_and(|status| status.success())
+    signal_process_group(pid, rustix::process::Signal::KILL)
 }
 
 #[cfg(unix)]
 fn kill_process_tree(pid: u32) -> bool {
+    kill_process_tree_before_collect(pid, || {})
+}
+
+fn kill_process_tree_before_collect(pid: u32, before_collect: impl FnOnce()) -> bool {
+    let _ = signal_process_group(pid, rustix::process::Signal::STOP);
+    before_collect();
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     let Ok(mut system) = System::new() else {
         let _ = kill_process_group(pid);
         return false;
     };
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::nothing().without_tasks(),
-    );
     let mut descendants = vec![Pid::from_u32(pid)];
-    let mut index = 0;
-    while index < descendants.len() {
-        let parent = descendants[index];
-        for process in system.processes().values() {
-            if process.parent() == Some(parent) && !descendants.contains(&process.pid()) {
-                descendants.push(process.pid());
+    let mut identities = Vec::new();
+    for _ in 0..8 {
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+        let previous_count = descendants.len();
+        let mut index = 0;
+        while index < descendants.len() {
+            let parent = descendants[index];
+            for process in system.processes().values() {
+                if process.parent() == Some(parent) && !descendants.contains(&process.pid()) {
+                    descendants.push(process.pid());
+                }
+            }
+            index += 1;
+        }
+        for pid in &descendants {
+            if !identities
+                .iter()
+                .any(|entry: &ProcessIdentity| entry.pid == *pid)
+            {
+                if let Some(process) = system.process(*pid) {
+                    identities.push(ProcessIdentity {
+                        pid: *pid,
+                        start: process.start_time(),
+                        parent: process.parent(),
+                    });
+                }
             }
         }
-        index += 1;
+        for identity in identities.iter().skip(1) {
+            if process_in_group(identity.pid, pid) {
+                continue;
+            }
+            signal_snapshot_process_with(
+                identity,
+                &identities,
+                &mut system,
+                rustix::process::Signal::STOP,
+            );
+        }
+        if descendants.len() == previous_count {
+            break;
+        }
     }
-    let identities: Vec<_> = descendants
-        .iter()
-        .filter_map(|pid| {
-            system.process(*pid).map(|process| ProcessIdentity {
-                pid: *pid,
-                start: process.start_time(),
-                parent: process.parent(),
-            })
-        })
-        .collect();
-    for identity in identities.iter().rev() {
-        signal_snapshot_process(identity, &identities, &mut system);
+    for identity in identities.iter().skip(1).rev() {
+        if !process_in_group(identity.pid, pid) {
+            signal_snapshot_process(identity, &identities, &mut system);
+        }
     }
     let _ = kill_process_group(pid);
     for _ in 0..100 {
         system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&descendants),
+            ProcessesToUpdate::All,
             true,
             ProcessRefreshKind::nothing().without_tasks(),
         );
+        let mut index = 0;
+        while index < descendants.len() {
+            let parent = descendants[index];
+            for process in system.processes().values() {
+                if process.parent() == Some(parent) && !descendants.contains(&process.pid()) {
+                    descendants.push(process.pid());
+                    identities.push(ProcessIdentity {
+                        pid: process.pid(),
+                        start: process.start_time(),
+                        parent: process.parent(),
+                    });
+                }
+            }
+            index += 1;
+        }
+        for identity in identities.iter().skip(1).rev() {
+            if !process_in_group(identity.pid, pid) {
+                signal_snapshot_process(identity, &identities, &mut system);
+            }
+        }
+        let _ = kill_process_group(pid);
         if descendants.iter().all(|pid| {
             system.process(*pid).is_none_or(|process| {
                 matches!(
@@ -442,6 +481,12 @@ fn kill_process_tree(pid: u32) -> bool {
         std::thread::sleep(POLL_INTERVAL);
     }
     false
+}
+
+fn process_in_group(process: sysinfo::Pid, group: u32) -> bool {
+    rustix::process::Pid::from_raw(process.as_u32().cast_signed())
+        .and_then(|pid| rustix::process::getpgid(Some(pid)).ok())
+        .is_some_and(|pid| pid.as_raw_nonzero().get() as u32 == group)
 }
 
 // A descendant can start a new session and retain the write end after a group kill.
@@ -470,16 +515,45 @@ fn signal_snapshot_process(
     snapshot: &[ProcessIdentity],
     system: &mut sysinfo::System,
 ) -> bool {
+    signal_snapshot_process_with(identity, snapshot, system, rustix::process::Signal::KILL)
+}
+
+fn signal_snapshot_process_with(
+    identity: &ProcessIdentity,
+    snapshot: &[ProcessIdentity],
+    system: &mut sysinfo::System,
+    signal: rustix::process::Signal,
+) -> bool {
+    #[cfg(target_os = "linux")]
+    let descriptor = {
+        use rustix::process::{pidfd_open, Pid, PidfdFlags};
+        let Some(pid) = Pid::from_raw(identity.pid.as_u32().cast_signed()) else {
+            return false;
+        };
+        let Ok(fd) = pidfd_open(pid, PidfdFlags::empty()) else {
+            return false;
+        };
+        fd
+    };
     let pids: Vec<_> = snapshot.iter().map(|entry| entry.pid).collect();
     system.refresh_processes_specifics(
         sysinfo::ProcessesToUpdate::Some(&pids),
         true,
         sysinfo::ProcessRefreshKind::nothing().without_tasks(),
     );
-    identity_chain_matches(identity, snapshot, system)
-        && system
-            .process(identity.pid)
-            .is_some_and(sysinfo::Process::kill)
+    if !identity_chain_matches(identity, snapshot, system) {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        rustix::process::pidfd_send_signal(&descriptor, signal).is_ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // macOS has no pidfd. Exit and PID reuse can still occur after this check.
+        rustix::process::Pid::from_raw(identity.pid.as_u32().cast_signed())
+            .is_some_and(|pid| rustix::process::kill_process(pid, signal).is_ok())
+    }
 }
 
 fn identity_chain_matches(
@@ -573,10 +647,6 @@ impl ProcessSpawner for RealProcessSpawner {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            // Makes the child the leader of its own new process group, so
-            // the timeout path below can kill the whole group - see
-            // `kill_process_group`'s doc comment for why a lone
-            // `child.kill()` isn't enough.
             command.process_group(0);
         }
         let start = self.clock.monotonic();
@@ -663,6 +733,65 @@ mod tests {
 
     fn write_script(path: &Path, body: &str) {
         crate::test_scripts::write_fake_executable(path, body);
+    }
+
+    #[test]
+    fn cleanup_stops_group_before_collecting_or_allows_a_synchronized_late_fork() {
+        use rustix::process::{waitid, Pid, WaitId, WaitIdOptions};
+        use std::os::unix::process::CommandExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let ready = tmp.path().join("ready");
+        let release = tmp.path().join("release");
+        let (send, recv) = std::sync::mpsc::channel();
+        let forked = tmp.path().join("forked");
+        let mut child = Command::new("python3")
+            .args([
+                "-c",
+                r"import os, sys, signal
+ready, release, forked = sys.argv[1:]
+open(ready + '.tmp', 'w').close()
+os.rename(ready + '.tmp', ready)
+while not os.path.exists(release): pass
+parent = os.getpid()
+if os.fork() == 0:
+    os.setsid()
+    fd = os.open('/dev/null', os.O_RDWR)
+    os.dup2(fd, 1)
+    os.dup2(fd, 2)
+    open(forked, 'w').close()
+    os.kill(parent, signal.SIGSTOP)
+    while True: pass
+while True: pass
+",
+            ])
+            .arg(&ready)
+            .arg(&release)
+            .arg(&forked)
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let observer = std::thread::spawn(move || {
+            while !ready.exists() {
+                std::thread::yield_now();
+            }
+            send.send(()).unwrap();
+        });
+        recv.recv().unwrap();
+        observer.join().unwrap();
+        let mut stopped = false;
+        let cleaned = kill_process_tree_before_collect(child.id(), || {
+            std::fs::write(release.with_extension("tmp"), b"release").unwrap();
+            std::fs::rename(release.with_extension("tmp"), &release).unwrap();
+            waitid(
+                WaitId::Pid(Pid::from_child(&child)),
+                WaitIdOptions::STOPPED | WaitIdOptions::NOWAIT,
+            )
+            .unwrap();
+            stopped = !forked.exists();
+        });
+        child.wait().unwrap();
+        assert!(stopped, "group was allowed to fork during collection");
+        assert!(cleaned);
     }
 
     #[test]

@@ -46,7 +46,7 @@ default_trait_access = "allow"
 items_after_statements = "allow"
 
 [dependencies]
-rustix = { version = "1.1.6", features = ["event", "process"] }
+rustix = { version = "1.1.6", features = ["event", "process", "fs"] }
 skill-studio-core = { path = "../skill-studio-core" }
 # Lease takeover's liveness probe (see lease.rs). `sysinfo`, not `libc`'s
 # `kill(pid, 0)`, because this crate forbids unsafe code.
