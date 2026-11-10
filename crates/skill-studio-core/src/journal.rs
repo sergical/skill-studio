@@ -852,7 +852,7 @@ pub fn trim_backups(
     let mut kept = Vec::new();
     for entry in entries {
         let age = now.signed_duration_since(entry.0);
-        let over_age = age.to_std().map(|d| d > quota.max_age).unwrap_or(false);
+        let over_age = age.to_std().is_ok_and(|d| d > quota.max_age);
         if over_age {
             journal.remove_backup(guard, &entry.1, &entry.2.relative)?;
             trimmed.push(TrimmedBackup {
@@ -2665,7 +2665,7 @@ mod tests {
 
         let quota = BackupQuota {
             max_total_bytes: 10,
-            max_age: Duration::from_secs(3600),
+            max_age: Duration::from_hours(1),
         };
         let trimmed = trim_backups(&journal, &g, now, &quota).expect("trim must run");
         let trimmed_ids: Vec<&PlanId> = trimmed.iter().map(|t| &t.plan).collect();

@@ -48,6 +48,15 @@ impl ScopeArgs {
         self.resolve_with_extra_project(None)
     }
 
+    pub fn process_spawner(&self, home: &Path) -> skill_studio_host::RealProcessSpawner {
+        let spawner = skill_studio_host::RealProcessSpawner::new();
+        if self.fixture.is_some() || self.home.is_some() {
+            spawner.with_isolated_home(home.to_path_buf())
+        } else {
+            spawner
+        }
+    }
+
     /// The desktop app's use cache, for `usage` to read. `None` under
     /// `--fixture` or `--home`: the cache indexes the real home's session
     /// history, so a report over another home would count those real uses.

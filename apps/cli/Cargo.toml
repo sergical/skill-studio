@@ -22,11 +22,11 @@ serde = "1"
 serde_json = { workspace = true }
 schemars = { version = "1", features = ["chrono04"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
-ulid = { version = "1", features = ["serde"] }
-dirs = "5"
+ulid = { version = "3.0.0", features = ["serde"] }
+dirs = "7.0.0"
 ctrlc = "3"
 
 [dev-dependencies]
 skill-studio-core = { path = "../../crates/skill-studio-core", features = ["testing"] }
 tempfile = "3"
-similar = "2"
+similar = "3.2.1"

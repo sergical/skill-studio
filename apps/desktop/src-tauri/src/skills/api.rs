@@ -461,7 +461,7 @@ pub fn rate_limit_wait(headers: &reqwest::header::HeaderMap) -> Duration {
     DEFAULT_RATE_LIMIT_WAIT
 }
 
-const DEFAULT_RATE_LIMIT_WAIT: Duration = Duration::from_secs(15 * 60);
+const DEFAULT_RATE_LIMIT_WAIT: Duration = Duration::from_mins(15);
 
 async fn send_skill_details(
     access: &SkillsShAccess,

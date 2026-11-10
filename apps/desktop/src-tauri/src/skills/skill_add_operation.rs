@@ -35,7 +35,7 @@ use super::skill_trust_policy::{
 pub const ADD_SKILL_OPERATION_EVENT: &str = "skills://add-skill-operation";
 
 const MAX_RETAINED_OPERATIONS: usize = 32;
-const OPERATION_TTL: Duration = Duration::from_secs(30 * 60);
+const OPERATION_TTL: Duration = Duration::from_mins(30);
 
 /// One phase of a background Add Skill operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -1109,9 +1109,7 @@ fn remove_crash_mid_rename_leaves_disk_in_the_before_or_after_state_or_names_the
 
             let original = home.join(UNIVERSAL_ROOT_RELATIVE).join(&skill);
             let quarantine_dir = home.join(UNIVERSAL_ROOT_RELATIVE).join(QUARANTINE_DIR_NAME);
-            let landed = std::fs::read_dir(&quarantine_dir)
-                .map(|mut d| d.next().is_some())
-                .unwrap_or(false);
+            let landed = std::fs::read_dir(&quarantine_dir).is_ok_and(|mut d| d.next().is_some());
             let tree_state_ok = match (kind, point) {
                 (_, CrashPoint::Tree) => original.join("SKILL.md").exists() != landed,
                 // `Copy`/`Fork`'s tree step already succeeded here: the
@@ -1500,7 +1498,7 @@ fn quarantine_prune_drops_entries_older_than_the_age_cap_or_names_the_kept_entry
     // Well under `QUARANTINE_RETENTION_CAP`, so only the age cap - not the
     // count cap - can be what prunes `old_name`.
     let clock = Arc::new(FakeClock::at(0));
-    clock.advance(std::time::Duration::from_secs(60 * 24 * 60 * 60));
+    clock.advance(std::time::Duration::from_hours(60 * 24));
     let rt = runtime_with_clock(
         &home,
         Arc::new(RealFs::new()),
@@ -1634,7 +1632,7 @@ fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_times
     // The CLI reads its home from `$HOME`, so a `--home` run must point it at
     // the same home the guard checked, not the user's real one.
     assert_eq!(
-        env.first(),
+        env.iter().find(|(name, _)| name == "HOME"),
         Some(&("HOME".to_string(), home.display().to_string())),
         "remove_via_cli must run the CLI with HOME set to the scope home"
     );

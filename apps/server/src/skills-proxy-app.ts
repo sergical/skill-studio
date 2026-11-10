@@ -53,7 +53,14 @@ export async function proxyGet(
     const response = await fetchImpl(upstreamUrl(path, search), {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: controller.signal,
+      redirect: "manual",
     });
+    if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+      reportServerError?.(new Error(`skills.sh answered ${response.status} with a redirect`), {
+        kind: "upstream",
+      });
+      return { status: 502, body: { error: "skills.sh redirected the request" } };
+    }
     const body = await response.json().catch((error) => {
       if (controller.signal.aborted) throw error;
       if (response.status < 500) {
@@ -87,6 +94,12 @@ export async function proxyGet(
   }
 }
 
+const LOGGED_METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
+
+function methodLabel(method: string): string {
+  return LOGGED_METHODS.has(method) ? method : "OTHER";
+}
+
 /** True only when no decoding layer turns a path segment into traversal or a separator. */
 function decodesToSafePathSegment(segment: string): boolean {
   let decodedLayer = segment;
@@ -109,13 +122,40 @@ function decodesToSafePathSegment(segment: string): boolean {
 }
 
 /** True only when a raw path segment has valid percent encoding and stays safe when decoded. */
-export function isSafeRawPathSegment(segment: string): boolean {
+function isSafeRawPathSegment(segment: string): boolean {
   try {
     decodeURIComponent(segment);
   } catch {
     return false;
   }
   return decodesToSafePathSegment(segment);
+}
+
+/** Validates the unnormalized Node request target before Hono can route a normalized URL. */
+export function isAllowedRawRequestTarget(rawTarget: string | undefined): boolean {
+  if (!rawTarget) return false;
+
+  const queryStart = rawTarget.indexOf("?");
+  const rawPath = queryStart === -1 ? rawTarget : rawTarget.slice(0, queryStart);
+  const rawQuery = queryStart === -1 ? "" : rawTarget.slice(queryStart + 1);
+  try {
+    decodeURIComponent(rawQuery);
+  } catch {
+    return false;
+  }
+  const segments = rawPath.split("/");
+  if (segments[0] !== "" || segments.slice(1).some((segment) => !isSafeRawPathSegment(segment))) {
+    return false;
+  }
+
+  const isApiV1 = segments[1] === "api" && segments[2] === "v1";
+  if (!isApiV1) return true;
+
+  const isSkillsRoute = segments[3] === "skills";
+  const isListRoute = isSkillsRoute && segments.length === 4;
+  const isSearchRoute = isSkillsRoute && segments.length === 5 && segments[4] === "search";
+  const isDetailRoute = isSkillsRoute && segments.length === 7;
+  return isListRoute || isSearchRoute || isDetailRoute;
 }
 
 /** Detects malformed first-pass percent encoding before Hono's tolerant parameter decoding hides it. */
@@ -231,7 +271,27 @@ export function createSkillsProxyApp({
     const start = Date.now();
     await next();
     const ms = Date.now() - start;
-    process.stdout.write(`${c.req.method} ${c.req.path} ${c.res.status} ${ms}ms\n`);
+    const route =
+      c.req.path === "/health"
+        ? "health"
+        : c.req.path === "/api/v1/skills"
+          ? "list"
+          : c.req.path === "/api/v1/skills/search"
+            ? "search"
+            : /^\/api\/v1\/skills\/[^/]+\/[^/]+\/[^/]+$/.test(c.req.path)
+              ? "detail"
+              : "other";
+    process.stdout.write(
+      `${JSON.stringify({ event: "proxy_request", method: methodLabel(c.req.method), route, status: c.res.status, duration_ms: ms })}\n`,
+    );
+  });
+
+  app.use("*", async (c, next) => {
+    const url = new URL(c.req.url);
+    if (!isAllowedRawRequestTarget(`${url.pathname}${url.search}`)) {
+      return c.json({ error: "Invalid request path" }, 400);
+    }
+    return next();
   });
 
   app.get("/health", (c) => c.json({ ok: true }));

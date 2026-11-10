@@ -38,7 +38,7 @@ use super::skill_refresh;
 use skill_studio_core::dotagents_ledger;
 
 /// How often the background loop re-checks for updates.
-pub const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+pub const UPDATE_CHECK_INTERVAL: Duration = Duration::from_hours(6);
 
 /// How long after startup the background loop waits before its first check,
 /// so it doesn't compete with the initial skill scan for CPU/network.

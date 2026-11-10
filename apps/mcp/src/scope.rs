@@ -7,7 +7,7 @@
 //! host home lookup and the ambient `data_root()`. The core never reads the
 //! environment; this module is where the MCP server does.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use skill_studio_core::scope::ProjectSelection;
 use skill_studio_core::RuntimeScope;
@@ -54,6 +54,17 @@ pub fn resolve() -> (RuntimeScope, PathBuf) {
     scope.opencode_config_root = Some(skill_studio_host::opencode_config_dir(&home));
     let lease_root = data_root.join("leases");
     (scope, lease_root)
+}
+
+pub(crate) fn process_spawner(home: &Path) -> skill_studio_host::RealProcessSpawner {
+    let spawner = skill_studio_host::RealProcessSpawner::new();
+    if std::env::var_os("SKILL_STUDIO_FIXTURE").is_some()
+        || std::env::var_os("SKILL_STUDIO_HOME").is_some()
+    {
+        spawner.with_isolated_home(home.to_path_buf())
+    } else {
+        spawner
+    }
 }
 
 /// The desktop app's use cache, for `skill_usage` to seed from, only when

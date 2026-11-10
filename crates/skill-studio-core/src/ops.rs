@@ -3710,11 +3710,22 @@ fn observe_harness(rt: &Runtime, facts: &HarnessFacts) -> HarnessObserved {
                 .symlink_metadata(&rt.scope.home.canonical.join(&root.relative_path))
                 .is_ok()
     });
-    let runner_binary = facts.runner.binary.as_deref().and_then(|binary| {
-        rt.ports
-            .tools
-            .as_deref()
-            .and_then(|lookup| lookup.find_binary(binary))
+    let adapter = builtin_adapters()
+        .into_iter()
+        .find(|adapter| adapter.id() == facts.id);
+    let runner_binary = rt.ports.tools.as_deref().and_then(|lookup| {
+        if let Some(adapter) = adapter.as_ref() {
+            adapter
+                .binary_names()
+                .iter()
+                .find_map(|binary| lookup.find_binary(binary))
+        } else {
+            facts
+                .runner
+                .binary
+                .as_deref()
+                .and_then(|binary| lookup.find_binary(binary))
+        }
     });
     HarnessObserved {
         config_present,
@@ -7181,7 +7192,7 @@ mod tests {
                 if call <= self.within_budget_calls + PRELUDE_CALLS {
                     Duration::from_millis(0)
                 } else {
-                    Duration::from_millis(3_000)
+                    Duration::from_secs(3)
                 }
             }
         }

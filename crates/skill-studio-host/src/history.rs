@@ -913,7 +913,7 @@ mod tests {
         let db_path = tmp.path().join("history").join("events.sqlite3");
         let mut store = SqliteHistoryStore::open(&db_path).unwrap();
 
-        let id = EventId::from_ulid(ulid::Ulid::new());
+        let id = EventId::from_ulid(ulid::Ulid::generate());
         let inverse =
             serde_json::json!({"op": "recreate_symlink", "pre_fingerprint": "sha256:abc"});
         store
@@ -959,7 +959,7 @@ mod tests {
 
         let mut ids = Vec::new();
         for i in 0..3 {
-            let id = EventId::from_ulid(ulid::Ulid::new());
+            let id = EventId::from_ulid(ulid::Ulid::generate());
             store
                 .record(
                     &guard,
@@ -1007,7 +1007,7 @@ mod tests {
         let db_path = tmp.path().join("history").join("events.sqlite3");
         let mut store = SqliteHistoryStore::open(&db_path).unwrap();
 
-        let target = EventId::from_ulid(ulid::Ulid::new());
+        let target = EventId::from_ulid(ulid::Ulid::generate());
         store
             .record(
                 &guard,
@@ -1019,8 +1019,8 @@ mod tests {
             .finish(&guard, &target, EventStatus::Done, None)
             .unwrap();
 
-        let first_restore = EventId::from_ulid(ulid::Ulid::new());
-        let second_restore = EventId::from_ulid(ulid::Ulid::new());
+        let first_restore = EventId::from_ulid(ulid::Ulid::generate());
+        let second_restore = EventId::from_ulid(ulid::Ulid::generate());
         assert!(store.claim_revert(&guard, &target, &first_restore).unwrap());
         assert!(!store
             .claim_revert(&guard, &target, &second_restore)
@@ -1038,7 +1038,7 @@ mod tests {
         let db_path = tmp.path().join("history").join("events.sqlite3");
         let mut store = SqliteHistoryStore::open(&db_path).unwrap();
 
-        let target = EventId::from_ulid(ulid::Ulid::new());
+        let target = EventId::from_ulid(ulid::Ulid::generate());
         store
             .record(
                 &guard,
@@ -1050,7 +1050,7 @@ mod tests {
             .finish(&guard, &target, EventStatus::Done, None)
             .unwrap();
 
-        let restore = EventId::from_ulid(ulid::Ulid::new());
+        let restore = EventId::from_ulid(ulid::Ulid::generate());
         assert!(store.claim_revert(&guard, &target, &restore).unwrap());
         assert!(store.release_revert(&guard, &target, &restore).unwrap());
 
@@ -1066,7 +1066,7 @@ mod tests {
         let db_path = tmp.path().join("history").join("events.sqlite3");
         let mut store = SqliteHistoryStore::open(&db_path).unwrap();
 
-        let target = EventId::from_ulid(ulid::Ulid::new());
+        let target = EventId::from_ulid(ulid::Ulid::generate());
         store
             .record(
                 &guard,
@@ -1078,8 +1078,8 @@ mod tests {
             .finish(&guard, &target, EventStatus::Done, None)
             .unwrap();
 
-        let holder = EventId::from_ulid(ulid::Ulid::new());
-        let impostor = EventId::from_ulid(ulid::Ulid::new());
+        let holder = EventId::from_ulid(ulid::Ulid::generate());
+        let impostor = EventId::from_ulid(ulid::Ulid::generate());
         assert!(store.claim_revert(&guard, &target, &holder).unwrap());
         assert!(!store.release_revert(&guard, &target, &impostor).unwrap());
 
@@ -1260,7 +1260,7 @@ mod tests {
         fs::write(present.join("SKILL.md"), b"hello").unwrap();
         let absent = tmp.path().join("skills").join("gone");
 
-        let id = EventId::from_ulid(ulid::Ulid::new());
+        let id = EventId::from_ulid(ulid::Ulid::generate());
         store
             .backup_paths(&guard, &id, &[present.clone(), absent.clone()])
             .unwrap();
@@ -1303,7 +1303,7 @@ mod tests {
         let db_path = tmp.path().join("history").join("events.sqlite3");
         let mut store = SqliteHistoryStore::open(&db_path).unwrap();
 
-        let finished = EventId::from_ulid(ulid::Ulid::new());
+        let finished = EventId::from_ulid(ulid::Ulid::generate());
         store
             .record(
                 &guard,
@@ -1315,7 +1315,7 @@ mod tests {
             .finish(&guard, &finished, EventStatus::Done, None)
             .unwrap();
 
-        let still_pending = EventId::from_ulid(ulid::Ulid::new());
+        let still_pending = EventId::from_ulid(ulid::Ulid::generate());
         store
             .record(
                 &guard,
@@ -1346,7 +1346,7 @@ mod tests {
         fs::write(present_dir.join("SKILL.md"), b"hello").unwrap();
         let absent = tmp.path().join("skills").join("gone");
 
-        let id = EventId::from_ulid(ulid::Ulid::new());
+        let id = EventId::from_ulid(ulid::Ulid::generate());
         let written = store
             .backup_paths(&guard, &id, &[present_dir.clone(), absent.clone()])
             .unwrap();
@@ -1396,7 +1396,7 @@ mod tests {
         fs::create_dir_all(present.parent().unwrap()).unwrap();
         fs::write(&present, b"the real backed-up bytes").unwrap();
 
-        let id = EventId::from_ulid(ulid::Ulid::new());
+        let id = EventId::from_ulid(ulid::Ulid::generate());
         let written = store
             .backup_paths(&guard, &id, std::slice::from_ref(&present))
             .unwrap();
@@ -1425,7 +1425,7 @@ mod tests {
         fs::write(present_dir.join("SKILL.md"), b"top").unwrap();
         fs::write(present_dir.join("nested").join("more.md"), b"nested").unwrap();
 
-        let id = EventId::from_ulid(ulid::Ulid::new());
+        let id = EventId::from_ulid(ulid::Ulid::generate());
         let written = store
             .backup_paths(&guard, &id, std::slice::from_ref(&present_dir))
             .unwrap();

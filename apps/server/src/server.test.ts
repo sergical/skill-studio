@@ -6,7 +6,8 @@
 // ============================================================================
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createNodeRequestHandler, isAllowedRawRequestTarget, requireApiKey } from "./server";
+import { createNodeRequestHandler, requireApiKey } from "./server";
+import { isAllowedRawRequestTarget } from "./skills-proxy-app";
 
 afterEach(() => {
   vi.unstubAllGlobals();

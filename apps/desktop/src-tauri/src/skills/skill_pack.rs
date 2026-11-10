@@ -173,7 +173,7 @@ struct PendingPackTrust {
     expires_at: Instant,
 }
 
-const PACK_TRUST_TOKEN_TTL: Duration = Duration::from_secs(10 * 60);
+const PACK_TRUST_TOKEN_TTL: Duration = Duration::from_mins(10);
 const MAX_PENDING_PACK_TRUST_TOKENS: usize = 64;
 const LOCAL_PACK_OWNERSHIP_FILE: &str = ".skill-studio-pack-import.json";
 
@@ -1108,7 +1108,7 @@ fn snapshot_local_pack(home: &Path, source: &str) -> Result<LocalPackSnapshot, S
             staging_root.display()
         ));
     }
-    let staging_dir = staging_root.join(Ulid::new().to_string());
+    let staging_dir = staging_root.join(Ulid::generate().to_string());
     fs::create_dir(&staging_dir)
         .map_err(|error| format!("Failed to create {}: {error}", staging_dir.display()))?;
     let source_dir = staging_dir.join("source");
@@ -1456,7 +1456,7 @@ fn preflight_pack_import_with(
     }
 
     let identities = prepared.identities.clone();
-    let confirmation_token = Ulid::new().to_string();
+    let confirmation_token = Ulid::generate().to_string();
     if let Some(snapshot) = &mut prepared.local_snapshot {
         if let Err(error) = persist_local_pack_snapshot_ownership(snapshot, &confirmation_token) {
             let _ = fs::remove_dir_all(&snapshot.staging_dir);
