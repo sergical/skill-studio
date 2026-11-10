@@ -26,7 +26,16 @@ interface SkillDetailPanelProps {
   onRemoveComplete: () => void;
 }
 
-export function SkillDetailPanel({
+type DetailsLoad =
+  | { kind: "loading" }
+  | { kind: "loaded"; details: SkillDetails }
+  | { kind: "failed"; message: string };
+
+export function SkillDetailPanel(props: SkillDetailPanelProps) {
+  return <SkillDetailsContent key={props.skill.id} {...props} />;
+}
+
+function SkillDetailsContent({
   skill,
   onClose,
   onInstallStart,
@@ -35,39 +44,34 @@ export function SkillDetailPanel({
   onUpdateComplete,
   onRemoveComplete,
 }: SkillDetailPanelProps) {
-  const [details, setDetails] = useState<SkillDetails | null>(null);
-  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+  const hasRemoteSource = skill.id.split("/").length >= 3;
+  const [load, setLoad] = useState<DetailsLoad>(() =>
+    hasRemoteSource
+      ? { kind: "loading" }
+      : { kind: "failed", message: "This skill has no skills.sh source." },
+  );
+  const details = load.kind === "loaded" ? load.details : null;
   const resolvedTopSource = details?.source ?? skill.top_source ?? null;
   const openAddSkillSheet = useAppStore((state) => state.openAddSkillSheet);
-
-  // Fetch the full skill details (source + SKILL.md body) by the skill's
-  // full owner/repo/slug id.
   useEffect(() => {
+    if (load.kind !== "loading") return;
     let cancelled = false;
-
-    // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- syncs from an external source: the getSkillDetails Tauri call below
-    setIsLoadingDetails(true);
-    getSkillDetails(skill.id)
-      .then((fetched) => {
-        if (!cancelled) {
-          setDetails(fetched);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setDetails(null);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsLoadingDetails(false);
-        }
-      });
-
+    getSkillDetails(skill.id).then(
+      (details) => {
+        if (!cancelled) setLoad({ kind: "loaded", details });
+      },
+      (error) => {
+        if (!cancelled)
+          setLoad({
+            kind: "failed",
+            message: error instanceof Error ? error.message : String(error),
+          });
+      },
+    );
     return () => {
       cancelled = true;
     };
-  }, [skill.id]);
+  }, [load.kind, skill.id]);
 
   return (
     <DrawerContent
@@ -76,10 +80,22 @@ export function SkillDetailPanel({
       showCloseButton={false}
     >
       <SkillDetailHeader skill={skill} resolvedTopSource={resolvedTopSource} onClose={onClose} />
+      {load.kind === "failed" && (
+        <div className="mx-5 mb-3 flex items-center justify-between gap-3">
+          <p role="alert" className="m-0 text-small text-error">
+            {load.message}
+          </p>
+          {hasRemoteSource && (
+            <Button variant="outline" size="sm" onClick={() => setLoad({ kind: "loading" })}>
+              Retry
+            </Button>
+          )}
+        </div>
+      )}
       <SkillContent
         skill={skill}
         skillMd={details?.skill_md ?? null}
-        isLoading={isLoadingDetails}
+        isLoading={load.kind === "loading"}
       />
       <Button
         variant="link"

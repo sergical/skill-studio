@@ -35,6 +35,8 @@
   "devDependencies": {
     "@babel/core": "^8.1.0",
     "@rolldown/plugin-babel": "^0.3.1",
+    "@stylexjs/stylex": "0.19.1",
+    "@stylexjs/unplugin": "0.19.1",
     "@tailwindcss/vite": "^4.3.5",
     "@tauri-apps/cli": "^2.12.4",
     "@testing-library/dom": "^10.4.2",
