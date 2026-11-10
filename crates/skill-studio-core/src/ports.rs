@@ -569,6 +569,17 @@ pub trait HistoryOpener: Send + Sync {
     ) -> Result<Option<Box<dyn HistoryStore>>, CoreError>;
 }
 
+/// A target's revert claim held by a restore row that never finished.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldRestoreClaim {
+    /// The unfinished restore row that holds the claim.
+    pub restore: EventId,
+    /// The row the restore was undoing.
+    pub target: EventId,
+    /// The target's raw `kind` column.
+    pub target_kind: String,
+}
+
 /// The append-only event log and its backups.
 ///
 /// Invariant: the store does not decide recovery. Startup recovery lives in
@@ -621,9 +632,11 @@ pub trait HistoryStore: Send {
     ) -> Result<bool, CoreError>;
     /// Rows still `pending`; only a crash leaves one behind.
     fn pending(&self) -> Result<Vec<EventRecord>, CoreError>;
-    /// `restore` rows already `interrupted`, oldest first. An older build
-    /// or the desktop startup pass left them with their target claim held.
-    fn interrupted_restores(&self) -> Result<Vec<EventRecord>, CoreError>;
+    /// Claims that `pending` or `interrupted` restore rows still hold on
+    /// their targets, oldest restore first. An older build or the desktop
+    /// startup pass can leave one behind. Reads only the ids and the target
+    /// kind, so a row whose other columns an older build wrote still lists.
+    fn held_restore_claims(&self) -> Result<Vec<HeldRestoreClaim>, CoreError>;
     /// Reads back the manifest a prior [`Self::backup_paths`] call wrote for
     /// `backup_dir` (an [`EventRecord::backup_dir`] value). A restore uses
     /// this to find, for the path it is putting back, whether the backup

@@ -19,7 +19,9 @@ use skill_studio_core::events::{
 };
 use skill_studio_core::fsops::StageFile;
 use skill_studio_core::identity::{sha256_hex, AgentId, EventId, Fingerprint, SkillName};
-use skill_studio_core::ports::{ExclusiveGuard, HistoryAccess, HistoryOpener, HistoryStore};
+use skill_studio_core::ports::{
+    ExclusiveGuard, HeldRestoreClaim, HistoryAccess, HistoryOpener, HistoryStore,
+};
 use skill_studio_core::scope::NormalizedScope;
 
 /// A `HistoryOpener` with no store behind it.
@@ -527,15 +529,26 @@ impl HistoryStore for SqliteHistoryStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)
     }
 
-    fn interrupted_restores(&self) -> Result<Vec<EventRecord>, CoreError> {
+    fn held_restore_claims(&self) -> Result<Vec<HeldRestoreClaim>, CoreError> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT * FROM events WHERE status = 'interrupted' AND kind = 'restore' \
-                 ORDER BY rowid ASC",
+                "SELECT r.id, t.id, t.kind FROM events r \
+                 JOIN events t ON t.reverted_by = r.id \
+                   AND t.id = json_extract(r.payload, '$.target_event') \
+                 WHERE r.kind = 'restore' AND r.status IN ('pending', 'interrupted') \
+                 ORDER BY r.rowid ASC",
             )
             .map_err(sql_err)?;
-        let rows = stmt.query_map([], row_from).map_err(sql_err)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(HeldRestoreClaim {
+                    restore: EventId(row.get(0)?),
+                    target: EventId(row.get(1)?),
+                    target_kind: row.get(2)?,
+                })
+            })
+            .map_err(sql_err)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)
     }
 
@@ -1072,6 +1085,50 @@ mod tests {
 
         let row = store.get(&target).unwrap().unwrap();
         assert_eq!(row.reverted_by, Some(holder));
+    }
+
+    /// Flow: an older desktop build wrote `harness = "Claude Code"` on a
+    /// conversion and on its Undo, then crashed mid-Undo, so startup left the
+    /// restore row `interrupted` with its claim held. Expect the next
+    /// mutation session's recovery to release the claim and succeed.
+    /// Failure: recovery decodes the label as an agent id, errors, and every
+    /// later Install, Update, Remove, or Park fails with it.
+    #[test]
+    fn recovery_releases_a_claim_that_an_old_desktop_restore_holds_or_every_mutation_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scope = scope_for(tmp.path());
+        let guard = guard_for(tmp.path(), &scope);
+        let db_path = tmp.path().join("history").join("events.sqlite3");
+        let mut store = SqliteHistoryStore::open(&db_path).unwrap();
+        store
+            .conn
+            .execute_batch(
+                "INSERT INTO events (id, ts, kind, skill, harness, payload, status, reverted_by)
+                 VALUES ('convert1', '2026-09-09T00:00:00Z', 'convert_to_shared', 'alpha',
+                         'Claude Code', '{}', 'done', 'undo1');
+                 INSERT INTO events (id, ts, kind, skill, harness, payload, status)
+                 VALUES ('undo1', '2026-09-09T00:01:00Z', 'restore', 'alpha', 'Claude Code',
+                         '{\"target_event\":\"convert1\"}', 'interrupted');",
+            )
+            .unwrap();
+
+        skill_studio_core::events::recover_interrupted(
+            &guard,
+            &mut store,
+            &crate::fs::RealFs,
+            &crate::sink::NoopSink,
+        )
+        .unwrap();
+
+        let reverted_by: Option<String> = store
+            .conn
+            .query_row(
+                "SELECT reverted_by FROM events WHERE id = 'convert1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(reverted_by, None);
     }
 
     #[test]

@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use crate::dto::{DriftState, EventDto, RestoreCapability};
 use crate::error::{CoreError, ErrorCode};
 use crate::identity::{AgentId, EventId, Fingerprint, SkillName};
-use crate::ports::{CoreNotice, EventSink, ExclusiveGuard, FileKind, HistoryStore, ScopeFs};
+use crate::ports::{
+    CoreNotice, EventSink, ExclusiveGuard, FileKind, HeldRestoreClaim, HistoryStore, ScopeFs,
+};
 
 /// Known event kinds.
 ///
@@ -425,15 +427,14 @@ pub fn recover_interrupted(
 ) -> Result<RecoveryReport, CoreError> {
     let _ = fs;
     let mut report = RecoveryReport::default();
-    // The release comes first: a crash between the two writes leaves the row
-    // `pending`, so the next pass runs both again.
+    // The releases come first: a crash before the flip leaves the row
+    // `pending`, so the next pass flips it.
+    for claim in store.held_restore_claims()? {
+        release_restore_claim(guard, store, &claim)?;
+    }
     for row in store.pending()? {
-        release_restore_claim(guard, store, &row)?;
         store.finish(guard, &row.id, EventStatus::Interrupted, None)?;
         report.interrupted.push(row.id);
-    }
-    for row in store.interrupted_restores()? {
-        release_restore_claim(guard, store, &row)?;
     }
     if !report.interrupted.is_empty() {
         sink.notify(CoreNotice::Recovered {
@@ -451,20 +452,10 @@ pub fn recover_interrupted(
 fn release_restore_claim(
     guard: &ExclusiveGuard,
     store: &mut dyn HistoryStore,
-    row: &EventRecord,
+    claim: &HeldRestoreClaim,
 ) -> Result<(), CoreError> {
-    if EventKind::parse(&row.kind) != Some(EventKind::Restore) {
-        return Ok(());
-    }
-    let Some(target) = row.payload.get("target_event").and_then(|v| v.as_str()) else {
-        return Ok(());
-    };
-    let target = EventId(target.to_string());
-    let resumed_by_desktop = store
-        .get(&target)?
-        .is_some_and(|t| EventKind::parse(&t.kind) == Some(EventKind::MakeIndependentCopy));
-    if !resumed_by_desktop {
-        store.release_revert(guard, &target, &row.id)?;
+    if EventKind::parse(&claim.target_kind) != Some(EventKind::MakeIndependentCopy) {
+        store.release_revert(guard, &claim.target, &claim.restore)?;
     }
     Ok(())
 }

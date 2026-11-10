@@ -1423,10 +1423,10 @@ impl skill_studio_core::ports::HistoryStore for PatchlessStore {
     ) -> Result<Vec<skill_studio_core::events::EventRecord>, skill_studio_core::CoreError> {
         self.0.pending()
     }
-    fn interrupted_restores(
+    fn held_restore_claims(
         &self,
-    ) -> Result<Vec<skill_studio_core::events::EventRecord>, skill_studio_core::CoreError> {
-        self.0.interrupted_restores()
+    ) -> Result<Vec<skill_studio_core::ports::HeldRestoreClaim>, skill_studio_core::CoreError> {
+        self.0.held_restore_claims()
     }
     fn read_manifest(
         &self,
