@@ -227,24 +227,35 @@ function EventRow({ event, onRestored }: { event: SkillEvent; onRestored: () => 
     : null;
 
   return (
-    <div
-      className={`flex min-h-9 items-center gap-3 border-b border-border-subtle px-2 py-1.5 last:border-b-0 ${
-        isFailed ? "bg-error-soft" : isInterrupted ? "bg-warning-soft" : ""
-      }`}
-    >
-      {icon}
-      <span className="min-w-0 flex-1 truncate text-body text-text-primary" title={event.skill}>
-        {event.skill || (event.harness ?? kindLabel(event.kind))}
-      </span>
-      <span className="text-small text-text-tertiary">{eventLabel(event, harnessLabel)}</span>
-      {harnessLabel && event.kind !== "split" && (
-        <span className="shrink-0 text-small text-text-tertiary">{harnessLabel}</span>
-      )}
-      <span className="shrink-0 text-small text-text-tertiary tabular-nums">
-        {formatRelativeTime(event.ts)}
-      </span>
-      <EventStatusBadge isFailed={isFailed} isInterrupted={isInterrupted} status={event.status} />
-      <EventActions event={event} isRestoring={isRestoring} onRestoreClick={handleRestoreClick} />
+    <div className="border-b border-border-subtle last:border-b-0">
+      <div
+        className={`flex min-h-9 items-center gap-3 px-2 py-1.5 ${
+          isFailed ? "bg-error-soft" : isInterrupted ? "bg-warning-soft" : ""
+        }`}
+      >
+        {icon}
+        <span className="min-w-0 flex-1 truncate text-body text-text-primary" title={event.skill}>
+          {event.skill || (event.harness ?? kindLabel(event.kind))}
+        </span>
+        <span className="text-small text-text-tertiary">{eventLabel(event, harnessLabel)}</span>
+        {harnessLabel && event.kind !== "split" && (
+          <span className="shrink-0 text-small text-text-tertiary">{harnessLabel}</span>
+        )}
+        <span className="shrink-0 text-small text-text-tertiary tabular-nums">
+          {formatRelativeTime(event.ts)}
+        </span>
+        <EventStatusBadge isFailed={isFailed} isInterrupted={isInterrupted} status={event.status} />
+        <EventActions event={event} isRestoring={isRestoring} onRestoreClick={handleRestoreClick} />
+      </div>
+      {event.retained_copies?.map((copy) => (
+        <div
+          key={copy.path}
+          className="px-2 pb-1.5 text-caption break-all text-text-secondary select-text"
+        >
+          Retained copy: {copy.path} ({copy.bytes ?? "unknown"} bytes at copy time; open writers can
+          change it)
+        </div>
+      ))}
     </div>
   );
 }

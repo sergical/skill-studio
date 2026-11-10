@@ -395,7 +395,9 @@ pub struct BackupManifest {
 /// What startup recovery did.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RecoveryReport {
-    /// Rows flipped from `pending` to `interrupted`.
+    #[serde(skip)]
+    pub(crate) reconciled_pending: bool,
+    /// Events whose recovery needs attention, including unacknowledged moves.
     pub interrupted: Vec<EventId>,
     /// Reserved for a future fingerprint-based recovery that finishes a row
     /// whose target already matches its proposed outcome. This PR mirrors
@@ -403,8 +405,20 @@ pub struct RecoveryReport {
     /// `interrupted` flip, no auto-completion), so this is always empty
     /// today; a caller must not depend on it being populated yet.
     pub completed: Vec<EventId>,
-    /// Retained source backups named by interrupted moves. Never deleted by recovery.
+    /// Retained staging copies and source backups. Never deleted by recovery.
     pub retained_quarantines: Vec<PathBuf>,
+    /// Measured sizes of retained copies, when the paths can be read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retained_copies: Vec<crate::dto::RetainedCopy>,
+}
+
+impl RecoveryReport {
+    /// Whether recovery has nothing to report.
+    pub fn is_empty(&self) -> bool {
+        self.interrupted.is_empty()
+            && self.completed.is_empty()
+            && self.retained_quarantines.is_empty()
+    }
 }
 
 /// Flips every `pending` row to `interrupted`, and releases the revert
@@ -433,23 +447,31 @@ pub fn recover_interrupted(
     for claim in store.held_restore_claims()? {
         release_restore_claim(guard, store, &claim)?;
     }
-    for row in store.pending()? {
-        if let Some(entries) = row
-            .payload
-            .get("quarantines")
-            .and_then(serde_json::Value::as_array)
-        {
-            for path in entries
-                .iter()
-                .filter_map(|entry| entry.get("path").and_then(serde_json::Value::as_str))
-            {
-                let path = PathBuf::from(path);
-                if fs.symlink_metadata(&path).is_ok() {
-                    report.retained_quarantines.push(path);
-                }
-            }
-        }
+    let pending = store.pending()?;
+    report.reconciled_pending = !pending.is_empty();
+    for row in &pending {
         store.finish(guard, &row.id, EventStatus::Interrupted, None)?;
+    }
+    // Transport delivery does not prove the user saw a notice.
+    for row in store
+        .list(&EventFilter {
+            limit: u32::MAX,
+            ..Default::default()
+        })?
+        .into_iter()
+        .filter(|row| {
+            row.payload.get("recovery_acknowledged") != Some(&serde_json::Value::Bool(true))
+                && (row.payload.get("quarantines").is_some()
+                    || matches!(row.kind.as_str(), "park" | "unpark")
+                    || pending.iter().any(|entry| entry.id == row.id))
+                && (row.status == EventStatus::Interrupted
+                    || (row.status == EventStatus::Failed
+                        && row.payload.get("quarantines").is_some()))
+        })
+    {
+        let (paths, copies) = retained_move_data(fs, &row);
+        report.retained_quarantines.extend(paths);
+        report.retained_copies.extend(copies);
         report.interrupted.push(row.id);
     }
     if !report.interrupted.is_empty() {
@@ -459,6 +481,53 @@ pub fn recover_interrupted(
         });
     }
     Ok(report)
+}
+
+pub(crate) fn retained_move_data(
+    fs: &dyn ScopeFs,
+    row: &EventRecord,
+) -> (Vec<PathBuf>, Vec<crate::dto::RetainedCopy>) {
+    let mut paths: Vec<PathBuf> = row
+        .payload
+        .get("quarantines")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .map(PathBuf::from)
+        })
+        .filter(|path| fs.symlink_metadata(path).is_ok())
+        .collect();
+    if paths.is_empty() {
+        paths.extend(
+            ["from", "to"]
+                .into_iter()
+                .filter_map(|key| {
+                    row.payload
+                        .get(key)
+                        .and_then(serde_json::Value::as_str)
+                        .map(PathBuf::from)
+                })
+                .filter(|path| fs.symlink_metadata(path).is_ok()),
+        );
+    }
+    paths.sort();
+    paths.dedup();
+    let copies = paths
+        .iter()
+        .filter_map(|path| {
+            crate::park_move::retained_bytes(fs, path)
+                .ok()
+                .map(|bytes| crate::dto::RetainedCopy {
+                    path: path.clone(),
+                    bytes,
+                })
+        })
+        .collect();
+    (paths, copies)
 }
 
 /// A restore claims its target before it mutates. A restore that never

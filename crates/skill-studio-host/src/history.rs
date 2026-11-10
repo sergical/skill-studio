@@ -433,15 +433,17 @@ impl HistoryStore for SqliteHistoryStore {
         Ok(())
     }
 
-    fn record_quarantine(
+    fn record_move_copy(
         &self,
         _guard: &ExclusiveGuard,
         from: &Path,
         to: &Path,
         quarantine: &Path,
+        phase: &str,
+        bytes: u64,
     ) -> Result<(), CoreError> {
         let entry = serde_json::json!({
-            "phase": "retain_before_rename", "from": from, "to": to, "path": quarantine,
+            "phase": phase, "from": from, "to": to, "path": quarantine, "bytes": bytes,
         });
         let changed = self.conn.execute(
             "UPDATE events SET payload = json_insert(json_insert(payload, '$.quarantines', json('[]')), '$.quarantines[#]', json(?1))
@@ -461,6 +463,17 @@ impl HistoryStore for SqliteHistoryStore {
             fs::File::open(parent)
                 .and_then(|dir| dir.sync_all())
                 .map_err(|e| CoreError::io(parent, e))?;
+        }
+        Ok(())
+    }
+
+    fn acknowledge_recovery(
+        &self,
+        _guard: &ExclusiveGuard,
+        ids: &[EventId],
+    ) -> Result<(), CoreError> {
+        for id in ids {
+            self.conn.execute("UPDATE events SET payload = json_set(payload, '$.recovery_acknowledged', json('true')) WHERE id = ?1 AND status IN ('interrupted', 'failed')", params![id.0]).map_err(sql_err)?;
         }
         Ok(())
     }

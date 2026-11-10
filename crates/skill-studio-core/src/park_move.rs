@@ -110,35 +110,98 @@ fn copy_verify_remove(
 
     let parent = to.parent().unwrap_or(to);
     confine(&rt.scope, fs, parent)?;
-    let preserves_modes = fs
-        .fsops_preserves_modes(parent)
+    let bytes = tree
+        .iter()
+        .filter(|entry| entry.kind == FileKind::File)
+        .try_fold(0u64, |sum, entry| {
+            fs.symlink_metadata(&from.join(&entry.relative))
+                .map(|facts| sum.saturating_add(facts.len))
+        })
+        .map_err(|e| CoreError::io(from, e))?;
+    let stage = loop {
+        let stage = parent.join(format!(".park-stage-{}", ulid::Ulid::generate()));
+        session.store.record_move_copy(
+            &session.guard,
+            from,
+            to,
+            &stage,
+            "stage_before_create",
+            bytes,
+        )?;
+        confine(&rt.scope, fs, &stage)?;
+        match fs.fsops_create_dir(&stage) {
+            Ok(()) => break stage,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(CoreError::io(&stage, e)),
+        }
+    };
+    fs.fsops_fsync_dir(parent)
         .map_err(|e| CoreError::io(parent, e))?;
-    let copied = copy_tree(rt, from, to, &mut tree, preserves_modes, facts.mode)
+    let preserves_modes = fs
+        .fsops_preserves_modes(&stage)
+        .map_err(|e| CoreError::io(parent, e))?;
+    let stage_binding = fs
+        .fsops_device_inode(&stage)
+        .map_err(|e| CoreError::io(&stage, e))?;
+    let copied = copy_tree(rt, from, &stage, &mut tree, preserves_modes, facts.mode)
         .and_then(|()| {
-            verify_copy(fs, to, &tree, preserves_modes, facts.mode)
+            verify_copy(fs, &stage, &tree, preserves_modes, facts.mode)
                 .map_err(|e| CoreError::io(to, e))
         })
-        .and_then(|()| flush_tree(fs, to, &tree).map_err(|e| CoreError::io(to, e)));
+        .and_then(|()| flush_tree(fs, &stage, &tree).map_err(|e| CoreError::io(to, e)));
     if let Err(e) = copied {
         return Err(CoreError::new(
             e.code,
             format!(
-                "{}; incomplete destination retained at {}",
+                "{}; incomplete staging copy retained at {}",
                 e.message,
-                to.display()
+                stage.display()
             ),
         )
-        .at(to));
+        .at(&stage));
     }
+    if fs.fsops_device_inode(&stage).ok() != Some(stage_binding)
+        || verify_copy(fs, &stage, &tree, preserves_modes, facts.mode).is_err()
+    {
+        return Err(CoreError::new(
+            ErrorCode::DriftConflict,
+            format!(
+                "the staging copy changed during sync; source and staging copy kept at {} and {}",
+                from.display(),
+                stage.display()
+            ),
+        )
+        .at(&stage));
+    }
+    let scoped_stage = confine(&rt.scope, fs, &stage)?;
+    let scoped_to = confine(&rt.scope, fs, to)?;
+    fs.rename(&session.guard, &scoped_stage, &scoped_to)
+        .map_err(|e| {
+            CoreError::new(
+                ErrorCode::Io,
+                format!(
+                    "publish failed; staging copy retained at {}: {e}",
+                    stage.display()
+                ),
+            )
+            .at(&stage)
+        })?;
+    fs.fsops_fsync_dir(parent)
+        .map_err(|e| CoreError::io(parent, e))?;
 
     // Conflict copies must never enter the trash sweeper's namespace.
     let trash = from.parent().unwrap_or(from).join(format!(
         ".park-quarantine-{}",
         crate::fsops::unique_suffix()
     ));
-    session
-        .store
-        .record_quarantine(&session.guard, from, to, &trash)?;
+    session.store.record_move_copy(
+        &session.guard,
+        from,
+        to,
+        &trash,
+        "retain_before_rename",
+        bytes,
+    )?;
     let source_parent = from.parent().unwrap_or(from);
     fs.fsops_fsync_dir(source_parent)
         .map_err(|e| CoreError::io(source_parent, e))?;
@@ -301,7 +364,6 @@ fn copy_tree(
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
     confine(&rt.scope, fs, to)?;
-    fs.fsops_create_dir(to).map_err(|e| CoreError::io(to, e))?;
     for entry in tree.iter_mut() {
         let source = from.join(&entry.relative);
         let dest = to.join(&entry.relative);
@@ -413,4 +475,17 @@ fn remove_tree(rt: &Runtime, session: &MutationSession, root: &Path) -> Result<(
     confine(&rt.scope, fs, root)?;
     fs.fsops_remove_dir(root)
         .map_err(|e| CoreError::io(root, e))
+}
+
+pub(crate) fn retained_bytes(fs: &dyn ScopeFs, path: &Path) -> io::Result<u64> {
+    if fs.symlink_metadata(path)?.kind != FileKind::Dir {
+        return Err(io::Error::other("retained path is not a directory"));
+    }
+    walk(fs, path)?
+        .iter()
+        .filter(|entry| entry.kind == FileKind::File)
+        .try_fold(0u64, |sum, entry| {
+            fs.symlink_metadata(&path.join(&entry.relative))
+                .map(|facts| sum.saturating_add(facts.len))
+        })
 }

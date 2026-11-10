@@ -72,6 +72,18 @@ function callCommand<T>(command: string, args?: InvokeArgs): Promise<T> {
     recordIpcCall(command, measure.duration, resolved);
     performance.clearMarks(startMark);
     performance.clearMeasures(`ipc:${command}`);
+    if (
+      [
+        "park_skill",
+        "unpark_skill",
+        "park_skills",
+        "unpark_skills",
+        "turn_off_for_agent",
+        "discard_skill_copy",
+      ].includes(command)
+    ) {
+      window.dispatchEvent(new Event("skill-studio:move-finished"));
+    }
   };
   return invoke<T>(command, args).then(
     (result) => {
@@ -925,4 +937,17 @@ export async function dataFolderStatus(): Promise<string | null> {
 /** Check installed skill sources now and publish a fresh snapshot. */
 export async function checkSkillUpdatesNow(): Promise<SkillSnapshot["update_check"]> {
   return callCommand<SkillSnapshot["update_check"]>("check_skill_updates_now");
+}
+
+export interface ParkRecoveryReport {
+  interrupted: string[];
+  retained_quarantines: string[];
+}
+
+export function parkRecoveryNotices(): Promise<ParkRecoveryReport> {
+  return callCommand("park_recovery_notices");
+}
+
+export function acknowledgeParkRecovery(events: string[]): Promise<void> {
+  return callCommand("acknowledge_park_recovery", { events });
 }

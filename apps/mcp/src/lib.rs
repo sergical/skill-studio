@@ -235,6 +235,7 @@ fn scope_error_envelope<T: Outcome>(
     use skill_studio_core::scope::EffectiveScope;
     let (runtime_scope, _) = scope::resolve();
     ResultEnvelope {
+        recovery: Default::default(),
         schema_version: skill_studio_core::SCHEMA_VERSION,
         operation,
         scope: EffectiveScope {

@@ -89,6 +89,8 @@ const EXPECTED_WRAPPER_COMMANDS = {
     kind: "command",
     command: "import_tracked_projects",
   },
+  parkRecoveryNotices: { kind: "command", command: "park_recovery_notices" },
+  acknowledgeParkRecovery: { kind: "command", command: "acknowledge_park_recovery" },
   removeSkill: { kind: "command", command: "remove_skill" },
   updateSkill: { kind: "command", command: "update_skill" },
   cancelUpdateAll: { kind: "command", command: "cancel_update_all" },

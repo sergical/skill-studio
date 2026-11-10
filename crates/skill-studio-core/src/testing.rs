@@ -840,6 +840,8 @@ impl ScopeFs for FixtureFs {
     }
 }
 
+type StageHook = Box<dyn FnOnce(&Path) -> std::io::Result<()> + Send>;
+
 type FsHook = Box<dyn FnOnce() -> std::io::Result<()> + Send>;
 
 /// A filesystem wrapper with deterministic fault and race injection.
@@ -848,6 +850,7 @@ pub struct FailingFs {
     after_full_sync: Mutex<Option<FsHook>>,
     after_new_file: Mutex<Option<(PathBuf, FsHook)>>,
     after_inode: Mutex<Option<(PathBuf, FsHook)>>,
+    before_stage_create: Mutex<Option<StageHook>>,
     before_create_for: Mutex<Option<(PathBuf, FsHook)>>,
     before_rename_from: Mutex<Option<(PathBuf, FsHook)>>,
     after_read_for: Mutex<Option<(PathBuf, FsHook)>>,
@@ -915,6 +918,7 @@ impl FailingFs {
             after_full_sync: Mutex::new(None),
             after_new_file: Mutex::new(None),
             after_inode: Mutex::new(None),
+            before_stage_create: Mutex::new(None),
             before_create_for: Mutex::new(None),
             before_rename_from: Mutex::new(None),
             after_read_for: Mutex::new(None),
@@ -1006,6 +1010,14 @@ impl FailingFs {
         hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
     ) {
         *self.before_rename_from.lock().expect("hook lock") = Some((path, Box::new(hook)));
+    }
+
+    /// Runs before creating a hidden Park staging directory, with its generated path.
+    pub fn before_stage_create_once(
+        &self,
+        hook: impl FnOnce(&Path) -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.before_stage_create.lock().expect("hook lock") = Some(Box::new(hook));
     }
 
     /// Runs once at the named filesystem boundary.
@@ -1457,6 +1469,15 @@ impl ScopeFs for FailingFs {
         self.inner.fsops_fsync_dir(path)
     }
     fn fsops_create_dir(&self, path: &Path) -> std::io::Result<()> {
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with(".park-stage-"))
+        {
+            let hook = self.before_stage_create.lock().expect("hook lock").take();
+            if let Some(hook) = hook {
+                hook(path)?;
+            }
+        }
         Self::run_hook(&self.before_create_for, path)?;
         if self.fail_next_create_dir.swap(false, Ordering::SeqCst) {
             return Err(std::io::Error::other(

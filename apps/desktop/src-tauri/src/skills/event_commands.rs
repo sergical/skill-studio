@@ -113,6 +113,24 @@ pub fn dto_from_row(
         && (row.kind != "explode_shared_dir"
             || skill_materialize::restore_guard_for_explode(store, &row, home).is_ok());
     SkillEventDto {
+        retained_copies: row
+            .payload
+            .get("quarantines")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|entry| {
+                row.status != "done"
+                    || entry.get("phase").and_then(serde_json::Value::as_str)
+                        == Some("retain_before_rename")
+            })
+            .filter_map(|entry| {
+                Some(super::skill_dto::RetainedMoveCopy {
+                    path: entry.get("path")?.as_str()?.to_string(),
+                    bytes: entry.get("bytes").and_then(serde_json::Value::as_u64),
+                })
+            })
+            .collect(),
         id: row.id,
         ts: row.ts,
         kind: row.kind,

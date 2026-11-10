@@ -78,3 +78,8 @@ Skipped, with the reason:
 - Park for every agent on a dotagents skill: it runs `dotagents remove` through the process spawner.
 - Remove of a manual skill: core refuses it, so a fork-owned skill is timed instead.
 - Install, update, uninstall: they run npx or the network.
+
+Recovery notices appear at desktop startup, in CLI stderr and JSON, and in MCP
+operation results. The desktop Acknowledge action records explicit receipt in
+history. No retained copy is deleted. Flow tests are `useParkRecovery.test.ts`,
+`park_recovery.rs`, and the interruption guards in `park_any_copy.rs`.

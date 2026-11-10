@@ -122,3 +122,31 @@ The four new core tests fail with `park_move.rs` restored from `6df5b679`.
 Both new probe tests fail when unconditional path cleanup is restored in the
 probe test hook. The fixes were restored after these checks. All tests use
 temporary home directories.
+
+## PR 491 review fixes
+
+Cross-volume copies now use a journaled `.park-stage-*` sibling on the destination
+volume. The move verifies bytes and modes, fully syncs the stage, and checks its
+identity and bytes again before publication. A failed copy or replaced stage stays
+hidden. The live destination stays absent. A staging name collision retries with a
+new name. Permission support is checked on the stage itself; no probe file is made.
+
+History keeps recovery notices until explicit acknowledgement. Desktop startup and
+move completion read these notices into a persistent toast. CLI emits a stderr
+warning and a JSON recovery report. MCP returns the report in the tool result.
+Recovery also covers interruptions before the first stage record and failures from
+the current call. Retained paths have measured sizes when readable. Successful
+Park and Turn on results include source backup paths and size snapshots. Desktop
+batch results keep that metadata on success and failure. Activity keeps legacy
+paths whose size is unknown. Open writers can still change retained source copies.
+
+The regression suite uses fault hooks and temporary homes. It covers failed Turn
+on after copying SKILL.md but before copying a script, interruption before stage
+publication, stage replacement during sync, stage name collisions, repeated
+recovery through a NoopSink, explicit acknowledgement, open-handle writes, CLI
+stderr and JSON, MCP restart delivery, and desktop notice and Activity rendering.
+
+Shared-target stale builds occurred during verification. Workspace crates use
+`RUSTC_WORKSPACE_WRAPPER=/tmp/skill-studio-pr491-rustc`, a script that runs its
+arguments unchanged. Cargo gives these workspace artifacts a separate cache key
+inside the same shared target. No other Cargo process or target file was removed.

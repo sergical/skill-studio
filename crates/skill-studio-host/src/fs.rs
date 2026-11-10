@@ -11,34 +11,21 @@ use skill_studio_core::ports::{
     DirEntryFacts, ExclusiveGuard, FileFacts, FileKind, ScopeFs, ScopedPath,
 };
 
-fn probe_mode_preservation(parent: &Path) -> io::Result<bool> {
-    let path = parent.join(format!(
-        ".park-mode-probe-{}-{}",
-        std::process::id(),
-        TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    probe_mode_file(&path, || Ok(()))
-}
-
-fn probe_mode_file(
-    path: &Path,
-    before_create: impl FnOnce() -> io::Result<()>,
-) -> io::Result<bool> {
-    before_create()?;
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
-    // Unlink has no portable compare-inode operation. Keep the empty probe
-    // rather than risk deleting a replacement inserted after an identity check.
-    for mode in [0o640, 0o751] {
-        if !mode_change_supported(file.set_permissions(fs::Permissions::from_mode(mode)))?
-            || file.metadata()?.mode() & 0o7777 != mode
-        {
-            return Ok(false);
+fn probe_mode_preservation(path: &Path) -> io::Result<bool> {
+    let dir = fs::File::open(path)?;
+    let original = dir.metadata()?.permissions();
+    let result = (|| {
+        for mode in [0o700, 0o750] {
+            if !mode_change_supported(dir.set_permissions(fs::Permissions::from_mode(mode)))?
+                || dir.metadata()?.mode() & 0o7777 != mode
+            {
+                return Ok(false);
+            }
         }
-    }
-    Ok(true)
+        Ok(true)
+    })();
+    let restored = mode_change_supported(dir.set_permissions(original))?;
+    result.map(|supported| supported && restored)
 }
 
 fn mode_change_supported(result: io::Result<()>) -> io::Result<bool> {
@@ -609,23 +596,15 @@ mod tests {
 #[cfg(test)]
 mod probe_races {
     use super::*;
-
     #[test]
-    fn mode_probe_keeps_racing_file_or_deletes_foreign_bytes() {
+    fn stage_mode_check_restores_mode_without_probe_files_or_accumulates_files() {
         let parent = tempfile::tempdir().unwrap();
-        let path = parent.path().join("probe");
-        assert!(probe_mode_file(&path, || fs::write(&path, b"foreign")).is_err());
-        assert_eq!(fs::read(path).unwrap(), b"foreign");
-    }
-
-    #[test]
-    fn mode_probe_keeps_symlink_target_or_deletes_foreign_bytes() {
-        let parent = tempfile::tempdir().unwrap();
-        let path = parent.path().join("probe");
-        let foreign = parent.path().join("foreign");
-        fs::write(&foreign, b"foreign").unwrap();
-        assert!(probe_mode_file(&path, || std::os::unix::fs::symlink(&foreign, &path)).is_err());
-        assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
-        assert_eq!(fs::read(foreign).unwrap(), b"foreign");
+        fs::write(parent.path().join(".park-mode-probe-1-0"), b"foreign").unwrap();
+        let before = fs::metadata(parent.path()).unwrap().mode();
+        for _ in 0..3 {
+            assert!(probe_mode_preservation(parent.path()).unwrap());
+        }
+        assert_eq!(fs::metadata(parent.path()).unwrap().mode(), before);
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 1);
     }
 }
