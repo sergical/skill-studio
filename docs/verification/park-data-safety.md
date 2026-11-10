@@ -9,7 +9,7 @@ returned empty output.
 | Issue | User flow                                | Expectation              | Proof (file::test or command)                                                                 | Red before fix?          | Measured numbers |
 | ----- | ---------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------- | ------------------------ | ---------------- |
 | #418  | Turn on after another wildcard exclusion | Keep unrelated exclusion | park_install_aware::turn_on_keeps_unrelated_wildcard_exclusion_added_during_remove            | Core test failed on base | Not measured     |
-| #418  | Turn on after ignore neighbours change   | Refuse before any write  | park_install_aware::turn_on_refuses_changed_ignore_anchor_without_changing_files; CLI and MCP | Core test failed on base | Not measured     |
+| #418  | Turn on after ignore neighbours change   | Refuse before any write  | park_install_aware::turn_on_refuses_changed_rule_anchors_or_overrides_external_negation; CLI and MCP | Core test failed on base | Not measured     |
 
 ## Evidence for issue #418
 
@@ -42,3 +42,17 @@ and force recompilation of this worktree's test source.
 Post-green simplification review found no worthwhile simplification. The shared
 CLI/MCP fixture avoids duplicate setup; the production changes add no new
 interface. No timing result is claimed for #418.
+
+## P2 follow-up regressions
+
+Turn on now checks each restored rule against the rules adjacent to its actual
+insertion point. The ignore-anchor regression includes a surviving `unrelated`
+rule and a header moved after a new external negation. It requires DriftConflict
+with config files and the parked folder unchanged.
+
+`turn_on_keeps_rule_added_between_reads_or_discards_editor_change` edits the
+ignore file during the config write, between the two ignore reads. It requires
+that the added `/editor-rule` survives. The hook runs once without sleeps.
+
+Both cases failed with their respective fixes reverted. The anchor test returned
+success, and the between-read test lost `/editor-rule`.

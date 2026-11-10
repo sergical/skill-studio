@@ -28,8 +28,8 @@ use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::{RootKind, RootScope, SkillName};
 use skill_studio_core::ops;
 use skill_studio_core::ports::{
-    acquire_exclusive, CancelToken, HistoryAccess, NeverCancel, Ports, ProcessOutput,
-    ProcessSpawner, ProcessSpec, Runtime,
+    acquire_exclusive, CancelToken, DirEntryFacts, ExclusiveGuard, FileFacts, HistoryAccess,
+    NeverCancel, Ports, ProcessOutput, ProcessSpawner, ProcessSpec, Runtime, ScopeFs, ScopedPath,
 };
 use skill_studio_core::scope::{ProjectSelection, RuntimeScope};
 use skill_studio_core::testing::golden::{ctx, unique_temp_dir};
@@ -2178,41 +2178,51 @@ fn turn_on_keeps_unrelated_wildcard_exclusion_added_during_remove() {
 }
 
 #[test]
-fn turn_on_refuses_changed_ignore_anchor_without_changing_files() {
-    let (home, stub) = dotagents_home("park_ignore_anchor", EXPLICIT_TOML);
-    let ignore = home.join(".agents/.gitignore");
-    std::fs::write(&ignore, "/skills/foo\n!/skills/foo/\n").unwrap();
-    let rt = runtime(&home, stub.clone(), true);
-    park_foo(&rt);
-    std::fs::write(&ignore, "!/skills/*/\n").unwrap();
-    let before = (
-        read(&stub.toml_path()),
-        read(&stub.lock_path()),
-        read(&ignore),
-    );
-    let err = ops::unpark(
-        &rt,
-        &ctx(),
-        &UnparkRequest {
-            deployment_id: parked_copy(&rt, "foo").id,
-        },
-    )
-    .unwrap_err();
-    assert_eq!(err.code, skill_studio_core::ErrorCode::DriftConflict);
-    assert!(err.message.contains("/skills/foo"));
-    assert_eq!(
-        (
+fn turn_on_refuses_changed_rule_anchors_or_overrides_external_negation() {
+    for prefix in ["", "unrelated\n# header\n"] {
+        let (home, stub) = dotagents_home("park_ignore_anchor", EXPLICIT_TOML);
+        let ignore = home.join(".agents/.gitignore");
+        std::fs::write(&ignore, format!("{prefix}/skills/foo\n!/skills/foo/\n")).unwrap();
+        let rt = runtime(&home, stub.clone(), true);
+        park_foo(&rt);
+        std::fs::write(
+            &ignore,
+            if prefix.is_empty() {
+                "!/skills/*/\n"
+            } else {
+                "unrelated\n!/skills/*/\n# header\n"
+            },
+        )
+        .unwrap();
+        let before = (
             read(&stub.toml_path()),
             read(&stub.lock_path()),
-            read(&ignore)
-        ),
-        before
-    );
-    assert!(home
-        .join(".agents/skills-parked/universal/foo/SKILL.md")
-        .exists());
-    assert!(!home.join(".agents/skills/foo").exists());
-    std::fs::remove_dir_all(home).unwrap();
+            read(&ignore),
+        );
+        let err = ops::unpark(
+            &rt,
+            &ctx(),
+            &UnparkRequest {
+                deployment_id: parked_copy(&rt, "foo").id,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, skill_studio_core::ErrorCode::DriftConflict);
+        assert!(err.message.contains("/skills/foo"));
+        assert_eq!(
+            (
+                read(&stub.toml_path()),
+                read(&stub.lock_path()),
+                read(&ignore)
+            ),
+            before
+        );
+        assert!(home
+            .join(".agents/skills-parked/universal/foo/SKILL.md")
+            .exists());
+        assert!(!home.join(".agents/skills/foo").exists());
+        std::fs::remove_dir_all(home).unwrap();
+    }
 }
 
 #[test]
@@ -2237,4 +2247,130 @@ fn parking_an_ambiguous_dotagents_skill_unlists_it_so_install_cannot_revive_it()
         "dotagents install revived the parked ambiguous skill"
     );
     std::fs::remove_dir_all(home).ok();
+}
+
+struct EditIgnoreOnConfigWrite {
+    inner: Arc<dyn ScopeFs>,
+    ignore: PathBuf,
+    armed: AtomicBool,
+}
+
+impl ScopeFs for EditIgnoreOnConfigWrite {
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        self.inner.canonicalize(path)
+    }
+    fn symlink_metadata(&self, path: &Path) -> std::io::Result<FileFacts> {
+        self.inner.symlink_metadata(path)
+    }
+    fn read_link(&self, path: &Path) -> std::io::Result<PathBuf> {
+        self.inner.read_link(path)
+    }
+    fn read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntryFacts>> {
+        self.inner.read_dir(path)
+    }
+    fn ancestor_holds(&self, start: &Path, name: &str) -> std::io::Result<bool> {
+        self.inner.ancestor_holds(start, name)
+    }
+    fn read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+        self.inner.read_capped(path, max_bytes)
+    }
+    fn read_prefix(&self, path: &Path, limit: u64) -> std::io::Result<(Vec<u8>, bool)> {
+        self.inner.read_prefix(path, limit)
+    }
+    fn write_atomic(
+        &self,
+        guard: &ExclusiveGuard,
+        path: &ScopedPath,
+        bytes: &[u8],
+    ) -> std::io::Result<()> {
+        self.inner.write_atomic(guard, path, bytes)?;
+        if path.as_path().ends_with("agents.toml") && self.armed.swap(false, Ordering::SeqCst) {
+            let current = std::fs::read_to_string(&self.ignore)?;
+            std::fs::write(&self.ignore, current + "/editor-rule\n")?;
+        }
+        Ok(())
+    }
+    fn rename(
+        &self,
+        guard: &ExclusiveGuard,
+        from: &ScopedPath,
+        to: &ScopedPath,
+    ) -> std::io::Result<()> {
+        self.inner.rename(guard, from, to)
+    }
+    fn remove_file(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
+        self.inner.remove_file(guard, path)
+    }
+    fn create_dir_all(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
+        self.inner.create_dir_all(guard, path)
+    }
+    fn symlink(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        link: &ScopedPath,
+    ) -> std::io::Result<()> {
+        self.inner.symlink(guard, target, link)
+    }
+    fn fsops_device_inode(&self, path: &Path) -> std::io::Result<(u64, u64)> {
+        self.inner.fsops_device_inode(path)
+    }
+    fn fsops_fsync_file(&self, path: &Path) -> std::io::Result<()> {
+        self.inner.fsops_fsync_file(path)
+    }
+    fn fsops_fsync_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.inner.fsops_fsync_dir(path)
+    }
+    fn fsops_create_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.inner.fsops_create_dir(path)
+    }
+    fn fsops_write_new_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        self.inner.fsops_write_new_file(path, bytes)
+    }
+    fn fsops_write_new_file_with_mode(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        mode: u32,
+    ) -> std::io::Result<()> {
+        self.inner.fsops_write_new_file_with_mode(path, bytes, mode)
+    }
+    fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        self.inner.fsops_rename(from, to)
+    }
+    fn fsops_symlink(&self, target: &Path, link: &Path) -> std::io::Result<()> {
+        self.inner.fsops_symlink(target, link)
+    }
+    fn fsops_remove_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.inner.fsops_remove_dir(path)
+    }
+    fn fsops_remove_file(&self, path: &Path) -> std::io::Result<()> {
+        self.inner.fsops_remove_file(path)
+    }
+    fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()> {
+        self.inner.fsops_exchange(a, b)
+    }
+}
+
+#[test]
+fn turn_on_keeps_rule_added_between_reads_or_discards_editor_change() {
+    let (home, stub) = dotagents_home("park_ignore_reread", EXPLICIT_TOML);
+    let ignore = home.join(".agents/.gitignore");
+    std::fs::write(&ignore, "/skills/foo\n!/skills/foo/\n").unwrap();
+    let mut rt = runtime(&home, stub, true);
+    park_foo(&rt);
+    std::fs::write(&ignore, "!/skills/foo/\n# edited\n").unwrap();
+    let hook = Arc::new(EditIgnoreOnConfigWrite {
+        inner: rt.ports.fs.clone(),
+        ignore: ignore.clone(),
+        armed: AtomicBool::new(true),
+    });
+    rt.ports.fs = hook.clone();
+    unpark_foo(&rt);
+    assert!(!hook.armed.load(Ordering::SeqCst));
+    assert_eq!(
+        read(&ignore),
+        "/skills/foo\n!/skills/foo/\n# edited\n/editor-rule\n"
+    );
+    std::fs::remove_dir_all(home).unwrap();
 }
