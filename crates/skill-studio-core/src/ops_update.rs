@@ -969,7 +969,7 @@ fn update_split_copies_body(
     req: &SplitCopiesUpdate,
 ) -> Result<SplitCopiesOutcome, CoreError> {
     ctx.checkpoint()?;
-    let session = MutationSession::begin_for(rt, ctx, std::slice::from_ref(&req.skill))?;
+    let mut session = MutationSession::begin_for(rt, ctx, std::slice::from_ref(&req.skill))?;
     let fs = rt.ports.fs.as_ref();
     let home = &rt.scope.home.lexical;
     let mut document = ops_install::read_registry_document(fs, home)?;
@@ -1018,6 +1018,7 @@ fn update_split_copies_body(
 
     let own_roots = crate::ops::harness_own_skill_roots(rt, &req.scope);
     let mut outcome = SplitCopiesOutcome::default();
+    let mut candidates = Vec::new();
     for (id, path, recorded_hash, split_source) in rows {
         if let Some(lock_source) = &lock_source {
             if split_source.is_none() || split_source != *lock_source {
@@ -1043,24 +1044,107 @@ fn update_split_copies_body(
             ));
             continue;
         }
-        match update_one_split_copy(rt, ctx, &session.guard, req, &path, &recorded_hash) {
+        match crate::ops::skill_content_hash(fs, ctx, &path) {
+            Ok(hash) if hash == recorded_hash => candidates.push((id, path, recorded_hash)),
+            Ok(_) => outcome.refused.push((
+                path,
+                "this copy has changes of its own, so the update left it as it is".to_string(),
+            )),
+            Err(error) => outcome
+                .refused
+                .push((path, format!("could not write: {}", error.message))),
+        }
+    }
+    let Some((_, primary, _)) = candidates.first() else {
+        session.finish(rt, ctx);
+        return Ok(outcome);
+    };
+    let id = rt.ports.ids.next_event_id();
+    let mut backup_targets: Vec<PathBuf> =
+        candidates.iter().map(|(_, path, _)| path.clone()).collect();
+    if req.scope == RootScope::Global && req.lock_folder_hash.is_some() {
+        backup_targets.push(crate::lock_file::lock_file_path(home));
+    }
+    let manifest = session
+        .store
+        .backup_paths(&session.guard, &id, &backup_targets)?;
+    let mut inverse = crate::events::restore_backup_inverse(
+        primary,
+        manifest
+            .entries
+            .first()
+            .and_then(|entry| entry.fingerprint.as_ref()),
+        None,
+    );
+    let rows_before: BTreeMap<_, _> = candidates
+        .iter()
+        .filter_map(|(copy_id, _, _)| {
+            document
+                .get("copies")?
+                .get(copy_id)
+                .map(|row| (copy_id.clone(), row.clone()))
+        })
+        .collect();
+    let registry_undo = |expected: Option<&serde_json::Map<String, serde_json::Value>>| {
+        candidates
+            .iter()
+            .map(|(copy_id, _, _)| {
+                let mut entry = ops_install::guarded_registry_undo(
+                    home,
+                    "copies",
+                    copy_id,
+                    rows_before.get(copy_id),
+                    expected
+                        .and_then(|doc| doc.get("copies"))
+                        .and_then(|copies| copies.get(copy_id)),
+                );
+                if expected.is_none() {
+                    if let Some(object) = entry.as_object_mut() {
+                        object.remove("expected");
+                    }
+                }
+                entry
+            })
+            .collect::<Vec<_>>()
+    };
+    inverse["registry_undo"] = serde_json::json!(registry_undo(None));
+    session.store.record(
+        &session.guard,
+        &id,
+        &EventDraft {
+            kind: EventKind::Update,
+            skill: req.skill.clone(),
+            harness: None,
+            scope: Some(scope_label.to_string()),
+            project_path: match &req.scope {
+                RootScope::Global => None,
+                RootScope::Project(project) => Some(project.0.clone()),
+            },
+            payload: serde_json::json!({ "split_copies": true, "destinations": backup_targets }),
+            inverse: Some(inverse),
+            backup_dir: Some(manifest.backup_dir),
+        },
+    )?;
+    for (copy_id, path, recorded_hash) in &candidates {
+        match update_one_split_copy(rt, ctx, &session.guard, req, path, recorded_hash) {
             Ok(Ok(new_hash)) => {
                 if let Some(row) = document
                     .get_mut("copies")
-                    .and_then(|copies| copies.get_mut(&id))
+                    .and_then(|copies| copies.get_mut(copy_id))
                 {
                     row["content_hash"] = serde_json::Value::String(new_hash);
                 }
-                outcome.updated.push(path);
+                outcome.updated.push(path.clone());
             }
-            Ok(Err(reason)) => outcome.refused.push((path, reason)),
+            Ok(Err(reason)) => outcome.refused.push((path.clone(), reason)),
             Err(e) => outcome
                 .refused
-                .push((path, format!("could not write: {}", e.message))),
+                .push((path.clone(), format!("could not write: {}", e.message))),
         }
     }
     // Hashes of the copies that did swap are always recorded, even when a
     // later copy failed, or the next update would refuse them as edited.
+    let registry_after = registry_undo(Some(&document));
     let mut result = Ok(());
     if !outcome.updated.is_empty() {
         result = ops_install::write_registry_document(&session.guard, fs, home, document);
@@ -1079,6 +1163,27 @@ fn update_split_copies_body(
             );
         }
     }
+    let secondary_post = backup_targets
+        .iter()
+        .skip(1)
+        .map(|path| (path.clone(), fingerprint_path(fs, path)))
+        .collect::<Vec<_>>();
+    let patch = crate::events::with_secondary_post(
+        serde_json::json!({ "registry_undo": registry_after }),
+        &secondary_post,
+    );
+    session.store.patch_inverse(&session.guard, &id, patch)?;
+    let post = fingerprint_path(fs, primary)?;
+    session.store.finish(
+        &session.guard,
+        &id,
+        if result.is_ok() {
+            EventStatus::Done
+        } else {
+            EventStatus::Failed
+        },
+        post,
+    )?;
     session.finish(rt, ctx);
     result.map(|()| outcome)
 }

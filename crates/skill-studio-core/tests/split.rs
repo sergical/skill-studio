@@ -145,7 +145,10 @@ fn split_to_claude_and_codex_leaves_only_two_real_copies_in_the_scan() {
     }
     assert!(std::fs::symlink_metadata(universal(&home)).is_err());
     assert!(std::fs::symlink_metadata(pi_link(&home)).is_err());
-    assert!(outcome.update_note.contains("npx skills update"));
+    assert!(outcome
+        .update_note
+        .contains("unedited copies from the same source"));
+    assert!(outcome.update_note.contains("Undo updates from Activity"));
     assert!(outcome.removed_links.contains(&pi_link(&home)));
 
     let inventory = ops::scan(&rt, &ctx(), &ScanRequest::default()).unwrap();

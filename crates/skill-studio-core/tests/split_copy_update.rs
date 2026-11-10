@@ -13,10 +13,10 @@ use skill_studio_core::ops;
 use skill_studio_core::ports::{Ports, Runtime, ScopeFs};
 use skill_studio_core::scope::RuntimeScope;
 use skill_studio_core::testing::golden::{ctx, unique_temp_dir};
-use skill_studio_core::testing::{FailingFs, FakeClock, FakeIds, RecordingSink};
+use skill_studio_core::testing::{FailingFs, FakeClock, RecordingSink};
 use skill_studio_core::SplitCopiesUpdate;
 
-use skill_studio_host::{FileLease, RealFs, SqliteHistoryOpener};
+use skill_studio_host::{FileLease, RealFs, SqliteHistoryOpener, UlidIds};
 
 const HARNESS_DIRS: [&str; 3] = [".claude/skills", ".codex/skills", ".pi/agent/skills"];
 
@@ -33,7 +33,7 @@ fn runtime_with(home: &Path, fs: Arc<dyn ScopeFs>) -> Runtime {
     let ports = Ports {
         fs,
         clock: Arc::new(FakeClock::at(0)),
-        ids: Arc::new(FakeIds::default()),
+        ids: Arc::new(UlidIds::new()),
         leases: Arc::new(FileLease::new(home.join(".leases"))),
         history: Arc::new(SqliteHistoryOpener::new(
             home.join(".history").join("events.sqlite3"),
@@ -370,4 +370,51 @@ fn a_same_name_copy_from_another_source_is_refused_and_not_overwritten() {
     assert_eq!(revision_of(&copy_of(&home, ".claude/skills")), Some("v2"));
     assert_eq!(read_lock(&home), lock_doc());
     std::fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn updating_split_copies_records_an_undo_that_restores_files_and_registry_or_leaves_new_bytes() {
+    let home = split_home("split_update_undo");
+    let registry = home.join(".agents/skill-studio.json");
+    let previous: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+    ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+    let event = ops::list_events(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::ListEventsRequest::default(),
+    )
+    .unwrap()
+    .into_iter()
+    .find(|event| event.kind == "update")
+    .expect("split update has no Activity row to undo");
+    let restore = skill_studio_core::dto::RestoreRequest {
+        event_id: event.id,
+        force: false,
+    };
+    let lock_path = home.join(".agents/.skill-lock.json");
+    let updated_lock = std::fs::read(&lock_path).unwrap();
+    let mut other_install = read_lock(&home);
+    other_install["another_install"] = serde_json::json!(true);
+    std::fs::write(&lock_path, other_install.to_string()).unwrap();
+    let refused = ops::restore_event(&rt, &ctx(), &restore).unwrap_err();
+    assert_eq!(
+        refused.code,
+        skill_studio_core::error::ErrorCode::DriftConflict
+    );
+    for dir in HARNESS_DIRS {
+        assert_eq!(revision_of(&copy_of(&home, dir)), Some("v2"));
+    }
+    std::fs::write(&lock_path, updated_lock).unwrap();
+    ops::restore_event(&rt, &ctx(), &restore).unwrap();
+    for dir in HARNESS_DIRS {
+        assert_eq!(revision_of(&copy_of(&home, dir)), Some("v1"), "{dir}");
+    }
+    let restored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(registry).unwrap()).unwrap();
+    assert_eq!(restored["copies"], previous["copies"]);
+    assert_eq!(read_lock(&home), lock_doc());
+    assert!(!home.join(".agents/skills/gamma").exists());
+    std::fs::remove_dir_all(home).ok();
 }
