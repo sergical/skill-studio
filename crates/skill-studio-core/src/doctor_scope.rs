@@ -193,7 +193,7 @@ fn recorded_paths(
                         .map(PathBuf::from)
                         .filter(|path| path.is_absolute())
                     {
-                        records.entry(path).or_insert(time);
+                        record_earliest_creation(records, path, time);
                     }
                 }
                 recorded_paths(value, time, records);
@@ -206,6 +206,18 @@ fn recorded_paths(
         }
         _ => {}
     }
+}
+
+fn record_earliest_creation(
+    records: &mut std::collections::BTreeMap<PathBuf, Option<chrono::DateTime<chrono::Utc>>>,
+    path: PathBuf,
+    time: Option<chrono::DateTime<chrono::Utc>>,
+) {
+    // A stored None marks an invalid creation record.
+    records
+        .entry(path)
+        .and_modify(|recorded| *recorded = (*recorded).min(time))
+        .or_insert(time);
 }
 
 fn creation_time(
@@ -299,7 +311,7 @@ pub(crate) fn retained_state(
                 ..
             } = step
             {
-                records.entry(path).or_insert(Some(plan.created_at));
+                record_earliest_creation(&mut records, path, Some(plan.created_at));
             }
         }
     }
@@ -426,6 +438,18 @@ mod tests {
             Some(created),
             &mut records,
         );
+        assert_eq!(records.get(&path), Some(&Some(created)));
+    }
+
+    #[test]
+    fn a_later_history_reference_keeps_the_original_retained_creation_time_or_hides_an_old_entry() {
+        let path = PathBuf::from("/home/.agents/skills-trash/removed");
+        let created = chrono::DateTime::from_timestamp(100, 0).unwrap();
+        let referenced = created + chrono::Duration::days(RETAINED_ENTRY_MAX_AGE_DAYS + 1);
+        let event = serde_json::json!({"to": path});
+        let mut records = std::collections::BTreeMap::new();
+        recorded_paths(&event, Some(referenced), &mut records);
+        recorded_paths(&event, Some(created), &mut records);
         assert_eq!(records.get(&path), Some(&Some(created)));
     }
 }

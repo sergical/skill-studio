@@ -6,7 +6,8 @@ or a selected project. A target outside every scope is a warning.
 
 Retained trash, quarantine entries, and orphaned parked or fork entries warn
 after 30 days. `RETAINED_ENTRY_MAX_AGE_DAYS` defines the age once. A recorded
-creation time takes precedence over mtime. Mtime applies only when no record
+creation time takes precedence over mtime. Later journal or history references
+keep the earliest recorded creation time. Mtime applies only when no record
 exists. An invalid recorded time gets a warning; touching an old entry does
 not reset its age. The count cap remains 20 entries per skill. Active parked
 skills and active fork bases are excluded at any age. Doctor never deletes.
