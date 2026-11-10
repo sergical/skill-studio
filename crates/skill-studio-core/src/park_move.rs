@@ -33,7 +33,7 @@ pub(crate) fn crosses_devices(err: &io::Error) -> bool {
 /// Across volumes: copies the folder, flushes the copy to disk, checks it
 /// (entries, file modes and a hash of every file), then renames the source to
 /// a hidden `.park-trash-*` sibling and deletes that. Any failure before the
-/// rename removes the partial copy and leaves the source as it was. Once the
+/// rename removes the partial copy, except that source drift keeps both trees. Once the
 /// rename is done the move has happened: a delete that fails after it leaves
 /// only the hidden sibling (the scan skips dot-folders) and still succeeds.
 pub(crate) fn move_dir(
@@ -95,6 +95,9 @@ fn copy_verify_remove(
         )
         .at(from));
     }
+    let source_binding = fs
+        .fsops_device_inode(from)
+        .map_err(|e| CoreError::io(from, e))?;
     let tree = walk(fs, from).map_err(|e| CoreError::io(from, e))?;
     if let Some(entry) = tree
         .iter()
@@ -117,7 +120,24 @@ fn copy_verify_remove(
             verify_copy(fs, from, to, &tree, preserves_modes, facts.mode)
                 .map_err(|e| CoreError::io(to, e))
         })
-        .and_then(|()| flush_tree(fs, to, &tree).map_err(|e| CoreError::io(to, e)));
+        .and_then(|()| flush_tree(fs, to, &tree).map_err(|e| CoreError::io(to, e)))
+        .and_then(|()| {
+            let rechecked = (|| {
+                if fs.symlink_metadata(from)?.kind != FileKind::Dir
+                    || fs.fsops_device_inode(from)? != source_binding
+                {
+                    return Err(io::Error::other("the source folder was replaced"));
+                }
+                verify_copy(fs, to, from, &tree, true, facts.mode)
+            })();
+            rechecked.map_err(|e| {
+                CoreError::new(
+                    ErrorCode::DriftConflict,
+                    format!("the source changed during sync; the source was kept: {e}"),
+                )
+                .at(from)
+            })
+        });
     let trash = from
         .parent()
         .unwrap_or(from)
@@ -129,9 +149,9 @@ fn copy_verify_remove(
             .map_err(|e| CoreError::io(from, e))
     });
     if let Err(e) = committed {
-        // Best effort: whatever landed at `to` is this attempt's own partial
-        // copy, because park refuses a destination that already exists.
-        let _ = remove_tree(rt, session, to);
+        if e.code != ErrorCode::DriftConflict {
+            let _ = remove_tree(rt, session, to);
+        }
         return Err(e);
     }
 

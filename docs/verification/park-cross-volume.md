@@ -37,3 +37,31 @@ is rerun separately. The Park, Turn on, layout, and volume tests passed.
 
 The isolated MCP watch/repair retry passed (one test). Its elapsed time included
 waiting for nested Cargo builds. Rust format and scoped clippy passed after simplification.
+
+## Source changes during sync
+
+The copy driver captures the source device and inode before the copy. After
+full sync it checks that identity and compares the current source tree with
+the complete copy, including file hashes and permission bits. A mismatch
+returns `DriftConflict` and keeps both trees. Copy and flush failures remove
+the incomplete copy.
+
+Two deterministic `FailingFs` hooks change the source after full file sync.
+No test uses sleeps or wall-clock assertions. Both tests failed against the
+unfixed driver on 2026-11-10 because Park returned success and deleted the
+source:
+
+- `cross_volume_park_keeps_source_edit_during_sync_or_deletes_external_bytes`
+- `cross_volume_park_keeps_replaced_source_during_sync_or_deletes_external_folder`
+
+The tests assert `DriftConflict`, the retained source, and the complete copy.
+The replacement test retains the original inode and creates a new source
+with identical bytes, so a hash-only check cannot pass it.
+
+With the fix, the same command passed both tests locally on 2026-11-10:
+
+```sh
+cargo test -p skill-studio-core --all-features \
+  --config 'profile.test.package.skill-studio-core.opt-level=1' \
+  --test park_any_copy during_sync
+```

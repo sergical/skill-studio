@@ -845,6 +845,7 @@ type FsHook = Box<dyn FnOnce() -> std::io::Result<()> + Send>;
 /// A filesystem wrapper with deterministic fault and race injection.
 pub struct FailingFs {
     full_sync_calls: AtomicU64,
+    after_full_sync: Mutex<Option<FsHook>>,
     fail_next_full_sync: AtomicBool,
     preserves_modes: AtomicBool,
     before_write_for: Mutex<Option<(PathBuf, FsHook)>>,
@@ -906,6 +907,7 @@ impl FailingFs {
     pub fn wrap(inner: Arc<dyn ScopeFs>) -> Self {
         FailingFs {
             full_sync_calls: AtomicU64::new(0),
+            after_full_sync: Mutex::new(None),
             fail_next_full_sync: AtomicBool::new(false),
             preserves_modes: AtomicBool::new(true),
             before_write_for: Mutex::new(None),
@@ -935,6 +937,14 @@ impl FailingFs {
             fail_read_when_present: Mutex::new(None),
             fail_symlink_metadata_for: Mutex::new(None),
         }
+    }
+
+    /// Runs once after the next successful full file sync.
+    pub fn after_full_sync_once(
+        &self,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.after_full_sync.lock().expect("hook lock") = Some(Box::new(hook));
     }
 
     /// Fails the next full file sync before reaching the inner adapter.
@@ -1360,7 +1370,9 @@ impl ScopeFs for FailingFs {
         if self.fail_next_full_sync.swap(false, Ordering::SeqCst) {
             return Err(std::io::Error::other("injected full sync failure"));
         }
-        self.inner.fsops_full_sync_file(path)
+        self.inner.fsops_full_sync_file(path)?;
+        let hook = self.after_full_sync.lock().expect("hook lock").take();
+        hook.map_or(Ok(()), |hook| hook())
     }
     fn fsops_set_directory_mode(&self, path: &Path, mode: u32) -> std::io::Result<()> {
         if !self.preserves_modes.load(Ordering::SeqCst) {

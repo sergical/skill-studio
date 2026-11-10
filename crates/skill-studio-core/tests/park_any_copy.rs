@@ -1415,3 +1415,72 @@ fn cross_volume_full_sync_finishes_before_source_disposal() {
     assert!(!live.exists());
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn cross_volume_park_keeps_source_edit_during_sync_or_deletes_external_bytes() {
+    let home = unique_temp_dir("park_sync_source_edit");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    std::fs::write(live.join("notes.txt"), "before").unwrap();
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    fs.fail_next_rename_cross_device();
+    let notes = live.join("notes.txt");
+    fs.after_full_sync_once(move || std::fs::write(notes, "external edit"));
+    let id = live_copy(&rt, "foo", &live).id;
+    let result = ops::park(&rt, &ctx(), &ParkRequest { deployment_id: id });
+    let error = result.expect_err("Park deleted a source edited during sync");
+    assert_eq!(
+        error.code,
+        skill_studio_core::error::ErrorCode::DriftConflict
+    );
+    let copy = home.join(".agents/skills-parked/codex/foo");
+    assert_eq!(
+        std::fs::read_to_string(copy.join("notes.txt")).unwrap(),
+        "before"
+    );
+    assert_eq!(
+        std::fs::read(copy.join("SKILL.md")).unwrap(),
+        std::fs::read(live.join("SKILL.md")).unwrap()
+    );
+    assert_eq!(
+        std::fs::read_to_string(live.join("notes.txt")).unwrap(),
+        "external edit"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn cross_volume_park_keeps_replaced_source_during_sync_or_deletes_external_folder() {
+    let home = unique_temp_dir("park_sync_source_replaced");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let fs = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    let rt = runtime_with(&home, &[], fs.clone(), Arc::new(RealProcessSpawner::new()));
+    fs.fail_next_rename_cross_device();
+    let source = live.clone();
+    let retained = home.join(".external-source-backup");
+    fs.after_full_sync_once(move || {
+        std::fs::rename(&source, retained)?;
+        write_skill(&source, "foo");
+        Ok(())
+    });
+    let id = live_copy(&rt, "foo", &live).id;
+    let result = ops::park(&rt, &ctx(), &ParkRequest { deployment_id: id });
+    let error = result.expect_err("Park deleted a replacement source with identical bytes");
+    assert_eq!(
+        error.code,
+        skill_studio_core::error::ErrorCode::DriftConflict
+    );
+    let copy = home.join(".agents/skills-parked/codex/foo");
+    assert_eq!(
+        std::fs::read(copy.join("SKILL.md")).unwrap(),
+        std::fs::read(live.join("SKILL.md")).unwrap()
+    );
+    assert_eq!(
+        std::fs::read(home.join(".external-source-backup/SKILL.md")).unwrap(),
+        std::fs::read(live.join("SKILL.md")).unwrap()
+    );
+    assert!(live.join("SKILL.md").is_file());
+    std::fs::remove_dir_all(home).unwrap();
+}
