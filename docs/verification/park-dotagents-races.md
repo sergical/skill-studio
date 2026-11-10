@@ -44,8 +44,12 @@ removed. Every remaining new race test fails without its fix.
 
 The replacement helper records a completed exchange before directory sync or
 conflict detection can fail. Rollback restores the displaced input through the
-same guarded exchange. Matching recovery copies are removed; displaced external
-edits keep a recovery file whose path is included in the conflict error.
+same guarded exchange. Each target keeps one pending displaced file. Its name records the expected
+content hash. The operation that displaced it never deletes it. A later Park or
+Turn on reads it again and deletes it only if the hash still matches. A changed
+pending file blocks the operation and the conflict reports its path. Rollback
+exchanges the pending file back and retains the displaced output for the next
+operation. Failed writes, file syncs, and exchanges remove their staging file.
 
 With the production fix reverted once, the install-aware target had 58 passing
 and five failing tests. The failures were:
@@ -74,3 +78,19 @@ No test failure was reported in that run. CI runs the full core suite.
 The post-green simplification pass found no worthwhile simplification. Final
 review kept the changes within the replacement helper, its callers, tests, and
 these verification notes.
+
+## Open handles and failed staging
+
+The open-writer tests open a writable handle before replacement. A callback
+writes through that handle after the displaced-file comparison has read its
+bytes. Config, lock, and ignore edits must survive. Four later Turn on attempts
+must report the retained path and leave one pending file for that target.
+
+The repeated-failure tests inject write, file-sync, and exchange errors after
+staging creation. Each test tries Park four times and requires zero recovery
+files after every failure. Hooks select the filesystem operation, with no sleeps
+or wall-clock gates.
+
+The cycle test now requires one pending file per target after each cycle.
+Rollback tests accept a recovered external edit in the live file. Rollback
+retains its displaced output rather than a second copy of the recovered input.

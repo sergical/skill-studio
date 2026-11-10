@@ -2658,19 +2658,16 @@ fn assert_last_moment_edit_is_recoverable(rollback: bool, ignore: bool) {
         assert!(parked_copy(&rt, "foo").path.join("SKILL.md").is_file());
         assert!(!stub.skill_dir("foo").exists());
     }
-    let recovery = paths_under(&home)
+    let error = result.unwrap_err();
+    let retained = paths_under(&home)
         .into_iter()
         .find(|p| {
-            p.file_name()
-                .is_some_and(|name| name.to_string_lossy().contains("park-recovery-"))
-                && std::fs::read_to_string(p)
-                    .is_ok_and(|text| text.contains("# external edit at replacement"))
+            std::fs::read_to_string(p)
+                .is_ok_and(|text| text.contains("# external edit at replacement"))
+                && error.message.contains(&p.display().to_string())
         })
-        .expect("external edit needs a recovery copy");
-    assert!(result
-        .unwrap_err()
-        .message
-        .contains(&recovery.display().to_string()));
+        .expect("conflict reports an existing path with the external edit");
+    assert!(read(&retained).contains("# external edit at replacement"));
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -2688,18 +2685,17 @@ fn failed_park_keeps_config_edit_at_rollback_replacement_or_loses_external_comme
 }
 
 #[test]
-fn park_turn_on_cycles_remove_redundant_recovery_files_or_grow_storage() {
+fn park_turn_on_cycles_bound_pending_recovery_files_or_grow_storage() {
     let (home, stub) = dotagents_home("park_recovery_cycles", EXPLICIT_TOML);
     write_gitignore(&home);
     let rt = runtime(&home, stub, true);
     for _ in 0..4 {
         park_foo(&rt);
         unpark_foo(&rt);
-        assert!(
-            !paths_under(&home).iter().any(|path| path
-                .file_name()
-                .is_some_and(|name| name.to_string_lossy().contains("park-recovery-"))),
-            "unchanged inputs left recovery files"
+        assert_eq!(
+            recovery_files(&home).len(),
+            3,
+            "one pending file per target"
         );
     }
     std::fs::remove_dir_all(home).unwrap();
@@ -2759,7 +2755,128 @@ fn failed_turn_on_retains_only_external_recovery_copy_or_loses_edit_and_grows_st
         })
         .collect();
     assert_eq!(recovery.len(), 1, "only the external edit needs recovery");
-    assert!(read(&recovery[0]).contains("# unique external edit"));
-    assert!(error.message.contains(&recovery[0].display().to_string()));
+    assert!(read(&stub.toml_path()).contains("# unique external edit"));
+    assert!(error
+        .message
+        .contains(&stub.toml_path().display().to_string()));
     std::fs::remove_dir_all(home).unwrap();
+}
+
+fn recovery_files(home: &Path) -> Vec<PathBuf> {
+    paths_under(home)
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().contains("park-recovery-"))
+        })
+        .collect()
+}
+
+fn assert_open_writer_survives(target_name: &str) {
+    use std::io::Write;
+    let (home, stub) = dotagents_home("park_open_writer", EXPLICIT_TOML);
+    write_gitignore(&home);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    let target = match target_name {
+        "config" => stub.toml_path(),
+        "lock" => stub.lock_path(),
+        _ => home.join(".agents/.gitignore"),
+    };
+    let mut writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&target)
+        .unwrap();
+    let armed = fs.clone();
+    fs.before_write_once(target.clone(), move || {
+        armed.after_recovery_read_once(move || writer.write_all(b"\n# open writer edit\n"));
+        Ok(())
+    });
+    park_foo(&rt);
+    let pending = recovery_files(&home)
+        .into_iter()
+        .find(|p| read(p).contains("# open writer edit"))
+        .expect("open-handle edit must survive cleanup");
+    for _ in 0..4 {
+        let error = ops::unpark(
+            &rt,
+            &ctx(),
+            &UnparkRequest {
+                deployment_id: parked_copy(&rt, "foo").id,
+            },
+        )
+        .unwrap_err();
+        assert!(error.message.contains(&pending.display().to_string()));
+        assert!(read(&pending).contains("# open writer edit"));
+        assert_eq!(
+            recovery_files(&home)
+                .iter()
+                .filter(|p| p
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(&format!(
+                        ".{}-park-recovery-",
+                        target.file_name().unwrap().to_string_lossy()
+                    )))
+                .count(),
+            1
+        );
+    }
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn park_keeps_open_config_writer_edit_after_comparison_or_cleanup_loses_it() {
+    assert_open_writer_survives("config");
+}
+#[test]
+fn park_keeps_open_lock_writer_edit_after_comparison_or_cleanup_loses_it() {
+    assert_open_writer_survives("lock");
+}
+#[test]
+fn park_keeps_open_ignore_writer_edit_after_comparison_or_cleanup_loses_it() {
+    assert_open_writer_survives("ignore");
+}
+
+fn assert_staging_failure_does_not_accumulate(kind: &str) {
+    let (home, stub) = dotagents_home("park_staging_failure", EXPLICIT_TOML);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    for _ in 0..4 {
+        let armed = fs.clone();
+        let kind = kind.to_string();
+        fs.before_recovery_write_once(move || {
+            match kind.as_str() {
+                "write" => return Err(std::io::Error::other("injected staging write failure")),
+                "sync" => armed.fail_next_fsops_fsync_file(),
+                _ => armed.fail_next_fsops_exchange(),
+            }
+            Ok(())
+        });
+        ops::park(
+            &rt,
+            &ctx(),
+            &ParkRequest {
+                deployment_id: live_copy(&rt, "foo").id,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            recovery_files(&home).is_empty(),
+            "failed staging must leave no recovery files"
+        );
+    }
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn repeated_park_write_failures_remove_staging_or_accumulate_recovery_files() {
+    assert_staging_failure_does_not_accumulate("write");
+}
+#[test]
+fn repeated_park_sync_failures_remove_staging_or_accumulate_recovery_files() {
+    assert_staging_failure_does_not_accumulate("sync");
+}
+#[test]
+fn repeated_park_exchange_failures_remove_staging_or_accumulate_recovery_files() {
+    assert_staging_failure_does_not_accumulate("exchange");
 }

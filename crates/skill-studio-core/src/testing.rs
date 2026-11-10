@@ -836,6 +836,9 @@ type FsHook = Box<dyn FnOnce() -> std::io::Result<()> + Send>;
 
 /// A filesystem wrapper with deterministic fault and race injection.
 pub struct FailingFs {
+    before_recovery_write: Mutex<Option<FsHook>>,
+    after_recovery_read: Mutex<Option<FsHook>>,
+    fail_next_fsops_fsync_file: AtomicBool,
     before_write_for: Mutex<Option<(PathBuf, FsHook)>>,
     after_rename_from: Mutex<Option<(PathBuf, FsHook)>>,
     inner: Arc<dyn ScopeFs>,
@@ -897,6 +900,9 @@ impl FailingFs {
             before_write_for: Mutex::new(None),
             after_rename_from: Mutex::new(None),
             inner,
+            before_recovery_write: Mutex::new(None),
+            after_recovery_read: Mutex::new(None),
+            fail_next_fsops_fsync_file: AtomicBool::new(false),
             fail_next_write_atomic: AtomicBool::new(false),
             fail_next_rename: AtomicBool::new(false),
             fail_next_rename_cross_device: AtomicBool::new(false),
@@ -951,6 +957,28 @@ impl FailingFs {
             }
         };
         hook.map_or(Ok(()), |hook| hook())
+    }
+
+    /// Injects a fault after recovery staging exists but before its bytes are written.
+    pub fn before_recovery_write_once(
+        &self,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.before_recovery_write.lock().expect("hook lock") = Some(Box::new(hook));
+    }
+
+    /// Runs after reading displaced bytes, before the caller compares the returned copy.
+    pub fn after_recovery_read_once(
+        &self,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.after_recovery_read.lock().expect("hook lock") = Some(Box::new(hook));
+    }
+
+    /// Fails the next file sync without changing the staged bytes.
+    pub fn fail_next_fsops_fsync_file(&self) {
+        self.fail_next_fsops_fsync_file
+            .store(true, Ordering::SeqCst);
     }
 
     /// The next `write_atomic` call returns an error instead of reaching
@@ -1200,7 +1228,17 @@ impl ScopeFs for FailingFs {
                 "FailingFs: injected read_capped failure",
             ));
         }
-        self.inner.read_capped(path, max_bytes)
+        let bytes = self.inner.read_capped(path, max_bytes)?;
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().contains("park-recovery-"))
+        {
+            let hook = self.after_recovery_read.lock().expect("hook lock").take();
+            if let Some(hook) = hook {
+                hook()?;
+            }
+        }
+        Ok(bytes)
     }
     fn read_prefix(&self, path: &Path, limit: u64) -> std::io::Result<(Vec<u8>, bool)> {
         let mut target = self
@@ -1222,6 +1260,16 @@ impl ScopeFs for FailingFs {
         path: &ScopedPath,
         bytes: &[u8],
     ) -> std::io::Result<()> {
+        if path
+            .as_path()
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().contains("park-recovery-"))
+        {
+            let hook = self.before_recovery_write.lock().expect("hook lock").take();
+            if let Some(hook) = hook {
+                hook()?;
+            }
+        }
         Self::run_hook(&self.before_write_for, path.as_path())?;
         if self.fail_next_write_atomic.swap(false, Ordering::SeqCst) {
             return Err(std::io::Error::other(
@@ -1324,6 +1372,12 @@ impl ScopeFs for FailingFs {
         self.inner.fsops_device_inode(path)
     }
     fn fsops_fsync_file(&self, path: &Path) -> std::io::Result<()> {
+        if self
+            .fail_next_fsops_fsync_file
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(std::io::Error::other("injected file sync failure"));
+        }
         self.inner.fsops_fsync_file(path)
     }
     fn fsops_fsync_dir(&self, path: &Path) -> std::io::Result<()> {

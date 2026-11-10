@@ -685,6 +685,9 @@ pub(crate) fn unlist(
 ) -> Result<(), CoreError> {
     ctx.checkpoint()?;
     let fs = rt.ports.fs.as_ref();
+    for path in [&plan.config, &plan.lock, &plan.gitignore] {
+        clean_pending(rt, guard, path)?;
+    }
     let before = read_text(fs, &plan.config)?;
     let text = before.as_deref().unwrap_or_default();
     let mut doc = parse(&plan.config, text)?;
@@ -863,13 +866,21 @@ pub(crate) fn restore_files(
             }
             match &file.text {
                 Some(text) => {
-                    let displaced = edit.recovery.as_ref().map(|path| read_text(fs, path)).transpose()?.flatten();
-                    write_text(rt, guard, &file.path, Some(&edit.after), displaced.as_deref().unwrap_or(text), &mut Vec::new())?;
-                    if displaced.as_deref() == Some(text) {
-                        if let Some(path) = &edit.recovery {
-                            let scoped = crate::ports::confine(&rt.scope, fs, path)?;
-                            fs.remove_file(guard, &scoped).map_err(|e| CoreError::io(path, e))?;
+                    if let Some(recovery) = &edit.recovery {
+                        let pending = recovery_path(&file.path, Some(&edit.after));
+                        let source = crate::ports::confine(&rt.scope, fs, recovery)?;
+                        let destination = crate::ports::confine(&rt.scope, fs, &pending)?;
+                        fs.rename(guard, &source, &destination).map_err(|e| CoreError::io(recovery, e))?;
+                        fs.fsops_exchange(&pending, &file.path).map_err(|e| CoreError::io(&file.path, e))?;
+                        if let Some(parent) = file.path.parent() {
+                            fs.fsops_fsync_dir(parent).map_err(|e| CoreError::io(parent, e))?;
                         }
+                        if read_text(fs, &pending)?.as_deref() != Some(edit.after.as_str()) {
+                            return Err(CoreError::new(ErrorCode::DriftConflict,
+                                format!("the file changed during rollback; recovery is retained at {}", pending.display())).at(&file.path));
+                        }
+                    } else {
+                        write_text(rt, guard, &file.path, Some(&edit.after), text, &mut Vec::new())?;
                     }
                     Ok(())
                 },
@@ -925,6 +936,62 @@ fn render_checked(
     Ok(text)
 }
 
+fn recovery_path(path: &Path, expected: Option<&str>) -> PathBuf {
+    path.with_file_name(format!(
+        ".{}-park-recovery-{}",
+        path.file_name().unwrap_or_default().to_string_lossy(),
+        content_hash(expected)
+    ))
+}
+
+fn clean_pending(rt: &Runtime, guard: &ExclusiveGuard, path: &Path) -> Result<(), CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let scoped = crate::ports::confine_write_through(&rt.scope, fs, path)?;
+    let path = scoped.as_path();
+    let prefix = format!(
+        ".{}-park-recovery-",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    );
+    let parent = path
+        .parent()
+        .ok_or_else(|| CoreError::new(ErrorCode::Io, "file has no parent"))?;
+    for entry in fs.read_dir(parent).map_err(|e| CoreError::io(parent, e))? {
+        let name = entry.name.as_str();
+        if let Some(expected) = name.strip_prefix(&prefix) {
+            let pending = parent.join(&entry.name);
+            if content_hash(read_text(fs, &pending)?.as_deref()) != expected {
+                return Err(CoreError::new(
+                    ErrorCode::DriftConflict,
+                    format!(
+                        "a displaced file changed; recovery is retained at {}",
+                        pending.display()
+                    ),
+                )
+                .at(&pending));
+            }
+            let scoped = crate::ports::confine(&rt.scope, fs, &pending)?;
+            fs.remove_file(guard, &scoped)
+                .map_err(|e| CoreError::io(&pending, e))?;
+        }
+    }
+    Ok(())
+}
+
+struct StagingFile<'a> {
+    fs: &'a dyn ScopeFs,
+    guard: &'a ExclusiveGuard,
+    path: &'a crate::ports::ScopedPath,
+    exchanged: bool,
+}
+
+impl Drop for StagingFile<'_> {
+    fn drop(&mut self) {
+        if !self.exchanged {
+            let _ = self.fs.remove_file(self.guard, self.path);
+        }
+    }
+}
+
 fn write_text(
     rt: &Runtime,
     guard: &ExclusiveGuard,
@@ -949,11 +1016,7 @@ fn write_text(
         });
         return Ok(());
     }
-    let displaced = path.with_file_name(format!(
-        ".{}-park-recovery-{}",
-        path.file_name().unwrap_or_default().to_string_lossy(),
-        crate::fsops::unique_suffix()
-    ));
+    let displaced = recovery_path(path, expected);
     let staged = crate::ports::confine(&rt.scope, fs, &displaced)?;
     let mode = fs
         .symlink_metadata(path)
@@ -962,13 +1025,19 @@ fn write_text(
         .unwrap_or(0o600);
     fs.fsops_write_new_file_with_mode(&displaced, b"", mode)
         .map_err(|e| CoreError::io(&displaced, e))?;
+    let mut staging = StagingFile {
+        fs,
+        guard,
+        path: &staged,
+        exchanged: false,
+    };
     fs.write_atomic(guard, &staged, text.as_bytes())
         .map_err(|e| CoreError::io(&displaced, e))?;
     fs.fsops_fsync_file(&displaced)
         .map_err(|e| CoreError::io(&displaced, e))?;
     fs.fsops_exchange(&displaced, path)
         .map_err(|e| CoreError::io(path, e))?;
-    let completed = changed.len();
+    staging.exchanged = true;
     changed.push(FileEdit {
         before: FileSnapshot {
             path: path.to_path_buf(),
@@ -985,15 +1054,12 @@ fn write_text(
         return Err(CoreError::new(
             ErrorCode::DriftConflict,
             format!(
-            "the file changed during replacement; both versions are kept, backup is retained at {}",
-            displaced.display()
-        ),
+                "the file changed during replacement; its displaced bytes are retained at {}",
+                displaced.display()
+            ),
         )
         .at(path));
     }
-    fs.remove_file(guard, &staged)
-        .map_err(|e| CoreError::io(&displaced, e))?;
-    changed[completed].recovery = None;
     Ok(())
 }
 
@@ -1169,13 +1235,31 @@ pub(crate) fn turn_on(
     originals: &[FileSnapshot],
     skill: &SkillName,
 ) -> Result<Vec<FileEdit>, CoreError> {
+    for path in [
+        Some(&recorded.config),
+        recorded.lock.as_ref(),
+        recorded.gitignore.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        clean_pending(rt, guard, path)?;
+    }
     let mut changed = Vec::new();
     match turn_on_files(rt, guard, recorded, originals, skill, &mut changed) {
         Ok(()) => Ok(changed),
-        Err(e) => {
+        Err(mut e) => {
             if let Err(mut restore_error) = restore_files(rt, guard, &changed) {
                 restore_error.message = format!("{} {}", e.message, restore_error.message);
                 return Err(restore_error);
+            }
+            for edit in &changed {
+                if let Some(recovery) = &edit.recovery {
+                    e.message = e.message.replace(
+                        &recovery.display().to_string(),
+                        &edit.before.path.display().to_string(),
+                    );
+                }
             }
             Err(e)
         }
