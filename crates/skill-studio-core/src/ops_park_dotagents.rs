@@ -1008,7 +1008,14 @@ fn available_recovery_path(
 // can leave either the original input or the exchanged output at that name.
 fn recover_rollback(rt: &Runtime, guard: &ExclusiveGuard, path: &Path) -> Result<bool, CoreError> {
     let fs = rt.ports.fs.as_ref();
-    let scoped = crate::ports::confine_write_through(&rt.scope, fs, path)?;
+    let resolved = crate::ports::resolve_config_link(fs, path)?;
+    if let Some(parent) = resolved.parent() {
+        if matches!(fs.symlink_metadata(parent), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+        {
+            return Ok(false);
+        }
+    }
+    let scoped = crate::ports::confine(&rt.scope, fs, &resolved)?;
     let path = scoped.as_path();
     let parent = path
         .parent()
