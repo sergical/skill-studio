@@ -1888,6 +1888,7 @@ fn undoing_an_update_whose_side_effect_patch_failed_still_backs_up_the_sibling_i
     let beta_md = home.join(UNIVERSAL_ROOT_RELATIVE).join("beta/SKILL.md");
     std::fs::write(&beta_md, "my edit to beta\n").unwrap();
 
+    make_readable(&home.join(UNIVERSAL_ROOT_RELATIVE).join("gamma/SKILL.md"));
     undo(&rt, outcome.event_id, true).unwrap();
 
     assert!(skill_body(&home, "beta").contains("Body at v1"));
@@ -1945,6 +1946,7 @@ fn plain_undo_refuses_over_an_edited_sibling_when_a_created_folder_was_unreadabl
     let beta_md = home.join(UNIVERSAL_ROOT_RELATIVE).join("beta/SKILL.md");
     std::fs::write(&beta_md, "my edit to beta\n").unwrap();
 
+    make_readable(&home.join(UNIVERSAL_ROOT_RELATIVE).join("gamma/SKILL.md"));
     let err = undo(&rt, outcome.event_id, false).unwrap_err();
 
     assert_eq!(err.code, ErrorCode::DriftConflict);
@@ -1953,7 +1955,6 @@ fn plain_undo_refuses_over_an_edited_sibling_when_a_created_folder_was_unreadabl
         "my edit to beta\n"
     );
 
-    make_readable(&home.join(UNIVERSAL_ROOT_RELATIVE).join("gamma/SKILL.md"));
     std::fs::remove_dir_all(&home).ok();
 }
 
@@ -2024,6 +2025,10 @@ fn forced_undo_leaves_a_link_target_outside_scope_alone_or_deletes_user_data() {
 
     undo(&rt, outcome.event_id, true).unwrap();
 
+    assert!(
+        std::fs::symlink_metadata(&beta).is_err(),
+        "Undo must remove the created link itself"
+    );
     assert_eq!(
         std::fs::read_to_string(outside.join("SKILL.md")).unwrap(),
         "outside beta\n"
@@ -2722,4 +2727,38 @@ fn update_all_reports_skills_a_finished_dotagents_install_covered_after_cancel_o
     assert!(result.items.iter().all(|item| item.outcome.is_some()));
 
     std::fs::remove_dir_all(&home).ok();
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_removes_a_created_folder_after_it_becomes_readable_or_silently_leaves_an_unowned_skill() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = siblings_home("update_created_read_failure");
+    let gamma = home.join(UNIVERSAL_ROOT_RELATIVE).join("gamma");
+    let failing = Arc::new(FailingFs::wrap(Arc::new(RealFs::new())));
+    failing.fail_read_dir_for(gamma.clone());
+    let rt = runtime_with(
+        &home,
+        failing.clone(),
+        Some(Arc::new(
+            FakeNpxUpdateSpawner::new(home.clone(), "v2").installing_new(&["gamma"]),
+        )),
+    );
+    let outcome = pinned_alpha_update(&rt);
+    assert!(gamma.join("SKILL.md").is_file());
+    let gamma_md = gamma.join("SKILL.md");
+    std::fs::set_permissions(&gamma_md, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let refused = undo(&rt, outcome.event_id.clone(), false);
+    make_readable(&gamma_md);
+    assert!(
+        refused.is_err(),
+        "Undo must refuse while the created folder cannot be read"
+    );
+    assert!(gamma.join("SKILL.md").is_file());
+    undo(&rt, outcome.event_id, false).unwrap();
+    assert!(
+        !gamma.exists(),
+        "Undo reported success but left the folder it created"
+    );
+    std::fs::remove_dir_all(home).unwrap();
 }

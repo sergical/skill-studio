@@ -2411,3 +2411,41 @@ fn remove_with_unreadable_cli_backup_link_target_refuses_before_spawn_or_loses_t
 {
     assert_unreadable_cli_backup_refuses_before_spawn(true);
 }
+
+#[test]
+fn undo_of_a_forced_remove_restore_returns_secondary_replacement_bytes_or_leaves_the_old_folder() {
+    let home_dir = tempfile::tempdir().unwrap();
+    let home = home_dir.path();
+    let spawner = Arc::new(FakeNpxSpawner::new(home.to_path_buf()));
+    spawner.clear_cli_agent_folders();
+    let rt = runtime_with(home, Arc::new(RealFs::new()), Some(spawner));
+    let deployment_id = setup_owner_kind(&rt, home, LifecycleOwnerKind::SkillsSh, "x");
+    let cursor = home.join(".cursor/skills/x");
+    write_skill_md(&cursor);
+    std::fs::write(cursor.join("old.txt"), "before remove\n").unwrap();
+    let removed = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+    std::fs::create_dir_all(&cursor).unwrap();
+    std::fs::write(cursor.join("replacement.txt"), "after remove\n").unwrap();
+    let replacement = folder_bytes(&cursor);
+    let restored = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: removed.event_id,
+            force: true,
+        },
+    )
+    .unwrap();
+    assert!(cursor.join("old.txt").is_file());
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: restored.restore_event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(folder_bytes(&cursor), replacement);
+    assert!(!home.join(".agents/skills/x").exists());
+}

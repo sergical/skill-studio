@@ -832,63 +832,55 @@ fn cli_runtime_for(home: &Path) -> skill_studio_core::ports::Runtime {
     skill_studio_core::ports::Runtime::new(&scope, ports).unwrap()
 }
 
-/// `undo` pages past a default-sized page of unrestorable history to find
-/// the one restorable row underneath it: `DEFAULT_EVENT_LIMIT + 1` park and
-/// unpark rows (each records no inverse) sit on top of the one real
-/// `apply-repair` that rewrote `zeta-bad`'s `SKILL.md`. A single-page read of
-/// `list_events` never sees that repair, so `undo` must keep paging with
-/// `after` until it does.
+/// Automatic quarantine rows can fill a page without hiding the user's last change.
 #[test]
-fn undo_finds_the_last_restorable_event_past_the_default_page_or_names_the_event_it_missed() {
-    use skill_studio_core::dto::{ParkRequest, UnparkRequest};
-    use skill_studio_core::identity::RootKind;
-    use skill_studio_core::ops;
-    use skill_studio_core::testing::golden::ctx;
+fn undo_finds_the_last_user_change_past_automatic_rows_or_names_the_event_it_missed() {
+    use skill_studio_core::events::{EventDraft, EventKind, EventStatus};
+    use skill_studio_core::identity::{EventId, SkillName};
+    use skill_studio_core::ports::{acquire_exclusive, HistoryAccess};
 
     let home = undoable_live_home();
     let zeta_skill_md = home.join(".claude/skills/zeta-bad/SKILL.md");
     let original_zeta_content = std::fs::read(&zeta_skill_md).unwrap();
-    let alpha_dir = home.join(".agents/skills/alpha");
-    std::fs::create_dir_all(&alpha_dir).unwrap();
-    std::fs::write(
-        alpha_dir.join("SKILL.md"),
-        b"---\nname: alpha\ndescription: A universal skill.\n---\nBody.\n",
-    )
-    .unwrap();
-
-    // The one restorable row.
     apply_zeta_repair(&home);
-
-    // Bury it under more than a page of park and unpark rows.
     let rt = cli_runtime_for(&home);
-    let alpha_in = |kind: RootKind| {
-        let inventory = ops::scan(&rt, &ctx(), &Default::default()).unwrap();
-        inventory
-            .skills
-            .iter()
-            .find(|s| s.name.0 == "alpha")
-            .and_then(|s| s.deployments.iter().find(|d| d.root.kind == kind))
-            .map(|d| d.id.clone())
-            .expect("alpha should have a deployment in the root it was moved to")
-    };
-    for _ in 0..=ops::DEFAULT_EVENT_LIMIT.div_ceil(2) {
-        let deployment_id = alpha_in(RootKind::Universal);
-        ops::park(&rt, &ctx(), &ParkRequest { deployment_id }).unwrap();
-        let deployment_id = alpha_in(RootKind::Parked);
-        ops::unpark(&rt, &ctx(), &UnparkRequest { deployment_id }).unwrap();
+    let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+    let mut store = rt
+        .ports
+        .history
+        .open(&rt.scope, HistoryAccess::ReadWrite)
+        .unwrap()
+        .unwrap();
+    for _ in 0..=skill_studio_core::ops::DEFAULT_EVENT_LIMIT {
+        let id = EventId::from_ulid(ulid::Ulid::generate());
+        store
+            .record(
+                &guard,
+                &id,
+                &EventDraft {
+                    kind: EventKind::QuarantinePrune,
+                    skill: SkillName("alpha".into()),
+                    harness: None,
+                    scope: Some("global".into()),
+                    project_path: None,
+                    payload: serde_json::json!({"pruned":[]}),
+                    inverse: None,
+                    backup_dir: None,
+                },
+            )
+            .unwrap();
+        store.finish(&guard, &id, EventStatus::Done, None).unwrap();
     }
-    drop(rt);
-
+    drop(store);
+    drop(guard);
     let undo = run(&["undo", "--home", home.to_str().unwrap(), "--json"]);
     assert_eq!(undo.json["status"], "ok", "{:?}", undo.json);
     assert_eq!(
         std::fs::read(&zeta_skill_md).unwrap(),
         original_zeta_content,
-        "undo should have paged past the park rows and reverted the buried repair, got {:?}",
-        undo.json
+        "Undo must page past automatic rows and restore the last user change"
     );
-
-    std::fs::remove_dir_all(&home).ok();
+    std::fs::remove_dir_all(&home).unwrap();
 }
 
 #[test]
