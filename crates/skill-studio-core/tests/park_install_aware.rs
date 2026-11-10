@@ -2409,3 +2409,75 @@ fn failed_turn_on_keeps_an_edit_after_relisting_when_lock_write_fails() {
 fn failed_turn_on_keeps_an_edit_after_relisting_when_move_fails() {
     assert_failed_turn_on_keeps_a_concurrent_edit(true);
 }
+
+fn assert_last_moment_edit_is_recoverable(rollback: bool, ignore: bool) {
+    let (home, stub) = dotagents_home("park_last_moment_edit", EXPLICIT_TOML);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    let path = if ignore {
+        home.join(".agents/.gitignore")
+    } else {
+        stub.toml_path()
+    };
+    if ignore {
+        write_gitignore(&home);
+    }
+    if !rollback {
+        park_foo(&rt);
+    }
+    let target = path.clone();
+    if rollback {
+        let armed = fs.clone();
+        fs.before_write_once(stub.lock_path(), move || {
+            armed.before_write_once(target.clone(), move || {
+                std::fs::write(&target, read(&target) + "# external edit at replacement\n")
+            });
+            Err(std::io::Error::other("injected lock failure"))
+        });
+    } else {
+        fs.before_write_once(target.clone(), move || {
+            std::fs::write(&target, read(&target) + "# external edit at replacement\n")
+        });
+    }
+    let result = if rollback {
+        ops::park(
+            &rt,
+            &ctx(),
+            &ParkRequest {
+                deployment_id: live_copy(&rt, "foo").id,
+            },
+        )
+        .map(|_| ())
+    } else {
+        ops::unpark(
+            &rt,
+            &ctx(),
+            &UnparkRequest {
+                deployment_id: parked_copy(&rt, "foo").id,
+            },
+        )
+        .map(|_| ())
+    };
+    assert!(
+        result.is_err(),
+        "concurrent replacement must report a conflict"
+    );
+    assert!(
+        paths_under(&home).iter().any(|p| std::fs::read_to_string(p)
+            .is_ok_and(|text| text.contains("# external edit at replacement"))),
+        "replacement erased the external edit"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn turn_on_keeps_config_edit_at_replacement_or_loses_external_comment() {
+    assert_last_moment_edit_is_recoverable(false, false);
+}
+#[test]
+fn turn_on_keeps_ignore_edit_at_replacement_or_loses_external_comment() {
+    assert_last_moment_edit_is_recoverable(false, true);
+}
+#[test]
+fn failed_park_keeps_config_edit_at_rollback_replacement_or_loses_external_comment() {
+    assert_last_moment_edit_is_recoverable(true, false);
+}

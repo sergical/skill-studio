@@ -1390,6 +1390,7 @@ impl ScopeFs for FailingFs {
         self.inner.fsops_remove_file(path)
     }
     fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()> {
+        Self::run_hook(&self.before_write_for, b)?;
         if self.fail_next_fsops_exchange.swap(false, Ordering::SeqCst) {
             return Err(std::io::Error::other(
                 "FailingFs: injected fsops_exchange failure",
