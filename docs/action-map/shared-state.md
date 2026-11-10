@@ -95,7 +95,7 @@ Backups and the event store need a retention limit.
 A size or age cap, checked at startup or on a schedule, keeps disk use bounded without weakening the audit trail for recent events.
 
 Background loops should be observable and cancellable.
-Each of the five, refresh, update check, trial expiry, startup reconcile, pack staging reconcile, should record its last run time and its last error somewhere a settings or diagnostics view can read.
+Each of the four, refresh, update check, trial expiry, startup reconcile, should record its last run time and its last error somewhere a settings or diagnostics view can read.
 A long-running loop should be stoppable, rather than only killable by quitting the app.
 
 ## Gaps
@@ -104,6 +104,6 @@ A long-running loop should be stoppable, rather than only killable by quitting t
 - `skill_fork.rs:949` (`ForkMutationLock`) and `skill_md_write.rs:18` (`SKILL_MD_WRITE_LOCK`): both are single global `Mutex<()>` locks, not per-skill or per-project, and neither is reentrant.
 - `crates/skill-studio-host/src/lease.rs`: a working per-scope `FileLease` exists for the core's `scan` path, but no desktop mutation command uses it.
 - `<app_data>/backups/<event-id>/` and `<app_data>/events.sqlite3`: no retention limit or size cap on either.
-- Five background loops, refresh, update check, trial expiry, startup reconcile, pack staging reconcile, expose no last-run or last-error state outside stderr, and none can be cancelled independently of the app.
+- Four background loops, refresh, update check, trial expiry, startup reconcile, expose no last-run or last-error state outside stderr, and none can be cancelled independently of the app.
 - `docs/spec-core-primitives.md` D9 names the exact rejected alternative that is still in production: the global `ForkMutationLock`. Its own decision log already flags this as the gap to close.
 - The spec's section 6.3 lists most of today's write commands, fork, park, update, packs, as work not yet moved to the core; the write path described in the spec is largely ahead of, not behind, the shipped app.
