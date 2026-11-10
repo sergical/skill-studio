@@ -37,3 +37,25 @@ export function isContentDirty(content: string, initialRaw: string): boolean {
 export function contentForSave(content: string, initialRaw: string): string {
   return initialRaw.includes("\r\n") ? content.replace(/\r?\n/g, "\r\n") : content;
 }
+
+/** The frontmatter through its closing `---` line, or all of `content` when it has none. */
+function frontmatterBlock(content: string): string {
+  return /^---\n[\s\S]*?\n---(?:\n|$)/.exec(content)?.[0] ?? content;
+}
+
+/**
+ * Whether the YAML diagnostic for 1-based `line` still applies: the frontmatter
+ * reads the same in the textarea's LF `content` as in the file as read, and the
+ * line still exists. A YAML error can come from a line other than the one the
+ * parser names, so any frontmatter edit clears the diagnostic.
+ */
+export function isYamlDiagnosticCurrent(
+  content: string,
+  initialRaw: string,
+  line: number,
+): boolean {
+  return (
+    lineRange(content, line) !== null &&
+    frontmatterBlock(content) === frontmatterBlock(normalizeLineEndings(initialRaw))
+  );
+}
