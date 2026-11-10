@@ -5232,15 +5232,15 @@ pub fn unlist_parked_dotagents(
             .at(&deployment.path));
         }
         let skill = resolve_skill(&session.fresh, &deployment.id)?.clone();
-        let plan = crate::ops_park_dotagents::plan_park(rt, &deployment, &skill.name)?.ok_or_else(
-            || {
-                CoreError::new(
-                    ErrorCode::InvalidRequest,
-                    format!("dotagents no longer lists {}", skill.name.0),
-                )
-                .at(&deployment.path)
-            },
-        )?;
+        let plan =
+            crate::ops_park_dotagents::plan_park(rt, &session.guard, &deployment, &skill.name)?
+                .ok_or_else(|| {
+                    CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        format!("dotagents no longer lists {}", skill.name.0),
+                    )
+                    .at(&deployment.path)
+                })?;
         if let Some(live) = crate::ops_park_dotagents::DotagentsPark::live_folder(
             rt,
             &deployment.root.scope,
@@ -5304,7 +5304,8 @@ pub(crate) fn park_found_copy(
 ) -> Result<ParkedCopy, CoreError> {
     let fs = rt.ports.fs.as_ref();
     // Before any row: a refusal here leaves no journal entry behind.
-    let dotagents = crate::ops_park_dotagents::plan_park(rt, deployment, &skill.name)?;
+    let dotagents =
+        crate::ops_park_dotagents::plan_park(rt, &session.guard, deployment, &skill.name)?;
     let links: Vec<PathBuf> = find_all_links(skill, &deployment.path, fs)
         .into_iter()
         .chain(find_independent_links(skill, deployment, fs))

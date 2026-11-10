@@ -578,24 +578,36 @@ fn refuse_nested_project(
 /// is not its own git root, where dotagents would use a different manifest.
 pub(crate) fn plan_park(
     rt: &Runtime,
+    guard: &ExclusiveGuard,
     deployment: &DeploymentDto,
     skill: &SkillName,
 ) -> Result<Option<DotagentsPark>, CoreError> {
-    if !matches!(
-        deployment.owner_kind,
-        LifecycleOwnerKind::Dotagents
-            | LifecycleOwnerKind::WildcardDotagents
-            | LifecycleOwnerKind::Ambiguous
-    ) {
-        return Ok(None);
-    }
     let fs = rt.ports.fs.as_ref();
     let dir = manifest_dir(rt, &deployment.root.scope);
     let config = crate::ports::resolve_config_link(fs, &dir.join("agents.toml"))?;
+    let lock = crate::ports::resolve_config_link(fs, &dir.join("agents.lock"))?;
+    let ignore = match &deployment.root.scope {
+        RootScope::Global => dir.join(".gitignore"),
+        RootScope::Project(_) => dir.join(".agents/.gitignore"),
+    };
+    let gitignore = crate::ports::resolve_config_link(fs, &ignore)?;
+    let mut recovered = false;
+    for path in [&config, &lock, &gitignore] {
+        recovered |= recover_rollback(rt, guard, path)?;
+    }
+    if !recovered
+        && !matches!(
+            deployment.owner_kind,
+            LifecycleOwnerKind::Dotagents
+                | LifecycleOwnerKind::WildcardDotagents
+                | LifecycleOwnerKind::Ambiguous
+        )
+    {
+        return Ok(None);
+    }
     let Some((original_config, doc)) = read_manifest(fs, &config)? else {
         return Ok(None);
     };
-    let lock = crate::ports::resolve_config_link(fs, &dir.join("agents.lock"))?;
     let original_lock = read_text(fs, &lock)?;
     let lock_doc = match &original_lock {
         Some(text) => Some(parse(&lock, text)?),
@@ -626,13 +638,6 @@ pub(crate) fn plan_park(
         return Ok(None);
     }
     refuse_nested_project(rt, &deployment.root.scope, skill)?;
-    let gitignore = crate::ports::resolve_config_link(
-        fs,
-        &match &deployment.root.scope {
-            RootScope::Global => dir.join(".gitignore"),
-            RootScope::Project(_) => dir.join(".agents").join(".gitignore"),
-        },
-    )?;
     // Turn on writes this file back through `confine_write_through`; a link
     // that leaves the home and projects would park the skill for good.
     crate::ports::confine(&rt.scope, fs, &gitignore).map_err(|e| {
@@ -694,7 +699,12 @@ pub(crate) fn unlist(
     let own_rows = |doc: &toml_edit::DocumentMut| {
         rows(doc)
             .filter(|row| {
-                row_name(row) == Some(skill.0.as_str()) || is_recorded(row, &plan.wildcards)
+                row_name(row) == Some(skill.0.as_str())
+                    || is_recorded(row, &plan.wildcards)
+                    || plan
+                        .locked
+                        .as_ref()
+                        .is_some_and(|locked| wildcard_contains(row, &skill.0, locked))
             })
             .map(ToString::to_string)
             .collect::<Vec<_>>()
@@ -868,7 +878,7 @@ pub(crate) fn restore_files(
                 Some(text) => {
                     if let Some(recovery) = &edit.recovery {
                         let retained = available_recovery_path(rt, &file.path, Some(&edit.after), Some(recovery))?;
-                        let pending = PathBuf::from(format!("{}-staging", retained.display()));
+                        let pending = PathBuf::from(format!("{}-rollback-staging", retained.display()));
                         let source = crate::ports::confine(&rt.scope, fs, recovery)?;
                         let destination = crate::ports::confine(&rt.scope, fs, &pending)?;
                         fs.rename(guard, &source, &destination).map_err(|e| CoreError::io(recovery, e))?;
@@ -979,11 +989,74 @@ fn available_recovery_path(
         let staging = PathBuf::from(format!("{}-staging", candidate.display()));
         if rt.ports.fs.symlink_metadata(&candidate).is_err()
             && rt.ports.fs.symlink_metadata(&staging).is_err()
+            && rt
+                .ports
+                .fs
+                .symlink_metadata(&PathBuf::from(format!(
+                    "{}-rollback-staging",
+                    candidate.display()
+                )))
+                .is_err()
         {
             return Ok(candidate);
         }
     }
     Err(CoreError::new(ErrorCode::DriftConflict, "retained Park files reached the limit; inspect and explicitly remove recovery and staging files before retrying").at(path))
+}
+
+// The rollback name records its expected live hash before the exchange. A crash
+// can leave either the original input or the exchanged output at that name.
+fn recover_rollback(rt: &Runtime, guard: &ExclusiveGuard, path: &Path) -> Result<bool, CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let scoped = crate::ports::confine_write_through(&rt.scope, fs, path)?;
+    let path = scoped.as_path();
+    let parent = path
+        .parent()
+        .ok_or_else(|| CoreError::new(ErrorCode::Io, "file has no parent"))?;
+    let entries = match fs.read_dir(parent) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(CoreError::io(parent, e)),
+    };
+    let prefix = format!(
+        ".{}-park-recovery-",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    );
+    let mut recovered = false;
+    for entry in entries {
+        let Some(retained_name) = entry.name.strip_suffix("-rollback-staging") else {
+            continue;
+        };
+        let Some(expected) = retained_name.strip_prefix(&prefix) else {
+            continue;
+        };
+        let expected = expected.split(".retained-").next().unwrap_or(expected);
+        let pending = parent.join(&entry.name);
+        if content_hash(read_text(fs, &pending)?.as_deref()) != expected {
+            if content_hash(read_text(fs, path)?.as_deref()) != expected {
+                return Err(CoreError::new(ErrorCode::DriftConflict,
+                    "the file changed after interrupted rollback; inspect the retained rollback file before retrying").at(&pending));
+            }
+            fs.fsops_exchange(&pending, path)
+                .map_err(|e| CoreError::io(path, e))?;
+            if content_hash(read_text(fs, &pending)?.as_deref()) != expected {
+                return Err(CoreError::new(
+                    ErrorCode::DriftConflict,
+                    "the file changed during rollback recovery; its displaced input is retained",
+                )
+                .at(&pending));
+            }
+        }
+        let retained = parent.join(retained_name);
+        let source = crate::ports::confine(&rt.scope, fs, &pending)?;
+        let destination = crate::ports::confine(&rt.scope, fs, &retained)?;
+        fs.rename(guard, &source, &destination)
+            .map_err(|e| CoreError::io(&pending, e))?;
+        fs.fsops_fsync_dir(parent)
+            .map_err(|e| CoreError::io(parent, e))?;
+        recovered = true;
+    }
+    Ok(recovered)
 }
 
 fn clean_pending(rt: &Runtime, _guard: &ExclusiveGuard, path: &Path) -> Result<(), CoreError> {

@@ -2947,7 +2947,7 @@ fn turn_on_keeps_ignore_write_after_pending_read_or_unlink_deletes_edit() {
     assert_writer_after_next_read_survives("ignore");
 }
 
-fn assert_killed_staging_allows_turn_on(rollback: bool) {
+fn assert_killed_staging_allows_turn_on(rollback: bool, concurrent_edit: bool) {
     use std::io::{BufRead, Write};
     const CHILD_HOME: &str = "SKILL_STUDIO_STAGING_KILL_HOME";
     if let Some(home) = std::env::var_os(CHILD_HOME) {
@@ -2989,8 +2989,10 @@ fn assert_killed_staging_allows_turn_on(rollback: bool) {
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            if rollback {
-                "park_killed_during_rollback_allows_retry_and_turn_on_or_conflicts_forever"
+            if concurrent_edit {
+                "park_killed_during_rollback_refuses_changed_config_on_retry_or_loses_external_edit"
+            } else if rollback {
+                "park_killed_during_rollback_restores_management_on_retry_and_turn_on_or_loses_config_entry"
             } else {
                 "park_killed_after_staging_allows_turn_on_or_retry_conflicts_forever"
             },
@@ -3022,10 +3024,32 @@ fn assert_killed_staging_allows_turn_on(rollback: bool) {
     }
     if rollback {
         assert!(home.join(".agents/skills/foo/SKILL.md").exists());
+        if concurrent_edit {
+            let config = home.join(".agents/agents.toml");
+            let expected = read(&config) + "# concurrent after crash\n";
+            std::fs::write(&config, &expected).unwrap();
+            let error = ops::park(
+                &rt,
+                &ctx(),
+                &ParkRequest {
+                    deployment_id: live_copy(&rt, "foo").id,
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error.code, skill_studio_core::ErrorCode::DriftConflict);
+            assert_eq!(read(&config), expected);
+            assert!(home.join(".agents/skills/foo/SKILL.md").exists());
+            std::fs::remove_dir_all(home).unwrap();
+            return;
+        }
         park_foo(&rt);
     }
     unpark_foo(&rt);
     assert!(home.join(".agents/skills/foo/SKILL.md").exists());
+    assert!(
+        read(&home.join(".agents/agents.toml")).contains("name = \"foo\""),
+        "Turn on lost dotagents management after interrupted rollback"
+    );
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -3083,9 +3107,36 @@ fn failed_turn_on_at_retention_limit_rolls_back_or_install_revives_parked_skill(
 
 #[test]
 fn park_killed_after_staging_allows_turn_on_or_retry_conflicts_forever() {
-    assert_killed_staging_allows_turn_on(false);
+    assert_killed_staging_allows_turn_on(false, false);
 }
 #[test]
-fn park_killed_during_rollback_allows_retry_and_turn_on_or_conflicts_forever() {
-    assert_killed_staging_allows_turn_on(true);
+fn park_killed_during_rollback_restores_management_on_retry_and_turn_on_or_loses_config_entry() {
+    assert_killed_staging_allows_turn_on(true, false);
+}
+
+#[test]
+fn park_refuses_a_new_supplying_wildcard_after_planning_or_turn_on_leaves_it_excluded() {
+    let (home, stub) = dotagents_home("park_new_wildcard", WILDCARD_TOML);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    let deployment_id = live_copy(&rt, "foo").id;
+    let config = stub.toml_path();
+    fs.after_rename_once(stub.skill_dir("foo"), move || {
+        std::fs::write(
+            &config,
+            read(&config)
+                + "\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\npath = \"other\"\n",
+        )
+    });
+    let error = ops::park(&rt, &ctx(), &ParkRequest { deployment_id }).unwrap_err();
+    assert_eq!(error.code, skill_studio_core::ErrorCode::DriftConflict);
+    let config = read(&stub.toml_path());
+    assert!(config.contains("path = \"other\""));
+    assert!(!config.contains("exclude"));
+    assert!(stub.skill_dir("foo").join("SKILL.md").exists());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn park_killed_during_rollback_refuses_changed_config_on_retry_or_loses_external_edit() {
+    assert_killed_staging_allows_turn_on(true, true);
 }
