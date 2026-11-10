@@ -29,6 +29,7 @@ function Confirmation() {
         request={request}
         onClose={() => setOpen(false)}
         onOffEverywhere={() => setOpen(false)}
+        onTurnedOff={() => setOpen(false)}
       />
     )
   );
