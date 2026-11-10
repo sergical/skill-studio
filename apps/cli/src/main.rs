@@ -752,7 +752,7 @@ fn build_runtime_write_with_project<T: ops::Outcome + serde::Serialize>(
         ports.discovery = Some(Arc::new(skill_studio_host::HostProjectDiscovery::new()));
     }
     ports.tools = Some(Arc::new(skill_studio_host::PathToolLookup::new()));
-    ports.spawner = Some(Arc::new(skill_studio_host::RealProcessSpawner::new()));
+    ports.spawner = Some(Arc::new(scope.process_spawner(&runtime_scope.home_root)));
     Runtime::new(&runtime_scope, ports).map_err(|err| {
         let envelope: ResultEnvelope<T> = error_envelope(operation, err, &runtime_scope);
         let code = exit_code(envelope.exit_status());
@@ -779,7 +779,7 @@ fn build_runtime<T: ops::Outcome + serde::Serialize>(
         skill_studio_host::telemetry::Surface::Cli,
         env!("CARGO_PKG_VERSION"),
     );
-    ports.spawner = Some(Arc::new(skill_studio_host::RealProcessSpawner::new()));
+    ports.spawner = Some(Arc::new(scope.process_spawner(&runtime_scope.home_root)));
     if runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture {
         // Fixture scopes name their own projects explicitly; discovery would
         // otherwise walk the real machine's transcripts for a fake home.
