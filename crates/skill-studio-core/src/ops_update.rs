@@ -1085,29 +1085,8 @@ fn update_split_copies_body(
                 .map(|row| (copy_id.clone(), row.clone()))
         })
         .collect();
-    let registry_undo = |expected: Option<&serde_json::Map<String, serde_json::Value>>| {
-        candidates
-            .iter()
-            .map(|(copy_id, _, _)| {
-                let mut entry = ops_install::guarded_registry_undo(
-                    home,
-                    "copies",
-                    copy_id,
-                    rows_before.get(copy_id),
-                    expected
-                        .and_then(|doc| doc.get("copies"))
-                        .and_then(|copies| copies.get(copy_id)),
-                );
-                if expected.is_none() {
-                    if let Some(object) = entry.as_object_mut() {
-                        object.remove("expected");
-                    }
-                }
-                entry
-            })
-            .collect::<Vec<_>>()
-    };
-    inverse["registry_undo"] = serde_json::json!(registry_undo(None));
+    inverse["registry_undo"] = serde_json::json!([]);
+    inverse["restore_paths"] = serde_json::json!([]);
     session.store.record(
         &session.guard,
         &id,
@@ -1144,7 +1123,21 @@ fn update_split_copies_body(
     }
     // Hashes of the copies that did swap are always recorded, even when a
     // later copy failed, or the next update would refuse them as edited.
-    let registry_after = registry_undo(Some(&document));
+    let registry_after = candidates
+        .iter()
+        .filter(|(_, path, _)| outcome.updated.contains(path))
+        .map(|(copy_id, _, _)| {
+            ops_install::guarded_registry_undo(
+                home,
+                "copies",
+                copy_id,
+                rows_before.get(copy_id),
+                document
+                    .get("copies")
+                    .and_then(|copies| copies.get(copy_id)),
+            )
+        })
+        .collect::<Vec<_>>();
     let mut result = Ok(());
     if !outcome.updated.is_empty() {
         result = ops_install::write_registry_document(&session.guard, fs, home, document);
@@ -1163,15 +1156,43 @@ fn update_split_copies_body(
             );
         }
     }
-    let secondary_post = backup_targets
+    let lock_path = crate::lock_file::lock_file_path(home);
+    let changed_paths: Vec<_> = backup_targets
+        .iter()
+        .filter(|path| {
+            outcome.updated.contains(path)
+                || (**path == lock_path
+                    && outcome.refused.is_empty()
+                    && !outcome.updated.is_empty())
+        })
+        .cloned()
+        .collect();
+    session.store.patch_payload(
+        &session.guard,
+        &id,
+        serde_json::json!({ "destinations": changed_paths }),
+    )?;
+    let Some(primary) = outcome.updated.first() else {
+        session
+            .store
+            .finish(&session.guard, &id, EventStatus::Failed, None)?;
+        session.finish(rt, ctx);
+        return result.map(|()| outcome);
+    };
+    let pre = manifest
+        .entries
+        .iter()
+        .find(|entry| &entry.original == primary)
+        .and_then(|entry| entry.fingerprint.as_ref());
+    let mut final_inverse = crate::events::restore_backup_inverse(primary, pre, None);
+    final_inverse["restore_paths"] = serde_json::json!(changed_paths);
+    final_inverse["registry_undo"] = serde_json::json!(registry_after);
+    let secondary_post = changed_paths
         .iter()
         .skip(1)
         .map(|path| (path.clone(), fingerprint_path(fs, path)))
         .collect::<Vec<_>>();
-    let patch = crate::events::with_secondary_post(
-        serde_json::json!({ "registry_undo": registry_after }),
-        &secondary_post,
-    );
+    let patch = crate::events::with_secondary_post(final_inverse, &secondary_post);
     session.store.patch_inverse(&session.guard, &id, patch)?;
     let post = fingerprint_path(fs, primary)?;
     session.store.finish(

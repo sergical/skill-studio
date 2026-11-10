@@ -4413,6 +4413,14 @@ fn restore_event_body(
     let step_start = clock.monotonic();
 
     let fs = rt.ports.fs.as_ref();
+    if inverse
+        .get("restore_paths")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        return Err(CoreError::new(ErrorCode::Unsupported,
+            "this interrupted update did not record which copies changed; keep its backups and inspect the copies"));
+    }
     let expected = post.as_deref().unwrap_or("absent");
     let live_fingerprint = crate::events::fingerprint_path(fs, &path)?;
     let live = live_fingerprint
@@ -4591,7 +4599,13 @@ fn restore_event_body(
             };
             for other in &original_manifest.entries {
                 // A write-back path is written once, by `write_back_plans`.
-                if other.original == path || write_back.contains(&other.original) {
+                if other.original == path
+                    || write_back.contains(&other.original)
+                    || inverse
+                        .get("restore_paths")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|paths| !paths.contains(&serde_json::json!(other.original)))
+                {
                     continue;
                 }
                 // A secondary path the event recorded as absent before and
@@ -4692,7 +4706,7 @@ fn restore_event_body(
         })
         .cloned()
         .collect();
-    let restore_inverse = crate::events::with_write_back(
+    let mut restore_inverse = crate::events::with_write_back(
         crate::events::restore_backup_inverse_with_links(
             &path,
             restore_pre_fingerprint.as_ref(),
@@ -4701,6 +4715,30 @@ fn restore_event_body(
         ),
         &removed_copies,
     );
+    if let Some(edits) = inverse
+        .get("registry_undo")
+        .and_then(serde_json::Value::as_array)
+    {
+        let mut mirror = Vec::new();
+        for edit in edits {
+            let (Some(root), Some(key), Some(id)) = (
+                edit["root"].as_str(),
+                edit["key"].as_str(),
+                edit["id"].as_str(),
+            ) else {
+                continue;
+            };
+            let document = ops_install::read_registry_document(fs, Path::new(root))?;
+            mirror.push(ops_install::guarded_registry_undo(
+                Path::new(root),
+                key,
+                id,
+                document.get(key).and_then(|rows| rows.get(id)),
+                edit.get("previous"),
+            ));
+        }
+        restore_inverse["registry_undo"] = serde_json::json!(mirror);
+    }
     let draft = crate::events::EventDraft {
         kind: crate::events::EventKind::Restore,
         skill: target.skill.clone(),

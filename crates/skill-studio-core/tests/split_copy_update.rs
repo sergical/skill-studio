@@ -418,3 +418,83 @@ fn updating_split_copies_records_an_undo_that_restores_files_and_registry_or_lea
     assert!(!home.join(".agents/skills/gamma").exists());
     std::fs::remove_dir_all(home).ok();
 }
+
+#[path = "support/edit_on_read.rs"]
+mod edit_on_read;
+
+fn latest_update(rt: &Runtime) -> skill_studio_core::identity::EventId {
+    ops::list_events(
+        rt,
+        &ctx(),
+        &skill_studio_core::dto::ListEventsRequest::default(),
+    )
+    .unwrap()
+    .into_iter()
+    .find(|e| e.kind == "update")
+    .unwrap()
+    .id
+}
+
+#[test]
+fn split_update_then_undo_keeps_a_copy_edited_after_backup_or_overwrites_the_refused_edit() {
+    let home = split_home("split_refused_undo");
+    let path = copy_of(&home, ".claude/skills").join("SKILL.md");
+    let edited = skill_md("editor");
+    let fs = edit_on_read::EditOnRead {
+        path: path.clone(),
+        backups: home.join(".history/backups"),
+        bytes: edited.clone(),
+        reads: Default::default(),
+    };
+    let rt = runtime_with(&home, Arc::new(fs));
+    let outcome = ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+    assert_eq!(outcome.refused.len(), 1, "{outcome:?}");
+    assert_eq!(outcome.updated.len(), 2, "{outcome:?}");
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: latest_update(&rt),
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        edited,
+        "Undo overwrote the refused edit"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn split_update_undo_redo_allows_the_next_update_or_the_registry_hash_refuses_unedited_copies() {
+    let home = split_home("split_redo_registry");
+    let rt = runtime_with(&home, Arc::new(RealFs::new()));
+    ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+    let undo = ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: latest_update(&rt),
+            force: false,
+        },
+    )
+    .unwrap();
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::RestoreRequest {
+            event_id: undo.restore_event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    let next = ops::update_split_copies(&rt, &ctx(), &v2()).unwrap();
+    assert!(
+        next.refused.is_empty(),
+        "redo left stale registry hashes: {next:?}"
+    );
+    assert_eq!(next.updated.len(), 3);
+    std::fs::remove_dir_all(home).unwrap();
+}
