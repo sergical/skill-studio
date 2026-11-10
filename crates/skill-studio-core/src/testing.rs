@@ -832,10 +832,12 @@ impl ScopeFs for FixtureFs {
     }
 }
 
-/// Wraps another [`ScopeFs`], failing exactly one `write_atomic` call and
-/// delegating everything else. Lets a test exercise a mutation that fails
-/// partway through without a second fake filesystem.
+type FsHook = Box<dyn FnOnce() -> std::io::Result<()> + Send>;
+
+/// A filesystem wrapper with deterministic fault and race injection.
 pub struct FailingFs {
+    before_write_for: Mutex<Option<(PathBuf, FsHook)>>,
+    after_rename_from: Mutex<Option<(PathBuf, FsHook)>>,
     inner: Arc<dyn ScopeFs>,
     fail_next_write_atomic: AtomicBool,
     fail_next_rename: AtomicBool,
@@ -892,6 +894,8 @@ impl FailingFs {
     /// Wraps `inner`, initially failing nothing.
     pub fn wrap(inner: Arc<dyn ScopeFs>) -> Self {
         FailingFs {
+            before_write_for: Mutex::new(None),
+            after_rename_from: Mutex::new(None),
             inner,
             fail_next_write_atomic: AtomicBool::new(false),
             fail_next_rename: AtomicBool::new(false),
@@ -917,6 +921,36 @@ impl FailingFs {
             fail_read_when_present: Mutex::new(None),
             fail_symlink_metadata_for: Mutex::new(None),
         }
+    }
+
+    /// Runs a callback once before the named file is written.
+    pub fn before_write_once(
+        &self,
+        path: PathBuf,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.before_write_for.lock().expect("hook lock") = Some((path, Box::new(hook)));
+    }
+
+    /// Runs a callback once after the named source has been renamed.
+    pub fn after_rename_once(
+        &self,
+        path: PathBuf,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.after_rename_from.lock().expect("hook lock") = Some((path, Box::new(hook)));
+    }
+
+    fn run_hook(slot: &Mutex<Option<(PathBuf, FsHook)>>, path: &Path) -> std::io::Result<()> {
+        let hook = {
+            let mut pending = slot.lock().expect("hook lock");
+            if pending.as_ref().is_some_and(|(target, _)| target == path) {
+                pending.take().map(|(_, hook)| hook)
+            } else {
+                None
+            }
+        };
+        hook.map_or(Ok(()), |hook| hook())
     }
 
     /// The next `write_atomic` call returns an error instead of reaching
@@ -1188,6 +1222,7 @@ impl ScopeFs for FailingFs {
         path: &ScopedPath,
         bytes: &[u8],
     ) -> std::io::Result<()> {
+        Self::run_hook(&self.before_write_for, path.as_path())?;
         if self.fail_next_write_atomic.swap(false, Ordering::SeqCst) {
             return Err(std::io::Error::other(
                 "FailingFs: injected write_atomic failure",
@@ -1225,7 +1260,8 @@ impl ScopeFs for FailingFs {
             }
             return Err(std::io::Error::from_raw_os_error(18));
         }
-        self.inner.rename(guard, from, to)
+        self.inner.rename(guard, from, to)?;
+        Self::run_hook(&self.after_rename_from, from.as_path())
     }
     fn remove_file(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
         if self.fail_next_remove_file.swap(false, Ordering::SeqCst) {

@@ -1,22 +1,14 @@
-//! Install-aware Park for skills dotagents manages (#389).
-//!
-//! `dotagents install` copies every skill `agents.toml` lists into
-//! `~/.agents/skills` on every run, so a parked copy would come back at the
-//! next install. Park therefore runs `dotagents remove <name> -y` (it drops
-//! the entry, or adds the name to a `name = "*"` entry's `exclude`, and
-//! deletes the skill's `agents.lock` row), and turning the skill on edits
-//! `agents.toml` and `agents.lock` back: dotagents has no command for that.
-//!
-//! `park` plans first ([`plan_park`]), so a refusal leaves no journal row;
-//! the edits to `agents.toml` go through `toml_edit`, which keeps comments
-//! and formatting.
+//! Install-aware Park edits dotagents bookkeeping without running its
+//! destructive remove command. Turn on restores untouched files byte for
+//! byte and merges the skill's entries when other content changed.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use crate::dto::DeploymentDto;
 use crate::error::{CoreError, ErrorCode};
 use crate::identity::{LifecycleOwnerKind, RootScope, SkillName};
-use crate::ports::{ExclusiveGuard, OpContext, ProcessSpec, Runtime, ScopeFs};
+use crate::ports::{ExclusiveGuard, OpContext, Runtime, ScopeFs};
 
 /// A file's text before an edit, to write back when a later step fails.
 /// `None` text means the file did not exist.
@@ -50,10 +42,7 @@ struct Locked {
 
 /// What Park must undo in dotagents' files for one skill.
 pub(crate) struct DotagentsPark {
-    /// The program that runs dotagents: `dotagents` itself, or `npx`.
-    program: PathBuf,
-    /// Arguments before the dotagents ones; `-y @sentry/dotagents` for `npx`.
-    prefix_args: Vec<String>,
+    changes: RefCell<Vec<(FileSnapshot, String)>>,
     /// `agents.toml`, or the file its link resolves to.
     pub(crate) config: PathBuf,
     /// `agents.lock`, or the file its link resolves to.
@@ -116,54 +105,37 @@ impl DotagentsPark {
     pub(crate) fn backup_paths(&self) -> Vec<PathBuf> {
         self.originals
             .iter()
+            .filter(|file| file.text.is_some())
             .map(|file| file.path.clone())
             .collect()
     }
 
     /// The `payload.dotagents_after` value: what the three files hold once
-    /// `dotagents remove` has run. `None` when a file cannot be read, or when
-    /// anything beyond this skill's own entries changed while the command
-    /// ran: turn-on then edits the files, because restoring a backup would
-    /// drop that other change.
+    /// Park has written them. `None` when the recorded input or output differs
+    /// from the backup and current bytes, so Turn on must merge.
     pub(crate) fn payload_after(
         &self,
         rt: &Runtime,
-        skill: &SkillName,
+        _skill: &SkillName,
     ) -> Option<serde_json::Value> {
         let fs = rt.ports.fs.as_ref();
-        let after_text = |path: &Path| read_text(fs, path).ok();
-        let before_text = |path: &Path| {
-            self.originals
-                .iter()
-                .find(|file| file.path == path)
-                .and_then(|file| file.text.clone())
+        let changes = self.changes.borrow();
+        let hash = |path: &Path| {
+            let original = self.originals.iter().find(|file| file.path == path)?;
+            let change = changes.iter().find(|(before, _)| before.path == path);
+            let expected = match change {
+                Some((before, after)) if before.text == original.text => Some(after.as_str()),
+                Some(_) => return None,
+                None => original.text.as_deref(),
+            };
+            let current = read_text(fs, path).ok()?;
+            (current.as_deref() == expected).then(|| content_hash(expected))
         };
-        let (config, lock, ignore) = (
-            after_text(&self.config)?,
-            after_text(&self.lock)?,
-            after_text(&self.gitignore)?,
-        );
-        let name = skill.0.as_str();
-        let only_own_entries_gone = removed_only(
-            before_text(&self.config).as_deref(),
-            config.as_deref(),
-            |text| config_shape(text, name, &self.wildcards),
-        ) && removed_only(
-            before_text(&self.lock).as_deref(),
-            lock.as_deref(),
-            |text| lock_shape(text, name),
-        ) && removed_only(
-            before_text(&self.gitignore).as_deref(),
-            ignore.as_deref(),
-            |text| Some(ignore_shape(text, name)),
-        );
-        only_own_entries_gone.then(|| {
-            serde_json::json!({
-                "config": content_hash(config.as_deref()),
-                "lock": content_hash(lock.as_deref()),
-                "gitignore": content_hash(ignore.as_deref()),
-            })
-        })
+        Some(serde_json::json!({
+            "config": hash(&self.config)?,
+            "lock": hash(&self.lock)?,
+            "gitignore": hash(&self.gitignore)?,
+        }))
     }
 
     /// The `payload.dotagents` value the park row records.
@@ -189,123 +161,6 @@ impl DotagentsPark {
             "wildcards": wildcards,
         })
     }
-}
-
-/// True when `after` is `before` apart from the skill's own entries, as
-/// `shape` sees them. An absent file only matches an absent file.
-fn removed_only(
-    before: Option<&str>,
-    after: Option<&str>,
-    shape: impl Fn(&str) -> Option<serde_json::Value>,
-) -> bool {
-    match (before, after) {
-        (None, None) => true,
-        (Some(before), Some(after)) => {
-            let before = shape(before);
-            before.is_some() && before == shape(after)
-        }
-        _ => false,
-    }
-}
-
-/// A TOML item as JSON, so two files compare by content and not by layout.
-fn item_json(item: &toml_edit::Item) -> serde_json::Value {
-    fn value_json(value: &toml_edit::Value) -> serde_json::Value {
-        match value {
-            toml_edit::Value::Array(items) => items.iter().map(value_json).collect(),
-            toml_edit::Value::InlineTable(table) => table
-                .iter()
-                .map(|(key, value)| (key.to_string(), value_json(value)))
-                .collect::<serde_json::Map<_, _>>()
-                .into(),
-            toml_edit::Value::String(text) => text.value().clone().into(),
-            other => other.to_string().trim().to_string().into(),
-        }
-    }
-    match item {
-        toml_edit::Item::Value(value) => value_json(value),
-        toml_edit::Item::Table(table) => table
-            .iter()
-            .map(|(key, item)| (key.to_string(), item_json(item)))
-            .collect::<serde_json::Map<_, _>>()
-            .into(),
-        toml_edit::Item::ArrayOfTables(tables) => tables
-            .iter()
-            .map(|table| item_json(&toml_edit::Item::Table(table.clone())))
-            .collect(),
-        toml_edit::Item::None => serde_json::Value::Null,
-    }
-}
-
-/// `agents.toml` without `skill`'s own row, and without `skill` in any
-/// recorded wildcard's `exclude` list (an empty list reads as no list, and so does an empty
-/// `skills` array: dotagents drops the key once the last row is gone).
-fn config_shape(text: &str, skill: &str, wildcards: &[WildcardRef]) -> Option<serde_json::Value> {
-    let doc = parse(Path::new("agents.toml"), text).ok()?;
-    let mut shape = item_json(doc.as_item());
-    if let Some(skills) = shape.get_mut("skills").and_then(|v| v.as_array_mut()) {
-        skills.retain(|row| row.get("name").and_then(|n| n.as_str()) != Some(skill));
-        for row in skills {
-            let Some(row) = row.as_object_mut() else {
-                continue;
-            };
-            let recorded = row.get("name").and_then(|v| v.as_str()) == Some("*")
-                && wildcards.iter().any(|w| {
-                    row.get("source")
-                        .and_then(|v| v.as_str())
-                        .is_some_and(|source| sources_match(source, &w.source))
-                        && comparable_path(row.get("path").and_then(|v| v.as_str()))
-                            == comparable_path(w.path.as_deref())
-                });
-            if !recorded {
-                continue;
-            }
-            if let Some(exclude) = row.get_mut("exclude").and_then(|v| v.as_array_mut()) {
-                exclude.retain(|item| item.as_str() != Some(skill));
-            }
-            if row
-                .get("exclude")
-                .and_then(|v| v.as_array())
-                .is_some_and(Vec::is_empty)
-            {
-                row.remove("exclude");
-            }
-        }
-    }
-    if shape
-        .get("skills")
-        .and_then(|v| v.as_array())
-        .is_some_and(Vec::is_empty)
-    {
-        shape.as_object_mut()?.remove("skills");
-    }
-    Some(shape)
-}
-
-/// `agents.lock` without `skill`'s row, and without an empty `skills` table
-/// (dotagents leaves `skills = {}` where the file had none).
-fn lock_shape(text: &str, skill: &str) -> Option<serde_json::Value> {
-    let doc = parse(Path::new("agents.lock"), text).ok()?;
-    let mut shape = item_json(doc.as_item());
-    if let Some(skills) = shape.get_mut("skills").and_then(|v| v.as_object_mut()) {
-        skills.remove(skill);
-        if skills.is_empty() {
-            shape.as_object_mut()?.remove("skills");
-        }
-    }
-    Some(shape)
-}
-
-/// The ignore file's lines in file order, without the ones that name
-/// `skill`. Git uses the last matching rule, so a reorder is a change.
-fn ignore_shape(text: &str, skill: &str) -> serde_json::Value {
-    let own = [format!("/skills/{skill}"), format!("/skills/{skill}/")];
-    let lines: Vec<&str> = text
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| !line.is_empty() && !own.iter().any(|own| own == line))
-        .collect();
-    lines.into()
 }
 
 /// Reads back what [`DotagentsPark::payload`] recorded.
@@ -712,11 +567,8 @@ fn refuse_nested_project(
 
 /// Decides whether parking `deployment` needs `dotagents remove`.
 ///
-/// `None` when dotagents does not list the skill (so `install` would not
-/// bring it back). Refuses when it does list the skill but neither
-/// `dotagents` nor `npx` is on `PATH`: parking would leave a copy the next
-/// `dotagents install` brings back. Also refuses a project that is not its
-/// own git root.
+/// `None` when dotagents does not list the skill. Refuses a project that
+/// is not its own git root, where dotagents would use a different manifest.
 pub(crate) fn plan_park(
     rt: &Runtime,
     deployment: &DeploymentDto,
@@ -766,59 +618,7 @@ pub(crate) fn plan_park(
     if entry.is_none() && wildcards.is_empty() {
         return Ok(None);
     }
-    let mut wildcards = wildcards;
-    if let (None, Some(locked)) = (&entry, &locked) {
-        // `dotagents remove` excludes the first `*` entry of the source, which
-        // need not be one that supplies the skill; turn-on lifts that too.
-        let target = rows(&doc)
-            .find(|row| {
-                row_name(row) == Some("*")
-                    && row_str(row, "source").is_some_and(|s| sources_match(s, &locked.source))
-            })
-            .filter(|row| !excludes(row, &skill.0))
-            .and_then(|row| {
-                Some(WildcardRef {
-                    source: row_str(row, "source")?.to_string(),
-                    path: row_str(row, "path").map(str::to_string),
-                    supplies: false,
-                    had_exclude: row.get("exclude").is_some(),
-                })
-            });
-        if let Some(target) = target {
-            let known = wildcards.iter().any(|w| {
-                sources_match(&w.source, &target.source)
-                    && comparable_path(w.path.as_deref()) == comparable_path(target.path.as_deref())
-            });
-            if !known {
-                wildcards.push(target);
-            }
-        }
-    }
     refuse_nested_project(rt, &deployment.root.scope, skill)?;
-    let tools = rt.ports.tools.as_ref();
-    let (program, prefix_args) = tools
-        .and_then(|tools| tools.find_binary("dotagents"))
-        .map(|program| (program, Vec::new()))
-        .or_else(|| {
-            tools
-                .and_then(|tools| tools.find_binary("npx"))
-                .map(|program| {
-                    (
-                        program,
-                        vec!["-y".to_string(), "@sentry/dotagents".to_string()],
-                    )
-                })
-        })
-        .ok_or_else(|| {
-            CoreError::new(
-                ErrorCode::Unsupported,
-                format!(
-                    "dotagents manages {} but is not installed here (neither `dotagents` nor `npx` is on PATH), so the next `dotagents install` would bring the copy back. Install dotagents, then park it again.",
-                    skill.0
-                ),
-            )
-            .at(&deployment.path)
-        })?;
     let gitignore = crate::ports::resolve_config_link(
         fs,
         &match &deployment.root.scope {
@@ -849,15 +649,12 @@ pub(crate) fn plan_park(
             text: original_lock,
         },
     ];
-    if let Some(text) = read_text(fs, &gitignore)? {
-        originals.push(FileSnapshot {
-            path: gitignore.clone(),
-            text: Some(text),
-        });
-    }
+    originals.push(FileSnapshot {
+        path: gitignore.clone(),
+        text: read_text(fs, &gitignore)?,
+    });
     Ok(Some(DotagentsPark {
-        program,
-        prefix_args,
+        changes: RefCell::new(Vec::new()),
         config,
         lock,
         gitignore,
@@ -869,51 +666,142 @@ pub(crate) fn plan_park(
     }))
 }
 
-/// Runs `dotagents remove <name> -y` for the scope the copy came from, then
-/// checks `agents.toml` really changed: dotagents exits 0 without a change
-/// when it has to ask a question and has no terminal.
-pub(crate) fn run_remove(
+/// Removes only the skill's bookkeeping entries. Never runs a command that
+/// can delete a live skill folder.
+pub(crate) fn unlist(
     rt: &Runtime,
     ctx: &OpContext,
     guard: &ExclusiveGuard,
     plan: &DotagentsPark,
     skill: &SkillName,
-    scope: &RootScope,
+    _scope: &RootScope,
 ) -> Result<(), CoreError> {
-    let spawner = rt.ports.spawner.as_ref().ok_or_else(|| {
-        CoreError::new(
-            ErrorCode::Unsupported,
-            "this host build has no process spawner; parking a dotagents skill is not available",
-        )
-    })?;
-    let home = rt.scope.home.lexical.clone();
-    let mut args = plan.prefix_args.clone();
-    // With `--project` dotagents never reads `DOTAGENTS_HOME`, but one in the
-    // environment must not leak in (an empty value removes the variable). A
-    // global run needs it, or dotagents may pick another user-scope folder.
-    let (cwd, dotagents_home) = match scope {
-        RootScope::Global => (home.clone(), home.join(".agents").display().to_string()),
-        RootScope::Project(project) => {
-            args.push("--project".to_string());
-            (project.0.clone(), String::new())
+    ctx.checkpoint()?;
+    let fs = rt.ports.fs.as_ref();
+    let before = read_text(fs, &plan.config)?;
+    let text = before.as_deref().unwrap_or_default();
+    let mut doc = parse(&plan.config, text)?;
+    let own_rows = |doc: &toml_edit::DocumentMut| {
+        rows(doc)
+            .filter(|row| {
+                row_name(row) == Some(skill.0.as_str()) || is_recorded(row, &plan.wildcards)
+            })
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    };
+    if let Some(original) = plan
+        .originals
+        .iter()
+        .find(|file| file.path == plan.config)
+        .and_then(|file| file.text.as_deref())
+    {
+        if own_rows(&parse(&plan.config, original)?) != own_rows(&doc) {
+            return Err(CoreError::new(
+                ErrorCode::DriftConflict,
+                "the skill entries changed during Park; scan and try again",
+            )
+            .at(&plan.config));
         }
-    };
-    args.extend(["remove".to_string(), skill.0.clone(), "-y".to_string()]);
-    let spec = ProcessSpec {
-        program: plan.program.display().to_string(),
-        args,
-        cwd: Some(cwd),
-        env: vec![
-            ("HOME".to_string(), home.display().to_string()),
-            ("DOTAGENTS_HOME".to_string(), dotagents_home),
-        ],
-        timeout_ms: 120_000,
-    };
-    let output = spawner.run(&spec, ctx.cancel.as_ref())?;
-    if output.status != Some(0) {
-        return Err(crate::ops_update::cli_failure("dotagents remove", &output));
     }
-    verify_removed(rt, guard, plan, skill)
+    if let Some(list) = doc
+        .get_mut("skills")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+    {
+        list.retain(|row| row_name(row) != Some(skill.0.as_str()));
+        for row in list.iter_mut() {
+            if plan
+                .locked
+                .as_ref()
+                .is_some_and(|locked| wildcard_contains(row, &skill.0, locked))
+            {
+                add_exclude(row, &skill.0);
+            }
+        }
+    }
+    if !is_removed(&doc, plan, skill) {
+        return Err(CoreError::new(
+            ErrorCode::DriftConflict,
+            "the skill entries changed; scan and try Park again",
+        )
+        .at(&plan.config));
+    }
+    let rendered = render_checked(&plan.config, &doc, text.contains("\r\n"))?;
+    write_park_file(rt, guard, plan, &plan.config, before, rendered)?;
+
+    if let Some(text) = read_text(fs, &plan.lock)? {
+        let mut doc = parse(&plan.lock, &text)?;
+        if lock_table_text(&doc, &skill.0) != plan.lock_entry {
+            return Err(CoreError::new(
+                ErrorCode::DriftConflict,
+                "the skill lock entry changed during Park; scan and try again",
+            )
+            .at(&plan.lock));
+        }
+        let removed = doc
+            .get_mut("skills")
+            .and_then(toml_edit::Item::as_table_mut)
+            .and_then(|skills| skills.remove(&skill.0))
+            .is_some();
+        if removed {
+            let rendered = render_checked(&plan.lock, &doc, text.contains("\r\n"))?;
+            write_park_file(rt, guard, plan, &plan.lock, Some(text), rendered)?;
+        }
+    }
+    if let Some(text) = read_text(fs, &plan.gitignore)? {
+        if !plan
+            .originals
+            .iter()
+            .any(|file| file.path == plan.gitignore && file.text.is_some())
+        {
+            return Err(CoreError::new(
+                ErrorCode::DriftConflict,
+                "the ignore file appeared during Park; scan and try again",
+            )
+            .at(&plan.gitignore));
+        }
+        let own = [
+            format!("/skills/{}", skill.0),
+            format!("/skills/{}/", skill.0),
+        ];
+        let kept: String = text
+            .split_inclusive('\n')
+            .filter(|line| {
+                !own.iter()
+                    .any(|own| line.trim_end_matches(['\r', '\n']) == own)
+            })
+            .collect();
+        write_park_file(rt, guard, plan, &plan.gitignore, Some(text), kept)?;
+    }
+    Ok(())
+}
+
+fn write_park_file(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    plan: &DotagentsPark,
+    path: &Path,
+    before: Option<String>,
+    after: String,
+) -> Result<(), CoreError> {
+    if before.as_deref() == Some(&after) {
+        return Ok(());
+    }
+    if read_text(rt.ports.fs.as_ref(), path)? != before {
+        return Err(CoreError::new(
+            ErrorCode::DriftConflict,
+            "the file changed during Park; scan and try again",
+        )
+        .at(path));
+    }
+    write_text(rt, guard, path, &after)?;
+    plan.changes.borrow_mut().push((
+        FileSnapshot {
+            path: path.to_path_buf(),
+            text: before,
+        },
+        after,
+    ));
+    Ok(())
 }
 
 /// Whether `dotagents install` would no longer install the skill from `doc`.
@@ -925,109 +813,8 @@ fn is_removed(doc: &toml_edit::DocumentMut, plan: &DotagentsPark, skill: &SkillN
     !lists_explicitly(doc, &skill.0) && !supplied
 }
 
-fn verify_removed(
-    rt: &Runtime,
-    guard: &ExclusiveGuard,
-    plan: &DotagentsPark,
-    skill: &SkillName,
-) -> Result<(), CoreError> {
-    let text = read_text(rt.ports.fs.as_ref(), &plan.config)?.unwrap_or_default();
-    let doc = parse(&plan.config, &text)?;
-    if is_removed(&doc, plan, skill) {
-        return Ok(());
-    }
-    if !lists_explicitly(&doc, &skill.0)
-        && exclude_where_supplied(rt, guard, plan, skill, doc, text.contains("\r\n"))?
-    {
-        return Ok(());
-    }
-    Err(CoreError::new(
-        ErrorCode::Io,
-        format!(
-            "dotagents ran but agents.toml still lists {}, so the next `dotagents install` would bring the copy back",
-            skill.0
-        ),
-    )
-    .at(&plan.config))
-}
-
-/// `dotagents remove` does not always leave the skill unlisted:
-/// - the skill had its own entry and a `*` entry from the same source, and
-///   `remove` drops only the own entry, so `install` brings the skill back
-///   through the `*` entry;
-/// - its `exclude` list spans several lines, or the file has CRLF line ends,
-///   and dotagents' line-based edit changes nothing;
-/// - dotagents excluded the first `*` entry of that source, which is not the
-///   one that supplies the skill (a different `path`).
-///
-/// Adds the name to the `exclude` of every `*` entry that still supplies the
-/// skill, and drops the lock row if dotagents left it. Writes nothing and
-/// returns `false` when that would not unlist the skill.
-fn exclude_where_supplied(
-    rt: &Runtime,
-    guard: &ExclusiveGuard,
-    plan: &DotagentsPark,
-    skill: &SkillName,
-    mut doc: toml_edit::DocumentMut,
-    crlf: bool,
-) -> Result<bool, CoreError> {
-    let Some(locked) = &plan.locked else {
-        return Ok(false);
-    };
-    let supplying: Vec<usize> = rows(&doc)
-        .enumerate()
-        .filter(|(_, row)| wildcard_contains(row, &skill.0, locked))
-        .map(|(index, _)| index)
-        .collect();
-    if let Some(list) = doc
-        .get_mut("skills")
-        .and_then(toml_edit::Item::as_array_of_tables_mut)
-    {
-        for (index, row) in list.iter_mut().enumerate() {
-            if supplying.contains(&index) {
-                add_exclude(row, &skill.0);
-            }
-        }
-    }
-    if !is_removed(&doc, plan, skill) {
-        return Ok(false);
-    }
-    write_text(
-        rt,
-        guard,
-        &plan.config,
-        &render_checked(&plan.config, &doc, crlf)?,
-    )?;
-    drop_lock_entry(rt, guard, plan, skill)?;
-    Ok(true)
-}
-
-fn drop_lock_entry(
-    rt: &Runtime,
-    guard: &ExclusiveGuard,
-    plan: &DotagentsPark,
-    skill: &SkillName,
-) -> Result<(), CoreError> {
-    let Some(text) = read_text(rt.ports.fs.as_ref(), &plan.lock)? else {
-        return Ok(());
-    };
-    let mut doc = parse(&plan.lock, &text)?;
-    let removed = doc
-        .get_mut("skills")
-        .and_then(toml_edit::Item::as_table_mut)
-        .and_then(|skills| skills.remove(&skill.0))
-        .is_some();
-    if removed {
-        let rendered = render_checked(&plan.lock, &doc, text.contains("\r\n"))?;
-        write_text(rt, guard, &plan.lock, &rendered)?;
-    }
-    Ok(())
-}
-
 impl DotagentsPark {
-    /// The folder `dotagents remove` deletes for `skill`, when one exists.
-    /// Taken from the scope, not from `.gitignore`: that file may be a link
-    /// into another folder.
+    /// The live shared folder for this scope, independent of the ignore file's location.
     pub(crate) fn live_folder(
         rt: &Runtime,
         scope: &RootScope,
@@ -1043,13 +830,22 @@ impl DotagentsPark {
     }
 }
 
-/// Writes `agents.toml` and `agents.lock` back as `plan_park` read them.
+/// Rolls back this Park's writes only while their recorded output still matches.
 pub(crate) fn restore_originals(
     rt: &Runtime,
     guard: &ExclusiveGuard,
     plan: &DotagentsPark,
 ) -> Result<(), CoreError> {
-    restore_files(rt, guard, &plan.originals)
+    for (before, expected) in plan.changes.borrow().iter().rev() {
+        if read_text(rt.ports.fs.as_ref(), &before.path)?.as_deref() != Some(expected) {
+            return Err(CoreError::new(
+                ErrorCode::DriftConflict,
+                "a file changed after Park wrote it; its backup is retained and the current file was kept",
+            ).at(&before.path));
+        }
+        restore_files(rt, guard, std::slice::from_ref(before))?;
+    }
+    Ok(())
 }
 
 /// Writes every snapshot back and reports the first failure after trying all.
@@ -1800,20 +1596,6 @@ mod tests {
             restore_line("/skills/foo\n", "# mine", "/skills/foo"),
             "# mine\n/skills/foo\n"
         );
-    }
-
-    /// Flow: another tool swaps two unrelated negation rules while dotagents
-    /// removes a skill's line. Expectation: the shapes differ, so no
-    /// after-hashes are recorded. Failure: a sorted comparison hides the swap
-    /// and turn-on restores the old file over it.
-    #[test]
-    fn a_reordered_ignore_file_is_not_only_the_skills_own_line_gone() {
-        let before = "/skills/bar\n!/skills/bar\n/skills/foo\n";
-        let swapped = "!/skills/bar\n/skills/bar\n";
-        let kept = "/skills/bar\n!/skills/bar\n";
-        let shape = |text: &str| Some(ignore_shape(text, "foo"));
-        assert!(!removed_only(Some(before), Some(swapped), shape));
-        assert!(removed_only(Some(before), Some(kept), shape));
     }
 
     /// Flow: a source in `agents.toml` and the same source in `agents.lock`

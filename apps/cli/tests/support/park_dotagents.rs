@@ -22,16 +22,8 @@ pub fn setup(home: &Path) -> String {
     std::fs::write(
         &script,
         r#"#!/bin/sh
-/bin/cat > "$DOTAGENTS_HOME/agents.toml" <<'TOML'
-[[skills]]
-name = "*"
-source = "other/repo"
-exclude = ["foo"]
-TOML
-: > "$DOTAGENTS_HOME/agents.lock"
-/bin/cat > "$DOTAGENTS_HOME/.gitignore" <<'IGNORE'
-!/skills/foo/
-IGNORE
+echo called > "$HOME/remove-called"
+exit 79
 "#,
     )
     .unwrap();
@@ -44,4 +36,21 @@ pub fn config_bytes(home: &Path) -> Vec<Vec<u8>> {
         .iter()
         .map(|file| std::fs::read(home.join(".agents").join(file)).unwrap())
         .collect()
+}
+
+pub fn make_lock_read_only(home: &Path) {
+    let dir = home.join("readonly");
+    std::fs::create_dir(&dir).unwrap();
+    let lock = home.join(".agents/agents.lock");
+    std::fs::rename(&lock, dir.join("agents.lock")).unwrap();
+    std::os::unix::fs::symlink(dir.join("agents.lock"), lock).unwrap();
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+}
+
+pub fn restore_lock_permissions(home: &Path) {
+    std::fs::set_permissions(
+        home.join("readonly"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
 }

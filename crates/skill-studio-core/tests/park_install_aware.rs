@@ -44,10 +44,7 @@ const NPX: &str = "/fake/bin/npx";
 /// One `dotagents` run the stub saw.
 #[derive(Clone)]
 struct Call {
-    program: String,
     args: Vec<String>,
-    cwd: Option<PathBuf>,
-    env: Vec<(String, String)>,
 }
 
 /// A fake `dotagents` over the temp home. `wildcard_pool` is what a
@@ -57,6 +54,7 @@ struct Call {
 struct FakeDotagents {
     home: PathBuf,
     wildcard_pool: Vec<String>,
+    pool_path: Mutex<Option<String>>,
     calls: Mutex<Vec<Call>>,
     /// Exit code `remove` reports; non-zero also changes nothing.
     remove_exit: AtomicI32,
@@ -76,6 +74,7 @@ struct FakeDotagents {
     /// tool editing the file at the same time would.
     add_unrelated_entry: AtomicBool,
     exclude_unrelated: AtomicBool,
+    reinstall_in_remove: AtomicBool,
     /// `remove` rewrites the files, then exits non-zero.
     fail_after_edit: AtomicBool,
 }
@@ -84,6 +83,7 @@ impl FakeDotagents {
     fn new(home: &Path, wildcard_pool: &[&str]) -> Arc<Self> {
         Arc::new(FakeDotagents {
             home: home.to_path_buf(),
+            pool_path: Mutex::new(None),
             wildcard_pool: wildcard_pool.iter().map(|s| (*s).to_string()).collect(),
             calls: Mutex::new(Vec::new()),
             remove_exit: AtomicI32::new(0),
@@ -94,6 +94,7 @@ impl FakeDotagents {
             block_move_back: AtomicBool::new(false),
             add_unrelated_entry: AtomicBool::new(false),
             exclude_unrelated: AtomicBool::new(false),
+            reinstall_in_remove: AtomicBool::new(false),
             fail_after_edit: AtomicBool::new(false),
         })
     }
@@ -112,10 +113,6 @@ impl FakeDotagents {
             .iter()
             .filter(|args| args.iter().any(|arg| arg == "remove"))
             .count()
-    }
-
-    fn last_call(&self) -> Call {
-        self.calls.lock().unwrap().last().unwrap().clone()
     }
 
     fn toml_path(&self) -> PathBuf {
@@ -231,6 +228,17 @@ impl FakeDotagents {
                 .to_string();
             match row.get("name").and_then(toml_edit::Item::as_str).unwrap() {
                 "*" => {
+                    if self
+                        .pool_path
+                        .lock()
+                        .unwrap()
+                        .as_deref()
+                        .is_some_and(|path| {
+                            row.get("path").and_then(toml_edit::Item::as_str) != Some(path)
+                        })
+                    {
+                        continue;
+                    }
                     let excluded: Vec<&str> = row
                         .get("exclude")
                         .and_then(toml_edit::Item::as_array)
@@ -278,10 +286,7 @@ impl ProcessSpawner for FakeDotagents {
         }
         let spec = &spec;
         self.calls.lock().unwrap().push(Call {
-            program: spec.program.clone(),
             args: spec.args.clone(),
-            cwd: spec.cwd.clone(),
-            env: spec.env.clone(),
         });
         let mut status = 0;
         match spec.args.iter().position(|arg| arg == "remove") {
@@ -291,6 +296,14 @@ impl ProcessSpawner for FakeDotagents {
                     "the process died inside dotagents remove"
                 );
                 status = self.remove_exit.load(Ordering::SeqCst);
+                if self.reinstall_in_remove.load(Ordering::SeqCst) {
+                    write_skill(&self.skill_dir("foo"), "foo");
+                    std::fs::write(
+                        self.skill_dir("foo").join("notes.txt"),
+                        "concurrent install",
+                    )
+                    .unwrap();
+                }
                 let failing_edit = self.fail_after_edit.load(Ordering::SeqCst);
                 if failing_edit {
                     status = 0;
@@ -396,6 +409,16 @@ fn runtime_with_tools(
     binaries: &[(&str, &str)],
     projects: Vec<PathBuf>,
 ) -> Runtime {
+    runtime_with_fs(home, spawner, binaries, projects, Arc::new(RealFs::new()))
+}
+
+fn runtime_with_fs(
+    home: &Path,
+    spawner: Arc<dyn ProcessSpawner>,
+    binaries: &[(&str, &str)],
+    projects: Vec<PathBuf>,
+    fs: Arc<dyn ScopeFs>,
+) -> Runtime {
     let mut tools = FakeToolLookup::default();
     for (name, path) in binaries {
         tools
@@ -403,7 +426,7 @@ fn runtime_with_tools(
             .insert((*name).to_string(), PathBuf::from(path));
     }
     let ports = Ports {
-        fs: Arc::new(RealFs::new()),
+        fs,
         clock: Arc::new(FakeClock::at(0)),
         ids: Arc::new(FakeIds::default()),
         leases: Arc::new(FileLease::new(home.join(".leases"))),
@@ -551,13 +574,7 @@ fn wildcard_skill_stays_parked_through_dotagents_install_and_returns_on_turn_on(
     let live = home.join(".agents/skills/foo");
 
     park_foo(&rt);
-    assert_eq!(stub.calls().last().unwrap(), &["remove", "foo", "-y"]);
-    let call = stub.last_call();
-    assert_eq!(call.cwd.as_deref(), Some(home.as_path()));
-    assert!(call.env.contains(&(
-        "DOTAGENTS_HOME".to_string(),
-        home.join(".agents").display().to_string()
-    )));
+    assert_eq!(stub.removes(), 0);
     assert!(read(&stub.toml_path()).contains("exclude"));
     dotagents_install(&stub);
     assert!(
@@ -625,7 +642,7 @@ fn explicit_skill_stays_parked_through_dotagents_install_and_returns_on_turn_on(
 /// the lock row stays deleted, the second park skips `remove`, and
 /// `dotagents install` brings the skill back.
 #[test]
-fn park_turn_on_park_again_runs_the_remove_each_time() {
+fn park_turn_on_park_again_unlists_without_running_remove() {
     for toml in [WILDCARD_TOML, EXPLICIT_TOML] {
         let (home, stub) = dotagents_home("park_dotagents_twice", toml);
         let rt = runtime(&home, stub.clone(), true);
@@ -635,11 +652,7 @@ fn park_turn_on_park_again_runs_the_remove_each_time() {
         assert!(read(&stub.lock_path()).contains("[skills.foo]"));
         park_foo(&rt);
 
-        assert_eq!(
-            stub.removes(),
-            2,
-            "the second park skipped dotagents remove"
-        );
+        assert_eq!(stub.removes(), 0, "Park must not run dotagents remove");
         dotagents_install(&stub);
         assert!(
             !home.join(".agents/skills/foo").exists(),
@@ -797,14 +810,14 @@ fn unpark_finds_an_imported_park_row_with_an_older_ts_and_a_higher_rowid() {
 fn assert_failed_park_rolls_back(
     label: &str,
     tomls: &[&str],
-    setup: impl Fn(&FakeDotagents),
+    setup: impl Fn(&skill_studio_core::testing::FailingFs, &FakeDotagents),
     expected: &str,
 ) {
     for toml in tomls.iter().copied() {
         let (home, stub) = dotagents_home(label, toml);
-        let rt = runtime(&home, stub.clone(), true);
+        let (rt, fs) = fault_runtime(&home, stub.clone());
         let (toml_before, lock_before) = (read(&stub.toml_path()), read(&stub.lock_path()));
-        setup(&stub);
+        setup(&fs, &stub);
 
         let err = ops::park(
             &rt,
@@ -834,12 +847,16 @@ fn assert_failed_park_rolls_back(
 /// is failed, and no marker is left. Failure: the skill ends parked with the
 /// file edits half done, or a stale marker misleads a later turn-on.
 #[test]
-fn a_failed_dotagents_remove_puts_the_copy_and_both_files_back() {
+fn a_failed_config_write_puts_the_copy_and_both_files_back() {
     assert_failed_park_rolls_back(
         "park_dotagents_remove_fails",
         &[WILDCARD_TOML, EXPLICIT_TOML],
-        |stub| stub.remove_exit.store(3, Ordering::SeqCst),
-        "dotagents remove",
+        |fs, stub| {
+            fs.before_write_once(stub.toml_path(), || {
+                Err(std::io::Error::other("config write failed"))
+            });
+        },
+        "config write failed",
     );
 }
 
@@ -850,12 +867,16 @@ fn a_failed_dotagents_remove_puts_the_copy_and_both_files_back() {
 /// A wildcard skill is different: park adds the exclude itself (see the
 /// repair tests below), so only an explicit entry can fail this way.
 #[test]
-fn a_dotagents_remove_that_changes_nothing_fails_the_park() {
+fn a_failed_lock_write_puts_the_config_and_copy_back() {
     assert_failed_park_rolls_back(
         "park_dotagents_no_change",
         &[EXPLICIT_TOML],
-        |stub| stub.ignore_yes.store(true, Ordering::SeqCst),
-        "still lists foo",
+        |fs, stub| {
+            fs.before_write_once(stub.lock_path(), || {
+                Err(std::io::Error::other("lock write failed"))
+            });
+        },
+        "lock write failed",
     );
 }
 
@@ -884,15 +905,7 @@ fn project_park_runs_in_the_project_and_leaves_the_global_config_alone() {
     )
     .unwrap();
 
-    assert_eq!(
-        stub.calls().last().unwrap(),
-        &["--project", "remove", "foo", "-y"]
-    );
-    let call = stub.last_call();
-    assert_eq!(call.cwd.as_deref(), Some(project.as_path()));
-    assert!(call
-        .env
-        .contains(&("DOTAGENTS_HOME".to_string(), String::new())));
+    assert_eq!(stub.removes(), 0);
     assert!(!read(&project.join("agents.toml")).contains("name = \"foo\""));
     assert!(!read(&project.join("agents.lock")).contains("[skills.foo]"));
     assert_eq!(read(&home.join(".agents/agents.toml")), WILDCARD_TOML);
@@ -978,9 +991,11 @@ fn a_turn_on_whose_move_fails_writes_both_files_back_and_can_be_retried() {
 #[test]
 fn a_park_that_crashed_after_the_move_can_still_be_turned_on() {
     let (home, stub) = dotagents_home("park_dotagents_crash", WILDCARD_TOML);
-    let rt = runtime(&home, stub.clone(), true);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
     let (toml_before, lock_before) = (read(&stub.toml_path()), read(&stub.lock_path()));
-    stub.crash_in_remove.store(true, Ordering::SeqCst);
+    fs.before_write_once(stub.toml_path(), || {
+        panic!("injected crash before config write")
+    });
     let deployment_id = live_copy(&rt, "foo").id;
 
     let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -988,7 +1003,6 @@ fn a_park_that_crashed_after_the_move_can_still_be_turned_on() {
     }));
     assert!(crashed.is_err());
     assert!(!home.join(".agents/skills/foo").exists());
-    stub.crash_in_remove.store(false, Ordering::SeqCst);
 
     unpark_foo(&rt);
 
@@ -999,34 +1013,16 @@ fn a_park_that_crashed_after_the_move_can_still_be_turned_on() {
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// Flow: park a dotagents skill on a machine with no `dotagents` on `PATH`.
-/// Expectation: park is refused with a reason that names dotagents, the copy
-/// stays where it is, `agents.toml` is untouched, and nothing ran. Failure:
-/// the copy is parked anyway and the next `dotagents install` brings it back.
 #[test]
-fn park_of_a_dotagents_skill_is_refused_with_a_plain_reason_when_dotagents_is_missing() {
-    let (home, stub) = dotagents_home("park_dotagents_missing", WILDCARD_TOML);
+fn park_without_dotagents_installed_unlists_the_skill_without_a_process() {
+    let (home, stub) = dotagents_home("park_no_binary", WILDCARD_TOML);
     let rt = runtime(&home, stub.clone(), false);
-    let calls_before = stub.calls().len();
-
-    let err = ops::park(
-        &rt,
-        &ctx(),
-        &ParkRequest {
-            deployment_id: live_copy(&rt, "foo").id,
-        },
-    )
-    .unwrap_err();
-
-    assert!(
-        err.message.contains("but is not installed here"),
-        "{}",
-        err.message
-    );
-    assert!(home.join(".agents/skills/foo/SKILL.md").exists());
-    assert_eq!(read(&stub.toml_path()), WILDCARD_TOML);
-    assert_eq!(stub.calls().len(), calls_before);
-    std::fs::remove_dir_all(&home).ok();
+    park_foo(&rt);
+    assert_eq!(stub.removes(), 0);
+    assert!(!home.join(".agents/skills/foo").exists());
+    assert!(read(&stub.toml_path()).contains("exclude"));
+    unpark_foo(&rt);
+    std::fs::remove_dir_all(home).unwrap();
 }
 
 /// Flow: park a skill the skills CLI installed, then ask the app to update
@@ -1074,22 +1070,14 @@ const ROWS_BEFORE_WILDCARD_TOML: &str = "version = 1\n\n[[skills]]\nname = \"bar
 /// The `exclude` list of the only wildcard entry spans several lines.
 const MULTILINE_EXCLUDE_TOML: &str = "# setup\nversion = 1\n\n[[skills]]\nname = \"*\"\nsource = \"owner/pack\"\nexclude = [\n  \"baz\",\n]\n";
 
-/// Flow: no `dotagents` on `PATH`, but `npx` is. Expectation: park runs
-/// `npx -y @sentry/dotagents remove foo -y` and the skill is parked. Failure:
-/// park refuses a machine that can run dotagents through `npx`.
 #[test]
-fn park_falls_back_to_npx_when_dotagents_is_not_on_path() {
-    let (home, stub) = dotagents_home("park_dotagents_npx", WILDCARD_TOML);
+fn park_with_only_npx_available_never_runs_a_destructive_command() {
+    let (home, stub) = dotagents_home("park_no_npx", WILDCARD_TOML);
     let rt = runtime_with_tools(&home, stub.clone(), &[("npx", NPX)], Vec::new());
-
     park_foo(&rt);
-
-    let call = stub.last_call();
-    assert_eq!(call.program, NPX);
-    assert_eq!(call.args, ["remove", "foo", "-y"]);
+    assert_eq!(stub.removes(), 0);
     assert!(read(&stub.toml_path()).contains("exclude"));
-    assert!(!home.join(".agents/skills/foo").exists());
-    std::fs::remove_dir_all(&home).ok();
+    std::fs::remove_dir_all(home).unwrap();
 }
 
 /// Flow: park a wildcard skill, then the person deletes the `[[skills]]` row
@@ -1356,6 +1344,7 @@ fn park_excludes_the_wildcard_entry_that_really_supplies_the_skill() {
         "[skills.foo]\nsource = \"owner/pack\"\nresolved_path = \"b\"\n",
     );
     std::fs::write(stub.lock_path(), lock).unwrap();
+    *stub.pool_path.lock().unwrap() = Some("b".to_string());
     let rt = runtime(&home, stub.clone(), true);
 
     park_foo(&rt);
@@ -1369,7 +1358,13 @@ fn park_excludes_the_wildcard_entry_that_really_supplies_the_skill() {
             .and_then(toml_edit::Item::as_array)
             .is_some_and(|list| list.iter().any(|item| item.as_str() == Some("foo")))
     };
-    assert!(rows.iter().all(excludes_foo), "{doc}");
+    for row in rows {
+        assert_eq!(
+            excludes_foo(row),
+            row["path"].as_str() == Some("b"),
+            "{doc}"
+        );
+    }
     dotagents_install(&stub);
     assert!(!home.join(".agents/skills/foo").exists());
 
@@ -1377,7 +1372,7 @@ fn park_excludes_the_wildcard_entry_that_really_supplies_the_skill() {
     assert_eq!(
         read(&stub.toml_path()),
         TWO_PATHS_TOML,
-        "turn-on must lift the exclude from both rows"
+        "turn-on must restore the original wildcard rows"
     );
     std::fs::remove_dir_all(&home).ok();
 }
@@ -1574,10 +1569,13 @@ fn turn_on_of_the_only_locked_skill_gives_agents_lock_back_byte_for_byte() {
     let rt = runtime(&home, stub.clone(), true);
 
     park_foo(&rt);
-    assert!(
-        read(&stub.lock_path()).contains("[skills]"),
-        "the stub's remove left no empty [skills] table"
-    );
+    let parked_lock = read(&stub.lock_path())
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    assert!(parked_lock
+        .get("skills")
+        .and_then(|skills| skills.get("foo"))
+        .is_none());
 
     unpark_foo(&rt);
     assert_eq!(read(&stub.lock_path()), lock, "agents.lock");
@@ -1609,7 +1607,7 @@ fn unlisting_a_parked_skill_still_in_agents_toml_drops_the_entry_and_keeps_the_p
 
     ops::unlist_parked_dotagents(&rt, &ctx(), &parked.id).unwrap();
 
-    assert_eq!(stub.removes(), removes_before + 1);
+    assert_eq!(stub.removes(), removes_before);
     assert!(!read(&stub.toml_path()).contains("name = \"foo\""));
     assert!(read(&stub.toml_path()).contains("name = \"bar\""));
     assert!(parked.path.join("SKILL.md").exists(), "parked copy lost");
@@ -1689,12 +1687,14 @@ fn a_failed_unlist_of_a_parked_skill_puts_agents_toml_and_agents_lock_back() {
     let (home, stub) = dotagents_home("park_dotagents_unlist_fails", EXPLICIT_TOML);
     let toml = read(&stub.toml_path());
     let lock = read(&stub.lock_path());
-    let rt = runtime(&home, stub.clone(), true);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
     park_foo(&rt);
     std::fs::write(stub.toml_path(), &toml).unwrap();
     std::fs::write(stub.lock_path(), &lock).unwrap();
     let parked = parked_copy(&rt, "foo");
-    stub.fail_after_edit.store(true, Ordering::SeqCst);
+    fs.before_write_once(stub.lock_path(), || {
+        Err(std::io::Error::other("injected lock failure"))
+    });
 
     ops::unlist_parked_dotagents(&rt, &ctx(), &parked.id).unwrap_err();
 
@@ -1812,10 +1812,13 @@ fn turn_on_after_agents_toml_was_edited_keeps_the_new_row_and_lists_the_skill_ag
 #[test]
 fn a_failed_remove_whose_rollback_also_failed_can_still_be_turned_on() {
     let (home, stub) = dotagents_home("park_dotagents_rollback_fails", EXPLICIT_TOML);
-    let rt = runtime(&home, stub.clone(), true);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
     let (toml, lock) = (read(&stub.toml_path()), read(&stub.lock_path()));
-    stub.remove_exit.store(3, Ordering::SeqCst);
-    stub.block_move_back.store(true, Ordering::SeqCst);
+    let live = stub.skill_dir("foo");
+    fs.before_write_once(stub.lock_path(), move || {
+        write_skill(&live, "foo");
+        Err(std::io::Error::other("injected lock failure"))
+    });
 
     let err = ops::park(
         &rt,
@@ -1860,7 +1863,7 @@ fn a_failed_remove_whose_rollback_also_failed_can_still_be_turned_on() {
 #[test]
 fn turn_on_after_a_failed_second_park_uses_the_newest_park_record() {
     let (home, stub) = dotagents_home("park_dotagents_newest_row", WILDCARD_TOML);
-    let rt = runtime(&home, stub.clone(), true);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
 
     park_foo(&rt);
     unpark_foo(&rt);
@@ -1869,8 +1872,11 @@ fn turn_on_after_a_failed_second_park_uses_the_newest_park_record() {
     let lock = read(&stub.lock_path()).replace("owner/pack", "owner/other");
     std::fs::write(stub.lock_path(), lock).unwrap();
 
-    stub.remove_exit.store(3, Ordering::SeqCst);
-    stub.block_move_back.store(true, Ordering::SeqCst);
+    let live = stub.skill_dir("foo");
+    fs.before_write_once(stub.lock_path(), move || {
+        write_skill(&live, "foo");
+        Err(std::io::Error::other("injected lock failure"))
+    });
     let second = ops::park(
         &rt,
         &ctx(),
@@ -1903,8 +1909,10 @@ fn turn_on_after_a_failed_second_park_uses_the_newest_park_record() {
 #[test]
 fn a_failed_row_with_a_completed_rollback_is_not_offered_to_turn_on() {
     let (home, stub) = dotagents_home("park_dotagents_failed_not_offered", EXPLICIT_TOML);
-    let rt = runtime(&home, stub.clone(), true);
-    stub.remove_exit.store(3, Ordering::SeqCst);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    fs.before_write_once(stub.toml_path(), || {
+        Err(std::io::Error::other("injected config failure"))
+    });
     let parked = ops::park(
         &rt,
         &ctx(),
@@ -2138,8 +2146,17 @@ fn project_turn_on_gives_the_ignore_file_back_byte_for_byte() {
 #[test]
 fn turn_on_keeps_an_entry_another_tool_added_while_dotagents_ran() {
     let (home, stub) = dotagents_home("park_dotagents_concurrent_edit", EXPLICIT_TOML);
-    let rt = runtime(&home, stub.clone(), true);
-    stub.add_unrelated_entry.store(true, Ordering::SeqCst);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    let path = stub.toml_path();
+    fs.after_rename_once(stub.skill_dir("foo"), move || {
+        let text = read(&path)
+            + "
+[[skills]]
+name = \"extra\"
+source = \"owner/extra\"
+";
+        std::fs::write(path, text)
+    });
 
     park_foo(&rt);
     unpark_foo(&rt);
@@ -2156,8 +2173,12 @@ fn turn_on_keeps_unrelated_exclusion_added_during_remove_or_erases_user_edit() {
         "{EXPLICIT_TOML}\n[[skills]]\nname = \"*\"\nsource = \"other/repo\"\nexclude = []\n"
     );
     let (home, stub) = dotagents_home("park_unrelated_exclude", &manifest);
-    let rt = runtime(&home, stub.clone(), true);
-    stub.exclude_unrelated.store(true, Ordering::SeqCst);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    let path = stub.toml_path();
+    fs.after_rename_once(stub.skill_dir("foo"), move || {
+        let text = read(&path).replace("exclude = []", "exclude = [\"foo\"]");
+        std::fs::write(path, text)
+    });
     park_foo(&rt);
     unpark_foo(&rt);
     let doc = read(&stub.toml_path())
@@ -2391,6 +2412,153 @@ fn turn_on_keeps_rule_added_between_reads_or_discards_editor_change() {
     assert_eq!(
         read(&ignore),
         "/skills/foo\n!/skills/foo/\n# edited\n/editor-rule\n"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn unlist_keeps_a_copy_reinstalled_after_the_live_folder_check() {
+    let (home, stub) = dotagents_home("park_reinstall_race", EXPLICIT_TOML);
+    let fs = Arc::new(skill_studio_core::testing::FailingFs::wrap(Arc::new(
+        RealFs::new(),
+    )));
+    let rt = runtime_with_fs(
+        &home,
+        stub.clone(),
+        &[("dotagents", DOTAGENTS)],
+        Vec::new(),
+        fs.clone(),
+    );
+    let original = read(&stub.toml_path());
+    let locked = read(&stub.lock_path());
+    park_foo(&rt);
+    std::fs::write(stub.toml_path(), original).unwrap();
+    std::fs::write(stub.lock_path(), locked).unwrap();
+    stub.reinstall_in_remove.store(true, Ordering::SeqCst);
+    let live = stub.skill_dir("foo");
+    fs.before_write_once(stub.toml_path(), move || {
+        write_skill(&live, "foo");
+        std::fs::write(live.join("notes.txt"), "concurrent install")
+    });
+    ops::unlist_parked_dotagents(&rt, &ctx(), &parked_copy(&rt, "foo").id).unwrap();
+    assert_eq!(
+        read(&stub.skill_dir("foo").join("notes.txt")),
+        "concurrent install"
+    );
+    assert!(parked_copy(&rt, "foo").path.join("SKILL.md").is_file());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn failed_park_keeps_concurrent_config_edits_during_rollback() {
+    let (home, stub) = dotagents_home("park_rollback_race", EXPLICIT_TOML);
+    let fs = Arc::new(skill_studio_core::testing::FailingFs::wrap(Arc::new(
+        RealFs::new(),
+    )));
+    let rt = runtime_with_fs(
+        &home,
+        stub.clone(),
+        &[("dotagents", DOTAGENTS)],
+        Vec::new(),
+        fs.clone(),
+    );
+    let config = stub.toml_path();
+    let concurrent = read(&config) + "\n[[skills]]\nname = \"extra\"\nsource = \"owner/extra\"\n";
+    let expected = concurrent.clone();
+    let failing_stub = stub.clone();
+    fs.after_rename_once(stub.skill_dir("foo"), move || {
+        failing_stub.remove_exit.store(3, Ordering::SeqCst);
+        std::fs::write(config, concurrent)
+    });
+    fs.before_write_once(stub.lock_path(), || {
+        Err(std::io::Error::other("injected lock write failure"))
+    });
+    let result = ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: live_copy(&rt, "foo").id,
+        },
+    );
+    assert!(result.is_err());
+    assert_eq!(read(&stub.toml_path()), expected);
+    assert!(stub.skill_dir("foo").join("SKILL.md").is_file());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+fn fault_runtime(
+    home: &Path,
+    stub: Arc<FakeDotagents>,
+) -> (Runtime, Arc<skill_studio_core::testing::FailingFs>) {
+    let fs = Arc::new(skill_studio_core::testing::FailingFs::wrap(Arc::new(
+        RealFs::new(),
+    )));
+    let rt = runtime_with_fs(
+        home,
+        stub,
+        &[("dotagents", DOTAGENTS)],
+        Vec::new(),
+        fs.clone(),
+    );
+    (rt, fs)
+}
+
+#[test]
+fn failed_park_refuses_to_overwrite_config_changed_after_its_write_and_keeps_backup() {
+    let (home, stub) = dotagents_home("park_rollback_drift", EXPLICIT_TOML);
+    let (rt, fs) = fault_runtime(&home, stub.clone());
+    let config = stub.toml_path();
+    fs.before_write_once(stub.lock_path(), move || {
+        std::fs::write(&config, read(&config) + "# concurrent after write\n")?;
+        Err(std::io::Error::other("injected lock failure"))
+    });
+    let result = ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: live_copy(&rt, "foo").id,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        result.message.contains("backup is retained"),
+        "{}",
+        result.message
+    );
+    let current = read(&stub.toml_path());
+    assert!(current.contains("# concurrent after write"));
+    assert!(!current.contains("name = \"foo\""));
+    assert!(paths_under(&home.join(".history"))
+        .iter()
+        .any(|path| std::fs::read(path).is_ok_and(|bytes| bytes == EXPLICIT_TOML.as_bytes())));
+    assert!(stub.skill_dir("foo").join("SKILL.md").is_file());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn turn_on_preserves_ignore_rule_order_changed_during_park() {
+    let (home, stub) = dotagents_home("park_ignore_reorder", EXPLICIT_TOML);
+    let ignore = home.join(".agents/.gitignore");
+    std::fs::write(&ignore, "/skills/bar\n!/skills/bar\n/skills/foo\n").unwrap();
+    let (rt, fs) = fault_runtime(&home, stub);
+    let changed = ignore.clone();
+    fs.after_rename_once(home.join(".agents/skills/foo"), move || {
+        std::fs::write(changed, "!/skills/bar\n/skills/bar\n/skills/foo\n")
+    });
+    park_foo(&rt);
+    unpark_foo(&rt);
+    let restored = read(&ignore);
+    let unrelated: Vec<_> = restored
+        .lines()
+        .filter(|line| *line != "/skills/foo")
+        .collect();
+    assert_eq!(unrelated, ["!/skills/bar", "/skills/bar"]);
+    assert_eq!(
+        restored
+            .lines()
+            .filter(|line| *line == "/skills/foo")
+            .count(),
+        1
     );
     std::fs::remove_dir_all(home).unwrap();
 }
