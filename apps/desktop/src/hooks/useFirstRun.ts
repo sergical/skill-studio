@@ -190,7 +190,11 @@ export function useFirstRunScreen(onSaved: () => void): FirstRunScreenState {
         setKept(found);
       })
       .catch((cause: unknown) => {
-        if (!cancelled) setError(invokeErrorMessage(cause));
+        if (!cancelled) {
+          const message = invokeErrorMessage(cause);
+          setError(message);
+          setHarnessDetection({ error: message });
+        }
       });
     return () => {
       cancelled = true;
