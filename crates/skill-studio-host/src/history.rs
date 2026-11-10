@@ -755,7 +755,7 @@ impl HistoryStore for SqliteHistoryStore {
             }
             payload[BACKUP_EXPIRED_PAYLOAD_KEY] = serde_json::Value::Bool(true);
             let changed = transaction.execute(
-                "UPDATE events SET backup_dir=NULL,restorable=0,payload=?1 WHERE id=?2 AND backup_dir=?3 AND status='done'",
+                "UPDATE events SET backup_dir=NULL,restorable=0,payload=?1 WHERE id=?2 AND backup_dir=?3 AND status IN ('done','failed')",
                 params![serde_json::to_string(&payload).map_err(json_err)?,id.0,backup_dir],
             ).map_err(sql_err)?;
             if changed > 0 {
@@ -1179,6 +1179,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum RetentionProtection {
         Count,
+        FailedControl,
         Recent,
         NewestUndoable,
         NewestUndoableNeedsNoBackup,
@@ -1226,7 +1227,13 @@ mod tests {
                 )
                 .unwrap();
             if index + 1 < count {
-                store.finish(&guard, &id, EventStatus::Done, None).unwrap();
+                let status =
+                    if matches!(protection, RetentionProtection::FailedControl) && index == 0 {
+                        EventStatus::Failed
+                    } else {
+                        EventStatus::Done
+                    };
+                store.finish(&guard, &id, status, None).unwrap();
             }
             ids.push(id);
         }
@@ -1246,7 +1253,7 @@ mod tests {
                 .unwrap();
         }
         let (protected, control, expected_kept) = match protection {
-            RetentionProtection::Count => {
+            RetentionProtection::Count | RetentionProtection::FailedControl => {
                 (count - BACKUP_RETENTION_COUNT, 0, BACKUP_RETENTION_COUNT)
             }
             RetentionProtection::Recent => (1, 0, count - 1),
@@ -1331,6 +1338,17 @@ mod tests {
         );
         assert_eq!(fs::read(target.join("SKILL.md")).unwrap(), live_before);
         store.get(&ids[control]).unwrap().unwrap()
+    }
+
+    #[test]
+    fn an_old_failed_event_expires_under_the_same_limits_or_keeps_its_backup_forever() {
+        let row = retention_protects_one_backup_and_expires_the_control(
+            RetentionProtection::FailedControl,
+        );
+        assert_eq!(row.status, EventStatus::Failed);
+        assert!(skill_studio_core::backup_retention::backup_is_expired(
+            &row.payload
+        ));
     }
 
     #[test]

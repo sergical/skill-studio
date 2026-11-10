@@ -132,8 +132,8 @@ pub fn expired_event_backups(
                 continue;
             }
             match event.status {
-                EventStatus::Done => {}
-                EventStatus::Pending | EventStatus::Failed | EventStatus::Interrupted => continue,
+                EventStatus::Done | EventStatus::Failed => {}
+                EventStatus::Pending | EventStatus::Interrupted => continue,
             }
             let keep_by_count = completed < BACKUP_RETENTION_COUNT;
             completed += 1;

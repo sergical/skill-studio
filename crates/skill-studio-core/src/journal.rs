@@ -849,6 +849,23 @@ pub struct TrimmedBackup {
     pub relative: String,
 }
 
+fn plan_backup_target(plan: &PlanRecord) -> Option<PathBuf> {
+    plan.steps
+        .iter()
+        .find_map(|step| match step {
+            PlanStep::Swap { path, .. } => Some(path),
+            _ => None,
+        })
+        .or_else(|| plan.backups.first().map(|entry| &entry.original))
+        .or_else(|| {
+            plan.steps.iter().find_map(|step| match step {
+                PlanStep::Link { path, .. } | PlanStep::WriteFile { path, .. } => Some(path),
+                PlanStep::Stage { .. } | PlanStep::Swap { .. } => None,
+            })
+        })
+        .map(|path| crate::backup_retention::skill_target(path))
+}
+
 /// Expires completed plan backups only when count, age, newest undoable
 /// plan, and recovery protections all permit it. Pending and interrupted
 /// plans remain protected. Rows stay; expiry is durable before deletion.
@@ -885,24 +902,19 @@ pub fn trim_backups(
                 journal.remove_backup(guard, &plan.id, &backup.relative)?;
                 continue;
             }
-            let primary = plan
-                .steps
-                .iter()
-                .find_map(|step| match step {
-                    PlanStep::Swap { path, .. } => Some(path),
-                    _ => None,
-                })
-                .or_else(|| plan.backups.first().map(|entry| &entry.original))
-                .unwrap_or(&backup.original);
-            let target = crate::backup_retention::skill_target(primary);
+            let Some(target) = plan_backup_target(plan) else {
+                continue;
+            };
             targets.entry(target).or_default().push((plan, backup));
         }
     }
-    for backups in targets.values() {
-        let newest_undoable = backups
+    for (target, backups) in &targets {
+        let newest_undoable = plans
             .iter()
-            .find(|(plan, _)| plan.status == PlanStatus::Done)
-            .map(|(plan, _)| &plan.id);
+            .find(|plan| {
+                plan.status == PlanStatus::Done && plan_backup_target(plan).as_ref() == Some(target)
+            })
+            .map(|plan| &plan.id);
         let mut completed = Vec::new();
         for (plan, backup) in backups {
             if !completed.contains(&plan.id) {
@@ -991,6 +1003,50 @@ mod tests {
             ids.push(id);
         }
         (journal, guard, fs, ids)
+    }
+
+    #[test]
+    fn a_newer_undoable_plan_without_a_backup_expires_the_old_backup_or_pins_it_forever() {
+        let (journal, guard, fs, ids) = retention_fixture("undoable");
+        let old = journal
+            .all()
+            .unwrap()
+            .into_iter()
+            .find(|plan| plan.id == ids[0])
+            .unwrap();
+        let backup = journal.backup_path(&old.id, &old.backups[0].relative);
+        assert!(fs.symlink_metadata(&backup).is_ok());
+        fs.fsops_create_dir(Path::new("/root/alpha")).unwrap();
+        let root = Root::open(fs.as_ref(), PathBuf::from("/root")).unwrap();
+        let plan = PlanWriter::begin(
+            &journal,
+            &guard,
+            PlanId("new-without-backup".into()),
+            Utc::now(),
+            "new file",
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .unwrap();
+        fsops::write_file(
+            &root,
+            &plan,
+            Path::new("alpha/SKILL.md"),
+            b"new user bytes",
+            &fsops::ReadStamp::Absent,
+        )
+        .unwrap();
+        plan.finish(PlanStatus::Done).unwrap();
+        trim_backups(&journal, &guard, Utc::now()).unwrap();
+        assert!(
+            fs.symlink_metadata(&backup).is_err(),
+            "a newer undoable plan no longer needs the old backup"
+        );
+        assert_eq!(
+            fs.read_capped(Path::new("/root/alpha/SKILL.md"), u64::MAX)
+                .unwrap(),
+            b"new user bytes"
+        );
     }
 
     #[test]

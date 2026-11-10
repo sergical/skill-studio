@@ -311,9 +311,9 @@ pub fn restore_event_with_runtime(
     }
 
     let write_lease = super::write_lease::WriteLease::default();
-    let _guard = write_lease.try_acquire(home)?;
+    let retention_guard = write_lease.try_acquire(home)?;
     store.restore(event_id, force)?;
-    store.retain_backups(_guard.as_exclusive_guard());
+    store.retain_backups(retention_guard.as_exclusive_guard());
     if target.kind == "explode_shared_dir" {
         if let Some(root) = target.payload.get("root").and_then(|v| v.as_str()) {
             store.unregister_materialized_root(Path::new(root))?;
@@ -429,7 +429,7 @@ pub async fn materialize_harness_root(
         let event_store = app.state::<EventStoreState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
-        let _guard = write_lease.try_acquire(&home)?;
+        let retention_guard = write_lease.try_acquire(&home)?;
         let root_path = PathBuf::from(&root);
         skill_materialize::validate_materialize_root(&root_path)?;
 
@@ -454,7 +454,7 @@ pub async fn materialize_harness_root(
         let guard = locked_store(&event_store)?;
         let store = guard.as_ref().ok_or("Event store is unavailable")?;
         skill_materialize::explode_shared_dir(store, &root_path, &harness)?;
-        store.retain_backups(_guard.as_exclusive_guard());
+        store.retain_backups(retention_guard.as_exclusive_guard());
         drop(guard);
 
         skill_refresh::request_snapshot_rebuild(&app);
@@ -480,7 +480,7 @@ pub async fn materialize_harness_root_then_disable(
             let event_store = app.state::<EventStoreState>();
             let home = dirs::home_dir().ok_or("Could not find home directory")?;
             let write_lease = super::write_lease::WriteLease::default();
-            let _guard = write_lease.try_acquire(&home)?;
+            let retention_guard = write_lease.try_acquire(&home)?;
             let deployment_id = target
                 .deployment_id
                 .as_deref()
@@ -542,7 +542,7 @@ pub async fn materialize_harness_root_then_disable(
                     project_path: deployment.project_path.as_deref(),
                 },
             )?;
-            store.retain_backups(_guard.as_exclusive_guard());
+            store.retain_backups(retention_guard.as_exclusive_guard());
             drop(guard);
             skill_refresh::request_snapshot_rebuild(&app);
             Ok(())
@@ -731,7 +731,7 @@ pub async fn repair_skill_link(
         let event_store = app.state::<EventStoreState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
-        let _guard = write_lease.try_acquire(&home)?;
+        let retention_guard = write_lease.try_acquire(&home)?;
         let link = PathBuf::from(&path);
 
         let snapshot =
@@ -775,7 +775,7 @@ pub async fn repair_skill_link(
             }
             other => return Err(format!("Unknown repair action: {other}")),
         }
-        store.retain_backups(_guard.as_exclusive_guard());
+        store.retain_backups(retention_guard.as_exclusive_guard());
         drop(guard);
 
         let normalized_link = normalize_link_path(&link);
