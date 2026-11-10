@@ -6012,7 +6012,7 @@ resolved_commit = "old"
             paused_rx.recv().unwrap();
             let write = write_lease.try_acquire(home);
             resume_tx.send(()).unwrap();
-            let (snapshot, _report) = rebuild.join().unwrap().unwrap();
+            let (snapshot, _report) = rebuild.join().unwrap();
             assert!(
                 write.is_ok(),
                 "a write was refused while the rebuild only indexed invocations"
@@ -6571,7 +6571,7 @@ resolved_commit = "old"
                 base_commit: "a".repeat(40),
             },
         );
-        super::super::skill_fork_registry::write_fork_registry(&home, &saved).unwrap();
+        super::super::skill_fork_registry::write_fork_registry(&home, &mut saved).unwrap();
         fs::write(
             lock_file::lock_file_path(&home),
             serde_json::json!({
