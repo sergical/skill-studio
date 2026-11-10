@@ -2537,3 +2537,78 @@ fn park_turn_on_roundtrips_agents_toml_layouts_byte_for_byte_or_names_the_layout
         }
     }
 }
+
+#[test]
+fn turn_on_refuses_ambiguous_wildcards_then_preserves_reviewed_exclusions() {
+    for keep_one in [false, true] {
+        assert_reviewed_wildcards_are_preserved(keep_one);
+    }
+}
+
+fn assert_reviewed_wildcards_are_preserved(keep_one: bool) {
+    let layouts: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/park-dotagents-layouts.json")).unwrap();
+    let original = layouts
+        .iter()
+        .find(|layout| layout["name"] == "existing-exclusion")
+        .unwrap()["manifest"]
+        .as_str()
+        .unwrap();
+    let (home, stub) = dotagents_home_with_pool("park_ambiguous_wildcards", original, &["foo"]);
+    let rt = runtime(&home, stub.clone(), true);
+    std::fs::write(home.join(".agents/.gitignore"), "/skills/foo\n").unwrap();
+    park_foo(&rt);
+    let changed = if keep_one {
+        original.split("\n\n[[skills]]").next().unwrap().to_string() + "\n# concurrent setting\n"
+    } else {
+        read(&stub.toml_path()) + "# concurrent setting\n"
+    };
+    std::fs::write(stub.toml_path(), changed).unwrap();
+    let files = [
+        stub.toml_path(),
+        stub.lock_path(),
+        home.join(".agents/.gitignore"),
+    ];
+    let before: Vec<Vec<u8>> = files
+        .iter()
+        .map(|path| std::fs::read(path).unwrap())
+        .collect();
+    let result = ops::unpark(
+        &rt,
+        &ctx(),
+        &UnparkRequest {
+            deployment_id: parked_copy(&rt, "foo").id,
+        },
+    );
+    let current = read(&stub.toml_path())
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    assert!(
+        current["skills"]
+            .as_array_of_tables()
+            .unwrap()
+            .get(0)
+            .unwrap()
+            .get("exclude")
+            .and_then(toml_edit::Item::as_array)
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some("foo"))),
+        "Turn on removed an exclusion that predates Park"
+    );
+    assert_eq!(
+        result.unwrap_err().code,
+        skill_studio_core::ErrorCode::DriftConflict
+    );
+    assert_eq!(
+        files
+            .iter()
+            .map(|path| std::fs::read(path).unwrap())
+            .collect::<Vec<_>>(),
+        before
+    );
+    assert!(parked_copy(&rt, "foo").path.join("SKILL.md").is_file());
+    let reviewed = original.to_string() + "# concurrent setting\n";
+    std::fs::write(stub.toml_path(), &reviewed).unwrap();
+    unpark_foo(&rt);
+    assert_eq!(read(&stub.toml_path()), reviewed);
+    std::fs::remove_dir_all(home).unwrap();
+}

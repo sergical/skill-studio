@@ -17,10 +17,32 @@ listed. Only its private helper name was adapted to the current caller for
 that check. CLI and MCP also failed with the legacy remover; their sentinel
 executable returned 79 when called. The production code was then restored.
 
-The implementation is in the parent race-fix PR. This PR keeps the full layout
-matrix and surface coverage separate. No production code or timing claim.
+The parent race-fix PR removes the layout-sensitive external remover. This PR
+adds the layout matrix and keeps earlier exclusions safe when config edits
+require a merge. It makes no timing claim.
 
-Scoped core, CLI, and MCP package tests passed with all features, including all
-32 layout variants on every surface. Rust formatting and scoped Clippy passed.
-Post-green simplification found no worthwhile simplification. The same gate is
-run again before push.
+The initial core, CLI, and MCP package gate passed with all features, including
+all 32 variants per surface. Rust format and scoped clippy passed.
+
+| Issue | User flow                                            | Expectation                                                                                | Proof (file::test or command)                                                                                                      | Red before fix?                                      | Measured numbers |
+| ----- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------- |
+| #404  | Edit config while identical wildcard keys are parked | Refuse before changing config, lock, ignore or copy; preserve reviewed exclusions on retry | park_install_aware::turn_on_refuses_ambiguous_wildcards_then_preserves_reviewed_exclusions; CLI envelope and MCP stdio equivalents | Yes; core, CLI and MCP removed the earlier exclusion | No timing claim  |
+
+Changed configs use a row key only if it was unique before Park and still names
+one row. Older records can establish that from their backup. Ambiguous rows
+stay untouched when the skill is already listed; otherwise Turn on asks for
+exclude review. New records retain key uniqueness even if a backup is missing.
+The core case also covers deleting the supplying rows while retaining the row
+that already excluded the skill. MCP repeats the retry after restarting its
+stdio server.
+
+The 58 core Park tests and CLI/MCP ambiguity flows passed. The post-green pass
+shared the key-uniqueness check between planning and legacy-record restoration.
+Scoped clippy and Rust format passed again after that cleanup. No events.rs
+changes.
+
+The final package repeat was stopped after macOS repeatedly held test processes
+at `_dyld_start` before Rust started. A one-second sample of the fsops process
+showed only that loader frame and a 96 KiB footprint after 32 seconds. The run
+had no test failure. Exact Park integration targets and scoped clippy were run
+separately after simplification. CI uses its own build folder for the full gate.

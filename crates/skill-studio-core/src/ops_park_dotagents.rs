@@ -37,6 +37,8 @@ struct WildcardRef {
     /// that key, and the line and comment it carried, when the list ends up
     /// empty.
     had_exclude: bool,
+    /// Older records need the original config to establish key uniqueness.
+    unique_before_park: Option<bool>,
 }
 
 /// What `agents.lock` records about the skill: the fields dotagents matches
@@ -155,6 +157,7 @@ impl DotagentsPark {
                     "path": w.path,
                     "supplies": w.supplies,
                     "had_exclude": w.had_exclude,
+                    "unique_before_park": w.unique_before_park,
                 })
             })
             .collect();
@@ -213,6 +216,9 @@ pub(crate) fn recorded(payload: &serde_json::Value) -> Option<RecordedDotagents>
                                 .get("had_exclude")
                                 .and_then(serde_json::Value::as_bool)
                                 .unwrap_or(false),
+                            unique_before_park: row
+                                .get("unique_before_park")
+                                .and_then(serde_json::Value::as_bool),
                         })
                     })
                     .collect()
@@ -438,6 +444,14 @@ fn is_recorded(row: &toml_edit::Table, wildcards: &[WildcardRef]) -> bool {
         })
 }
 
+fn unique_wildcard_key(doc: &toml_edit::DocumentMut, wildcard: &WildcardRef) -> bool {
+    rows(doc)
+        .filter(|row| is_recorded(row, std::slice::from_ref(wildcard)))
+        .take(2)
+        .count()
+        == 1
+}
+
 /// Whether the recorded entry that matches `row` had an `exclude` key before
 /// the park.
 fn had_exclude(row: &toml_edit::Table, wildcards: &[WildcardRef]) -> bool {
@@ -605,7 +619,7 @@ pub(crate) fn plan_park(
     let entry = rows(&doc)
         .find(|row| row_name(row) == Some(skill.0.as_str()))
         .map(ToString::to_string);
-    let wildcards: Vec<WildcardRef> = match &locked {
+    let mut wildcards: Vec<WildcardRef> = match &locked {
         Some(locked) => rows(&doc)
             .filter(|row| wildcard_contains(row, &skill.0, locked))
             .filter_map(|row| {
@@ -614,11 +628,16 @@ pub(crate) fn plan_park(
                     path: row_str(row, "path").map(str::to_string),
                     supplies: true,
                     had_exclude: row.get("exclude").is_some(),
+                    unique_before_park: None,
                 })
             })
             .collect(),
         None => Vec::new(),
     };
+    for wildcard in &mut wildcards {
+        let unique = unique_wildcard_key(&doc, wildcard);
+        wildcard.unique_before_park = Some(unique);
+    }
     if entry.is_none() && wildcards.is_empty() {
         return Ok(None);
     }
@@ -1022,6 +1041,45 @@ fn lift_exclude(exclude: &mut toml_edit::Array, name: &str) -> bool {
     lifted
 }
 
+fn mergeable_wildcards(
+    doc: &toml_edit::DocumentMut,
+    original: Option<&str>,
+    skill: &SkillName,
+    wildcards: &[WildcardRef],
+) -> Result<Vec<WildcardRef>, CoreError> {
+    if wildcards.is_empty() {
+        return Ok(Vec::new());
+    }
+    let original = original
+        .map(|text| parse(Path::new("agents.toml"), text))
+        .transpose()?;
+    let already_managed = listed_again(doc, skill, wildcards);
+    let mut mergeable = Vec::new();
+    for wildcard in wildcards {
+        let key = std::slice::from_ref(wildcard);
+        let matching: Vec<_> = rows(doc).filter(|row| is_recorded(row, key)).collect();
+        let unique_before = wildcard
+            .unique_before_park
+            .or_else(|| {
+                original
+                    .as_ref()
+                    .map(|before| unique_wildcard_key(before, wildcard))
+            })
+            .unwrap_or(false);
+        let ambiguous = !wildcard.supplies || !unique_before || matching.len() > 1;
+        if ambiguous {
+            if !already_managed && matching.iter().any(|row| excludes(row, &skill.0)) {
+                return Err(CoreError::new(ErrorCode::DriftConflict, format!(
+                    "Some wildcard entries need review before Turn on. In agents.toml, remove {} from exclude only in entries that should supply it. Then try Turn on again.", skill.0
+                )));
+            }
+            continue;
+        }
+        mergeable.push(wildcard.clone());
+    }
+    Ok(mergeable)
+}
+
 /// `skill` listed again in `doc`: the recorded `[[skills]]` entry added back,
 /// and the name lifted from the `exclude` of the recorded wildcard
 /// entries. Reports whether anything changed.
@@ -1223,12 +1281,12 @@ fn turn_on_files(
             )?;
         } else {
             let mut doc = parse(&recorded.config, &current)?;
-            let edited = with_skill_back(
-                &mut doc,
-                skill,
-                recorded.entry.as_deref(),
-                &recorded.wildcards,
-            )?;
+            let original = originals
+                .iter()
+                .find(|file| file.path == recorded.config)
+                .and_then(|file| file.text.as_deref());
+            let wildcards = mergeable_wildcards(&doc, original, skill, &recorded.wildcards)?;
+            let edited = with_skill_back(&mut doc, skill, recorded.entry.as_deref(), &wildcards)?;
             let has_record = recorded.entry.is_some() || !recorded.wildcards.is_empty();
             // Nothing is written yet: a turn-on that would not make dotagents
             // manage the skill again must leave the copy parked and the files alone.
@@ -1679,6 +1737,7 @@ mod tests {
                 path: path.map(str::to_string),
                 supplies: true,
                 had_exclude: false,
+                unique_before_park: Some(true),
             }]
         };
         let doc = table(

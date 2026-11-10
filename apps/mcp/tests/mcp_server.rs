@@ -1265,3 +1265,47 @@ async fn mcp_park_turn_on_restores_every_layout_byte_for_byte_or_names_the_layou
     }
     client.cancel().await.ok();
 }
+
+#[tokio::test]
+async fn mcp_turn_on_refuses_ambiguous_wildcards_and_keeps_reviewed_exclusions() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    let path = park_dotagents::setup(&home);
+    let original = park_dotagents::duplicate_wildcard_layout();
+    park_dotagents::write_layout(&home, &original);
+    let environment = [
+        ("HOME", home.to_str().unwrap()),
+        ("SKILL_STUDIO_HOME", home.to_str().unwrap()),
+        ("PATH", &path),
+    ];
+    let (client, _) = connect(&environment).await;
+    let id = deployment_id_via_mcp(&client, "foo", "universal").await;
+    let result = call_tool(&client, "park", serde_json::json!({"deployment_id":id})).await;
+    assert_eq!(result["status"], "ok", "{result}");
+    let config = home.join(".agents/agents.toml");
+    std::fs::write(
+        &config,
+        std::fs::read_to_string(&config).unwrap() + "# concurrent setting\n",
+    )
+    .unwrap();
+    let before = park_dotagents::config_bytes(&home);
+    let id = deployment_id_via_mcp(&client, "foo", "parked").await;
+    let result = call_tool(&client, "unpark", serde_json::json!({"deployment_id":id})).await;
+    client.cancel().await.ok();
+    assert_eq!(
+        park_dotagents::config_bytes(&home),
+        before,
+        "Turn on changed an existing exclusion"
+    );
+    assert_eq!(result["errors"][0]["code"], "drift_conflict");
+    assert!(home
+        .join(".agents/skills-parked/universal/foo/SKILL.md")
+        .is_file());
+    let reviewed = original + "# concurrent setting\n";
+    std::fs::write(&config, &reviewed).unwrap();
+    let (client, _) = connect(&environment).await;
+    let result = call_tool(&client, "unpark", serde_json::json!({"deployment_id":id})).await;
+    client.cancel().await.ok();
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(std::fs::read_to_string(config).unwrap(), reviewed);
+}

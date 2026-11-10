@@ -95,3 +95,17 @@ pub fn write_layout(home: &Path, text: &str) {
     )
     .unwrap();
 }
+
+pub fn duplicate_wildcard_layout() -> String {
+    let table: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "../../../../crates/skill-studio-core/tests/fixtures/park-dotagents-layouts.json"
+    ))
+    .unwrap();
+    table
+        .iter()
+        .find(|row| row["name"] == "existing-exclusion")
+        .unwrap()["manifest"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}

@@ -1273,3 +1273,53 @@ fn cli_park_turn_on_restores_every_layout_byte_for_byte_or_names_the_layout() {
         assert!(home.join(".agents/skills/foo/SKILL.md").is_file());
     }
 }
+
+#[test]
+fn cli_turn_on_refuses_ambiguous_wildcards_and_keeps_reviewed_exclusions() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    let path = park_dotagents::setup(&home);
+    let original = park_dotagents::duplicate_wildcard_layout();
+    park_dotagents::write_layout(&home, &original);
+    let args = |op| vec![op, "foo", "--home", home.to_str().unwrap(), "--json"];
+    assert_eq!(
+        run_with_env(
+            &args("park"),
+            &[("HOME", home.to_str().unwrap()), ("PATH", &path)]
+        )
+        .status,
+        0
+    );
+    let config = home.join(".agents/agents.toml");
+    std::fs::write(
+        &config,
+        std::fs::read_to_string(&config).unwrap() + "# concurrent setting\n",
+    )
+    .unwrap();
+    let before = park_dotagents::config_bytes(&home);
+    let result = run_with_env(
+        &args("unpark"),
+        &[("HOME", home.to_str().unwrap()), ("PATH", &path)],
+    );
+    assert_eq!(
+        park_dotagents::config_bytes(&home),
+        before,
+        "Turn on changed an existing exclusion"
+    );
+    assert_ne!(result.status, 0, "{}", result.json);
+    assert_eq!(result.json["errors"][0]["code"], "drift_conflict");
+    assert!(home
+        .join(".agents/skills-parked/universal/foo/SKILL.md")
+        .is_file());
+    let reviewed = original + "# concurrent setting\n";
+    std::fs::write(&config, &reviewed).unwrap();
+    assert_eq!(
+        run_with_env(
+            &args("unpark"),
+            &[("HOME", home.to_str().unwrap()), ("PATH", &path)]
+        )
+        .status,
+        0
+    );
+    assert_eq!(std::fs::read_to_string(config).unwrap(), reviewed);
+}
