@@ -167,6 +167,41 @@ mod tests {
     use skill_studio_core::{harness::HarnessCatalog, RuntimeScope};
     use std::sync::Arc;
 
+    #[test]
+    fn first_run_reports_claude_install_method_from_fixture_home_or_drops_the_verified_method() {
+        let home = tempfile::tempdir().unwrap();
+        let method = "native";
+        let config = home.path().join(".claude.json");
+        std::fs::write(
+            &config,
+            serde_json::to_vec(&serde_json::json!({"installMethod": method})).unwrap(),
+        )
+        .unwrap();
+        let scope = RuntimeScope::fixture(home.path());
+        let ports = skill_studio_host::default_ports(
+            home.path().join(".leases"),
+            Arc::new(HarnessCatalog::builtin()),
+        );
+        let runtime = Runtime::new(&scope, ports).unwrap();
+        let report =
+            tauri::async_runtime::block_on(detect_with_runtime(move || Ok(runtime))).unwrap();
+        let row = report
+            .harnesses
+            .iter()
+            .find(|row| row.id.as_str() == "claude-code")
+            .unwrap();
+        assert_eq!(row.install_method.value.as_deref(), Some(method));
+        assert_eq!(
+            row.install_method.evidence.confidence,
+            skill_studio_core::harness::Confidence::VerifiedFromDocs
+        );
+        assert!(row
+            .install_method
+            .evidence
+            .source
+            .contains(config.to_str().unwrap()));
+    }
+
     /// `clean_home_with_no_harness_reaches_the_list_with_zero_harnesses_and_no_error`:
     /// an empty temp `$HOME` (no `ToolLookup`, no config, no sessions) must
     /// make `ops::harnesses` report every row `NotFound`, never an `Err` and
