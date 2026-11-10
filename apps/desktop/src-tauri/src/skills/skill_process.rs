@@ -850,16 +850,23 @@ mod tests {
     ) {
         let tmp = tempfile::tempdir().unwrap();
         let marker = tmp.path().join("marker");
-        // A link to a system binary, not a freshly written script: running a
+        // A link to the system shell, not a freshly written script: running a
         // just-written script can stall for minutes on macOS hosts that scan
-        // new executables, and races a parallel fork on Linux (ETXTBSY).
-        std::os::unix::fs::symlink("/usr/bin/touch", tmp.path().join("fakeclaude")).unwrap();
+        // new executables, and races a parallel fork on Linux (ETXTBSY). Not
+        // `touch` either: uutils multi-call coreutils (Ubuntu CI) refuse to
+        // run under another name.
+        std::os::unix::fs::symlink("/bin/sh", tmp.path().join("fakeclaude")).unwrap();
 
         let cancel = AtomicBool::new(false);
         let search_dirs = vec![tmp.path().to_path_buf()];
         run_controlled_command_with_search_dirs(
             "fakeclaude",
-            &[marker.display().to_string()],
+            &[
+                "-c".to_string(),
+                r#": > "$1""#.to_string(),
+                "sh".to_string(),
+                marker.display().to_string(),
+            ],
             None,
             &cancel,
             Duration::from_secs(30),

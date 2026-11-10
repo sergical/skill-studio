@@ -255,11 +255,7 @@ fn journal_rows(db_path: &Path, home: &Path) -> String {
     let mut out = String::new();
     for table in tables {
         let mut statement = conn.prepare(&format!("SELECT * FROM {table}")).unwrap();
-        let columns: Vec<String> = statement
-            .column_names()
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        let columns: Vec<String> = statement.column_names().map(str::to_string).collect();
         let mut lines: Vec<String> = statement
             .query_map([], |row| {
                 Ok(columns
