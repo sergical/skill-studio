@@ -94,7 +94,7 @@ type ParkHook<'a> = dyn Fn(
         &OpContext,
         &mut MutationSession,
         &crate::identity::EventId,
-    ) -> Result<PathBuf, CoreError>
+    ) -> Result<crate::ops::ParkedCopy, CoreError>
     + 'a;
 
 /// [`split`]'s body, for `turn_off_for_agent` too: the second value is where
@@ -143,6 +143,17 @@ pub(crate) fn split_body(
 
     let skill = crate::ops::resolve_skill(&session.fresh, &deployment.id)?.clone();
     let fs = rt.ports.fs.as_ref();
+    let registry_path = crate::ops_install::registry_path(&rt.scope.home.lexical);
+    let registry_before = if let Some(hook) = agent_off {
+        crate::ops_agent_off::refuse_shared_agent_roots(rt, &deployment.root.scope, hook.agent)?;
+        match fs.read_capped(&registry_path, 8 * 1024 * 1024) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(CoreError::io(&registry_path, e)),
+        }
+    } else {
+        None
+    };
     let universal_root = deployment
         .path
         .parent()
@@ -362,7 +373,7 @@ pub(crate) fn split_body(
         .filter(|copy| agent_off.is_none_or(|hook| &copy.harness != hook.agent))
         .cloned()
         .collect();
-    record_split_copies(
+    let finalize = record_split_copies(
         rt,
         ctx,
         &session,
@@ -370,10 +381,57 @@ pub(crate) fn split_body(
         &deployment.root.scope,
         &skill.name,
         &registered,
-    )?;
-    session
-        .store
-        .finish(&session.guard, &id, EventStatus::Done, None)?;
+    )
+    .and_then(|()| {
+        session
+            .store
+            .finish(&session.guard, &id, EventStatus::Done, None)
+    });
+    if let Err(error) = finalize {
+        if let (Some(hook), Some(parked)) = (agent_off, parked_path.as_ref()) {
+            let rollback = rollback_agent_off(
+                rt,
+                &mut session,
+                &AgentOffRollback {
+                    agent: hook.agent,
+                    parked,
+                    copies: &copies,
+                    links: &link_targets,
+                    universal: &deployment.path,
+                    quarantined: &quarantine_target,
+                    fingerprint: &pre_fingerprint,
+                    registry_path: &registry_path,
+                    registry_before: registry_before.as_deref(),
+                },
+            );
+            let _ = session
+                .store
+                .finish(&session.guard, &id, EventStatus::Failed, None);
+            let message = match rollback {
+                Ok(()) => {
+                    let _ = session.store.patch_payload(
+                        &session.guard,
+                        &id,
+                        serde_json::json!({ crate::events::ROLLED_BACK_PAYLOAD_KEY: true }),
+                    );
+                    format!(
+                        "{}; all file changes rolled back (event {})",
+                        error.message, id.0
+                    )
+                }
+                Err(rollback) => format!(
+                    "{}; rollback incomplete for event {}: {}; backup at {}, parked copy at {}",
+                    error.message,
+                    id.0,
+                    rollback.message,
+                    quarantine_target.display(),
+                    parked.parked_dir.display()
+                ),
+            };
+            return Err(CoreError::new(error.code, message));
+        }
+        return Err(error);
+    }
     crate::ops_remove::prune_quarantine(rt, &mut session, fs, &quarantine_dir, &skill.name);
     session.finish(rt, ctx);
     let write_step = crate::timing::step(clock, "split", step_start);
@@ -393,8 +451,73 @@ pub(crate) fn split_body(
             quarantine_path: quarantine_target,
             update_note: SPLIT_UPDATE_NOTE.to_string(),
         },
-        parked_path,
+        parked_path.map(|parked| parked.parked_dir),
     ))
+}
+
+struct AgentOffRollback<'a> {
+    agent: &'a AgentId,
+    parked: &'a crate::ops::ParkedCopy,
+    copies: &'a [SplitCopy],
+    links: &'a [(PathBuf, PathBuf)],
+    universal: &'a Path,
+    quarantined: &'a Path,
+    fingerprint: &'a crate::identity::Fingerprint,
+    registry_path: &'a Path,
+    registry_before: Option<&'a [u8]>,
+}
+
+fn rollback_agent_off(
+    rt: &Runtime,
+    session: &mut MutationSession,
+    state: &AgentOffRollback<'_>,
+) -> Result<(), CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let slot = state
+        .copies
+        .iter()
+        .find(|copy| &copy.harness == state.agent)
+        .ok_or_else(|| CoreError::new(ErrorCode::Io, "parked agent has no split destination"))?;
+    crate::park_move::move_dir(rt, session, &state.parked.parked_dir, &slot.path)?;
+    if let Some(note) = &state.parked.origin_note {
+        let scoped = crate::ports::confine(&rt.scope, fs, note)?;
+        fs.remove_file(&session.guard, &scoped)
+            .map_err(|e| CoreError::io(note, e))?;
+    }
+    put_universal_back(rt, session, fs, state.quarantined, state.universal)?;
+    roll_back_split(rt, session, fs, state.copies, state.links);
+    if crate::events::fingerprint_path(fs, state.universal)?.as_ref() != Some(state.fingerprint) {
+        return Err(
+            CoreError::new(ErrorCode::Io, "shared skill was not restored").at(state.universal),
+        );
+    }
+    for copy in state.copies {
+        if fs
+            .symlink_metadata(&copy.path)
+            .is_ok_and(|facts| facts.kind != FileKind::Symlink)
+        {
+            return Err(CoreError::new(ErrorCode::Io, "split copy remains").at(&copy.path));
+        }
+    }
+    for (link, target) in state.links {
+        if fs.read_link(link).ok().as_ref() != Some(target) {
+            return Err(CoreError::new(ErrorCode::Io, "original link was not restored").at(link));
+        }
+    }
+    let registry = crate::ports::confine(&rt.scope, fs, state.registry_path)?;
+    match state.registry_before {
+        Some(bytes) => fs.write_atomic(&session.guard, &registry, bytes),
+        None => match fs.remove_file(&session.guard, &registry) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        },
+    }
+    .map_err(|e| CoreError::io(state.registry_path, e))?;
+    session.store.patch_payload(
+        &session.guard,
+        &state.parked.event_id,
+        serde_json::json!({ crate::events::ROLLED_BACK_PAYLOAD_KEY: true }),
+    )
 }
 
 /// Moves the quarantined Universal folder back to its place, after a failed

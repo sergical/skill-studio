@@ -25,12 +25,17 @@ use crate::error::{CoreError, ErrorCode};
 // picks whichever type it walks to first and silently suffixes the other
 // (`AgentId2`), which flips based on unrelated edits (review round 1, item
 // 10).
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
 #[serde(transparent)]
 #[schemars(rename = "AgentIdentity")]
 pub struct AgentId(String);
+
+impl<'de> Deserialize<'de> for AgentId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse_harness(&raw).map_err(serde::de::Error::custom)
+    }
+}
 
 impl AgentId {
     /// Claude Code.

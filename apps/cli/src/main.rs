@@ -149,6 +149,23 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Split a shared skill and park one agent's copy. Stops source updates for the copies.
+    TurnOff {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        #[command(flatten)]
+        target: TargetArgs,
+        #[arg(long)]
+        agent: String,
+        /// Preview refusals and git status without changing files.
+        #[arg(long, conflicts_with = "confirm")]
+        check: bool,
+        /// Confirm the split and park after reviewing --check.
+        #[arg(long)]
+        confirm: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Turn a parked skill on again.
     Unpark {
         #[command(flatten)]
@@ -257,7 +274,7 @@ enum Command {
         #[arg(long, value_enum, default_value_t = AddMethod::SkillsSh)]
         method: AddMethod,
         /// Agent to install for. Repeat for more than one: universal (the
-        /// shared folder), claude-code, codex, opencode, cursor, pi or
+        /// shared folder), claude-code, codex, open-code (alias opencode), cursor, pi or
         /// grok-build. Default: universal.
         #[arg(long = "agent", alias = "harness", value_name = "AGENT")]
         harnesses: Vec<String>,
@@ -596,6 +613,23 @@ fn main() -> ExitCode {
         } => run_install_preferences(&scope, project_path, json, time),
         Command::Conflicts { scope, json } => run_diagnose_conflict(&scope, json, time),
         Command::Doctor { scope, json } => run_doctor(&scope, json, time),
+        Command::TurnOff {
+            scope,
+            target,
+            agent,
+            check,
+            confirm,
+            json,
+        } => {
+            let mode = if check {
+                TurnOffMode::Check
+            } else if confirm {
+                TurnOffMode::Apply
+            } else {
+                TurnOffMode::Unconfirmed
+            };
+            run_turn_off(&scope, &target, &agent, mode, json, time)
+        }
         Command::Remove {
             scope,
             target,
@@ -886,7 +920,7 @@ fn run_capabilities(
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
     let harnesses = match harnesses
         .into_iter()
-        .map(|h| AgentId::parse(&h))
+        .map(|h| AgentId::parse_harness(&h))
         .collect::<Result<Vec<_>, _>>()
     {
         Ok(harnesses) => harnesses,
@@ -2077,4 +2111,65 @@ fn early_error<T: serde::Serialize + ops::Outcome>(
 ) -> ExitCode {
     let envelope = ResultEnvelope::<T>::from_result(operation, scope, ctx, Err(err));
     finish(&envelope, json, time, print_table)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TurnOffMode {
+    Check,
+    Apply,
+    Unconfirmed,
+}
+
+fn run_turn_off(
+    scope: &ScopeArgs,
+    target: &TargetArgs,
+    agent: &str,
+    mode: TurnOffMode,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    use skill_studio_core::dto::{AgentOffCheck, AgentOffOutcome, AgentOffRequest};
+    use skill_studio_core::ops_agent_off;
+    let operation = Operation::TurnOffForAgent;
+    let rt = if mode == TurnOffMode::Apply {
+        build_runtime_write::<AgentOffOutcome>(scope, operation, json)
+    } else {
+        build_runtime::<AgentOffCheck>(scope, operation, json)
+    };
+    let rt = match rt {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let request = resolve_target(&rt, target, TargetKind::Park).and_then(|deployment_id| {
+        Ok(AgentOffRequest {
+            deployment_id,
+            agent: AgentId::parse_harness(agent)?,
+        })
+    });
+    if mode == TurnOffMode::Check {
+        let result = request.and_then(|req| ops_agent_off::turn_off_check(&rt, &ctx, &req));
+        let envelope = ResultEnvelope::from_result(operation, &rt.scope, &ctx, result);
+        return finish(&envelope, json, time, |e| {
+            if let Some(data) = &e.data {
+                println!("{}", serde_json::to_string_pretty(data).unwrap_or_default());
+            }
+        });
+    }
+    let result = request.and_then(|req| {
+        if mode == TurnOffMode::Unconfirmed {
+            return Err(skill_studio_core::CoreError::new(skill_studio_core::ErrorCode::InvalidRequest,
+                "Review turn-off --check, then pass --confirm. This splits the shared skill and stops source updates for the copies."));
+        }
+        ops_agent_off::turn_off_for_agent(&rt, &ctx, &req)
+    });
+    let envelope = ResultEnvelope::from_result(operation, &rt.scope, &ctx, result);
+    finish(&envelope, json, time, |e| {
+        if let Some(data) = &e.data {
+            println!(
+                "Parked {} for {}. {}",
+                data.skill, data.agent, data.update_note
+            );
+        }
+    })
 }

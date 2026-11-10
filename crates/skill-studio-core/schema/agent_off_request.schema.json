@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentOffRequest",
+  "description": "Request to turn a skill in the shared folder off for one agent: give every\nagent that reads the folder its own copy, then park that agent's copy.",
+  "type": "object",
+  "properties": {
+    "deployment_id": {
+      "description": "The live Universal (shared folder) copy, at global or project scope.",
+      "$ref": "#/$defs/DeploymentId"
+    },
+    "agent": {
+      "description": "The agent that loses the skill. Must read the shared folder.",
+      "$ref": "#/$defs/AgentIdentity"
+    }
+  },
+  "required": [
+    "deployment_id",
+    "agent"
+  ],
+  "$defs": {
+    "DeploymentId": {
+      "description": "Opaque deployment id.\n\nInvariant: the string starts with `dep:v1/`. Its internal layout is a core\ndetail; adapters and the UI compare it as a string and never split it.",
+      "type": "string"
+    },
+    "AgentIdentity": {
+      "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+      "type": "string"
+    }
+  }
+}
