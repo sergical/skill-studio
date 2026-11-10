@@ -640,6 +640,11 @@ pub fn rebuild_snapshot_now(
     app: &AppHandle,
     state: &SkillRefreshState,
 ) -> Result<SkillSnapshot, String> {
+    if let Some(state) = app.try_state::<super::data_folder_status::DataFolderStatusState>() {
+        if let Some(message) = state.0.lock().map_err(|error| error.to_string())?.clone() {
+            return Err(message);
+        }
+    }
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     rebuild_snapshot_at(&home, state, |built| {
         app.emit(SNAPSHOT_EVENT, built)
@@ -675,7 +680,7 @@ pub(crate) fn rebuild_snapshot_at(
         now,
         Some(scan_lease),
         || {},
-    );
+    )?;
     let previous = state
         .snapshot
         .read()
@@ -1027,7 +1032,7 @@ fn reconcile_skill_names_at(
         &update_store,
         &skill_plugin_update::read_plugin_versions_beside(&state.update_check_path),
         &current_owner_ids,
-    );
+    )?;
     sort_snapshot_skills(&mut replacements);
 
     let mut built = current;
@@ -1672,10 +1677,12 @@ pub(crate) fn opencode_config_root(home: &Path) -> PathBuf {
     }
 }
 
-fn park_event_times(db_path: &Path, paths: &[&str]) -> BTreeMap<String, String> {
+fn park_event_times(db_path: &Path, paths: &[&str]) -> Result<BTreeMap<String, String>, String> {
     if paths.is_empty() {
-        return BTreeMap::new();
+        return Ok(BTreeMap::new());
     }
+    let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+    let _guard = skill_studio_host::lock_data_folders(&[parent])?;
     let read = || -> rusqlite::Result<BTreeMap<String, String>> {
         let db = rusqlite::Connection::open_with_flags(
             db_path,
@@ -1692,7 +1699,7 @@ fn park_event_times(db_path: &Path, paths: &[&str]) -> BTreeMap<String, String> 
         let rows = query.query_map([paths], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect()
     };
-    read().unwrap_or_default()
+    Ok(read().unwrap_or_default())
 }
 
 /// Recompute registry, update, disable, and invocation fields on freshly
@@ -1708,7 +1715,7 @@ pub(crate) fn apply_skill_snapshot_overlays(
     update_store: &skill_update_check::UpdateCheckStore,
     plugin_versions: &skill_plugin_update::PluginVersionCache,
     current_owner_ids: &[String],
-) {
+) -> Result<(), String> {
     for skill in skills.iter_mut() {
         skill.has_update = false;
         skill.update_owner_ids.clear();
@@ -1897,7 +1904,7 @@ pub(crate) fn apply_skill_snapshot_overlays(
     let park_times = park_event_times(
         &super::core_runtime::history_db_path(&super::core_runtime::data_root()),
         &parked_paths,
-    );
+    )?;
     for skill in skills.iter_mut() {
         // A skill with any live copy is not parked as a whole: its parked
         // copies show as their own rows (and as "left behind" when a live
@@ -2044,6 +2051,7 @@ pub(crate) fn apply_skill_snapshot_overlays(
         skill.invocation =
             super::frontmatter::invocation_policy_from(disable_model, user_invocable).0;
     }
+    Ok(())
 }
 
 /// Runs core `ops::scan` over `home`/`project_paths`, restricted to `names`
@@ -2282,7 +2290,7 @@ pub fn build_snapshot(
     invocation_index: &mut SkillInvocationIndex,
     paths: BuildPaths,
     now: DateTime<Utc>,
-) -> (SkillSnapshot, SkillUseRefreshReport) {
+) -> Result<(SkillSnapshot, SkillUseRefreshReport), String> {
     build_snapshot_releasing(home, Some(invocation_index), paths, now, None, || {})
 }
 
@@ -2299,7 +2307,7 @@ fn build_snapshot_releasing(
     now: DateTime<Utc>,
     scan_lease: Option<super::write_lease::ScanLeaseGuard>,
     after_scan_reads: impl FnOnce(),
-) -> (SkillSnapshot, SkillUseRefreshReport) {
+) -> Result<(SkillSnapshot, SkillUseRefreshReport), String> {
     let total_start = Instant::now();
     let BuildPaths {
         cache_path,
@@ -2354,7 +2362,7 @@ fn build_snapshot_releasing(
         &update_store,
         &skill_plugin_update::read_plugin_versions_beside(update_check_path),
         &current_owner_ids,
-    );
+    )?;
     let overlays_ms = overlays_start.elapsed().as_millis();
 
     drop(scan_lease);
@@ -2426,7 +2434,7 @@ fn build_snapshot_releasing(
         "skill refresh: full rebuild {total_ms} ms (projects {projects_ms} ms, scan {scan_ms} ms, assembly {assembly_ms} ms, overlays {overlays_ms} ms, invocations {invocations_ms} ms, last-test {last_test_ms} ms, rest {rest_ms} ms; {skill_count} skills)"
     );
 
-    (snapshot, report)
+    Ok((snapshot, report))
 }
 
 /// Which kind of rebuild a single filesystem-watch event implies.
@@ -2789,6 +2797,22 @@ mod tests {
         change: impl FnOnce(&mut TrackedProjects),
     ) -> Result<(TrackedProjects, bool), String> {
         update_registry_section(home, |registry| &mut registry.projects, change)
+    }
+
+    #[test]
+    fn parked_history_read_refuses_newer_folder_or_opens_an_incompatible_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("schema_version");
+        std::fs::write(&marker, b"2\n").unwrap();
+        let error = park_event_times(&dir.path().join("events.sqlite3"), &["parked"]).unwrap_err();
+        assert_eq!(
+            error,
+            skill_studio_host::newer_data_folder_message(skill_studio_host::NewerDataFolder {
+                folder_version: 2,
+                app_version: skill_studio_host::CURRENT_DATA_VERSION
+            })
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]
@@ -3468,7 +3492,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         assert!(snapshot
             .projects
@@ -3515,7 +3540,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         let skill = snapshot
             .skills
@@ -3595,7 +3621,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
         let skill = snapshot
             .skills
             .iter()
@@ -3638,7 +3665,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         let skill = snapshot
             .skills
@@ -3712,7 +3740,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         let skill = snapshot
             .skills
@@ -3794,7 +3823,8 @@ mod tests {
                 update_check_path: &update_check_path,
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         let foo = snapshot.skills.iter().find(|s| s.name == "foo").unwrap();
         assert_eq!(
@@ -3904,6 +3934,7 @@ mod tests {
             },
             Utc::now(),
         )
+        .unwrap()
         .0
     }
 
@@ -3979,7 +4010,8 @@ mod tests {
                 update_check_path: &update_check_path,
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
         let foo = initial
             .skills
             .iter()
@@ -4026,7 +4058,8 @@ mod tests {
                 update_check_path: &update_check_path,
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
         let foo = snapshot
             .skills
             .iter()
@@ -4070,7 +4103,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         assert!(!snapshot
             .projects
@@ -4102,7 +4136,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         assert!(!snapshot
             .projects
@@ -4300,7 +4335,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         assert!(snapshot.projects.is_empty());
     }
@@ -4322,7 +4358,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         assert!(snapshot.projects.is_empty());
     }
@@ -4901,7 +4938,8 @@ mod tests {
             &skill_update_check::UpdateCheckStore::default(),
             &skill_plugin_update::PluginVersionCache::default(),
             &[],
-        );
+        )
+        .unwrap();
 
         assert!(!skill.has_update);
         assert!(skill.update_owner_ids.is_empty());
@@ -4959,7 +4997,8 @@ mod tests {
             &skill_update_check::UpdateCheckStore::default(),
             &skill_plugin_update::PluginVersionCache::default(),
             &[],
-        );
+        )
+        .unwrap();
 
         assert!(skill.has_update);
         assert_eq!(skill.update_owner_ids, vec!["plugin:codex@official"]);
@@ -4981,7 +5020,8 @@ mod tests {
             &skill_update_check::UpdateCheckStore::default(),
             &skill_plugin_update::PluginVersionCache::default(),
             &[],
-        );
+        )
+        .unwrap();
         assert!(!skill.has_update);
     }
 
@@ -5038,7 +5078,8 @@ mod tests {
             &store,
             &skill_plugin_update::PluginVersionCache::default(),
             &all_owner_ids,
-        );
+        )
+        .unwrap();
         skill
     }
 
@@ -5155,6 +5196,7 @@ mod tests {
             },
             Utc::now(),
         )
+        .unwrap()
         .0
     }
 
@@ -5396,7 +5438,8 @@ mod tests {
                 update_check_path: &update_check_path,
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
         assert_eq!(snapshot.skills.len(), 2, "both skills start out listed");
         let mut state = SkillRefreshState::fixture(snapshot);
         state.update_check_path = update_check_path;
@@ -5625,6 +5668,7 @@ mod tests {
                         resume_rx.recv().unwrap();
                     },
                 )
+                .unwrap()
             });
             paused_rx.recv().unwrap();
             let write = write_lease.try_acquire(home);
@@ -5793,7 +5837,8 @@ mod tests {
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
-        );
+        )
+        .unwrap();
 
         let skill = snapshot
             .skills

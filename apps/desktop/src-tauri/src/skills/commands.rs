@@ -995,7 +995,8 @@ mod tests {
             &refreshed_store,
             &super::super::skill_plugin_update::PluginVersionCache::default(),
             &[],
-        );
+        )
+        .unwrap();
         assert!(
             !skills[0].has_update,
             "the badge must not reappear on the next full rebuild after B1's store patch"
@@ -1110,7 +1111,8 @@ mod tests {
             &refreshed_store,
             &super::super::skill_plugin_update::PluginVersionCache::default(),
             &[owner_id.to_string()],
-        );
+        )
+        .unwrap();
         assert!(
             !skills[0].has_update,
             "the pre-update legacy pair must not resurrect the badge on the next full rebuild"

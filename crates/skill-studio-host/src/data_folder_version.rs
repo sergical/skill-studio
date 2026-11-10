@@ -93,28 +93,50 @@ impl Fs for RealFs {
     }
 }
 
-/// Holds the data-folder lock through validation, migration, and opening.
-/// The lock file stays in place so all processes lock the same inode.
-pub fn with_data_folder<T>(
-    folder: &Path,
-    open: impl FnOnce() -> Result<T, String>,
-) -> Result<T, String> {
-    with_data_folders(&[folder], open)
+/// Keeps compatible folders locked until the protected store is dropped.
+#[derive(Debug)]
+pub struct DataFolderGuard {
+    _locks: Vec<std::fs::File>,
 }
 
-/// Validates all folders before migrating any, with locks in path order.
-pub fn with_data_folders<T>(
-    folders: &[&Path],
-    open: impl FnOnce() -> Result<T, String>,
-) -> Result<T, String> {
-    with_data_folders_before_lock(folders, || {}, open)
+fn folder_identity(folder: &Path) -> io::Result<std::path::PathBuf> {
+    match folder.canonicalize() {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let absolute = std::path::absolute(folder)?;
+            let parent = absolute.parent().ok_or(error)?;
+            Ok(
+                folder_identity(parent)?.join(absolute.file_name().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "folder has no name")
+                })?),
+            )
+        }
+        Err(error) => Err(error),
+    }
 }
 
-fn with_data_folders_before_lock<T>(
+fn coordination_lock(folder: &Path) -> io::Result<std::fs::File> {
+    // CLI and desktop must use the same lock inode even when TMPDIR differs.
+    let root = Path::new("/tmp").join("skill-studio-data-locks");
+    std::fs::create_dir_all(&root)?;
+    let key = skill_studio_core::identity::sha256_hex(folder.as_os_str().as_encoded_bytes());
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.join(key))
+}
+
+/// Validates all folders, migrates under exclusive locks, then keeps shared locks.
+pub fn lock_data_folders(folders: &[&Path]) -> Result<DataFolderGuard, String> {
+    lock_data_folders_before_lock(folders, || {})
+}
+
+fn lock_data_folders_before_lock(
     folders: &[&Path],
     before_lock: impl FnOnce(),
-    open: impl FnOnce() -> Result<T, String>,
-) -> Result<T, String> {
+) -> Result<DataFolderGuard, String> {
     let validate = |folder: &Path| {
         let version = read_version(&RealFs, folder).map_err(|error| {
             format!(
@@ -125,37 +147,88 @@ fn with_data_folders_before_lock<T>(
         check_compatible(version, CURRENT_DATA_VERSION).map_err(newer_data_folder_message)?;
         Ok::<u32, String>(version)
     };
-    let mut folders = folders.to_vec();
+    let mut folders = folders
+        .iter()
+        .map(|folder| folder_identity(folder))
+        .collect::<io::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())?;
     folders.sort_unstable();
     folders.dedup();
-    // Refusal of an already newer folder must not create even a lock file.
     for folder in &folders {
         validate(folder)?;
     }
     before_lock();
-    let mut locks = Vec::new();
-    for folder in &folders {
-        std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
-        let lock = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(folder.join(".data-folder.lock"))
-            .map_err(|error| format!("Migrating {}: {error}", folder.display()))?;
-        lock.lock().map_err(|error| error.to_string())?;
-        locks.push(lock);
+    let locks = folders
+        .iter()
+        .map(|folder| coordination_lock(folder))
+        .collect::<io::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())?;
+    for lock in &locks {
+        lock.lock_shared().map_err(|error| error.to_string())?;
     }
     let versions = folders
         .iter()
         .map(|folder| validate(folder))
         .collect::<Result<Vec<_>, _>>()?;
-    for (folder, version) in folders.iter().zip(versions) {
-        if version < CURRENT_DATA_VERSION {
-            migrate(&RealFs, folder, version, CURRENT_DATA_VERSION)
-                .map_err(|error| format!("Migrating {}: {error}", folder.display()))?;
+    if versions
+        .iter()
+        .any(|version| *version < CURRENT_DATA_VERSION)
+    {
+        // Concurrent lock upgrades can deadlock while either process holds a shared lock.
+        for lock in &locks {
+            lock.unlock().map_err(|error| error.to_string())?;
+        }
+        for (lock, version) in locks.iter().zip(&versions) {
+            if *version < CURRENT_DATA_VERSION {
+                lock.lock().map_err(|error| error.to_string())?;
+            } else {
+                lock.lock_shared().map_err(|error| error.to_string())?;
+            }
+        }
+        let versions = folders
+            .iter()
+            .map(|folder| validate(folder))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (folder, version) in folders.iter().zip(versions) {
+            if version < CURRENT_DATA_VERSION {
+                migrate(&RealFs, folder, version, CURRENT_DATA_VERSION)
+                    .map_err(|error| format!("Migrating {}: {error}", folder.display()))?;
+            }
+        }
+        for lock in &locks {
+            lock.lock_shared().map_err(|error| error.to_string())?;
         }
     }
+    for folder in &folders {
+        validate(folder)?;
+    }
+    Ok(DataFolderGuard { _locks: locks })
+}
+
+/// Runs a transient operation while the folder stays protected.
+pub fn with_data_folder<T>(
+    folder: &Path,
+    open: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    with_data_folders(&[folder], open)
+}
+
+/// Runs a transient operation while all folders stay protected.
+pub fn with_data_folders<T>(
+    folders: &[&Path],
+    open: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let _guard = lock_data_folders(folders)?;
+    open()
+}
+
+#[cfg(test)]
+fn with_data_folders_before_lock<T>(
+    folders: &[&Path],
+    before_lock: impl FnOnce(),
+    open: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let _guard = lock_data_folders_before_lock(folders, before_lock)?;
     open()
 }
 
@@ -321,6 +394,50 @@ mod tests {
     use std::sync::Mutex;
 
     #[test]
+    fn startup_symlink_alias_opens_once_or_deadlocks_on_its_own_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            tx.send(with_data_folders(&[&real, &alias], || Ok(())))
+                .unwrap();
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(30))
+            .expect("startup deadlocked on a symlink alias")
+            .unwrap();
+        assert_eq!(
+            folder_identity(&dir.path().join("alias/missing")).unwrap(),
+            folder_identity(&dir.path().join("real/missing")).unwrap()
+        );
+    }
+
+    #[test]
+    fn startup_racing_newer_history_leaves_missing_app_data_absent_or_creates_files_on_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("app");
+        let history = dir.path().join("history");
+        std::fs::create_dir(&history).unwrap();
+        let error = with_data_folders_before_lock(
+            &[&app, &history],
+            || std::fs::write(history.join(VERSION_FILE_NAME), b"2\n").unwrap(),
+            || Err::<(), _>("opener ran".to_owned()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            newer_data_folder_message(NewerDataFolder {
+                folder_version: 2,
+                app_version: CURRENT_DATA_VERSION,
+            })
+        );
+        assert!(!app.exists(), "refusal created the app-data folder");
+        assert_eq!(std::fs::read_dir(history).unwrap().count(), 1);
+    }
+
+    #[test]
     fn startup_open_holds_folder_lock_through_migration_and_sqlite_or_allows_a_newer_writer() {
         let dir = tempfile::tempdir().unwrap();
         with_data_folder(dir.path(), || {
@@ -343,11 +460,15 @@ mod tests {
         let Some(folder) = std::env::var_os("SKILL_STUDIO_LOCK_PROBE") else {
             return;
         };
-        let competing = std::fs::File::open(Path::new(&folder).join(".data-folder.lock")).unwrap();
-        assert!(matches!(
-            competing.try_lock(),
-            Err(std::fs::TryLockError::WouldBlock)
-        ));
+        let competing = coordination_lock(&folder_identity(Path::new(&folder)).unwrap()).unwrap();
+        if std::env::var_os("SKILL_STUDIO_LOCK_AVAILABLE").is_some() {
+            competing.try_lock().unwrap();
+        } else {
+            assert!(matches!(
+                competing.try_lock(),
+                Err(std::fs::TryLockError::WouldBlock)
+            ));
+        }
     }
 
     #[test]
@@ -355,7 +476,7 @@ mod tests {
     ) {
         let dir = tempfile::tempdir().unwrap();
         let folder = dir.path().to_path_buf();
-        let lock = std::fs::File::create(folder.join(".data-folder.lock")).unwrap();
+        let lock = coordination_lock(&folder_identity(&folder).unwrap()).unwrap();
         lock.lock().unwrap();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let (continue_tx, continue_rx) = std::sync::mpsc::channel();

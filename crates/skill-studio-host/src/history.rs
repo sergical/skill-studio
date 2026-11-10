@@ -130,19 +130,14 @@ pub struct SqliteHistoryStore {
     /// `backups/<event-id>`) are relative to this.
     root: PathBuf,
     backups_root: PathBuf,
+    _folder_guard: crate::DataFolderGuard,
 }
 
 impl SqliteHistoryStore {
     fn open(db_path: &Path) -> Result<Self, CoreError> {
         let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
-        crate::with_data_folder(parent, || {
-            Self::open_locked(db_path).map_err(|e| e.to_string())
-        })
-        .map_err(|message| CoreError::new(ErrorCode::Io, message))
-    }
-
-    fn open_locked(db_path: &Path) -> Result<Self, CoreError> {
-        let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+        let folder_guard = crate::lock_data_folders(&[parent])
+            .map_err(|message| CoreError::new(ErrorCode::Io, message))?;
         let conn = Connection::open(db_path).map_err(sql_err)?;
         // The desktop's `EventStore` opens this same file from a second
         // connection (`core_runtime::history_db_path`); WAL lets both read
@@ -166,6 +161,7 @@ impl SqliteHistoryStore {
             conn,
             root: parent.to_path_buf(),
             backups_root: parent.join("backups"),
+            _folder_guard: folder_guard,
         })
     }
 
@@ -765,7 +761,10 @@ pub fn reimport_event_as_legacy(
     imported_id: &str,
     ts: &str,
 ) -> rusqlite::Result<()> {
-    let db = Connection::open(data_dir.join(".history/events.sqlite3"))?;
+    let folder = data_dir.join(".history");
+    let _guard =
+        crate::lock_data_folders(&[&folder]).map_err(rusqlite::Error::InvalidParameterName)?;
+    let db = Connection::open(folder.join("events.sqlite3"))?;
     db.execute(
         "INSERT INTO events
             (id, ts, kind, skill, harness, scope, project_path, payload, inverse, backup_dir, status, reverted_by, restorable)
@@ -855,6 +854,31 @@ mod tests {
     use skill_studio_core::events::EventKind;
     use skill_studio_core::ports::{acquire_exclusive, HistoryOpener};
     use skill_studio_core::scope::RuntimeScope;
+
+    #[test]
+    fn history_connection_keeps_migration_locked_until_drop_or_allows_a_newer_writer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("history");
+        let store = SqliteHistoryStore::open(&folder.join("events.sqlite3")).unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "data_folder_version::tests::competing_process_cannot_lock_during_startup_open_or_migrations_can_race"])
+            .env("SKILL_STUDIO_LOCK_PROBE", &folder).output().unwrap();
+        assert!(
+            child.status.success(),
+            "{}",
+            String::from_utf8_lossy(&child.stdout)
+        );
+        drop(store);
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "data_folder_version::tests::competing_process_cannot_lock_during_startup_open_or_migrations_can_race"])
+            .env("SKILL_STUDIO_LOCK_PROBE", &folder)
+            .env("SKILL_STUDIO_LOCK_AVAILABLE", "1").output().unwrap();
+        assert!(
+            child.status.success(),
+            "{}",
+            String::from_utf8_lossy(&child.stdout)
+        );
+    }
 
     fn scope_for(home: &Path) -> NormalizedScope {
         let raw = RuntimeScope::fixture(home);
