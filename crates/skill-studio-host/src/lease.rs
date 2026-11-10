@@ -20,8 +20,8 @@ const RETRY_INTERVAL: Duration = Duration::from_millis(20);
 const STALE_TAKEOVER_TIMEOUT: Duration = Duration::from_millis(500);
 const STALE_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
-/// `LeaseProvider` backed by one advisory-locked file per canonical root,
-/// under `lease_root`.
+/// `LeaseProvider` backed by one persistent lock file per canonical root.
+/// Older clients can hold open descriptors, so these files must never be removed.
 pub struct FileLease {
     lease_root: PathBuf,
 }
@@ -151,9 +151,14 @@ impl LeaseProvider for FileLease {
             loop {
                 match try_lock(&file, mode) {
                     Ok(true) => {
-                        if mode == LeaseMode::Exclusive {
-                            let _ = write_holder(&file);
-                        }
+                        // No exclusive holder can coexist with a shared one,
+                        // so any record left by an earlier writer is stale.
+                        // Left in place, it would send a later exclusive
+                        // waiter into the dead-holder takeover past its wait.
+                        let _ = match mode {
+                            LeaseMode::Exclusive => write_holder(&file),
+                            LeaseMode::Shared => file.set_len(0),
+                        };
                         break;
                     }
                     Ok(false) => {
@@ -210,6 +215,8 @@ impl LeaseProvider for FileLease {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LEGACY_DIRECTORY_LOCK: &str = ".lease-directory";
 
     fn key(name: &str) -> LeaseKey {
         LeaseKey {
@@ -323,6 +330,40 @@ mod tests {
         file.seek(SeekFrom::Start(0)).expect("seek to the start");
         write!(file, "{pid}|0").expect("write the fake holder record");
         file.sync_all().expect("flush the fake holder record");
+    }
+
+    #[test]
+    fn a_shared_lease_clears_a_dead_writers_record_or_an_exclusive_waiter_outlasts_its_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = FileLease::new(dir.path().to_path_buf());
+        let keys = vec![key("shared-over-dead-writer")];
+        let path = lease.lock_path(&keys[0]);
+        fs::create_dir_all(dir.path()).unwrap();
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        write_fake_holder(&file, u32::MAX);
+        drop(file);
+
+        let _reader = lease
+            .acquire(&keys, LeaseMode::Shared, Duration::from_millis(100))
+            .unwrap();
+
+        assert_eq!(
+            read_holder(&path),
+            None,
+            "a live shared reader left the dead writer's record, so an exclusive waiter retries \
+             the stale takeover for {STALE_TAKEOVER_TIMEOUT:?} whatever its own wait"
+        );
+        let busy = lease
+            .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
+            .err()
+            .expect("the shared reader still holds the root");
+        assert_eq!(busy.code, ErrorCode::ScopeBusy);
     }
 
     /// Given another `FileLease` holds an exclusive lease, when this
@@ -463,5 +504,272 @@ mod tests {
              bridging until the OS lock actually releases; got {:?}",
             result.as_ref().err()
         );
+    }
+
+    #[test]
+    fn released_scan_and_write_leases_reuse_the_stable_root_file_instead_of_removing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = FileLease::new(dir.path().to_path_buf());
+        let keys = [key("released")];
+        for mode in [LeaseMode::Shared, LeaseMode::Exclusive] {
+            drop(lease.acquire(&keys, mode, Duration::ZERO).unwrap());
+            assert!(
+                lease.lock_path(&keys[0]).exists(),
+                "release unlinked the stable root file"
+            );
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), keys.len());
+        }
+    }
+
+    #[test]
+    fn shared_scans_keep_exclusion_and_the_last_release_preserves_the_stable_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = FileLease::new(dir.path().to_path_buf());
+        let keys = [key("shared")];
+        let first = lease
+            .acquire(&keys, LeaseMode::Shared, Duration::ZERO)
+            .unwrap();
+        let second = lease
+            .acquire(&keys, LeaseMode::Shared, Duration::ZERO)
+            .unwrap();
+        drop(first);
+        assert!(lease
+            .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
+            .is_err());
+        drop(second);
+        assert!(
+            lease.lock_path(&keys[0]).exists(),
+            "last release removed a legacy waiter's file"
+        );
+        assert!(lease
+            .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
+            .is_ok());
+    }
+
+    #[test]
+    fn an_unlocked_stale_root_file_is_reused_instead_of_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = FileLease::new(dir.path().to_path_buf());
+        let keys = [key("stale")];
+        let path = lease.lock_path(&keys[0]);
+        fs::write(&path, "4294967295|0").unwrap();
+        drop(
+            lease
+                .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
+                .unwrap(),
+        );
+        assert!(
+            path.exists(),
+            "a stale holder record caused the lock file to be removed"
+        );
+    }
+
+    #[test]
+    fn one_thousand_scan_and_write_cycles_reuse_a_fixed_set_of_root_files_instead_of_growing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = FileLease::new(dir.path().to_path_buf());
+        let keys = [key("home"), key("project")];
+        drop(
+            lease
+                .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
+                .unwrap(),
+        );
+        let before = fs::read_dir(dir.path()).unwrap().count();
+        for _ in 0..1000 {
+            for mode in [LeaseMode::Shared, LeaseMode::Exclusive] {
+                drop(lease.acquire(&keys, mode, Duration::ZERO).unwrap());
+            }
+        }
+        let mut expected: Vec<_> = keys
+            .iter()
+            .map(|key| lease.lock_path(key).file_name().unwrap().to_owned())
+            .collect();
+        expected.sort();
+        let mut remaining: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        remaining.sort();
+        println!(
+            "1000 scan+write cycles, {} fixed roots: before={before}, after={}",
+            keys.len(),
+            remaining.len()
+        );
+        assert_eq!(
+            before,
+            expected.len(),
+            "initial release removed stable root files"
+        );
+        assert_eq!(remaining, expected);
+    }
+
+    #[test]
+    fn contending_writers_keep_exclusion_and_reuse_the_same_stable_root_file() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+        let dir = tempfile::tempdir().unwrap();
+        let lease = Arc::new(FileLease::new(dir.path().to_path_buf()));
+        let active = Arc::new(AtomicUsize::new(0));
+        let start = Arc::new(Barrier::new(4));
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let (lease, active, start) =
+                    (Arc::clone(&lease), Arc::clone(&active), Arc::clone(&start));
+                scope.spawn(move || {
+                    start.wait();
+                    for _ in 0..50 {
+                        let held = lease
+                            .acquire(
+                                &[key("contended")],
+                                LeaseMode::Exclusive,
+                                Duration::from_secs(5),
+                            )
+                            .unwrap();
+                        assert_eq!(
+                            active.fetch_add(1, Ordering::SeqCst),
+                            0,
+                            "two writers entered the same root"
+                        );
+                        std::thread::yield_now();
+                        assert_eq!(active.fetch_sub(1, Ordering::SeqCst), 1);
+                        drop(held);
+                    }
+                });
+            }
+        });
+        assert!(
+            lease.lock_path(&key("contended")).exists(),
+            "the stable root file was removed"
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_failed_multi_root_acquire_releases_earlier_locks_and_preserves_their_stable_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = FileLease::new(dir.path().to_path_buf());
+        let first = key("a");
+        let busy = key("b");
+        let held = lease
+            .acquire(
+                std::slice::from_ref(&busy),
+                LeaseMode::Exclusive,
+                Duration::ZERO,
+            )
+            .unwrap();
+        assert!(lease
+            .acquire(&[first.clone(), busy], LeaseMode::Exclusive, Duration::ZERO)
+            .is_err());
+        assert!(
+            lease.lock_path(&first).exists(),
+            "partial acquisition removed the stable file"
+        );
+        assert!(lease
+            .acquire(&[first], LeaseMode::Exclusive, Duration::ZERO)
+            .is_ok());
+        drop(held);
+    }
+
+    #[test]
+    fn a_held_legacy_directory_lock_cannot_extend_the_root_acquisition_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = FileLease::new(dir.path().to_path_buf());
+        let keys = [key("directory-blocked")];
+        let held = lease
+            .acquire(&keys, LeaseMode::Exclusive, Duration::from_secs(1))
+            .unwrap();
+        let directory = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(dir.path().join(LEGACY_DIRECTORY_LOCK))
+            .unwrap();
+        directory.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                let result = lease.acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(50));
+                tx.send(result.map(drop)).unwrap();
+            });
+            let outcome = rx.recv_timeout(Duration::from_secs(5));
+            drop(directory);
+            worker.join().unwrap();
+            drop(held);
+            assert!(
+                matches!(outcome, Ok(Err(ref error)) if error.code == ErrorCode::ScopeBusy),
+                "the directory lock ignored the acquisition deadline: {outcome:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn release_does_not_wait_for_a_held_directory_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = FileLease::new(dir.path().to_path_buf());
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (drop_tx, drop_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let lease = &lease;
+            let worker = scope.spawn(move || {
+                let held = lease
+                    .acquire(&[key("release")], LeaseMode::Exclusive, Duration::ZERO)
+                    .unwrap();
+                held_tx.send(()).unwrap();
+                drop_rx.recv().unwrap();
+                drop(held);
+                done_tx.send(()).unwrap();
+            });
+            held_rx.recv().unwrap();
+            let directory = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(dir.path().join(LEGACY_DIRECTORY_LOCK))
+                .unwrap();
+            directory.lock().unwrap();
+            drop_tx.send(()).unwrap();
+            let released = done_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+            drop(directory);
+            worker.join().unwrap();
+            assert!(released, "release waited for the directory lock");
+        });
+    }
+    #[test]
+    fn a_held_legacy_directory_lock_does_not_block_a_free_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = FileLease::new(dir.path().to_path_buf());
+        let directory = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(dir.path().join(LEGACY_DIRECTORY_LOCK))
+            .unwrap();
+        directory.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                tx.send(
+                    lease
+                        .acquire(
+                            &[key("free-root")],
+                            LeaseMode::Exclusive,
+                            Duration::from_millis(50),
+                        )
+                        .map(drop),
+                )
+                .unwrap();
+            });
+            let acquired = rx.recv_timeout(Duration::from_secs(5));
+            drop(directory);
+            worker.join().unwrap();
+            assert!(
+                matches!(acquired, Ok(Ok(()))),
+                "a legacy directory guard blocked an independent root: {acquired:?}"
+            );
+        });
     }
 }

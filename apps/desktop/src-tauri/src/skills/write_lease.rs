@@ -16,8 +16,54 @@ use skill_studio_host::FileLease;
 
 use super::core_runtime;
 
+thread_local! {
+    /// Leases over the home the current thread holds, write or scan. The
+    /// guards are `!Send` (they own a `Box<dyn LeaseHandle>`), so each drops
+    /// on the thread that took it and this count stays exact.
+    static HELD_ON_THIS_THREAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether the calling thread holds a lease over the home, write or scan. A
+/// scan on such a thread must not lease again: advisory locks do not nest
+/// within one process, so its shared lease would wait out the thread's own.
+pub fn current_thread_holds_home_lease() -> bool {
+    HELD_ON_THIS_THREAD.with(|held| held.get() > 0)
+}
+
+/// How long a rebuild waits for a write to finish before it gives up. Matches
+/// the core scan's own read budget.
+const SCAN_READ_WAIT: Duration = Duration::from_secs(60);
+
+/// Holds a shared lease for a rebuild until dropped. The handle is `None`
+/// when the thread already held a lease over the home, which covers the read.
+///
+/// Lock order: a rebuild takes this before `rebuild_lock`, the same order a
+/// write command follows (its exclusive lease first, then the rebuild). The
+/// other order lets a rebuild hold `rebuild_lock` while it waits for a lease
+/// that a write holds, while that write waits for `rebuild_lock`.
+pub struct ScanLeaseGuard(Option<Box<dyn skill_studio_core::ports::LeaseHandle>>);
+
+impl Drop for ScanLeaseGuard {
+    fn drop(&mut self) {
+        if self.0.is_some() {
+            HELD_ON_THIS_THREAD.with(|held| held.set(held.get().saturating_sub(1)));
+        }
+    }
+}
+
+/// Longest a write waits for a background scan's shared lease to end. A scan
+/// holds it only while it reads, well under a second; this bound lets one
+/// finish instead of failing the write with "in progress".
+const SCAN_WAIT: Duration = Duration::from_secs(3);
+
 /// Holds the write lease until dropped, releasing it.
 pub struct WriteLeaseGuard(ExclusiveGuard);
+
+impl Drop for WriteLeaseGuard {
+    fn drop(&mut self) {
+        HELD_ON_THIS_THREAD.with(|held| held.set(held.get().saturating_sub(1)));
+    }
+}
 
 impl WriteLeaseGuard {
     /// The proof-of-lease token for a nested write to the same root - e.g.
@@ -35,12 +81,18 @@ impl WriteLeaseGuard {
 /// unpark.
 pub struct WriteLease {
     lease: FileLease,
+    /// How long `try_acquire` waits for a holder to release.
+    wait: Duration,
+    /// How long `acquire_scan_lease` waits for a writer to release.
+    scan_wait: Duration,
 }
 
 impl Default for WriteLease {
     fn default() -> Self {
         WriteLease {
             lease: FileLease::new(core_runtime::data_root().join("leases")),
+            wait: SCAN_WAIT,
+            scan_wait: SCAN_READ_WAIT,
         }
     }
 }
@@ -53,10 +105,53 @@ impl WriteLease {
     pub fn with_lease_root(lease_root: std::path::PathBuf) -> Self {
         WriteLease {
             lease: FileLease::new(lease_root),
+            wait: Duration::ZERO,
+            scan_wait: Duration::ZERO,
         }
     }
 
-    /// Acquires an exclusive, non-blocking lease on `root`. `Err` mirrors
+    /// [`Self::with_lease_root`], waiting up to `wait` for a holder to release
+    /// like the real provider does.
+    #[cfg(test)]
+    pub fn with_lease_root_and_wait(lease_root: std::path::PathBuf, wait: Duration) -> Self {
+        WriteLease {
+            lease: FileLease::new(lease_root),
+            wait,
+            scan_wait: wait,
+        }
+    }
+
+    /// Acquires a shared lease over `home` and `projects` for a rebuild, so a
+    /// write and the scan exclude each other while scans do not block each
+    /// other. Takes no lease when this thread already holds one over the home.
+    pub fn acquire_scan_lease(
+        &self,
+        home: &Path,
+        projects: &[std::path::PathBuf],
+    ) -> Result<ScanLeaseGuard, String> {
+        if current_thread_holds_home_lease() {
+            return Ok(ScanLeaseGuard(None));
+        }
+        let mut keys: Vec<LeaseKey> = std::iter::once(home)
+            .chain(projects.iter().map(std::path::PathBuf::as_path))
+            .map(|root| LeaseKey {
+                canonical_root: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+            })
+            .collect();
+        keys.sort();
+        keys.dedup();
+        #[cfg(test)]
+        scan_wait_probe::notify(&home.canonicalize().unwrap_or_else(|_| home.to_path_buf()));
+        let handle = self
+            .lease
+            .acquire(&keys, LeaseMode::Shared, self.scan_wait)
+            .map_err(|e| e.message)?;
+        HELD_ON_THIS_THREAD.with(|held| held.set(held.get() + 1));
+        Ok(ScanLeaseGuard(Some(handle)))
+    }
+
+    /// Acquires an exclusive lease on `root`, waiting a few seconds at most
+    /// for a background scan to finish. `Err` mirrors
     /// the old mutation mutex's message shape when another writer already
     /// holds it, naming its pid and how long it has held the lease when the
     /// lease reports one; any other failure (e.g. the lease directory isn't
@@ -67,8 +162,11 @@ impl WriteLease {
         let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let key = LeaseKey { canonical_root };
         self.lease
-            .acquire(&[key], LeaseMode::Exclusive, Duration::ZERO)
-            .map(|handle| WriteLeaseGuard(ExclusiveGuard::from_handle(handle)))
+            .acquire(&[key], LeaseMode::Exclusive, self.wait)
+            .map(|handle| {
+                HELD_ON_THIS_THREAD.with(|held| held.set(held.get() + 1));
+                WriteLeaseGuard(ExclusiveGuard::from_handle(handle))
+            })
             .map_err(|e| match e.busy {
                 Some(busy) => format!(
                     "Another write is in progress (pid {}, held for {:?})",
@@ -76,6 +174,31 @@ impl WriteLease {
                 ),
                 None => e.message,
             })
+    }
+}
+
+/// Lets a test learn that a rebuild thread has reached the point just before
+/// it waits for the scan lease, which is the moment its lock order shows.
+#[cfg(test)]
+pub(crate) mod scan_wait_probe {
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc::Sender;
+    use std::sync::Mutex;
+
+    static PROBE: Mutex<Option<(PathBuf, Sender<()>)>> = Mutex::new(None);
+
+    /// Sends one message when a rebuild over `home` is about to wait for its
+    /// lease. Rebuilds over other homes, in parallel tests, are ignored.
+    pub(crate) fn watch(home: PathBuf, sender: Sender<()>) {
+        *PROBE.lock().unwrap() = Some((home, sender));
+    }
+
+    pub(super) fn notify(home: &Path) {
+        if let Some((watched, sender)) = PROBE.lock().unwrap().as_ref() {
+            if watched == home {
+                let _ = sender.send(());
+            }
+        }
     }
 }
 
