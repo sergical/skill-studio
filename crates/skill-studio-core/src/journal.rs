@@ -1098,12 +1098,15 @@ fn restore_file_from_backup(
             }
         }
     }
-    let tmp_path = temporary.map(Path::to_path_buf).unwrap_or_else(|| {
-        parent.join(format!(
-            "{temp_prefix}{}{FILE_RESTORE_TEMP_SUFFIX}",
-            fsops::unique_suffix()
-        ))
-    });
+    let tmp_path = temporary.map_or_else(
+        || {
+            parent.join(format!(
+                "{temp_prefix}{}{FILE_RESTORE_TEMP_SUFFIX}",
+                fsops::unique_suffix()
+            ))
+        },
+        Path::to_path_buf,
+    );
     fs.fsops_write_new_file_with_mode(&tmp_path, backup, mode.unwrap_or(0o644))?;
     fs.fsops_fsync_file(&tmp_path)?;
     fs.fsops_rename(&tmp_path, path)?;
