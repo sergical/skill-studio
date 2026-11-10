@@ -554,12 +554,15 @@ pub fn reconcile_with_history(
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                         Err(e) => return Err(CoreError::io(path, e)),
                     };
-                    let source = if binding.is_some_and(|binding| binding != *staged_binding) {
-                        path
-                    } else if fs.symlink_metadata(displaced).is_ok() {
+                    let staged_is_original = fs
+                        .fsops_device_inode(staged)
+                        .is_ok_and(|binding| binding != *staged_binding);
+                    let source = if fs.symlink_metadata(displaced).is_ok() {
                         displaced
-                    } else {
+                    } else if staged_is_original || binding == Some(*staged_binding) {
                         staged
+                    } else {
+                        path
                     };
                     store.retain_displaced(guard, event, path, source)?;
                 }
@@ -679,6 +682,7 @@ fn reverse_steps(
             PlanStep::LedgerEntry {
                 path,
                 name,
+                file,
                 before,
                 after,
             } => {
@@ -687,10 +691,11 @@ fn reverse_steps(
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                     Err(e) => return Err(e),
                 };
-                let file = path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or_default();
+                let file = file.as_deref().unwrap_or_else(|| {
+                    path.file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or_default()
+                });
                 // A recorded forward write may not have run, or reversal may already have run.
                 if crate::ledger_publication::merge(
                     name,
@@ -739,6 +744,21 @@ fn reverse_steps(
                     Err(e) => return Err(e),
                 };
                 if !landed {
+                    if quarantined
+                        .as_ref()
+                        .is_some_and(|path| fs.symlink_metadata(path).is_ok())
+                        || fs
+                            .fsops_device_inode(staged)
+                            .is_ok_and(|binding| binding != *staged_binding)
+                    {
+                        if fs.symlink_metadata(path).is_ok() {
+                            return Err(std::io::Error::other(format!(
+                                "recovery conflict: published directory replaced at {}",
+                                path.display()
+                            )));
+                        }
+                        continue;
+                    }
                     // The exchange never ran; `path` still shows whatever
                     // was there before this plan. Nothing to undo here -
                     // the preceding `Stage` step's own reversal removes
@@ -1710,6 +1730,78 @@ mod tests {
         assert_eq!(
             after, before,
             "reconciliation must restore the old folder byte-for-byte, or name the folder it deleted"
+        );
+    }
+
+    #[test]
+    fn restart_after_exchange_preserves_displaced_tree_when_directory_replaced_or_stage_cleanup_deletes_edits(
+    ) {
+        let fixture = FixtureBuilder::new()
+            .dir("/journal")
+            .dir("/root")
+            .dir("/root/skill")
+            .file("/root/skill/SKILL.md", b"old content")
+            .build_fs();
+        let root_path = PathBuf::from("/root");
+
+        let failing = FailingFs::wrap(Arc::new(fixture.clone()));
+        let root = Root::open(&failing, root_path.clone()).expect("open root");
+        let journal = journal_over(Arc::new(fixture.clone()));
+        let lease = FakeLease::default();
+        let g = guard(&lease);
+
+        let id = PlanId("01PLANSWAPCRASH00000000001".into());
+        let plan = PlanWriter::begin(
+            &journal,
+            &g,
+            id.clone(),
+            Utc::now(),
+            "crash between exchange and quarantine move",
+            root_path.clone(),
+            Vec::new(),
+        )
+        .expect("begin");
+
+        let staged = fsops::stage(
+            &root,
+            &plan,
+            &[(PathBuf::from("SKILL.md"), b"new content".to_vec())],
+        )
+        .expect("stage");
+        // The exchange itself (a `fsops_exchange` call) is unaffected; only
+        // the follow-up `fsops_rename` that moves the old folder into
+        // quarantine fails, landing the crash exactly between the two.
+        failing.fail_next_fsops_rename();
+        fsops::swap(
+            &root,
+            &plan,
+            Path::new("skill"),
+            &staged,
+            Path::new(".trash"),
+        )
+        .expect_err("the quarantine move must fail, or this test proves nothing about the window between it and the exchange");
+        // The process dies here: `plan` is dropped, never finished.
+        drop(plan);
+
+        let live = Path::new("/root/skill");
+        fixture
+            .fsops_rename(live, Path::new("/root/replaced"))
+            .unwrap();
+        fixture.fsops_create_dir(live).unwrap();
+        fixture
+            .fsops_write_new_file(&live.join("SKILL.md"), b"replacement")
+            .unwrap();
+        let report = reconcile(&journal, &g, &fixture).unwrap();
+        assert!(report.interrupted.iter().any(|plan| plan.id == id));
+        assert_eq!(
+            fixture
+                .read_capped(&staged.path().join("SKILL.md"), 100)
+                .unwrap(),
+            b"old content"
+        );
+        assert_eq!(
+            fixture.read_capped(&live.join("SKILL.md"), 100).unwrap(),
+            b"replacement"
         );
     }
 

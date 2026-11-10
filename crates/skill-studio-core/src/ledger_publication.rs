@@ -173,7 +173,17 @@ pub fn publish(
             change.after.as_deref(),
             previous.as_deref(),
         )?;
-        writes.push((path, previous, bytes));
+        writes.push((
+            path,
+            change
+                .path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_owned(),
+            previous,
+            bytes,
+        ));
     }
     if writes.is_empty() {
         return Ok(());
@@ -188,7 +198,10 @@ pub fn publish(
         .parent()
         .ok_or_else(|| invalid("ledger has no parent"))?
         .to_path_buf();
-    while writes.iter().any(|(path, _, _)| !path.starts_with(&root)) {
+    while writes
+        .iter()
+        .any(|(path, _, _, _)| !path.starts_with(&root))
+    {
         root = root
             .parent()
             .ok_or_else(|| invalid("ledgers have no common root"))?
@@ -227,7 +240,8 @@ pub(crate) fn publish_in_plan(
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(CoreError::io(&path, e)),
         };
-        let file = path
+        let file = change
+            .path
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or_default();
@@ -238,12 +252,22 @@ pub(crate) fn publish_in_plan(
             change.after.as_deref(),
             previous.as_deref(),
         )?;
-        writes.push((path, previous, bytes));
+        writes.push((
+            path,
+            change
+                .path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_owned(),
+            previous,
+            bytes,
+        ));
     }
     publish_writes(rt, guard, name, plan, writes)
 }
 
-type LedgerWrite = (PathBuf, Option<Vec<u8>>, Vec<u8>);
+type LedgerWrite = (PathBuf, String, Option<Vec<u8>>, Vec<u8>);
 
 fn publish_writes(
     rt: &Runtime,
@@ -253,16 +277,13 @@ fn publish_writes(
     writes: Vec<LedgerWrite>,
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
-    for (path, previous, bytes) in writes {
-        let file = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default();
+    for (path, file, previous, bytes) in writes {
         plan.record_step(crate::ports::PlanStep::LedgerEntry {
             path: path.clone(),
             name: name.into(),
-            before: merge(name, file, None, previous.as_deref(), None)?,
-            after: merge(name, file, None, Some(&bytes), None)?,
+            file: Some(file.clone()),
+            before: merge(name, &file, None, previous.as_deref(), None)?,
+            after: merge(name, &file, None, Some(&bytes), None)?,
         })?;
         let scoped = crate::ports::confine(&rt.scope, fs, &path)?;
         fs.write_atomic(guard, &scoped, &bytes)

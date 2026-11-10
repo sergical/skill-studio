@@ -520,6 +520,26 @@ fn update_skills_sh_staged(
             }
         }
     }
+    let mut changed_paths = vec![destination.to_path_buf()];
+    for dir in crate::ops::harness_own_skill_roots(rt, &req.scope) {
+        let live = dir.join(&req.skill.0);
+        let existing = fs.symlink_metadata(&live);
+        let selected = existing
+            .as_ref()
+            .is_ok_and(|facts| facts.kind == FileKind::Dir)
+            && eligible_copies.contains(&live);
+        let created = existing.is_err()
+            && dir.strip_prefix(&root).is_ok_and(|relative| {
+                fs.symlink_metadata(&stage.join(relative).join(&req.skill.0))
+                    .is_ok_and(|facts| facts.kind == FileKind::Dir)
+            });
+        if selected || created {
+            changed_paths.push(live);
+        }
+    }
+    session
+        .store
+        .backup_paths(&session.guard, id, &changed_paths)?;
     let journal = FsJournal::new(
         ops_install::journal_root(&rt.scope.home.lexical),
         rt.ports.fs.clone(),
@@ -857,7 +877,7 @@ fn update_write(
     id: &crate::identity::EventId,
 ) -> Result<Option<serde_json::Value>, CoreError> {
     let fs = rt.ports.fs.as_ref();
-    if req.method == InstallMethod::SkillsSh {
+    if req.method == InstallMethod::SkillsSh && req.scope == RootScope::Global {
         update_skills_sh_staged(rt, ctx, session, id, req, destination)?;
         return Ok(None);
     }
@@ -1047,17 +1067,6 @@ fn update_body(
     // and `agents.lock` - back beside it.
     let mut backup_targets = vec![destination.clone()];
     let mut folders_before = skill_folder_names(fs, &universal_root)?;
-    if req.method == InstallMethod::SkillsSh {
-        backup_targets.extend(
-            crate::ops::harness_own_skill_roots(rt, &req.scope)
-                .into_iter()
-                .map(|dir| dir.join(&req.skill.0))
-                .filter(|path| {
-                    fs.symlink_metadata(path)
-                        .map_or(true, |facts| facts.kind == crate::ports::FileKind::Dir)
-                }),
-        );
-    }
     if let Some(plan) = &dotagents {
         backup_targets.push(plan.config.clone());
         backup_targets.push(plan.lock.clone());
@@ -1137,7 +1146,25 @@ fn update_body(
             serde_json::json!({ "registry_undo": [entry] }),
         );
     }
-    if dotagents.is_some() || req.method == InstallMethod::SkillsSh {
+    if req.method == InstallMethod::SkillsSh && req.scope == RootScope::Global {
+        let manifest = session.store.read_manifest(&manifest.backup_dir)?;
+        let secondary: Vec<_> = manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.original != destination)
+            .map(|entry| {
+                (
+                    entry.original.clone(),
+                    fingerprint_path(fs, &entry.original),
+                )
+            })
+            .collect();
+        session.store.patch_inverse(
+            &session.guard,
+            &id,
+            crate::events::with_secondary_post(serde_json::json!({}), &secondary),
+        )?;
+    } else if dotagents.is_some() {
         // Best-effort like the registry patch above: the install already
         // wrote, so the row must still finish for undo to find it.
         let _ = record_dotagents_side_effects(

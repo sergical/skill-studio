@@ -758,6 +758,9 @@ pub enum PlanStep {
     LedgerEntry {
         /// Resolved ledger path.
         path: PathBuf,
+        /// Logical ledger filename, independent of symlink resolution.
+        #[serde(default)]
+        file: Option<String>,
         /// Selected skill.
         name: String,
         /// Entry before publication, encoded as a minimal ledger document.

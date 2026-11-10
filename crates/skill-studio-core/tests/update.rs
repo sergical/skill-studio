@@ -2802,6 +2802,7 @@ impl ProcessSpawner for WritesDuringUpdate {
         cancel: &dyn CancelToken,
     ) -> Result<ProcessOutput, skill_studio_core::CoreError> {
         for (path, bytes) in &self.writes {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, bytes).unwrap();
         }
         let output = self.inner.run(spec, cancel)?;
@@ -2980,6 +2981,16 @@ impl skill_studio_core::ports::HistoryOpener for CrashRetentionHistory {
 
 #[test]
 fn skills_sh_update_restart_then_undo_restores_late_edit_or_uses_pre_cli_snapshot() {
+    restart_then_undo(false);
+}
+
+#[test]
+fn update_restart_then_undo_keeps_displaced_edits_after_directory_replacement_or_backs_up_replacement(
+) {
+    restart_then_undo(true);
+}
+
+fn restart_then_undo(replace: bool) {
     let home = unique_temp_dir("update_retention_crash");
     std::fs::create_dir_all(&home).unwrap();
     seed_installed_skill(&home, "delta", "before");
@@ -2999,6 +3010,11 @@ fn skills_sh_update_restart_then_undo_restores_late_edit_or_uses_pre_cli_snapsho
         ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh))
     }));
     assert!(crash.is_err());
+    if replace {
+        std::fs::rename(shared.parent().unwrap(), home.join("moved-published")).unwrap();
+        std::fs::create_dir_all(shared.parent().unwrap()).unwrap();
+        std::fs::write(&shared, "replacement").unwrap();
+    }
     let ids = rt.ports.ids.clone();
     drop(rt);
     let mut rt = runtime_with_history(
@@ -3091,7 +3107,7 @@ fn ledger_crash_recovery(write: bool, drift: bool) {
 }
 
 #[test]
-fn skills_sh_update_preserves_foreign_owned_copy_or_overwrites_another_owner() {
+fn skills_sh_update_undo_preserves_concurrent_foreign_copy_edits_or_restores_excluded_backup() {
     let home = unique_temp_dir("update_foreign_owner");
     std::fs::create_dir_all(&home).unwrap();
     seed_installed_skill(&home, "delta", "before");
@@ -3142,11 +3158,26 @@ fn skills_sh_update_preserves_foreign_owned_copy_or_overwrites_another_owner() {
     assert!(copies
         .iter()
         .any(|copy| copy.owner_kind == LifecycleOwnerKind::SkillsSh && copy.owner_id.is_some()));
-    ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh)).unwrap();
+    let mut rt = rt;
+    rt.ports.spawner = Some(Arc::new(WritesDuringUpdate {
+        inner: FakeNpxUpdateSpawner::new(home.clone(), "v2"),
+        writes: vec![(agent.join("SKILL.md"), "concurrent foreign edit".into())],
+        ledger_after: None,
+    }));
+    let outcome = ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh)).unwrap();
+    assert_ne!(std::fs::read(agent.join("SKILL.md")).unwrap(), before);
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
     assert_eq!(
-        std::fs::read(agent.join("SKILL.md")).unwrap(),
-        before,
-        "Update overwrote a foreign owner"
+        std::fs::read_to_string(agent.join("SKILL.md")).unwrap(),
+        "concurrent foreign edit"
     );
     std::fs::remove_dir_all(home).unwrap();
 }
@@ -3213,5 +3244,111 @@ fn restart_after_swap(delete: bool) {
             "recovery must report a conflict"
         );
     }
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn skills_sh_update_undo_preserves_copy_created_during_cli_or_deletes_external_copy() {
+    let home = unique_temp_dir("created_copy_undo");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "delta", "before");
+    let agent = home.join(".codex/skills/delta/SKILL.md");
+    let rt = runtime_with(
+        &home,
+        Arc::new(RealFs::new()),
+        Some(Arc::new(WritesDuringUpdate {
+            inner: FakeNpxUpdateSpawner::new(home.clone(), "v2"),
+            writes: vec![(agent.clone(), "external copy".into())],
+            ledger_after: None,
+        })),
+    );
+    let outcome = ops::update(&rt, &ctx(), &cli_request("delta", InstallMethod::SkillsSh)).unwrap();
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(agent).unwrap(), "external copy");
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn fork_linked_toml_recovery_restores_declaration_or_resolved_filename_loses_entry() {
+    linked_ledger_recovery(
+        "agents.toml",
+        "dotfiles-agents.toml",
+        b"[[skills]]\nname = \"delta\"\nsource = \"owner/repo\"\n",
+        b"",
+    );
+}
+
+#[test]
+fn fork_linked_json_recovery_restores_entry_or_extensionless_target_parses_as_toml() {
+    linked_ledger_recovery(
+        ".skill-lock.json",
+        "ledger",
+        br#"{"skills":{"delta":{"source":"owner/repo"}}}"#,
+        br#"{"skills":{}}"#,
+    );
+}
+
+fn linked_ledger_recovery(logical: &str, target: &str, before: &[u8], after: &[u8]) {
+    let home = unique_temp_dir("linked_ledger_recovery");
+    std::fs::create_dir_all(home.join(".agents")).unwrap();
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), None);
+    let context = ctx();
+    let session = MutationSession::begin(&rt, &context).unwrap();
+    let path = home.join(".agents").join(logical);
+    let resolved = home.join(".agents").join(target);
+    std::fs::write(&resolved, before).unwrap();
+    std::os::unix::fs::symlink(target, &path).unwrap();
+    skill_studio_core::ledger_publication::publish(
+        &rt,
+        &session.guard,
+        "delta",
+        &[skill_studio_core::ledger_publication::LedgerChange {
+            path: path.clone(),
+            before: Some(before.to_vec()),
+            after: Some(after.to_vec()),
+        }],
+    )
+    .unwrap();
+    let journal = skill_studio_core::journal::FsJournal::new(
+        home.join(".agents/skill-studio-journal"),
+        rt.ports.fs.clone(),
+    );
+    use skill_studio_core::ports::Journal;
+    let recorded = journal.all().unwrap().pop().unwrap();
+    let plan = skill_studio_core::journal::PlanWriter::begin(
+        &journal,
+        &session.guard,
+        skill_studio_core::identity::PlanId("linked-recovery".into()),
+        rt.ports.clock.now(),
+        "recover publication",
+        std::fs::canonicalize(&home).unwrap(),
+        vec![],
+    )
+    .unwrap();
+    for step in recorded.steps {
+        plan.record_step(step).unwrap();
+    }
+    assert!(!String::from_utf8(std::fs::read(&resolved).unwrap())
+        .unwrap()
+        .contains("owner/repo"));
+    drop(plan);
+    let report =
+        skill_studio_core::journal::reconcile(&journal, &session.guard, rt.ports.fs.as_ref())
+            .unwrap();
+    assert!(report.interrupted.is_empty(), "{report:?}");
+    assert!(String::from_utf8(std::fs::read(&resolved).unwrap())
+        .unwrap()
+        .contains("owner/repo"));
+    assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
+    assert!(journal.pending().unwrap().is_empty());
+    drop(session);
     std::fs::remove_dir_all(home).unwrap();
 }
