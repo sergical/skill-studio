@@ -191,6 +191,14 @@ fn status_error(status: reqwest::StatusCode) -> String {
     }
 }
 
+/// Matches the background install-count lookup's eight-second deadline.
+#[cfg(not(test))]
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+#[cfg(test)]
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+
+const REQUEST_TIMED_OUT: &str = "Skill request timed out. Try again.";
+
 /// Builds the client and headers for `access`: `Direct` carries a bearer
 /// `Authorization` header, `Server` carries none - the server it talks to
 /// holds the real key.
@@ -204,7 +212,19 @@ fn client_for(
         auth_value.set_sensitive(true);
         headers.insert(reqwest::header::AUTHORIZATION, auth_value);
     }
-    Ok((reqwest::Client::new(), headers))
+    let client = reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+    Ok((client, headers))
+}
+
+fn body_error(what: &str, e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        REQUEST_TIMED_OUT.to_string()
+    } else {
+        format!("Failed to parse {what}: {e}")
+    }
 }
 
 /// Maps a transport-level failure to reach `access`'s base URL (the request
@@ -213,6 +233,9 @@ fn client_for(
 /// local server explicitly, since "connection refused" otherwise reads like a
 /// skills.sh outage.
 fn connection_error(access: &SkillsShAccess, e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        return REQUEST_TIMED_OUT.to_string();
+    }
     match access {
         SkillsShAccess::Server { .. } => server_unreachable_message(access.server_root()),
         SkillsShAccess::Direct { .. } => format!("Failed to reach skills.sh: {e}"),
@@ -282,7 +305,7 @@ pub async fn search_skills(
     let data: SkillsSearchResponse = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse skills response: {e}"))?;
+        .map_err(|e| body_error("skills response", &e))?;
 
     Ok(PaginatedSkillsResponse {
         skills: data.data.into_iter().map(SkillSearchResult::from).collect(),
@@ -321,7 +344,7 @@ pub async fn get_popular_skills(
     let data: SkillsListResponse = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse skills response: {e}"))?;
+        .map_err(|e| body_error("skills response", &e))?;
 
     Ok(PaginatedSkillsResponse {
         skills: data.data.into_iter().map(SkillSearchResult::from).collect(),
@@ -465,7 +488,7 @@ async fn send_skill_details(
     let data: SkillDetailsResponse = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse skill details: {e}"))?;
+        .map_err(|e| body_error("skill details", &e))?;
 
     Ok(SkillDetails {
         id: data.id,
@@ -567,6 +590,50 @@ mod tests {
             let (access, _request) = fake_skills_server(status_line, r#"{"error":"nope"}"#).await;
             let err = search_skills(&access, "", None).await.unwrap_err();
             assert_eq!(err, expected);
+        }
+    }
+
+    /// Serves one connection: reads the request head, writes `head` (possibly
+    /// empty), then holds the socket open and never finishes the response.
+    async fn stalled_skills_server(
+        head: &'static str,
+    ) -> (SkillsShAccess, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let held = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+            socket.write_all(head.as_bytes()).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let access = SkillsShAccess::Server {
+            base_url: format!("http://{addr}/api/v1"),
+        };
+        (access, held)
+    }
+
+    /// Flow: the user searches the Skill Store and the server accepts the
+    /// connection but never answers, or sends headers and then stalls the body.
+    /// Expectation: the search ends with the timeout message, not the
+    /// "start the server" advice and not a parse error.
+    /// A failure here means the store spins forever or tells the user to start
+    /// a server that is already running.
+    #[tokio::test]
+    async fn a_stalled_skill_search_ends_with_the_timeout_message() {
+        for head in [
+            "",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"data\":",
+        ] {
+            let (access, held) = stalled_skills_server(head).await;
+            let err = tokio::time::timeout(Duration::from_secs(30), search_skills(&access, "x", Some(1)))
+                .await
+                .expect("Skill Store search must return its own timeout error instead of hanging")
+                .unwrap_err();
+            assert_eq!(err, REQUEST_TIMED_OUT, "head: {head:?}");
+            held.abort();
         }
     }
 
