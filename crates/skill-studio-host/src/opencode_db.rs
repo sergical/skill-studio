@@ -143,7 +143,8 @@ const ENV_CHILD_ROOT: &str = "SKILL_STUDIO_HOST_ENV_CHILD_ROOT";
 
 /// Runs `body` in a child copy of this test binary with the env vars from
 /// `env` set, so they never reach the tests running in parallel in this
-/// process. `module` is the caller's `module_path!()` and `test` its function
+/// process. The child drops any `OpenCode` path override it inherits, so a
+/// developer's own setting cannot change the result. `module` is the caller's `module_path!()` and `test` its function
 /// name. Both calls run `body` with the same temp root: the parent picks it,
 /// the child receives it.
 #[cfg(test)]
@@ -162,6 +163,10 @@ pub(crate) fn run_with_env_in_child(
     let name = format!("{module}::{test}");
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args([name.as_str(), "--exact", "--nocapture", "--test-threads=1"])
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("OPENCODE_CONFIG_DIR")
+        .env_remove("OPENCODE_DB")
         .env(ENV_CHILD_ROOT, tmp.path())
         .envs(env(tmp.path()))
         .output()
