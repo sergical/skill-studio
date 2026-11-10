@@ -2140,7 +2140,7 @@ fn run_turn_off(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::new().to_string()));
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let request = resolve_target(&rt, target, TargetKind::Park).and_then(|deployment_id| {
         Ok(AgentOffRequest {
             deployment_id,
