@@ -1,0 +1,263 @@
+{
+  "aliases-merge": {
+    "value": {
+      "name": "demo",
+      "description": "example",
+      "license": null,
+      "compatibility": null,
+      "metadata": {
+        "copy": "example",
+        "merged": {
+          "<<": {
+            "x": 1
+          },
+          "y": 2
+        },
+        "base": {
+          "x": 1
+        }
+      },
+      "allowed-tools": null,
+      "disable-model-invocation": null,
+      "user-invocable": null
+    }
+  },
+  "boolean-words": {
+    "value": {
+      "name": "yes",
+      "description": "no",
+      "license": null,
+      "compatibility": null,
+      "metadata": {
+        "no": "no",
+        "off": "off",
+        "yes": "yes",
+        "on": "on"
+      },
+      "allowed-tools": null,
+      "disable-model-invocation": null,
+      "user-invocable": null
+    }
+  },
+  "crates/skill-studio-core/tests/fixtures/cli-traces/01-add-github-global-claude-code/after/files/.agents/skills/academy-guide/SKILL.md": {
+    "absent": true
+  },
+  "crates/skill-studio-core/tests/fixtures/cli-traces/02-add-skillssh-slug-global/after/files/.agents/skills/web-design-guidelines/SKILL.md": {
+    "absent": true
+  },
+  "crates/skill-studio-core/tests/fixtures/cli-traces/03-add-local-folder-project/after/files/.agents/skills/my-local-skill/SKILL.md": {
+    "value": {
+      "name": "my-local-skill",
+      "description": "A tiny local test skill for CLI trace recording.",
+      "license": null,
+      "compatibility": null,
+      "metadata": null,
+      "allowed-tools": null,
+      "disable-model-invocation": null,
+      "user-invocable": null
+    }
+  },
+  "crates/skill-studio-core/tests/fixtures/cli-traces/04-add-two-harnesses/after/files/.agents/skills/brand-guidelines/SKILL.md": {
+    "absent": true
+  },
+  "crates/skill-studio-core/tests/fixtures/cli-traces/05-add-shared-root-only/after/files/.agents/skills/web-artifacts-builder/SKILL.md": {
+    "absent": true
+  },
+  "crates/skill-studio-core/tests/fixtures/cli-traces/06-update-newer-source/after/files/.agents/skills/academy-guide/SKILL.md": {
+    "absent": true
+  },
+  "crates/skill-studio-core/tests/fixtures/cli-traces/06-update-newer-source/before/files/.agents/skills/academy-guide/SKILL.md": {
+    "absent": true
+  },
+  "crates/skill-studio-core/tests/fixtures/cli-traces/07-update-already-current/after/files/.agents/skills/academy-guide/SKILL.md": {
+    "absent": true
+  },
+  "crates/skill-studio-core/tests/fixtures/cli-traces/07-update-already-current/before/files/.agents/skills/academy-guide/SKILL.md": {
+    "absent": true
+  },
+  "crates/skill-studio-core/tests/fixtures/cli-traces/08-remove-one-harness/before/files/.agents/skills/academy-guide/SKILL.md": {
+    "absent": true
+  },
+  "crates/skill-studio-core/tests/fixtures/cli-traces/08-remove-one-harness/before/files/.claude/skills/academy-guide/SKILL.md": {
+    "absent": true
+  },
+  "crates/skill-studio-core/tests/fixtures/cli-traces/09-remove-last-deployment/before/files/.agents/skills/academy-guide/SKILL.md": {
+    "absent": true
+  },
+  "duplicate-field": {
+    "invalid": true,
+    "line": 2,
+    "column": 1,
+    "message": "duplicate field `name`"
+  },
+  "duplicate-metadata": {
+    "value": {
+      "name": null,
+      "description": null,
+      "license": null,
+      "compatibility": null,
+      "metadata": {
+        "key": "second"
+      },
+      "allowed-tools": null,
+      "disable-model-invocation": null,
+      "user-invocable": null
+    }
+  },
+  "empty": {
+    "value": {
+      "name": null,
+      "description": null,
+      "license": null,
+      "compatibility": null,
+      "metadata": null,
+      "allowed-tools": null,
+      "disable-model-invocation": null,
+      "user-invocable": null
+    }
+  },
+  "fixtures/tree-hash/skills/nested/SKILL.md": {
+    "absent": true
+  },
+  "fixtures/tree-hash/skills/simple/SKILL.md": {
+    "value": {
+      "name": "simple",
+      "description": null,
+      "license": null,
+      "compatibility": null,
+      "metadata": null,
+      "allowed-tools": null,
+      "disable-model-invocation": null,
+      "user-invocable": null
+    }
+  },
+  "literal": {
+    "value": {
+      "name": "demo",
+      "description": "first\nsecond\n",
+      "license": null,
+      "compatibility": null,
+      "metadata": null,
+      "allowed-tools": null,
+      "disable-model-invocation": null,
+      "user-invocable": null
+    }
+  },
+  "malformed": {
+    "invalid": true,
+    "line": 3,
+    "column": 22,
+    "message": "mapping values are not allowed in this context"
+  },
+  "metadata-types": {
+    "value": {
+      "name": null,
+      "description": null,
+      "license": null,
+      "compatibility": null,
+      "metadata": {
+        "bool": true,
+        "nested": {
+          "a": "b"
+        },
+        "list": [
+          1,
+          "two"
+        ]
+      },
+      "allowed-tools": null,
+      "disable-model-invocation": null,
+      "user-invocable": null
+    }
+  },
+  "multiline": {
+    "invalid": true,
+    "line": 6,
+    "column": 21,
+    "message": "found character that cannot start any token"
+  },
+  "nonfinite": {
+    "value": {
+      "name": null,
+      "description": null,
+      "license": null,
+      "compatibility": null,
+      "metadata": {
+        "infinity": null,
+        "nan": null
+      },
+      "allowed-tools": null,
+      "disable-model-invocation": null,
+      "user-invocable": null
+    }
+  },
+  "numbers-dates": {
+    "value": {
+      "name": "123",
+      "description": "2026-11-11",
+      "license": null,
+      "compatibility": null,
+      "metadata": {
+        "int": 42,
+        "leading": "012",
+        "hex": 255,
+        "octal": 15,
+        "date": "2026-11-11",
+        "float": 1.5,
+        "null": null
+      },
+      "allowed-tools": null,
+      "disable-model-invocation": null,
+      "user-invocable": null
+    }
+  },
+  "numeric-keys": {
+    "value": {
+      "name": null,
+      "description": null,
+      "license": null,
+      "compatibility": null,
+      "metadata": {
+        "nested": {
+          "42": "answer",
+          "true": "bool-key"
+        }
+      },
+      "allowed-tools": null,
+      "disable-model-invocation": null,
+      "user-invocable": null
+    }
+  },
+  "quotes-comments": {
+    "value": {
+      "name": "demo",
+      "description": "text: # literal",
+      "license": null,
+      "compatibility": null,
+      "metadata": {
+        "quoted": "yes"
+      },
+      "allowed-tools": null,
+      "disable-model-invocation": null,
+      "user-invocable": null
+    }
+  },
+  "sequence": {
+    "invalid": true,
+    "line": 3,
+    "column": 14,
+    "message": "description: invalid type: sequence, expected a string"
+  },
+  "strict-bool": {
+    "invalid": true,
+    "line": 3,
+    "column": 27,
+    "message": "disable-model-invocation: invalid type: string \"yes\", expected a boolean"
+  },
+  "tabs": {
+    "invalid": true,
+    "line": 4,
+    "column": 1,
+    "message": "found character that cannot start any token"
+  }
+}

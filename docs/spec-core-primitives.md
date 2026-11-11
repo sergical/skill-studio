@@ -461,7 +461,7 @@ section 9.
 
 - `#![deny(missing_docs)]` and `#![forbid(unsafe_code)]` in the core.
 - `cargo deny` or a `Cargo.toml` review: the core lists only `serde`,
-  `serde_json`, `schemars`, `thiserror`, `chrono`, `ulid`, plus `serde_yaml`
+  `serde_json`, `schemars`, `thiserror`, `chrono`, `ulid`, plus `serde-saphyr` and `serde-value`
   and `toml` for frontmatter and lock-file parsing (PR 2). Dev-only:
   `skill-studio-host`, `tempfile`, `similar` (golden-snapshot diffing).
 - A grep gate: no `dirs::`, `std::env::var("HOME")`, or `home_dir` in
