@@ -1383,7 +1383,7 @@ export interface HarnessesChoice {
    * Whether the user opted in to searching harness history (Codex
    * `config.toml` trust rows, Claude Code transcripts, ...) for project
    * folders, mirroring the per-harness discovery switch in
-   * `docs/action-map/settings-and-projects.md`.
+   * `docs/flows.md`.
    */
   search_project_folders: boolean;
   /**
@@ -1433,7 +1433,7 @@ export interface UnrepairedIssue {
   /**
    * Stable category a caller can branch on instead of `message`.
    */
-  kind: "link" | "frontmatter" | "conflict" | "other";
+  kind: "link" | "frontmatter" | "other";
 }
 /**
  * One pair of differing copies: never merged, named for the caller to open
@@ -1697,7 +1697,7 @@ export interface RemoveOutcome {
   tree_hash_before: string;
   /**
    * Where the folder now lives under quarantine, for `Copy`/`Fork`
-   * (never deleted - see `docs/action-map/primitives-and-call-stack.md`'s
+   * (never deleted - see `docs/flows.md`'s
    * Remove row). `None` for `Dotagents`/`SkillsSh`, whose own CLI deletes
    * the bytes directly, the same as it does for every other build's
    * remove today.
@@ -1778,7 +1778,7 @@ export interface UpdateAllItem {
 }
 /**
  * Result of `doctor`: one pass over every lifecycle invariant in
- * `docs/action-map/lifecycle-states.md`'s Invariants section, over the
+ * `docs/flows.md`, over the
  * whole scope (every root `scan` knows, every registry and lockfile
  * entry, the quarantine dirs, the journal), independent of any single
  * command's own rollback logic.

@@ -160,49 +160,6 @@ impl RealProcessSpawner {
             .env("GIT_CONFIG_NOSYSTEM", "1");
     }
 
-    /// Resolves `program` to an absolute path under `search_dirs` when it is
-    /// a bare name (no `/`); falls back to `program` unchanged otherwise, or
-    /// when no `search_dirs` entry has it (`std::process::Command` then
-    /// resolves it against the child's own `PATH`, set below).
-    fn resolve_program(&self, program: &str) -> PathBuf {
-        if program.contains('/') {
-            return PathBuf::from(program);
-        }
-        self.search_dirs
-            .iter()
-            .map(|dir| dir.join(program))
-            .find(|candidate| is_executable_file(candidate))
-            .unwrap_or_else(|| PathBuf::from(program))
-    }
-
-    /// `search_dirs` joined with this process's own `PATH`, for a child that
-    /// needs to resolve a second binary itself (`npx`'s `#!/usr/bin/env
-    /// node` shebang needs `node` on the child's `PATH`, not just its own
-    /// `argv[0]` resolved).
-    fn child_path(&self) -> OsString {
-        let inherited = std::env::var_os("PATH").unwrap_or_default();
-        // A dir containing the PATH separator can't be represented in a
-        // joined PATH string. Skip just that dir instead of letting
-        // `join_paths` fail and falling back to `inherited` alone, which
-        // would silently drop every other `search_dirs` entry too.
-        let search_dirs = self
-            .search_dirs
-            .iter()
-            .filter(|dir| !dir.as_os_str().to_string_lossy().contains(':'))
-            .cloned();
-        // An empty (unset or "") inherited PATH must contribute nothing, not
-        // an empty path segment: `split_paths` on "" yields one empty
-        // component, which `Command` resolves as the child's cwd - for
-        // `npx` that is a project folder, not a directory to trust bare
-        // names from.
-        let inherited_dirs: Vec<PathBuf> = if inherited.is_empty() {
-            Vec::new()
-        } else {
-            std::env::split_paths(&inherited).collect()
-        };
-        std::env::join_paths(search_dirs.chain(inherited_dirs)).unwrap_or(inherited)
-    }
-
     /// The `PATH` `run` gives the child for `spec`.
     fn effective_path(&self, spec: &ProcessSpec) -> OsString {
         if let Some((_, value)) = spec.env.iter().find(|(key, _)| key == "PATH") {
@@ -211,7 +168,7 @@ impl RealProcessSpawner {
         if self.search_dirs.is_empty() {
             return std::env::var_os("PATH").unwrap_or_default();
         }
-        self.child_path()
+        child_path(&self.search_dirs)
     }
 
     /// For a failed `npx` run, appends one `Ran:` line naming the program,
@@ -601,7 +558,7 @@ impl ProcessSpawner for RealProcessSpawner {
                 "process cancelled",
             ));
         }
-        let program = self.resolve_program(&spec.program);
+        let program = resolve_program(&spec.program, &self.search_dirs);
         let probe_key = if spec.args == ["--version"] && spec.cwd.is_none() && spec.env.is_empty() {
             let path = if program.is_absolute() {
                 Some(program.clone())
@@ -635,7 +592,7 @@ impl ProcessSpawner for RealProcessSpawner {
             }
         }
         if !self.search_dirs.is_empty() && !spec.env.iter().any(|(key, _)| key == "PATH") {
-            command.env("PATH", self.child_path());
+            command.env("PATH", child_path(&self.search_dirs));
         }
         self.isolate_environment(&mut command);
         // No stdin: the MCP server's JSON-RPC stream must not reach a child,
@@ -724,6 +681,48 @@ impl ProcessSpawner for RealProcessSpawner {
         }
         Ok(output)
     }
+}
+
+/// Resolves `program` to an absolute path under `search_dirs` when it is
+/// a bare name (no `/`); falls back to `program` unchanged otherwise, or
+/// when no `search_dirs` entry has it (`std::process::Command` then
+/// resolves it against the child's own `PATH`, set below).
+pub fn resolve_program(program: &str, search_dirs: &[PathBuf]) -> PathBuf {
+    if program.contains('/') {
+        return PathBuf::from(program);
+    }
+    search_dirs
+        .iter()
+        .map(|dir| dir.join(program))
+        .find(|candidate| is_executable_file(candidate))
+        .unwrap_or_else(|| PathBuf::from(program))
+}
+
+/// `search_dirs` joined with this process's own `PATH`, for a child that
+/// needs to resolve a second binary itself (`npx`'s `#!/usr/bin/env
+/// node` shebang needs `node` on the child's `PATH`, not just its own
+/// `argv[0]` resolved).
+pub fn child_path(search_dirs: &[PathBuf]) -> OsString {
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    // A dir containing the PATH separator can't be represented in a
+    // joined PATH string. Skip just that dir instead of letting
+    // `join_paths` fail and falling back to `inherited` alone, which
+    // would silently drop every other `search_dirs` entry too.
+    let search_dirs = search_dirs
+        .iter()
+        .filter(|dir| !dir.as_os_str().to_string_lossy().contains(':'))
+        .cloned();
+    // An empty (unset or "") inherited PATH must contribute nothing, not
+    // an empty path segment: `split_paths` on "" yields one empty
+    // component, which `Command` resolves as the child's cwd - for
+    // `npx` that is a project folder, not a directory to trust bare
+    // names from.
+    let inherited_dirs: Vec<PathBuf> = if inherited.is_empty() {
+        Vec::new()
+    } else {
+        std::env::split_paths(&inherited).collect()
+    };
+    std::env::join_paths(search_dirs.chain(inherited_dirs)).unwrap_or(inherited)
 }
 
 #[cfg(test)]

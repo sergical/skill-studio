@@ -28,8 +28,7 @@ unimplemented = "deny"
 dbg_macro = "deny"
 print_stdout = "deny"
 print_stderr = "deny"
-# Pure churn with no safety or clarity gain for this workspace; allowed at
-# the workspace level per plan.md section 7.
+# Pure churn with no safety or clarity gain for this workspace.
 module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"

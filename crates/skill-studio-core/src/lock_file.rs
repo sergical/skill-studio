@@ -264,21 +264,6 @@ impl LockRowUndo {
     }
 }
 
-/// Sets `skill_name`'s `skillFolderHash` in the lock file at `path`, keeping
-/// every other key as `npx skills` wrote it, so the update check sees the
-/// skill as current after a write that did not go through the CLI. A no-op
-/// when the file or the row is missing.
-pub fn set_skill_folder_hash(
-    guard: &ExclusiveGuard,
-    fs: &dyn ScopeFs,
-    scope: &NormalizedScope,
-    path: &Path,
-    skill_name: &str,
-    hash: &str,
-) -> Result<(), CoreError> {
-    set_skill_folder_hash_with_undo(guard, fs, scope, path, skill_name, hash).map(|_| ())
-}
-
 pub(crate) fn set_skill_folder_hash_with_undo(
     guard: &ExclusiveGuard,
     fs: &dyn ScopeFs,

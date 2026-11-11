@@ -4,7 +4,7 @@ The Skill Studio command line: a thin adapter over `skill-studio-core`. It
 builds a `RuntimeScope` and a set of ports from flags and the environment,
 calls one core operation, and prints the result. It holds no policy of its
 own — issue derivation, capability facts, and exit statuses all live in the
-core, so the CLI, the desktop app, and any future MCP server or TUI agree.
+core, so the CLI, the desktop app, and the MCP server agree.
 
 ## Commands
 

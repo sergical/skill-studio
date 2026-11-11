@@ -22,7 +22,7 @@ Directory layout: `SKILL.md` (required), optional `scripts/`, `references/`, `as
 The spec has **no** invocation-control fields; those are agent extensions (below).
 Reference validator: `skills-ref validate ./my-skill`.
 
-Skill Studio enforces these rules in `src-tauri/src/skills/frontmatter.rs`
+Skill Studio enforces these rules in `crates/skill-studio-core/src/frontmatter.rs`
 (`validate_skill`) and reports failures as `spec_violations`.
 
 ## What agents do with a spec violation
@@ -352,7 +352,7 @@ already uses.
 The 24-hour trial install was removed in #285. There is no time-boxed install
 mode anymore. To switch a skill off without deleting it, use park
 (`park_skill`/`unpark_skill`, `src-tauri/src/skills/skill_park.rs`) - see
-[park-fork-trial.md](action-map/park-fork-trial.md). A `trials` map left over
+[Flows](flows.md). A `trials` map left over
 in `~/.agents/skill-studio.json` from before #285 round-trips unchanged and is
 otherwise ignored.
 

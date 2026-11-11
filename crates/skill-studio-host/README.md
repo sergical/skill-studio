@@ -17,8 +17,7 @@ gives each of them a real implementation.
 - `FileLease` — `LeaseProvider` over one advisory-locked file per canonical
   root, using `std::fs::File::{lock, lock_shared, try_lock, try_lock_shared}`
   (stable since Rust 1.89). Locks release when the returned handle drops.
-- `NoopSink` / `StderrSink` — `EventSink` that discards notices, or prints
-  one JSON line per notice to stderr.
+- `NoopSink` — `EventSink` that discards notices.
 - `NoHistoryOpener` — `HistoryOpener` with no store behind it. Fine for
   read-only operations like a scan; a mutation asking for read-write access
   fails with `ErrorCode::Unsupported`.

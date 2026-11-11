@@ -2,7 +2,7 @@
 //!
 //! A plan's manifest and the plan itself are fsynced to disk, through
 //! [`Journal::begin`], before the plan's first step runs - see
-//! `docs/action-map/plan.md` unit 1.2. [`FsJournal`] is the reference
+//! `docs/flows.md` [`FsJournal`] is the reference
 //! [`Journal`] implementation, built only on [`ScopeFs`] so a host can reuse
 //! it verbatim rather than reimplementing the write order. [`reconcile`]
 //! resolves every plan a crash left `Pending` by undoing its recorded steps
