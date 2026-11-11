@@ -80,6 +80,7 @@ const EXPECTED_WRAPPER_COMMANDS = {
     kind: "command",
     command: "get_harnesses_choice",
   },
+  setHarnessEnabled: { kind: "command", command: "set_harness_enabled" },
   saveHarnessesChoice: {
     kind: "command",
     command: "save_harnesses_choice",

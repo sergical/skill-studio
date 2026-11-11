@@ -62,10 +62,12 @@ impl ToolLookup for PathToolLookup {
             is_executable_file(&candidate).then_some(candidate)
         })
     }
+    fn binary_on_path(&self, _path: &Path) -> Option<bool> {
+        Some(true)
+    }
 }
 
-/// Markers the login-shell probe script prints around `PATH`, mirroring
-/// `skill_editor.rs`'s `MARKER_START`/`MARKER_END`: a login shell's rc files
+/// Markers separate requested values from login-shell banners. Startup files
 /// can print a banner (`echo Welcome`, nvm's "Now using node ...") before
 /// the value the script asked for, so the parser must find the line between
 /// these markers rather than assume `PATH` is the first line printed. The
@@ -73,6 +75,8 @@ impl ToolLookup for PathToolLookup {
 /// shell to exit; see `run_with_timeout`'s doc comment for why a plain
 /// `read_to_string` would hang on some machines (an rc file that leaves a
 /// background process holding the pipe open).
+const MARKER_START: &str = "__SKILL_STUDIO_ENV_START__";
+const MARKER_END: &str = "__SKILL_STUDIO_ENV_END__";
 const PATH_MARKER_START: &str = "__skill_studio_path_start__";
 const PATH_MARKER_END: &str = "__skill_studio_path_end__";
 
@@ -83,8 +87,7 @@ const PATH_MARKER_END: &str = "__skill_studio_path_end__";
 const SHELL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Reads stdout on a helper thread so a login shell's rc files can't hang
-/// this forever; see `PATH_MARKER_END`'s doc comment. Mirrors
-/// `skill_editor.rs`'s `run_with_timeout`.
+/// this forever when a background child retains stdout.
 fn run_with_timeout(mut command: Command, end_marker: &str, timeout: Duration) -> Option<String> {
     command
         .stdin(Stdio::null())
@@ -127,11 +130,33 @@ fn run_with_timeout(mut command: Command, end_marker: &str, timeout: Duration) -
 /// asks the user's own login shell instead.
 fn login_shell_path_probe(shell: &str) -> Command {
     let mut command = Command::new(shell);
-    command.arg("-lic").arg(format!(
-        "{}echo {PATH_MARKER_START}; echo \"$PATH\"; echo {PATH_MARKER_END}",
+    command.env_remove("VISUAL").env_remove("EDITOR").arg("-lic").arg(format!(
+        "{}echo {PATH_MARKER_START}; echo \"$PATH\"; echo {PATH_MARKER_END}; echo {MARKER_START}; echo \"VISUAL=$VISUAL\"; echo \"EDITOR=$EDITOR\"; echo {MARKER_END}",
         mise_hook_snippet(shell)
     ));
     command
+}
+
+fn parse_terminal_editor(output: &str) -> Option<String> {
+    let start = output.find(MARKER_START)?;
+    let after_start = &output[start + MARKER_START.len()..];
+    let end = after_start.find(MARKER_END).unwrap_or(after_start.len());
+    let body = &after_start[..end];
+
+    let mut visual = None;
+    let mut editor = None;
+    for line in body.lines() {
+        if let Some(v) = line.strip_prefix("VISUAL=") {
+            if !v.is_empty() {
+                visual = Some(v.to_string());
+            }
+        } else if let Some(e) = line.strip_prefix("EDITOR=") {
+            if !e.is_empty() {
+                editor = Some(e.to_string());
+            }
+        }
+    }
+    visual.or(editor)
 }
 
 /// Script prefix that runs mise's prompt hook. `mise activate` puts the
@@ -158,8 +183,7 @@ fn mise_hook_snippet(shell: &str) -> &'static str {
 
 /// Parses the `$PATH` line between the start and end markers, tolerating
 /// any banner text a login shell's rc files print before or after them (an
-/// `echo Welcome`, nvm's "Now using node ..."). Mirrors `skill_editor.rs`'s
-/// `parse_terminal_editor`. Returns `None` when the start marker never
+/// `echo Welcome`, nvm's "Now using node ..."). Returns `None` when the start marker never
 /// appears (spawn failure, timeout, or a marker the shell mangled).
 fn parse_path_probe_output(stdout: &str) -> Option<String> {
     let start = stdout.find(PATH_MARKER_START)?;
@@ -173,40 +197,50 @@ fn parse_path_probe_output(stdout: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Runs the login shell once to read `$PATH`. Returns the fallback
-/// directories from harness-detection.md's "PATH resolution" when the probe
-/// fails or times out, rather than an empty path, so detection still finds
-/// binaries a version-manager shim installs outside the process's own
-/// minimal `PATH`.
-fn read_login_shell_path(fallback_dirs: &[PathBuf]) -> Vec<PathBuf> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-    probe_login_shell_path(&shell, SHELL_PROBE_TIMEOUT, fallback_dirs)
+#[derive(Default)]
+struct ShellEnvironment {
+    path_dirs: Vec<PathBuf>,
+    editor: Option<String>,
 }
-
-/// [`read_login_shell_path`] with the shell and deadline chosen by the
-/// caller, so tests can use a fake shell script.
+fn probe_shell_environment(shell: &str, timeout: Duration) -> ShellEnvironment {
+    let output = run_with_timeout(login_shell_path_probe(shell), MARKER_END, timeout);
+    ShellEnvironment {
+        path_dirs: output
+            .as_deref()
+            .and_then(parse_path_probe_output)
+            .map(|line| std::env::split_paths(&line).collect())
+            .unwrap_or_default(),
+        editor: output.as_deref().and_then(parse_terminal_editor),
+    }
+}
+fn cached_shell_environment<'a>(
+    cache: &'a OnceLock<ShellEnvironment>,
+    shell: &str,
+    timeout: Duration,
+) -> &'a ShellEnvironment {
+    cache.get_or_init(|| probe_shell_environment(shell, timeout))
+}
+fn shell_environment() -> &'static ShellEnvironment {
+    static ENVIRONMENT: OnceLock<ShellEnvironment> = OnceLock::new();
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    cached_shell_environment(&ENVIRONMENT, &shell, SHELL_PROBE_TIMEOUT)
+}
+/// The editor and PATH come from the same login shell, once per app launch.
+pub fn terminal_editor_command() -> Option<String> {
+    shell_environment().editor.clone()
+}
+#[cfg(test)]
 fn probe_login_shell_path(
     shell: &str,
     timeout: Duration,
     fallback_dirs: &[PathBuf],
 ) -> Vec<PathBuf> {
-    let output = run_with_timeout(login_shell_path_probe(shell), PATH_MARKER_END, timeout);
-    let probed = output
-        .as_deref()
-        .and_then(parse_path_probe_output)
-        .map(|line| std::env::split_paths(&line).collect::<Vec<_>>())
-        .filter(|dirs| !dirs.is_empty());
-    if let Some(dirs) = probed {
-        return dirs;
+    let environment = probe_shell_environment(shell, timeout);
+    if environment.path_dirs.is_empty() {
+        fallback_dirs.to_vec()
+    } else {
+        environment.path_dirs
     }
-    #[allow(clippy::print_stderr)]
-    {
-        eprintln!(
-            "login shell {shell} did not print PATH within {}s; using fallback directories",
-            timeout.as_secs()
-        );
-    }
-    fallback_dirs.to_vec()
 }
 
 /// Fallback directories checked when the login-shell `PATH` probe fails,
@@ -307,23 +341,8 @@ fn version_key(name: &str) -> Vec<u64> {
         .collect()
 }
 
-/// The one real login-shell `PATH` probe result for this process's whole
-/// lifetime. `core_runtime::build_runtime_write_at` builds a fresh `Runtime`
-/// (and so a fresh `LoginShellToolLookup`) per command - park, unpark,
-/// update (once per skill in Update All), remove, doctor, fix, undo, and
-/// twice at startup - and `skill_fork::run_npx` probes again for the
-/// un-fork flow; without this cache each of those would spawn its own
-/// `$SHELL -lic` (100-800ms, up to `SHELL_PROBE_TIMEOUT`). Scoped to the
-/// *production* probe only: [`LoginShellToolLookup::with_probe`] (tests,
-/// and any future fake) never reads or writes this `static`, so a test
-/// supplying its own probe can neither leak into nor be starved by another
-/// test's real one.
-static LOGIN_SHELL_PATH: OnceLock<Vec<PathBuf>> = OnceLock::new();
-
 fn cached_login_shell_path() -> Vec<PathBuf> {
-    LOGIN_SHELL_PATH
-        .get_or_init(|| read_login_shell_path(&default_fallback_dirs()))
-        .clone()
+    shell_environment().path_dirs.clone()
 }
 
 /// `ToolLookup` that resolves against the user's login-shell `PATH`
@@ -331,8 +350,7 @@ fn cached_login_shell_path() -> Vec<PathBuf> {
 /// for the desktop app; the CLI and MCP server keep using
 /// [`PathToolLookup`], whose process `PATH` already comes from a shell.
 ///
-/// [`LoginShellToolLookup::new`] reads [`LOGIN_SHELL_PATH`], a process-wide
-/// cache: the shell spawns at most once per launch no matter how many
+/// [`LoginShellToolLookup::new`] reads a process-wide environment cache: the shell spawns at most once per launch no matter how many
 /// `Runtime`s (and so `LoginShellToolLookup` instances) the app builds
 /// (`harness-detection.md`: "one shell spawn per app start, cached").
 /// [`LoginShellToolLookup::with_probe`] bypasses that cache entirely, so a
@@ -340,7 +358,9 @@ fn cached_login_shell_path() -> Vec<PathBuf> {
 /// test's real probe nor be forced to spawn a real shell.
 pub struct LoginShellToolLookup {
     search_dirs: OnceLock<Vec<PathBuf>>,
+    effective_dirs: OnceLock<Vec<PathBuf>>,
     probe: Box<dyn Fn() -> Vec<PathBuf> + Send + Sync>,
+    fallback_dirs: Vec<PathBuf>,
 }
 
 impl LoginShellToolLookup {
@@ -348,7 +368,16 @@ impl LoginShellToolLookup {
     /// cache, probing the real login shell only on this process's first
     /// call to it.
     pub fn new() -> Self {
-        Self::with_probe(cached_login_shell_path)
+        let mut lookup = Self::with_probe(cached_login_shell_path);
+        lookup.fallback_dirs = default_fallback_dirs();
+        let mut applications = vec![PathBuf::from("/Applications")];
+        if let Some(home) = std::env::var_os("HOME") {
+            applications.insert(0, PathBuf::from(home).join("Applications"));
+        }
+        lookup
+            .fallback_dirs
+            .extend(application_resource_dirs(&applications));
+        lookup
     }
 
     /// As [`LoginShellToolLookup::new`], with `probe` standing in for the
@@ -357,8 +386,24 @@ impl LoginShellToolLookup {
     fn with_probe(probe: impl Fn() -> Vec<PathBuf> + Send + Sync + 'static) -> Self {
         LoginShellToolLookup {
             search_dirs: OnceLock::new(),
+            effective_dirs: OnceLock::new(),
             probe: Box::new(probe),
+            fallback_dirs: Vec::new(),
         }
+    }
+
+    /// Explicit fixture roots; does not spawn a shell or inspect installed applications.
+    pub fn with_search_and_fallback(
+        path_dirs: Vec<PathBuf>,
+        fallback_dirs: Vec<PathBuf>,
+        applications: &[PathBuf],
+    ) -> Self {
+        let mut lookup = Self::with_probe(move || path_dirs.clone());
+        lookup.fallback_dirs = fallback_dirs;
+        lookup
+            .fallback_dirs
+            .extend(application_resource_dirs(applications));
+        lookup
     }
 
     fn search_dirs(&self) -> &[PathBuf] {
@@ -371,7 +416,15 @@ impl LoginShellToolLookup {
     /// give that spawner the same directories this lookup resolved `npx`
     /// against, instead of probing the login shell a second time.
     pub fn dirs(&self) -> &[PathBuf] {
-        self.search_dirs()
+        self.effective_dirs.get_or_init(|| {
+            let mut dirs = self.search_dirs().to_vec();
+            for fallback in &self.fallback_dirs {
+                if !dirs.contains(fallback) {
+                    dirs.push(fallback.clone());
+                }
+            }
+            dirs
+        })
     }
 }
 
@@ -383,8 +436,47 @@ impl Default for LoginShellToolLookup {
 
 impl ToolLookup for LoginShellToolLookup {
     fn find_binary(&self, name: &str) -> Option<PathBuf> {
-        PathToolLookup::with_search_dirs(self.search_dirs().to_vec()).find_binary(name)
+        PathToolLookup::with_search_dirs(self.search_dirs().to_vec())
+            .find_binary(name)
+            .or_else(|| {
+                PathToolLookup::with_search_dirs(self.fallback_dirs.clone()).find_binary(name)
+            })
     }
+    fn binary_on_path(&self, path: &Path) -> Option<bool> {
+        Some(self.search_dirs().iter().any(|dir| {
+            std::path::absolute(dir.join(path.file_name().unwrap_or_default()))
+                .is_ok_and(|candidate| candidate == path)
+        }))
+    }
+}
+
+fn application_resource_dirs(applications: &[PathBuf]) -> Vec<PathBuf> {
+    let mut bundles: Vec<_> = applications
+        .iter()
+        .flat_map(|root| {
+            std::fs::read_dir(root)
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+        })
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
+        })
+        .collect();
+    bundles.sort();
+    bundles
+        .into_iter()
+        .flat_map(|bundle| {
+            let resources = bundle.join("Contents/Resources");
+            [
+                resources.clone(),
+                resources.join("bin"),
+                resources.join("app/bin"),
+            ]
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -729,5 +821,134 @@ mod tests {
             dirs.is_empty(),
             "no nvm tree exists, yet the lookup returned {dirs:?}"
         );
+    }
+    #[test]
+    fn marker_parsing_ignores_banner_noise_and_prefers_visual() {
+        let output =
+            format!("Welcome to zsh!\n{MARKER_START}\nVISUAL=nvim\nEDITOR=vi\n{MARKER_END}\nbye\n");
+        assert_eq!(parse_terminal_editor(&output), Some("nvim".to_string()));
+    }
+
+    #[test]
+    fn marker_parsing_falls_back_to_editor_when_visual_is_empty() {
+        let output = format!("{MARKER_START}\nVISUAL=\nEDITOR=vi\n{MARKER_END}\n");
+        assert_eq!(parse_terminal_editor(&output), Some("vi".to_string()));
+    }
+
+    #[test]
+    fn marker_parsing_returns_none_when_both_are_empty() {
+        let output = format!("{MARKER_START}\nVISUAL=\nEDITOR=\n{MARKER_END}\n");
+        assert_eq!(parse_terminal_editor(&output), None);
+    }
+
+    #[test]
+    fn marker_parsing_returns_none_without_markers() {
+        assert_eq!(parse_terminal_editor("VISUAL=nvim\n"), None);
+    }
+
+    #[test]
+    fn login_shell_probe_drops_an_inherited_editor() {
+        let probe = login_shell_path_probe("/bin/zsh");
+        let removed: Vec<_> = probe
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_os_string())
+            .collect();
+        assert!(removed.contains(&"VISUAL".into()), "{removed:?}");
+        assert!(removed.contains(&"EDITOR".into()), "{removed:?}");
+    }
+    #[test]
+    fn fallback_and_app_bundle_tools_are_found_but_not_marked_on_path_or_hide_a_finder_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("path");
+        let fallback = dir.path().join("fallback");
+        let apps = dir.path().join("Applications");
+        let resources = apps.join("Agent.app/Contents/Resources");
+        for directory in [&path, &fallback, &resources] {
+            fs::create_dir_all(directory).unwrap();
+        }
+        write_executable(&path.join("path-tool"));
+        write_executable(&fallback.join("fallback-tool"));
+        write_executable(&resources.join("app-tool"));
+        let lookup = LoginShellToolLookup::with_search_and_fallback(
+            vec![path.clone()],
+            vec![fallback.clone()],
+            &[apps],
+        );
+        for (name, expected, on_path) in [
+            ("path-tool", path.join("path-tool"), true),
+            ("fallback-tool", fallback.join("fallback-tool"), false),
+            ("app-tool", resources.join("app-tool"), false),
+        ] {
+            let found = lookup
+                .find_binary(name)
+                .expect("fixture tool was not found");
+            assert_eq!(found, expected);
+            assert_eq!(lookup.binary_on_path(&found), Some(on_path));
+        }
+        assert!(
+            lookup.dirs().contains(&fallback),
+            "version subprocesses need the same fallback PATH"
+        );
+    }
+
+    #[test]
+    fn one_login_shell_output_supplies_path_and_editor_or_spawns_a_second_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let shell = dir.path().join("shell");
+        let count = dir.path().join("calls");
+        crate::test_scripts::write_fake_executable(&shell, &format!("echo call >> '{}'\necho banner\nPATH=/fixture/bin\nVISUAL=nvim\nEDITOR=vi\nexport PATH VISUAL EDITOR\nexec /bin/sh -c \"$2\"\n", count.display()));
+        let cached = OnceLock::new();
+        let read =
+            || cached_shell_environment(&cached, shell.to_str().unwrap(), Duration::from_secs(5));
+        assert_eq!(read().path_dirs, vec![PathBuf::from("/fixture/bin")]);
+        assert_eq!(read().editor.as_deref(), Some("nvim"));
+        assert_eq!(fs::read_to_string(count).unwrap().lines().count(), 1);
+    }
+    #[test]
+    fn detection_reports_a_fallback_executable_off_path_even_without_version_output_or_claims_terminal_access(
+    ) {
+        use skill_studio_core::{
+            dto::HarnessesRequest,
+            harness::{HarnessCatalog, HarnessReport},
+            identity::CorrelationId,
+            ops,
+            ports::{OpContext, Runtime},
+            RuntimeScope,
+        };
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let fallback = dir.path().join("fallback");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&fallback).unwrap();
+        write_executable(&fallback.join("codex"));
+        let scope = RuntimeScope::fixture(&home);
+        let mut ports = crate::default_ports(
+            dir.path().join("leases"),
+            Arc::new(HarnessCatalog::builtin()),
+        );
+        ports.tools = Some(Arc::new(LoginShellToolLookup::with_search_and_fallback(
+            Vec::new(),
+            vec![fallback],
+            &[],
+        )));
+        let rt = Runtime::new(&scope, ports).unwrap();
+        let report = ops::harnesses(
+            &rt,
+            &OpContext::uncancellable(CorrelationId("fallback".into())),
+            &HarnessesRequest {},
+        )
+        .unwrap();
+        let wire = serde_json::to_value(&report).unwrap();
+        let decoded: HarnessReport = serde_json::from_value(wire).unwrap();
+        let codex = decoded
+            .harnesses
+            .iter()
+            .find(|row| row.id.as_str() == "codex")
+            .unwrap();
+        assert!(codex.executable.is_some());
+        assert_eq!(codex.executable_on_path, Some(false));
+        assert!(!home.join(".codex").exists());
     }
 }

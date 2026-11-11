@@ -1227,6 +1227,10 @@ export interface HarnessDetection {
    * Resolved executable path, when found on `PATH`.
    */
   executable: string | null;
+  /**
+   * False for an executable found only in a fallback directory.
+   */
+  executable_on_path: boolean | null;
   version: DetectedString;
   install_method: DetectedString1;
   /**

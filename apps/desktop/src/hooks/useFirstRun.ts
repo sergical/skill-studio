@@ -7,13 +7,21 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import type { HarnessDetection, HarnessesChoice } from "@skill-studio/lib";
+import type { HarnessDetection, HarnessesChoice, HarnessReport } from "@skill-studio/lib";
 import {
   detectHarnesses,
   getHarnessesChoice,
   invokeErrorMessage,
   saveHarnessesChoice,
 } from "../lib/skill-api";
+
+import { setHarnessDetection } from "./useDetectedHarnesses";
+
+let launchDetection: Promise<HarnessReport> | undefined;
+function detectAtLaunch(): Promise<HarnessReport> {
+  launchDetection ??= detectHarnesses();
+  return launchDetection;
+}
 
 interface FirstRunGateState {
   /** `null` while the saved-choice check is in flight. */
@@ -36,19 +44,48 @@ export function useFirstRunGate(): FirstRunGateState {
 
   useEffect(() => {
     let cancelled = false;
-    getHarnessesChoice()
-      .then((choice) => {
-        if (!cancelled) setShowScreen(showScreenForChoiceRead({ ok: true, choice }));
-      })
-      .catch(() => {
-        if (!cancelled) setShowScreen(showScreenForChoiceRead({ ok: false }));
-      });
+    void loadLaunchChoice({
+      readChoice: getHarnessesChoice,
+      detect: detectAtLaunch,
+      onChoice: (choice) => setHarnessDetection({ choice }),
+      onGate: (show) => {
+        if (!cancelled) setShowScreen(show);
+      },
+      onReport: (report) => setHarnessDetection({ report }),
+      onError: (error) => setHarnessDetection({ error }),
+    }).catch(() => {
+      if (!cancelled) setShowScreen(false);
+    });
     return () => {
       cancelled = true;
     };
   }, []);
 
   return { showScreen };
+}
+
+export async function loadLaunchChoice(effects: {
+  readChoice: () => Promise<HarnessesChoice | null>;
+  detect: () => Promise<HarnessReport>;
+  onChoice: (choice: HarnessesChoice | null) => void;
+  onGate: (show: boolean) => void;
+  onReport: (report: HarnessReport) => void;
+  onError: (message: string) => void;
+}): Promise<void> {
+  try {
+    const choice = await effects.readChoice();
+    effects.onChoice(choice);
+    effects.onGate(showScreenForChoiceRead({ ok: true, choice }));
+    if (choice === null) return;
+  } catch (cause) {
+    effects.onChoice(null);
+    effects.onGate(showScreenForChoiceRead({ ok: false }));
+    effects.onError(invokeErrorMessage(cause));
+  }
+  void effects
+    .detect()
+    .then(effects.onReport)
+    .catch((cause: unknown) => effects.onError(invokeErrorMessage(cause)));
 }
 
 interface FirstRunScreenState {
@@ -141,9 +178,10 @@ export function useFirstRunScreen(onSaved: () => void): FirstRunScreenState {
 
   useEffect(() => {
     let cancelled = false;
-    detectHarnesses()
+    detectAtLaunch()
       .then((report) => {
         if (cancelled) return;
+        setHarnessDetection({ report });
         setRows(report.harnesses);
         const found = new Set<string>();
         for (const row of report.harnesses) {
@@ -152,7 +190,11 @@ export function useFirstRunScreen(onSaved: () => void): FirstRunScreenState {
         setKept(found);
       })
       .catch((cause: unknown) => {
-        if (!cancelled) setError(invokeErrorMessage(cause));
+        if (!cancelled) {
+          const message = invokeErrorMessage(cause);
+          setError(message);
+          setHarnessDetection({ error: message });
+        }
       });
     return () => {
       cancelled = true;
@@ -176,7 +218,10 @@ export function useFirstRunScreen(onSaved: () => void): FirstRunScreenState {
       new Date().toISOString(),
     );
     void saveChoiceThenOpenApp(() => saveHarnessesChoice(choice, savedTelemetryEnabled), {
-      onSaved,
+      onSaved: () => {
+        setHarnessDetection({ choice });
+        onSaved();
+      },
       onSaveFailed: (reason) => {
         setSaveError(`Couldn't save your choice. ${reason}`);
         setSaving(false);
