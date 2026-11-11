@@ -11,7 +11,7 @@ use std::process::{Child, Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 
-use crate::skills::skill_fork_registry::{read_fork_registry_or_default, write_fork_registry};
+use crate::skills::skill_fork_registry::read_fork_registry_or_default;
 
 /// One editor the user can pick, as offered to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -187,9 +187,9 @@ fn set_preferred_editor_in(
             Some(v)
         }
     };
-    let mut registry = read_fork_registry_or_default(home);
-    registry.preferred_editor = normalized;
-    write_fork_registry(home, &registry)
+    super::skill_fork_registry::update_fork_registry(home, |registry| {
+        registry.preferred_editor.clone_from(&normalized);
+    })
 }
 
 pub fn installed_editors(home: &Path) -> Vec<EditorOption> {

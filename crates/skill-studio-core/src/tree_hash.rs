@@ -13,7 +13,7 @@
 //! against [`ScopeFs`], with no `git` binary involved.
 
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sha1::{Digest, Sha1};
 
@@ -36,14 +36,33 @@ const MODE_SYMLINK: &[u8] = b"120000";
 /// Git mode string for a subtree.
 const MODE_TREE: &[u8] = b"40000";
 
+/// A skill tree hash and the repository metadata it excluded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeHashEvidence {
+    /// Git tree SHA-1 of the skill files.
+    pub hash: String,
+    /// Skipped `.git` directories, relative to the skill folder and sorted.
+    pub excluded_git_directories: Vec<PathBuf>,
+}
+
+/// Hashes a skill and names the repository metadata excluded from the hash.
+pub fn tree_hash_with_evidence(
+    fs: &dyn ScopeFs,
+    dir: &Path,
+) -> Result<TreeHashEvidence, CoreError> {
+    tree_hash_with(fs, dir, false)
+}
+
 /// The git tree SHA-1 of `dir`, hex-encoded - the same value `git
 /// write-tree` would produce for `dir` added to a fresh, empty index.
+/// Repository metadata directories named `.git` are excluded at every depth.
+/// [`tree_hash_with_evidence`] lists the excluded directories.
 ///
 /// A directory with no trackable entry (no files, symlinks, or non-empty
 /// subdirectories, recursively) hashes the same way git tracks it: as the
 /// well-known empty tree, `4b825dc642cb6eb9a060e54bf8d69288fbee4904`.
 pub fn tree_hash(fs: &dyn ScopeFs, dir: &Path) -> Result<String, CoreError> {
-    tree_hash_with(fs, dir, false)
+    tree_hash_with_evidence(fs, dir).map(|evidence| evidence.hash)
 }
 
 /// [`tree_hash`] without the files the `skills` CLI never installs and the
@@ -51,7 +70,7 @@ pub fn tree_hash(fs: &dyn ScopeFs, dir: &Path) -> Result<String, CoreError> {
 /// that `.DS_Store` or `__pycache__` does not make an untouched install
 /// look edited.
 pub fn tree_hash_ignoring_junk(fs: &dyn ScopeFs, dir: &Path) -> Result<String, CoreError> {
-    tree_hash_with(fs, dir, true)
+    tree_hash_with(fs, dir, true).map(|evidence| evidence.hash)
 }
 
 /// Names `npx skills` leaves out of an install (`EXCLUDE_DIRS` in the CLI:
@@ -66,13 +85,29 @@ pub fn is_install_junk(name: &str, kind: FileKind) -> bool {
     }
 }
 
-fn tree_hash_with(fs: &dyn ScopeFs, dir: &Path, skip_junk: bool) -> Result<String, CoreError> {
-    let sha = hash_dir(fs, dir, skip_junk)?.unwrap_or_else(|| hash_object(b"tree", &[]));
+fn tree_hash_with(
+    fs: &dyn ScopeFs,
+    dir: &Path,
+    skip_junk: bool,
+) -> Result<TreeHashEvidence, CoreError> {
+    let mut excluded_git_directories = Vec::new();
+    let sha = hash_dir(
+        fs,
+        dir,
+        skip_junk,
+        Path::new(""),
+        &mut excluded_git_directories,
+    )?
+    .unwrap_or_else(|| hash_object(b"tree", &[]));
     let mut hex = String::with_capacity(sha.len() * 2);
     for byte in sha {
         write!(hex, "{byte:02x}").ok();
     }
-    Ok(hex)
+    excluded_git_directories.sort();
+    Ok(TreeHashEvidence {
+        hash: hex,
+        excluded_git_directories,
+    })
 }
 
 /// One sorted tree entry, formatted git's way: `<mode> <name>\0<20-byte sha>`.
@@ -91,17 +126,33 @@ struct Entry {
 /// contributes nothing trackable - the same case in which git leaves the
 /// directory out of its parent tree entirely, since git never records an
 /// empty directory.
-fn hash_dir(fs: &dyn ScopeFs, dir: &Path, skip_junk: bool) -> Result<Option<[u8; 20]>, CoreError> {
+fn hash_dir(
+    fs: &dyn ScopeFs,
+    dir: &Path,
+    skip_junk: bool,
+    relative: &Path,
+    excluded_git_directories: &mut Vec<PathBuf>,
+) -> Result<Option<[u8; 20]>, CoreError> {
     let listing = fs.read_dir(dir).map_err(|e| CoreError::io(dir, e))?;
     let mut entries = Vec::new();
     for item in listing {
+        if item.kind == FileKind::Dir && item.name == ".git" {
+            excluded_git_directories.push(relative.join(&item.name));
+            continue;
+        }
         if skip_junk && is_install_junk(&item.name, item.kind) {
             continue;
         }
         let path = dir.join(&item.name);
         match item.kind {
             FileKind::Dir => {
-                if let Some(sha) = hash_dir(fs, &path, skip_junk)? {
+                if let Some(sha) = hash_dir(
+                    fs,
+                    &path,
+                    skip_junk,
+                    &relative.join(&item.name),
+                    excluded_git_directories,
+                )? {
                     entries.push(Entry {
                         sort_key: sort_key(&item.name, true),
                         mode: MODE_TREE,
@@ -196,6 +247,36 @@ mod tests {
     use super::*;
     use crate::testing::FixtureBuilder;
     use std::path::Path;
+
+    #[test]
+    fn hashing_a_skill_ignores_nested_git_writes_or_reports_repository_metadata_as_an_edit() {
+        for git_dir in ["/skill/.git", "/skill/scripts/.git"] {
+            let fs = FixtureBuilder::new()
+                .dir(git_dir)
+                .file("/skill/SKILL.md", b"skill body")
+                .build_fs();
+            let before = tree_hash(&fs, Path::new("/skill")).unwrap();
+            fs.fsops_write_new_file(&Path::new(git_dir).join("FETCH_HEAD"), b"new commit")
+                .unwrap();
+            let after = tree_hash_with_evidence(&fs, Path::new("/skill")).unwrap();
+            assert_eq!(
+                after.hash, before,
+                "repository metadata at {git_dir} must not count as a skill edit"
+            );
+            assert_eq!(
+                after.excluded_git_directories,
+                vec![PathBuf::from(git_dir.strip_prefix("/skill/").unwrap())],
+                "the hash evidence must identify the excluded repository directory"
+            );
+            fs.fsops_write_new_file(Path::new("/skill/notes.md"), b"skill edit")
+                .unwrap();
+            assert_ne!(
+                tree_hash(&fs, Path::new("/skill")).unwrap(),
+                before,
+                "skill files must still affect the hash"
+            );
+        }
+    }
 
     #[test]
     fn tree_hash_of_an_empty_folder_is_gits_well_known_empty_tree_sha_or_names_the_mismatch() {

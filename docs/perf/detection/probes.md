@@ -22,9 +22,10 @@ The launch-detection report measures the shell separately.
 The control disables persistence in the same release binary. Its two phases
 both execute every version command. Cache hits use a new spawner, so they
 prove disk reuse across launches. A changed invocation path, resolved shim
-target, size, or exact mtime invalidates a result. Failures and timeouts are
-not cached. The default spawner has memory caching only; persistence is an
-explicit opt-in to an app-owned path. The file is bounded and mode 0600.
+target, size, exact mtime, file identity, change time, or effective PATH
+invalidates a result. Failures and timeouts are
+not cached. Desktop, CLI, and MCP runtime constructors load the cache under the selected
+home at `.skill-studio/version-probes.json`. The file is bounded and mode 0600.
 
 Repeat with disposable directories:
 
@@ -36,12 +37,25 @@ cargo build -p skill-studio-host --example perf_detection --release --all-featur
 
 ## Profile
 
-`uncached.json.gz` and `cached.json.gz` are release Samply recordings with
-symbol sidecars. `profile-metadata.json` records the source, binary hash, and
-load. The folded stacks and SVGs retain stacks through `harness_detect` or
-`probe_cache`. Observer sysctl/pgrep calls outside the timed interval are
-excluded. Counts include sleeping and are not CPU utilization percentages.
+Generated recordings, symbol sidecars, and SVGs are not tracked. The folded
+stacks, summaries, and `profile-metadata.json` retain the recorded measurements.
+Counts include sleeping and are not CPU utilization percentages.
 The cache-enabled recording includes ten misses followed by ten hits.
+
+Regenerate SVGs from the recorded stacks with Inferno:
+
+```sh
+inferno-flamegraph < docs/perf/detection/uncached.folded.txt > docs/perf/detection/uncached-flamegraph.svg
+inferno-flamegraph < docs/perf/detection/cached.folded.txt > docs/perf/detection/cached-flamegraph.svg
+```
+
+Record new profiles and symbol sidecars with Samply 0.13.1 after the release
+build above. Use a new fixture directory for each recording:
+
+```sh
+samply record --save-only --unstable-presymbolicate -o docs/perf/detection/uncached.json.gz -- "$CARGO_TARGET_DIR/release/examples/perf_detection" "$(mktemp -d)/fixture" uncached
+samply record --save-only --unstable-presymbolicate -o docs/perf/detection/cached.json.gz -- "$CARGO_TARGET_DIR/release/examples/perf_detection" "$(mktemp -d)/fixture"
+```
 
 | Leaf frame                           | Uncached samples | Cache-enabled samples |
 | ------------------------------------ | ---------------: | --------------------: |
@@ -61,4 +75,6 @@ writes is a separate performance change with its own measurements.
 Timeout and cancellation tests use child-readiness handshakes and a logical
 clock. Reader joins check that the reader has finished. A normal child exit
 with a descendant still holding a pipe also gets bounded reader cleanup.
-The test's failure guard is not a performance budget or a wall-clock CI gate.
+Tests control the cleanup grace and release descendants only after the probe
+returns. They assert event order without elapsed-time limits. Process checks
+assert that descendants stopped running; they do not assert zombie reaping.

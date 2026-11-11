@@ -42,6 +42,7 @@ import type {
   InstallCountKey,
   SkillEvent,
   SkillSnapshot,
+  BackgroundStatus,
   SplitCopy,
   SplitOutcome,
   AgentOffCheck,
@@ -833,13 +834,20 @@ export async function repairSkillLink(
  * Instant read of the background refresh thread's latest snapshot, or
  * `undefined` before the first snapshot has landed.
  */
+export async function getBackgroundStatus(): Promise<BackgroundStatus> {
+  return callCommand("get_background_status");
+}
+
+export function onBackgroundStatus(cb: (status: BackgroundStatus) => void): Promise<() => void> {
+  return listen<BackgroundStatus>("skills://background-status", (event) => cb(event.payload));
+}
+
 export async function getSkillSnapshot(): Promise<SkillSnapshot | undefined> {
   return callCommand("get_skill_snapshot");
 }
 
 /**
- * Ask the background refresh thread to rebuild the snapshot. Returns
- * immediately; listen for `onSkillSnapshot` to see the result.
+ * Rebuild the snapshot and report any failure after the rebuild finishes.
  */
 export async function requestSkillRescan(): Promise<void> {
   return callCommand("request_skill_rescan");

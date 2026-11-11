@@ -1,0 +1,3 @@
+*-flamegraph.svg
+*.json.gz
+*.json.syms.json

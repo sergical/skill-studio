@@ -155,7 +155,7 @@ fn set_harness_enabled_at(
     }
     choice.saved_at = chrono::Utc::now().to_rfc3339();
     let choice = choice.clone();
-    super::skill_fork_registry::write_fork_registry_locked(&guard, home, &registry)?;
+    super::skill_fork_registry::write_fork_registry_locked(&guard, home, &mut registry)?;
     Ok(choice)
 }
 
@@ -181,7 +181,7 @@ fn save_harnesses_choice_at(
     let mut registry = super::skill_fork_registry::read_fork_registry(home)?;
     registry.harnesses = Some(choice);
     registry.telemetry_enabled = telemetry_enabled;
-    super::skill_fork_registry::write_fork_registry_locked(&guard, home, &registry)?;
+    super::skill_fork_registry::write_fork_registry_locked(&guard, home, &mut registry)?;
     consent.set(skill_studio_host::telemetry::resolve_consent(
         env_override,
         telemetry_enabled,
@@ -196,6 +196,41 @@ mod tests {
     use skill_studio_core::ports::{OpContext, Ports, Runtime};
     use skill_studio_core::{harness::HarnessCatalog, RuntimeScope};
     use std::sync::Arc;
+
+    #[test]
+    fn first_run_reports_claude_install_method_from_fixture_home_or_drops_the_verified_method() {
+        let home = tempfile::tempdir().unwrap();
+        let method = "native";
+        let config = home.path().join(".claude.json");
+        std::fs::write(
+            &config,
+            serde_json::to_vec(&serde_json::json!({"installMethod": method})).unwrap(),
+        )
+        .unwrap();
+        let scope = RuntimeScope::fixture(home.path());
+        let ports = skill_studio_host::default_ports(
+            home.path().join(".leases"),
+            Arc::new(HarnessCatalog::builtin()),
+        );
+        let runtime = Runtime::new(&scope, ports).unwrap();
+        let report =
+            tauri::async_runtime::block_on(detect_with_runtime(move || Ok(runtime))).unwrap();
+        let row = report
+            .harnesses
+            .iter()
+            .find(|row| row.id.as_str() == "claude-code")
+            .unwrap();
+        assert_eq!(row.install_method.value.as_deref(), Some(method));
+        assert_eq!(
+            row.install_method.evidence.confidence,
+            skill_studio_core::harness::Confidence::VerifiedFromDocs
+        );
+        assert!(row
+            .install_method
+            .evidence
+            .source
+            .contains(config.to_str().unwrap()));
+    }
 
     /// `clean_home_with_no_harness_reaches_the_list_with_zero_harnesses_and_no_error`:
     /// an empty temp `$HOME` (no `ToolLookup`, no config, no sessions) must
@@ -312,7 +347,7 @@ mod tests {
             search_project_folders: true,
             saved_at: "2026-09-18T00:00:00Z".to_string(),
         });
-        super::super::skill_fork_registry::write_fork_registry(&home, &registry).unwrap();
+        super::super::skill_fork_registry::write_fork_registry(&home, &mut registry).unwrap();
 
         let reloaded = super::super::skill_fork_registry::read_fork_registry(&home).unwrap();
         assert_eq!(

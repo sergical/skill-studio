@@ -1034,7 +1034,7 @@ pub struct HarnessDetection {
     pub executable_on_path: Option<bool>,
     /// Version, proven by `<bin> --version`.
     pub version: DetectedString,
-    /// Install method, inferred from the resolved executable path.
+    /// Install method from vendor metadata, or inferred from the executable path.
     pub install_method: DetectedString,
     /// The vendor config file exists under the home root.
     pub configured: bool,
@@ -1058,8 +1058,7 @@ pub struct DetectionPorts<'a> {
     pub home: &'a Path,
     /// `PATH` lookup; `None` means every executable reads as absent.
     pub tools: Option<&'a dyn ToolLookup>,
-    /// Process runner for the `--version` probe; `None` means version and
-    /// install method stay `Unknown` even when the binary is found.
+    /// Process runner for the `--version` probe; `None` leaves the version unknown.
     pub spawner: Option<&'a dyn ProcessSpawner>,
 }
 
@@ -1113,12 +1112,22 @@ pub trait HarnessAdapter: Send + Sync {
         ports: &DetectionPorts<'_>,
         cancel: &dyn CancelToken,
     ) -> HarnessDetection {
+        let id = self.id();
         let executable = ports.tools.and_then(|lookup| {
             self.binary_names()
                 .iter()
                 .find_map(|bin| lookup.find_binary(bin))
         });
-        let (version, install_method) = probe_version(self, executable.as_ref(), ports, cancel);
+        let version = probe_version(self, executable.as_ref(), ports, cancel);
+        let inferred = || match executable.as_ref() {
+            Some(path) => infer_install_method(ports.fs, path),
+            None => DetectedString::unknown("no executable on PATH"),
+        };
+        let install_method = if id.as_str() == AgentId::CLAUDE_CODE {
+            read_claude_install_method(ports.fs, ports.home).unwrap_or_else(inferred)
+        } else {
+            inferred()
+        };
         let configured = self
             .config_relative_path()
             .is_some_and(|rel| ports.fs.symlink_metadata(&ports.home.join(rel)).is_ok());
@@ -1136,7 +1145,7 @@ pub trait HarnessAdapter: Send + Sync {
             (false, _, _) => HarnessState::NotFound,
         };
         HarnessDetection {
-            id: self.id(),
+            id,
             display_name: self.display_name().to_string(),
             state,
             executable_on_path: executable
@@ -1151,9 +1160,8 @@ pub trait HarnessAdapter: Send + Sync {
     }
 }
 
-/// Runs `<bin> --version` when both a binary and a spawner exist, and
-/// infers the install method from the resolved path. Any missing
-/// precondition (no binary, no spawner, a non-zero exit, a spawn error, a
+/// Runs `<bin> --version` when both a binary and a spawner exist. Any
+/// missing precondition (no binary, no spawner, a non-zero exit, a spawn error, a
 /// probe that outlives `timeout_ms`) reports `Unknown` with the reason as
 /// evidence rather than guessing. The host spawner owns probe caching.
 fn probe_version(
@@ -1161,18 +1169,12 @@ fn probe_version(
     executable: Option<&PathBuf>,
     ports: &DetectionPorts<'_>,
     cancel: &dyn CancelToken,
-) -> (DetectedString, DetectedString) {
+) -> DetectedString {
     let Some(path) = executable else {
-        return (
-            DetectedString::unknown("no executable on PATH"),
-            DetectedString::unknown("no executable on PATH"),
-        );
+        return DetectedString::unknown("no executable on PATH");
     };
     let Some(spawner) = ports.spawner else {
-        return (
-            DetectedString::unknown("no ProcessSpawner port"),
-            DetectedString::unknown("no ProcessSpawner port"),
-        );
+        return DetectedString::unknown("no ProcessSpawner port");
     };
     let spec = ProcessSpec {
         program: path.display().to_string(),
@@ -1189,10 +1191,7 @@ fn probe_version(
                 path.display(),
                 err.message
             );
-            return (
-                DetectedString::unknown(reason.clone()),
-                DetectedString::unknown(reason),
-            );
+            return DetectedString::unknown(reason);
         }
     };
     if output.timed_out {
@@ -1201,30 +1200,67 @@ fn probe_version(
             path.display(),
             spec.timeout_ms
         );
-        return (
-            DetectedString::unknown(reason.clone()),
-            DetectedString::unknown(reason),
-        );
+        return DetectedString::unknown(reason);
     }
     if output.status != Some(0) {
         let reason = format!("{} --version exited {:?}", path.display(), output.status);
-        return (
-            DetectedString::unknown(reason.clone()),
-            DetectedString::unknown(reason),
-        );
+        return DetectedString::unknown(reason);
     }
-    let version = match adapter.parse_version(&output.stdout) {
+    match adapter.parse_version(&output.stdout) {
         Some(value) => DetectedString::known(value, Evidence::verified("--version stdout")),
         None => DetectedString::unknown("--version printed nothing usable"),
-    };
-    (version, infer_install_method(ports.fs, path))
+    }
 }
 
-/// Infers an install method from the resolved executable's path. No vendor
-/// marker is read here - Claude Code's own `~/.claude.json` `installMethod`
-/// field is a documented but unread signal, a follow-up - so every row uses
-/// the same "inferred from path" heuristic `harness-detection.md` describes
-/// for Codex, `OpenCode`, and pi.
+/// Only `installMethod` from a top-level object; every other value in
+/// `.claude.json` is skipped without being kept.
+struct ClaudeConfig {
+    install_method: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ClaudeConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ObjectOnly;
+        impl<'de> serde::de::Visitor<'de> for ObjectOnly {
+            type Value = ClaudeConfig;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a JSON object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<ClaudeConfig, A::Error> {
+                let mut install_method = None;
+                while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
+                    if key == "installMethod" {
+                        install_method = map.next_value::<Option<String>>()?;
+                    } else {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                Ok(ClaudeConfig { install_method })
+            }
+        }
+        deserializer.deserialize_map(ObjectOnly)
+    }
+}
+
+fn read_claude_install_method(fs: &dyn ScopeFs, home: &Path) -> Option<DetectedString> {
+    let path = home.join(".claude.json");
+    let bytes = fs.read_capped(&path, 1024 * 1024).ok()?;
+    let config: ClaudeConfig = serde_json::from_slice(&bytes).ok()?;
+    let method = config.install_method?;
+    let method = method.trim();
+    if method.is_empty() {
+        return None;
+    }
+    Some(DetectedString::known(
+        method,
+        Evidence::verified(&format!("{}#installMethod", path.display())),
+    ))
+}
+
+/// Infers an install method from the resolved executable's path.
 fn infer_install_method(fs: &dyn ScopeFs, path: &Path) -> DetectedString {
     // A shim link (`codex` -> `lib/node_modules/...`) names its install only
     // through its target.
@@ -1601,6 +1637,108 @@ mod tests {
         assert_eq!(method.value.as_deref(), Some("npm"), "got {method:?}");
     }
 
+    #[test]
+    fn claude_install_method_uses_its_file_instead_of_the_binary_path_or_reports_the_guessed_method(
+    ) {
+        let home = Path::new("/home");
+        let executable = PathBuf::from("/usr/local/Cellar/claude/1/bin/claude");
+        let mut tools = FakeToolLookup::default();
+        tools.binaries.insert("claude".into(), executable.clone());
+        let mut spawner = crate::testing::FakeProcessSpawner::default();
+        spawner
+            .outputs
+            .insert(executable.display().to_string(), ("claude 1.0".into(), 0));
+        for (config, expected, confidence) in [
+            (
+                r#"{"installMethod":"native"}"#,
+                "native",
+                Confidence::VerifiedFromDocs,
+            ),
+            ("{}", "homebrew", Confidence::Inferred),
+            (
+                r#"{"installMethod":null}"#,
+                "homebrew",
+                Confidence::Inferred,
+            ),
+            (r#"{"installMethod":""}"#, "homebrew", Confidence::Inferred),
+            ("not JSON", "homebrew", Confidence::Inferred),
+            (r#"["native"]"#, "homebrew", Confidence::Inferred),
+        ] {
+            let fs = FixtureBuilder::new()
+                .dir("/home")
+                .file("/home/.claude.json", config.as_bytes())
+                .build_fs();
+            let ports = DetectionPorts {
+                fs: &fs,
+                home,
+                tools: Some(&tools),
+                spawner: Some(&spawner),
+            };
+            let detection = ClaudeCodeAdapter.detect(&ports);
+            assert_eq!(
+                detection.install_method.value.as_deref(),
+                Some(expected),
+                "config {config} returned a guessed or missing method"
+            );
+            assert_eq!(detection.install_method.evidence.confidence, confidence);
+            if confidence == Confidence::VerifiedFromDocs {
+                assert!(detection
+                    .install_method
+                    .evidence
+                    .source
+                    .contains("/home/.claude.json"));
+            }
+        }
+    }
+
+    #[test]
+    fn claude_install_method_survives_a_failed_version_probe_or_loses_the_verified_file_evidence() {
+        let fs = FixtureBuilder::new()
+            .dir("/home")
+            .file("/home/.claude.json", br#"{"installMethod":"native"}"#)
+            .build_fs();
+        let mut tools = FakeToolLookup::default();
+        tools
+            .binaries
+            .insert("claude".into(), PathBuf::from("/usr/local/bin/claude"));
+        let ports = DetectionPorts {
+            fs: &fs,
+            home: Path::new("/home"),
+            tools: Some(&tools),
+            spawner: Some(&TimedOutSpawner),
+        };
+        let detection = ClaudeCodeAdapter.detect(&ports);
+        assert!(detection.version.value.is_none());
+        assert_eq!(detection.install_method.value.as_deref(), Some("native"));
+        assert_eq!(
+            detection.install_method.evidence.confidence,
+            Confidence::VerifiedFromDocs
+        );
+    }
+
+    #[test]
+    fn claude_path_fallback_survives_a_failed_version_probe_or_reports_an_unknown_method() {
+        let fs = FixtureBuilder::new().dir("/home").build_fs();
+        let mut tools = FakeToolLookup::default();
+        tools.binaries.insert(
+            "claude".into(),
+            PathBuf::from("/usr/local/Cellar/claude/1/bin/claude"),
+        );
+        let ports = DetectionPorts {
+            fs: &fs,
+            home: Path::new("/home"),
+            tools: Some(&tools),
+            spawner: Some(&TimedOutSpawner),
+        };
+        let detection = ClaudeCodeAdapter.detect(&ports);
+        assert!(detection.version.value.is_none());
+        assert_eq!(detection.install_method.value.as_deref(), Some("homebrew"));
+        assert_eq!(
+            detection.install_method.evidence.confidence,
+            Confidence::Inferred
+        );
+    }
+
     /// A spawner whose every probe outlives its deadline.
     struct TimedOutSpawner;
 
@@ -1632,8 +1770,7 @@ mod tests {
         };
         let executable = PathBuf::from("/usr/local/bin/claude");
 
-        let (version, _) =
-            probe_version(&ClaudeCodeAdapter, Some(&executable), &ports, &NeverCancel);
+        let version = probe_version(&ClaudeCodeAdapter, Some(&executable), &ports, &NeverCancel);
 
         assert!(
             version.value.is_none(),

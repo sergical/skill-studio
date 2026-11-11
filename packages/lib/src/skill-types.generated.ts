@@ -32,6 +32,7 @@ export type HarnessId = "claude-code" | "codex" | "open-code" | "pi";
  * to hand-edit a `.jsonc` file rather than silently showing no disables.
  */
 export type OpencodeConfigKind = "json" | "jsonc";
+export type BackgroundWorker = "scan" | "invocations" | "update_check";
 /**
  * Agent target identifier
  */
@@ -705,6 +706,17 @@ export interface UpstreamAhead {
    */
   owner_ids: string[];
 }
+export interface BackgroundStatus {
+  revision: number;
+  tasks: BackgroundTaskStatus[];
+}
+export interface BackgroundTaskStatus {
+  worker: BackgroundWorker;
+  running: boolean;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  last_error: string | null;
+}
 /**
  * Agent target with paths resolved
  */
@@ -1250,7 +1262,7 @@ export interface Evidence {
   confidence: "verified-from-docs" | "inferred" | "unknown";
 }
 /**
- * Install method, inferred from the resolved executable path.
+ * Install method from vendor metadata, or inferred from the executable path.
  */
 export interface DetectedString1 {
   /**
