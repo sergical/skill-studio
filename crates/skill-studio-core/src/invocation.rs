@@ -1,30 +1,33 @@
 //! Invocation edits preserve all bytes outside the requested scalar values.
+use serde_json::Value;
+
 use crate::frontmatter::{invocation_policy, parse_frontmatter, InvocationPolicy};
+use crate::yaml;
 
 fn key_value(line: &str, key: &str) -> Option<usize> {
     let (name, _) = line.split_once(':')?;
-    let parsed: serde_yaml::Value = serde_yaml::from_str(name.trim()).ok()?;
-    (parsed.as_str() == Some(key)).then_some(name.len() + 1)
+    let parsed: String = yaml::from_str(name.trim()).ok()?;
+    (parsed == key).then_some(name.len() + 1)
 }
 
-fn parse_yaml(content: &str) -> Result<serde_yaml::Value, String> {
+fn parse_yaml(content: &str) -> Result<Value, String> {
     if content.trim().is_empty() {
-        Ok(serde_yaml::Value::Mapping(Default::default()))
+        Ok(Value::Object(serde_json::Map::new()))
     } else {
-        serde_yaml::from_str(content).map_err(|e| e.to_string())
+        yaml::from_str(content).map_err(|e| e.to_string())
     }
 }
 
-fn set_value(root: &mut serde_yaml::Value, keys: &[&str], flag: bool) -> Result<(), String> {
+fn set_value(root: &mut Value, keys: &[&str], flag: bool) -> Result<(), String> {
     let map = root
-        .as_mapping_mut()
+        .as_object_mut()
         .ok_or("invocation YAML is not a mapping")?;
     if keys.len() == 1 {
         map.insert(keys[0].into(), flag.into());
     } else {
         let child = map
-            .entry(keys[0].into())
-            .or_insert_with(|| serde_yaml::Value::Mapping(Default::default()));
+            .entry(keys[0])
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
         set_value(child, &keys[1..], flag)?;
     }
     Ok(())

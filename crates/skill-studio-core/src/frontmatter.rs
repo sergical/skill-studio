@@ -10,6 +10,8 @@ use std::collections::{BTreeMap, HashMap};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::yaml;
+
 /// `SKILL.md` frontmatter, per the agentskills.io spec. Unknown keys are
 /// ignored by default serde behavior, so agent-specific extensions in a
 /// skill's frontmatter don't break parsing.
@@ -25,8 +27,9 @@ pub struct SkillFrontmatter {
     /// Optional, spec caps this at 500 chars.
     pub compatibility: Option<String>,
     /// Tolerate non-string metadata values (numbers, lists, nested maps).
-    #[schemars(with = "Option<HashMap<String, serde_json::Value>>")]
-    pub metadata: Option<HashMap<String, serde_yaml::Value>>,
+    #[schemars(!default, with = "Option<HashMap<String, serde_json::Value>>")]
+    #[serde(default, deserialize_with = "yaml::deserialize_metadata")]
+    pub metadata: Option<HashMap<String, yaml::Value>>,
     /// Comma-separated tool allowlist.
     #[serde(rename = "allowed-tools")]
     pub allowed_tools: Option<String>,
@@ -125,12 +128,16 @@ pub fn parse_frontmatter(content: &str) -> FrontmatterParseResult {
     let mut yaml_block = String::new();
     for line in lines {
         if line.trim() == "---" {
-            return match serde_yaml::from_str(&yaml_block) {
+            return match yaml::from_str(&yaml_block) {
                 Ok(frontmatter) => FrontmatterParseResult::Valid(frontmatter),
                 Err(error) => {
                     let location = error.location();
-                    let line = location.as_ref().map_or(1, |location| location.line() + 1);
-                    let column = location.as_ref().map_or(1, serde_yaml::Location::column);
+                    let line = location
+                        .as_ref()
+                        .map_or(2, |location| location.line() as usize + 1);
+                    let column = location
+                        .as_ref()
+                        .map_or(1, |location| location.column() as usize);
                     let rendered = error.to_string();
                     let message = rendered
                         .rsplit_once(" at line ")
@@ -175,15 +182,17 @@ pub fn frontmatter_fields(content: &str) -> BTreeMap<String, String> {
     if !has_closing_fence {
         return BTreeMap::new();
     }
-    let Ok(serde_yaml::Value::Mapping(map)) = serde_yaml::from_str(&yaml_block) else {
+    let Ok(yaml::Value::Map(map)) = yaml::from_str(&yaml_block) else {
         return BTreeMap::new();
     };
     map.into_iter()
         .filter_map(|(k, v)| {
-            let key = k.as_str()?.to_string();
+            let yaml::Value::String(key) = k else {
+                return None;
+            };
             let value = match v {
-                serde_yaml::Value::String(s) => s,
-                other => serde_yaml::to_string(&other)
+                yaml::Value::String(s) => s,
+                other => yaml::to_string(&other)
                     .unwrap_or_default()
                     .trim()
                     .to_string(),
