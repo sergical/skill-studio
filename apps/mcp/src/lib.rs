@@ -601,7 +601,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Turn skills off for every agent by moving them aside. Pass skills as a list of names, or deployment_id for one copy. All names are checked before any move. Each result has an event_id. Reverse park with unpark.",
+        description = "Turn skills off for every agent by moving them aside. Pass skills as a list of names, or deployment_id for one copy. All names are checked before any move. Each result has an event_id. Undo with unpark.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn park(
@@ -688,7 +688,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Turn parked skills back on for every agent. Pass skills as a list of names, or deployment_id for one copy. All names are checked before any move. This reverses park.",
+        description = "Turn parked skills back on for every agent. Pass skills as a list of names, or deployment_id for one copy. All names are checked before any move. Undo with park.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn unpark(
