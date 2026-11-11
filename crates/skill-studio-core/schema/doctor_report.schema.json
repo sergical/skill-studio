@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "DoctorReport",
-  "description": "Result of `doctor`: one pass over every lifecycle invariant in\n`docs/action-map/lifecycle-states.md`'s Invariants section, over the\nwhole scope (every root `scan` knows, every registry and lockfile\nentry, the quarantine dirs, the journal), independent of any single\ncommand's own rollback logic.",
+  "description": "Result of `doctor`: one pass over every lifecycle invariant in\n`docs/flows.md`, over the\nwhole scope (every root `scan` knows, every registry and lockfile\nentry, the quarantine dirs, the journal), independent of any single\ncommand's own rollback logic.",
   "type": "object",
   "properties": {
     "listing_cost": {
@@ -218,7 +218,7 @@
       ]
     },
     "DoctorInvariant": {
-      "description": "One of the six doctor invariants from `lifecycle-states.md`. Carries\n`Serialize`/`Deserialize`/`JsonSchema` (unlike the rest of this\ndetect-only module) because `ops::doctor`'s [`crate::dto::DoctorReport`]\ncrosses the CLI/desktop/MCP boundary and needs to name which invariant a\nviolation is.",
+      "description": "One of the six doctor invariants from `docs/flows.md`. Carries\n`Serialize`/`Deserialize`/`JsonSchema` (unlike the rest of this\ndetect-only module) because `ops::doctor`'s [`crate::dto::DoctorReport`]\ncrosses the CLI/desktop/MCP boundary and needs to name which invariant a\nviolation is.",
       "oneOf": [
         {
           "description": "1. Every link resolves inside its root.",

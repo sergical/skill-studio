@@ -230,7 +230,7 @@ mod tests {
     /// case - most machines have no dotagents skills).
     /// Expectation: `read_dotagents_ledger` returns an empty `Vec`.
     /// A failure here means a fresh install throws instead of reading as
-    /// empty, per shared-root.md's "missing files mean empty, not error".
+    /// empty: missing files mean empty, not an error.
     #[test]
     fn dotagents_ledger_missing_files_read_as_empty_not_error_or_names_the_thrown_error() {
         let fs = FixtureBuilder::new().dir("/home/.agents").build_fs();

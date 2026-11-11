@@ -10,7 +10,7 @@
 //!
 //! The config directory itself is not resolved here: `~/.config/opencode`
 //! is only `OpenCode`'s *default*, and `XDG_CONFIG_HOME`/`OPENCODE_CONFIG_DIR`
-//! move it (`docs/action-map/harnesses/opencode.md`). Per this crate's own
+//! move it (`docs/agent-skill-conventions.md`). Per this crate's own
 //! rule against reading environment variables, the caller (the host
 //! adapter, `skill_studio_host::opencode_config_dir`) resolves the env
 //! overrides and passes the effective directory in.

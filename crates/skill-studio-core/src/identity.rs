@@ -234,22 +234,6 @@ impl RootRef {
     }
 }
 
-/// A root after resolution.
-///
-/// Invariant: `lexical` is what the harness reads; `canonical` is where the
-/// bytes live. They differ when the root is a symlink (whole-dir link).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ResolvedRoot {
-    /// The root reference.
-    pub root: RootRef,
-    /// Path as the harness names it.
-    pub lexical: PathBuf,
-    /// Canonical path, or `None` when the root does not exist.
-    pub canonical: Option<PathBuf>,
-    /// True when `lexical` is itself a symlink.
-    pub is_link: bool,
-}
-
 /// Opaque deployment id.
 ///
 /// Invariant: the string starts with `dep:v1/`. Its internal layout is a core

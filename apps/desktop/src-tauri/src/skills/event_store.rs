@@ -163,7 +163,7 @@ fn open_locked(db_path: &Path) -> Result<Connection, String> {
 /// implementation here would only duplicate that logic, untested. Nothing
 /// here reroutes the five-phase `events` table write path above through it
 /// yet - that adoption is a later slice (see
-/// `docs/action-map/events-and-history.md`) - but `lib.rs`'s startup
+/// `docs/flows.md`) - but `lib.rs`'s startup
 /// reconciliation now calls `skill_studio_core::journal::reconcile`
 /// against this store directly.
 pub struct EventStore {

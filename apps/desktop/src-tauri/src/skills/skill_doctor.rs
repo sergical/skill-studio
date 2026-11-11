@@ -1,7 +1,7 @@
 // ============================================================================
 // Skills Module - skill_doctor
 // Unit 5.3: a thin adapter over `skill_studio_core::ops::doctor`, the op that
-// runs all six lifecycle invariants (`docs/action-map/lifecycle-states.md`)
+// runs all six lifecycle invariants (`docs/flows.md`)
 // over the whole scope rather than one skill at a time the way
 // `ops::fix_skill`'s per-skill checks do. `run_doctor` is called from
 // `skill_refresh::init`'s startup sweep, which runs once after the first

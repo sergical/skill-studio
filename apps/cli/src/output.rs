@@ -703,6 +703,12 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
     }
     type SchemaFn = fn() -> schemars::Schema;
     let schemas: &[(&str, SchemaFn)] = &[
+        ("extras_request", || {
+            schemars::schema_for!(skill_studio_core::extras::ExtrasRequest)
+        }),
+        ("extras_report", || {
+            schemars::schema_for!(skill_studio_core::extras::ExtrasReport)
+        }),
         ("agent_off_request", || {
             schemars::schema_for!(skill_studio_core::dto::AgentOffRequest)
         }),
@@ -774,6 +780,12 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         ("doctor_request", || {
             schemars::schema_for!(skill_studio_core::dto::DoctorRequest)
         }),
+        ("invocation_request", || {
+            schemars::schema_for!(skill_studio_core::ops_invocation::InvocationRequest)
+        }),
+        ("invocation_report", || {
+            schemars::schema_for!(skill_studio_core::ops_invocation::InvocationReport)
+        }),
         ("doctor_report", || schemars::schema_for!(DoctorReport)),
         ("park_request", || {
             schemars::schema_for!(skill_studio_core::dto::ParkRequest)
@@ -815,4 +827,50 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         println!("wrote {}", path.display());
     }
     ExitCode::SUCCESS
+}
+
+/// Prints declaration names and paths. No configuration values are available here.
+pub fn print_extras_table(envelope: &ResultEnvelope<skill_studio_core::extras::ExtrasReport>) {
+    print_errors(envelope);
+    if let Some(report) = &envelope.data {
+        for row in &report.entries {
+            let scope = row
+                .project
+                .as_ref()
+                .map_or_else(|| row.scope.clone(), |p| format!("project {}", p.display()));
+            println!(
+                "{}  {}  {}  {}  {}  {}  {}",
+                row.harness,
+                scope,
+                row.kind,
+                row.name.as_deref().unwrap_or("-"),
+                row.count,
+                row.path.display(),
+                row.status
+            );
+        }
+    }
+}
+
+pub fn print_invocation_table(
+    envelope: &ResultEnvelope<skill_studio_core::ops_invocation::InvocationReport>,
+) {
+    print_errors(envelope);
+    if let Some(report) = &envelope.data {
+        for skill in &report.skills {
+            for d in &skill.deployments {
+                println!(
+                    "{} {} {:?}{} {}",
+                    skill.skill.0.as_str(),
+                    d.harness.as_str(),
+                    d.mode,
+                    if skill.mismatch { " MISMATCH" } else { "" },
+                    d.path.display()
+                );
+            }
+        }
+        for id in &report.event_ids {
+            println!("Undo: skill-studio restore --event-id {}", id.0);
+        }
+    }
 }

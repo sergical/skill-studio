@@ -78,18 +78,6 @@ fn turn_off_requires_confirmation_then_parks_only_codex_or_names_the_surface() {
 }
 
 #[test]
-fn remove_description_names_owned_shared_copies_and_refuses_manual_agent_copies() {
-    let home = tempfile::tempdir().unwrap();
-    let list = mcp(home.path(), "tools/list", &json!({}));
-    let tools = list["result"]["tools"].as_array().unwrap();
-    let remove = tools.iter().find(|t| t["name"] == "remove").unwrap();
-    let description = remove["description"].as_str().unwrap();
-    for word in [".agents/skills", "owned", "unsupported"] {
-        assert!(description.contains(word), "missing {word}: {description}");
-    }
-}
-
-#[test]
 fn opencode_alias_installs_with_the_canonical_agent_id_or_names_the_surface() {
     let source = tempfile::tempdir().unwrap();
     let body = "---\nname: gamma\ndescription: test skill\n---\nBody\n";

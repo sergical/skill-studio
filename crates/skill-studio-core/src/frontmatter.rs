@@ -77,7 +77,7 @@ impl FrontmatterParseResult {
 }
 
 /// The three invocation-control states a skill's frontmatter can express.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum InvocationPolicy {
     /// Both explicit (`/name`) and model auto-invoke are available.

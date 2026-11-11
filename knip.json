@@ -20,9 +20,6 @@
     "apps/server": {
       "project": ["src/**/*.ts"]
     },
-    "apps/tui": {
-      "project": ["src/**/*.{ts,tsx}"]
-    },
     "packages/lib": {
       "project": ["src/**/*.{ts,tsx}"],
       "entry": ["src/skill-types.generated.ts"]

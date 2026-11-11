@@ -29,13 +29,16 @@ use skill_studio_lib::skills::skill_fork::PullResult;
 use skill_studio_lib::skills::skill_fork_registry::{ForkRecord, PackMember};
 use skill_studio_lib::skills::skill_frontmatter_repair::FrontmatterRepairPreview;
 use skill_studio_lib::skills::skill_invocation::InvocationTarget;
-use skill_studio_lib::skills::skill_pack::{PackInfo, UpdatePackResult};
 use skill_studio_lib::skills::skill_project_folders::{ProjectFolder, ProjectFolderSource};
 use skill_studio_lib::skills::skill_refresh::{DiscoverySourceSetting, SkillSnapshot};
 
 #[derive(JsonSchema)]
 #[allow(dead_code)]
 struct WireTypes {
+    extras_report: skill_studio_core::extras::ExtrasReport,
+    extras_request: skill_studio_core::extras::ExtrasRequest,
+    invocation_request: skill_studio_core::ops_invocation::InvocationRequest,
+    invocation_report: skill_studio_core::ops_invocation::InvocationReport,
     skill_snapshot: SkillSnapshot,
     background_status: skill_studio_lib::skills::background_work::BackgroundStatus,
     agent_target: AgentTarget,
@@ -55,8 +58,6 @@ struct WireTypes {
     pull_result: PullResult,
     frontmatter_repair_preview: FrontmatterRepairPreview,
     invocation_heatmap: InvocationHeatmap,
-    pack_info: PackInfo,
-    update_pack_result: UpdatePackResult,
     skill_event: SkillEventDto,
     pack_member: PackMember,
     skill_invocation: SkillInvocation,

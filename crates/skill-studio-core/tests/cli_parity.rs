@@ -20,7 +20,7 @@
 //! `ops`'s own surrounding bookkeeping (the destination-exists check,
 //! `link_claude_code`'s tolerance of an already-existing link, the final
 //! on-disk tree) matches the recorded `after/` state byte for byte - the
-//! `docs/action-map/definition-of-done.md` check 4 parity bar.
+//! `docs/flows.md` parity requirements.
 //!
 //! Divergences this comparison found are named, not hidden: see
 //! [`KNOWN_DIVERGENCES`]. Comparisons skip exactly the field/path a table

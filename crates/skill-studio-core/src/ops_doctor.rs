@@ -1,5 +1,5 @@
 //! `ops::doctor`: one read-only pass over every lifecycle invariant named
-//! in `docs/action-map/lifecycle-states.md`'s Invariants section, over the
+//! in `docs/flows.md`, over the
 //! whole scope the running `Runtime` knows - not one skill at a time, the
 //! way `ops::fix_skill` runs invariants 1-5 scoped to a single skill while
 //! repairing what it can. `doctor` repairs nothing; it only names what it

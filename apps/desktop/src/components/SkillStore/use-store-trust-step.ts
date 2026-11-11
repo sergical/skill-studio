@@ -34,7 +34,7 @@ interface UseStoreTrustStepArgs {
   applyOperationEvent: (incoming: AddSkillOperationEvent) => void;
   // Passed in rather than imported from `skill-api.ts` directly, so this file
   // does not need the same layering exemption `SkillStoreInstallFlow.tsx` has
-  // (plan.md section 7: components go through the store, not straight to IPC).
+  // (components go through the store, not straight to IPC).
   cancelAddSkillOperation: (operationId: string) => Promise<AddSkillOperationEvent>;
   confirmAddSkillTrust: (
     operationId: string,

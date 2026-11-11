@@ -5,12 +5,7 @@
 // see that script and `docs/spec-core-primitives.md` section 10's PR 3 row)
 // plus the UI-only types and helpers that have no Rust counterpart.
 //
-// `ParsedSkillSource` and `SkillRunSummary` are deliberately NOT re-exported
-// here even though the generator also produces them: `skill-source-parse.ts`
-// and `skill-run-history-types.ts` are those two types' canonical homes
-// (the frontend builds the former; both are already exported from
-// `index.ts`), and re-exporting a second copy of the same name from this
-// file would make every import of it ambiguous.
+// `ParsedSkillSource` is exported from skill-source-parse.ts.
 // ============================================================================
 
 export type {
@@ -26,7 +21,6 @@ export type {
   FrontmatterRepairApplyMode,
   FrontmatterRepairKind,
   InvocationConflictChoice,
-  HarnessId,
   OpencodeConfigKind,
   DisabledBy,
   AddMethodDefaults,
@@ -49,7 +43,6 @@ export type {
   InstallResult,
   InstallPreferences,
   InvocationHeatmap,
-  PackInfo,
   PackMember,
   PaginatedSkillsResponse,
   SkillSearchResult,
@@ -78,7 +71,6 @@ export type {
   UpdateCheckSummary,
   UpstreamAhead,
   SkillsShAccessInfo,
-  UpdatePackResult,
   LifecycleTarget,
   TrackedProjects,
   DiscoverySourceSetting,
@@ -140,21 +132,6 @@ export interface Toast {
   /** A secondary button - see `ToastContainer`. */
   action?: { label: string; onClick: () => void };
 }
-
-/**
- * First-class agents featured for quick selection in the agent-target
- * picker. These are the install targets `npx skills --agent <id>` accepts,
- * not every harness the scanner reads: Grok Build is scanned for coverage
- * and health but is not an `npx skills` install target, so it is excluded
- * here (see AgentId::GrokBuild rejection in skills/commands.rs).
- */
-export const COMMON_AGENTS: import("./skill-types.generated").AgentId[] = [
-  "claude-code",
-  "codex",
-  "open-code",
-  "pi",
-  "cursor",
-];
 
 /** Badge label for each source_kind, shared by SkillBrowser and SkillDetailPanel. */
 export const SOURCE_KIND_LABELS = {

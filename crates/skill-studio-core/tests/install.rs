@@ -426,7 +426,7 @@ fn install_preferences_round_trips_a_saved_method_and_harnesses() {
 /// own, matching `run_park` for `ops::park`), so the one thing that could
 /// differ between the CLI and a direct call is the disk state left behind;
 /// this asserts that state directly against the layout
-/// `docs/action-map/install.md` names for `Copy`.
+/// `docs/flows.md` names for `Copy`.
 ///
 /// Caveat, tracked as a follow-up: this is not yet a byte-for-byte
 /// comparison against a captured CLI stdout/stderr trace fixture, since
@@ -1243,7 +1243,7 @@ fn walk_files_relative(root: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
 }
 
 /// `cli_add_matches_the_npx_skills_add_trace_byte_for_byte_apart_from_timestamps_or_names_the_diverging_file`
-/// (issue #163's parity checkbox): `docs/action-map/definition-of-done.md`
+/// (issue #163's parity checkbox): `docs/flows.md`
 /// check 4's parity test (nine recorded CLI traces, diffed against our own
 /// result tree) is unit 5.4's - recording a real `npx skills add` run needs
 /// a real `npx`, which this worktree cannot do. This is its narrower stand-in

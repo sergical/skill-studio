@@ -15,7 +15,6 @@ function snapshot(revision: number, scannedAt: string): SkillSnapshot {
     invocations: [],
     heatmap: { days: {} },
     scanned_at: scannedAt,
-    last_test_by_skill: {},
     update_check: {
       checked_at: null,
       gh_status: "ok",

@@ -19,7 +19,6 @@ fn main() {
         Some(home.clone().into_os_string())
     );
     let cache = home.join(".cache/perf-invocations.json");
-    let runs = home.join(".data/runs");
     let updates = home.join(".data/updates.json");
     let mut samples = Vec::new();
     let mut outcomes = Vec::new();
@@ -33,7 +32,7 @@ fn main() {
         let (snapshot, _) = build_snapshot(
             &home,
             &mut SkillInvocationIndex::default(),
-            BuildPaths::new(&cache, &runs, &updates),
+            BuildPaths::new(&cache, &updates),
             chrono::Utc::now(),
         )
         .expect("build fixture snapshot");
