@@ -1,23 +1,10 @@
 // ============================================================================
-// useKeptHarnesses - the harness ids the user kept on the first-run screen.
-// Empty until the saved choice loads, and when there is none.
+// useKeptHarnesses - the saved agent choice shared with Settings and welcome.
 // ============================================================================
 
-import { useEffect, useState } from "react";
-import { getHarnessesChoice } from "../lib/skill-api";
+import { useAppStore } from "../store/appStore";
 
 export function useKeptHarnesses(): string[] {
-  const [kept, setKept] = useState<string[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    getHarnessesChoice()
-      .then((choice) => {
-        if (!cancelled) setKept(choice?.kept ?? []);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  return kept;
+  const kept = useAppStore((state) => state.harnessDetection.choice?.kept);
+  return kept ?? [];
 }

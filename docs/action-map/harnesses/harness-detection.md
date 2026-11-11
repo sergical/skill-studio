@@ -29,7 +29,7 @@ Unknown is a value, not an error. A row the app cannot prove prints Unknown; it 
 
 ## PATH resolution
 
-macOS launches a desktop app with the minimal `launchd` PATH, so `~/.local/bin`, `/opt/homebrew/bin`, and version-manager shims are missing. The app already runs the login shell once to read `$EDITOR` (apps/desktop/src-tauri/src/skills/skill_editor.rs, cached in a `OnceLock`). Detection reuses that single spawn: ask the login shell for `PATH`, then resolve each binary name in Rust against that PATH and check the executable bit. This avoids one shell per harness and avoids aliases and shell functions, which `command -v` would return as non-paths.
+macOS launches a desktop app with the minimal `launchd` PATH, so `~/.local/bin`, `/opt/homebrew/bin`, and version-manager shims are missing. The host reads `PATH`, `VISUAL`, and `EDITOR` in one marker-delimited login-shell probe, cached once per process. Detection and the editor picker share that result. Resolve each binary name in Rust against the reported PATH and check the executable bit. This avoids one shell per harness and avoids aliases and shell functions, which `command -v` would return as non-paths.
 
 Fallback directories, checked when the PATH lookup fails: `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/.npm-global/bin`, `~/.volta/bin`, `~/.bun/bin`, `~/.nvm/versions/node/*/bin`, and `/Applications/*.app/Contents/Resources` for bundled CLIs. A hit from a fallback is reported as "not on PATH" so the user knows why the harness's own terminal may differ.
 
@@ -106,3 +106,19 @@ Both are in the app's agent list for install targets but are not first-class Act
 - OpenCode rows marked "confirm v2" need the v2 docs page from sources.md.
 - Grok Build binary name and config folder.
 - The Codex desktop version signal when Codex ships as a standalone app rather than inside ChatGPT.app.
+
+## Current process adapter
+
+`RealProcessSpawner` forwards cancellation and kills the probe's process group when execution stops. Reader waits are bounded after timeout and normal exit. Version probes use the two-second execution budget from core.
+
+Successful `--version` output is cached by invocation path, resolved target, size, and mtime. Keeping the invocation path preserves shim names. Retargeting a shim invalidates its entry even when size and mtime match. Failed and timed-out probes are retried. The default cache stays in memory. `with_probe_cache` opts into a bounded app-owned cache file; it writes no agent folder.
+
+## Later launches
+
+Detect on each launch in the blocking pool. A saved choice opens the app
+without waiting for detection. Settings shows the refreshed rows. A newly
+found agent stays off until the user turns it on. Detection never changes
+the choice or writes an agent folder. The version cache is app-owned and
+keys successful probes by invocation path, resolved target, size, and mtime.
+The login shell still runs once per launch; version-cache hits do not remove
+that cost. These are lead defaults for the owner to confirm.

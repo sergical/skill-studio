@@ -145,9 +145,10 @@ pub fn build_runtime_write_at_with_search_dirs(
     ports.tools = Some(Arc::new(
         skill_studio_host::PathToolLookup::with_search_dirs(search_dirs.clone()),
     ));
-    ports.spawner = Some(Arc::new(
-        skill_studio_host::RealProcessSpawner::with_search_path(search_dirs),
-    ));
+    ports.spawner = Some(Arc::new(skill_studio_host::RealProcessSpawner::for_home(
+        home,
+        search_dirs,
+    )));
     Runtime::new(&scope, ports).map_err(|err| err.message)
 }
 
@@ -159,7 +160,16 @@ pub fn build_runtime_write_at_with_search_dirs(
 /// read/write split may need to diverge again.
 pub fn build_runtime_detect() -> Result<Runtime, String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    build_runtime_write_at(&home, &data_root())
+    let data = data_root();
+    let tools = skill_studio_host::LoginShellToolLookup::new();
+    let dirs = tools.dirs().to_vec();
+    let mut runtime = build_runtime_write_at_with_search_dirs(&home, &data, dirs.clone())?;
+    runtime.ports.tools = Some(Arc::new(tools));
+    runtime.ports.spawner = Some(Arc::new(
+        skill_studio_host::RealProcessSpawner::with_search_path(dirs)
+            .with_probe_cache(data.join("cache/version-probes.json")),
+    ));
+    Ok(runtime)
 }
 
 /// Unwraps a `ResultEnvelope` into the plain `Result<T, String>` every
@@ -199,5 +209,72 @@ mod data_root_tests {
                 PathBuf::from("/home/u/.local/share/skill-studio")
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod probe_cache_tests {
+    use super::*;
+
+    #[test]
+    fn repeated_desktop_detection_reuses_unchanged_versions_or_spawns_twice() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let program = bin.join("claude");
+        let source = bin.join("probe.c");
+        std::fs::write(
+            &source,
+            r#"#include <stdio.h>
+#include <string.h>
+int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "--version") == 0) {
+        char calls[4096];
+        snprintf(calls, sizeof(calls), "%s.calls", argv[0]);
+        FILE *f = fopen(calls, "a");
+        if (!f) return 1;
+        fputs("called\n", f); fclose(f);
+    }
+    puts("1.2.3"); return 0;
+}
+"#,
+        )
+        .unwrap();
+        assert!(std::process::Command::new("/usr/bin/cc")
+            .arg(&source)
+            .arg("-o")
+            .arg(&program)
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new(&program)
+            .output()
+            .unwrap()
+            .status
+            .success());
+        for _ in 0..2 {
+            let runtime = build_runtime_write_at_with_search_dirs(
+                home.path(),
+                &home.path().join("data"),
+                vec![bin.clone()],
+            )
+            .unwrap();
+            skill_studio_core::ops::harnesses(
+                &runtime,
+                &skill_studio_core::ports::OpContext::uncancellable(
+                    skill_studio_core::identity::CorrelationId("cache".into()),
+                ),
+                &skill_studio_core::dto::HarnessesRequest {},
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(bin.join("claude.calls"))
+                .unwrap()
+                .lines()
+                .count(),
+            1,
+            "desktop detection spawned the unchanged binary twice"
+        );
     }
 }

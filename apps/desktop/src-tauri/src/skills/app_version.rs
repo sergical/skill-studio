@@ -51,7 +51,7 @@ pub fn changelog_section(
     Ok(rest[..body_end].trim().to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn app_version() -> AppVersion {
     let version = env!("CARGO_PKG_VERSION").to_string();
     let notes = changelog_section(CHANGELOG, &version).ok();

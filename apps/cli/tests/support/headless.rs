@@ -52,10 +52,17 @@ pub fn cli_request(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = skill_studio_host::spawn_retrying_busy(&mut command)
-        .unwrap()
-        .wait_with_output()
-        .unwrap();
+    let mut child = skill_studio_host::spawn_retrying_busy(&mut command).unwrap();
+    if args.first() == Some(&"watch") {
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        return serde_json::from_str(&line).unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
     serde_json::from_slice(&output.stdout)
         .unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&output.stderr)))
 }

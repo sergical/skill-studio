@@ -22,6 +22,7 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 /// The data folder version this build writes and expects. A folder read at
 /// a version higher than this was written by a newer app; see
@@ -91,6 +92,225 @@ impl Fs for RealFs {
         }
         Ok(())
     }
+}
+
+/// Keeps compatible folders locked until the protected store is dropped.
+#[derive(Debug)]
+pub struct DataFolderGuard {
+    _locks: Vec<std::fs::File>,
+}
+
+fn folder_identity(folder: &Path) -> io::Result<std::path::PathBuf> {
+    match folder.canonicalize() {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let absolute = std::path::absolute(folder)?;
+            let parent = absolute.parent().ok_or(error)?;
+            Ok(
+                folder_identity(parent)?.join(absolute.file_name().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "folder has no name")
+                })?),
+            )
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn private_coordination_root(base: &Path, uid: u32) -> io::Result<std::path::PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+
+    let root = base.join(format!("skill-studio-data-locks-{uid}"));
+    match std::fs::DirBuilder::new().mode(0o700).create(&root) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    let metadata = std::fs::symlink_metadata(&root)?;
+    if !metadata.is_dir()
+        || metadata.uid() != uid
+        || metadata.permissions().mode() & 0o7777 != 0o700
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "Coordination folder {} must be owned by user {uid} with mode 0700",
+                root.display()
+            ),
+        ));
+    }
+    Ok(root)
+}
+
+fn coordination_lock(folder: &Path) -> io::Result<std::fs::File> {
+    // CLI and desktop must use the same lock inode even when TMPDIR differs.
+    let root = private_coordination_root(Path::new("/tmp"), rustix::process::geteuid().as_raw())?;
+    let key = skill_studio_core::identity::sha256_hex(folder.as_os_str().as_encoded_bytes());
+    rustix::fs::open(
+        root.join(key),
+        rustix::fs::OFlags::RDWR | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .map(std::fs::File::from)
+    .map_err(io::Error::from)
+}
+
+fn wait_for_lock(
+    lock: &std::fs::File,
+    exclusive: bool,
+    on_retry: &mut impl FnMut(),
+) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let result = if exclusive {
+            lock.try_lock()
+        } else {
+            lock.try_lock_shared()
+        };
+        match result {
+            Ok(()) => return Ok(()),
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                on_retry();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(lock_error(error)),
+        }
+    }
+}
+
+fn lock_error(error: std::fs::TryLockError) -> String {
+    match error {
+        std::fs::TryLockError::WouldBlock => {
+            "Close the other Skill Studio process and try again. It holds the data folder lock."
+                .to_owned()
+        }
+        std::fs::TryLockError::Error(error) => error.to_string(),
+    }
+}
+
+/// Holds a compatible folder without creating or migrating its contents.
+pub fn guard_read_data_folder(folder: &Path) -> Result<DataFolderGuard, String> {
+    let folder = folder_identity(folder).map_err(|error| error.to_string())?;
+    let validate = || {
+        let version = read_version(&RealFs, &folder).map_err(|error| error.to_string())?;
+        check_compatible(version, CURRENT_DATA_VERSION).map_err(newer_data_folder_message)
+    };
+    validate()?;
+    let lock = coordination_lock(&folder).map_err(|error| error.to_string())?;
+    wait_for_lock(&lock, false, &mut || {})?;
+    validate()?;
+    Ok(DataFolderGuard { _locks: vec![lock] })
+}
+
+/// Validates all folders, migrates under exclusive locks, then keeps shared locks.
+pub fn lock_data_folders(folders: &[&Path]) -> Result<DataFolderGuard, String> {
+    lock_data_folders_before_lock(folders, || {})
+}
+
+fn lock_data_folders_before_lock(
+    folders: &[&Path],
+    before_lock: impl FnOnce(),
+) -> Result<DataFolderGuard, String> {
+    lock_data_folders_with_retry(folders, before_lock, || {})
+}
+
+fn lock_data_folders_with_retry(
+    folders: &[&Path],
+    before_lock: impl FnOnce(),
+    mut on_retry: impl FnMut(),
+) -> Result<DataFolderGuard, String> {
+    let validate = |folder: &Path| {
+        let version = read_version(&RealFs, folder).map_err(|error| {
+            format!(
+                "Could not read the data folder version at {}: {error}",
+                folder.display()
+            )
+        })?;
+        check_compatible(version, CURRENT_DATA_VERSION).map_err(newer_data_folder_message)?;
+        Ok::<u32, String>(version)
+    };
+    let mut folders = folders
+        .iter()
+        .map(|folder| folder_identity(folder))
+        .collect::<io::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())?;
+    folders.sort_unstable();
+    folders.dedup();
+    for folder in &folders {
+        validate(folder)?;
+    }
+    before_lock();
+    let locks = folders
+        .iter()
+        .map(|folder| coordination_lock(folder))
+        .collect::<io::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())?;
+    for lock in &locks {
+        wait_for_lock(lock, false, &mut on_retry)?;
+    }
+    let versions = folders
+        .iter()
+        .map(|folder| validate(folder))
+        .collect::<Result<Vec<_>, _>>()?;
+    if versions
+        .iter()
+        .any(|version| *version < CURRENT_DATA_VERSION)
+    {
+        // Concurrent lock upgrades can deadlock while either process holds a shared lock.
+        for lock in &locks {
+            lock.unlock().map_err(|error| error.to_string())?;
+        }
+        for (lock, version) in locks.iter().zip(&versions) {
+            if *version < CURRENT_DATA_VERSION {
+                wait_for_lock(lock, true, &mut on_retry)?;
+            } else {
+                wait_for_lock(lock, false, &mut on_retry)?;
+            }
+        }
+        let versions = folders
+            .iter()
+            .map(|folder| validate(folder))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (folder, version) in folders.iter().zip(versions) {
+            if version < CURRENT_DATA_VERSION {
+                migrate(&RealFs, folder, version, CURRENT_DATA_VERSION)
+                    .map_err(|error| format!("Migrating {}: {error}", folder.display()))?;
+            }
+        }
+        for lock in &locks {
+            wait_for_lock(lock, false, &mut on_retry)?;
+        }
+    }
+    for folder in &folders {
+        validate(folder)?;
+    }
+    Ok(DataFolderGuard { _locks: locks })
+}
+
+/// Runs a transient operation while the folder stays protected.
+pub fn with_data_folder<T>(
+    folder: &Path,
+    open: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    with_data_folders(&[folder], open)
+}
+
+/// Runs a transient operation while all folders stay protected.
+pub fn with_data_folders<T>(
+    folders: &[&Path],
+    open: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let _guard = lock_data_folders(folders)?;
+    open()
+}
+
+#[cfg(test)]
+fn with_data_folders_before_lock<T>(
+    folders: &[&Path],
+    before_lock: impl FnOnce(),
+    open: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let _guard = lock_data_folders_before_lock(folders, before_lock)?;
+    open()
 }
 
 /// One version migration step: turns a folder at version `from` into
@@ -253,6 +473,258 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
+
+    #[test]
+    fn write_after_short_scan_waits_and_migrates_or_reports_a_false_lock_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut reader = Some(guard_read_data_folder(dir.path()).unwrap());
+        let mut retried = false;
+        let writer = lock_data_folders_with_retry(
+            &[dir.path()],
+            || {},
+            || {
+                retried = true;
+                drop(reader.take());
+            },
+        )
+        .unwrap();
+        assert!(retried);
+        assert_eq!(
+            read_version(&RealFs, dir.path()).unwrap(),
+            CURRENT_DATA_VERSION
+        );
+        drop(writer);
+    }
+
+    #[test]
+    fn scan_lock_closes_on_child_exec_or_a_running_child_blocks_the_writer() {
+        use std::io::{BufRead, Write};
+        use std::process::{Command, Stdio};
+        let dir = tempfile::tempdir().unwrap();
+        let reader = guard_read_data_folder(dir.path()).unwrap();
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "echo ready; read release"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        drop(reader);
+        let lock = coordination_lock(&folder_identity(dir.path()).unwrap()).unwrap();
+        let result = lock.try_lock();
+        child.stdin.take().unwrap().write_all(b"release\n").unwrap();
+        assert!(child.wait().unwrap().success());
+        result.unwrap();
+    }
+
+    #[test]
+    fn child_spawned_during_scan_does_not_keep_lock_or_block_a_later_writer() {
+        use std::io::{Read, Write};
+        use std::os::unix::{net::UnixStream, process::CommandExt};
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let reader = guard_read_data_folder(dir.path()).unwrap();
+        let (mut parent, mut child_pipe) = UnixStream::pair().unwrap();
+        let spawning = std::thread::spawn(move || {
+            let mut command = Command::new("/usr/bin/true");
+            // SAFETY: the child only uses read/write syscalls before exec; it takes no Rust locks.
+            #[allow(unsafe_code)]
+            unsafe {
+                command.pre_exec(move || {
+                    child_pipe.write_all(b"r")?;
+                    child_pipe.read_exact(&mut [0])?;
+                    Ok(())
+                });
+            }
+            command.spawn().unwrap()
+        });
+        parent.read_exact(&mut [0]).unwrap();
+        drop(reader);
+        let writer = lock_data_folders_with_retry(
+            &[dir.path()],
+            || {},
+            || {
+                let _ = parent.write_all(b"x");
+            },
+        );
+        let _ = parent.write_all(b"x");
+        assert!(spawning.join().unwrap().wait().unwrap().success());
+        writer.unwrap();
+    }
+
+    #[test]
+    fn newer_build_migration_refuses_while_older_desktop_holds_the_folder_or_hangs() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("a");
+        let second = dir.path().join("b");
+        std::fs::create_dir(&second).unwrap();
+        let older = coordination_lock(&folder_identity(&second).unwrap()).unwrap();
+        older.lock_shared().unwrap();
+        let error = lock_data_folders(&[&first, &second]).unwrap_err();
+        assert!(
+            error.contains("Close the other Skill Studio process"),
+            "{error}"
+        );
+        assert!(!first.exists());
+        assert!(!second.join(VERSION_FILE_NAME).exists());
+        let released = coordination_lock(&folder_identity(&first).unwrap()).unwrap();
+        released.try_lock().unwrap();
+        drop(released);
+        drop(older);
+        lock_data_folders(&[&first, &second]).unwrap();
+    }
+
+    #[test]
+    fn startup_coordination_uses_private_user_folder_or_other_accounts_block_access() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("skill-studio-data-locks");
+        std::fs::create_dir(&legacy).unwrap();
+        std::fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let uid = rustix::process::geteuid().as_raw();
+        let root = private_coordination_root(dir.path(), uid).unwrap();
+        let metadata = std::fs::metadata(&root).unwrap();
+        assert_eq!(metadata.uid(), uid);
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o700);
+        assert_eq!(private_coordination_root(dir.path(), uid).unwrap(), root);
+        assert_ne!(root, legacy);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(private_coordination_root(dir.path(), uid).is_err());
+        let other_uid = uid + 1;
+        let other = dir
+            .path()
+            .join(format!("skill-studio-data-locks-{other_uid}"));
+        std::fs::create_dir(&other).unwrap();
+        std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(private_coordination_root(dir.path(), other_uid).is_err());
+        std::fs::remove_dir(&root).unwrap();
+        std::os::unix::fs::symlink(&legacy, &root).unwrap();
+        assert!(private_coordination_root(dir.path(), uid).is_err());
+        assert_eq!(
+            std::fs::metadata(&legacy).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+
+    #[test]
+    fn startup_symlink_alias_opens_once_or_deadlocks_on_its_own_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        with_data_folders(&[&real, &alias], || Ok(())).unwrap();
+        assert_eq!(
+            folder_identity(&dir.path().join("alias/missing")).unwrap(),
+            folder_identity(&dir.path().join("real/missing")).unwrap()
+        );
+    }
+
+    #[test]
+    fn startup_racing_newer_history_leaves_missing_app_data_absent_or_creates_files_on_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("app");
+        let history = dir.path().join("history");
+        std::fs::create_dir(&history).unwrap();
+        let error = with_data_folders_before_lock(
+            &[&app, &history],
+            || std::fs::write(history.join(VERSION_FILE_NAME), b"2\n").unwrap(),
+            || Err::<(), _>("opener ran".to_owned()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            newer_data_folder_message(NewerDataFolder {
+                folder_version: 2,
+                app_version: CURRENT_DATA_VERSION,
+            })
+        );
+        assert!(!app.exists(), "refusal created the app-data folder");
+        assert_eq!(std::fs::read_dir(history).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn startup_open_holds_folder_lock_through_migration_and_sqlite_or_allows_a_newer_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        with_data_folder(dir.path(), || {
+            assert_eq!(
+                read_version(&RealFs, dir.path()).unwrap(),
+                CURRENT_DATA_VERSION
+            );
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "data_folder_version::tests::competing_process_cannot_lock_during_startup_open_or_migrations_can_race"])
+                .env("SKILL_STUDIO_LOCK_PROBE", dir.path())
+                .output().unwrap();
+            assert!(child.status.success(), "{}", String::from_utf8_lossy(&child.stdout));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn competing_process_cannot_lock_during_startup_open_or_migrations_can_race() {
+        let Some(folder) = std::env::var_os("SKILL_STUDIO_LOCK_PROBE") else {
+            return;
+        };
+        let competing = coordination_lock(&folder_identity(Path::new(&folder)).unwrap()).unwrap();
+        if std::env::var_os("SKILL_STUDIO_LOCK_AVAILABLE").is_some() {
+            competing.try_lock().unwrap();
+        } else {
+            assert!(matches!(
+                competing.try_lock(),
+                Err(std::fs::TryLockError::WouldBlock)
+            ));
+        }
+    }
+
+    #[test]
+    fn startup_waiting_on_newer_migration_refuses_without_lowering_marker_or_opens_stale_version_zero(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().to_path_buf();
+        let lock = coordination_lock(&folder_identity(&folder).unwrap()).unwrap();
+        lock.lock().unwrap();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+        let older = std::thread::spawn(move || {
+            with_data_folders_before_lock(
+                &[&folder],
+                || {
+                    ready_tx.send(()).unwrap();
+                    continue_rx.recv().unwrap();
+                },
+                || Err::<(), _>("incompatible opener ran".to_owned()),
+            )
+        });
+        ready_rx.recv().unwrap();
+        let marker = dir.path().join("schema_version");
+        std::fs::write(&marker, b"2\n").unwrap();
+        let before = (
+            std::fs::read(&marker).unwrap(),
+            std::fs::metadata(&marker).unwrap().modified().unwrap(),
+        );
+        drop(lock);
+        continue_tx.send(()).unwrap();
+        let error = older.join().unwrap().unwrap_err();
+        assert_eq!(
+            error,
+            newer_data_folder_message(NewerDataFolder {
+                folder_version: 2,
+                app_version: CURRENT_DATA_VERSION
+            })
+        );
+        assert_eq!(
+            before,
+            (
+                std::fs::read(&marker).unwrap(),
+                std::fs::metadata(&marker).unwrap().modified().unwrap()
+            )
+        );
+    }
 
     /// Extracts every run of ASCII digits in `text`, in order, as `u32`s -
     /// used to assert on the version numbers a message names without

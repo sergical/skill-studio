@@ -95,7 +95,11 @@ fn update_cli_args_and_cwd(
     };
     match method {
         InstallMethod::SkillsSh => {
-            let mut args = vec!["skills".to_string(), "update".to_string(), skill.0.clone()];
+            let mut args = vec![
+                crate::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string(),
+                "update".to_string(),
+                skill.0.clone(),
+            ];
             args.push(
                 match scope {
                     RootScope::Global => "--global",
@@ -277,19 +281,16 @@ fn record_dotagents_side_effects(
         .iter()
         .map(|path| (path.clone(), fingerprint_path(fs, path)))
         .collect::<Vec<_>>();
-    // A folder that cannot be listed or read is left out of `created`, never
-    // allowed to drop the `secondary_post` part above.
     let mut created = Vec::new();
     for name in skill_folder_names(fs, universal_root).unwrap_or_default() {
         let folder = universal_root.join(&name);
         if folders_before.contains(&name) || secondary.contains(&folder) {
             continue;
         }
-        if let Ok(Some(fingerprint)) = fingerprint_path(fs, &folder) {
-            created.push((folder, fingerprint));
-        }
+        let fingerprint = fingerprint_path(fs, &folder);
+        created.push((folder, fingerprint));
     }
-    let patch = crate::events::with_remove_copies(
+    let patch = crate::events::with_created_paths(
         crate::events::with_secondary_post(serde_json::json!({}), &secondary_post),
         &created,
     );
@@ -1556,14 +1557,14 @@ mod tests {
                 "skills.sh global",
                 InstallMethod::SkillsSh,
                 &RootScope::Global,
-                vec!["skills", "update", "alpha", "--global"],
+                vec!["skills@1.7.0", "update", "alpha", "--global"],
                 None,
             ),
             (
                 "skills.sh project",
                 InstallMethod::SkillsSh,
                 &project,
-                vec!["skills", "update", "alpha", "--project"],
+                vec!["skills@1.7.0", "update", "alpha", "--project"],
                 Some(PathBuf::from("/proj")),
             ),
             (

@@ -1,3 +1,5 @@
+import { ScanStatusNote } from "../SkillList/ScanStatusNote";
+import type { BackgroundStatus } from "@skill-studio/lib";
 // ============================================================================
 // SkillActivityView - Docked layout: a year heatmap, by-skill and by-project
 // lists on the left; a right-hand panel that is always there, showing the
@@ -18,6 +20,7 @@ import { useAppStore } from "../../store/appStore";
 
 interface SkillActivityViewProps {
   snapshot: SkillSnapshot | undefined;
+  backgroundStatus?: BackgroundStatus;
   onSelectSkill: (name: string) => void;
 }
 
@@ -31,7 +34,11 @@ function activityNow(scannedAt: string | undefined) {
  * table filtered to the shared usage window, a 30-day per-project breakdown,
  * and a docked details panel for the day currently picked.
  */
-export function SkillActivityView({ snapshot, onSelectSkill }: SkillActivityViewProps) {
+export function SkillActivityView({
+  snapshot,
+  backgroundStatus,
+  onSelectSkill,
+}: SkillActivityViewProps) {
   const day = useAppStore((state) => state.activityDay);
   const setDay = useAppStore((state) => state.setActivityDay);
   useActivityEscape(() => setDay(null));
@@ -59,6 +66,7 @@ export function SkillActivityView({ snapshot, onSelectSkill }: SkillActivityView
         />
       }
     >
+      <ScanStatusNote status={backgroundStatus} />
       {!snapshot || !hasAnyInvocations ? (
         <>
           <p className="text-wrap-pretty text-body text-text-tertiary">

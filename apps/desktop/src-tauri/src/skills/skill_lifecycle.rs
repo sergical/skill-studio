@@ -324,7 +324,7 @@ pub fn preview_owner_deployments(
 
 pub fn skills_sh_remove_args_for_scope(name: &str, scope: InstallScope) -> Vec<String> {
     let mut args = vec![
-        "skills".to_string(),
+        skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string(),
         "remove".to_string(),
         name.to_string(),
         "--yes".to_string(),
@@ -385,11 +385,11 @@ mod tests {
     fn skills_sh_remove_args_selects_global_flag() {
         assert_eq!(
             skills_sh_remove_args_for_scope("foo", InstallScope::Global),
-            vec!["skills", "remove", "foo", "--yes", "--global"]
+            vec!["skills@1.7.0", "remove", "foo", "--yes", "--global"]
         );
         assert_eq!(
             skills_sh_remove_args_for_scope("foo", InstallScope::Project),
-            vec!["skills", "remove", "foo", "--yes"]
+            vec!["skills@1.7.0", "remove", "foo", "--yes"]
         );
     }
 

@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 
 use crate::identity::RootScope;
 
+/// Pinned CLI whose install, update, and removal behavior this crate supports.
+pub const SKILLS_CLI_PACKAGE: &str = "skills@1.7.0";
+
 /// From skills CLI 1.7.0 `dist/cli.mjs`, the `agents` table. Folders the CLI reads from an env
 /// var (see [`cli_env_pins`]) are listed at their default location: `ops::remove` pins those
 /// vars when it runs the CLI, so the CLI deletes where this table says.
