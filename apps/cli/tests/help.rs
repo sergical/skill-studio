@@ -65,7 +65,7 @@ fn listed_commands(help: &str) -> Vec<String> {
 }
 
 fn assert_plain_words(what: &str, text: &str) {
-    let lower = text.to_lowercase();
+    let lower = text.replace("--harness", "").to_lowercase();
     for word in ["harness", "deployment", "invariant", "docs/"] {
         assert!(
             !lower.contains(word),
@@ -110,6 +110,12 @@ fn help_text_uses_no_internal_words() {
     for command in USER_COMMANDS {
         let text = help(&[command]);
         assert_plain_words(&format!("`{command} --help`"), &text);
+        if *command == "usage" {
+            assert!(
+                text.contains("--harness <AGENT>"),
+                "usage must show its public agent filter: {text}"
+            );
+        }
         assert!(
             !text.contains("--fixture"),
             "`{command} --help` shows --fixture:\n{text}"

@@ -130,8 +130,8 @@ enum Command {
     },
     /// Show which skills your agents used, and which they never used.
     Usage {
-        /// Keep uses from this harness id only.
-        #[arg(long)]
+        /// Keep uses from this agent id only.
+        #[arg(long, value_name = "AGENT")]
         harness: Option<String>,
         #[command(flatten)]
         scope: ScopeArgs,
