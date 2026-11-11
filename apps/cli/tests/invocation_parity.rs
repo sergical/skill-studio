@@ -168,6 +168,29 @@ fn invocation_refuses_plugin_directory_alias() {
 }
 
 #[test]
+fn invocation_refuses_link_without_editable_owner_in_cursor_and_grok_plugins() {
+    for target in [
+        ".cursor/plugins/cache/vendor/tool/1.0/skills/gamma",
+        ".grok/plugins/tool/skills/gamma",
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let plugin = home.path().join(target);
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(plugin.join("SKILL.md"), MD).unwrap();
+        std::fs::create_dir_all(home.path().join(".claude/skills")).unwrap();
+        std::os::unix::fs::symlink(&plugin, home.path().join(".claude/skills/alias")).unwrap();
+        let result = headless::cli(home.path(), &["invocation", "alias", "--manual"]);
+        assert_eq!(result["status"], "error", "{target}: {result}");
+        assert_eq!(
+            std::fs::read_to_string(plugin.join("SKILL.md")).unwrap(),
+            MD,
+            "{target}"
+        );
+        assert!(!plugin.join("agents/openai.yaml").exists(), "{target}");
+    }
+}
+
+#[test]
 fn invocation_edits_shared_install_once_through_verified_link() {
     let home = tempfile::tempdir().unwrap();
     let shared = home.path().join(".agents/skills/gamma");

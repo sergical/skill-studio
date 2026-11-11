@@ -104,12 +104,17 @@ pub fn invocation(
                     .iter()
                     .flat_map(|s| &s.deployments)
                     .find(|candidate| {
-                        candidate.backing != crate::identity::BackingRelationship::LinkedTo
+                        !is_link(candidate)
                             && fs
                                 .canonicalize(&candidate.path)
                                 .is_ok_and(|path| path == dir)
                     })
-                    .unwrap_or(d);
+                    .or((!is_link(d)).then_some(d));
+                let Some(owner) = owner else {
+                    return Err(
+                        CoreError::new(ErrorCode::Unsupported, "skill is read only").at(&dir)
+                    );
+                };
                 if crate::ops::plugin_owns_path(rt, &dir)
                     || owner.plugin.is_some()
                     || (owner.mutability != DeploymentMutability::Mutable
@@ -349,4 +354,8 @@ pub fn invocation(
         }
         Ok(report)
     })
+}
+
+fn is_link(d: &crate::dto::DeploymentDto) -> bool {
+    d.is_symlink || d.backing == crate::identity::BackingRelationship::LinkedTo
 }
