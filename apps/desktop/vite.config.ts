@@ -12,8 +12,8 @@ export default defineConfig(async () => ({
   // JSX-transformed output, per @vitejs/plugin-react's documented ordering.
   plugins: [react(), babel({ presets: [reactCompilerPreset()] }), tailwindcss()],
 
-  // Sentry's `component` tag (see frontend-error-report.ts) comes from a
-  // function name in React's component stack; the default Oxc minifier
+  // The React component stack in a WebView error event (see
+  // webview-telemetry.ts) is made of function names; the default Oxc minifier
   // mangles those to single letters (e.g. `Kc`), which would make the tag
   // useless in the packaged app. `mangle.keepNames` preserves only function
   // and class declaration names - everything else (locals, params) is still

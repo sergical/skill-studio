@@ -233,11 +233,18 @@ breadcrumbs - the panic payload text itself is never read. The panic hook
 flushes for at most 2 seconds so a main-thread panic is still reported when
 `RunEvent::Exit` never runs; the exit handler flushes for another 2 seconds
 on top of the HTTP client's own 2-second timeout, so quit waits at most
-about 4 seconds total. A WebView error - a React `componentDidCatch`, an
-uncaught `window` error, or an unhandled promise rejection - reaches the
-same client through one Tauri command, `report_frontend_error`, which
-carries only a component name and an error kind; anything that is not a
-bare identifier is replaced by `unknown` before capture.
+about 4 seconds total. The WebView runs the Sentry JS SDK for errors (stack
+traces and React component stacks) and screen timings (page load, screen
+changes, long tasks, INP). The SDK has no network path of its own: its
+transport hands envelope items to one Tauri command, `send_webview_envelope`.
+Rust drops them while the switch is off, and otherwise rebuilds each item
+from an allowlist (`skill_studio_host::telemetry::webview`) before it sends
+them to the `skill-studio-desktop-react` project with a second client. The
+exception message, `message`, breadcrumbs, request, user, extra, and tags are
+dropped; a frame keeps its function name, file basename, line, and column; a
+span keeps its description only when it is an `ipc` span named after a
+command. Each `invoke` carries a `sentry-trace` header, so the Rust command
+root continues the WebView trace.
 
 ## Delivery phases and exit criteria
 

@@ -2,17 +2,18 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { KitPreview } from "@skill-studio/ui";
 import App from "./App";
-import { installWindowErrorReporting, reportBoundaryError } from "./lib/frontend-error-report";
 import { stampInitialTheme } from "./lib/theme";
+import {
+  reactErrorHandler,
+  setScreenSource,
+  syncWebviewTelemetry,
+  trackScreenChange,
+} from "./lib/webview-telemetry";
+import { useAppStore } from "./store/appStore";
 
 // Stamped before React renders, so the app never flashes the wrong palette
 // on first paint.
 stampInitialTheme();
-
-// Catches an uncaught `window` error or an unhandled promise rejection -
-// the two failure shapes an ErrorBoundary never sees. Installed once, before
-// the first render.
-installWindowErrorReporting();
 
 // Simple error boundary for debugging
 class ErrorBoundary extends React.Component<
@@ -26,13 +27,6 @@ class ErrorBoundary extends React.Component<
 
   static getDerivedStateFromError(error: Error) {
     return { hasError: true, error };
-  }
-
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    // No toast store is reachable here: a crash this deep may mean the
-    // Zustand provider itself failed to mount. The fallback UI below is
-    // the only surface left to report the error on.
-    reportBoundaryError(error, errorInfo);
   }
 
   render() {
@@ -100,11 +94,21 @@ async function boot(): Promise<void> {
     console.info("[harness] mock Tauri IPC installed");
   }
 
+  setScreenSource(() => useAppStore.getState().activeView.kind);
+  useAppStore.subscribe((state, previous) => {
+    if (state.activeView.kind !== previous.activeView.kind) trackScreenChange();
+  });
+  await syncWebviewTelemetry();
+
   const PerfOverlay = showPerfOverlay
     ? (await import("./components/dev/PerfOverlay")).PerfOverlay
     : null;
 
-  ReactDOM.createRoot(rootElement).render(
+  ReactDOM.createRoot(rootElement, {
+    onUncaughtError: reactErrorHandler,
+    onCaughtError: reactErrorHandler,
+    onRecoverableError: reactErrorHandler,
+  }).render(
     <React.StrictMode>
       <ErrorBoundary>
         {showKitPreview ? <KitPreview /> : <App />}

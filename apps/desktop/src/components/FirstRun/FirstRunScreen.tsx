@@ -121,7 +121,9 @@ function FirstRunScreenBody({ onComplete }: FirstRunScreenProps) {
 
             <div className="space-y-1">
               <label className="flex items-center justify-between gap-3">
-                <span className="text-sm">Send crash reports and timings to Skill Studio</span>
+                <span className="text-sm">
+                  Send crash reports, timings, and screen performance to Skill Studio
+                </span>
                 <Switch
                   checked={telemetryEnabled}
                   onCheckedChange={setTelemetryEnabled}

@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { recordIpcCall } from "./perf-marks";
+import { syncWebviewTelemetry, withIpcSpan } from "./webview-telemetry";
 import { isUpdateAllRunning, plainBusyMessage } from "./skill-busy-message";
 import type {
   AddMethodDefaults,
@@ -64,7 +65,10 @@ let ipcCallSeq = 0;
  * Tauri rejects a failed command with the Rust `Result::Err` string directly, not an `Error` - a
  * catch site's `err instanceof Error ? err.message : "Unknown error"` would discard it. Wrapping
  * a non-`Error` rejection here, once, means every existing catch site across the app shows the
- * real backend text without a per-site edit. */
+ * real backend text without a per-site edit.
+ *
+ * While WebView telemetry is on, each call is also an `ipc` span whose `sentry-trace` header the
+ * Rust command root continues. */
 function callCommand<T>(command: string, args?: InvokeArgs): Promise<T> {
   const startMark = `ipc:${command}:${ipcCallSeq++}`;
   performance.mark(startMark);
@@ -74,7 +78,9 @@ function callCommand<T>(command: string, args?: InvokeArgs): Promise<T> {
     performance.clearMarks(startMark);
     performance.clearMeasures(`ipc:${command}`);
   };
-  return invoke<T>(command, args).then(
+  return withIpcSpan(command, (headers) =>
+    invoke<T>(command, args, headers ? { headers } : undefined),
+  ).then(
     (result) => {
       finish(true);
       return result;
@@ -288,7 +294,8 @@ export async function saveHarnessesChoice(
   choice: HarnessesChoice,
   telemetryEnabled: boolean,
 ): Promise<void> {
-  return callCommand("save_harnesses_choice", { choice, telemetryEnabled });
+  await callCommand("save_harnesses_choice", { choice, telemetryEnabled });
+  await syncWebviewTelemetry();
 }
 
 /**
@@ -430,14 +437,16 @@ export async function setPreferredEditor(value: string | null): Promise<void> {
   return callCommand("set_preferred_editor", { appName: value });
 }
 
-/** Reads the telemetry switch (crash reports, timings, WebView errors) from the registry. */
+/** Reads the telemetry switch (crash reports, timings, WebView errors and screen timings) from the registry. */
 export async function getTelemetryEnabled(): Promise<boolean> {
   return callCommand("get_telemetry_enabled");
 }
 
 /** Saves the telemetry switch; takes effect without a restart - see the Rust `telemetry_commands`. */
 export async function setTelemetryEnabled(enabled: boolean): Promise<boolean> {
-  return callCommand("set_telemetry_enabled", { enabled });
+  const saved = await callCommand<boolean>("set_telemetry_enabled", { enabled });
+  await syncWebviewTelemetry();
+  return saved;
 }
 
 // ============================================================================

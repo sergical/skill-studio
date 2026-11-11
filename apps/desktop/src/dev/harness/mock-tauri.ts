@@ -423,6 +423,10 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           return false;
         case "set_telemetry_enabled":
           return Boolean(payload.enabled);
+        case "get_webview_telemetry":
+          return false;
+        case "send_webview_envelope":
+          return 0;
 
         case "read_installed_skill_md": {
           const path = String(payload.path);

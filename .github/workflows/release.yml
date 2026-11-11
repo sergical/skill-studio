@@ -215,6 +215,7 @@ jobs:
           # variable expands to an empty string, which `resolve_dsn` treats
           # as absent, so telemetry stays off until this is set.
           SKILL_STUDIO_SENTRY_DSN: ${{ vars.SKILL_STUDIO_SENTRY_DSN }}
+          SKILL_STUDIO_SENTRY_WEBVIEW_DSN: ${{ vars.SKILL_STUDIO_SENTRY_WEBVIEW_DSN }}
           # Apple's APPLE_CERTIFICATE/APPLE_SIGNING_IDENTITY/etc. are
           # deliberately NOT set here - see "Configure Apple code signing"
           # above, the only place that writes them; that step fails the job
@@ -307,6 +308,7 @@ jobs:
           SKILL_STUDIO_COMMIT: ${{ github.sha }}
           SKILL_STUDIO_SERVER_URL: ${{ vars.SKILL_STUDIO_SERVER_URL }}
           SKILL_STUDIO_SENTRY_DSN: ${{ vars.SKILL_STUDIO_SENTRY_DSN }}
+          SKILL_STUDIO_SENTRY_WEBVIEW_DSN: ${{ vars.SKILL_STUDIO_SENTRY_WEBVIEW_DSN }}
         run: |
           set -euo pipefail
           cargo build --release --locked -p skill-studio-cli --target "${{ matrix.target }}"
