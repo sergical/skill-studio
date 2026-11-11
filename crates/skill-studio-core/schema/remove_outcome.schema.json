@@ -21,7 +21,7 @@
       "type": "string"
     },
     "quarantine_path": {
-      "description": "Where the folder now lives under quarantine, for `Copy`/`Fork`\n(never deleted - see `docs/action-map/primitives-and-call-stack.md`'s\nRemove row). `None` for `Dotagents`/`SkillsSh`, whose own CLI deletes\nthe bytes directly, the same as it does for every other build's\nremove today.",
+      "description": "Where the folder now lives under quarantine, for `Copy`/`Fork`\n(never deleted - see `docs/flows.md`'s\nRemove row). `None` for `Dotagents`/`SkillsSh`, whose own CLI deletes\nthe bytes directly, the same as it does for every other build's\nremove today.",
       "type": [
         "string",
         "null"

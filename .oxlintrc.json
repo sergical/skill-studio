@@ -58,7 +58,7 @@
       "rules": { "anti-slop/no-internal-vocabulary": "error" }
     },
     {
-      "files": ["packages/ui/**", "apps/tui/**", "packages/marketing/**"],
+      "files": ["packages/ui/**", "packages/marketing/**"],
       "rules": { "anti-slop/no-raw-form-elements": "off" }
     },
     {

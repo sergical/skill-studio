@@ -1,5 +1,5 @@
 //! The app data folder's `schema_version` marker and its forward migration
-//! (`docs/action-map/plan.md` unit 6.3).
+//! (`docs/flows.md`).
 //!
 //! The data folder (Tauri's `app_data_dir`) holds the event store, the
 //! timing log, and backups; a folder with no marker file is version 0
