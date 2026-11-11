@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { selectNewerSkillSnapshot, startSkillSnapshotSubscription } from "./useSkillSnapshot";
+import {
+  requestRescanWithFeedback,
+  selectNewerBackgroundStatus,
+  selectNewerSkillSnapshot,
+  startSkillSnapshotSubscription,
+} from "./useSkillSnapshot";
 import type { SkillSnapshot } from "@skill-studio/lib";
 
 function snapshot(revision: number, scannedAt: string): SkillSnapshot {
@@ -105,5 +110,50 @@ describe("startSkillSnapshotSubscription", () => {
 
     expect(disposed).toBe(true);
     expect(readCalled).toBe(false);
+  });
+});
+
+describe("background status publication", () => {
+  it("keeps_a_running_event_when_an_older_initial_read_arrives_or_hides_the_scan", () => {
+    const running = { revision: 2, tasks: [] };
+    expect(selectNewerBackgroundStatus(running, { revision: 1, tasks: [] })).toBe(running);
+    expect(selectNewerBackgroundStatus(undefined, running)).toBe(running);
+  });
+});
+
+describe("request rescan result", () => {
+  it("a_failed_rebuild_reaches_the_caller_and_stops_loading_or_silently_reports_success", async () => {
+    const loading: boolean[] = [];
+    const errors: string[] = [];
+    await expect(
+      requestRescanWithFeedback({
+        request: async () => {
+          throw new Error("fixture rebuild failed");
+        },
+        isMounted: () => true,
+        setLoading: (value) => loading.push(value),
+        reportError: (message) => errors.push(message),
+      }),
+    ).rejects.toThrow("fixture rebuild failed");
+    expect(loading).toEqual([true, false]);
+    expect(errors).toEqual(["fixture rebuild failed"]);
+  });
+
+  it("an_unmounted_view_receives_no_late_loading_or_error_updates_or_changes_disposed_state", async () => {
+    const loading: boolean[] = [];
+    const errors: string[] = [];
+    let mounted = true;
+    const result = requestRescanWithFeedback({
+      request: async () => {
+        mounted = false;
+        throw new Error("fixture rebuild failed");
+      },
+      isMounted: () => mounted,
+      setLoading: (value) => loading.push(value),
+      reportError: (message) => errors.push(message),
+    });
+    await expect(result).rejects.toThrow("fixture rebuild failed");
+    expect(loading).toEqual([true]);
+    expect(errors).toEqual([]);
   });
 });

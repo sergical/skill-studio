@@ -43,7 +43,7 @@ function actionsByAgent(installed: ReturnType<typeof skill>) {
 describe("turn off for one agent: confirm text", () => {
   it("confirm_text_names_the_skill_and_agent_in_the_spec_wording_or_the_user_does_not_learn_every_agent_gets_a_copy", () => {
     expect(turnOffConfirmText("find-bugs", "Codex")).toBe(
-      "find-bugs is shared by every agent. To turn it off for Codex only, Skill Studio gives each agent its own copy, then parks the Codex copy. You will see one copy per agent from now on.",
+      "find-bugs is shared by every agent. To turn it off for Codex only, Skill Studio gives each agent its own copy, then parks the Codex copy. You will see one copy per agent from now on. After you turn the Codex copy back on, it is a manual copy and Skill Studio will not update it.",
     );
   });
 

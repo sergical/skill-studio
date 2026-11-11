@@ -20,8 +20,40 @@ use skill_studio_core::ports::{LeaseKey, LeaseMode, LeaseProvider};
 use skill_studio_core::testing::fixtures;
 use skill_studio_host::FileLease;
 
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_skill-studio")
+fn complete_folder_tree(root: &Path) -> Vec<(PathBuf, u64, Vec<u8>)> {
+    fn walk(root: &Path, path: &Path, entries: &mut Vec<(PathBuf, u64, Vec<u8>)>) {
+        let metadata = std::fs::symlink_metadata(path).unwrap();
+        let bytes = if metadata.is_symlink() {
+            std::fs::read_link(path)
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec()
+        } else if metadata.is_file() {
+            std::fs::read(path).unwrap()
+        } else {
+            Vec::new()
+        };
+        entries.push((
+            path.strip_prefix(root).unwrap().to_path_buf(),
+            metadata.len(),
+            bytes,
+        ));
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(path).unwrap() {
+                walk(root, &entry.unwrap().path(), entries);
+            }
+        }
+    }
+    let mut entries = Vec::new();
+    walk(root, root, &mut entries);
+    entries.sort();
+    entries
+}
+
+fn bin() -> PathBuf {
+    std::env::var_os("SKILL_STUDIO_TEST_BINARY")
+        .map_or_else(|| env!("CARGO_BIN_EXE_skill-studio").into(), PathBuf::from)
 }
 
 /// Materializes the named fixture to a fresh temp directory and returns its
@@ -247,7 +279,7 @@ fn a_nonexistent_fixture_exits_2() {
 #[test]
 fn a_lease_held_by_another_process_exits_3() {
     let home = materialized_fixture("basic");
-    let lease_root = home.join(".history").join("leases");
+    let lease_root = home.join(".skill-studio").join("leases");
     let lease = FileLease::new(lease_root);
     let key = LeaseKey {
         canonical_root: home.clone(),
@@ -520,7 +552,7 @@ fn a_malformed_project_registry_still_scans_with_no_projects() {
 #[test]
 fn a_write_command_under_a_held_lease_exits_3_instead_of_blocking() {
     let home = materialized_fixture("basic");
-    let lease_root = home.join(".history").join("leases");
+    let lease_root = home.join(".skill-studio").join("leases");
     let lease = FileLease::new(lease_root);
     let key = LeaseKey {
         canonical_root: home.clone(),
@@ -1179,4 +1211,195 @@ fn split_writes_the_chosen_copy_and_drops_the_rest_or_names_the_envelope() {
         .join(".claude/skills/gamma")
         .symlink_metadata()
         .is_err());
+}
+
+#[path = "support/park_dotagents.rs"]
+mod park_dotagents;
+
+#[test]
+fn cli_turn_on_keeps_concurrent_exclusion_and_refuses_lost_ignore_anchor() {
+    for changed_anchor in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().canonicalize().unwrap();
+        let path = park_dotagents::setup(&home);
+        let env = [("HOME", home.to_str().unwrap()), ("PATH", path.as_str())];
+        let parked = run_with_env(
+            &["park", "foo", "--home", home.to_str().unwrap(), "--json"],
+            &env,
+        );
+        assert_eq!(parked.json["status"], "ok", "{:?}", parked.json);
+        if changed_anchor {
+            std::fs::write(home.join(".agents/.gitignore"), "!/skills/*/\n").unwrap();
+        }
+        let before = park_dotagents::config_bytes(&home);
+        let result = run_with_env(
+            &["unpark", "foo", "--home", home.to_str().unwrap(), "--json"],
+            &env,
+        );
+        if changed_anchor {
+            assert_ne!(result.status, 0, "{:?}", result.json);
+            assert_eq!(park_dotagents::config_bytes(&home), before);
+            assert!(!home.join(".agents/skills/foo").exists());
+        } else {
+            assert_eq!(result.status, 0, "{:?}", result.json);
+            let text = std::fs::read_to_string(home.join(".agents/agents.toml")).unwrap();
+            assert!(text.contains("exclude = [\"foo\"]"), "{text}");
+            assert!(home.join(".agents/skills/foo/SKILL.md").is_file());
+        }
+    }
+}
+
+#[test]
+fn harnesses_cli_reads_claude_install_method_from_fixture_home_or_reports_unknown() {
+    let home = tempfile::tempdir().unwrap();
+    let method = "native";
+    let config = home.path().join(".claude.json");
+    std::fs::write(
+        &config,
+        serde_json::to_vec(&serde_json::json!({"installMethod": method})).unwrap(),
+    )
+    .unwrap();
+    let empty_path = home.path().join("bin");
+    std::fs::create_dir(&empty_path).unwrap();
+    let result = run_with_env(
+        &[
+            "harnesses",
+            "--fixture",
+            home.path().to_str().unwrap(),
+            "--json",
+        ],
+        &[
+            ("HOME", home.path().to_str().unwrap()),
+            ("PATH", empty_path.to_str().unwrap()),
+            ("SKILL_STUDIO_TELEMETRY", "0"),
+        ],
+    );
+    assert_eq!(result.status, 0);
+    let row = result.json["data"]["harnesses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "claude-code")
+        .unwrap();
+    assert_eq!(row["install_method"]["value"], method);
+    assert_eq!(
+        row["install_method"]["evidence"]["confidence"],
+        serde_json::to_value(skill_studio_core::harness::Confidence::VerifiedFromDocs).unwrap()
+    );
+    assert!(row["install_method"]["evidence"]["source"]
+        .as_str()
+        .unwrap()
+        .contains(config.to_str().unwrap()));
+}
+
+#[test]
+fn cli_park_refuses_newer_history_without_tree_changes_or_writes_mutation_lease() {
+    for fixture in [false, true] {
+        let (_dir, home) = parkable_live_home();
+        let deployment = deployment_id_in_root(&home, "gamma", "universal");
+        let history = home.join(if fixture {
+            ".history"
+        } else {
+            ".skill-studio/history"
+        });
+        std::fs::create_dir_all(&history).unwrap();
+        let db = history.join("events.sqlite3");
+        std::fs::write(&db, b"").unwrap();
+        let marker = history.join("schema_version");
+        let newer = skill_studio_host::CURRENT_DATA_VERSION + 1;
+        std::fs::write(&marker, format!("{newer}\n")).unwrap();
+        let snapshot = || complete_folder_tree(&home);
+        let before = snapshot();
+        let result = run_with_env(
+            &[
+                "park",
+                if fixture { "--fixture" } else { "--home" },
+                home.to_str().unwrap(),
+                "--deployment-id",
+                &deployment,
+                "--json",
+            ],
+            &[
+                ("HOME", home.to_str().unwrap()),
+                ("SKILL_STUDIO_TELEMETRY", "off"),
+            ],
+        );
+        assert_ne!(result.status, 0);
+        let message = result.json.to_string();
+        assert!(
+            message.contains(&format!("folder is version {newer}")),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!(
+                "up to version {}",
+                skill_studio_host::CURRENT_DATA_VERSION
+            )),
+            "{message}"
+        );
+        assert_eq!(before, snapshot());
+        assert_eq!(std::fs::read_dir(&history).unwrap().count(), 2);
+    }
+}
+
+#[test]
+fn cli_fixture_scan_refuses_newer_history_without_tree_changes_or_creates_read_leases() {
+    let home = tempfile::tempdir().unwrap();
+    let history = home.path().join(".history");
+    std::fs::create_dir_all(&history).unwrap();
+    let newer = skill_studio_host::CURRENT_DATA_VERSION + 1;
+    std::fs::write(history.join("schema_version"), format!("{newer}\n")).unwrap();
+    let before = complete_folder_tree(home.path());
+    let result = run_with_env(
+        &["scan", "--fixture", home.path().to_str().unwrap(), "--json"],
+        &[
+            ("HOME", home.path().to_str().unwrap()),
+            ("SKILL_STUDIO_TELEMETRY", "off"),
+        ],
+    );
+    assert_ne!(result.status, 0, "{:?}", result.json);
+    let message = result.json.to_string();
+    assert!(
+        message.contains(&format!("folder is version {newer}")),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "up to version {}",
+            skill_studio_host::CURRENT_DATA_VERSION
+        )),
+        "{message}"
+    );
+    assert_eq!(before, complete_folder_tree(home.path()));
+}
+
+#[test]
+fn cli_events_refuse_newer_history_without_sqlite_or_return_empty_success() {
+    let home = tempfile::tempdir().unwrap();
+    let history = home.path().join(".skill-studio/history");
+    std::fs::create_dir_all(&history).unwrap();
+    let newer = skill_studio_host::CURRENT_DATA_VERSION + 1;
+    std::fs::write(history.join("schema_version"), format!("{newer}\n")).unwrap();
+    let before = complete_folder_tree(home.path());
+    let result = run_with_env(
+        &["events", "--home", home.path().to_str().unwrap(), "--json"],
+        &[
+            ("HOME", home.path().to_str().unwrap()),
+            ("SKILL_STUDIO_TELEMETRY", "off"),
+        ],
+    );
+    assert_ne!(result.status, 0, "{:?}", result.json);
+    let message = result.json.to_string();
+    assert!(
+        message.contains(&format!("folder is version {newer}")),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "up to version {}",
+            skill_studio_host::CURRENT_DATA_VERSION
+        )),
+        "{message}"
+    );
+    assert_eq!(before, complete_folder_tree(home.path()));
 }

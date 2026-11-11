@@ -23,6 +23,23 @@ export function updatePluginInstall(target: PluginUpdateTarget): Promise<PluginU
   return updatePlugin(target.plugin_id, "Claude Code", target.scope, target.project_path);
 }
 
+function pluginBatchUpdater() {
+  const refreshed = new Set<string>();
+  return async (target: PluginUpdateTarget): Promise<PluginUpdateResult> => {
+    const marketplace = target.plugin_id.slice(target.plugin_id.lastIndexOf("@") + 1);
+    const key = JSON.stringify([marketplace, target.project_path]);
+    const result = await updatePlugin(
+      target.plugin_id,
+      "Claude Code",
+      target.scope,
+      target.project_path,
+      refreshed.has(key),
+    );
+    if (result.marketplace_refreshed) refreshed.add(key);
+    return result;
+  };
+}
+
 /** Stop request for one `runHomeUpdateAll` batch. */
 export interface UpdateAllControl {
   /** Names this batch to the backend, so a Cancel that lands before the batch starts still reaches it. */
@@ -69,7 +86,7 @@ export async function runHomeUpdateAll(
         ),
       onProgress,
       forkNames && { names: forkNames, fork: forkSkill },
-      updatePluginInstall,
+      pluginBatchUpdater(),
       control && (() => control.stopRequest ?? false),
     );
   } finally {
@@ -162,7 +179,7 @@ export function runListUpdate(
       pullFork: pullForkUpstream,
       updateAll: (targets, onUpdateProgress) =>
         updateAllSkillsWithProgress(targets, ({ done, total }) => onUpdateProgress(done, total)),
-      updatePluginInstall,
+      updatePluginInstall: pluginBatchUpdater(),
     },
     onProgress,
   );

@@ -84,7 +84,7 @@ fn registry_flatten_catch_all_round_trips_an_unknown_key_or_names_the_dropped_ke
 /// write.
 /// Expectation: the write-version on disk (and on the in-memory value the
 /// caller holds) becomes 4.
-/// Failure here means a lease loser's stale-read check (a follow-up) would
+/// Failure here means a lease loser's stale-read check would
 /// have nothing to compare against - the counter never moves.
 #[test]
 fn write_registry_document_bumps_write_version_by_one_or_names_the_stuck_value() {
@@ -96,6 +96,8 @@ fn write_registry_document_bumps_write_version_by_one_or_names_the_stuck_value()
         write_version: 3,
         ..Default::default()
     };
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
     write(home, &path, &mut doc);
     assert_eq!(doc.write_version, 4);
 
@@ -113,4 +115,147 @@ fn missing_write_version_defaults_to_zero_or_names_the_thrown_error() {
     let json = r#"{"known_field":"a"}"#;
     let doc: TestDoc = serde_json::from_str(json).unwrap();
     assert_eq!(doc.write_version(), 0);
+}
+
+#[test]
+fn registry_write_with_a_stale_write_version_is_rejected_and_names_the_current_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join(".agents/skill-studio.json");
+    let mut winner = TestDoc::default();
+    write(tmp.path(), &path, &mut winner);
+    let mut stale = winner.clone();
+    winner.known_field = "newer change".into();
+    write(tmp.path(), &path, &mut winner);
+    let committed = std::fs::read(&path).unwrap();
+    let read_version = stale.write_version;
+    stale.known_field = "stale change".into();
+    let error = write_registry_document(
+        &FileLease::new(tmp.path().join(".leases")),
+        &RealFs::new(),
+        tmp.path(),
+        &path,
+        &mut stale,
+    )
+    .expect_err("a stale snapshot must not overwrite the newer writer");
+    assert_eq!(error.code, skill_studio_core::ErrorCode::StaleProposal);
+    assert!(
+        error
+            .message
+            .contains(&format!("current version {}", winner.write_version)),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), committed);
+    assert_eq!(stale.write_version, read_version);
+}
+
+#[test]
+fn a_failed_registry_write_keeps_the_callers_version_or_makes_its_retry_stale() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join(".agents/skill-studio.json");
+    let fs = skill_studio_core::testing::FailingFs::wrap(std::sync::Arc::new(RealFs::new()));
+    fs.fail_next_write_atomic();
+    let mut doc = TestDoc::default();
+    let before = doc.clone();
+    assert!(write_registry_document(
+        &FileLease::new(tmp.path().join(".leases")),
+        &fs,
+        tmp.path(),
+        &path,
+        &mut doc
+    )
+    .is_err());
+    assert_eq!(
+        doc, before,
+        "an unsuccessful write must leave its input version reusable"
+    );
+    assert!(!path.exists());
+}
+
+#[test]
+fn two_registry_writers_under_one_lease_serialize_and_neither_write_is_lost() {
+    use std::sync::{mpsc, Arc, Barrier, Mutex};
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join(".agents/skill-studio.json");
+    let barrier = Arc::new(Barrier::new(2));
+    let (sender, receiver) = mpsc::channel();
+    let receiver = Arc::new(Mutex::new(receiver));
+    let names = ["one", "two"];
+    let handles: Vec<_> = names
+        .iter()
+        .map(|name| {
+            let name = name.to_string();
+            let path = path.clone();
+            let home = tmp.path().to_path_buf();
+            let barrier = barrier.clone();
+            let sender = sender.clone();
+            let receiver = receiver.clone();
+            std::thread::spawn(move || {
+                let leases = FileLease::new(home.join(".leases"));
+                let fs = RealFs::new();
+                let mut doc = TestDoc::default();
+                doc.extra.insert(name.clone(), serde_json::json!(true));
+                barrier.wait();
+                match write_registry_document(&leases, &fs, &home, &path, &mut doc) {
+                    Ok(()) => sender.send(()).unwrap(),
+                    Err(error)
+                        if matches!(
+                            error.code,
+                            skill_studio_core::ErrorCode::StaleProposal
+                                | skill_studio_core::ErrorCode::ScopeBusy
+                        ) =>
+                    {
+                        drop(sender);
+                        receiver
+                            .lock()
+                            .unwrap()
+                            .recv()
+                            .expect("the other writer must commit before retry");
+                        let mut fresh: TestDoc =
+                            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                        fresh.extra.insert(name, serde_json::json!(true));
+                        write_registry_document(&leases, &fs, &home, &path, &mut fresh).unwrap();
+                    }
+                    Err(error) => panic!("unexpected registry failure: {error:?}"),
+                }
+            })
+        })
+        .collect();
+    drop(sender);
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    let committed: TestDoc = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        committed.write_version,
+        names.len() as u64,
+        "each successful writer must advance the version once"
+    );
+    for name in names {
+        assert_eq!(
+            committed.extra.get(name),
+            Some(&serde_json::json!(true)),
+            "writer {name} was lost"
+        );
+    }
+}
+
+#[test]
+fn registry_write_without_the_lease_root_names_the_missing_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let blocked = temp.path().join("blocked");
+    std::fs::write(&blocked, b"not a directory").unwrap();
+    let lease_root = blocked.join("leases");
+    let path = temp.path().join(".agents/skill-studio.json");
+    let mut document = TestDoc::default();
+    let error = write_registry_document(
+        &FileLease::new(lease_root.clone()),
+        &RealFs::new(),
+        temp.path(),
+        &path,
+        &mut document,
+    )
+    .expect_err("an unusable lease root must fail before writing the registry");
+    assert_eq!(error.path.as_ref(), Some(&lease_root));
+    assert_eq!(document.write_version, 0);
+    assert!(!path.exists());
 }

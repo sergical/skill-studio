@@ -26,12 +26,14 @@ export function ParkCopyDialog({
   deployment,
   scopeLabel,
   onClose,
+  onParked,
 }: {
   skillName: string;
   deployment: Deployment;
   /** The project's block name on the card, e.g. "Project · web". */
   scopeLabel: string;
   onClose: () => void;
+  onParked: () => void;
 }) {
   const [isParking, setIsParking] = useState(false);
   const addToast = useAppStore((state) => state.addToast);
@@ -44,7 +46,7 @@ export function ParkCopyDialog({
   const handlePark = () => {
     setIsParking(true);
     parkSkill({ deployment_id: deployment.id })
-      .then(onClose)
+      .then(onParked)
       .catch((err) => {
         addToast({
           type: "error",

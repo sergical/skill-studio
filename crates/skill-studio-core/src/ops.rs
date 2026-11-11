@@ -399,6 +399,7 @@ pub fn scan(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Inventor
 
 fn scan_body(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Inventory, CoreError> {
     ctx.checkpoint()?;
+    let _folder_guard = rt.ports.history.guard_read_data_folder()?;
     let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
     scan_inner(rt, ctx, req)
 }
@@ -3856,6 +3857,7 @@ fn preview_frontmatter_repair_body(
     ctx.checkpoint()?;
     let clock = rt.ports.clock.as_ref();
     let op_start = clock.monotonic();
+    let _folder_guard = rt.ports.history.guard_read_data_folder()?;
     let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
     let step_start = clock.monotonic();
     let inventory = scan_inner(
@@ -4542,7 +4544,7 @@ fn restore_event_body(
         }
         crate::ops_install::check_registry_drift(fs, inverse)?;
     }
-    let mut write_back_plans: Vec<(PathBuf, Vec<fsops::StageFile>)> = Vec::new();
+    let mut write_back_plans: Vec<(PathBuf, RestorePlan)> = Vec::new();
     if !write_back.is_empty() {
         let backup_dir = target.backup_dir.as_deref().ok_or_else(|| {
             CoreError::new(ErrorCode::Io, "a write_back inverse implies a backup_dir").at(&path)
@@ -4552,18 +4554,20 @@ fn restore_event_body(
             let entry = original_manifest
                 .entries
                 .iter()
-                .find(|e| &e.original == copy && e.is_dir)
+                .find(|e| &e.original == copy && e.fingerprint.is_some())
                 .ok_or_else(|| {
                     CoreError::new(
                         ErrorCode::Io,
-                        "the original event's manifest has no folder entry for this copy",
+                        "the original event's manifest has no backed-up entry for this copy",
                     )
                     .at(copy)
                 })?;
-            let files = session
-                .store
-                .read_backup_files(backup_dir, &entry.relative)?;
-            write_back_plans.push((copy.clone(), files));
+            let copy_plan = RestorePlan::Restore(read_backup_content(
+                session.store.as_ref(),
+                backup_dir,
+                entry,
+            )?);
+            write_back_plans.push((copy.clone(), copy_plan));
         }
     }
     // What this restore takes down is recorded as what its own undo puts
@@ -4641,7 +4645,37 @@ fn restore_event_body(
     // before touching it: with `force` this is exactly "the drifted bytes
     // are backed up first"; without drift it still gives the restore its
     // own undo. Split copies about to be deleted are backed up with it.
+    let parked_root = rt.scope.home.lexical.join(PARKED_ROOT_RELATIVE);
+    let agent_off_parked = target
+        .payload
+        .get("agent_off")
+        .and_then(|marker| marker.get("parked_to"))
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .filter(|parked| parked.starts_with(&parked_root));
+    let parked_slot = agent_off_parked
+        .as_ref()
+        .filter(|parked| remove_copies.iter().any(|(copy, _)| copy == *parked))
+        .and_then(|parked| parked.parent());
+    let project_marker = agent_off_parked
+        .as_ref()
+        .and_then(|parked| parked.parent())
+        .as_ref()
+        .filter(|slot| {
+            target.project_path.is_some()
+                && slot.parent().and_then(Path::parent)
+                    == Some(
+                        parked_root
+                            .join(crate::park_layout::PARKED_PROJECTS_DIR)
+                            .as_path(),
+                    )
+        })
+        .and_then(|slot| slot.parent())
+        .map(|key| key.join(crate::park_layout::PROJECT_ORIGIN_MARKER));
     let mut restore_backup_targets = vec![path.clone()];
+    if parked_slot.is_some() {
+        restore_backup_targets.extend(project_marker.iter().cloned());
+    }
     restore_backup_targets.extend(remove_copies.iter().map(|(copy, _)| copy.clone()));
     // The extra paths the event also changed are overwritten below, so a
     // forced restore keeps their drifted bytes too. An event whose
@@ -4656,16 +4690,15 @@ fn restore_event_body(
             .store
             .backup_paths(&session.guard, &restore_id, &restore_backup_targets)?;
     let restore_pre_fingerprint = manifest.entries.first().and_then(|e| e.fingerprint.clone());
-    // Copies this restore removes that the backup above holds as folders:
-    // its own undo writes them back.
-    let removed_copies: Vec<PathBuf> = remove_copies
+    // Origin notes are files and must replay with the folders they describe.
+    let mut removed_copies: Vec<PathBuf> = remove_copies
         .iter()
         .map(|(copy, _)| copy)
         .filter(|copy| {
             manifest
                 .entries
                 .iter()
-                .any(|e| &e.original == *copy && e.is_dir)
+                .any(|e| &e.original == *copy && e.fingerprint.is_some())
         })
         .cloned()
         .collect();
@@ -4687,7 +4720,7 @@ fn restore_event_body(
         harness: target.harness.clone(),
         scope: target.scope.clone(),
         project_path: target.project_path.clone(),
-        payload: serde_json::json!({ "target_event": target.id.0 }),
+        payload: serde_json::json!({ "target_event": target.id.0, "agent_off": target.payload.get("agent_off") }),
         inverse: Some(restore_inverse),
         backup_dir: Some(manifest.backup_dir.clone()),
     };
@@ -4773,11 +4806,19 @@ fn restore_event_body(
             Err(error) => copy_errors.push(error.message),
         }
     }
-    for (copy, files) in &write_back_plans {
+    for (copy, copy_plan) in &write_back_plans {
         let written = copy
             .parent()
             .map_or(Ok(()), |root| ensure_dir_all(rt, &session, fs, root));
-        let written = written.and_then(|()| restore_write_dir(rt, &session.guard, copy, files));
+        let written = written.and_then(|()| match copy_plan {
+            RestorePlan::Restore(content) => {
+                let scoped = crate::ports::confine(&rt.scope, fs, copy)?;
+                apply_backup_content(rt, &session.guard, copy, &scoped, content)
+            }
+            RestorePlan::RemoveIfPresent => {
+                unreachable!("write_back plans only contain backed-up paths")
+            }
+        });
         if let Err(error) = written {
             copy_errors.push(error.message);
         }
@@ -4801,6 +4842,43 @@ fn restore_event_body(
         }
         if fs.symlink_metadata(copy).is_ok() {
             copy_errors.push(format!("could not remove {}", copy.display()));
+        }
+    }
+    if let Some(slot) = &parked_slot {
+        remove_park_scaffolding(
+            rt,
+            &session,
+            &[],
+            &[
+                slot.to_path_buf(),
+                slot.join(crate::park_layout::COPY_ORIGIN_DIR),
+            ],
+        );
+        if let Some(marker) = &project_marker {
+            let key = marker.parent().unwrap_or(marker);
+            let only_marker = fs.read_dir(key).is_ok_and(|entries| {
+                entries.len() == 1 && entries[0].name == crate::park_layout::PROJECT_ORIGIN_MARKER
+            });
+            let owned_marker = target.project_path.as_ref().is_some_and(|project| {
+                fs.read_capped(marker, 4096)
+                    .is_ok_and(|bytes| bytes == project.to_string_lossy().as_bytes())
+            });
+            if only_marker && owned_marker {
+                removed_copies.push(marker.clone());
+                let recorded = session.store.patch_inverse(
+                    &session.guard,
+                    &restore_id,
+                    crate::events::with_write_back(serde_json::json!({}), &removed_copies),
+                );
+                match recorded.and_then(|()| {
+                    let scoped = crate::ports::confine(&rt.scope, fs, marker)?;
+                    fs.remove_file(&session.guard, &scoped)
+                        .map_err(|error| CoreError::io(marker, error))
+                }) {
+                    Ok(()) => remove_park_scaffolding(rt, &session, &[], &[key.to_path_buf()]),
+                    Err(error) => copy_errors.push(error.message),
+                }
+            }
         }
     }
     // Best-effort, after the primary path is already restored and claimed:
@@ -4896,6 +4974,7 @@ fn restore_event_body(
     // and the copies it wrote, so a chain of undos replays.
     let written_back: Vec<(PathBuf, Fingerprint)> = write_back_plans
         .iter()
+        .filter(|(copy, _)| project_marker.as_ref() != Some(copy))
         .filter_map(|(copy, _)| {
             let fingerprint = crate::events::fingerprint_path(fs, copy).ok().flatten()?;
             Some((copy.clone(), fingerprint))
@@ -6002,6 +6081,7 @@ pub fn park_git_warning(
     ctx: &OpContext,
     deployment_id: &DeploymentId,
 ) -> Option<String> {
+    let _folder_guard = rt.ports.history.guard_read_data_folder().ok()?;
     let check = park_check(
         rt,
         ctx,

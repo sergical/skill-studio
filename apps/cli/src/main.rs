@@ -494,6 +494,13 @@ struct TargetArgs {
 }
 
 fn main() -> ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("--perf-build-id") {
+        println!(
+            "{}",
+            option_env!("SKILL_STUDIO_PERF_BUILD").unwrap_or("unmarked")
+        );
+        return ExitCode::SUCCESS;
+    }
     // Parse before telemetry starts: `mcp` reports as its own surface, and
     // `run_stdio` sets that up itself.
     let cli = Cli::parse();
@@ -775,6 +782,9 @@ fn build_runtime<T: ops::Outcome + serde::Serialize>(
     let (runtime_scope, lease_root) = scope.resolve();
     let catalog = Arc::new(HarnessCatalog::builtin());
     let mut ports = skill_studio_host::default_ports_with_discovery(lease_root, catalog);
+    ports.history = Arc::new(skill_studio_host::GuardedNoHistoryOpener::new(
+        runtime_scope.history_root.clone(),
+    ));
     ports.telemetry = skill_studio_host::telemetry::port(
         skill_studio_host::telemetry::Surface::Cli,
         env!("CARGO_PKG_VERSION"),
@@ -1650,6 +1660,7 @@ fn resolve_target(
     target: &TargetArgs,
     kind: TargetKind,
 ) -> Result<DeploymentId, skill_studio_core::CoreError> {
+    let _folder_guard = rt.ports.history.guard_read_data_folder()?;
     if let Some(id) = &target.id {
         return DeploymentId::parse(id);
     }

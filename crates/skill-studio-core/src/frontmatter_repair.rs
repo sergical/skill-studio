@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::frontmatter::{
     is_valid_skill_name, parse_frontmatter, validate_skill, FrontmatterParseResult,
-    SkillFrontmatter,
 };
 
 /// Which deterministic fix to propose.
@@ -242,16 +241,13 @@ fn rebuild(lines: &[&str], index: usize, replacement: Option<&str>) -> String {
 
 /// Parsed frontmatter with the field behind `key` cleared, so two versions of
 /// a file can be compared on everything except the key a repair targets.
-fn parsed_without(content: &str, key: &str) -> Option<SkillFrontmatter> {
-    let FrontmatterParseResult::Valid(mut parsed) = parse_frontmatter(content) else {
-        return None;
-    };
-    match key {
-        "name" => parsed.name = None,
-        "user-invocable" => parsed.user_invocable = None,
-        _ => parsed.disable_model_invocation = None,
-    }
-    Some(parsed)
+fn parsed_without(content: &str, key: &str) -> Result<serde_yaml::Mapping, String> {
+    let lines = lines_with_endings(content);
+    let end = frontmatter_end(&lines).ok_or("Frontmatter is missing or unterminated")?;
+    let mut parsed: serde_yaml::Mapping = serde_yaml::from_str(&lines[1..end].concat())
+        .map_err(|error| format!("Cannot compare frontmatter values: {error}"))?;
+    parsed.remove(serde_yaml::Value::String(key.to_string()));
+    Ok(parsed)
 }
 
 fn propose_name_repair(
@@ -309,7 +305,7 @@ fn propose_conflict_repair(
 /// repair exists. A proposal is returned only if re-validating it clears the
 /// targeted violation and adds none. For [`FrontmatterRepairKind::
 /// InvocationConflict`] without a `choice`, the content comes back unchanged
-/// (after proving both options are possible) so a caller can offer them.
+/// (after proving at least one removal is possible) so a caller can offer them.
 pub fn propose_repair(
     kind: FrontmatterRepairKind,
     content: &str,
@@ -331,13 +327,16 @@ pub fn propose_repair(
             "name",
         ),
         FrontmatterRepairKind::InvocationConflict => {
-            for option in [
-                InvocationConflictChoice::UserOnly,
-                InvocationConflictChoice::ModelOnly,
-            ] {
-                propose_conflict_repair(content, dir_name, option)?;
-            }
             let Some(choice) = choice else {
+                let can_offer_choice = [
+                    InvocationConflictChoice::UserOnly,
+                    InvocationConflictChoice::ModelOnly,
+                ]
+                .into_iter()
+                .any(|option| propose_conflict_repair(content, dir_name, option).is_ok());
+                if !can_offer_choice {
+                    return Err("No invocation choice can be repaired safely".to_string());
+                }
                 return Ok((content.to_string(), CONFLICT_REASON.to_string()));
             };
             let reason = match choice {
@@ -364,7 +363,7 @@ pub fn propose_repair(
     if after.iter().any(|v| targets(v)) || after.iter().any(|v| !before.contains(v)) {
         return Err("The proposed repair would still leave a violation".to_string());
     }
-    if parsed_without(content, key) != parsed_without(&proposed, key) {
+    if parsed_without(content, key)? != parsed_without(&proposed, key)? {
         return Err("The proposed repair would change another key's value".to_string());
     }
     Ok((proposed, reason))
@@ -680,5 +679,44 @@ mod tests {
             );
             assert!(matches(expected), "{kind} matcher rejects its message");
         }
+    }
+
+    #[test]
+    fn choosing_model_only_allows_the_other_multiline_key_or_refuses_a_safe_fix() {
+        let content = "---\nname: sample\ndescription: d\ndisable-model-invocation: true\nuser-invocable:\n  false\n---\nBody.\n";
+        let (proposed, _) = propose_repair(
+            FrontmatterRepairKind::InvocationConflict,
+            content,
+            "sample",
+            Some(InvocationConflictChoice::ModelOnly),
+        )
+        .unwrap();
+        assert!(!proposed.contains("disable-model-invocation"));
+        assert!(proposed.contains("user-invocable:\n  false"));
+        assert!(propose_repair(
+            FrontmatterRepairKind::InvocationConflict,
+            content,
+            "sample",
+            None
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn repair_preserves_extension_values_or_the_post_check_misses_an_anchor_change() {
+        let content = "---\nname: sample\ndescription: d\nx-default: &mode true\ndisable-model-invocation: true\nuser-invocable: &mode false\nx-agent: *mode\n---\nBody.\n";
+        let proposed =
+            propose_conflict_repair(content, "sample", InvocationConflictChoice::UserOnly).unwrap();
+        assert!(!violations_of("sample", &proposed)
+            .iter()
+            .any(|v| violation_is_invocation_conflict(v)));
+        let error = propose_repair(
+            FrontmatterRepairKind::InvocationConflict,
+            content,
+            "sample",
+            Some(InvocationConflictChoice::UserOnly),
+        )
+        .unwrap_err();
+        assert!(error.contains("another key"), "{error}");
     }
 }

@@ -70,6 +70,7 @@ function App() {
   }, []);
   const {
     snapshot,
+    backgroundStatus,
     emittedSnapshotRevision,
     isLoading,
     error: snapshotError,
@@ -184,11 +185,24 @@ function App() {
         />
       );
     } else if (kind === "skills") {
-      list = <SkillsView snapshot={snapshot} onSelectSkill={onSelectSkill} active={isShown} />;
+      list = (
+        <SkillsView
+          backgroundStatus={backgroundStatus}
+          snapshot={snapshot}
+          onSelectSkill={onSelectSkill}
+          active={isShown}
+        />
+      );
     } else if (kind === "plugins") {
       list = <PluginSkillsView snapshot={snapshot} onSelectSkill={onSelectSkill} />;
     } else {
-      list = <SkillActivityView snapshot={snapshot} onSelectSkill={onSelectSkill} />;
+      list = (
+        <SkillActivityView
+          backgroundStatus={backgroundStatus}
+          snapshot={snapshot}
+          onSelectSkill={onSelectSkill}
+        />
+      );
     }
     return (
       <>

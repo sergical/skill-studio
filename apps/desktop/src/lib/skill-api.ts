@@ -18,7 +18,6 @@ import type {
   AppVersion,
   BulkTargetResult,
   DiscoverySourceSetting,
-  ImportResult,
   FixSkillOutcome,
   ForkRecord,
   FrontmatterRepairApplyMode,
@@ -34,8 +33,6 @@ import type {
   LifecycleTarget,
   InvocationPolicy,
   InvocationTarget,
-  PackImportPreflightResult,
-  PackImportRequest,
   PaginatedSkillsResponse,
   ProjectFolder,
   PullResult,
@@ -45,6 +42,7 @@ import type {
   InstallCountKey,
   SkillEvent,
   SkillSnapshot,
+  BackgroundStatus,
   SplitCopy,
   SplitOutcome,
   AgentOffCheck,
@@ -322,21 +320,16 @@ export async function removeSkill(target: LifecycleTarget): Promise<RemoveOutcom
   return callCommand("remove_skill", { target });
 }
 
-/**
- * Update a skill through whichever method owns it (dotagents or skills.sh -
- * `build_update_request` routes every other owner, including Copy, to
- * "Update is not available") - `skill_studio_core::ops::update` under the
- * hood, off the UI thread. `updateSkillOwners` (skill-lifecycle-target.ts)
- * reads only
- * `success`/`error`; a thrown rejection (an `Err` from the command) is
- * caught there too, so a `success: true` literal on the happy path is
- * enough - no caller reads `UpdateOutcome`'s own fields.
- */
+/** Update one lifecycle owner. Tauri failures reject; equal tree hashes mean already current. */
 export async function updateSkill(
   target: LifecycleTarget,
-): Promise<{ success: boolean; error?: string | null }> {
-  await callCommand<UpdateOutcome>("update_skill", { target });
-  return { success: true };
+): Promise<{ success: true; outcome: UpdateOutcome; alreadyCurrent: boolean }> {
+  const outcome = await callCommand<UpdateOutcome>("update_skill", { target });
+  return {
+    success: true,
+    outcome,
+    alreadyCurrent: outcome.tree_hash_before === outcome.tree_hash_after,
+  };
 }
 
 /**
@@ -473,33 +466,6 @@ export async function pullForkUpstream(target: LifecycleTarget): Promise<PullRes
  */
 export async function unforkSkill(target: LifecycleTarget): Promise<void> {
   return callCommand("unfork_skill", { target });
-}
-
-// ============================================================================
-// Share Packs API
-// ============================================================================
-
-/**
- * Preflight and import a pack from a GitHub repo or local folder. Remote
- * repository identities pause for explicit trust before any install.
- */
-export async function importSkillPack(
-  request: PackImportRequest,
-): Promise<PackImportPreflightResult> {
-  return callCommand("import_skill_pack", { request });
-}
-
-/** Confirm the exact repository list returned by pack import preflight. */
-export async function confirmSkillPackTrust(
-  confirmationToken: string,
-  request: PackImportRequest,
-): Promise<ImportResult> {
-  return callCommand("confirm_skill_pack_trust", { confirmationToken, request });
-}
-
-/** Consume a pending pack trust prompt and remove its unchanged local snapshot. */
-export async function abandonPackImportTrust(confirmationToken: string): Promise<boolean> {
-  return callCommand("abandon_pack_import_trust", { confirmationToken });
 }
 
 // ============================================================================
@@ -759,6 +725,7 @@ export async function setPluginEnabled(
 
 /** What `claude plugin update --json` reported for one install. */
 export interface PluginUpdateResult {
+  marketplace_refreshed?: boolean;
   /** The CLI's `updateOutcome`: `updated`, `up_to_date`, or another value such as `skipped`. */
   outcome: string;
   /** The CLI's own message or reason for the outcome, when it gave one. */
@@ -777,8 +744,11 @@ export async function updatePlugin(
   harness: string,
   scope: string,
   projectPath: string | null,
+  skipMarketplaceRefresh = false,
 ): Promise<PluginUpdateResult> {
-  return callCommand("update_plugin", { pluginId, harness, scope, projectPath });
+  const request = { pluginId, harness, scope, projectPath };
+  if (skipMarketplaceRefresh) Object.assign(request, { skipMarketplaceRefresh: true });
+  return callCommand("update_plugin", request);
 }
 
 /**
@@ -860,13 +830,20 @@ export async function repairSkillLink(
  * Instant read of the background refresh thread's latest snapshot, or
  * `undefined` before the first snapshot has landed.
  */
+export async function getBackgroundStatus(): Promise<BackgroundStatus> {
+  return callCommand("get_background_status");
+}
+
+export function onBackgroundStatus(cb: (status: BackgroundStatus) => void): Promise<() => void> {
+  return listen<BackgroundStatus>("skills://background-status", (event) => cb(event.payload));
+}
+
 export async function getSkillSnapshot(): Promise<SkillSnapshot | undefined> {
   return callCommand("get_skill_snapshot");
 }
 
 /**
- * Ask the background refresh thread to rebuild the snapshot. Returns
- * immediately; listen for `onSkillSnapshot` to see the result.
+ * Rebuild the snapshot and report any failure after the rebuild finishes.
  */
 export async function requestSkillRescan(): Promise<void> {
   return callCommand("request_skill_rescan");
@@ -951,4 +928,9 @@ export function onUpdateStatus(cb: (status: UpdateStatus) => void): Promise<() =
  */
 export async function dataFolderStatus(): Promise<string | null> {
   return callCommand("data_folder_status");
+}
+
+/** Check installed skill sources now and publish a fresh snapshot. */
+export async function checkSkillUpdatesNow(): Promise<SkillSnapshot["update_check"]> {
+  return callCommand<SkillSnapshot["update_check"]>("check_skill_updates_now");
 }
