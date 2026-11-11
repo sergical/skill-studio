@@ -403,7 +403,7 @@ fn direct_ops_call_leaves_the_disk_state_every_surface_shares() {
 
     let outcome = ops::park(&rt, &ctx(), &ParkRequest { deployment_id }).unwrap();
 
-    // This is the one layout `docs/action-map/primitives-and-call-stack.md`
+    // This is the one layout `docs/flows.md`
     // names for Park: link removed, directory under `skills-parked`. Any
     // adapter (CLI, MCP, desktop) that calls `ops::park` gets exactly this,
     // since none of them touch the filesystem themselves.

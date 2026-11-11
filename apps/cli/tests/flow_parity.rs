@@ -317,8 +317,6 @@ struct Coverage {
     flow: &'static str,
     cli: &'static str,
     mcp: &'static str,
-    cli_test: fn(),
-    mcp_test: fn(),
 }
 
 macro_rules! executable_coverage {
@@ -330,7 +328,7 @@ macro_rules! executable_coverage {
             fn $mcp() { exercise($flow, Surface::Mcp); }
         )*
         const COVERAGE: &[Coverage] = &[$(
-            Coverage { flow: $flow, cli: stringify!($cli), mcp: stringify!($mcp), cli_test: $cli, mcp_test: $mcp },
+            Coverage { flow: $flow, cli: stringify!($cli), mcp: stringify!($mcp) },
         )*];
     };
 }
@@ -389,8 +387,6 @@ fn every_desktop_flow_has_named_executable_cli_and_mcp_coverage_or_an_explicit_g
             .unwrap_or_else(|| panic!("no executable scenarios for {}", columns[1]));
         assert_eq!(columns[8], coverage.cli);
         assert_eq!(columns[9], coverage.mcp);
-        (coverage.cli_test)();
-        (coverage.mcp_test)();
         assert!(seen.insert(coverage.flow), "duplicate flow");
     }
     assert_eq!(

@@ -94,9 +94,9 @@ See the [MCP docs](https://useskillstudio.com/docs/mcp/) for other agents.
 
 - [Node.js](https://nodejs.org/) ^22.18 or >=24.11 (the Vite 8 and Babel 8
   toolchain needs this range)
-- [pnpm](https://pnpm.io/) 11 (pinned in `packageManager` in `package.json`;
+- [pnpm](https://pnpm.io/) 12.18.0 (pinned in `packageManager` in `package.json`;
   enable it with `corepack enable`)
-- [Rust](https://rustup.rs/)
+- [Rust](https://rustup.rs/) 1.95.0
 - [Tauri prerequisites](https://tauri.app/start/prerequisites/)
 
 ### Setup
@@ -122,7 +122,7 @@ folders.
 SKILL_STUDIO_FIXTURE=/path/to/fixture-home pnpm run tauri dev
 ```
 
-The MCP server and the TUI also read `SKILL_STUDIO_FIXTURE`.
+The MCP server also reads `SKILL_STUDIO_FIXTURE`.
 
 ### Repository layout
 
@@ -132,7 +132,6 @@ The MCP server and the TUI also read `SKILL_STUDIO_FIXTURE`.
 | `apps/cli`                    | `skill-studio` CLI                                 |
 | `apps/mcp`                    | MCP server over stdio                              |
 | `apps/server`                 | skills.sh API proxy (Cloudflare Worker)            |
-| `apps/tui`                    | Terminal UI                                        |
 | `crates/skill-studio-core`    | Shared core: scan, diagnose, park, install, events |
 | `crates/skill-studio-host`    | Real file system, process, and telemetry adapters  |
 | `packages/marketing`          | Website and docs at useskillstudio.com             |

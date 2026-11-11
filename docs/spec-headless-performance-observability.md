@@ -8,7 +8,7 @@ Date: 2026-09-08.
 
 Skill Studio retains its Tauri desktop interface and gains a shared Rust core, a synchronous CLI, and a local stdio MCP interface. All interfaces use the same ownership, diagnosis, mutation, and restore rules.
 
-This specification covers production visibility for the desktop, CLI, existing Hono API, and marketing site. It defines performance measurements and release gates. It preserves the existing user workflows listed in [Workflow contracts](./spec-workflow-contracts.md).
+This specification covers production visibility for the desktop, CLI, existing Hono API, and marketing site. It defines performance measurements and release gates. It preserves the existing user workflows listed in [Workflow contracts](./flows.md).
 
 Hosted MCP, Cloudflare migration, remote laptop control, an always-running daemon, and a new background job service are out of scope. Blank skill creation and plugin installation are also out of scope.
 

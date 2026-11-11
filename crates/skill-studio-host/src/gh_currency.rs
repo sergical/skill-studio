@@ -2,7 +2,7 @@
 //! three currency ports. Read-only `gh api` calls through the user's own
 //! `gh` login, mirroring the desktop's `gh_cli.rs`; the app stores no
 //! tokens. Codex has no plugin CLI, so [`GhPluginManifestLookup`] is Claude
-//! Code marketplaces only, per plan.md unit 3.4.
+//! Code marketplaces only.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -90,7 +90,10 @@ impl SourceTreeLookup for GhSourceTreeLookup {
 /// early - the caller cannot tell "not in the tree" from "not fetched yet"
 /// for the paths past the cutoff, so this is an error naming the repo
 /// rather than a partial (and silently misleading) map.
-fn parse_tree_response(repo: &str, stdout: &[u8]) -> Result<HashMap<String, String>, CoreError> {
+pub fn parse_tree_response(
+    repo: &str,
+    stdout: &[u8],
+) -> Result<HashMap<String, String>, CoreError> {
     let value: serde_json::Value = serde_json::from_slice(stdout).map_err(|e| {
         CoreError::new(
             ErrorCode::Unsupported,

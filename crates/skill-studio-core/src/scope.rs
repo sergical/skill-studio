@@ -91,7 +91,7 @@ pub struct RuntimeScope {
     /// Codex's own directory, in place of `home_root/.codex`. `None` keeps
     /// the default. The adapter is the one place allowed to read
     /// `CODEX_HOME`; the core only ever sees the resolved path here (see
-    /// `docs/action-map/harnesses/codex.md`, "`CODEX_HOME` overrides
+    /// `docs/agent-skill-conventions.md`, "`CODEX_HOME` overrides
     /// `~/.codex`").
     pub codex_home: Option<PathBuf>,
     /// Shared-lease wait budget for read operations, in milliseconds.

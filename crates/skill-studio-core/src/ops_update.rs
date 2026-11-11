@@ -11,10 +11,7 @@
 //! row - a backup of the *existing* destination (never "absent", unlike
 //! install's: `update` only ever runs over a deployment already on disk) and
 //! the `restore_backup` inverse that undoes it - before the first byte
-//! moves, exactly the guarantee `docs/action-map/install.md` "Desired
-//! state" names and `docs/action-map/remove-and-update.md` "Desired state"
-//! extends to update ("record a journal event with a backup and an inverse
-//! before the first write").
+//! moves. See `docs/flows.md` for operation guarantees.
 //!
 //! `Copy` re-stages fresh `req.files` beside the destination and swaps them
 //! in through [`crate::fsops::swap`], which - since a folder already sits at

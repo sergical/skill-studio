@@ -24,7 +24,7 @@ pub const CODEX_ROOT_RELATIVE: &str = ".codex/skills";
 /// pi's global skills root, relative to the home.
 pub const PI_ROOT_RELATIVE: &str = ".pi/agent/skills";
 /// Folder name reserved by Claude Code inside a skills root
-/// (`docs/action-map/harnesses/claude-code.md`, "`synced` under
+/// (`docs/agent-skill-conventions.md`, "`synced` under
 /// `~/.claude/skills` is reserved; the scanner must skip it").
 pub const SYNCED_DIR_NAME: &str = "synced";
 /// Stands for the uuid a real synced bucket is named after.
