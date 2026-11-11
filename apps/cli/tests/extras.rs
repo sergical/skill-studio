@@ -309,3 +309,32 @@ fn extras_uses_scanner_config_roots_instead_of_default_codex_and_opencode_paths(
     assert!(!rows.iter().any(|r| r["name"] == "wrong-root"));
     assert!(!report.to_string().contains("PRIVATE_VALUE"));
 }
+
+/// Flow: list extras for an `OpenCode` V2 config. Expectation: the server names
+/// under `mcp.servers` are listed, also from a `.json` file with a comment,
+/// which `OpenCode` accepts. Failure means the list shows `servers` as a server
+/// name, or calls a valid file unreadable.
+#[test]
+fn extras_lists_opencode_v2_server_names_instead_of_the_servers_key() {
+    let home = tempfile::tempdir().unwrap();
+    let project = home.path().join("project");
+    write(
+        home.path(),
+        "project/opencode.json",
+        "{\n  // local tools\n  \"mcp\": {\"servers\": {\"v2-server\": {\"url\": \"PRIVATE_VALUE\"},},},\n}",
+    );
+    let report = headless::cli(
+        home.path(),
+        &["extras", "--project", project.to_str().unwrap()],
+    );
+    let rows: Vec<_> = report["data"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["harness"] == "opencode" && r["kind"] != "instruction")
+        .collect();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["name"], "v2-server", "{rows:?}");
+    assert_eq!(rows[0]["status"], "found", "{rows:?}");
+    assert!(!report.to_string().contains("PRIVATE_VALUE"));
+}

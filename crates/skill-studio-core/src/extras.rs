@@ -198,12 +198,10 @@ impl Reader<'_> {
                     toml::from_str::<toml::Value>(text)
                         .ok()
                         .and_then(|v| serde_json::to_value(v).ok())
-                } else if path.extension().is_some_and(|e| e == "jsonc") {
+                } else {
                     jsonc_parser::parse_to_serde_value(text, &Default::default())
                         .ok()
                         .flatten()
-                } else {
-                    serde_json::from_str(text).ok()
                 }
             });
         match value {
@@ -222,7 +220,13 @@ impl Reader<'_> {
     }
 
     fn names(&mut self, path: &Path, value: &Value, mcp_key: &str, hooks: bool) {
-        if let Some(servers) = value.get(mcp_key).and_then(Value::as_object) {
+        let servers = value.get(mcp_key);
+        // OpenCode V2 nests server names under `mcp.servers`; V1 lists them under `mcp`.
+        let servers = match mcp_key {
+            "mcp" => servers.and_then(|m| m.get("servers")).or(servers),
+            _ => servers,
+        };
+        if let Some(servers) = servers.and_then(Value::as_object) {
             for name in servers.keys() {
                 self.push(path, "mcp_server", Some(name), 1, "found");
             }
