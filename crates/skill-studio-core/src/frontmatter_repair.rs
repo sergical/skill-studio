@@ -11,6 +11,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::yaml;
+
 use crate::frontmatter::{
     is_valid_skill_name, parse_frontmatter, validate_skill, FrontmatterParseResult,
 };
@@ -107,7 +109,7 @@ pub fn propose_colon_scalar_repair(content: &str) -> Result<(String, String), St
     let replacement = if *key == "description" {
         format!("description: |-{separator}  {value}")
     } else {
-        let quoted = serde_yaml::to_string(value)
+        let quoted = yaml::to_string(value)
             .map_err(|error| format!("Could not quote name: {error}"))?
             .trim_end()
             .to_string();
@@ -241,12 +243,12 @@ fn rebuild(lines: &[&str], index: usize, replacement: Option<&str>) -> String {
 
 /// Parsed frontmatter with the field behind `key` cleared, so two versions of
 /// a file can be compared on everything except the key a repair targets.
-fn parsed_without(content: &str, key: &str) -> Result<serde_yaml::Mapping, String> {
+fn parsed_without(content: &str, key: &str) -> Result<yaml::Mapping, String> {
     let lines = lines_with_endings(content);
     let end = frontmatter_end(&lines).ok_or("Frontmatter is missing or unterminated")?;
-    let mut parsed: serde_yaml::Mapping = serde_yaml::from_str(&lines[1..end].concat())
+    let mut parsed: yaml::Mapping = yaml::from_str(&lines[1..end].concat())
         .map_err(|error| format!("Cannot compare frontmatter values: {error}"))?;
-    parsed.remove(serde_yaml::Value::String(key.to_string()));
+    parsed.remove(&yaml::Value::String(key.to_string()));
     Ok(parsed)
 }
 

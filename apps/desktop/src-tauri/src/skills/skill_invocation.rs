@@ -16,6 +16,8 @@
 // because a Codex link can share the edited folder.
 // ============================================================================
 
+use skill_studio_core::yaml;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -205,27 +207,27 @@ fn codex_openai_yaml_path(skill_dir: &Path) -> PathBuf {
 /// key leaves it empty, rather than leaving a stray `{}`.
 fn patch_codex_openai_yaml(skill_dir: &Path, user_only: bool) -> Result<(), String> {
     let path = codex_openai_yaml_path(skill_dir);
-    let mut root: serde_yaml::Mapping = match fs::read_to_string(&path) {
-        Ok(content) => match serde_yaml::from_str(&content) {
-            Ok(serde_yaml::Value::Mapping(m)) => m,
+    let mut root: yaml::Mapping = match fs::read_to_string(&path) {
+        Ok(content) => match yaml::from_str(&content) {
+            Ok(yaml::Value::Map(m)) => m,
             Ok(_) | Err(_) => {
                 return Err(format!("{} is not a YAML mapping", path.display()));
             }
         },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_yaml::Mapping::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => yaml::Mapping::new(),
         Err(e) => return Err(format!("Failed to read {}: {e}", path.display())),
     };
 
-    let policy_key = serde_yaml::Value::String("policy".to_string());
-    let allow_key = serde_yaml::Value::String("allow_implicit_invocation".to_string());
+    let policy_key = yaml::Value::String("policy".to_string());
+    let allow_key = yaml::Value::String("allow_implicit_invocation".to_string());
     let mut policy = match root.get(&policy_key) {
-        Some(serde_yaml::Value::Mapping(m)) => m.clone(),
-        _ => serde_yaml::Mapping::new(),
+        Some(yaml::Value::Map(m)) => m.clone(),
+        _ => yaml::Mapping::new(),
     };
 
     if user_only {
-        policy.insert(allow_key, serde_yaml::Value::Bool(false));
-        root.insert(policy_key, serde_yaml::Value::Mapping(policy));
+        policy.insert(allow_key, yaml::Value::Bool(false));
+        root.insert(policy_key, yaml::Value::Map(policy));
     } else {
         // A serde round trip drops comments and reformats, so a sidecar with
         // nothing to clear (often one a skill ships for Codex's UI) stays as is.
@@ -235,7 +237,7 @@ fn patch_codex_openai_yaml(skill_dir: &Path, user_only: bool) -> Result<(), Stri
         if policy.is_empty() {
             root.remove(&policy_key);
         } else {
-            root.insert(policy_key, serde_yaml::Value::Mapping(policy));
+            root.insert(policy_key, yaml::Value::Map(policy));
         }
         if root.is_empty() {
             if path.is_file() {
@@ -249,7 +251,7 @@ fn patch_codex_openai_yaml(skill_dir: &Path, user_only: bool) -> Result<(), Stri
     let parent = path.parent().ok_or("openai.yaml has no parent directory")?;
     fs::create_dir_all(parent)
         .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
-    let yaml = serde_yaml::to_string(&serde_yaml::Value::Mapping(root))
+    let yaml = yaml::to_string(&yaml::Value::Map(root))
         .map_err(|e| format!("Failed to serialize {}: {e}", path.display()))?;
     let tmp_path = path.with_extension("yaml.tmp");
     fs::write(&tmp_path, yaml)

@@ -70,11 +70,6 @@ feature-depth = 1
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
-  # Expires 2026-11-30. serde_yaml (archived) pulls unsafe-libyaml into core
-  # and desktop. A replacement parser changes Value/Mapping handling, scalar
-  # coercion, and error locations, and the YAML repair code matches
-  # serde_yaml's diagnostic text, so the swap needs its own compatibility work.
-  { id = "RUSTSEC-2024-0449", reason = "Unmaintained unsafe-libyaml via serde_yaml in core and desktop; accepted until 2026-11-30 while the YAML parser migration is reviewed" },
   # Transitive via tauri's macro dependencies, not a direct dependency. The
   # advisory names no safe upgrade. Retry `cargo update` and `cargo deny check`
   # on the next tauri bump, and drop the entry once the fix lands upstream.
