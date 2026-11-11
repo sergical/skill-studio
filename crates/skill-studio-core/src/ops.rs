@@ -944,6 +944,7 @@ fn scan_one_plugin_target(
                     studio_disabled: false,
                     source_kind: SourceKind::Plugin,
                     parked_origin: None,
+                    parked_owner_kind: None,
                 };
                 insert_deployment(
                     &mut accum.skills,
@@ -1251,6 +1252,18 @@ fn process_entries(
         } else {
             own_canonical.clone().filter(|c| c != &skill_dir)
         };
+        let parked_owner_kind = skill_dir
+            .parent()
+            .filter(|_| cx.target.kind == RootKind::Parked)
+            .map(|slot| {
+                slot.join(crate::park_layout::COPY_ORIGIN_DIR)
+                    .join(&entry.name)
+            })
+            .and_then(|path| cx.fs.read_capped(&path, 16 * 1024).ok())
+            .and_then(|bytes| {
+                let text = std::str::from_utf8(&bytes).ok()?;
+                serde_json::from_str::<LifecycleOwnerKind>(text.lines().nth(1)?).ok()
+            });
         let in_git_repo = in_git_repo(cx.fs, cx.scope, &skill_dir);
         // Matches the variant, not merely "forced": the field means the
         // deployment sits in a `.skill-studio-disabled/` holding directory,
@@ -1337,6 +1350,7 @@ fn process_entries(
             studio_disabled,
             source_kind,
             parked_origin: cx.target.parked_origin.clone(),
+            parked_owner_kind,
         };
 
         insert_deployment(&mut accum.skills, &entry.name, description, deployment);
@@ -5755,7 +5769,10 @@ pub(crate) fn park_found_copy(
         if let Some(relative) = &origin_root_relative {
             let marker_dir = slot_dir.join(crate::park_layout::COPY_ORIGIN_DIR);
             created_dirs.extend(ensure_dir_all_tracked(rt, session, fs, &marker_dir)?);
-            write_marker(marker_dir.join(&skill.name.0), relative, true)?;
+            let marker = marker_dir.join(&skill.name.0);
+            let owner = serde_json::to_string(&deployment.owner_kind)
+                .map_err(|e| CoreError::io(&marker, std::io::Error::other(e)))?;
+            write_marker(marker, &format!("{relative}\n{owner}"), true)?;
         }
         crate::park_move::move_dir(rt, session, &deployment.path, &parked_dir)?;
         // After the move: `dotagents remove` deletes the skill's folder, and
@@ -5924,6 +5941,23 @@ fn unpark_body(
         RootScope::Project(project) => Some(project.0.clone()),
     };
 
+    let origin_kind = deployment
+        .parked_origin
+        .as_ref()
+        .map_or(&RootKind::Universal, |origin| &origin.kind);
+    let restored_destination = if matches!(origin_kind, RootKind::Harness(_)) {
+        SkillDestination::PerHarness
+    } else {
+        SkillDestination::Universal
+    };
+    let restored_id = deployment_id(
+        &skill.name.0,
+        &scope_label,
+        restored_destination,
+        &harness_slot_for_kind(origin_kind),
+        project_label(origin_scope).as_deref(),
+        &restored_dir,
+    );
     let id = rt.ports.ids.next_event_id();
     // A skill parked from dotagents goes back into `agents.toml` and
     // `agents.lock` below. Like the park, the row has no inverse; the backup
@@ -6074,7 +6108,7 @@ fn unpark_body(
     ));
     Ok(UnparkOutcome {
         event_id: id,
-        deployment_id: deployment.id,
+        deployment_id: restored_id,
         restored_path: restored_dir,
     })
 }
@@ -6181,12 +6215,12 @@ fn unrecorded_origin_dir(
         .parent()
         .map(|slot| slot.join(crate::park_layout::COPY_ORIGIN_DIR).join(&name.0));
     let recorded = marker
-        .and_then(|marker| fs.read_capped(&marker, 1024).ok())
+        .and_then(|marker| fs.read_capped(&marker, 16 * 1024).ok())
         .and_then(|bytes| String::from_utf8(bytes).ok());
     let dir = match recorded {
         Some(text) => roots
             .into_iter()
-            .find(|(relative, _)| relative == text.trim())
+            .find(|(relative, _)| Some(relative.as_str()) == text.lines().next().map(str::trim))
             .map(|(_, path)| path),
         None => roots.into_iter().next().map(|(_, path)| path),
     };
@@ -7011,6 +7045,7 @@ mod tests {
             studio_disabled: false,
             source_kind,
             parked_origin: None,
+            parked_owner_kind: None,
         }
     }
 

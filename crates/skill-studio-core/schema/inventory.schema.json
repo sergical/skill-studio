@@ -303,6 +303,17 @@
               "type": "null"
             }
           ]
+        },
+        "parked_owner_kind": {
+          "description": "For a parked copy, the owner type it had before Park, read from the\nslot's origin marker. Provenance only: `owner_kind` still says what\nmanages the parked copy now. `None` for a copy that is not parked or\nwas parked before the marker recorded it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LifecycleOwnerKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

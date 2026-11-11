@@ -1,0 +1,29 @@
+[
+  {
+    "owner": "dotagents",
+    "live_source": "manual",
+    "live_owner": "manual",
+    "project_matches_original": true,
+    "watch_matches_scan": true,
+    "human": "foo  (1 copy)\n  - $PARKED  id $ID\n    parked from project $PROJECT; dotagents\n",
+    "physical_git_location_matches": true
+  },
+  {
+    "owner": "wildcard_dotagents",
+    "live_source": "manual",
+    "live_owner": "manual",
+    "project_matches_original": true,
+    "watch_matches_scan": true,
+    "human": "foo  (1 copy)\n  - $PARKED  id $ID\n    parked from project $PROJECT; dotagents wildcard\n",
+    "physical_git_location_matches": true
+  },
+  {
+    "owner": "in_repo",
+    "live_source": "manual",
+    "live_owner": "manual",
+    "project_matches_original": true,
+    "watch_matches_scan": true,
+    "human": "foo  (1 copy)\n  - $PARKED  id $ID\n    parked from project $PROJECT; in repo\n",
+    "physical_git_location_matches": true
+  }
+]

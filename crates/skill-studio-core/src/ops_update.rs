@@ -787,7 +787,11 @@ fn update_body(
     if fs.symlink_metadata(&destination).is_err() {
         return Err(CoreError::new(
             ErrorCode::InvalidRequest,
-            "update needs an existing copy; none exists at this destination",
+            if req.method == InstallMethod::Copy {
+                "update needs an existing shared copy; to update agent copies after a split, open this skill in Skill Studio and use Update"
+            } else {
+                "update needs an existing copy; none exists at this destination"
+            },
         )
         .at(&destination));
     }

@@ -69,6 +69,28 @@ fn print_inventory(inventory: &Inventory) {
                 deployment.path.display(),
                 deployment.id.as_str()
             );
+            if let Some(origin) = &deployment.parked_origin {
+                use skill_studio_core::identity::{LifecycleOwnerKind, RootScope};
+                let scope = match &origin.scope {
+                    RootScope::Global => "global".to_string(),
+                    RootScope::Project(project) => format!("project {}", project.0.display()),
+                };
+                let owner = match deployment
+                    .parked_owner_kind
+                    .unwrap_or(deployment.owner_kind)
+                {
+                    LifecycleOwnerKind::SkillsSh => "skills.sh",
+                    LifecycleOwnerKind::Dotagents => "dotagents",
+                    LifecycleOwnerKind::WildcardDotagents => "dotagents wildcard",
+                    LifecycleOwnerKind::InRepo => "in repo",
+                    LifecycleOwnerKind::Manual => "manual",
+                    LifecycleOwnerKind::Copy => "copy",
+                    LifecycleOwnerKind::Fork => "fork",
+                    LifecycleOwnerKind::Plugin => "plugin",
+                    LifecycleOwnerKind::Ambiguous => "ambiguous",
+                };
+                println!("    parked from {scope}; {owner}");
+            }
         }
     }
     for observation in &inventory.observations {

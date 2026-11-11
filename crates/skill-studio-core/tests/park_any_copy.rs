@@ -24,12 +24,12 @@ use skill_studio_core::dto::{
     DeploymentDto, ListEventsRequest, ParkCheckRequest, ParkRequest, ScanRequest, UnparkRequest,
 };
 use skill_studio_core::harness::HarnessCatalog;
-use skill_studio_core::identity::{AgentId, RootKind, RootScope, SkillName};
+use skill_studio_core::identity::{AgentId, RootKind, RootScope, SkillName, SourceKind};
 use skill_studio_core::ops;
-use skill_studio_core::ports::{Ports, ProcessSpawner, Runtime, ScopeFs};
+use skill_studio_core::ports::{Ports, ProcessSpawner, Runtime, ScopeFs, ToolLookup};
 use skill_studio_core::scope::{ProjectSelection, RuntimeScope};
 use skill_studio_core::testing::golden::{ctx, unique_temp_dir};
-use skill_studio_core::testing::{FailingFs, FakeClock, FakeIds, RecordingSink};
+use skill_studio_core::testing::{FailingFs, FakeClock, FakeIds, FakeToolLookup, RecordingSink};
 
 use skill_studio_host::{FileLease, RealFs, RealProcessSpawner, SqliteHistoryOpener};
 
@@ -59,6 +59,16 @@ fn runtime_with(
     fs: Arc<dyn ScopeFs>,
     spawner: Arc<dyn ProcessSpawner>,
 ) -> Runtime {
+    runtime_with_tools(home, projects, fs, spawner, None)
+}
+
+fn runtime_with_tools(
+    home: &Path,
+    projects: &[PathBuf],
+    fs: Arc<dyn ScopeFs>,
+    spawner: Arc<dyn ProcessSpawner>,
+    tools: Option<Arc<dyn ToolLookup>>,
+) -> Runtime {
     let mut scope = RuntimeScope::fixture(home);
     scope.projects = ProjectSelection::Explicit {
         paths: projects.to_vec(),
@@ -74,7 +84,7 @@ fn runtime_with(
         sink: Arc::new(RecordingSink::default()),
         spawner: Some(spawner),
         discovery: None,
-        tools: None,
+        tools,
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
     };
@@ -745,8 +755,8 @@ fn unpark_without_a_journal_row_returns_an_opencode_copy_to_its_own_folder() {
         .join(PARKED_ROOT_RELATIVE)
         .join("open-code/.origin/foo");
     assert_eq!(
-        std::fs::read_to_string(marker).unwrap().trim(),
-        ".config/opencode/skills"
+        std::fs::read_to_string(marker).unwrap().lines().next(),
+        Some(".config/opencode/skills")
     );
     forget_history(&home);
     let rt = runtime(&home, &[]);
@@ -1310,4 +1320,159 @@ fn park_succeeds_when_the_sweep_cannot_delete_a_stale_trash_folder() {
         "the failed delete leaves it"
     );
     std::fs::remove_dir_all(&home).ok();
+}
+
+#[path = "../../../apps/cli/tests/support/park_display.rs"]
+mod park_display;
+
+#[test]
+fn park_scan_keeps_each_project_owner_or_names_the_lost_type() {
+    use skill_studio_core::identity::LifecycleOwnerKind;
+    for (label, expected) in [
+        ("dotagents", LifecycleOwnerKind::Dotagents),
+        ("wildcard_dotagents", LifecycleOwnerKind::WildcardDotagents),
+        ("in_repo", LifecycleOwnerKind::InRepo),
+    ] {
+        let home = unique_temp_dir("park_display_owner");
+        let project = park_display::project(&home, label);
+        let live = project.join(".agents/skills/foo");
+        let mut tools = FakeToolLookup::default();
+        tools
+            .binaries
+            .insert("dotagents".into(), park_display::fake_dotagents(&home));
+        let rt = runtime_with_tools(
+            &home,
+            std::slice::from_ref(&project),
+            Arc::new(RealFs::new()),
+            Arc::new(RealProcessSpawner::new()),
+            Some(Arc::new(tools)),
+        );
+        let original = live_copy(&rt, "foo", &live);
+        assert_eq!(original.owner_kind, expected, "fixture {label}");
+        ops::park(
+            &rt,
+            &ctx(),
+            &ParkRequest {
+                deployment_id: original.id,
+            },
+        )
+        .unwrap();
+        let parked = parked_copy(&rt, "foo", &RootKind::Universal);
+        assert_eq!(parked.parked_owner_kind, Some(expected), "lost {label}");
+        assert_eq!(
+            parked.owner_kind,
+            LifecycleOwnerKind::Manual,
+            "{label}: the parked copy is no longer managed by its old owner"
+        );
+        assert_eq!(
+            parked.source_kind,
+            SourceKind::Manual,
+            "{label}: the parked copy's source follows its current owner"
+        );
+        assert_eq!(parked.parked_origin.unwrap().scope, original.root.scope);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+}
+
+/// Flow: park a Claude Code or `OpenCode` copy, then Turn it on. Expectation:
+/// the returned id is the id a fresh scan gives the restored copy, so a
+/// second Park with it works. Failure: the id names the park slot (for
+/// `OpenCode`, `open-code` instead of `opencode`) and the next Park fails.
+#[test]
+fn turn_on_harness_copy_returns_the_rescanned_id_or_names_the_parked_slot() {
+    for (agent, folder) in [
+        (AgentId::CLAUDE_CODE, ".claude/skills/foo"),
+        (AgentId::OPEN_CODE, ".config/opencode/skills/foo"),
+    ] {
+        let home = unique_temp_dir("turn_on_display_id");
+        let live = home.join(folder);
+        park_display::skill(&live);
+        let rt = runtime(&home, &[]);
+        let original = live_copy(&rt, "foo", &live);
+        ops::park(
+            &rt,
+            &ctx(),
+            &ParkRequest {
+                deployment_id: original.id.clone(),
+            },
+        )
+        .unwrap();
+        let parked = parked_copy(&rt, "foo", &RootKind::Harness(agent.into()));
+        let result = ops::unpark(
+            &rt,
+            &ctx(),
+            &UnparkRequest {
+                deployment_id: parked.id,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            result.deployment_id,
+            live_copy(&rt, "foo", &live).id,
+            "{agent}"
+        );
+        ops::park(
+            &rt,
+            &ctx(),
+            &ParkRequest {
+                deployment_id: result.deployment_id,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{agent}: second Park with the returned id: {e}"));
+        std::fs::remove_dir_all(home).unwrap();
+    }
+}
+
+#[test]
+fn copy_update_after_split_explains_the_skill_page_instead_of_an_absent_shared_copy() {
+    let home = unique_temp_dir("split_update_display");
+    park_display::skill(&home.join(".claude/skills/foo"));
+    let rt = runtime(&home, &[]);
+    let error = ops::update(
+        &rt,
+        &ctx(),
+        &skill_studio_core::dto::UpdateRequest {
+            skill: SkillName("foo".to_string()),
+            method: skill_studio_core::dto::InstallMethod::Copy,
+            scope: RootScope::Global,
+            files: Vec::new(),
+            source: None,
+            ref_pin: None,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.message.contains("Skill Studio") && error.message.contains("Update"),
+        "{}",
+        error.message
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn parked_scan_keeps_the_project_owner_type_but_reports_the_current_git_location() {
+    let home = unique_temp_dir("park_physical_git");
+    let project = park_display::project(&home, "in_repo");
+    let rt = runtime(&home, std::slice::from_ref(&project));
+    let original = live_copy(&rt, "foo", &project.join(".agents/skills/foo"));
+    assert!(original.in_git_repo);
+    ops::park(
+        &rt,
+        &ctx(),
+        &ParkRequest {
+            deployment_id: original.id,
+        },
+    )
+    .unwrap();
+    let parked = parked_copy(&rt, "foo", &RootKind::Universal);
+    assert_eq!(parked.parked_owner_kind, Some(original.owner_kind));
+    let physically_in_git = parked
+        .path
+        .ancestors()
+        .any(|path| path.join(".git").exists());
+    assert_eq!(
+        parked.in_git_repo, physically_in_git,
+        "the Git flag describes the old location"
+    );
+    std::fs::remove_dir_all(home).unwrap();
 }
