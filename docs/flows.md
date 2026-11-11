@@ -137,3 +137,16 @@ opening a folder written by a newer schema. A folder with no marker is version 0
 | Skill listing cost per harness                     | CLI/MCP-only  | `skill-studio doctor --json`                      | `doctor` | `apps/cli/tests/listing_cost.rs::doctor_listing_cost_warns_and_names_top_skills_or_counts_manual_and_parked_skills`; `apps/mcp/tests/mcp_server.rs::doctor_listing_cost_matches_cli_and_warns_or_loses_the_budget_in_one_adapter`; `apps/cli/tests/listing_cost.rs::doctor_keeps_a_codex_disabled_skill_in_the_cursor_row_instead_of_hiding_it_from_every_reader`; `apps/cli/tests/listing_cost.rs::doctor_charges_codex_utf8_bytes_instead_of_utf16_units_for_non_ascii_descriptions` |
 
 Agent home overrides use the existing scan, extras, park and unpark flows. The CLI commands are `skill-studio scan`, `skill-studio extras`, `skill-studio park moved` and `skill-studio unpark moved`; the MCP tools are `scan`, `extras`, `park` and `unpark`. `apps/cli/tests/agent_home_env.rs` covers each variable with `claude_env_scan_and_extras_use_moved_home_instead_of_default`, `pi_env_scan_and_extras_use_moved_home_instead_of_default` and `grok_env_scan_and_extras_use_moved_home_instead_of_default`.
+
+## Skill review dates (CLI/MCP-only)
+
+| Flow | Desktop entry | CLI | MCP tool | Flow tests |
+| --- | --- | --- | --- | --- |
+| Set a skill review date | CLI/MCP-only | `skill-studio review set <skill> <YYYY-MM-DD> [--json]` | `review_set` | `review_set_due_counts_fixture_sessions_and_clear_removes_or_future_dates_leak`; `review_unknown_skill_is_refused_instead_of_storing_a_date` |
+| Clear a review date | CLI/MCP-only | `skill-studio review clear <skill> [--json]` | `review_clear` | `review_set_due_counts_fixture_sessions_and_clear_removes_or_future_dates_leak` |
+| List skills past their review date | CLI/MCP-only | `skill-studio review due [--json]` | `review_due` | `review_due_uses_fake_clock_and_excludes_today_instead_of_reading_wall_time`; `review_cli_mcp_json_matches_for_set_due_clear_and_unknown_or_one_adapter_drifts` |
+
+Dates use UTC. A date becomes due on the next day. Counts cover distinct
+sessions across all available history. The due list refreshes its saved usage
+index on each run and includes every usage observation when counts are partial.
+Review dates and the usage index are Skill Studio data under `~/.agents/`.

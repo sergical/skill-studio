@@ -223,6 +223,79 @@ export interface ExtraEntry {
  */
 export interface ExtrasRequest {}
 /**
+ * A named skill and its optional review date. No date clears the saved date.
+ */
+export interface ReviewRequest {
+  /**
+   * Installed skill name.
+   */
+  skill: string;
+  /**
+   * Calendar date in YYYY-MM-DD form.
+   */
+  date: string | null;
+}
+/**
+ * Saved review date after a set or clear.
+ */
+export interface ReviewOutcome {
+  /**
+   * Installed skill name.
+   */
+  skill: string;
+  /**
+   * None after clear.
+   */
+  review_date: string | null;
+}
+/**
+ * Due skills with usage completeness facts.
+ */
+export interface ReviewDueReport {
+  /**
+   * Skills sorted by name.
+   */
+  rows: ReviewRow[];
+  /**
+   * Counts may miss sessions.
+   */
+  partial: boolean;
+  /**
+   * All usage observations.
+   */
+  observations: ReviewObservation[];
+}
+/**
+ * One skill past its review date.
+ */
+export interface ReviewRow {
+  /**
+   * Skill name.
+   */
+  skill: string;
+  /**
+   * Saved date in YYYY-MM-DD form.
+   */
+  review_date: string;
+  /**
+   * Distinct sessions across all available history.
+   */
+  sessions: number;
+}
+/**
+ * History that could not be counted.
+ */
+export interface ReviewObservation {
+  /**
+   * Skipped file or root.
+   */
+  path: string;
+  /**
+   * Why this history is unavailable.
+   */
+  reason: string;
+}
+/**
  * Check a scope or set invocation for one skill.
  */
 export interface InvocationRequest {

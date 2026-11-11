@@ -141,6 +141,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Set, clear, or list skill review dates.
+    Review {
+        #[command(subcommand)]
+        action: ReviewCommand,
+    },
     /// Show which skills your agents used, and which they never used.
     Usage {
         /// Keep uses from this agent id only.
@@ -522,6 +527,36 @@ struct BatchTargets {
     id: Option<String>,
 }
 
+#[derive(clap::Subcommand)]
+enum ReviewCommand {
+    /// Set a review date in YYYY-MM-DD form.
+    Set {
+        skill: String,
+        date: String,
+        #[command(flatten)]
+        args: ReviewArgs,
+    },
+    /// Clear a saved review date.
+    Clear {
+        skill: String,
+        #[command(flatten)]
+        args: ReviewArgs,
+    },
+    /// List skills with a review date before today in UTC.
+    Due {
+        #[command(flatten)]
+        args: ReviewArgs,
+    },
+}
+
+#[derive(clap::Args)]
+struct ReviewArgs {
+    #[command(flatten)]
+    scope: ScopeArgs,
+    #[arg(long)]
+    json: bool,
+}
+
 fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some("--perf-build-id") {
         println!(
@@ -607,6 +642,7 @@ fn main() -> ExitCode {
             json,
         } => run_restore(&scope, event_id, force, json, time),
         Command::Undo { scope, force, json } => run_undo(&scope, force, json, time),
+        Command::Review { action } => run_review(action, time),
         Command::Usage {
             scope,
             days,
@@ -2406,4 +2442,40 @@ fn run_invocation(
     let result = invocation(&rt, &ctx, &req);
     let envelope = ResultEnvelope::from_result(Operation::Invocation, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_invocation_table)
+}
+
+fn run_review(action: ReviewCommand, time: bool) -> ExitCode {
+    use skill_studio_core::review::{ReviewDueReport, ReviewOutcome, ReviewRequest};
+    let (args, req) = match action {
+        ReviewCommand::Set { skill, date, args } => (
+            args,
+            Some(ReviewRequest {
+                skill,
+                date: Some(date),
+            }),
+        ),
+        ReviewCommand::Clear { skill, args } => (args, Some(ReviewRequest { skill, date: None })),
+        ReviewCommand::Due { args } => (args, None),
+    };
+    let ReviewArgs { scope, json } = args;
+    if let Some(req) = req {
+        let rt = match build_runtime_write::<ReviewOutcome>(&scope, Operation::Review, json) {
+            Ok(rt) => rt,
+            Err(code) => return code,
+        };
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+        let result = ops::review(&rt, &ctx, &req);
+        let envelope = ResultEnvelope::from_result(Operation::Review, &rt.scope, &ctx, result);
+        finish(&envelope, json, time, output::print_review)
+    } else {
+        let rt = match build_runtime::<ReviewDueReport>(&scope, Operation::ReviewDue, json) {
+            Ok(rt) => rt,
+            Err(code) => return code,
+        };
+        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+        let result =
+            skill_studio_host::review_due_report(&rt, &ctx, scope.desktop_usage_cache().as_deref());
+        let envelope = ResultEnvelope::from_result(Operation::ReviewDue, &rt.scope, &ctx, result);
+        finish(&envelope, json, time, output::print_review_due)
+    }
 }

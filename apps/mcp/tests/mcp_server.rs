@@ -1731,3 +1731,64 @@ async fn doctor_listing_cost_matches_cli_and_warns_or_loses_the_budget_in_one_ad
     assert_eq!(claude["warning"], "over_limit");
     client.cancel().await.unwrap();
 }
+
+#[tokio::test]
+async fn review_cli_mcp_json_matches_for_set_due_clear_and_unknown_or_one_adapter_drifts() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join(".agents/skills/gamma");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("SKILL.md"),
+        "---\nname: gamma\ndescription: Test.\n---\n",
+    )
+    .unwrap();
+    let logs = home.path().join(".claude/projects/work");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(logs.join("session.jsonl"), concat!(
+        r#"{"type":"assistant","sessionId":"session-1","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"gamma"}}]}}"#,
+        "\nbad json\n")).unwrap();
+    let home_str = home.path().to_str().unwrap();
+    let (client, _) = connect(&[
+        ("HOME", home_str),
+        ("SKILL_STUDIO_FIXTURE", home_str),
+        ("SKILL_STUDIO_TELEMETRY", "0"),
+    ])
+    .await;
+    for (tool, args, input) in [
+        (
+            "review_set",
+            vec!["set", "gamma", "2000-01-01"],
+            serde_json::json!({"skill":"gamma", "date":"2000-01-01"}),
+        ),
+        ("review_due", vec!["due"], serde_json::json!({})),
+        (
+            "review_clear",
+            vec!["clear", "gamma"],
+            serde_json::json!({"skill":"gamma"}),
+        ),
+        (
+            "review_set",
+            vec!["set", "missing", "2000-01-01"],
+            serde_json::json!({"skill":"missing", "date":"2000-01-01"}),
+        ),
+    ] {
+        let mcp = call_tool(&client, tool, input).await;
+        if tool == "review_due" {
+            assert_eq!(mcp["data"]["rows"][0]["sessions"], 1);
+            assert_eq!(mcp["data"]["partial"], true);
+        }
+        let cli = std::process::Command::new(
+            Path::new(&mcp_bin()).parent().unwrap().join("skill-studio"),
+        )
+        .arg("review")
+        .args(args)
+        .args(["--fixture", home_str, "--json"])
+        .env("HOME", home_str)
+        .env("SKILL_STUDIO_TELEMETRY", "0")
+        .output()
+        .unwrap();
+        let cli: serde_json::Value = serde_json::from_slice(&cli.stdout).unwrap();
+        assert_eq!(normalize(mcp), normalize(cli), "{tool}");
+    }
+    client.cancel().await.unwrap();
+}
