@@ -122,8 +122,12 @@ rules are firm:
   list 20 times over 2 seconds: one check missed a running `cargo test` 24% of
   the time (gaps between test binaries), two checks in a row never did
   (measured). It holds the folder's locks while it checks and deletes, and
-  keeps the lock files. The cap is an eviction threshold: builds that run at the same
-  time can go over it. Run it every 15 minutes with launchd (macOS):
+  keeps the lock files. While any Cargo process is stopped (Ctrl-Z, a
+  debugger), it empties nothing. Known gap: a `cargo test` that gets no CPU
+  for over 2 seconds between two test binaries can lose its folder; that run
+  fails and the next one rebuilds. The cap is an eviction threshold: builds
+  that run at the same time can go over it. Run it every 15 minutes with
+  launchd (macOS):
 
   ```bash
   install -m 755 tools/cargo-build-gc.pl ~/.local/bin/cargo-build-gc

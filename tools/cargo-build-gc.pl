@@ -18,6 +18,13 @@
 # from scratch. A folder seen in use is marked, and the idle window keeps it
 # for an hour after each mark. Any failed check skips the folder.
 #
+# A stopped Cargo (Ctrl-Z, SIGSTOP, a debugger) between two test binaries runs
+# nothing from the folder and holds no lock, so while any Cargo is stopped this
+# script empties nothing. Known gap: a `cargo test` that the system does not
+# schedule for over 2 seconds between two test binaries, in a folder not
+# written for an hour, can lose its folder. That test run fails and the next
+# one rebuilds.
+#
 #   CARGO_BUILD_GC_CAP_GB       total size cap (default 40)
 #   CARGO_BUILD_GC_FLOOR_GB     free-disk floor (default 30)
 #   CARGO_BUILD_GC_MAX_DAYS     empty folders not used for this long (default 3)
@@ -75,6 +82,12 @@ sub runs_from {
         return 1 if grep { index($_, "/$id/") >= 0 } @commands;
     }
     return 0;
+}
+
+sub cargo_stopped {
+    my @procs = `ps -ax -o stat=,ucomm=`;
+    return 1 if $?;
+    return scalar grep { /^\s*T\S*\s+cargo\s*$/ } @procs;
 }
 
 sub mtime { my @s = lstat($_[0]); return @s ? $s[9] : 0 }
@@ -154,6 +167,10 @@ for my $w (sort { $a->{used} <=> $b->{used} } @workspaces) {
         mark_busy($w->{mark});
         logline("skip $w->{ws} ($why): $busy");
         next;
+    }
+    if (cargo_stopped()) {
+        logline('stop: a Cargo process is stopped, so no folder is emptied in this run');
+        last;
     }
     if ($dry_run) {
         logline("would empty $w->{ws} ($why, " . int($w->{kb} / 1024) . ' MB)');
