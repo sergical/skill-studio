@@ -56,7 +56,7 @@ fn data_root_for(xdg_data_home: Option<&str>, home: Option<PathBuf>) -> PathBuf 
 /// `ops` mutation (`build_runtime_write_at`, below) reads and writes
 /// history through. Also the file `lib.rs`'s `open_event_store` opens for
 /// the desktop's own `EventStore`, so Activity/Undo see every core mutation
-/// alongside the desktop's own (`docs/action-map/events-and-history.md`);
+/// alongside the desktop's own (`docs/flows.md`);
 /// `pub` (not `pub(crate)`) so `lib.rs` can share this instead of
 /// hand-deriving the same path a second way, and so
 /// `tests/undo_activity_history.rs` can point its own fixture `Runtime` and

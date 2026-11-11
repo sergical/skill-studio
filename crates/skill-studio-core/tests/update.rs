@@ -546,7 +546,7 @@ fn update_crash_after_each_step_leaves_disk_in_the_before_or_after_state_or_name
 }
 
 /// `cli_update_spawns_the_npx_skills_update_argv_and_lands_the_new_revision_or_names_the_diverging_arg`
-/// (the CLI parity test, per `definition-of-done.md` check 4): replays a
+/// (the CLI parity test): replays a
 /// hand-built (not a checked-in fixture file, and not recorded from a real
 /// `npx` run - unit 5.4 owns recording one) trace of `npx skills update
 /// <name> --global` and `npx -y @sentry/dotagents add <source> --name

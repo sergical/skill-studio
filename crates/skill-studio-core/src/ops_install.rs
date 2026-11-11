@@ -6,7 +6,7 @@
 //! [`journal_root`]'s `Copy` staging journal for a previous crash's stray
 //! plan before returning - see that function's doc. `install` then records
 //! an `install` journal row - the destination's backup (normally "absent",
-//! per `docs/action-map/install.md` "Desired state") and the inverse that
+//! see `docs/flows.md`) and the inverse that
 //! undoes a completed install - before the first byte moves. `Copy` stages
 //! its folder beside the destination and swaps it into place through
 //! [`crate::fsops`]'s `stage`/`swap`, journaled through [`journal_root`]'s
@@ -14,7 +14,7 @@
 //! the process-spawner port and let the CLI write its own files; this op
 //! does not stage-and-swap the CLI's own writes - redirecting it into a
 //! temporary home to force that would fight the CLI's own layout
-//! assumptions, per `docs/action-map/plan.md`'s Correction section.
+//! assumptions, see `docs/flows.md`.
 //!
 //! Trust: a `Dotagents` install's identity is always derived from `req.source`
 //! itself (never the caller's own `trust_identity`, which a caller could

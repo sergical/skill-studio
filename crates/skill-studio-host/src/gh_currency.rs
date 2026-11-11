@@ -2,7 +2,7 @@
 //! three currency ports. Read-only `gh api` calls through the user's own
 //! `gh` login, mirroring the desktop's `gh_cli.rs`; the app stores no
 //! tokens. Codex has no plugin CLI, so [`GhPluginManifestLookup`] is Claude
-//! Code marketplaces only, per plan.md unit 3.4.
+//! Code marketplaces only.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};

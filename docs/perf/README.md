@@ -41,8 +41,8 @@ block a PR. Existing required job names are unchanged.
 | Baseline prerequisite | Read skills through core, CLI, MCP, and desktop IPC | Repeatable release samples for all three fixture sizes | `pnpm run perf:baseline`                      | Baseline command and artifacts absent before this change | See baseline JSON and Markdown          |
 | #224                  | Scan the owner's home                               | Record actual home scan against 100 ms                 | Owner must run the command against their home | Not run: task safety rule forbids real-home access       | Fixture numbers do not close this issue |
 
-The requested `docs/state-machines.md` is absent at the base commit. The
-available lifecycle guidance is `docs/action-map/lifecycle-states.md`.
+Lifecycle transitions are in `docs/state-machines.md`; user flows are in
+`docs/flows.md`.
 
 CLI measurements use a 60-second read budget so large fixtures can complete.
 MCP and desktop use their default read budget. The JSON records CLI status,

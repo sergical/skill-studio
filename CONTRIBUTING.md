@@ -5,8 +5,8 @@ Thank you for your interest in this project.
 ## Prerequisites
 
 - Node.js `^22.18.0` or `>=24.11.0` (see `engines` in `package.json`)
-- pnpm 11 (pinned in `packageManager` in `package.json`)
-- Rust `1.92.0` with `rustfmt` and `clippy` (see `.github/workflows/rust.yml`)
+- pnpm 12.18.0 (pinned in `packageManager` in `package.json`)
+- Rust `1.95.0` with `rustfmt` and `clippy` (see `.github/workflows/rust.yml`)
 - Tauri CLI prerequisites: https://tauri.app/start/prerequisites/
 
 ## Setup

@@ -357,7 +357,7 @@ pub struct CapabilityReport {
     /// root, plus a harness's own root only when the catalog has it
     /// verified from the vendor's own documentation ([`Confidence::VerifiedFromDocs`]).
     /// An [`RootRole::Own`] root the catalog only infers (Codex's
-    /// `.codex/skills`: `docs/action-map/harnesses/codex.md`, "Resolved by
+    /// `.codex/skills`: `docs/agent-skill-conventions.md`, "Resolved by
     /// the docs on 2026-09-16") is excluded - installing there would be a
     /// guess about where Codex actually looks.
     pub default_install_destinations: Vec<RootSpec>,
@@ -441,7 +441,7 @@ const CLAUDE_SKILLS_DOC: &str = "https://code.claude.com/docs/en/skills";
 /// per-skill link and the whole-dir `~/.claude/skills -> ~/.agents/skills`
 /// link both work), and nested `<subdir>/.claude/skills` folders are
 /// discovered up to the repo root. Resolved by the docs on 2026-09-16
-/// (`docs/action-map/harnesses/claude-code.md`, "Resolved by the docs").
+/// (`docs/agent-skill-conventions.md`, "Resolved by the docs").
 const CLAUDE_SKILLS_DOC_2026_09_16: &str = "https://code.claude.com/docs/en/skills (read 2026-09-16: symlink dedup, nested project discovery)";
 const CLAUDE_PLUGINS_REF: &str = "https://code.claude.com/docs/en/plugins-reference";
 const CODEX_SKILLS_DOC: &str = "https://learn.chatgpt.com/docs/build-skills";
@@ -964,7 +964,7 @@ fn grok_build() -> HarnessFacts {
 // Runtime detection: the missing half of the catalog above. `HarnessFacts`
 // says what a harness reads and supports, as documented facts; the types and
 // trait below say how to prove, on this machine, that the harness exists at
-// all. Per `docs/action-map/harnesses/harness-detection.md`.
+// all. Per `docs/agent-skill-conventions.md`.
 // ============================================================================
 
 /// A version string or install-method name proven by a probe or a path
@@ -1002,7 +1002,7 @@ impl DetectedString {
 }
 
 /// Runtime detection state for one harness, derived from the signals in
-/// `docs/action-map/harnesses/harness-detection.md`.
+/// `docs/agent-skill-conventions.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HarnessState {
@@ -1083,7 +1083,7 @@ pub trait HarnessAdapter: Send + Sync {
     /// entry cannot shadow it. A harness with no command returns `&[]`.
     fn binary_names(&self) -> &'static [&'static str];
     /// Config file path relative to the home root, checked at global scope
-    /// only, per `docs/action-map/harnesses/harness-detection.md`.
+    /// only, per `docs/agent-skill-conventions.md`.
     fn config_relative_path(&self) -> Option<&'static str>;
     /// Session or transcript root relative to the home root; a non-empty
     /// listing is evidence the harness has run at least once.
@@ -1091,7 +1091,7 @@ pub trait HarnessAdapter: Send + Sync {
 
     /// Turns `<bin> --version` stdout into a display string. The default
     /// takes the first non-empty line: none of the six vendors' `--version`
-    /// formats are pinned yet (`docs/action-map/harnesses/harness-detection.md`,
+    /// formats are pinned yet (`docs/agent-skill-conventions.md`,
     /// "Open items").
     fn parse_version(&self, stdout: &str) -> Option<String> {
         stdout
@@ -1372,7 +1372,7 @@ impl HarnessAdapter for PiAdapter {
 
 /// Cursor. Detected as the CLI (`cursor-agent`, or the older `agent` name),
 /// not the editor bundle; the two are two separate detections per
-/// `docs/action-map/harnesses/harness-detection.md`, and this row is the
+/// `docs/agent-skill-conventions.md`, and this row is the
 /// CLI one.
 pub struct CursorAdapter;
 
@@ -1435,8 +1435,7 @@ impl HarnessAdapter for GrokBuildAdapter {
 // ---------------------------------------------------------------------------
 
 /// `synced` under `~/.claude/skills` is reserved by Claude Code itself and
-/// must never be treated as a skill folder (docs/action-map/harnesses/
-/// claude-code.md, "Resolved by the docs on 2026-09-16").
+/// must never be treated as a skill folder (docs/agent-skill-conventions.md).
 const CLAUDE_RESERVED_SKILLS_ENTRY: &str = "synced";
 
 /// The entry name `harness` reserves inside its own skills root: an entry

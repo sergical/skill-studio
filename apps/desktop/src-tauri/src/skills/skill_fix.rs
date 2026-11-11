@@ -1,6 +1,6 @@
 // ============================================================================
 // Skills Module - skill_fix
-// "Fix" runs the doctor invariants in `docs/action-map/lifecycle-states.md`
+// "Fix" runs the doctor invariants in `docs/flows.md`
 // for one skill by name and reports anything it repaired plus anything it
 // couldn't; a conflict (two differing copies of the same skill) is reported,
 // never merged. `fix_skill` is a thin adapter over

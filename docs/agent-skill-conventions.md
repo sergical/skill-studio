@@ -345,7 +345,7 @@ already uses.
 The 24-hour trial install was removed in #285. There is no time-boxed install
 mode anymore. To switch a skill off without deleting it, use park
 (`park_skill`/`unpark_skill`, `src-tauri/src/skills/skill_park.rs`) - see
-[park-fork-trial.md](action-map/park-fork-trial.md). A `trials` map left over
+[Flows](flows.md). A `trials` map left over
 in `~/.agents/skill-studio.json` from before #285 round-trips unchanged and is
 otherwise ignored.
 
