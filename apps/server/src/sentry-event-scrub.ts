@@ -1,10 +1,10 @@
 // ============================================================================
 // Skill Studio - Sentry Event Scrub
-// The Worker's Sentry `beforeSend` hook: this proxy is public, so an event it
+// The Worker's Sentry `beforeSend` and `beforeSendSpan` hooks: this proxy is public, so an event it
 // sends must never leak who called it or what they asked for.
 // ============================================================================
 
-import type { ErrorEvent } from "@sentry/cloudflare";
+import type { CloudflareOptions, ErrorEvent } from "@sentry/cloudflare";
 
 /** Strips request headers, cookies, query strings, user data, breadcrumbs, and the
  *  culture (timezone) context from a Sentry event before it leaves the Worker, so a
@@ -31,4 +31,15 @@ export function scrubSentryEvent<E extends ErrorEvent>(event: E): E {
     }
   }
   return event;
+}
+
+type StreamedSpan = Parameters<NonNullable<CloudflareOptions["beforeSendSpan"]>>[0];
+
+const UNSCRUBBED_SPAN_ATTRIBUTES = ["user_agent.original", "culture.timezone", "culture.locale"];
+
+/** Drops the request details `dataCollection` cannot turn off: the caller's
+ * user agent and the timezone Cloudflare derives from their location. */
+export function scrubSentrySpan(span: StreamedSpan): StreamedSpan {
+  for (const key of UNSCRUBBED_SPAN_ATTRIBUTES) delete span.attributes[key];
+  return span;
 }

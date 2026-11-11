@@ -202,6 +202,23 @@ interface CreateSkillsProxyAppOptions {
   reportServerError?: (cause: unknown, context: { kind: "upstream" | "unhandled" }) => void;
 }
 
+export const PROXY_ROUTE_TEMPLATES = {
+  health: "/health",
+  list: "/api/v1/skills",
+  search: "/api/v1/skills/search",
+  detail: "/api/v1/skills/:owner/:repo/:slug",
+} as const;
+
+type ProxyRoute = keyof typeof PROXY_ROUTE_TEMPLATES | "other";
+
+export function proxyRouteFor(path: string): ProxyRoute {
+  if (path === PROXY_ROUTE_TEMPLATES.health) return "health";
+  if (path === PROXY_ROUTE_TEMPLATES.list) return "list";
+  if (path === PROXY_ROUTE_TEMPLATES.search) return "search";
+  if (/^\/api\/v1\/skills\/[^/]+\/[^/]+\/[^/]+$/.test(path)) return "detail";
+  return "other";
+}
+
 const RATE_LIMIT_WINDOW_SECONDS = 60;
 
 /** Edge-cache lifetime per route family, in seconds - list/search results
@@ -271,16 +288,7 @@ export function createSkillsProxyApp({
     const start = Date.now();
     await next();
     const ms = Date.now() - start;
-    const route =
-      c.req.path === "/health"
-        ? "health"
-        : c.req.path === "/api/v1/skills"
-          ? "list"
-          : c.req.path === "/api/v1/skills/search"
-            ? "search"
-            : /^\/api\/v1\/skills\/[^/]+\/[^/]+\/[^/]+$/.test(c.req.path)
-              ? "detail"
-              : "other";
+    const route = proxyRouteFor(c.req.path);
     process.stdout.write(
       `${JSON.stringify({ event: "proxy_request", method: methodLabel(c.req.method), route, status: c.res.status, duration_ms: ms })}\n`,
     );
