@@ -54,6 +54,11 @@ my $seen = "$root/.gc-last-busy";
 
 sub logline { print strftime('%F %T', localtime), " @_\n" }
 
+if (-l $seen || (-e _ && !-d _)) {
+    logline("stop: $seen is not a plain folder, so no folder is emptied");
+    exit 1;
+}
+
 open(my $instance, '>>', "$root/.gc.lock") or die "cannot open $root/.gc.lock: $!\n";
 exit 0 unless flock($instance, LOCK_EX | LOCK_NB);
 
@@ -124,7 +129,7 @@ sub free_kb {
 
 sub mark_busy {
     my ($mark) = @_;
-    return if $dry_run;
+    return if $dry_run || -l "$seen/$mark";
     make_path($seen);
     if (open(my $fh, '>>', "$seen/$mark")) { close($fh) }
     utime(undef, undef, "$seen/$mark");
