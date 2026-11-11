@@ -75,9 +75,12 @@ fn update_local_edits(
             .owner_id
             .as_deref()
             .is_some_and(|owner| copy.owner_id.as_deref() == Some(owner));
-        // A copy-mode edit loses its inferred owner, but the skills CLI can still replace that folder.
+        // A copy-mode edit loses its inferred owner (and reads as in-repo under a Git folder), but the skills CLI can still replace that folder.
         let unclaimed_agent_copy = copy.owner_id.is_none()
-            && copy.owner_kind == LifecycleOwnerKind::Manual
+            && matches!(
+                copy.owner_kind,
+                LifecycleOwnerKind::Manual | LifecycleOwnerKind::InRepo
+            )
             && copy.destination == super::skill_deployment::SkillDestination::PerHarness;
         if !same_owner && !unclaimed_agent_copy {
             continue;
@@ -137,14 +140,27 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// Flow: Update a skills.sh skill whose copy-mode Codex folder was edited,
+    /// with and without a Git folder at `~/.codex`. Expectation: the verdict
+    /// says edited either way. Failure: the in-repo copy is skipped and Update
+    /// overwrites the edit with no warning.
     #[test]
     fn updating_an_owner_checks_its_copy_mode_folders_or_silently_overwrites_their_edits() {
+        for codex_in_git in [false, true] {
+            check_copy_mode_folder(codex_in_git);
+        }
+    }
+
+    fn check_copy_mode_folder(codex_in_git: bool) {
         let home = tempfile::tempdir().unwrap();
         let canonical_path = home.path().join(".agents/skills/sample");
         let copy_path = home.path().join(".codex/skills/sample");
         for path in [&canonical_path, &copy_path] {
             fs::create_dir_all(path).unwrap();
             fs::write(path.join("SKILL.md"), b"original skill").unwrap();
+        }
+        if codex_in_git {
+            fs::create_dir_all(home.path().join(".codex/.git")).unwrap();
         }
         let real_fs = skill_studio_host::RealFs::new();
         let hash = skill_studio_core::tree_hash::tree_hash_ignoring_junk(&real_fs, &canonical_path)
@@ -193,6 +209,12 @@ mod tests {
             })
             .unwrap()
             .clone();
+        assert_eq!(
+            copy.owner_kind == LifecycleOwnerKind::InRepo,
+            codex_in_git,
+            "fixture: {:?}",
+            copy.owner_kind
+        );
         let verdict = update_local_edits(
             &real_fs,
             Some(&lock),

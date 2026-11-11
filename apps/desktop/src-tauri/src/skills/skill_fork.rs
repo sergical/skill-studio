@@ -1037,12 +1037,19 @@ fn fork_skill_with_storage(
     let agents_dir = home.join(".agents");
     let skill_dir = agents_dir.join("skills").join(name);
     let canonical_skill = fs::canonicalize(&skill_dir).map_err(|error| error.to_string())?;
-    let roots = super::agents::AgentId::all()
+    let copies = super::agents::AgentId::all()
         .into_iter()
-        .map(|agent| agent.global_skills_dir(home))
-        .chain(std::iter::once(home.join(".config/opencode/skill")));
-    for root in roots {
-        let copy = root.join(name);
+        .map(|agent| agent.global_skills_dir(home).join(name))
+        .chain(std::iter::once(
+            home.join(".config/opencode/skill").join(name),
+        ))
+        .chain(skill_studio_core::skills_cli_agents::cli_removal_targets(
+            home,
+            &skill_studio_host::codex_home(home),
+            &skill_studio_core::identity::RootScope::Global,
+            name,
+        ));
+    for copy in copies {
         let metadata = match fs::symlink_metadata(&copy) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -2494,8 +2501,19 @@ mod tests {
         assert_eq!(record.base_commit, "a".repeat(40));
     }
 
+    /// Flow: Fork a skill that also has an independent edited copy in an
+    /// agent folder that global `skills remove` deletes: one the desktop
+    /// knows (Codex) and one only the skills CLI knows (Goose). Expectation:
+    /// Fork refuses and both folders keep their content. Failure: Fork runs
+    /// the removal and the agent copy's edits are gone.
     #[test]
     fn skill_local_edits_fork_refuses_independent_copy_or_global_removal_loses_agent_edits() {
+        for agent_folder in [".codex/skills", ".config/goose/skills"] {
+            fork_refuses_independent_copy_in(agent_folder);
+        }
+    }
+
+    fn fork_refuses_independent_copy_in(agent_folder: &str) {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         let app_data = tmp.path().join("data");
@@ -2517,7 +2535,7 @@ mod tests {
             }
         }
         let shared = home.join(".agents/skills/sample");
-        let copy = home.join(".codex/skills/sample");
+        let copy = home.join(agent_folder).join("sample");
         write_file(&shared.join("SKILL.md"), "original shared content");
         write_file(&copy.join("SKILL.md"), "independent Codex edit");
         struct RemovingBoth(Vec<PathBuf>);
@@ -2546,7 +2564,7 @@ mod tests {
         );
         assert!(
             result.is_err(),
-            "Fork must refuse before global removal loses an independent copy"
+            "{agent_folder}: Fork must refuse before global removal loses an independent copy"
         );
         assert!(result.unwrap_err().contains("independent"));
         assert_eq!(
