@@ -50,14 +50,14 @@ description matches the task. Grok Build's model-side control is not verified
 yet (see the "unknown" cell below). [Skill uses](#skill-uses) lists
 how each harness records a typed command and a model call.
 
-| Agent       | Explicit invocation | Restrict model auto-invoke                                                                     | Agent setting that hides a skill (Skill Studio reads it)                         |
-| ----------- | ------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Claude Code | `/name [args]`      | frontmatter `disable-model-invocation: true` (user only); `user-invocable: false` (model only) | `~/.claude/settings.json` → `skillOverrides: {"<name>": "off"}`                  |
-| Codex       | `$name`, `/skills`  | sidecar `agents/openai.yaml` → `policy.allow_implicit_invocation: false`                       | `~/.codex/config.toml` → `[[skills.config]] path = "…/SKILL.md" enabled = false` |
-| OpenCode    | `/name`             | `permission.skill` in `opencode.json`: per-name pattern `allow` / `deny` / `ask`               | same: `"name": "deny"` (wildcards allowed, e.g. `internal-*`)                    |
-| pi          | `/skill:name`       | frontmatter `disable-model-invocation: true`                                                   | none                                                                             |
-| Cursor      | `/name`             | frontmatter `disable-model-invocation: true`                                                   | none                                                                             |
-| Grok Build  | `/name`             | unknown                                                                                        | none                                                                             |
+| Agent       | Explicit invocation | Restrict model auto-invoke                                                                                       | Agent setting that hides a skill (Skill Studio reads it)                         |
+| ----------- | ------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Claude Code | `/name [args]`      | frontmatter `disable-model-invocation: true` (user only); `user-invocable: false` (model only)                   | `~/.claude/settings.json` → `skillOverrides: {"<name>": "off"}`                  |
+| Codex       | `$name`, `/skills`  | sidecar `agents/openai.yaml` → `policy.allow_implicit_invocation: false`                                         | `~/.codex/config.toml` → `[[skills.config]] path = "…/SKILL.md" enabled = false` |
+| OpenCode    | `/name`             | `disable-model-invocation: true`; `metadata["opencode/autoinvoke"]` overrides it (boolean or number 1/0, v2.2.6) | `permission.skill` in `opencode.json`: `"name": "deny"` (wildcards allowed)      |
+| pi          | `/skill:name`       | frontmatter `disable-model-invocation: true`                                                                     | none                                                                             |
+| Cursor      | `/name`             | frontmatter `disable-model-invocation: true`                                                                     | none                                                                             |
+| Grok Build  | `/name`             | unknown                                                                                                          | none                                                                             |
 
 Sources: https://code.claude.com/docs/en/skills · https://developers.openai.com/codex/skills ·
 https://opencode.ai/docs/skills/ · https://opencode.ai/v2/docs/skills/ · https://pi.dev/docs/latest/skills ·
@@ -69,10 +69,11 @@ to it. Config-based controls for Codex and OpenCode apply to one harness.
 
 `skill-studio invocation [skill]` checks both skill-owned controls and reports
 manual, auto, or unsupported for each harness and copy. `--manual` or `--auto`
-writes both controls to all editable copies of the named skill. OpenCode's
-permission config cannot express this skill-owned manual-only policy, and Grok
-Build has no verified control. Both report unsupported; the setter does not
-change harness config files.
+writes the controls to all editable copies of the named skill. OpenCode v2.2.6
+uses `metadata["opencode/autoinvoke"]` when set, otherwise it uses
+`disable-model-invocation`, otherwise model invocation is allowed. Manual mode
+sets the frontmatter flag and changes an existing auto-invoke override to false.
+Grok Build reports unsupported. The setter does not change harness config files.
 
 ### Other Claude Code frontmatter fields
 

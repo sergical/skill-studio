@@ -1,242 +1,201 @@
-//! Shared invocation policy text edits.
+//! Invocation edits preserve all bytes outside the requested scalar values.
 use crate::frontmatter::{invocation_policy, parse_frontmatter, InvocationPolicy};
-use std::fmt::Write as _;
-fn strip_terminator(raw: &str) -> &str {
-    raw.strip_suffix("\r\n")
-        .or_else(|| raw.strip_suffix('\n'))
-        .unwrap_or(raw)
+
+fn key_value(line: &str, key: &str) -> Option<usize> {
+    let (name, _) = line.split_once(':')?;
+    let parsed: serde_yaml::Value = serde_yaml::from_str(name.trim()).ok()?;
+    (parsed.as_str() == Some(key)).then_some(name.len() + 1)
 }
 
-/// A line at column 0 (no leading whitespace) with some content - the start
-/// of a new top-level YAML key. Blank lines and indented lines are
-/// continuations of whatever top-level key preceded them (a nested mapping,
-/// a block scalar body, or just blank padding).
-fn is_top_level_line(text: &str) -> bool {
-    !text.is_empty() && !text.starts_with(' ') && !text.starts_with('\t')
-}
-
-/// Whether `text` (a top-level line) is the given top-level `key`, i.e.
-/// matches `^<key>\s*:`.
-fn is_key(text: &str, key: &str) -> bool {
-    match text.strip_prefix(key) {
-        Some(rest) => rest.trim_start_matches([' ', '\t']).starts_with(':'),
-        None => false,
+fn parse_yaml(content: &str) -> Result<serde_yaml::Value, String> {
+    if content.trim().is_empty() {
+        Ok(serde_yaml::Value::Mapping(Default::default()))
+    } else {
+        serde_yaml::from_str(content).map_err(|e| e.to_string())
     }
 }
 
-/// Groups `body` (the frontmatter's lines, one entry per line, sans
-/// terminator) into `[start, end)` spans, one per top-level key: a span
-/// starts at a column-0 line and extends through every blank or indented
-/// line that follows, up to (but not including) the next column-0 line.
-fn top_level_spans(body: &[&str]) -> Vec<(usize, usize)> {
-    let mut spans = Vec::new();
-    let mut i = 0;
-    while i < body.len() {
-        if !is_top_level_line(body[i]) {
-            // Malformed frontmatter (content before any top-level key) -
-            // skip rather than looping forever; nothing to attach it to.
-            i += 1;
-            continue;
-        }
-        let start = i;
-        i += 1;
-        while i < body.len()
-            && (body[i].is_empty() || body[i].starts_with(' ') || body[i].starts_with('\t'))
-        {
-            i += 1;
-        }
-        spans.push((start, i));
+fn set_value(root: &mut serde_yaml::Value, keys: &[&str], flag: bool) -> Result<(), String> {
+    let map = root
+        .as_mapping_mut()
+        .ok_or("invocation YAML is not a mapping")?;
+    if keys.len() == 1 {
+        map.insert(keys[0].into(), flag.into());
+    } else {
+        let child = map
+            .entry(keys[0].into())
+            .or_insert_with(|| serde_yaml::Value::Mapping(Default::default()));
+        set_value(child, &keys[1..], flag)?;
     }
-    spans
+    Ok(())
 }
 
-/// Removes (or replaces) the top-level `disable-model-invocation`/
-/// `user-invocable` keys in `content`'s frontmatter block to match `policy`,
-/// inserting the new key (if any) right after the `description` key's span -
-/// after its block-scalar body, if it has one - or at the end of the
-/// frontmatter when there's no `description`. Every other byte - other keys
-/// (including a nested key that happens to share a name with one of these
-/// two), the body, blank lines, the line separator style (`\r\n` vs `\n`),
-/// and a missing final newline - is passed through unchanged. Errs when
-/// `content` has no `---`-fenced frontmatter block to edit, or when the
-/// result doesn't parse back to the requested `policy`.
-pub fn rewrite_invocation_frontmatter(
-    content: &str,
-    policy: InvocationPolicy,
-) -> Result<String, String> {
+fn patch_block(content: &str, keys: &[&str], flag: bool) -> Result<String, String> {
     let sep = if content.contains("\r\n") {
         "\r\n"
     } else {
         "\n"
     };
-
-    // Raw segments keep each line's own terminator (or lack of one, for the
-    // last line) attached, so untouched lines can be re-emitted byte for
-    // byte instead of being rejoined with a terminator we chose ourselves.
-    let raw_lines: Vec<&str> = content.split_inclusive('\n').collect();
-    let lines: Vec<&str> = raw_lines.iter().copied().map(strip_terminator).collect();
-
-    if lines.first().map(|l| l.trim()) != Some("---") {
-        return Err("SKILL.md has no frontmatter to edit".to_string());
+    let lines: Vec<_> = content.split_inclusive('\n').collect();
+    let mut start = 0;
+    let mut end = lines.len();
+    let mut indent = 0;
+    let mut offset = 0;
+    for (depth, key) in keys.iter().enumerate() {
+        let found = (start..end).find(|&i| {
+            let line = lines[i];
+            line.len() - line.trim_start_matches(' ').len() == indent
+                && key_value(line.trim_start_matches(' '), key).is_some()
+        });
+        let Some(i) = found else {
+            let insertion = if keys.len() == 1 {
+                lines
+                    .iter()
+                    .position(|line| key_value(line, "description").is_some())
+                    .map_or(end, |description| {
+                        (description + 1..end)
+                            .find(|&j| {
+                                !lines[j].trim().is_empty()
+                                    && !lines[j].starts_with([' ', '\t', '#'])
+                            })
+                            .unwrap_or(end)
+                    })
+            } else {
+                end
+            };
+            let at: usize = lines[..insertion].iter().map(|l| l.len()).sum();
+            let mut addition = String::new();
+            if at > 0 && !content[..at].ends_with('\n') {
+                addition.push_str(sep);
+            }
+            for (j, key) in keys[depth..].iter().enumerate() {
+                addition.push_str(&" ".repeat(indent + j * 2));
+                addition.push_str(key);
+                addition.push(':');
+                if depth + j + 1 == keys.len() {
+                    addition.push_str(if flag { " true" } else { " false" });
+                }
+                addition.push_str(sep);
+            }
+            return Ok(format!("{}{}{}", &content[..at], addition, &content[at..]));
+        };
+        offset = lines[..i].iter().map(|l| l.len()).sum::<usize>() + indent;
+        let line = lines[i].trim_start_matches(' ');
+        let colon = key_value(line, key).ok_or("invocation key has no editable span")?;
+        let rest = &line[colon..];
+        if depth + 1 == keys.len() {
+            let leading = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+            let value = rest.trim_start_matches([' ', '\t']);
+            let len = value
+                .find(|c: char| c.is_whitespace() || c == '#')
+                .unwrap_or(value.len());
+            if !matches!(&value[..len], "true" | "false" | "0" | "1") {
+                return Err(
+                    "unsupported invocation YAML layout; use a block mapping with boolean values"
+                        .into(),
+                );
+            }
+            let at = offset + colon + leading;
+            return Ok(format!(
+                "{}{}{}",
+                &content[..at],
+                flag,
+                &content[at + len..]
+            ));
+        }
+        if !rest.trim().is_empty() && !rest.trim_start().starts_with('#') {
+            return Err("unsupported invocation YAML layout; use a block mapping".into());
+        }
+        start = i + 1;
+        end = (start..end)
+            .find(|&j| {
+                let line = lines[j];
+                !line.trim().is_empty()
+                    && !line.trim_start().starts_with('#')
+                    && line.len() - line.trim_start_matches(' ').len() <= indent
+            })
+            .unwrap_or(end);
+        indent = lines[start..end]
+            .iter()
+            .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+            .map_or(indent + 2, |l| l.len() - l.trim_start_matches(' ').len());
     }
-    let close_idx = lines
+    Err(format!("invocation key has no editable span at {offset}"))
+}
+
+fn patch_flag(content: &str, keys: &[&str], flag: bool) -> Result<String, String> {
+    let mut intended = parse_yaml(content)?;
+    set_value(&mut intended, keys, flag)?;
+    let out = patch_block(content, keys, flag)?;
+    if parse_yaml(&out)? != intended {
+        return Err(
+            "unsupported invocation YAML layout; proposed edit does not match the requested policy"
+                .into(),
+        );
+    }
+    Ok(out)
+}
+
+/// Change invocation scalar values without removing comments or line endings.
+pub fn rewrite_invocation_frontmatter(
+    content: &str,
+    policy: InvocationPolicy,
+) -> Result<String, String> {
+    let lines: Vec<_> = content.split_inclusive('\n').collect();
+    if lines.first().map(|l| l.trim()) != Some("---") {
+        return Err("SKILL.md has no frontmatter to edit".into());
+    }
+    let close = lines
         .iter()
         .enumerate()
         .skip(1)
         .find(|(_, l)| l.trim() == "---")
         .map(|(i, _)| i)
         .ok_or("SKILL.md frontmatter has no closing `---`")?;
-
-    let body: &[&str] = &lines[1..close_idx];
-    let body_raw: &[&str] = &raw_lines[1..close_idx];
-    let spans = top_level_spans(body);
-
-    let mut drop = vec![false; body.len()];
-    for &(start, end) in &spans {
-        if is_key(body[start], "disable-model-invocation") || is_key(body[start], "user-invocable")
+    let mut body = lines[1..close].concat();
+    let original = parse_yaml(&body)?;
+    for (key, flag) in [
+        (
+            "disable-model-invocation",
+            policy == InvocationPolicy::UserOnly,
+        ),
+        ("user-invocable", policy != InvocationPolicy::ModelOnly),
+    ] {
+        if original.get(key).is_some()
+            || (key == "disable-model-invocation" && flag)
+            || (key == "user-invocable" && !flag)
         {
-            for slot in drop.iter_mut().take(end).skip(start) {
-                *slot = true;
-            }
+            body = patch_flag(&body, &[key], flag)?;
         }
     }
-    let description_span = spans
-        .iter()
-        .find(|&&(start, _)| is_key(body[start], "description"))
-        .copied();
-
-    let new_key = match policy {
-        InvocationPolicy::Both => None,
-        InvocationPolicy::UserOnly => Some("disable-model-invocation: true"),
-        InvocationPolicy::ModelOnly => Some("user-invocable: false"),
-    };
-
-    let mut out = String::new();
-    out.push_str(raw_lines[0]);
-    for idx in 0..body.len() {
-        if drop[idx] {
-            continue;
-        }
-        out.push_str(body_raw[idx]);
-        let at_description_end = description_span.is_some_and(|(_, end)| idx == end - 1);
-        if at_description_end {
-            if let Some(key) = new_key {
-                out.push_str(key);
-                out.push_str(sep);
-            }
-        }
+    if original
+        .get("metadata")
+        .and_then(|m| m.get("opencode/autoinvoke"))
+        .is_some_and(|value| {
+            value.as_bool().or_else(|| value.as_i64().map(|n| n == 1))
+                != Some(policy != InvocationPolicy::UserOnly)
+        })
+    {
+        body = patch_flag(
+            &body,
+            &["metadata", "opencode/autoinvoke"],
+            policy != InvocationPolicy::UserOnly,
+        )?;
     }
-    if description_span.is_none() {
-        if let Some(key) = new_key {
-            out.push_str(key);
-            out.push_str(sep);
-        }
-    }
-    out.push_str(raw_lines[close_idx]);
-    for raw in &raw_lines[close_idx + 1..] {
-        out.push_str(raw);
-    }
-
+    let out = format!("{}{}{}", lines[0], body, lines[close..].concat());
     let parsed = parse_frontmatter(&out);
     let rewritten = parsed
         .as_frontmatter()
-        .ok_or("Rewritten frontmatter failed to parse back".to_string())?;
-    let (rewritten_policy, _) = invocation_policy(Some(rewritten));
-    if rewritten_policy != policy {
+        .ok_or("Rewritten frontmatter failed to parse back")?;
+    if invocation_policy(Some(rewritten)).0 != policy {
         return Err(
-            "Rewritten frontmatter does not round-trip to the requested invocation policy"
-                .to_string(),
+            "Rewritten frontmatter does not round-trip to the requested invocation policy".into(),
         );
     }
-
     Ok(out)
 }
 
-/// Update only the Codex policy value. Other YAML bytes stay unchanged.
+/// Update only the Codex policy value, refusing layouts without a safe span.
 pub fn rewrite_codex_yaml(content: &str, manual: bool) -> Result<String, String> {
-    let value: serde_yaml::Value = if content.trim().is_empty() {
-        serde_yaml::Value::Mapping(Default::default())
-    } else {
-        serde_yaml::from_str(content).map_err(|e| e.to_string())?
-    };
-    let mapping = value.as_mapping().ok_or("openai.yaml is not a mapping")?;
-    let sep = if content.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    };
-    let flag = if manual { "false" } else { "true" };
-    let lines: Vec<_> = content.split_inclusive('\n').collect();
-    if let Some(policy) = mapping.get("policy") {
-        policy
-            .as_mapping()
-            .ok_or("openai.yaml policy is not a mapping")?;
-        let start = lines
-            .iter()
-            .position(|line| is_key(strip_terminator(line), "policy"));
-        let block = start.is_some_and(|start| {
-            strip_terminator(lines[start])
-                .split_once(':')
-                .is_some_and(|(_, rest)| rest.trim().is_empty() || rest.trim().starts_with('#'))
-        });
-        if !block {
-            // Flow mappings and quoted keys have no line span to patch safely.
-            let mut root = mapping.clone();
-            let mut policy = policy
-                .as_mapping()
-                .ok_or("openai.yaml policy is not a mapping")?
-                .clone();
-            policy.insert("allow_implicit_invocation".into(), (!manual).into());
-            root.insert("policy".into(), policy.into());
-            return serde_yaml::to_string(&root).map_err(|e| e.to_string());
-        }
-        let start = start.ok_or("policy has no editable span")?;
-        let end = (start + 1..lines.len())
-            .find(|&i| is_top_level_line(strip_terminator(lines[i])) && !lines[i].starts_with('#'))
-            .unwrap_or(lines.len());
-        let mut out = String::new();
-        let mut found = false;
-        let indent = lines[start + 1..end]
-            .iter()
-            .find(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
-            .map_or(2, |line| line.len() - line.trim_start().len());
-        for (i, line) in lines.iter().enumerate() {
-            if i > start
-                && i < end
-                && line.len() - line.trim_start().len() == indent
-                && is_key(line.trim_start(), "allow_implicit_invocation")
-            {
-                let comment = strip_terminator(line)
-                    .split_once('#')
-                    .map(|(_, c)| format!(" #{c}"))
-                    .unwrap_or_default();
-                let _ = write!(
-                    out,
-                    "{}allow_implicit_invocation: {flag}{comment}{sep}",
-                    " ".repeat(indent)
-                );
-                found = true;
-            } else {
-                out.push_str(line);
-            }
-            if i + 1 == end && !found {
-                if !out.ends_with('\n') {
-                    out.push_str(sep);
-                }
-                let _ = write!(
-                    out,
-                    "{}allow_implicit_invocation: {flag}{sep}",
-                    " ".repeat(indent)
-                );
-            }
-        }
-        Ok(out)
-    } else {
-        let mut out = content.to_string();
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push_str(sep);
-        }
-        let _ = write!(out, "policy:{sep}  allow_implicit_invocation: {flag}{sep}");
-        Ok(out)
-    }
+    patch_flag(content, &["policy", "allow_implicit_invocation"], !manual)
 }

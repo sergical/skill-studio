@@ -75,11 +75,12 @@ pub fn invocation(
                     "choose a skill to set invocation",
                 )
             })?;
-            let mut session = MutationSession::begin_for(rt, ctx, &[skill])?;
+            let mut session = MutationSession::begin(rt, ctx)?;
             let targets: Vec<_> = session
                 .fresh
                 .skills
                 .iter()
+                .filter(|s| s.name == skill)
                 .flat_map(|s| &s.deployments)
                 .filter(|d| req.deployment_id.as_ref().is_none_or(|id| id == &d.id))
                 .cloned()
@@ -93,22 +94,35 @@ pub fn invocation(
             let fs = rt.ports.fs.as_ref();
             let mut edits = Vec::new();
             for d in &targets {
-                if d.plugin.is_some()
-                    || (d.mutability != DeploymentMutability::Mutable
+                let dir = fs
+                    .canonicalize(&d.path)
+                    .map_err(|e| CoreError::io(&d.path, e))?;
+                crate::ports::confine(&rt.scope, fs, &dir)?;
+                let owner = session
+                    .fresh
+                    .skills
+                    .iter()
+                    .flat_map(|s| &s.deployments)
+                    .find(|candidate| {
+                        candidate.backing != crate::identity::BackingRelationship::LinkedTo
+                            && fs
+                                .canonicalize(&candidate.path)
+                                .is_ok_and(|path| path == dir)
+                    })
+                    .unwrap_or(d);
+                if crate::ops::plugin_owns_path(rt, &dir)
+                    || owner.plugin.is_some()
+                    || (owner.mutability != DeploymentMutability::Mutable
                         && !matches!(
-                            d.owner_kind,
+                            owner.owner_kind,
                             crate::identity::LifecycleOwnerKind::Manual
                                 | crate::identity::LifecycleOwnerKind::InRepo
                         ))
                 {
                     return Err(
-                        CoreError::new(ErrorCode::Unsupported, "skill is read only").at(&d.path)
+                        CoreError::new(ErrorCode::Unsupported, "skill is read only").at(&dir)
                     );
                 }
-                let dir = fs
-                    .canonicalize(&d.path)
-                    .map_err(|e| CoreError::io(&d.path, e))?;
-                crate::ports::confine(&rt.scope, fs, &dir)?;
                 if edits.iter().any(|(path, _, _)| path == &dir) {
                     continue;
                 }
@@ -154,7 +168,7 @@ pub fn invocation(
                     .map_err(|e| CoreError::new(ErrorCode::InvalidRequest, e).at(&path))?;
                     writes.push((path, stamp, updated));
                 }
-                edits.push((dir, d.clone(), writes));
+                edits.push((dir, owner.clone(), writes));
             }
             let mut ids = Vec::new();
             for (dir, d, writes) in edits {
@@ -253,6 +267,16 @@ pub fn invocation(
                     .frontmatter
                     .as_ref()
                     .is_some_and(|f| f.disable_model_invocation == Some(true));
+                let opencode_manual = d
+                    .frontmatter
+                    .as_ref()
+                    .and_then(|f| f.metadata.as_ref())
+                    .and_then(|m| m.get("opencode/autoinvoke"))
+                    .and_then(|v| {
+                        v.as_bool()
+                            .or_else(|| v.as_i64().filter(|n| matches!(n, 0 | 1)).map(|n| n == 1))
+                    })
+                    .map_or(manual, |auto| !auto);
                 let bytes = match rt.ports.fs.read_capped(
                     &d.path.join("agents/openai.yaml"),
                     crate::ops::SKILL_MD_MAX_BYTES,
@@ -275,8 +299,9 @@ pub fn invocation(
                     || {
                         rt.ports
                             .catalog
-                            .universal_root_readers()
+                            .facts
                             .iter()
+                            .filter(|facts| facts.reads_universal_root.is_yes())
                             .map(|h| h.id.clone())
                             .collect()
                     },
@@ -286,6 +311,14 @@ pub fn invocation(
                     let mode = match harness.as_str() {
                         AgentId::CLAUDE_CODE | AgentId::PI | AgentId::CURSOR => {
                             if manual {
+                                InvocationMode::Manual
+                            } else {
+                                InvocationMode::Auto
+                            }
+                        }
+                        AgentId::OPEN_CODE => {
+                            modes.push(opencode_manual);
+                            if opencode_manual {
                                 InvocationMode::Manual
                             } else {
                                 InvocationMode::Auto

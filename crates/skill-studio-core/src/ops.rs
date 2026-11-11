@@ -1710,6 +1710,15 @@ struct PluginCacheTarget {
     path: PathBuf,
 }
 
+pub(crate) fn plugin_owns_path(rt: &Runtime, path: &Path) -> bool {
+    plugin_scan_targets(rt).iter().any(|target| {
+        rt.ports
+            .fs
+            .canonicalize(&target.path)
+            .is_ok_and(|root| path.starts_with(root))
+    })
+}
+
 fn plugin_scan_targets(rt: &Runtime) -> Vec<PluginCacheTarget> {
     let mut targets = Vec::new();
     for facts in &rt.ports.catalog.facts {

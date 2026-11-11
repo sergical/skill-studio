@@ -225,13 +225,13 @@ mod tests {
     use super::*;
     use skill_studio_core::invocation::rewrite_invocation_frontmatter;
     #[test]
-    fn both_removes_either_key() {
+    fn both_resets_existing_key_value() {
         let content =
             "---\nname: find-bugs\ndescription: test\ndisable-model-invocation: true\n---\nBody.";
         let updated = rewrite_invocation_frontmatter(content, InvocationPolicy::Both).unwrap();
         assert_eq!(
             updated,
-            "---\nname: find-bugs\ndescription: test\n---\nBody."
+            "---\nname: find-bugs\ndescription: test\ndisable-model-invocation: false\n---\nBody."
         );
     }
     #[test]
@@ -250,7 +250,7 @@ mod tests {
         let updated = rewrite_invocation_frontmatter(content, InvocationPolicy::ModelOnly).unwrap();
         assert_eq!(
             updated,
-            "---\nname: find-bugs\ndescription: test\nuser-invocable: false\n---\nBody.\n"
+            "---\nname: find-bugs\ndescription: test\nuser-invocable: false\ndisable-model-invocation: false\n---\nBody.\n"
         );
     }
     #[test]
@@ -312,11 +312,11 @@ mod tests {
         assert!(!updated.ends_with('\n'));
     }
     #[test]
-    fn both_removes_conflicting_keys_leaving_neither() {
+    fn both_resets_conflicting_key_values() {
         let content = "---\nname: find-bugs\ndescription: test\ndisable-model-invocation: true\nuser-invocable: false\n---\nBody.\n";
         let updated = rewrite_invocation_frontmatter(content, InvocationPolicy::Both).unwrap();
-        assert!(!updated.contains("disable-model-invocation"));
-        assert!(!updated.contains("user-invocable"));
+        assert!(updated.contains("disable-model-invocation: false"));
+        assert!(updated.contains("user-invocable: true"));
     }
     #[test]
     fn applying_the_same_policy_twice_is_idempotent() {

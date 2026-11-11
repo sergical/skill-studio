@@ -102,15 +102,13 @@ fn invocation_manual_creates_codex_policy_and_auto_clears_it_without_claiming_un
         let rows = result["data"]["skills"][0]["deployments"]
             .as_array()
             .unwrap();
-        for harness in ["open-code", "grok-build"] {
-            assert!(
-                rows.iter()
-                    .any(|r| r["harness"] == harness && r["mode"] == "unsupported"),
-                "{result}"
-            );
-        }
+        assert!(
+            rows.iter()
+                .any(|r| r["harness"] == "grok-build" && r["mode"] == "unsupported"),
+            "{result}"
+        );
         for row in rows {
-            let expected = if matches!(row["harness"].as_str(), Some("open-code" | "grok-build")) {
+            let expected = if matches!(row["harness"].as_str(), Some("grok-build")) {
                 "unsupported"
             } else if flag == "--manual" {
                 "manual"
@@ -147,5 +145,125 @@ fn invocation_set_refuses_external_sidecar_instead_of_writing_outside_scope() {
     assert_eq!(
         std::fs::read_to_string(home.path().join(".claude/skills/gamma/SKILL.md")).unwrap(),
         MD
+    );
+}
+
+#[test]
+fn invocation_refuses_plugin_directory_alias() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = home
+        .path()
+        .join(".claude/plugins/cache/vendor/tool/1.0/skills/gamma");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(plugin.join("SKILL.md"), MD).unwrap();
+    std::fs::create_dir_all(home.path().join(".claude/skills")).unwrap();
+    std::os::unix::fs::symlink(&plugin, home.path().join(".claude/skills/alias")).unwrap();
+    let result = headless::cli(home.path(), &["invocation", "alias", "--manual"]);
+    assert_eq!(result["status"], "error", "{result}");
+    assert_eq!(
+        std::fs::read_to_string(plugin.join("SKILL.md")).unwrap(),
+        MD
+    );
+    assert!(!plugin.join("agents/openai.yaml").exists());
+}
+
+#[test]
+fn invocation_edits_shared_install_once_through_verified_link() {
+    let home = tempfile::tempdir().unwrap();
+    let shared = home.path().join(".agents/skills/gamma");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("SKILL.md"), MD).unwrap();
+    std::fs::write(home.path().join(".agents/.skill-lock.json"), r#"{"version":3,"skills":{"gamma":{"source":"owner/repo","sourceType":"github","sourceUrl":"https://github.com/owner/repo","skillFolderHash":"abc","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}}}"#).unwrap();
+    std::fs::create_dir_all(home.path().join(".claude/skills")).unwrap();
+    std::os::unix::fs::symlink(&shared, home.path().join(".claude/skills/gamma")).unwrap();
+    let result = headless::cli(home.path(), &["invocation", "gamma", "--manual"]);
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(result["data"]["event_ids"].as_array().unwrap().len(), 1);
+    assert_eq!(result["data"]["skills"][0]["mismatch"], false);
+}
+
+#[test]
+fn invocation_opencode_override_is_effective_and_patched() {
+    for flag in ["true", "1", "false", "0"] {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".config/opencode/skills/gamma");
+        std::fs::create_dir_all(&dir).unwrap();
+        let md = MD.replace("license:", &format!("disable-model-invocation: true\nmetadata:\n  opencode/autoinvoke: {flag} # keep\nlicense:"));
+        std::fs::write(dir.join("SKILL.md"), &md).unwrap();
+        std::fs::create_dir_all(dir.join("agents")).unwrap();
+        std::fs::write(
+            dir.join("agents/openai.yaml"),
+            "policy:\n  allow_implicit_invocation: false\n",
+        )
+        .unwrap();
+        let result = headless::cli(home.path(), &["invocation", "gamma"]);
+        let auto = matches!(flag, "true" | "1");
+        assert_eq!(result["data"]["skills"][0]["mismatch"], auto, "{result}");
+        assert_eq!(
+            result["data"]["skills"][0]["deployments"][0]["mode"],
+            if auto { "auto" } else { "manual" },
+            "{result}"
+        );
+        let result = headless::cli(home.path(), &["invocation", "gamma", "--manual"]);
+        assert_eq!(result["status"], "ok", "{result}");
+        assert_eq!(result["data"]["skills"][0]["mismatch"], false, "{result}");
+        let expected = if auto {
+            md.replace(&format!("{flag} # keep"), "false # keep")
+        } else {
+            md
+        };
+        assert_eq!(
+            std::fs::read_to_string(dir.join("SKILL.md")).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn invocation_codex_quoted_keys_preserve_bytes() {
+    let home = fixture();
+    let path = home.path().join(".codex/skills/gamma/agents/openai.yaml");
+    let yaml = "# keep\r\n\"policy\":\r\n  'allow_implicit_invocation':  true  # keep\r\n";
+    std::fs::write(&path, yaml).unwrap();
+    let result = headless::cli(home.path(), &["invocation", "gamma", "--manual"]);
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        yaml.replace("true", "false")
+    );
+    assert_eq!(result["data"]["event_ids"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn invocation_codex_flow_mapping_refused_before_any_write() {
+    let home = fixture();
+    let path = home.path().join(".codex/skills/gamma/agents/openai.yaml");
+    let yaml = "# keep\r\npolicy: {allow_implicit_invocation: true} # keep\r\n";
+    std::fs::write(&path, yaml).unwrap();
+    let result = headless::cli(home.path(), &["invocation", "gamma", "--manual"]);
+    assert_eq!(result["status"], "error", "{result}");
+    assert_eq!(std::fs::read_to_string(path).unwrap(), yaml);
+    assert_eq!(
+        std::fs::read_to_string(home.path().join(".claude/skills/gamma/SKILL.md")).unwrap(),
+        MD
+    );
+}
+
+#[test]
+fn invocation_frontmatter_preserves_comments_and_spacing() {
+    let home = fixture();
+    let path = home.path().join(".codex/skills/gamma/SKILL.md");
+    let md = MD
+        .replace(
+            "license:",
+            "disable-model-invocation:  false  # keep inline\n  # keep indented\nlicense:",
+        )
+        .replace('\n', "\r\n");
+    std::fs::write(&path, &md).unwrap();
+    let result = headless::cli(home.path(), &["invocation", "gamma", "--manual"]);
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        md.replace("false", "true")
     );
 }
