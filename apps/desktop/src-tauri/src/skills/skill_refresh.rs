@@ -1406,17 +1406,18 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
     // needs a schedule of its own (`issue-3.9a-followup-a.md` item 3).
     // Routed through `first_scan_then_sweep` so a test can pin both the
     // order and the thread without re-implementing this loop's scaffold.
-    let _: Result<(), ()> = in_background_span("snapshot_refresh.startup", || {
+    let _: Result<(), String> = in_background_span("snapshot_refresh.startup", || {
         first_scan_then_sweep(
             &mut || {
-                if let Err(e) = rebuild_snapshot_now(&app, &state) {
+                let result = rebuild_snapshot_now(&app, &state);
+                if let Err(e) = &result {
                     eprintln!("skill refresh: initial rebuild failed: {e}");
                 }
                 reconcile_watchers_from_snapshot(&home, &state, &mut debouncer, &mut watched);
+                result.map(|_| ())
             },
             super::core_runtime::build_runtime_write,
-        );
-        Ok(())
+        )
     });
     run_startup_doctor_pass(&app);
 
@@ -1545,7 +1546,14 @@ fn in_background_span<T, E>(
     name: &'static str,
     step: impl FnOnce() -> Result<T, E>,
 ) -> Result<T, E> {
-    let span = CommandSpan::start(Trigger::Background, None);
+    in_background_span_with_span(name, CommandSpan::start(Trigger::Background, None), step)
+}
+
+fn in_background_span_with_span<T, E>(
+    name: &'static str,
+    span: CommandSpan,
+    step: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
     let start = Instant::now();
     let result = span.enter(step);
     skill_studio_host::telemetry::record_command(
@@ -1601,7 +1609,7 @@ fn next_refresh_step(tick: RefreshTick) -> RefreshStep {
 
 /// Runs `run_refresh_loop`'s first-iteration sequence - the initial
 /// snapshot rebuild, then the startup quarantine sweep, in that order, both
-/// on whichever thread the caller runs on. `rebuild` (`&mut dyn FnMut()` -
+/// on whichever thread the caller runs on. `rebuild` (`&mut dyn FnMut() -> Result<(), String>` -
 /// the production call site also reconciles the filesystem watcher, which
 /// needs `&mut` access to its own locals) is the only injected
 /// seam: it stands in for `rebuild_snapshot_now`, which needs a real Tauri
@@ -1615,11 +1623,12 @@ fn next_refresh_step(tick: RefreshTick) -> RefreshStep {
 /// that mutation. Only `build_runtime` - the sweep's own seam, already used
 /// without a real `AppHandle` - is passed through.
 fn first_scan_then_sweep(
-    rebuild: &mut dyn FnMut(),
+    rebuild: &mut dyn FnMut() -> Result<(), String>,
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
-) {
-    rebuild();
-    run_startup_quarantine_sweep(build_runtime);
+) -> Result<(), String> {
+    let rebuild_result = rebuild();
+    let sweep_result = run_startup_quarantine_sweep(build_runtime);
+    rebuild_result.and(sweep_result)
 }
 
 /// The startup quarantine sweep unit 3.9b's `run_refresh_loop` runs once,
@@ -1633,27 +1642,29 @@ fn first_scan_then_sweep(
 /// project here as well is a follow-up, not part of the happy path.
 fn run_startup_quarantine_sweep(
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
-) {
+) -> Result<(), String> {
     let rt = match build_runtime() {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("skill refresh: startup quarantine sweep could not build a runtime: {e}");
-            return;
+            return Err(e);
         }
     };
     let ctx = skill_studio_core::ports::OpContext::uncancellable(
         skill_studio_core::identity::CorrelationId(ulid::Ulid::generate().to_string()),
     );
-    if let Err(e) = skill_studio_core::ops::sweep_quarantine(
+    skill_studio_core::ops::sweep_quarantine(
         &rt,
         &ctx,
         &skill_studio_core::identity::RootScope::Global,
-    ) {
+    )
+    .map_err(|e| {
         eprintln!(
             "skill refresh: startup quarantine sweep failed: {}",
             e.message
         );
-    }
+        e.message
+    })
 }
 
 /// Unit 5.3: one doctor pass over every lifecycle invariant, run once after
@@ -6399,6 +6410,40 @@ resolved_commit = "old"
         );
     }
 
+    #[test]
+    fn startup_rebuild_failure_emits_error_root_and_still_runs_sweep() {
+        let mut swept = false;
+        let envelopes = sentry::test::with_captured_envelopes(|| {
+            let result = in_background_span_with_span(
+                "snapshot_refresh.startup",
+                CommandSpan::start(Trigger::User, None),
+                || {
+                    first_scan_then_sweep(&mut || Err("rebuild failed".into()), || {
+                        swept = true;
+                        Err("runtime unavailable".into())
+                    })
+                },
+            );
+            assert_eq!(result, Err("rebuild failed".into()));
+        });
+        assert!(swept);
+        let transaction = envelopes
+            .iter()
+            .flat_map(|e| e.items())
+            .find_map(|item| {
+                if let sentry::protocol::EnvelopeItem::Transaction(transaction) = item {
+                    Some(transaction)
+                } else {
+                    None
+                }
+            })
+            .expect("startup must emit its root transaction");
+        assert_eq!(
+            transaction.tags.get("outcome").map(String::as_str),
+            Some("error")
+        );
+    }
+
     /// `startup_prune_runs_after_the_first_scan_off_the_ui_thread_or_names_the_missing_run`:
     /// calls `first_scan_then_sweep` - the exact function `run_refresh_loop`'s
     /// first iteration calls - with a test-owned `rebuild` closure but the
@@ -6436,12 +6481,13 @@ resolved_commit = "old"
         let build_runtime_log = StdArc::clone(&log);
 
         let handle = std::thread::spawn(move || {
-            first_scan_then_sweep(
+            let _ = first_scan_then_sweep(
                 &mut || {
                     scan_log
                         .lock()
                         .unwrap()
                         .push(("scan", std::thread::current().id()));
+                    Ok(())
                 },
                 move || {
                     // `build_runtime` is reached after lease cleanup and
