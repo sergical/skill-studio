@@ -33,7 +33,7 @@
 use strict;
 use warnings;
 use Cwd qw(realpath);
-use Fcntl qw(:flock);
+use Fcntl qw(:flock O_APPEND O_CREAT O_NOFOLLOW O_WRONLY);
 use File::Basename qw(dirname);
 use File::Glob qw(bsd_glob);
 use File::Path qw(make_path remove_tree);
@@ -59,8 +59,23 @@ if (-l $seen || (-e _ && !-d _)) {
     exit 1;
 }
 
-open(my $instance, '>>', "$root/.gc.lock") or die "cannot open $root/.gc.lock: $!\n";
+sub open_nofollow { sysopen($_[0], $_[1], O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW) }
+
+sub output_of {
+    open(my $out, '-|', @_) or return ();
+    my @lines = <$out>;
+    close($out) or return ();
+    return @lines;
+}
+
+open_nofollow(my $instance, "$root/.gc.lock") or die "cannot open $root/.gc.lock: $!\n";
 exit 0 unless flock($instance, LOCK_EX | LOCK_NB);
+
+sub glob_in {
+    my ($dir, @patterns) = @_;
+    (my $quoted = $dir) =~ s/([\\\[\]{}*?~])/\\$1/g;
+    return map { bsd_glob("$quoted/$_") } @patterns;
+}
 
 # True when $dir has no symlink in any part of its path below $ws.
 sub inside {
@@ -74,7 +89,7 @@ sub inside {
 sub lock_all {
     my ($ws) = @_;
     my @held;
-    for my $path (map { bsd_glob("$ws/$_") } '*/.cargo-lock', '*/*/.cargo-lock') {
+    for my $path (glob_in($ws, '*/.cargo-lock', '*/*/.cargo-lock')) {
         my $dir = dirname($path);
         next if -l $path || !inside($ws, $dir);
         open(my $fh, '<', $path) or return undef;
@@ -108,7 +123,7 @@ sub mtime { my @s = lstat($_[0]); return @s ? $s[9] : 0 }
 sub last_used {
     my ($ws, $mark) = @_;
     my $newest = mtime("$seen/$mark");
-    for my $p ($ws, map { bsd_glob("$ws/$_") } qw(*/deps */.fingerprint */*/deps */*/.fingerprint)) {
+    for my $p ($ws, glob_in($ws, qw(*/deps */.fingerprint */*/deps */*/.fingerprint))) {
         my $t = mtime($p);
         $newest = $t if $t > $newest;
     }
@@ -116,12 +131,12 @@ sub last_used {
 }
 
 sub size_kb {
-    my $out = `du -sk "$_[0]" 2>/dev/null`;
-    return ($out =~ /^(\d+)/) ? $1 : undef;
+    my ($out) = output_of('du', '-sk', $_[0]);
+    return (defined $out && $out =~ /^(\d+)/) ? $1 : undef;
 }
 
 sub free_kb {
-    my @lines = `df -k "$root"`;
+    my @lines = output_of('df', '-k', $root);
     my @cols  = split ' ', ($lines[1] // '');
     die "df failed for $root\n" unless defined $cols[3] && $cols[3] =~ /^\d+$/;
     return $cols[3];
@@ -129,10 +144,11 @@ sub free_kb {
 
 sub mark_busy {
     my ($mark) = @_;
-    return if $dry_run || -l "$seen/$mark";
+    return if $dry_run;
     make_path($seen);
-    if (open(my $fh, '>>', "$seen/$mark")) { close($fh) }
-    utime(undef, undef, "$seen/$mark");
+    open_nofollow(my $fh, "$seen/$mark") or return;
+    utime(undef, undef, $fh);
+    close($fh);
 }
 
 my $now = time;
