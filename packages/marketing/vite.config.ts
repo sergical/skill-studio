@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { sentryVitePlugin } from "@sentry/vite-plugin";
 import stylex from "@stylexjs/unplugin";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin, type ViteDevServer } from "vite";
@@ -59,8 +60,32 @@ function devPrerender(): Plugin {
   };
 }
 
+/**
+ * Uploads the client build's source maps to Sentry and deletes them from dist, so the
+ * Worker assets never serve them. Workers Builds holds SENTRY_AUTH_TOKEN; a build
+ * without it makes no source maps.
+ */
+const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN;
+
+function sentrySourceMaps(): Plugin[] {
+  if (!sentryAuthToken) return [];
+  return sentryVitePlugin({
+    org: "sergtech",
+    project: "skill-studio-marketing",
+    authToken: sentryAuthToken,
+    release: { name: process.env.WORKERS_CI_COMMIT_SHA },
+    sourcemaps: { filesToDeleteAfterUpload: ["./dist/**/*.map"] },
+    telemetry: false,
+  });
+}
+
 export default defineConfig(({ isSsrBuild }) => ({
-  plugins: [stylex.vite({ useCSSLayers: true }), react(), devPrerender()],
+  plugins: [
+    stylex.vite({ useCSSLayers: true }),
+    react(),
+    devPrerender(),
+    ...(isSsrBuild ? [] : sentrySourceMaps()),
+  ],
   // Workers Builds sets these two variables; they are empty on a local build.
   define: {
     __SITE_RELEASE__: JSON.stringify(process.env.WORKERS_CI_COMMIT_SHA ?? ""),
@@ -72,6 +97,7 @@ export default defineConfig(({ isSsrBuild }) => ({
         // The StyleX plugin appends every collected rule to a single CSS asset. With one
         // CSS file per page, the docs pages would miss the rules gathered from other entries.
         cssCodeSplit: false,
+        sourcemap: sentryAuthToken ? "hidden" : false,
         rollupOptions: { input: pageInputs },
       },
 }));
