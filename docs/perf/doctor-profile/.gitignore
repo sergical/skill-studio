@@ -1,0 +1,4 @@
+*-flamegraph.svg
+*.folded.txt
+*.syms.json
+*-summary.json

@@ -1539,7 +1539,7 @@ impl HistoryOpener for NoHistory {
         access: HistoryAccess,
     ) -> Result<Option<Box<dyn HistoryStore>>, CoreError> {
         match access {
-            HistoryAccess::ReadIfExists => Ok(None),
+            HistoryAccess::ReadIfExists | HistoryAccess::Inspect => Ok(None),
             HistoryAccess::ReadWrite => Err(CoreError::new(
                 ErrorCode::Io,
                 "NoHistory cannot create an event store",

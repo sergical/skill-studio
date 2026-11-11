@@ -43,7 +43,7 @@ impl HistoryOpener for NoHistoryOpener {
         access: HistoryAccess,
     ) -> Result<Option<Box<dyn HistoryStore>>, CoreError> {
         match access {
-            HistoryAccess::ReadIfExists => Ok(None),
+            HistoryAccess::ReadIfExists | HistoryAccess::Inspect => Ok(None),
             HistoryAccess::ReadWrite => Err(CoreError::new(
                 ErrorCode::Unsupported,
                 "this host build has no history store; mutations are not available yet",
@@ -201,6 +201,56 @@ impl HistoryOpener for SqliteHistoryOpener {
                     &self.backup_roots,
                 )?)))
             }
+            HistoryAccess::Inspect => {
+                let parent = self.db_path.parent().unwrap_or_else(|| Path::new("."));
+                let version = crate::data_folder_version::read_version(
+                    &crate::data_folder_version::RealFs,
+                    parent,
+                )
+                .map_err(|error| CoreError::new(ErrorCode::Io, error.to_string()))?;
+                crate::data_folder_version::check_compatible(version, crate::CURRENT_DATA_VERSION)
+                    .map_err(|error| {
+                        CoreError::new(
+                            ErrorCode::Io,
+                            crate::data_folder_version::newer_data_folder_message(error),
+                        )
+                    })?;
+                if !self.db_path.exists() {
+                    return Ok(None);
+                }
+                let mut wal = self.db_path.as_os_str().to_os_string();
+                wal.push("-wal");
+                if fs::symlink_metadata(&wal).is_ok() {
+                    return Err(CoreError::new(
+                        ErrorCode::Io,
+                        "history busy, skipped: WAL exists",
+                    ));
+                }
+                let mut uri = url::Url::from_file_path(&self.db_path)
+                    .map_err(|()| CoreError::new(ErrorCode::Io, "history path must be absolute"))?;
+                uri.set_query(Some("immutable=1"));
+                let conn = Connection::open_with_flags(
+                    uri.as_str(),
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                        | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+                )
+                .map_err(sql_err)?;
+                let root = self
+                    .db_path
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_path_buf();
+                Ok(Some(Box::new(SqliteHistoryStore {
+                    conn,
+                    backups_root: root.join("backups"),
+                    fs: Arc::new(crate::RealFs::new()),
+                    backup_roots: std::iter::once(root.join("backups"))
+                        .chain(self.backup_roots.iter().cloned())
+                        .collect(),
+                    root,
+                    _folder_guard: None,
+                })))
+            }
             HistoryAccess::ReadWrite => Ok(Some(Box::new(
                 SqliteHistoryStore::open_with_backup_roots(&self.db_path, &self.backup_roots)?,
             ))),
@@ -218,7 +268,7 @@ pub struct SqliteHistoryStore {
     backups_root: PathBuf,
     fs: Arc<dyn ScopeFs>,
     backup_roots: Vec<PathBuf>,
-    _folder_guard: crate::DataFolderGuard,
+    _folder_guard: Option<crate::DataFolderGuard>,
 }
 
 impl SqliteHistoryStore {
@@ -238,7 +288,7 @@ impl SqliteHistoryStore {
             backup_roots: std::iter::once(parent.join("backups"))
                 .chain(legacy_roots.iter().cloned())
                 .collect(),
-            _folder_guard: folder_guard,
+            _folder_guard: Some(folder_guard),
         })
     }
 
@@ -280,7 +330,7 @@ impl SqliteHistoryStore {
             backup_roots: std::iter::once(parent.join("backups"))
                 .chain(legacy_roots.iter().cloned())
                 .collect(),
-            _folder_guard: folder_guard,
+            _folder_guard: Some(folder_guard),
         })
     }
 
@@ -565,7 +615,48 @@ fn set_post_fingerprint(
     Ok(())
 }
 
+const DOCTOR_RETENTION_SQL: &str =
+    "SELECT rowid, ts, payload, inverse FROM events WHERE rowid > ?1 ORDER BY rowid LIMIT 256";
+const DOCTOR_PENDING_SQL: &str = "SELECT rowid, substr(id, 1, 256), substr(kind, 1, 256) FROM events WHERE rowid > ?1 AND status IN ('pending', 'interrupted') ORDER BY rowid LIMIT 256";
+
 impl HistoryStore for SqliteHistoryStore {
+    fn doctor_pending(&self, after: i64) -> Result<Vec<(i64, String, String)>, CoreError> {
+        let mut stmt = self.conn.prepare(DOCTOR_PENDING_SQL).map_err(sql_err)?;
+        let rows = stmt
+            .query_map([after], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(sql_err)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)
+    }
+    fn doctor_retention(
+        &self,
+        after: i64,
+    ) -> Result<Vec<skill_studio_core::ports::DoctorHistoryRow>, CoreError> {
+        let mut stmt = self.conn.prepare(DOCTOR_RETENTION_SQL).map_err(sql_err)?;
+        let rows = stmt
+            .query_map([after], |row| {
+                let ts: String = row.get(1)?;
+                let payload: String = row.get(2)?;
+                let inverse: Option<String> = row.get(3)?;
+                Ok((row.get(0)?, ts, payload, inverse))
+            })
+            .map_err(sql_err)?;
+        rows.map(|row| {
+            let (rowid, ts, payload, inverse) = row.map_err(sql_err)?;
+            Ok(skill_studio_core::ports::DoctorHistoryRow {
+                rowid,
+                ts: DateTime::parse_from_rfc3339(&ts)
+                    .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()))?
+                    .with_timezone(&Utc),
+                payload: serde_json::from_str(&payload).map_err(json_err)?,
+                inverse: inverse
+                    .map(|s| serde_json::from_str(&s))
+                    .transpose()
+                    .map_err(json_err)?,
+            })
+        })
+        .collect()
+    }
+
     fn list(&self, filter: &EventFilter) -> Result<Vec<EventRecord>, CoreError> {
         let mut clauses = Vec::new();
         if filter.skill.is_some() {
@@ -1382,6 +1473,100 @@ mod tests {
             inverse,
             backup_dir: None,
         }
+    }
+
+    fn folder_bytes(root: &Path) -> std::collections::BTreeMap<PathBuf, (u64, Vec<u8>)> {
+        fs::read_dir(root)
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                (
+                    path.file_name().unwrap().into(),
+                    (fs::metadata(&path).unwrap().len(), fs::read(path).unwrap()),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn doctor_wal_without_sidecars_preserves_folder_or_creates_wal_and_shm() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("events.sqlite3");
+        drop(SqliteHistoryStore::open(&path).unwrap());
+        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 2);
+        assert!(tmp.path().join("schema_version").is_file());
+        let before = folder_bytes(tmp.path());
+        let store = SqliteHistoryOpener::new(&path)
+            .open(&scope_for(tmp.path()), HistoryAccess::Inspect)
+            .unwrap()
+            .unwrap();
+        assert!(store.doctor_pending(0).unwrap().is_empty());
+        assert!(store.doctor_retention(0).unwrap().is_empty());
+        drop(store);
+        assert_eq!(folder_bytes(tmp.path()), before);
+    }
+
+    #[test]
+    fn doctor_wal_with_sidecars_reports_skipped_or_writes_shared_memory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("events.sqlite3");
+        let writer = SqliteHistoryStore::open(&path).unwrap();
+        writer.conn.execute("INSERT INTO events (id,ts,kind,skill,payload,status) VALUES ('wal-only','2026-01-01T00:00:00Z','park','alpha','{}','pending')", []).unwrap();
+        assert!(path.with_extension("sqlite3-wal").exists());
+        assert!(path.with_extension("sqlite3-shm").exists());
+        let before = folder_bytes(tmp.path());
+        let result =
+            SqliteHistoryOpener::new(&path).open(&scope_for(tmp.path()), HistoryAccess::Inspect);
+        assert!(result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("history busy, skipped"));
+        assert_eq!(folder_bytes(tmp.path()), before);
+    }
+
+    #[test]
+    fn doctor_pending_pages_identifiers_and_counts_all_or_decodes_unbounded_payloads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SqliteHistoryStore::open(&tmp.path().join("events.sqlite3")).unwrap();
+        store.conn.execute_batch("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<4097) INSERT INTO events (id,ts,kind,skill,payload,inverse,status) SELECT x,'invalid','park','alpha','invalid JSON','invalid JSON',CASE WHEN x % 2 = 0 THEN 'interrupted' ELSE 'pending' END FROM n").unwrap();
+        let mut after = 0;
+        let mut total = 0;
+        loop {
+            let rows = store.doctor_pending(after).unwrap();
+            assert!(rows.len() <= 256);
+            if rows.is_empty() {
+                break;
+            }
+            assert!(rows[0].0 > after);
+            after = rows.last().unwrap().0;
+            total += rows.len();
+        }
+        assert_eq!(total, 4097);
+    }
+
+    #[test]
+    fn doctor_retention_uses_rowid_keyset_or_sorts_each_history_page() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SqliteHistoryStore::open(&tmp.path().join("events.sqlite3")).unwrap();
+        let mut statement = store
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {DOCTOR_RETENTION_SQL}"))
+            .unwrap();
+        let plan: Vec<String> = statement
+            .query_map([256], |row| row.get(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("INTEGER PRIMARY KEY (rowid>?)")),
+            "{plan:?}"
+        );
+        assert!(
+            plan.iter().all(|line| !line.contains("TEMP B-TREE")),
+            "{plan:?}"
+        );
     }
 
     #[derive(Clone, Copy)]

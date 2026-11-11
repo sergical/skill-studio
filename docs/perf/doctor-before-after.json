@@ -1,0 +1,216 @@
+{
+  "status": "provisional: recorded under load",
+  "recorded_at_utc": "2026-11-10T09:39:12.084361+00:00",
+  "hardware": {
+    "cpu": "Apple M3 Max",
+    "memory_bytes": 38654705664,
+    "macos": "26.7"
+  },
+  "fixture": {
+    "skills": 378,
+    "global_skills": 239,
+    "plugin_caches": ["claude", "codex"],
+    "broken_skill_files": 3,
+    "seed": 1
+  },
+  "cache_state": "warm executable trust and OS caches; fresh CLI process each sample; before/after interleaved",
+  "percentile": "nearest rank",
+  "versions": {
+    "before": {
+      "source_git_sha": "301f6c691e524286784d39b37524dd64ef9d35b6",
+      "binary_sha256": "65973dc194cf5b3c939998082e437ea9f8e76fdd4eb93128cb998b28b2303367",
+      "samples": [
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 1,
+          "elapsed_ms": 195.369125,
+          "peak_rss_bytes": 41336832,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 1,
+          "elapsed_ms": 178.120708,
+          "peak_rss_bytes": 41058304,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 160.048166,
+          "peak_rss_bytes": 40747008,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 166.181083,
+          "peak_rss_bytes": 40910848,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 161.250458,
+          "peak_rss_bytes": 40796160,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 163.654625,
+          "peak_rss_bytes": 40861696,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 165.377792,
+          "peak_rss_bytes": 40648704,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 172.505583,
+          "peak_rss_bytes": 41500672,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.35 5.36 6.82 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 157.810667,
+          "peak_rss_bytes": 41172992,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.35 5.36 6.82 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 157.442375,
+          "peak_rss_bytes": 41025536,
+          "violations": 0
+        }
+      ],
+      "elapsed_ms": {
+        "n": 10,
+        "median": 164.5162085,
+        "p95": 195.369125,
+        "max": 195.369125
+      },
+      "peak_rss_bytes": {
+        "n": 10,
+        "median": 40968192.0,
+        "p95": 41500672,
+        "max": 41500672
+      }
+    },
+    "after": {
+      "source_git_sha": "b639223f1e83c4875b7e3ee69038ff9cfc26657f",
+      "binary_sha256": "6944c5d3d35b03583a20214468cfd7afed02725da64359b85542028d353aca2d",
+      "samples": [
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 1,
+          "elapsed_ms": 240.138708,
+          "peak_rss_bytes": 41598976,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 170.098166,
+          "peak_rss_bytes": 41189376,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 167.262167,
+          "peak_rss_bytes": 40845312,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 169.334292,
+          "peak_rss_bytes": 40910848,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 169.577625,
+          "peak_rss_bytes": 40992768,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 176.099,
+          "peak_rss_bytes": 40910848,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.38 5.39 6.84 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 176.592833,
+          "peak_rss_bytes": 41058304,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.35 5.36 6.82 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 174.383875,
+          "peak_rss_bytes": 40714240,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.35 5.36 6.82 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 158.911708,
+          "peak_rss_bytes": 41041920,
+          "violations": 0
+        },
+        {
+          "load_average": "{ 4.35 5.36 6.82 }",
+          "cargo_processes": 1,
+          "rustc_processes": 0,
+          "elapsed_ms": 178.609084,
+          "peak_rss_bytes": 40943616,
+          "violations": 0
+        }
+      ],
+      "elapsed_ms": {
+        "n": 10,
+        "median": 172.2410205,
+        "p95": 240.138708,
+        "max": 240.138708
+      },
+      "peak_rss_bytes": {
+        "n": 10,
+        "median": 40968192.0,
+        "p95": 41598976,
+        "max": 41598976
+      }
+    }
+  }
+}

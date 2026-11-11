@@ -32,6 +32,7 @@
 pub mod backup_retention;
 pub mod discovery_sources;
 pub mod doctor;
+mod doctor_scope;
 pub mod dotagents_ledger;
 mod dotagents_saved_entries;
 pub mod dto;

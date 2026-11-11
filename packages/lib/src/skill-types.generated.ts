@@ -1658,6 +1658,10 @@ export interface DoctorReport {
  */
 export interface DoctorViolation {
   /**
+   * Warning for a retained entry or external link; error for broken state.
+   */
+  severity: "off" | "warning" | "error";
+  /**
    * Which invariant is violated.
    */
   invariant:

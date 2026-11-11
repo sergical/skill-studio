@@ -210,6 +210,9 @@ impl ScopeFs for ScopedReads<'_> {
     fn read_link(&self, path: &Path) -> std::io::Result<PathBuf> {
         self.inner.read_link(path)
     }
+    fn visit_dir(&self, path: &Path, visit: &mut dyn FnMut(DirEntryFacts)) -> std::io::Result<()> {
+        self.inner.visit_dir(path, visit)
+    }
     fn read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntryFacts>> {
         self.inner.read_dir(path)
     }
@@ -324,6 +327,13 @@ pub trait ScopeFs: Send + Sync {
     fn read_link(&self, path: &Path) -> std::io::Result<PathBuf>;
     /// Lists a directory. Order is unspecified; callers sort.
     fn read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntryFacts>>;
+    /// Visits entries without requiring a complete directory listing.
+    fn visit_dir(&self, path: &Path, visit: &mut dyn FnMut(DirEntryFacts)) -> std::io::Result<()> {
+        for entry in self.read_dir(path)? {
+            visit(entry);
+        }
+        Ok(())
+    }
     /// True when `start` or any ancestor of it inside the scope holds an entry
     /// named `name`. Walks up from `start` and stops at the scope root, so a
     /// repository outside the scope is not visible.
@@ -577,8 +587,10 @@ pub fn acquire_exclusive(
 /// How an operation wants the history store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HistoryAccess {
-    /// Open only when the database already exists. Never creates it.
+    /// Open an existing database read-only. Never creates it or changes its schema or journal mode.
     ReadIfExists,
+    /// Inspect without writing database sidecars; a busy WAL may be skipped.
+    Inspect,
     /// Open or create. Requires an exclusive guard at the call site.
     ReadWrite,
 }
@@ -614,11 +626,38 @@ pub struct HeldRestoreClaim {
     pub target_kind: String,
 }
 
+/// One bounded doctor history page entry.
+pub struct DoctorHistoryRow {
+    /// `SQLite` traversal key, independent of event time.
+    pub rowid: i64,
+    /// Event creation time.
+    pub ts: chrono::DateTime<chrono::Utc>,
+    /// Recorded paths and creation times.
+    pub payload: serde_json::Value,
+    /// Inverse paths.
+    pub inverse: Option<serde_json::Value>,
+}
+
 /// The append-only event log and its backups.
 ///
 /// Invariant: the store does not decide recovery. Startup recovery lives in
 /// [`crate::events::recover_interrupted`] and takes the exclusive guard.
 pub trait HistoryStore: Send {
+    /// Pending identifiers only, in rowid order, at most 256 rows.
+    fn doctor_pending(&self, _after: i64) -> Result<Vec<(i64, String, String)>, CoreError> {
+        Err(CoreError::new(
+            crate::error::ErrorCode::Unsupported,
+            "doctor history unavailable",
+        ))
+    }
+    /// Retention records in rowid order, at most 256 rows.
+    fn doctor_retention(&self, _after: i64) -> Result<Vec<DoctorHistoryRow>, CoreError> {
+        Err(CoreError::new(
+            crate::error::ErrorCode::Unsupported,
+            "doctor history unavailable",
+        ))
+    }
+
     /// Lists events, newest first, honoring the filter.
     fn list(&self, filter: &EventFilter) -> Result<Vec<EventRecord>, CoreError>;
     /// Reads one event.
@@ -942,6 +981,14 @@ pub trait Journal: Send {
     ) -> Result<(), CoreError>;
     /// Every plan the journal holds, oldest first. Never filtered.
     fn all(&self) -> Result<Vec<PlanRecord>, CoreError>;
+    /// Visits one plan at a time for inspection.
+    fn visit(&self, visit: &mut dyn FnMut(PlanRecord)) -> Result<(), CoreError> {
+        for plan in self.all()? {
+            visit(plan);
+        }
+        Ok(())
+    }
+
     /// Rows awaiting recovery, Pending or Interrupted, oldest first.
     fn pending(&self) -> Result<Vec<PlanRecord>, CoreError>;
     /// Removes one backup's bytes from disk. Never touches the plan row;

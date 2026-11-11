@@ -477,6 +477,21 @@ impl CoreError {
     }
 }
 
+/// Fork storage under Tauri's application data directory.
+pub fn fork_storage_root(app_data: &Path) -> PathBuf {
+    app_data.join("skill-studio/forks")
+}
+
+/// Desktop fork storage resolved from explicit platform roots for headless callers.
+pub fn desktop_fork_storage_root(home: &Path, shared_data_root: &Path) -> PathBuf {
+    let platform_data = if cfg!(target_os = "macos") {
+        home.join("Library/Application Support")
+    } else {
+        shared_data_root.parent().unwrap_or(home).to_path_buf()
+    };
+    fork_storage_root(&platform_data.join("com.skillstudio.app"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

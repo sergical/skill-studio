@@ -2923,10 +2923,33 @@ pub fn diagnose(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Diag
 }
 
 fn diagnose_body(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Diagnosis, CoreError> {
+    diagnose_with_scan(rt, ctx, req, true)
+}
+
+pub(crate) fn diagnose_inspect(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &ScanRequest,
+) -> Result<Diagnosis, CoreError> {
+    rt.run(Operation::Diagnose, ctx, || {
+        diagnose_with_scan(rt, ctx, req, false)
+    })
+}
+
+fn diagnose_with_scan(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &ScanRequest,
+    lease: bool,
+) -> Result<Diagnosis, CoreError> {
     let clock = rt.ports.clock.as_ref();
     let op_start = clock.monotonic();
     let step_start = clock.monotonic();
-    let inventory = scan(rt, ctx, req);
+    let inventory = if lease {
+        scan(rt, ctx, req)
+    } else {
+        rt.run(Operation::Scan, ctx, || scan_inner(rt, ctx, req))
+    };
     // Discard `scan`'s own timing immediately: an error below must leave
     // `ctx` with `diagnose`'s own timing or none, never `scan`'s.
     ctx.take_timing();

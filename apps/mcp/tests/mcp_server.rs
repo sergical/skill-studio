@@ -1280,6 +1280,123 @@ async fn harnesses_stdio_reads_claude_install_method_from_fixture_home_or_report
 }
 
 #[tokio::test]
+async fn doctor_stdio_warns_for_external_links_and_errors_for_broken_links_or_reports_a_healthy_scope(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let external = dir.path().join("external");
+    let root = home.join(".claude/skills");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::write(
+        external.join("SKILL.md"),
+        "---\nname: dev-skill\ndescription: fixture\n---\n",
+    )
+    .unwrap();
+    let link = root.join("dev-skill");
+    std::os::unix::fs::symlink(&external, &link).unwrap();
+    let codex = home.join(".codex");
+    let config = home.join(".config");
+    let data = home.join(".local/share");
+    let (client, _) = connect(&[
+        ("SKILL_STUDIO_HOME", home.to_str().unwrap()),
+        ("HOME", home.to_str().unwrap()),
+        ("CODEX_HOME", codex.to_str().unwrap()),
+        ("XDG_CONFIG_HOME", config.to_str().unwrap()),
+        ("XDG_DATA_HOME", data.to_str().unwrap()),
+        ("SKILL_STUDIO_MCP_DEV_TOOLS", "1"),
+        ("SKILL_STUDIO_TELEMETRY", "0"),
+    ])
+    .await;
+    for expected in ["warning", "error"] {
+        let envelope = call_tool(&client, "doctor", serde_json::json!({})).await;
+        let links: Vec<_> = envelope["data"]["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["invariant"] == "link_resolves_in_root")
+            .collect();
+        assert_eq!(links.len(), 1, "{envelope}");
+        assert_eq!(links[0]["severity"], expected);
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        std::fs::remove_file(external.join("SKILL.md")).ok();
+        std::fs::remove_dir(&external).ok();
+    }
+}
+
+fn complete_tree(
+    root: &std::path::Path,
+) -> std::collections::BTreeMap<std::path::PathBuf, (u64, Vec<u8>)> {
+    fn walk(
+        root: &std::path::Path,
+        path: &std::path::Path,
+        out: &mut std::collections::BTreeMap<std::path::PathBuf, (u64, Vec<u8>)>,
+    ) {
+        let facts = std::fs::symlink_metadata(path).unwrap();
+        let bytes = if facts.is_file() {
+            std::fs::read(path).unwrap()
+        } else if facts.file_type().is_symlink() {
+            std::fs::read_link(path)
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec()
+        } else {
+            Vec::new()
+        };
+        out.insert(
+            path.strip_prefix(root).unwrap().to_path_buf(),
+            (facts.len(), bytes),
+        );
+        if facts.is_dir() {
+            for entry in std::fs::read_dir(path).unwrap() {
+                walk(root, &entry.unwrap().path(), out);
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(root, root, &mut out);
+    out
+}
+
+#[tokio::test]
+async fn doctor_mcp_preserves_empty_and_populated_trees_or_creates_lease_files() {
+    for populated in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        if populated {
+            std::fs::create_dir_all(home.join(".agents/skills/alpha")).unwrap();
+            std::fs::write(
+                home.join(".agents/skills/alpha/SKILL.md"),
+                "---\nname: alpha\ndescription: fixture\n---\n",
+            )
+            .unwrap();
+            std::fs::create_dir_all(home.join(".history/leases")).unwrap();
+            std::fs::write(
+                home.join(".history/leases/sentinel"),
+                "retained lease bytes",
+            )
+            .unwrap();
+        }
+        let before = complete_tree(dir.path());
+        let (client, _) = connect(&[
+            ("SKILL_STUDIO_FIXTURE", home.to_str().unwrap()),
+            ("HOME", home.to_str().unwrap()),
+            ("SKILL_STUDIO_MCP_DEV_TOOLS", "1"),
+            ("SKILL_STUDIO_TELEMETRY", "0"),
+        ])
+        .await;
+        let envelope = call_tool(&client, "doctor", serde_json::json!({})).await;
+        assert!(envelope["data"]["violations"].is_array(), "{envelope}");
+        assert_eq!(before, complete_tree(dir.path()));
+    }
+}
+
+#[tokio::test]
 async fn mcp_park_refuses_newer_history_without_tree_changes_or_writes_mutation_lease() {
     let (_dir, home) = live_home();
     let deployment = deployment_id_in_root(&home, "gamma", "universal");

@@ -106,6 +106,7 @@ impl ScopeArgs {
                 };
             }
             scope.opencode_config_root = Some(skill_studio_host::opencode_config_dir_under(home));
+            scope.data_root = Some(data_root.clone());
             let lease_root = data_root.join("leases");
             (scope, lease_root)
         } else {
@@ -121,6 +122,7 @@ impl ScopeArgs {
                 };
             }
             scope.opencode_config_root = Some(skill_studio_host::opencode_config_dir(&home));
+            scope.data_root = Some(data_root.clone());
             let lease_root = data_root.join("leases");
             (scope, lease_root)
         };
