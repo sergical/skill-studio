@@ -110,8 +110,10 @@ export function EditorCard() {
       title="Open in editor"
       description="The app a skill folder opens in from the Locations card."
     >
-      {isLoading || !choices ? (
+      {isLoading ? (
         <p className="m-0 text-small text-text-tertiary">Looking for installed editors…</p>
+      ) : !choices ? (
+        <p className="m-0 text-small text-text-tertiary">Couldn't read installed editors.</p>
       ) : (
         <>
           <RadioGroup

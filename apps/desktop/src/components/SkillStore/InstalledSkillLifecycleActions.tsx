@@ -320,7 +320,7 @@ export function InstalledSkillLifecycleActions({
         <p className="m-0 text-caption text-text-tertiary">{updateDisabledReason}</p>
       )}
       <Button
-        className={`${ACTION_BUTTON_CLASS} bg-error-soft text-error hover:bg-error hover:text-white`}
+        className={`${ACTION_BUTTON_CLASS} bg-error-soft text-error hover:bg-error-solid hover:text-white`}
         onClick={() => setShowRemoveConfirm(true)}
         disabled={isRemoving || !removalPreview}
       >

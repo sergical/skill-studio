@@ -100,7 +100,7 @@ export function ActivityDayDetails({
           <h2 className="text-body font-medium text-text-primary">{formatDay(dayKey)}</h2>
           <Muted>{summary}</Muted>
           {comparison && (
-            <span className="text-small tabular-nums text-text-quaternary">{comparison}</span>
+            <span className="text-small tabular-nums text-text-tertiary">{comparison}</span>
           )}
         </div>
         <div className="-mr-1.5 flex shrink-0 items-center">

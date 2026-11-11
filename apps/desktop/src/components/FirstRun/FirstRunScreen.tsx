@@ -81,10 +81,14 @@ function FirstRunScreenBody({ onComplete }: FirstRunScreenProps) {
               </p>
             </div>
 
-            {error != null && <p className="text-sm text-destructive">{error}</p>}
+            {error != null && (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            )}
 
             {rows == null && error == null && (
-              <p className="text-sm text-muted-foreground">Detecting agents...</p>
+              <p className="text-sm text-muted-foreground">Detecting agents…</p>
             )}
 
             {rows != null && (
@@ -137,14 +141,18 @@ function FirstRunScreenBody({ onComplete }: FirstRunScreenProps) {
               </p>
             </div>
 
-            {saveError != null && <p className="text-sm text-destructive">{saveError}</p>}
+            {saveError != null && (
+              <p role="alert" className="text-sm text-destructive">
+                {saveError}
+              </p>
+            )}
 
             <Button
               onClick={onContinue}
               disabled={continueIsBlocked({ rows, error, saving })}
               className="w-full"
             >
-              {saving ? "Saving..." : "Continue"}
+              {saving ? "Saving…" : "Continue"}
             </Button>
           </div>
         </div>

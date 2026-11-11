@@ -161,6 +161,7 @@ export function SkillRepairCard({ skill, deployment }: SkillRepairCardProps) {
       </p>
 
       <RadioGroup
+        aria-label="Repair options"
         className="gap-2 px-3 pb-1"
         value={selectedKey}
         onValueChange={(value) => setSelectedKey(value)}

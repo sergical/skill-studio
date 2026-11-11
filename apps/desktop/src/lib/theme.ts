@@ -76,11 +76,9 @@ export function watchSystemTheme(onChange: (prefersDark: boolean) => void): () =
 }
 
 /**
- * `PatchDiff`'s own theme name for `resolved` - shared by `SkillRunDiff`,
- * `SkillProposedEdits`, and `SkillCompareDialog`, the three `PatchDiff`
- * callers. Takes the store's `resolvedTheme` (not a fresh DOM read) so those
- * components re-render on a theme change instead of only picking it up on
- * their next unrelated render.
+ * `PatchDiff`'s own theme name for `resolved`. Takes the store's
+ * `resolvedTheme` (not a fresh DOM read) so diff views re-render on a theme
+ * change instead of only picking it up on their next unrelated render.
  */
 export function diffTheme(resolved: ResolvedTheme): "github-light" | "github-dark" {
   return resolved === "light" ? "github-light" : "github-dark";

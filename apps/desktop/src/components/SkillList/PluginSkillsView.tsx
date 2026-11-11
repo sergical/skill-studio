@@ -1,3 +1,4 @@
+import { FirstScanState, type FirstScanStateProps } from "../SkillList/FirstScanState";
 // ============================================================================
 // PluginSkillsView - Skills shipped inside agent plugin caches, grouped by
 // the plugin that ships them. A separate place from Skills: plugin skills
@@ -11,7 +12,7 @@ import { Button } from "@skill-studio/ui";
 import { PageShell } from "../Shell/PageShell";
 import { HarnessIcon, harnessIdFromLabel } from "../ui/HarnessIcon";
 
-interface PluginSkillsViewProps {
+interface PluginSkillsViewProps extends FirstScanStateProps {
   snapshot: SkillSnapshot | undefined;
   onSelectSkill: (name: string, deploymentPath?: string) => void;
 }
@@ -21,9 +22,23 @@ function deploymentPathInGroup(skill: InstalledSkill, group: PluginGroup): strin
   return skill.deployments.find((d) => d.plugin?.name === group.pluginName)?.path;
 }
 
-export function PluginSkillsView({ snapshot, onSelectSkill }: PluginSkillsViewProps) {
+export function PluginSkillsView({
+  snapshot,
+  onSelectSkill,
+  isLoading,
+  error,
+  onRetry,
+}: PluginSkillsViewProps) {
   const groups = groupPluginSkills(pluginSkillsView(snapshot?.skills ?? []));
   const skillCount = new Set(groups.flatMap((g) => g.skills.map((s) => s.name))).size;
+
+  if (!snapshot) {
+    return (
+      <PageShell title="Plugin skills">
+        <FirstScanState isLoading={isLoading} error={error} onRetry={onRetry} />
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell
