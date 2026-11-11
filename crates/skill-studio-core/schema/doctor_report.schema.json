@@ -72,7 +72,7 @@
       ]
     },
     "DoctorInvariant": {
-      "description": "One of the six doctor invariants from `lifecycle-states.md`. Carries\n`Serialize`/`Deserialize`/`JsonSchema` (unlike the rest of this\ndetect-only module) because `ops::doctor`'s [`crate::dto::DoctorReport`]\ncrosses the CLI/desktop/MCP boundary and needs to name which invariant a\nviolation is.",
+      "description": "One of the six doctor invariants from `docs/flows.md`. Carries\n`Serialize`/`Deserialize`/`JsonSchema` (unlike the rest of this\ndetect-only module) because `ops::doctor`'s [`crate::dto::DoctorReport`]\ncrosses the CLI/desktop/MCP boundary and needs to name which invariant a\nviolation is.",
       "oneOf": [
         {
           "description": "1. Every link resolves inside its root.",
