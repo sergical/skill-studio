@@ -13,10 +13,14 @@ import {
   rememberedSiteTheme,
   transitionSiteTheme,
 } from "../site-theme";
+import { bufferEarlyErrors, startSiteSentry } from "../site-sentry";
 import "../marketing-site.css";
 import "./docs-prose.css";
 // Imported for its StyleX rules, which the build collects into the shared CSS file.
 import "./docs-page-styles";
+
+// The SDK chunk loads after this script finishes, so a setup error below is still buffered.
+void startSiteSentry(bufferEarlyErrors());
 
 const COPY_LABEL_RESET_MS = 2000;
 const copyResetTimers = new WeakMap<HTMLElement, number>();
