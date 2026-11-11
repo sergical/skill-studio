@@ -1007,9 +1007,8 @@ export interface SkillEventDto {
   backup_path?: string | null;
 }
 /**
- * One skill bundled into a pack: `name` is its directory name, `path` is
- * the exact deployment directory it was bundled from - see
- * `skill_pack::resolve_members`.
+ * One skill in a pack record: `name` is its directory name, `path` is the
+ * deployment directory it was bundled from.
  */
 export interface PackMember {
   name: string;

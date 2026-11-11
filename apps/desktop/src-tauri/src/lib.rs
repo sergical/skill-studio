@@ -193,8 +193,8 @@ fn reconcile_core_journal_at_startup(
 /// `skill_refresh::build_snapshot` - at that directory instead of the real
 /// one, for the manual fixture-mode checklist in
 /// `docs/spec-core-primitives.md` section 11.5. Must run before anything
-/// else reads `HOME` (the refresh thread, the event store, `skill_pack`
-/// startup reconcile), so it's the very first thing `run()` does.
+/// else reads `HOME` (the refresh thread, the event store), so it's the
+/// very first thing `run()` does.
 ///
 /// SAFETY: single-threaded at this point - `run()` hasn't spawned the
 /// refresh thread or handed control to Tauri yet, so nothing else reads
