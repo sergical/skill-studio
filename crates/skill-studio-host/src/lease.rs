@@ -566,45 +566,6 @@ mod tests {
     }
 
     #[test]
-    fn one_thousand_scan_and_write_cycles_reuse_a_fixed_set_of_root_files_instead_of_growing_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let lease = FileLease::new(dir.path().to_path_buf());
-        let keys = [key("home"), key("project")];
-        drop(
-            lease
-                .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
-                .unwrap(),
-        );
-        let before = fs::read_dir(dir.path()).unwrap().count();
-        for _ in 0..1000 {
-            for mode in [LeaseMode::Shared, LeaseMode::Exclusive] {
-                drop(lease.acquire(&keys, mode, Duration::ZERO).unwrap());
-            }
-        }
-        let mut expected: Vec<_> = keys
-            .iter()
-            .map(|key| lease.lock_path(key).file_name().unwrap().to_owned())
-            .collect();
-        expected.sort();
-        let mut remaining: Vec<_> = fs::read_dir(dir.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect();
-        remaining.sort();
-        println!(
-            "1000 scan+write cycles, {} fixed roots: before={before}, after={}",
-            keys.len(),
-            remaining.len()
-        );
-        assert_eq!(
-            before,
-            expected.len(),
-            "initial release removed stable root files"
-        );
-        assert_eq!(remaining, expected);
-    }
-
-    #[test]
     fn contending_writers_keep_exclusion_and_reuse_the_same_stable_root_file() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::{Arc, Barrier};

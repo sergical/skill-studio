@@ -68,11 +68,6 @@ export function pluginInfoForSkill(skill: InstalledSkill): Deployment["plugin"] 
   return skill.deployments.find((d) => d.plugin)?.plugin;
 }
 
-/** The name of the first plugin deployment shipping `skill`, if any. */
-export function pluginLabelForSkill(skill: InstalledSkill): string | undefined {
-  return pluginInfoForSkill(skill)?.name;
-}
-
 /**
  * The Source-row and "Managed by" label for a plugin-shipped skill, e.g.
  * `Claude Code plugin · codex · v1.0.6`. `undefined` when `skill` has no
@@ -120,20 +115,4 @@ export function groupPluginSkills(skills: InstalledSkill[]): PluginGroup[] {
   return [...groups.values()].sort(
     (a, b) => a.harness.localeCompare(b.harness) || a.pluginName.localeCompare(b.pluginName),
   );
-}
-
-/**
- * Distinct skill count per harness with plugin-shipped skills, for the
- * Plugins sidebar section. Built from `groupPluginSkills` (deployments), so
- * a skill that also has an own deployment elsewhere still counts toward its
- * harness here.
- */
-export function pluginHarnessCounts(skills: InstalledSkill[]): Map<string, number> {
-  const namesByHarness = new Map<string, Set<string>>();
-  for (const group of groupPluginSkills(skills)) {
-    const names = namesByHarness.get(group.harness) ?? new Set<string>();
-    for (const skill of group.skills) names.add(skill.name);
-    namesByHarness.set(group.harness, names);
-  }
-  return new Map([...namesByHarness].map(([harness, names]) => [harness, names.size]));
 }

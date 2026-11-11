@@ -5,35 +5,7 @@
 // skill-coverage.ts.
 // ============================================================================
 
-import type { SkillInvocationStats, SkillSnapshot } from "./skill-types";
-
-/** Aggregate counts shown in the dashboard's stat cards. */
-export interface SkillTotals {
-  skillCount: number;
-  tokens: number;
-  bytes: number;
-  invocationsLast30Days: number;
-}
-
-/**
- * Totals over every skill in the snapshot: count, SKILL.md token sum,
- * folder byte sum, and invocations across all skills in the last 30 days.
- */
-export function computeTotals(snapshot: SkillSnapshot): SkillTotals {
-  let tokens = 0;
-  let bytes = 0;
-  for (const skill of snapshot.skills) {
-    tokens += skill.skill_md_tokens;
-    bytes += skill.folder_bytes;
-  }
-
-  let invocationsLast30Days = 0;
-  for (const stat of snapshot.invocations) {
-    invocationsLast30Days += stat.last_30_days;
-  }
-
-  return { skillCount: snapshot.skills.length, tokens, bytes, invocationsLast30Days };
-}
+import type { SkillInvocationStats } from "./skill-types";
 
 /** Formats a byte count as e.g. "1.2 MB", "340 KB", "12 B". */
 export function formatBytes(bytes: number): string {
@@ -171,19 +143,4 @@ export function recentWeeks(dates: string[], weeks: number): string[] {
   const total = weekColumns(dates);
   if (weeks >= total) return dates;
   return dates.slice((total - Math.max(1, weeks)) * 7 - lead);
-}
-
-/** The `n` skills with the most invocations in `window`, descending; ties break by name. */
-export function topSkills(
-  stats: SkillInvocationStats[],
-  n: number,
-  window: UsageWindow = "30d",
-): SkillInvocationStats[] {
-  return [...stats]
-    .sort(
-      (a, b) =>
-        invocationsInWindow(b, window) - invocationsInWindow(a, window) ||
-        a.skill.localeCompare(b.skill),
-    )
-    .slice(0, n);
 }

@@ -141,21 +141,6 @@ export interface Toast {
   action?: { label: string; onClick: () => void };
 }
 
-/**
- * First-class agents featured for quick selection in the agent-target
- * picker. These are the install targets `npx skills --agent <id>` accepts,
- * not every harness the scanner reads: Grok Build is scanned for coverage
- * and health but is not an `npx skills` install target, so it is excluded
- * here (see AgentId::GrokBuild rejection in skills/commands.rs).
- */
-export const COMMON_AGENTS: import("./skill-types.generated").AgentId[] = [
-  "claude-code",
-  "codex",
-  "open-code",
-  "pi",
-  "cursor",
-];
-
 /** Badge label for each source_kind, shared by SkillBrowser and SkillDetailPanel. */
 export const SOURCE_KIND_LABELS = {
   "skills-sh": "skills.sh",

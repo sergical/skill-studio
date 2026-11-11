@@ -5,19 +5,8 @@
 import type {
   Deployment,
   FrontmatterRepairKind,
-  FrontmatterRepairPreview,
   InvocationConflictChoice,
 } from "@skill-studio/lib";
-
-export function hasMalformedYamlWarning(
-  deployment: Pick<Deployment, "spec_violations"> | undefined,
-): boolean {
-  return Boolean(
-    deployment?.spec_violations?.some((violation) =>
-      violation.startsWith("invalid YAML frontmatter at line "),
-    ),
-  );
-}
 
 /**
  * The repair a single violation message calls for. The matching mirrors the
@@ -130,14 +119,4 @@ export function canOfferLocalQuote(state: {
   hasPreview: boolean;
 }): boolean {
   return state.isPreviewSettled && !state.hasPreview;
-}
-
-export function frontmatterRepairActionLabels(
-  preview: Pick<FrontmatterRepairPreview, "allowed_apply_modes">,
-): string[] {
-  return preview.allowed_apply_modes.map((mode) => {
-    if (mode === "fork-and-fix") return "Fork and fix";
-    if (mode === "fix-installed-copy") return "Fix installed copy";
-    return "Apply fix";
-  });
 }

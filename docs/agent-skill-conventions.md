@@ -22,7 +22,7 @@ Directory layout: `SKILL.md` (required), optional `scripts/`, `references/`, `as
 The spec has **no** invocation-control fields; those are agent extensions (below).
 Reference validator: `skills-ref validate ./my-skill`.
 
-Skill Studio enforces these rules in `src-tauri/src/skills/frontmatter.rs`
+Skill Studio enforces these rules in `crates/skill-studio-core/src/frontmatter.rs`
 (`validate_skill`) and reports failures as `spec_violations`.
 
 ## What agents do with a spec violation

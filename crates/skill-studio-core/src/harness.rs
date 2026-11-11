@@ -270,27 +270,6 @@ impl HarnessCatalog {
         self.facts.iter().find(|f| &f.id == id)
     }
 
-    /// Harnesses that read the universal root, in scan order.
-    pub fn universal_root_readers(&self) -> Vec<&HarnessFacts> {
-        self.facts
-            .iter()
-            .filter(|f| f.reads_universal_root.is_yes())
-            .collect()
-    }
-
-    /// Plugin cache roots, derived from the facts rather than from the scope.
-    pub fn plugin_cache_paths(&self) -> Vec<(AgentId, String)> {
-        self.facts
-            .iter()
-            .filter_map(|f| {
-                f.plugin_cache
-                    .relative_path
-                    .clone()
-                    .map(|p| (f.id.clone(), p))
-            })
-            .collect()
-    }
-
     /// The catalog shipped with this crate. Sources are listed per fact and
     /// mirror `docs/research/harness-primitives.md`.
     pub fn builtin() -> Self {
@@ -1881,8 +1860,9 @@ mod tests {
         let claude = catalog.get(&AgentId::from(AgentId::CLAUDE_CODE)).unwrap();
         assert!(!claude.reads_universal_root.is_yes());
         let readers: Vec<_> = catalog
-            .universal_root_readers()
-            .into_iter()
+            .facts
+            .iter()
+            .filter(|facts| facts.reads_universal_root.is_yes())
             .map(|f| f.id.as_str().to_string())
             .collect();
         assert_eq!(
