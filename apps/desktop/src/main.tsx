@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { KitPreview } from "@skill-studio/ui";
 import App from "./App";
+import { AppErrorBoundary } from "./components/Shell/AppErrorBoundary";
 import { stampInitialTheme } from "./lib/theme";
 import {
   reactErrorHandler,
@@ -14,55 +15,6 @@ import { useAppStore } from "./store/appStore";
 // Stamped before React renders, so the app never flashes the wrong palette
 // on first paint.
 stampInitialTheme();
-
-// Simple error boundary for debugging
-class ErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { hasError: boolean; error: Error | null }
-> {
-  constructor(props: { children: React.ReactNode }) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error };
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div
-          style={{
-            padding: 20,
-            color: "#ff6b6b",
-            backgroundColor: "#1a1a1a",
-            minHeight: "100vh",
-            fontFamily: "monospace",
-          }}
-        >
-          <h1>Something went wrong</h1>
-          <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", userSelect: "text" }}>
-            {this.state.error?.message}
-          </pre>
-          <pre
-            style={{
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              fontSize: 12,
-              opacity: 0.7,
-              userSelect: "text",
-            }}
-          >
-            {this.state.error?.stack}
-          </pre>
-        </div>
-      );
-    }
-
-    return this.props.children;
-  }
-}
 
 // Dev-only proof that @skill-studio/ui renders themed with the app's tokens.
 // Not a real route: visit with `#kit` while running `npm run dev`.
@@ -110,10 +62,10 @@ async function boot(): Promise<void> {
     onRecoverableError: reactErrorHandler,
   }).render(
     <React.StrictMode>
-      <ErrorBoundary>
+      <AppErrorBoundary>
         {showKitPreview ? <KitPreview /> : <App />}
         {PerfOverlay && <PerfOverlay />}
-      </ErrorBoundary>
+      </AppErrorBoundary>
     </React.StrictMode>,
   );
 }

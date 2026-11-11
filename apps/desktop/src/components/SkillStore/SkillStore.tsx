@@ -205,14 +205,16 @@ function useSkillStoreData(
       // Show popular skills when no search query
       return getPopularSkills(0, LIMIT)
         .then((response) => {
+          if (searchQueryRef.current !== query) return;
           setRawResults(response.skills);
           setHasMore(response.has_more);
         })
         .catch((err) => {
+          if (searchQueryRef.current !== query) return;
           setBrowseError(err instanceof Error ? err.message : "Failed to load popular skills");
         })
         .finally(() => {
-          setIsLoading(false);
+          if (searchQueryRef.current === query) setIsLoading(false);
         });
     }
 
@@ -220,14 +222,16 @@ function useSkillStoreData(
     // everything up to LIMIT.
     return searchSkills(query, LIMIT)
       .then((response) => {
+        if (searchQueryRef.current !== query) return;
         setRawResults(response.skills);
         setHasMore(false);
       })
       .catch((err) => {
+        if (searchQueryRef.current !== query) return;
         setBrowseError(err instanceof Error ? err.message : "Failed to search skills");
       })
       .finally(() => {
-        setIsLoading(false);
+        if (searchQueryRef.current === query) setIsLoading(false);
       });
   };
 
@@ -433,37 +437,37 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
         <SkillStoreTabList installedCount={installedSkills.length} tabsPadding={tabsPadding} />
 
         <TabsContent value="browse" className="flex flex-1 flex-col overflow-hidden">
+          <div className={`flex items-center gap-4 border-b border-border py-4 ${tabsPadding}`}>
+            <SkillSearchBar
+              value={searchQuery}
+              onChange={setSearchQuery}
+              onSearch={handleSearch}
+              isLoading={isLoading}
+            />
+            {!browseError && (
+              <div className="ml-auto flex items-center gap-4">
+                <span className="text-small tabular-nums text-text-tertiary">
+                  {searchResultsWithStatus.length} skill
+                  {searchResultsWithStatus.length !== 1 ? "s" : ""}
+                </span>
+              </div>
+            )}
+          </div>
+
           {browseError ? (
             <BrowseErrorEmptyState error={browseError} onRetry={retry} />
           ) : (
-            <>
-              <div className={`flex items-center gap-4 border-b border-border py-4 ${tabsPadding}`}>
-                <SkillSearchBar
-                  value={searchQuery}
-                  onChange={setSearchQuery}
-                  onSearch={handleSearch}
-                  isLoading={isLoading}
-                />
-                <div className="ml-auto flex items-center gap-4">
-                  <span className="text-small tabular-nums text-text-tertiary">
-                    {searchResultsWithStatus.length} skill
-                    {searchResultsWithStatus.length !== 1 ? "s" : ""}
-                  </span>
-                </div>
-              </div>
-
-              <div className={`flex flex-1 overflow-hidden ${compact ? "flex-col" : ""}`}>
-                <SkillBrowser
-                  skills={searchResultsWithStatus}
-                  selectedSkill={selectedSkill}
-                  onSelectSkill={(skill) => setSelectedSkillName(skill.name)}
-                  mode={{ kind: "browse", isLoading, isLoadingMore, hasMore, onLoadMore: loadMore }}
-                  emptyMessage={
-                    searchQuery ? "No skills found matching your search" : "Loading popular skills…"
-                  }
-                />
-              </div>
-            </>
+            <div className={`flex flex-1 overflow-hidden ${compact ? "flex-col" : ""}`}>
+              <SkillBrowser
+                skills={searchResultsWithStatus}
+                selectedSkill={selectedSkill}
+                onSelectSkill={(skill) => setSelectedSkillName(skill.name)}
+                mode={{ kind: "browse", isLoading, isLoadingMore, hasMore, onLoadMore: loadMore }}
+                emptyMessage={
+                  searchQuery ? "No skills found matching your search" : "Loading popular skills…"
+                }
+              />
+            </div>
           )}
         </TabsContent>
 

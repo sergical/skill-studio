@@ -71,6 +71,7 @@ export function SkillSearchBar({
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
+        aria-label="Search skills.sh"
         className="h-(--control-height) pr-8.5 pl-8.5"
       />
       {value && (

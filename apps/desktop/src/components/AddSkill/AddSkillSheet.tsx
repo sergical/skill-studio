@@ -220,11 +220,13 @@ function SourceField({
   source,
   parsed,
   onChange,
+  onEnter,
   inputRef,
 }: {
   source: string;
   parsed: ParsedSkillSource | { error: string };
   onChange: (value: string) => void;
+  onEnter: (event: React.KeyboardEvent<HTMLInputElement>) => void;
   inputRef: React.RefObject<HTMLInputElement | null>;
 }) {
   // Parse errors stay neutral while the user is still typing; they turn red
@@ -243,10 +245,19 @@ function SourceField({
         className="h-(--control-height) rounded-sm border-border bg-bg-primary text-body text-text-primary focus-visible:border-border-focus focus-visible:ring-0"
         value={source}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onEnter}
         onBlur={() => setTouched(true)}
         placeholder="owner/repo, a GitHub URL, a skills.sh URL, or a local path"
+        spellCheck={false}
+        autoCorrect="off"
+        autoCapitalize="off"
+        aria-invalid={showError || undefined}
+        aria-describedby="add-skill-source-summary"
       />
-      <p className={`m-0 text-small ${showError ? "text-error" : "text-text-tertiary"}`}>
+      <p
+        id="add-skill-source-summary"
+        className={`m-0 text-small ${showError ? "text-error" : "text-text-tertiary"}`}
+      >
         {source.trim() ? parseSummary(parsed) : "Paste a repo, URL, or path to get started."}
       </p>
     </div>
@@ -259,9 +270,11 @@ function SourceField({
 function GitSkillNameField({
   name,
   onChange,
+  onEnter,
 }: {
   name: string;
   onChange: (value: string) => void;
+  onEnter: (event: React.KeyboardEvent<HTMLInputElement>) => void;
 }) {
   const [touched, setTouched] = useState(false);
   const showError = touched && name.trim().length === 0;
@@ -276,10 +289,17 @@ function GitSkillNameField({
         className="h-(--control-height) rounded-sm border-border bg-bg-primary text-body text-text-primary focus-visible:border-border-focus focus-visible:ring-0"
         value={name}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onEnter}
         onBlur={() => setTouched(true)}
         placeholder="The folder name this skill installs under"
+        aria-invalid={showError || undefined}
+        aria-describedby={showError ? "add-skill-git-name-error" : undefined}
       />
-      {showError && <p className="m-0 text-small text-error">A git source needs a skill name.</p>}
+      {showError && (
+        <p id="add-skill-git-name-error" className="m-0 text-small text-error">
+          A git source needs a skill name.
+        </p>
+      )}
     </div>
   );
 }
@@ -1243,6 +1263,13 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
       ? `Install ${githubEntries.length} skills`
       : "Add skill";
 
+  const canSubmit = isValid && !listingBlocks && !isSubmitting;
+  const submitOnEnter = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing || !canSubmit) return;
+    event.preventDefault();
+    void handleSubmit();
+  };
+
   const handleBrowseProject = async () => {
     const selected = await open({ directory: true, multiple: false, title: "Select Project" });
     if (!selected) return;
@@ -1310,6 +1337,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
               source={source}
               parsed={parsed}
               onChange={(value) => dispatch({ type: "set_source", source: value })}
+              onEnter={submitOnEnter}
               inputRef={sourceInputRef}
             />
 
@@ -1317,6 +1345,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
               <GitSkillNameField
                 name={gitSkillName}
                 onChange={(value) => dispatch({ type: "set_git_skill_name", name: value })}
+                onEnter={submitOnEnter}
               />
             )}
 

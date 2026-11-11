@@ -78,7 +78,6 @@
   --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.4);
   --shadow-md: 0 4px 12px oklch(0 0 0 / 0.5);
   --shadow-lg: 0 8px 32px oklch(0 0 0 / 0.6);
-  --shadow-glow: 0 0 24px oklch(0.606 0.219 292.717 / 0.2);
 
   /* Radius - grows with surface size: controls rounded-sm (4px), panels and
      cards rounded-md (6px), menus, popovers, and dialogs rounded-lg (10px). */
@@ -204,7 +203,6 @@
   --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.08);
   --shadow-md: 0 4px 12px oklch(0 0 0 / 0.12);
   --shadow-lg: 0 8px 32px oklch(0 0 0 / 0.16);
-  --shadow-glow: 0 0 24px oklch(0.541 0.247 293.009 / 0.16);
 
   /* Dimming layer behind a drawer/dialog */
   --color-scrim: oklch(0 0 0 / 0.3);
@@ -297,7 +295,7 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
-} /* Monaco editor overrides */
+}
 /* Keyframe only - the drawer rows themselves are Tailwind utilities in
    SkillLocationScope.tsx; referenced via animate-[locationRowIn_120ms_ease-out_both].
    Tailwind can reference a named keyframe from a utility class but can't
@@ -320,14 +318,6 @@ body {
   }
 }
 
-/* ============================================================================
-   Skill Detail - Facts, Deployments, Frontmatter
-   ============================================================================ */
-/* ============================================================================
-   Skill Detail - Markdown body, editor, and Locations card
-   ============================================================================ */
-/* .skill-markdown rules moved to Tailwind utilities in SkillMarkdown.tsx. */
-/* Add-skill sheet */
 /* A wide diff is the one place in the app where a hidden horizontal scrollbar
    costs the reader content, so this scroller keeps a visible thumb. */
 .skill-compare-dialog-body {
@@ -355,4 +345,3 @@ body {
     height 220ms,
     box-shadow 200ms !important;
 }
-/* .add-skill-sheet-* rules moved to Tailwind utilities in AddSkillSheet.tsx. */

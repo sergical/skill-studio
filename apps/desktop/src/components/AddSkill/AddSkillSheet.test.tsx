@@ -57,6 +57,41 @@ it("Add by source submits a local Copy and shows its error or the pack cleanup b
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
+it("Enter in the Source field adds the skill, as the enabled Add skill button would", async () => {
+  const requests: unknown[] = [];
+  mockIPC(
+    (command, args) => {
+      if (command === "get_add_method_defaults")
+        return {
+          dotagents_installed: false,
+          has_skill_lock: false,
+          installed_harnesses: [],
+          claude_reads_shared_folder: false,
+        };
+      if (command === "get_harnesses_choice") return null;
+      if (command === "start_add_skill_operation") {
+        requests.push(args);
+        return {
+          operation_id: args && "operationId" in args ? args.operationId : "operation",
+          sequence: 1,
+          phase: "failed",
+          message: "Fixture folder is missing",
+        };
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    },
+    { shouldMockEvents: true },
+  );
+  useAppStore.getState().openAddSkillSheet("/fixture/sample");
+  const user = userEvent.setup();
+  render(<AddSkillSheet skills={[]} />);
+  const add = await screen.findByRole("button", { name: "Add skill" });
+  await waitFor(() => expect(add.hasAttribute("disabled")).toBe(false));
+  await user.click(screen.getByLabelText("Source"));
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(requests).toHaveLength(1));
+});
+
 it.each([
   { key: "{Enter}", label: "Enter" },
   { key: " ", label: "Space" },

@@ -243,6 +243,7 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
           <Input
             ref={inputRef}
             role="combobox"
+            aria-label="Command or skill"
             aria-expanded="true"
             aria-controls="command-palette-listbox"
             aria-activedescendant={activeId}
