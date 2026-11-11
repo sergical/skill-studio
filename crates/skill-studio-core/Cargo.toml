@@ -25,7 +25,10 @@ schemars = { version = "1", features = ["chrono04"] }
 thiserror = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 ulid = { version = "3.0.0", features = ["serde"] }
-serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize", "serialize"] }
+serde-saphyr = { version = "2.1.1", default-features = false, features = [
+  "deserialize",
+  "serialize",
+] }
 serde-value = "0.7"
 jsonc-parser = { version = "0.29", features = ["serde"] }
 toml = "1"
