@@ -388,6 +388,29 @@ fn doctor_and_scan_apply_codex_name_rules_in_order_instead_of_counting_disabled_
 }
 
 #[test]
+fn doctor_matches_spaced_names_and_inline_codex_rules_like_codex_instead_of_counting_disabled_skills(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write(
+        home,
+        ".agents/skills/review/SKILL.md",
+        "---\nname: \" review \"\ndescription: Review code\n---\n",
+    );
+    for rules in [
+        "[[skills.config]]\nname = 'review'\nenabled = false\n",
+        "[skills]\nconfig = [{ name = 'review', enabled = false }]\n",
+    ] {
+        write(home, ".codex/config.toml", rules);
+        assert_eq!(
+            row(&report(home, "doctor", false), "codex", false)["listed_skills"],
+            0,
+            "{rules}"
+        );
+    }
+}
+
+#[test]
 fn doctor_merges_project_plugin_switches_instead_of_using_global_enablement() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();

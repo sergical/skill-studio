@@ -2118,7 +2118,7 @@ fn codex_skill_disabled(
                 .is_some_and(|p| codex_path_form(fs, Path::new(p)) == path),
             (None, Some(selector)) => selector
                 .as_str()
-                .is_some_and(|n| !n.trim().is_empty() && n.trim() == name),
+                .is_some_and(|n| !n.trim().is_empty() && n.trim() == name.trim()),
             _ => false,
         };
         if matches {
@@ -2183,15 +2183,27 @@ fn codex_config_path(codex_home: &Path) -> PathBuf {
 /// Iterates `[[skills.config]]` rows in a `toml_edit` document, tolerating a
 /// document with no `skills` table, no `config` array, or a `config` that
 /// isn't an array of tables.
-fn codex_skills_config_rows(
-    doc: &toml_edit::DocumentMut,
-) -> impl Iterator<Item = &toml_edit::Table> {
-    doc.get("skills")
-        .and_then(toml_edit::Item::as_table)
+fn codex_skills_config_rows(doc: &toml_edit::DocumentMut) -> Vec<&dyn toml_edit::TableLike> {
+    let Some(config) = doc
+        .get("skills")
+        .and_then(toml_edit::Item::as_table_like)
         .and_then(|t| t.get("config"))
-        .and_then(toml_edit::Item::as_array_of_tables)
+    else {
+        return Vec::new();
+    };
+    if let Some(rows) = config.as_array_of_tables() {
+        return rows
+            .iter()
+            .map(|t| t as &dyn toml_edit::TableLike)
+            .collect();
+    }
+    config
+        .as_array()
         .into_iter()
         .flatten()
+        .filter_map(toml_edit::Value::as_inline_table)
+        .map(|t| t as &dyn toml_edit::TableLike)
+        .collect()
 }
 
 /// Reads Claude Code's global `enabledPlugins` map, keyed
