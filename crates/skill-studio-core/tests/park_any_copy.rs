@@ -727,8 +727,8 @@ fn failed_cross_volume_park_keeps_source_and_partial_copy_or_deletes_uncertain_e
 }
 
 /// Flow: park an `OpenCode` copy, check the `.origin` marker, forget the
-/// journal, and unpark. Expectation: the marker holds the exact skills folder
-/// the catalog spells (`.config/opencode/skills`) and the copy returns there.
+/// journal, and unpark. Expectation: the marker's first line holds the exact skills
+/// folder the catalog spells (`.config/opencode/skills`) and the copy returns there.
 /// Failure: the marker is missing or wrong, so a no-row unpark has to guess
 /// the folder. (The singular `skill/` folder is a legacy root and park
 /// refuses it, so it never needs a marker.)
@@ -743,8 +743,8 @@ fn unpark_without_a_journal_row_returns_an_opencode_copy_to_its_own_folder() {
         .join(PARKED_ROOT_RELATIVE)
         .join("open-code/.origin/foo");
     assert_eq!(
-        std::fs::read_to_string(marker).unwrap().trim(),
-        ".config/opencode/skills"
+        std::fs::read_to_string(marker).unwrap().lines().next(),
+        Some(".config/opencode/skills")
     );
     forget_history(&home);
     let rt = runtime(&home, &[]);
