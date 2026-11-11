@@ -293,7 +293,10 @@ pub async fn search_skills(
     let response = client
         .get(&url)
         .headers(headers)
-        .header("User-Agent", concat!("SkillStudio/", env!("CARGO_PKG_VERSION")))
+        .header(
+            "User-Agent",
+            concat!("SkillStudio/", env!("CARGO_PKG_VERSION")),
+        )
         .send()
         .await
         .map_err(|e| connection_error(access, &e))?;
@@ -332,7 +335,10 @@ pub async fn get_popular_skills(
     let response = client
         .get(&url)
         .headers(headers)
-        .header("User-Agent", concat!("SkillStudio/", env!("CARGO_PKG_VERSION")))
+        .header(
+            "User-Agent",
+            concat!("SkillStudio/", env!("CARGO_PKG_VERSION")),
+        )
         .send()
         .await
         .map_err(|e| connection_error(access, &e))?;
@@ -471,7 +477,10 @@ async fn send_skill_details(
     let response = client
         .get(url)
         .headers(headers)
-        .header("User-Agent", concat!("SkillStudio/", env!("CARGO_PKG_VERSION")))
+        .header(
+            "User-Agent",
+            concat!("SkillStudio/", env!("CARGO_PKG_VERSION")),
+        )
         .send()
         .await
         .map_err(|e| connection_error(access, &e))?;
