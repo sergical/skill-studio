@@ -3,19 +3,20 @@
 // The telemetry switch (unit 6.4): `telemetry_enabled` in
 // `~/.agents/skill-studio.json`, alongside the other settings in
 // `skill_fork_registry` - off by default, covering crash reports, operation
-// timings, and WebView errors. The welcome screen offers it on and
+// timings, and WebView errors and screen timings. The welcome screen offers it on and
 // `save_harnesses_choice` writes the user's explicit choice; Settings'
 // "Telemetry" card keeps it in sync afterward. The actual Sentry client, its
 // panic hook, and its consent gate live in `skill_studio_host::telemetry`;
 // this module only owns the two Tauri commands that read and flip the
-// persisted switch, the `TelemetryState` they flip alongside it, and
-// `report_frontend_error`.
+// persisted switch, the `TelemetryState` they flip alongside it, and the
+// two commands the WebView's Sentry SDK uses: `get_webview_telemetry` and
+// `send_webview_envelope`.
 // ============================================================================
 
 use std::path::Path;
 use std::sync::Mutex;
 
-use skill_studio_host::telemetry::{Consent, TelemetryGuard};
+use skill_studio_host::telemetry::{Consent, TelemetryGuard, WebviewBundle, WebviewTelemetry};
 use tauri::Manager;
 
 /// The Tauri-managed telemetry state: the live consent flag every command
@@ -28,6 +29,19 @@ pub struct TelemetryState {
     /// `None` when `telemetry::init` found no DSN (every build until
     /// `SKILL_STUDIO_SENTRY_DSN` is set) - there is nothing to flush.
     pub guard: Mutex<Option<TelemetryGuard>>,
+    /// The client for webview envelopes. `None` when no
+    /// `SKILL_STUDIO_SENTRY_WEBVIEW_DSN` was set at build or run time.
+    pub webview: Option<WebviewTelemetry>,
+}
+
+/// Reads the facts the desktop build wrote next to the bundle. A dev build
+/// serves the frontend from Vite and embeds no assets, so it gets an empty
+/// bundle, which drops every name.
+pub fn read_webview_bundle<R: tauri::Runtime>(assets: &tauri::AssetResolver<R>) -> WebviewBundle {
+    assets
+        .get(WebviewBundle::FILE.into())
+        .map(|asset| WebviewBundle::from_json(&asset.bytes))
+        .unwrap_or_default()
 }
 
 /// The saved switch, straight off disk - like `get_discovery_sources`, this
@@ -112,33 +126,34 @@ fn set_telemetry_enabled_at_with(
     Ok(())
 }
 
-/// Forwards one `WebView` error (a React `componentDidCatch`, an uncaught
-/// `window` error, or an unhandled promise rejection) to
-/// `skill_studio_host::telemetry::report_frontend_error`, unless consent is
-/// off - so `FRONTEND_ERROR_REPORT_COUNT`'s per-process cap isn't spent by
-/// reports that `ConsentTransport` would have dropped anyway. `ConsentTransport`
-/// stays the authoritative consent check: this is only a courtesy that skips
-/// the count, not a second copy of the gate.
+/// Whether the webview should start its Sentry SDK: a webview client
+/// exists and the switch is on. Not timed, so it adds no command root.
 #[allow(clippy::needless_pass_by_value)] // Tauri's command extractor requires owned arguments.
 #[tauri::command(async)]
-pub fn report_frontend_error(
-    component: String,
-    kind: String,
-    state: tauri::State<'_, TelemetryState>,
-) {
-    forward_frontend_error(&state.consent, &component, &kind);
+pub fn get_webview_telemetry(state: tauri::State<'_, TelemetryState>) -> bool {
+    state.webview.is_some() && state.consent.enabled()
 }
 
-/// The body of `report_frontend_error`, kept apart so a test can drive it
-/// with a plain `Consent` - a `tauri::State` can't be constructed outside a
-/// running app. Returns whether the report was forwarded, so a test can
-/// assert on it without a fake host client.
-pub(crate) fn forward_frontend_error(consent: &Consent, component: &str, kind: &str) -> bool {
-    if !consent.enabled() {
-        return false;
-    }
-    skill_studio_host::telemetry::report_frontend_error(component, kind);
-    true
+/// The webview Sentry SDK's only way out: it hands its envelope items here,
+/// and `WebviewTelemetry::send_json` drops them while the switch is off and
+/// scrubs them otherwise. Returns how many items were sent. Not timed, so
+/// sending telemetry does not make more telemetry.
+#[allow(clippy::needless_pass_by_value)] // Tauri's command extractor requires owned arguments.
+#[tauri::command(async)]
+pub fn send_webview_envelope(
+    request: tauri::ipc::Request<'_>,
+    state: tauri::State<'_, TelemetryState>,
+) -> usize {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return 0;
+    };
+    let Ok(items) = std::str::from_utf8(bytes) else {
+        return 0;
+    };
+    state
+        .webview
+        .as_ref()
+        .map_or(0, |webview| webview.send_json(items))
 }
 
 #[cfg(test)]
@@ -193,27 +208,6 @@ mod tests {
         assert!(
             after.telemetry_enabled,
             "the registry still records the user's choice, independent of the env override"
-        );
-    }
-
-    /// guards: `forward_frontend_error` counting a report against
-    /// `FRONTEND_ERROR_REPORT_COUNT` while consent is off - `ConsentTransport`
-    /// stays the authoritative gate, but this command shouldn't call the host
-    /// at all when it already knows the envelope would be dropped. No Sentry
-    /// client is bound in tests, so the host call itself is a no-op either
-    /// way; this only asserts the return value that signals whether it ran.
-    #[test]
-    fn a_webview_error_is_not_forwarded_while_the_switch_is_off() {
-        let off = Consent::new(false);
-        assert!(
-            !forward_frontend_error(&off, "SkillList", "TypeError"),
-            "a report must not be forwarded while consent is off"
-        );
-
-        let on = Consent::new(true);
-        assert!(
-            forward_frontend_error(&on, "SkillList", "TypeError"),
-            "a report must be forwarded once consent is on"
         );
     }
 }

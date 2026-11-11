@@ -19,6 +19,7 @@
     "@base-ui/react": "^1.9.0",
     "@paper-design/shaders-react": "0.0.82",
     "@pierre/diffs": "^1.6.4",
+    "@sentry/react": "^11.11.0",
     "@skill-studio/lib": "workspace:*",
     "@skill-studio/ui": "workspace:*",
     "@tanstack/react-virtual": "^3.14.26",

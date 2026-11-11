@@ -1,6 +1,6 @@
 // ============================================================================
 // TelemetryCard - Settings' "Telemetry" card: the switch for crash reports,
-// operation timings, and WebView errors. Off in the registry by default; the
+// operation timings, WebView errors, and screen performance. Off in the registry by default; the
 // welcome screen offers it on and writes the user's explicit choice; this
 // card lets the user change it later - see the Rust `telemetry_commands` and
 // `crates/skill-studio-host/src/telemetry.rs` for what a report can and
@@ -59,7 +59,7 @@ export function TelemetryCard() {
     <SettingsCard
       icon={<Bug size={15} className="text-text-tertiary" />}
       title="Telemetry"
-      description="Sends where in its own code a crash happened and how long each action took. Skill Studio removes everything sensitive first: no skill names, files, paths, or machine name. It uses this data only to improve the app."
+      description="Sends where in its own code a crash or error happened, how long each action took, and how fast each screen loads and responds. Skill Studio removes everything sensitive first: no skill names, files, paths, or machine name. It uses this data only to improve the app."
     >
       <label className="flex h-9 items-center gap-2 px-2 text-body text-text-secondary">
         <SwitchControl

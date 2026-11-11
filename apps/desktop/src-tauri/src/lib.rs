@@ -293,9 +293,16 @@ pub fn run() {
                 env!("CARGO_PKG_VERSION"),
                 consent.clone(),
             );
+            let assets = app.asset_resolver();
+            let webview_telemetry = skill_studio_host::telemetry::WebviewTelemetry::init(
+                env!("CARGO_PKG_VERSION"),
+                consent.clone(),
+                move || skills::telemetry_commands::read_webview_bundle(&assets),
+            );
             app.manage(skills::telemetry_commands::TelemetryState {
                 consent,
                 guard: std::sync::Mutex::new(telemetry_guard),
+                webview: webview_telemetry,
             });
 
             // The version gate must run before the event-store opener or background writers.
@@ -394,7 +401,8 @@ pub fn run() {
             skills::commands::set_preferred_editor,
             skills::telemetry_commands::get_telemetry_enabled,
             skills::telemetry_commands::set_telemetry_enabled,
-            skills::telemetry_commands::report_frontend_error,
+            skills::telemetry_commands::get_webview_telemetry,
+            skills::telemetry_commands::send_webview_envelope,
             // Fork / Pull upstream / Un-fork
             skills::skill_fork::fork_skill,
             skills::skill_fork::pull_fork_upstream,
@@ -462,6 +470,9 @@ pub fn run() {
                 else {
                     return;
                 };
+                if let Some(webview) = &state.webview {
+                    webview.shutdown();
+                }
                 let taken_guard = state
                     .guard
                     .lock()

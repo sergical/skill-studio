@@ -69,12 +69,13 @@ fn frontend_callers(skill_api_ts: &str) -> BTreeSet<String> {
 }
 
 /// Commands with a real frontend caller that deliberately isn't
-/// `callCommand` in `skill-api.ts`. `report_frontend_error` (telemetry PR 3)
-/// is called from `frontend-error-report.ts` through a bare `invoke`
-/// instead: it must fire-and-forget with no timing entry and no throw on
-/// failure, neither of which `callCommand` offers. Keep this list to exactly
-/// that kind of documented exception, not a general escape hatch.
-const NON_SKILL_API_CALLERS: &[&str] = &["report_frontend_error"];
+/// `callCommand` in `skill-api.ts`. `get_webview_telemetry` and
+/// `send_webview_envelope` are called from `webview-telemetry.ts` through a
+/// bare `invoke` instead: `callCommand` wraps each call in an `ipc` span, and
+/// a span around the Sentry transport would make each sent envelope start
+/// another one. Keep this list to exactly that kind of documented exception,
+/// not a general escape hatch.
+const NON_SKILL_API_CALLERS: &[&str] = &["get_webview_telemetry", "send_webview_envelope"];
 
 #[test]
 fn command_registration_matches_frontend_caller_count_or_names_the_orphan() {
@@ -103,14 +104,14 @@ fn command_registration_matches_frontend_caller_count_or_names_the_orphan() {
 #[test]
 fn every_non_skill_api_command_has_its_named_caller() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let frontend_error_report_ts =
-        fs::read_to_string(manifest_dir.join("../src/lib/frontend-error-report.ts"))
-            .expect("read frontend-error-report.ts");
+    let webview_telemetry_ts =
+        fs::read_to_string(manifest_dir.join("../src/lib/webview-telemetry.ts"))
+            .expect("read webview-telemetry.ts");
 
     for name in NON_SKILL_API_CALLERS {
         assert!(
-            frontend_error_report_ts.contains(&format!("\"{name}\"")),
-            "{name} is listed in NON_SKILL_API_CALLERS but frontend-error-report.ts has no \
+            webview_telemetry_ts.contains(&format!("\"{name}\"")),
+            "{name} is listed in NON_SKILL_API_CALLERS but webview-telemetry.ts has no \
              \"{name}\" string literal"
         );
     }

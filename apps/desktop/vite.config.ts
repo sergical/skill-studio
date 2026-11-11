@@ -2,6 +2,7 @@ import { configDefaults, defineConfig } from "vitest/config";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
+import { webviewBundle } from "./webview-bundle";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -10,10 +11,10 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   // babel() must come after react() so the compiler pass runs on already
   // JSX-transformed output, per @vitejs/plugin-react's documented ordering.
-  plugins: [react(), babel({ presets: [reactCompilerPreset()] }), tailwindcss()],
+  plugins: [react(), babel({ presets: [reactCompilerPreset()] }), tailwindcss(), webviewBundle()],
 
-  // Sentry's `component` tag (see frontend-error-report.ts) comes from a
-  // function name in React's component stack; the default Oxc minifier
+  // The React component stack in a WebView error event (see
+  // webview-telemetry.ts) is made of function names; the default Oxc minifier
   // mangles those to single letters (e.g. `Kc`), which would make the tag
   // useless in the packaged app. `mangle.keepNames` preserves only function
   // and class declaration names - everything else (locals, params) is still
