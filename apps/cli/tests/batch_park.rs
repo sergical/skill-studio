@@ -372,3 +372,22 @@ fn blocked_recorded_link_refuses_batch_unpark_before_restoring_any_copy_on_cli_a
         assert_eq!(std::fs::read(&link).unwrap(), b"keep this file");
     }
 }
+
+#[test]
+fn batch_unpark_recreates_a_removed_skills_folder_and_link_instead_of_refusing_in_the_precheck() {
+    let home = tempfile::tempdir().unwrap();
+    for name in ["alpha", "beta"] {
+        skill(home.path(), name);
+    }
+    let link = home.path().join(".claude/skills/beta");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink("../../.agents/skills/beta", &link).unwrap();
+    assert_eq!(
+        park(home.path(), "park", &["alpha", "beta"])["status"],
+        "ok"
+    );
+    std::fs::remove_dir(home.path().join(".agents/skills")).unwrap();
+    let result = cli(home.path(), &["unpark", "alpha", "beta"]);
+    assert_eq!(result["status"], "ok", "{result}");
+    assert!(link.join("SKILL.md").exists(), "{result}");
+}

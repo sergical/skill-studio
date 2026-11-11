@@ -6212,7 +6212,6 @@ fn unpark_destination(
     }
     if let Some(row) = park_row {
         for link in park_row_links(&row.payload) {
-            crate::ports::confine(&rt.scope, fs, &link)?;
             if fs.symlink_metadata(&link).is_ok() {
                 return Err(CoreError::new(
                     ErrorCode::InvalidRequest,
@@ -6220,18 +6219,6 @@ fn unpark_destination(
                 )
                 .at(&link));
             }
-            let target = row
-                .payload
-                .get("link_targets")
-                .and_then(|targets| targets.get(link.to_string_lossy().as_ref()))
-                .and_then(serde_json::Value::as_str)
-                .map(PathBuf::from)
-                .filter(|target| target.is_relative())
-                .map_or_else(
-                    || restored_dir.clone(),
-                    |target| crate::fsops::join_lexical(link.parent().unwrap_or(&link), &target),
-                );
-            crate::ports::confine(&rt.scope, fs, &target)?;
         }
     }
     Ok(restored_dir)
