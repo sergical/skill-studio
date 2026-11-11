@@ -1322,7 +1322,6 @@ export function buildHarnessSnapshot(skillCount = 0): SkillSnapshot {
     scan_observations: [],
     scan_partial: false,
     unread_roots: [],
-    last_test_by_skill: {},
     update_check: {
       checked_at: SCANNED_AT,
       gh_status: "ok",

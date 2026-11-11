@@ -7,7 +7,6 @@ import {
   AGENT_MATRIX_LABELS,
   agentMatrix,
   agentIdFromDeploymentLabel,
-  deploymentRelationText,
   driftingCopies,
   groupDeploymentsForDisplay,
   locationSummary,
@@ -357,47 +356,5 @@ describe("disabled shared-root readers", () => {
 
     expect(skillVisibleToAgent(skill, "open-code")).toBe("own");
     expect(agentMatrix([skill])[0]?.cells.OpenCode.state).toBe("own");
-  });
-});
-
-describe("deploymentRelationText", () => {
-  it("says the Universal root lives here", () => {
-    expect(
-      deploymentRelationText(
-        fixtureDeployment({ agent: "shared", path: "/Users/me/.agents/skills/find-bugs" }),
-      ),
-    ).toBe("lives here");
-  });
-
-  it("calls a per-skill link into the Universal root a symlink", () => {
-    expect(
-      deploymentRelationText(
-        fixtureDeployment({
-          is_symlink: true,
-          symlink_target: "/Users/me/.agents/skills/find-bugs",
-        }),
-      ),
-    ).toBe("symlink");
-  });
-
-  it("names the linked root a whole-dir link reads through", () => {
-    expect(
-      deploymentRelationText(
-        fixtureDeployment({
-          path: "/Users/me/.claude/skills/find-bugs",
-          shared_via_whole_dir_link: true,
-        }),
-      ),
-    ).toBe("reads this folder via ~/.claude/skills");
-  });
-
-  it("calls a real directory a copy", () => {
-    expect(deploymentRelationText(fixtureDeployment())).toBe("copy");
-  });
-
-  it("calls an unresolved link broken", () => {
-    expect(
-      deploymentRelationText(fixtureDeployment({ is_symlink: true, symlink_is_broken: true })),
-    ).toBe("broken link");
   });
 });

@@ -207,8 +207,7 @@ removed; do not list individual source files here.
 │   │   ├── src/                  # React frontend: components/, hooks/, lib/, store/
 │   │   └── src-tauri/src/skills/ # Rust backend: scan, lifecycle, Tauri commands
 │   ├── mcp/                      # Rust MCP server over skill-studio-core, stdio
-│   ├── server/                   # Node proxy for the skills.sh API (port 8787)
-│   └── tui/                      # Terminal UI (Node)
+│   └── server/                   # Node proxy for the skills.sh API (port 8787)
 ├── crates/
 │   ├── skill-studio-core/        # Scope-confined core: scan, ops, events, DTOs, schema/
 │   └── skill-studio-host/        # Real-world port adapters for the core crate
@@ -402,14 +401,14 @@ Enabled in `apps/desktop/tsconfig.json`:
 ### Testing
 
 - Rust: `cargo test` in `apps/desktop/src-tauri`, tests live in colocated `#[cfg(test)]` modules
-- Frontend: no test runner is configured yet; use Vitest (compatible with Vite) when adding tests
+- Frontend: Vitest is configured; run `pnpm run test`
 
 ## Before you implement an issue
 
 Review findings and follow-up issues often ask for a guarantee in one rare
 case. If you implement each case as written, you get fixes on top of fixes:
-the Park chain #485, #487 and #491 reached 11,000 lines and was replaced by
-#531. Before you write code for an issue:
+the Park chain #485, #487 and #491 reached 11,000 lines and was closed.
+The shared guard proposed in #531 was not built; #531 was also closed. Before you write code for an issue:
 
 1. Write the user need in one sentence. Write the smallest change that meets
    it. If the issue asks for more than the need (for example byte-exact
@@ -420,8 +419,7 @@ the Park chain #485, #487 and #491 reached 11,000 lines and was replaced by
    does not hand-edit `agents.toml`, `agents.lock`, `.gitignore` or
    `.skill-lock.json`.
 3. For edits that happen at the same time, use one shared guard: read, keep
-   the hash, check again before the write, and refuse on change (#531 adds
-   it). Do not add a guard for one case only.
+   the hash, check again before the write, and refuse on change. Do not add a guard for one case only.
 4. A rare race or a rare layout becomes a follow-up issue, not part of the PR.
 5. If the change grows past about 500 lines, or a fix needs a fix, stop and
    write a design note in the issue before you continue.

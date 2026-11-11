@@ -22,7 +22,7 @@ Directory layout: `SKILL.md` (required), optional `scripts/`, `references/`, `as
 The spec has **no** invocation-control fields; those are agent extensions (below).
 Reference validator: `skills-ref validate ./my-skill`.
 
-Skill Studio enforces these rules in `src-tauri/src/skills/frontmatter.rs`
+Skill Studio enforces these rules in `crates/skill-studio-core/src/frontmatter.rs`
 (`validate_skill`) and reports failures as `spec_violations`.
 
 ## What agents do with a spec violation
@@ -50,14 +50,14 @@ description matches the task. Grok Build's model-side control is not verified
 yet (see the "unknown" cell below). [Skill uses](#skill-uses) lists
 how each harness records a typed command and a model call.
 
-| Agent       | Explicit invocation | Restrict model auto-invoke                                                                     | Agent setting that hides a skill (Skill Studio reads it)                         |
-| ----------- | ------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Claude Code | `/name [args]`      | frontmatter `disable-model-invocation: true` (user only); `user-invocable: false` (model only) | `~/.claude/settings.json` → `skillOverrides: {"<name>": "off"}`                  |
-| Codex       | `$name`, `/skills`  | sidecar `agents/openai.yaml` → `policy.allow_implicit_invocation: false`                       | `~/.codex/config.toml` → `[[skills.config]] path = "…/SKILL.md" enabled = false` |
-| OpenCode    | `/name`             | `permission.skill` in `opencode.json`: per-name pattern `allow` / `deny` / `ask`               | same: `"name": "deny"` (wildcards allowed, e.g. `internal-*`)                    |
-| pi          | `/skill:name`       | frontmatter `disable-model-invocation: true`                                                   | none                                                                             |
-| Cursor      | `/name`             | frontmatter `disable-model-invocation: true`                                                   | none                                                                             |
-| Grok Build  | `/name`             | unknown                                                                                        | none                                                                             |
+| Agent       | Explicit invocation | Restrict model auto-invoke                                                                                       | Agent setting that hides a skill (Skill Studio reads it)                         |
+| ----------- | ------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Claude Code | `/name [args]`      | frontmatter `disable-model-invocation: true` (user only); `user-invocable: false` (model only)                   | `~/.claude/settings.json` → `skillOverrides: {"<name>": "off"}`                  |
+| Codex       | `$name`, `/skills`  | sidecar `agents/openai.yaml` → `policy.allow_implicit_invocation: false`                                         | `~/.codex/config.toml` → `[[skills.config]] path = "…/SKILL.md" enabled = false` |
+| OpenCode    | `/name`             | `disable-model-invocation: true`; `metadata["opencode/autoinvoke"]` overrides it (boolean or number 1/0, v2.2.6) | `permission.skill` in `opencode.json`: `"name": "deny"` (wildcards allowed)      |
+| pi          | `/skill:name`       | frontmatter `disable-model-invocation: true`                                                                     | none                                                                             |
+| Cursor      | `/name`             | frontmatter `disable-model-invocation: true`                                                                     | none                                                                             |
+| Grok Build  | `/name`             | unknown                                                                                                          | none                                                                             |
 
 Sources: https://code.claude.com/docs/en/skills · https://developers.openai.com/codex/skills ·
 https://opencode.ai/docs/skills/ · https://opencode.ai/v2/docs/skills/ · https://pi.dev/docs/latest/skills ·
@@ -66,6 +66,14 @@ https://cursor.com/docs/skills · https://docs.x.ai/build/features/skills-plugin
 Frontmatter-based controls (`disable-model-invocation`, `user-invocable`) edit the
 Universal SKILL.md, so they apply to every agent that reads that folder or a symlink
 to it. Config-based controls for Codex and OpenCode apply to one harness.
+
+`skill-studio invocation [skill]` checks both skill-owned controls and reports
+manual, auto, or unsupported for each harness and copy. `--manual` or `--auto`
+writes the controls to all editable copies of the named skill. OpenCode v2.2.6
+uses `metadata["opencode/autoinvoke"]` when set, otherwise it uses
+`disable-model-invocation`, otherwise model invocation is allowed. Manual mode
+sets the frontmatter flag and changes an existing auto-invoke override to false.
+Grok Build reports unsupported. The setter does not change harness config files.
 
 ### Other Claude Code frontmatter fields
 
@@ -290,124 +298,19 @@ Universal deployment or separate Per harness copies. For Per harness, the backen
 copies the fetched source into each selected harness path and rejects an empty
 selection. Project scope uses the same layout below the selected project.
 
-## Packs
-
-A share pack (`src-tauri/src/skills/skill_pack.rs`) bundles a chosen set of
-skill deployments into one dotagents-compatible repo under
-`~/.agents/packs/<name>/`, for handing to another machine or another person.
-Selecting rows in any `SkillListTable` and clicking "Create pack" in the
-selection bar (`src/store/appStore.ts`'s `selectedSkillPaths`, keyed by each
-row's deployment path) builds:
-
-- `skills/<name>/` - a full bundled copy of **every** member, bundled from
-  its exact selected deployment path - even one managed by dotagents,
-  skills.sh, or a fork, so the pack still works if the origin repo moves or
-  disappears.
-- `agents.toml` - a `[[skills]]` row for provenance on every **managed**
-  member (dotagents, skills.sh, or fork - only when its path is the shared
-  `~/.agents/skills/<name>` root; a project deployment or plugin-cache copy
-  is always treated as manual), with `source`, `path`, and `ref` (the fork's
-  or skills.sh's resolved `installed_commit`, falling back to a dotagents
-  declared ref, or omitted for an unpinned/wildcard entry).
-- `README.md` - generated install instructions for both `npx -y
-  @sentry/dotagents add <owner>/<repo> --all` and `npx skills add
-  <owner>/<repo>`.
-
-`create_skill_pack`/`update_skill_pack` commit the tree with `git`
-locally only; `update_skill_pack` rebuilds from the pack's already-recorded
-members and only commits when the tree actually changed. **Publishing is
-never automatic**: `publish_skill_pack` confirms with a native
-`tauri_plugin_dialog` message box (`PublishConfirm`) right before it shells
-out to `gh repo create ... --push` (first publish) or `git push origin HEAD`
-(every publish after `repo` is recorded) - the app never creates a repo or
-pushes on its own, and a cancelled dialog returns `Err("Publish cancelled")`
-before any `gh`/`git` call. `delete_skill_pack` only removes the local
-registry entry and directory; it never touches GitHub.
-
-Importing a pack (the Add-skill sheet's "Pack" method, shown for GitHub
-sources) reads the repo's `agents.toml` read-only via `gh api -H "Accept:
-application/vnd.github.raw" repos/<owner>/<repo>/contents/agents.toml`, then
-validates every `[[skills]]` row (name, source, path, ref) before running any
-command - one invalid row, or more than 200 rows, refuses the whole import
-with nothing installed. It then runs `npx -y @sentry/dotagents add
-<owner>/<repo> --all` for the bundled `skills/` tree, and only then one
-`dotagents add <source> --name <name> --ref <ref>` per remaining `[[skills]]`
-row - skipping any row whose name `--all` already bundled, since a pack now
-bundles every managed member alongside its row. A row that fails to resolve
-is reported but doesn't abort the rest of the import. None of this ever edits
-`~/.agents/agents.toml`, `agents.lock`, or `.skill-lock.json` directly - a
-pack only ever writes its own generated `agents.toml` under
-`~/.agents/packs/<name>/`, and imports go through the same CLIs "Add skill"
-already uses.
-
 ## Trials (removed)
 
 The 24-hour trial install was removed in #285. There is no time-boxed install
 mode anymore. To switch a skill off without deleting it, use park
 (`park_skill`/`unpark_skill`, `src-tauri/src/skills/skill_park.rs`) - see
-[park-fork-trial.md](action-map/park-fork-trial.md). A `trials` map left over
+[Flows](flows.md). A `trials` map left over
 in `~/.agents/skill-studio.json` from before #285 round-trips unchanged and is
 otherwise ignored.
-
-## Headless runs
-
-Skill Studio's local harness runner (`src-tauri/src/skills/skill_agent_runner.rs`)
-starts each harness as a one-shot subprocess and parses its streaming JSON-lines
-stdout. Binaries are resolved with `$SHELL -lc 'command -v <bin>'` (fallback
-`/bin/zsh`) and cached per harness, since the app's own `PATH` doesn't see the
-user's shell config.
-
-- **Claude Code**: `claude -p "<prompt>" --output-format stream-json --verbose
-  --permission-mode <mode> [--resume <id>]`. Lines:
-  `{"type":"system","subtype":"init",...,"session_id"}`;
-  `{"type":"assistant","message":{"content":[{"type":"text","text":...} |
-  {"type":"tool_use","name":"Skill","input":{"skill":"say-banana"}} |
-  {"type":"thinking",...}]}}`;
-  `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":...,"content":"Launching skill: say-banana"}]}}`;
-  `{"type":"result","subtype":"success","is_error":false,"result":"BANANA","session_id":"…","total_cost_usd":0.061,"duration_ms":…}`.
-  Ignore `system/hook_*`, `rate_limit_event`, `thinking`. Skill loaded = a
-  `tool_use` named `Skill` whose `input.skill` equals the skill name.
-- **Codex**: `codex exec --json --skip-git-repo-check -s <read-only|workspace-write>
-  [-C <cwd>] "<prompt>"`; resume: `codex exec resume <thread_id> --json "<prompt>"`
-  (no `-C`; set the process cwd instead). No `-a` flag. Lines:
-  `{"type":"thread.started","thread_id":"…"}`, `turn.started`,
-  `{"type":"item.started"|"item.completed","item":{"id","type":"agent_message","text"}
-  | {"type":"command_execution","command","aggregated_output","exit_code"} |
-  {"type":"reasoning"} | {"type":"file_change",...} | {"type":"error","message"}}`,
-  `{"type":"turn.completed","usage":{...}}`, `turn.failed`. Skill loaded = any
-  `command_execution.command` containing `/<skill-name>/SKILL.md`, else unknown.
-  Final text = last completed `agent_message`.
-- **pi**: `pi -p --mode json "<prompt>"` (cwd = process cwd; resume `--session <id>`).
-  Lines: `{"type":"session","id":"…","cwd"}`, `message_update` with
-  `assistantMessageEvent.type=="text_delta"` and `.delta`, `tool_execution_start`
-  `{toolName, args}` / `tool_execution_end` `{toolName, result}`, `turn_end` with
-  `message.content[]` (text blocks), `agent_end`, `agent_settled`. Skill loaded = a
-  `read` tool whose `args.path` ends with or contains `/<skill-name>/SKILL.md`, else
-  unknown. Final text = concatenated text blocks of the last `turn_end`.
-- **OpenCode**: `opencode2 run --standalone --format json --auto [--session <id>]
-  "<prompt>"` (binary is `opencode2`, the v2 CLI; no `--dir` flag, cwd is the process
-  cwd; `--standalone` bypasses the shared `opencode2 serve --service` background
-  service, which hangs every run with no output when wedged). JSONL `type` values:
-  `step_start | text | tool | step_finish`, each carrying a `part`. Session id comes
-  from the top-level `sessionID`, first seen. `type=="text"` → assistant text from
-  `part.text`. `type=="tool"` (`part.type=="tool"`) → one tool call per
-  `part.callID`/`part.id`, deduped across the CLI's pending/running/completed
-  re-prints of the same part; skill loaded = `part.tool=="skill"` naming this run's
-  skill, or `part.tool=="read"` of that skill's `SKILL.md`. `type=="step_finish"` →
-  `part.cost`/`part.tokens`, best effort, feeds the run's `Finished` cost. Read-only
-  is not enforced for OpenCode: nine live probes of v0.0.0-beta-17498 found the CLI
-  ignores `OPENCODE_CONFIG`, and cwd-scoped permission denies for `edit`/`write`/
-  `patch`/`multiedit`/`apply_patch` never blocked `patch` from creating a file, so
-  every OpenCode run gets workspace write access regardless of the requested mode.
-
-Every run emits one `SkillAgentEvent` per parsed line (or per lifecycle step) on
-`"skill-agent://event"`, and always exactly one terminating `Finished` event, even
-on cancellation or a crash before any output.
 
 ## Navigation
 
 The app shell keeps two different jobs apart: the sidebar (`Sidebar.tsx`) holds
-_places_ - Home, Skills, Activity, Packs, and Parked - and the Skills view's
+_places_ - Home, Skills, Activity, and Parked - and the Skills view's
 filter bar (`SkillListFilterBar.tsx`) holds _filters_ over that one list:
 scope (all/global/project), harness, source, a coverage toggle, and a
 free-text query. There is no separate page per scope, per harness, or per
@@ -432,3 +335,57 @@ issues deliberately are not: a skill that has never been invoked (noise, not
 something worth fixing for every skill) and a skill with an update available
 (that's the "Updates" section on Home, a routine action, not a health
 problem).
+
+## Non-skill configuration inventory
+
+`skill-studio extras [--project <path>] [--json]` and the MCP `extras` tool
+list declaration names and file paths. They do not run hooks, connect to MCP
+servers, or read instruction bodies. Hook counts count declared handlers,
+including handlers with the same command. A file that cannot be read or parsed
+gets one `unreadable` row. Parser messages never enter the output.
+
+These are declarations, not proof that an agent loaded them. Trust, enable
+settings, compatibility switches, and precedence can change what loads. The
+inventory covers the global root and each selected project root. It does not
+walk project children, parent directories, plugin caches, managed policy files,
+or config paths named by a value in another config file. It does not expand
+instruction imports, globs, or environment variables. Codex and OpenCode use the
+config roots already resolved by the runtime scope. Live scope uses `CODEX_HOME`
+for Codex and `OPENCODE_CONFIG_DIR` or `XDG_CONFIG_HOME/opencode` for OpenCode,
+with the default paths below when unset. Explicit `--home` and fixture scopes
+keep these roots under the selected home. Other roots use the default paths below.
+
+Checked against upstream docs on 2026-11-11:
+
+| Agent       | Hooks                                                                                                                        | MCP servers                                                                                                                                                                          | Instruction files                                                                                                                                                           |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code | `~/.claude/settings.json`; project `.claude/settings.json`, `settings.local.json`; `hooks.<event>[]` contains handler groups | `~/.claude.json` has `mcpServers` and `projects.<absolute-project-path>.mcpServers`; project `.mcp.json` has `mcpServers`                                                            | Global `~/.claude/CLAUDE.md`; project `CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md`                                                                                   |
+| Codex       | Global and project `.codex/hooks.json` or inline `[hooks]` in `.codex/config.toml`; event arrays contain handler groups      | Global and project `.codex/config.toml`, `[mcp_servers.<name>]`                                                                                                                      | Global `.codex/AGENTS.md`, `AGENTS.override.md`; project `AGENTS.md`, `AGENTS.override.md`                                                                                  |
+| OpenCode    | No declarative hook file in this inventory; plugins can register events in code                                              | Global `~/.config/opencode/opencode.json` or `.jsonc`; project `opencode.json` or `.jsonc` and `.opencode/opencode.json` or `.jsonc`; `mcp.<name>` (V1) or `mcp.servers.<name>` (V2) | Global config directory `AGENTS.md`, fallback `~/.claude/CLAUDE.md`; project `AGENTS.md`, `CLAUDE.md`                                                                       |
+| Cursor      | Global and project `.cursor/hooks.json`; `hooks.<event>[]` contains handlers                                                 | Global and project `.cursor/mcp.json`; `mcpServers`                                                                                                                                  | Project `AGENTS.md`                                                                                                                                                         |
+| pi          | Events are registered by extensions in code, not a declarative hooks file                                                    | `~/.pi/agent/mcp.json`, project `.pi/mcp.json`; `mcpServers` in current pi                                                                                                           | Global `~/.pi/agent/AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`; project equivalents; global agent directory and project `.pi/` also have `SYSTEM.md`, `APPEND_SYSTEM.md` |
+| Grok Build  | `~/.grok/hooks/*.json`, project `.grok/hooks/*.json`, inline `[hooks]` in `~/.grok/config.toml`                              | Global and project `.grok/config.toml`, `[mcp_servers.<name>]`                                                                                                                       | Global `~/.grok/` and project root: `AGENTS.md`, `AGENT.md`, `CLAUDE.md`, `CLAUDE.local.md`                                                                                 |
+
+Grok also reads Claude and Cursor rule directories for compatibility. Rule
+directories are outside this inventory. Grok instruction filenames in the table
+are listed under Grok at both scopes. Older pi versions did
+not include native MCP support. Case-only filename variants use the same lookup
+on the default macOS filesystem. The inventory uses the usual `.md` spelling.
+
+Sources: [Claude settings](https://code.claude.com/docs/en/settings),
+[Claude MCP](https://code.claude.com/docs/en/mcp),
+[Claude memory](https://code.claude.com/docs/en/memory),
+[Codex hooks](https://developers.openai.com/codex/hooks),
+[Codex MCP](https://developers.openai.com/codex/mcp),
+[Codex instructions](https://developers.openai.com/codex/guides/agents-md),
+[OpenCode config](https://opencode.ai/docs/config/),
+[OpenCode rules](https://opencode.ai/v1/docs/rules/),
+[Cursor hooks](https://cursor.com/docs/hooks),
+[Cursor MCP](https://cursor.com/docs/mcp),
+[Cursor rules](https://cursor.com/docs/rules),
+[pi MCP](https://pi.dev/docs/latest/mcp),
+[pi configuration](https://pi.dev/docs/latest/configuration),
+[Grok settings](https://docs.x.ai/build/settings),
+[Grok project rules](https://docs.x.ai/build/features/project-rules#discovery),
+[Grok MCP](https://docs.x.ai/build/features/mcp-servers),
+[Grok hook source](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md).

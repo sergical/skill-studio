@@ -8,7 +8,6 @@ use std::collections::{BTreeMap, HashMap};
 
 use skill_studio_core::yaml;
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// SKILL.md frontmatter, per the agentskills.io spec. Unknown keys are
@@ -68,16 +67,7 @@ impl FrontmatterParseResult {
 
 /// The three invocation-control states a skill's frontmatter can express -
 /// see `docs/agent-skill-conventions.md`'s "Invocation control" section.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum InvocationPolicy {
-    /// Both explicit (`/name`) and model auto-invoke are available.
-    Both,
-    /// `disable-model-invocation: true` - explicit invocation only.
-    UserOnly,
-    /// `user-invocable: false` - model auto-invoke only.
-    ModelOnly,
-}
+pub use skill_studio_core::frontmatter::InvocationPolicy;
 
 /// Reads `disable-model-invocation` and `user-invocable` off `frontmatter`
 /// into an `InvocationPolicy`, plus a spec-violation note when both keys are
@@ -94,19 +84,7 @@ pub fn invocation_policy(frontmatter: Option<&SkillFrontmatter>) -> (InvocationP
 /// `invocation_policy`, taking the two raw key values directly rather than a
 /// `SkillFrontmatter` - used by `skill_refresh::build_snapshot`, which only
 /// has `InstalledSkill.frontmatter_fields`'s stringified form to work from.
-pub fn invocation_policy_from(
-    disable_model_invocation: Option<bool>,
-    user_invocable: Option<bool>,
-) -> (InvocationPolicy, bool) {
-    let disable_model = disable_model_invocation.unwrap_or(false);
-    let user_invocable = user_invocable.unwrap_or(true);
-    match (disable_model, user_invocable) {
-        (true, false) => (InvocationPolicy::UserOnly, true), // conflicting keys
-        (true, true) => (InvocationPolicy::UserOnly, false),
-        (false, false) => (InvocationPolicy::ModelOnly, false),
-        (false, true) => (InvocationPolicy::Both, false),
-    }
-}
+pub use skill_studio_core::frontmatter::invocation_policy_from;
 
 /// Parse a complete SKILL.md frontmatter fence without losing YAML errors.
 pub fn parse_frontmatter(content: &str) -> FrontmatterParseResult {
@@ -191,93 +169,6 @@ pub fn frontmatter_fields(content: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Skill name constraints from the agentskills.io spec: 1-64 chars,
-/// lowercase a-z0-9 and hyphens, no leading/trailing/consecutive hyphens.
-fn is_valid_skill_name(name: &str) -> bool {
-    if name.is_empty() || name.len() > 64 {
-        return false;
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-    {
-        return false;
-    }
-    if name.starts_with('-') || name.ends_with('-') || name.contains("--") {
-        return false;
-    }
-    true
-}
-
-/// Validate SKILL.md frontmatter (plus overall file length) against the
-/// agentskills.io spec. Returns human-readable violations; an empty vec
-/// means the skill is spec-compliant. The spec's optional `scripts/`,
-/// `references/`, and `assets/` directories aren't validated - they're
-/// free-form by design.
-pub fn validate_skill(
-    dir_name: &str,
-    parse_result: &FrontmatterParseResult,
-    skill_md_line_count: usize,
-) -> Vec<String> {
-    let mut violations = Vec::new();
-    let frontmatter = parse_result.as_frontmatter();
-
-    if let FrontmatterParseResult::Invalid(error) = parse_result {
-        violations.push(format!(
-            "invalid YAML frontmatter at line {}, column {}: {}",
-            error.line, error.column, error.message
-        ));
-    }
-
-    if !matches!(parse_result, FrontmatterParseResult::Invalid(_)) {
-        match frontmatter
-            .and_then(|f| f.name.as_deref())
-            .filter(|n| !n.is_empty())
-        {
-            None => violations.push("missing required frontmatter field: name".to_string()),
-            Some(name) => {
-                if !is_valid_skill_name(name) {
-                    violations.push(format!(
-                        "name \"{name}\" must be 1-64 lowercase a-z0-9 characters and hyphens, with no leading, trailing, or consecutive hyphens"
-                    ));
-                }
-                if name != dir_name {
-                    violations.push(format!(
-                        "name \"{name}\" does not match its directory name \"{dir_name}\""
-                    ));
-                }
-            }
-        }
-
-        match frontmatter
-            .and_then(|f| f.description.as_deref())
-            .filter(|d| !d.is_empty())
-        {
-            None => violations.push("missing required frontmatter field: description".to_string()),
-            Some(d) if d.chars().count() > 1024 => {
-                violations.push("description exceeds 1024 characters".to_string());
-            }
-            Some(_) => {}
-        }
-    }
-
-    if let Some(compat) = frontmatter.and_then(|f| f.compatibility.as_deref()) {
-        if compat.chars().count() > 500 {
-            violations.push("compatibility exceeds 500 characters".to_string());
-        }
-    }
-
-    if skill_md_line_count > 500 {
-        violations.push("SKILL.md exceeds recommended 500 lines".to_string());
-    }
-
-    if invocation_policy(frontmatter).1 {
-        violations.push("conflicting invocation keys".to_string());
-    }
-
-    violations
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,70 +181,6 @@ mod tests {
         }
     }
 
-    fn validate_frontmatter(frontmatter: SkillFrontmatter, dir_name: &str) -> Vec<String> {
-        validate_skill(dir_name, &FrontmatterParseResult::Valid(frontmatter), 10)
-    }
-
-    #[test]
-    fn fully_valid_skill_has_no_violations() {
-        let violations = validate_skill(
-            "write-tests",
-            &FrontmatterParseResult::Valid(valid_frontmatter()),
-            50,
-        );
-        assert!(
-            violations.is_empty(),
-            "expected no violations, got {violations:?}"
-        );
-    }
-
-    #[test]
-    fn bad_name_characters_are_flagged() {
-        let mut fm = valid_frontmatter();
-        fm.name = Some("Write_Tests!".to_string());
-        let violations = validate_frontmatter(fm, "Write_Tests!");
-        assert!(violations
-            .iter()
-            .any(|v| v.contains("must be 1-64 lowercase")));
-    }
-
-    #[test]
-    fn name_directory_mismatch_is_flagged() {
-        let violations = validate_frontmatter(valid_frontmatter(), "other-dir");
-        assert!(violations
-            .iter()
-            .any(|v| v.contains("does not match its directory name")));
-    }
-
-    #[test]
-    fn missing_description_is_flagged() {
-        let mut fm = valid_frontmatter();
-        fm.description = None;
-        let violations = validate_frontmatter(fm, "write-tests");
-        assert!(violations
-            .iter()
-            .any(|v| v.contains("missing required frontmatter field: description")));
-    }
-
-    #[test]
-    fn overlong_description_is_flagged() {
-        let mut fm = valid_frontmatter();
-        fm.description = Some("x".repeat(1025));
-        let violations = validate_frontmatter(fm, "write-tests");
-        assert!(violations
-            .iter()
-            .any(|v| v.contains("exceeds 1024 characters")));
-    }
-
-    #[test]
-    fn missing_frontmatter_flags_both_required_fields() {
-        let parsed = parse_frontmatter("# No frontmatter\nBody.");
-        assert!(matches!(parsed, FrontmatterParseResult::Absent));
-        let violations = validate_skill("write-tests", &parsed, 10);
-        assert!(violations.iter().any(|v| v.contains("name")));
-        assert!(violations.iter().any(|v| v.contains("description")));
-    }
-
     #[test]
     fn frontmatter_fields_captures_every_top_level_key() {
         let content = "---\nname: write-tests\ndescription: Writes tests.\ncustom-field: some-value\n---\nBody.";
@@ -362,46 +189,6 @@ mod tests {
         assert_eq!(
             fields.get("custom-field").map(String::as_str),
             Some("some-value")
-        );
-    }
-
-    #[test]
-    fn colon_in_plain_description_reports_yaml_location_without_missing_fields() {
-        let content =
-            "---\nname: write-tests\ndescription: Triggers on: requests for tests\n---\nBody.";
-        let parsed = parse_frontmatter(content);
-        let violations = validate_skill("write-tests", &parsed, content.lines().count());
-
-        assert_eq!(
-            violations,
-            vec!["invalid YAML frontmatter at line 3, column 25: mapping values are not allowed in this context"]
-        );
-    }
-
-    #[test]
-    fn valid_yaml_with_missing_fields_keeps_required_field_diagnostics() {
-        let parsed = parse_frontmatter("---\nlicense: MIT\n---\nBody.");
-        let violations = validate_skill("write-tests", &parsed, 4);
-
-        assert_eq!(
-            violations,
-            vec![
-                "missing required frontmatter field: name".to_string(),
-                "missing required frontmatter field: description".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn unterminated_frontmatter_is_one_invalid_eof_diagnostic() {
-        let content = "---\nname: write-tests\ndescription: Writes tests.";
-        let parsed = parse_frontmatter(content);
-        let violations = validate_skill("write-tests", &parsed, content.lines().count());
-
-        assert!(matches!(parsed, FrontmatterParseResult::Invalid(_)));
-        assert_eq!(
-            violations,
-            vec!["invalid YAML frontmatter at line 4, column 1: unterminated YAML frontmatter"]
         );
     }
 
@@ -462,16 +249,5 @@ mod tests {
         let (policy, conflict) = invocation_policy(Some(&fm));
         assert_eq!(policy, InvocationPolicy::UserOnly);
         assert!(conflict);
-    }
-
-    #[test]
-    fn validate_skill_flags_conflicting_invocation_keys() {
-        let mut fm = valid_frontmatter();
-        fm.disable_model_invocation = Some(true);
-        fm.user_invocable = Some(false);
-        let violations = validate_frontmatter(fm, "write-tests");
-        assert!(violations
-            .iter()
-            .any(|v| v.contains("conflicting invocation keys")));
     }
 }

@@ -255,6 +255,39 @@ fn exercise(flow: &str, surface: Surface) {
                 Fixture::md("gamma", "Original")
             );
         }
+        "Invocation policy" => {
+            let result = f.call(
+                &["invocation", "gamma", "--manual"],
+                "invocation",
+                "invocation",
+                &json!({"skill":"gamma","policy":"user-only"}),
+            );
+            assert_eq!(result["data"]["skills"][0]["mismatch"], false, "{result}");
+            assert!(std::fs::read_to_string(f.path("gamma"))
+                .unwrap()
+                .contains("disable-model-invocation: true"));
+            let yaml = f.path("gamma").parent().unwrap().join("agents/openai.yaml");
+            assert!(std::fs::read_to_string(yaml)
+                .unwrap()
+                .contains("allow_implicit_invocation: false"));
+        }
+        "Invocation check" => {
+            std::fs::write(
+                f.path("gamma"),
+                Fixture::md("gamma", "Original").replace(
+                    "description:",
+                    "disable-model-invocation: true\ndescription:",
+                ),
+            )
+            .unwrap();
+            let result = f.call(
+                &["invocation", "gamma"],
+                "invocation",
+                "invocation",
+                &json!({"skill":"gamma"}),
+            );
+            assert_eq!(result["data"]["skills"][0]["mismatch"], true, "{result}");
+        }
         "Fix" | "Frontmatter repair" => {
             std::fs::write(f.home.path().join(".agents/skill-studio.json"), "{}").unwrap();
             let malformed = "---\nname: gamma\ndescription: Use this: when broken\n---\nBody\n";
@@ -295,8 +328,6 @@ struct Coverage {
     flow: &'static str,
     cli: &'static str,
     mcp: &'static str,
-    cli_test: fn(),
-    mcp_test: fn(),
 }
 
 macro_rules! executable_coverage {
@@ -308,12 +339,14 @@ macro_rules! executable_coverage {
             fn $mcp() { exercise($flow, Surface::Mcp); }
         )*
         const COVERAGE: &[Coverage] = &[$(
-            Coverage { flow: $flow, cli: stringify!($cli), mcp: stringify!($mcp), cli_test: $cli, mcp_test: $mcp },
+            Coverage { flow: $flow, cli: stringify!($cli), mcp: stringify!($mcp) },
         )*];
     };
 }
 
 executable_coverage! {
+    "Invocation policy" => (cli_invocation_manual_sets_both_keys_or_names_the_auto_copy, mcp_invocation_manual_sets_both_keys_or_names_the_auto_copy),
+    "Invocation check" => (cli_invocation_check_reports_mismatch_or_names_the_missing_policy, mcp_invocation_check_reports_mismatch_or_names_the_missing_policy),
     "First launch harness detect" => (cli_harness_detection_reports_codex_or_names_the_missing_agent, mcp_harness_detection_reports_codex_or_names_the_missing_agent),
     "Scan" => (cli_scan_reports_shared_gamma_or_names_the_missing_deployment, mcp_scan_reports_shared_gamma_or_names_the_missing_deployment),
     "Activity" => (cli_activity_contains_install_or_names_the_missing_event, mcp_activity_contains_install_or_names_the_missing_event),
@@ -364,8 +397,6 @@ fn every_desktop_flow_has_named_executable_cli_and_mcp_coverage_or_an_explicit_g
             .unwrap_or_else(|| panic!("no executable scenarios for {}", columns[1]));
         assert_eq!(columns[8], coverage.cli);
         assert_eq!(columns[9], coverage.mcp);
-        (coverage.cli_test)();
-        (coverage.mcp_test)();
         assert!(seen.insert(coverage.flow), "duplicate flow");
     }
     assert_eq!(

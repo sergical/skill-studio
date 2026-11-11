@@ -10,6 +10,8 @@
 use std::process::Command;
 
 const USER_COMMANDS: &[&str] = &[
+    "extras",
+    "invocation",
     "scan",
     "diagnose",
     "conflicts",

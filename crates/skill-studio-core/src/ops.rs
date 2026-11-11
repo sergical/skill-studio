@@ -127,6 +127,10 @@ pub enum Operation {
     /// it: the host crate's `usage_report` reads agent session history,
     /// which the core never touches.
     SkillUsage,
+    /// Names and paths of non-skill agent configuration.
+    Extras,
+    /// Check or set skill invocation across harnesses.
+    Invocation,
 }
 
 /// Outcome status of one call.
@@ -189,6 +193,7 @@ impl Outcome for Diagnosis {
     }
 }
 
+impl Outcome for crate::extras::ExtrasReport {}
 impl Outcome for Capabilities {}
 impl Outcome for HarnessReport {}
 impl Outcome for FrontmatterRepairPreview {}
@@ -981,7 +986,7 @@ fn scan_one_plugin_target(
 /// the root's own harness owns, from
 /// [`crate::harness::reserved_skills_root_entry`]: Claude Code's `synced`
 /// folder is the vendor's, so it is skipped even when it holds a
-/// `SKILL.md` (`docs/action-map/harnesses/claude-code.md`: "`synced` under
+/// `SKILL.md` (`docs/agent-skill-conventions.md`: "`synced` under
 /// `~/.claude/skills` is reserved; the scanner must skip it").
 /// As [`read_root_entries`], accumulating the read's duration onto
 /// `sc.timings.dir_walk` (the scan step this call is part of).
@@ -1706,6 +1711,15 @@ struct PluginCacheTarget {
     scope: RootScope,
     harness: AgentId,
     path: PathBuf,
+}
+
+pub(crate) fn plugin_owns_path(rt: &Runtime, path: &Path) -> bool {
+    plugin_scan_targets(rt).iter().any(|target| {
+        rt.ports
+            .fs
+            .canonicalize(&target.path)
+            .is_ok_and(|root| path.starts_with(root))
+    })
 }
 
 fn plugin_scan_targets(rt: &Runtime) -> Vec<PluginCacheTarget> {
@@ -3058,7 +3072,7 @@ fn conflicts_in(inventory: &Inventory) -> Vec<crate::dto::ConflictSummary> {
     conflicts
 }
 
-/// Runs the doctor invariants from `docs/action-map/lifecycle-states.md`
+/// Runs the doctor invariants from `docs/flows.md`
 /// for one skill and applies whichever repair exists.
 ///
 /// A [`IssueKind::RepairableFrontmatter`] issue is repaired the same way
@@ -5467,6 +5481,7 @@ fn find_independent_links<'a>(
         .collect()
 }
 
+pub use crate::extras::extras;
 pub use crate::ops_discard::discard;
 pub use crate::ops_doctor::doctor;
 pub use crate::ops_install::{install, install_preferences};
@@ -5485,7 +5500,7 @@ pub use crate::ops_update::{update, update_all, update_split_copies};
 /// build: the event's `inverse` is `None`, and `restore_event` refuses it
 /// ([`ErrorCode::Unsupported`]); use `unpark` instead.
 ///
-/// Sequence, matching `docs/action-map/primitives-and-call-stack.md`'s Park
+/// Sequence, matching `docs/flows.md`'s Park
 /// row: the journal row is recorded before any filesystem step, every
 /// per-skill link into the folder (any harness) is removed first, then the
 /// directory is renamed into `.agents/skills-parked`.
@@ -5873,8 +5888,8 @@ pub(crate) fn park_found_copy(
 /// root).
 ///
 /// This reverses the most recent unreverted `park` event recorded for the
-/// skill (matched by `payload.to` naming this deployment's path), per
-/// `primitives-and-call-stack.md`'s "the reverse, from the journal entry".
+/// skill (matched by `payload.to` naming this deployment's path), from the
+/// journal entry.
 /// A parked directory with no matching `park` row (never parked by this
 /// build, or the row aged out) still unparks: no link is then recreated.
 pub fn unpark(
@@ -7939,6 +7954,7 @@ mod tests {
                 Operation::Split,
                 Operation::TurnOffForAgent,
                 Operation::SkillUsage,
+                Operation::Extras,
             ];
             for operation in all {
                 let expected = match operation {
@@ -7965,6 +7981,8 @@ mod tests {
                     Operation::Split => "split",
                     Operation::TurnOffForAgent => "turn_off_for_agent",
                     Operation::SkillUsage => "skill_usage",
+                    Operation::Extras => "extras",
+                    Operation::Invocation => "invocation",
                 };
                 let value = serde_json::to_value(operation).unwrap();
                 assert_eq!(

@@ -92,3 +92,8 @@ two calls on the same server), error mapping for an invalid scope, progress
 notifications with and without a token, that `SKILL_STUDIO_HOME` never
 writes outside itself, and that `skill-studio watch` and a fresh MCP `scan`
 agree on state after a mutation applied through the CLI.
+
+The read-only `extras` tool takes `{}` and uses the server's existing home and
+project scope. It returns the same declaration list as `skill-studio extras
+--json`: hook events and counts, MCP server names, and instruction file paths.
+It returns no config values or instruction contents.

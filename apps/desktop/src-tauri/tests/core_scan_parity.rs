@@ -280,13 +280,11 @@ fn run_desktop(name: &str, home: &Path) -> BTreeMap<String, Vec<Value>> {
         .unwrap();
     }
     let cache_path = home.join(".cache/invocations.json");
-    let runs_root = home.join(".data/runs");
     let update_check_path = home.join(".data/update-check.json");
     std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
-    std::fs::create_dir_all(&runs_root).unwrap();
 
     let mut invocation_index = SkillInvocationIndex::default();
-    let paths = BuildPaths::new(&cache_path, &runs_root, &update_check_path);
+    let paths = BuildPaths::new(&cache_path, &update_check_path);
 
     let previous_home = std::env::var("HOME").ok();
     // SAFETY: `home_env_lock` above serializes every test in this file that

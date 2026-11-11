@@ -1,7 +1,7 @@
 // ============================================================================
 // InstalledSkillHeader - Title, description, state chips, and any blocking
 // violation for the rendered copy. The actions cluster (primary action,
-// assistant toggle, ⋯ menu) lives in `PageShell`'s `actions` now; the source
+// ⋯ menu) lives in `PageShell`'s `actions` now; the source
 // ledger's facts moved into the properties rail.
 // ============================================================================
 

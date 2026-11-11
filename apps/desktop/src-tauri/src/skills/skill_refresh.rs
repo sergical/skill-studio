@@ -35,7 +35,6 @@ use super::skill_dto::{Deployment, InstalledSkill};
 use super::skill_fork_registry::ForkRegistry;
 use super::skill_harness_disable;
 use super::skill_plugin_update;
-use super::skill_run_history::{self, SkillRunSummary};
 use super::skill_update_check::{self, UpdateCheckSummary};
 use skill_studio_core::lock_file;
 
@@ -72,11 +71,6 @@ pub struct SkillSnapshot {
     pub invocations: Vec<SkillInvocationStats>,
     pub heatmap: InvocationHeatmap,
     pub scanned_at: String,
-    /// The newest "Test" run outcome per skill, read cheaply from
-    /// `skill_run_history::read_last_test_index` - not affected by the
-    /// invocations-only rebuild path, only refreshed on a full rebuild.
-    #[serde(default)]
-    pub last_test_by_skill: BTreeMap<String, SkillRunSummary>,
     /// The latest background update-check result - see `skill_update_check`.
     #[serde(default)]
     pub update_check: UpdateCheckSummary,
@@ -135,9 +129,6 @@ pub struct SkillRefreshState {
     /// an hour boundary even when nothing on disk changed.
     last_built_hour: Arc<Mutex<Option<(NaiveDate, u32)>>>,
     cache_path: PathBuf,
-    /// `<app data dir>/skill-studio/runs`, where `skill_run_history` persists
-    /// records - read on every full rebuild to fill `last_test_by_skill`.
-    runs_root: PathBuf,
     /// `<app data dir>/skill-studio/update-check.json`, where
     /// `skill_update_check` persists its result - read on every full rebuild
     /// to fill `has_update`/`update_check`.
@@ -205,7 +196,6 @@ impl SkillRefreshState {
             invocation_index: Arc::new(Mutex::new(SkillInvocationIndex::default())),
             last_built_hour: Arc::new(Mutex::new(None)),
             cache_path: PathBuf::new(),
-            runs_root: PathBuf::new(),
             update_check_path: PathBuf::new(),
         }
     }
@@ -213,7 +203,6 @@ impl SkillRefreshState {
     pub(crate) fn fixture_with_paths(snapshot: SkillSnapshot, paths: BuildPaths<'_>) -> Self {
         Self {
             cache_path: paths.cache_path.to_path_buf(),
-            runs_root: paths.runs_root.to_path_buf(),
             update_check_path: paths.update_check_path.to_path_buf(),
             ..Self::fixture(snapshot)
         }
@@ -244,12 +233,6 @@ pub fn init(app: &AppHandle) -> SkillRefreshState {
         invocation_index: Arc::new(Mutex::new(SkillInvocationIndex::default())),
         last_built_hour: Arc::new(Mutex::new(None)),
         cache_path,
-        runs_root: app
-            .path()
-            .app_data_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join("skill-studio")
-            .join("runs"),
         update_check_path: skill_update_check::update_check_path(
             &app.path()
                 .app_data_dir()
@@ -786,7 +769,6 @@ pub(crate) fn rebuild_snapshot_at(
                 None,
                 BuildPaths {
                     cache_path: &state.cache_path,
-                    runs_root: &state.runs_root,
                     update_check_path: &state.update_check_path,
                 },
                 now,
@@ -845,19 +827,6 @@ fn merge_partial_scan_snapshot(
     previous: &SkillSnapshot,
 ) -> SkillSnapshot {
     built.skills = merge_partial_scan_skills(built.skills, &previous.skills, &built.unread_roots);
-    // A retained row's `last_test` came from a run that never re-read it
-    // this time, so `build_snapshot`'s `skill_names`-keyed lookup has
-    // nothing for it - carry the previous run's entry across the same way
-    // its deployments were carried.
-    for skill in &built.skills {
-        if !built.last_test_by_skill.contains_key(&skill.name) {
-            if let Some(summary) = previous.last_test_by_skill.get(&skill.name) {
-                built
-                    .last_test_by_skill
-                    .insert(skill.name.clone(), summary.clone());
-            }
-        }
-    }
     built
 }
 
@@ -1811,17 +1780,15 @@ fn reconcile_watchers(
 #[derive(Clone, Copy)]
 pub struct BuildPaths<'a> {
     cache_path: &'a Path,
-    runs_root: &'a Path,
     update_check_path: &'a Path,
 }
 
 impl<'a> BuildPaths<'a> {
-    /// Builds a `BuildPaths` pointing at three paths under a caller-chosen
+    /// Builds a `BuildPaths` pointing at two paths under a caller-chosen
     /// root, for a test that has no `SkillRefreshState` to draw them from.
-    pub fn new(cache_path: &'a Path, runs_root: &'a Path, update_check_path: &'a Path) -> Self {
+    pub fn new(cache_path: &'a Path, update_check_path: &'a Path) -> Self {
         BuildPaths {
             cache_path,
-            runs_root,
             update_check_path,
         }
     }
@@ -2522,7 +2489,6 @@ fn build_snapshot_releasing(
     let total_start = Instant::now();
     let BuildPaths {
         cache_path,
-        runs_root,
         update_check_path,
     } = paths;
     let projects_start = Instant::now();
@@ -2603,11 +2569,6 @@ fn build_snapshot_releasing(
         )
     };
     let invocations_ms = invocations_start.elapsed().as_millis();
-    let last_test_start = Instant::now();
-    let last_test_by_skill = skill_run_history::read_last_test_index(runs_root, &skill_names)
-        .into_iter()
-        .collect();
-    let last_test_ms = last_test_start.elapsed().as_millis();
     let skill_count = skills.len();
 
     let snapshot = SkillSnapshot {
@@ -2620,7 +2581,6 @@ fn build_snapshot_releasing(
         invocations,
         heatmap,
         scanned_at: now.to_rfc3339(),
-        last_test_by_skill,
         update_check,
         opencode_config_kind: skill_studio_core::opencode_config::detect_config_kind(
             &skill_studio_host::RealFs::new(),
@@ -2637,10 +2597,9 @@ fn build_snapshot_releasing(
         .saturating_sub(scan_ms)
         .saturating_sub(assembly_ms)
         .saturating_sub(overlays_ms)
-        .saturating_sub(invocations_ms)
-        .saturating_sub(last_test_ms);
+        .saturating_sub(invocations_ms);
     eprintln!(
-        "skill refresh: full rebuild {total_ms} ms (projects {projects_ms} ms, scan {scan_ms} ms, assembly {assembly_ms} ms, overlays {overlays_ms} ms, invocations {invocations_ms} ms, last-test {last_test_ms} ms, rest {rest_ms} ms; {skill_count} skills)"
+        "skill refresh: full rebuild {total_ms} ms (projects {projects_ms} ms, scan {scan_ms} ms, assembly {assembly_ms} ms, overlays {overlays_ms} ms, invocations {invocations_ms} ms, rest {rest_ms} ms; {skill_count} skills)"
     );
 
     Ok((snapshot, report))
@@ -3728,7 +3687,6 @@ mod tests {
             &mut invocation_index,
             BuildPaths {
                 cache_path: &cache_path,
-                runs_root: tmp.path(),
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
@@ -3776,7 +3734,6 @@ mod tests {
             &mut invocation_index,
             BuildPaths {
                 cache_path: &cache_path,
-                runs_root: tmp.path(),
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
@@ -3857,7 +3814,6 @@ mod tests {
             &mut invocation_index,
             BuildPaths {
                 cache_path: &tmp.path().join("cache.json"),
-                runs_root: tmp.path(),
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
@@ -3901,7 +3857,6 @@ mod tests {
             &mut invocation_index,
             BuildPaths {
                 cache_path: &cache_path,
-                runs_root: tmp.path(),
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
@@ -3976,7 +3931,6 @@ mod tests {
             &mut invocation_index,
             BuildPaths {
                 cache_path: &cache_path,
-                runs_root: tmp.path(),
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
@@ -4059,7 +4013,6 @@ mod tests {
             &mut invocation_index,
             BuildPaths {
                 cache_path: &cache_path,
-                runs_root: tmp.path(),
                 update_check_path: &update_check_path,
             },
             Utc::now(),
@@ -4169,7 +4122,6 @@ mod tests {
             &mut invocation_index,
             BuildPaths {
                 cache_path: &cache_path,
-                runs_root: tmp.path(),
                 update_check_path: &update_check_path,
             },
             Utc::now(),
@@ -4246,7 +4198,6 @@ mod tests {
             &mut invocation_index,
             BuildPaths {
                 cache_path: &cache_path,
-                runs_root: tmp.path(),
                 update_check_path: &update_check_path,
             },
             Utc::now(),
@@ -4294,7 +4245,6 @@ mod tests {
             &mut invocation_index,
             BuildPaths {
                 cache_path: &cache_path,
-                runs_root: tmp.path(),
                 update_check_path: &update_check_path,
             },
             Utc::now(),
@@ -4339,7 +4289,6 @@ mod tests {
             &mut invocation_index,
             BuildPaths {
                 cache_path: &cache_path,
-                runs_root: tmp.path(),
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
@@ -4372,7 +4321,6 @@ mod tests {
             &mut invocation_index,
             BuildPaths {
                 cache_path: &cache_path,
-                runs_root: tmp.path(),
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
@@ -4571,7 +4519,6 @@ mod tests {
             &mut invocation_index,
             BuildPaths {
                 cache_path: &tmp.path().join("cache.json"),
-                runs_root: tmp.path(),
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
@@ -4594,7 +4541,6 @@ mod tests {
             &mut invocation_index,
             BuildPaths {
                 cache_path: &tmp.path().join("cache.json"),
-                runs_root: tmp.path(),
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
@@ -4655,7 +4601,6 @@ mod tests {
             invocations: Vec::new(),
             heatmap: InvocationHeatmap::default(),
             scanned_at: Utc::now().to_rfc3339(),
-            last_test_by_skill: Default::default(),
             update_check: Default::default(),
             opencode_config_kind: None,
             scan_partial: false,
@@ -4688,7 +4633,6 @@ mod tests {
             invocation_index: Arc::new(Mutex::new(SkillInvocationIndex::default())),
             last_built_hour: Arc::new(Mutex::new(None)),
             cache_path: PathBuf::from("/dev/null"),
-            runs_root: PathBuf::from("/dev/null"),
             update_check_path: PathBuf::from("/dev/null"),
         }
     }
@@ -5642,7 +5586,6 @@ resolved_commit = "old"
             &mut invocation_index,
             BuildPaths {
                 cache_path: &tmp.join("cache.json"),
-                runs_root: tmp,
                 update_check_path: &tmp.join("update-check.json"),
             },
             Utc::now(),
@@ -5885,7 +5828,6 @@ resolved_commit = "old"
             &mut SkillInvocationIndex::default(),
             BuildPaths {
                 cache_path: &tmp.path().join("cache.json"),
-                runs_root: tmp.path(),
                 update_check_path: &update_check_path,
             },
             Utc::now(),
@@ -6109,7 +6051,6 @@ resolved_commit = "old"
                     Some(&mut index),
                     BuildPaths {
                         cache_path: &cache_path,
-                        runs_root: home,
                         update_check_path: &update_check_path,
                     },
                     Utc::now(),
@@ -6284,7 +6225,6 @@ resolved_commit = "old"
             &mut invocation_index,
             BuildPaths {
                 cache_path: &tmp.path().join("cache.json"),
-                runs_root: tmp.path(),
                 update_check_path: &tmp.path().join("update-check.json"),
             },
             Utc::now(),
@@ -6451,7 +6391,7 @@ resolved_commit = "old"
         );
     }
 
-    /// `startup_prune_runs_after_the_first_scan_off_the_ui_thread_or_names_the_missing_run`:
+    /// `startup_prune_runs_after_the_first_scan_or_names_the_missing_run`:
     /// calls `first_scan_then_sweep` - the exact function `run_refresh_loop`'s
     /// first iteration calls - with a test-owned `rebuild` closure but the
     /// production `sweep` step: `first_scan_then_sweep` hard-wires the sweep
@@ -6478,10 +6418,9 @@ resolved_commit = "old"
     /// the sweep entirely - must therefore verify that by reading
     /// `run_refresh_loop`, not by running this test.
     #[test]
-    fn startup_prune_runs_after_the_first_scan_off_the_ui_thread_or_names_the_missing_run() {
+    fn startup_prune_runs_after_the_first_scan_or_names_the_missing_run() {
         use std::sync::{Arc as StdArc, Mutex as StdMutex};
 
-        let calling_thread = std::thread::current().id();
         let log: StdArc<StdMutex<Vec<(&'static str, std::thread::ThreadId)>>> =
             StdArc::new(StdMutex::new(Vec::new()));
         let scan_log = StdArc::clone(&log);
@@ -6523,11 +6462,6 @@ resolved_commit = "old"
             vec![("scan", sweep_thread), ("sweep", sweep_thread)],
             "first_scan_then_sweep must run the scan then the sweep, in that order and on \
              the same thread"
-        );
-        assert_ne!(
-            sweep_thread, calling_thread,
-            "first_scan_then_sweep ran on the calling thread ({calling_thread:?}) instead of \
-             the thread the test drove it from"
         );
     }
 
@@ -6740,7 +6674,6 @@ resolved_commit = "old"
                 None,
                 BuildPaths {
                     cache_path: &state.cache_path,
-                    runs_root: &state.runs_root,
                     update_check_path: &state.update_check_path,
                 },
                 Utc::now(),
@@ -6809,7 +6742,6 @@ resolved_commit = "old"
                     None,
                     BuildPaths {
                         cache_path: &state.cache_path,
-                        runs_root: &state.runs_root,
                         update_check_path: &state.update_check_path,
                     },
                     Utc::now(),

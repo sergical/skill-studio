@@ -1,8 +1,6 @@
 //! fsops: five primitives for durable, confined writes under one root
 //! folder - [`Root`], [`stage`], [`swap`], [`link`], and [`write_file`].
-//! See `docs/action-map/primitives-and-call-stack.md` for the guarantee
-//! each one makes and `docs/action-map/plan.md` unit 1.1 for the tests
-//! that hold them to it.
+//! See `docs/flows.md` for operation guarantees and flow tests.
 //!
 //! Nothing in [`crate::ops`] calls these yet; adoption starts in a later
 //! unit. Every primitive is written against the `fsops_*` methods on
@@ -15,7 +13,7 @@
 //! [`crate::journal::PlanWriter`] and record their own step against it
 //! *before* their mutation runs, with the reversal data (the staged path's
 //! identity, the previous link target, the fsynced backup) computed and
-//! made durable first - see `docs/action-map/plan.md` unit 1.2. The
+//! made durable first - see `docs/flows.md`. The
 //! `&PlanWriter` parameter is itself the guarantee that a caller cannot run
 //! one of these four without a plan step landing for it: there is no way to
 //! call `stage`, `swap`, `link`, or `write_file` without one in scope, and

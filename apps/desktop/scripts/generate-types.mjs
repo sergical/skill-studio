@@ -22,9 +22,17 @@ const desktopDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const workspaceRoot = path.dirname(path.dirname(desktopDir));
 const outputPath = path.join(workspaceRoot, "packages/lib/src/skill-types.generated.ts");
 
-const schemaJson = execFileSync(
+execFileSync(
   "cargo",
-  ["run", "--quiet", "-p", "skill-studio", "--example", "schema"],
+  ["build", "--quiet", "--workspace", "--all-features", "--example", "schema"],
+  { cwd: workspaceRoot, stdio: ["ignore", "ignore", "inherit"] },
+);
+const schemaJson = execFileSync(
+  path.join(
+    workspaceRoot,
+    "target/debug/examples",
+    process.platform === "win32" ? "schema.exe" : "schema",
+  ),
   { cwd: workspaceRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
 );
 const schema = JSON.parse(schemaJson);

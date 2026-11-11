@@ -8,7 +8,7 @@
 //!
 //! Every fixture comes from [`skill_studio_core::testing_shapes`], and
 //! every expectation below is derived from `docs/agent-skill-conventions.md`
-//! or `docs/action-map/harnesses/`, cited in the test's own doc comment -
+//! or `docs/agent-skill-conventions.md`, cited in the test's own doc comment -
 //! never from what the scanner happens to do today.
 
 use std::path::{Path, PathBuf};
@@ -101,7 +101,7 @@ fn rows_named(inventory: &Inventory, name: &str) -> usize {
 }
 
 /// `synced` is reserved by the vendor inside its skills root
-/// (`docs/action-map/harnesses/claude-code.md`: "`synced` under
+/// (`docs/agent-skill-conventions.md`: "`synced` under
 /// `~/.claude/skills` is reserved; the scanner must skip it"), so it is
 /// skipped by name: the fixture plants a `SKILL.md` at the reserved folder
 /// itself, which makes it a skill folder by the spec's shape test
@@ -154,7 +154,7 @@ fn scan_reports_synced_bucket_skills_once_and_not_the_bucket_root_or_names_the_e
 /// A dot-prefixed entry is hidden from every documented reader
 /// (`docs/agent-skill-conventions.md`, Discovery paths), so a skills root
 /// contributes nothing from one - not Codex's bundled `.system` tree
-/// (`docs/action-map/harnesses/codex.md` lists those as the harness's own,
+/// (`docs/agent-skill-conventions.md` lists those as the harness's own,
 /// separate from the roots a user deploys into), and not a dot-prefixed
 /// folder that holds a valid `SKILL.md` of its own.
 #[test]
@@ -203,9 +203,9 @@ fn scan_skips_dot_prefixed_entries_in_a_skills_root_or_names_the_row() {
 }
 
 /// `npx skills` in symlink mode writes each harness's entry as a relative
-/// link into the shared root (`docs/action-map/harnesses/shared-root.md`),
+/// link into the shared root (`docs/agent-skill-conventions.md`),
 /// and a symlinked skill folder "loads once, deduplicated by target"
-/// (`docs/action-map/harnesses/sources.md`). One skill reached twice is one
+/// (`docs/agent-skill-conventions.md`). One skill reached twice is one
 /// row with two deployments, not two rows.
 #[test]
 fn scan_dedupes_a_pi_relative_link_onto_its_shared_deployment_or_names_the_duplicate() {
@@ -255,7 +255,7 @@ fn scan_dedupes_a_pi_relative_link_onto_its_shared_deployment_or_names_the_dupli
 /// Doctor invariant 1 is "every link resolves inside its root". A relative
 /// link whose target does resolve is not a violation; reporting one would
 /// send the user to repair the deployment shape `npx skills` writes by
-/// default (`docs/action-map/harnesses/shared-root.md`). A link whose
+/// default (`docs/agent-skill-conventions.md`). A link whose
 /// target is missing is the violation the invariant exists for, so the same
 /// home carries one of each and the check must name only the dangling one.
 #[test]
@@ -284,7 +284,7 @@ fn doctor_link_check_resolves_relative_links_inside_the_root_or_names_the_false_
 /// legacy `skill/` next to it (`docs/agent-skill-conventions.md`, Discovery
 /// paths); `~/.opencode` is not one of them. The harness is still
 /// Configured when its config file exists and its binary is on `PATH`
-/// (`docs/action-map/harnesses/harness-detection.md`), so "no skills" and
+/// (`docs/agent-skill-conventions.md`), so "no skills" and
 /// "not set up" must not be confused.
 #[test]
 fn scan_reports_opencode_installed_with_zero_skills_and_ignores_dot_opencode_or_names_the_root() {
@@ -325,7 +325,7 @@ fn scan_reports_opencode_installed_with_zero_skills_and_ignores_dot_opencode_or_
 }
 
 /// A plugin's skills live at `skills/<name>/SKILL.md` inside the plugin
-/// folder (`docs/action-map/harnesses/plugins.md`). A `node_modules/`
+/// folder (`docs/agent-skill-conventions.md`). A `node_modules/`
 /// subtree holds the plugin's dependencies; a `SKILL.md` inside one belongs
 /// to that package, and no documented reader loads it.
 #[test]
@@ -361,7 +361,7 @@ fn claude_cached_plugin_paths(inventory: &Inventory) -> Vec<String> {
 }
 
 /// Claude Code keeps an updated plugin's old version folder in the cache
-/// until its ~14-day orphan prune (`docs/action-map/harnesses/plugins.md`),
+/// until its ~14-day orphan prune (`docs/agent-skill-conventions.md`),
 /// and its enabled state is keyed `<plugin>@<marketplace>` with no version
 /// (`docs/research/harness-primitives.md`). `installed_plugins.json`
 /// (version 2) names the `installPath` Claude Code loads, so one skill row
@@ -427,7 +427,7 @@ fn scan_without_a_matching_installed_plugins_record_keeps_every_cached_version_o
 /// The lock file belongs to `npx skills`, which writes keys this reader
 /// does not model (`dismissed`, `lastSelectedAgents`) and agent ids the app
 /// has no harness for. Reading it must keep every documented field
-/// (`docs/action-map/harnesses/shared-root.md`) and must not drop the keys
+/// (`docs/agent-skill-conventions.md`) and must not drop the keys
 /// it does not model, for the reason the sibling registry keeps a flatten
 /// catch-all: an older build must never drop a newer build's keys.
 #[test]

@@ -1067,6 +1067,7 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
 /// The tools an agent sees by default, read-only ones first. A change to
 /// this list changes what every client loads into context.
 const READ_TOOLS: &[&str] = &[
+    "extras",
     "turn_off_check",
     "scan",
     "diagnose",
@@ -1077,6 +1078,7 @@ const READ_TOOLS: &[&str] = &[
     "outdated",
 ];
 const WRITE_TOOLS: &[&str] = &[
+    "invocation",
     "apply_frontmatter_repair",
     "restore_event",
     "fix",
