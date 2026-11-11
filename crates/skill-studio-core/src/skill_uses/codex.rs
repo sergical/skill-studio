@@ -67,17 +67,28 @@ fn command_from_function_call_args(args: &serde_json::Value) -> Option<String> {
 /// panics: a malformed line, or one missing a `timestamp`, is skipped rather
 /// than failing the whole file.
 pub fn parse_codex_uses(text: &str, context: &mut TranscriptContext) -> Vec<SkillInvocation> {
+    parse_codex_uses_checked(text, context, &mut 0)
+}
+
+/// Parses history and counts corrupt JSON records without parsing a record twice.
+pub fn parse_codex_uses_checked(
+    text: &str,
+    context: &mut TranscriptContext,
+    invalid: &mut usize,
+) -> Vec<SkillInvocation> {
     let mut out = Vec::new();
 
     for line in text.lines() {
-        if !line.contains(SESSION_META_MARKER)
-            && !line.contains(SKILL_BLOCK_MARKER)
-            && !line.contains(SKILL_MD_MARKER)
-            && !line.contains(SKILLS_NAMESPACE_MARKER)
-        {
-            continue;
-        }
-        let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+        let Some(record) = super::checked_history_line(
+            line,
+            &[
+                SESSION_META_MARKER,
+                SKILL_BLOCK_MARKER,
+                SKILL_MD_MARKER,
+                SKILLS_NAMESPACE_MARKER,
+            ],
+            invalid,
+        ) else {
             continue;
         };
         let record_type = record.get("type").and_then(|v| v.as_str());
@@ -103,13 +114,8 @@ pub fn parse_codex_uses(text: &str, context: &mut TranscriptContext) -> Vec<Skil
             continue;
         }
 
-        let Some(timestamp) = record.get("timestamp").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Ok(at) = DateTime::parse_from_rfc3339(timestamp) else {
-            continue;
-        };
-        let at = at.with_timezone(&Utc);
+        let before = out.len();
+        let at = DateTime::<Utc>::UNIX_EPOCH;
 
         let Some(payload) = record.get("payload") else {
             continue;
@@ -155,13 +161,20 @@ pub fn parse_codex_uses(text: &str, context: &mut TranscriptContext) -> Vec<Skil
             Some("function_call") => {
                 let name = payload.get("name").and_then(|v| v.as_str());
                 let namespace = payload.get("namespace").and_then(|v| v.as_str());
+                let is_skill = namespace == Some("skills") && name == Some("read");
                 let Some(args_str) = payload.get("arguments").and_then(|v| v.as_str()) else {
+                    if is_skill {
+                        *invalid += 1;
+                    }
                     continue;
                 };
                 let Ok(args) = serde_json::from_str::<serde_json::Value>(args_str) else {
+                    if is_skill {
+                        *invalid += 1;
+                    }
                     continue;
                 };
-                if namespace == Some("skills") && name == Some("read") {
+                if is_skill {
                     let has_resource = args
                         .get("resource")
                         .is_some_and(|v| !v.is_null() && v.as_str() != Some(""));
@@ -169,6 +182,7 @@ pub fn parse_codex_uses(text: &str, context: &mut TranscriptContext) -> Vec<Skil
                         continue;
                     }
                     let Some(package) = args.get("package").and_then(|v| v.as_str()) else {
+                        *invalid += 1;
                         continue;
                     };
                     if let Some(name) = codex_skill_name_from_package(package) {
@@ -180,6 +194,8 @@ pub fn parse_codex_uses(text: &str, context: &mut TranscriptContext) -> Vec<Skil
                             SkillTrigger::Agent,
                             at,
                         );
+                    } else {
+                        *invalid += 1;
                     }
                 } else if matches!(name, Some("exec_command" | "shell")) {
                     if let Some(command) = command_from_function_call_args(&args) {
@@ -189,6 +205,7 @@ pub fn parse_codex_uses(text: &str, context: &mut TranscriptContext) -> Vec<Skil
             }
             _ => {}
         }
+        super::validate_invocation_timestamp(&mut out, before, &record, invalid);
     }
 
     out

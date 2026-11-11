@@ -5,7 +5,8 @@
 //! The desktop app owns the use cache (`skill-uses.json` in its app data
 //! folder). This module only ever reads it: it seeds an in-memory
 //! [`SkillInvocationIndex`] from the cache so a refresh re-reads only what
-//! changed since the app last ran, and never saves the result back.
+//! changed since the app last ran, and never saves the result back. The CLI
+//! can save a separate caller-owned cache after it finishes the read.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -24,12 +25,6 @@ use crate::skill_uses::SkillInvocationIndex;
 /// The window `usage` and `skill_usage` use when the caller names none.
 pub const DEFAULT_USAGE_DAYS: u32 = 30;
 
-/// A refresh reads at most a fixed byte budget. A first run with no desktop
-/// cache can need more than one pass to read a large history; this caps the
-/// passes so one report stays bounded, and a history still unread after
-/// them makes the report partial.
-const MAX_REFRESH_PASSES: usize = 8;
-
 /// The desktop app's use cache under the platform data folder (`dirs::data_dir()`,
 /// `~/Library/Application Support` on macOS): Tauri's `app_data_dir()` for
 /// the `com.skillstudio.app` identifier, joined with the file name the app
@@ -41,6 +36,10 @@ pub fn desktop_usage_cache_path(data_dir: &Path) -> PathBuf {
 /// One installed skill's uses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkillUsageRow {
+    /// Distinct (harness, session id) pairs across the selected history.
+    pub sessions: usize,
+    /// Uses by trigger across the selected history.
+    pub triggers: BTreeMap<String, u32>,
     /// The skill's name.
     pub skill: String,
     /// Uses in the last `days` days of the report.
@@ -56,6 +55,8 @@ pub struct SkillUsageRow {
 /// Uses for every installed, not parked skill over one window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UsageReport {
+    /// Roots or files whose history was unavailable or skipped.
+    pub observations: Vec<crate::skill_uses::UsageObservation>,
     /// The window, in days, that `recent_uses` and `unused` cover.
     pub days: u32,
     /// Skills not used in the window first, by name; then the rest, most
@@ -85,16 +86,45 @@ impl Outcome for UsageReport {
 #[derive(Debug, Clone, Default)]
 pub struct SkillUsage {
     index: SkillInvocationIndex,
+    loaded_index: SkillInvocationIndex,
+}
+
+/// Optional exact matches over recorded history. Paths use lexical path equality.
+#[derive(Debug, Clone, Default)]
+pub struct UsageFilter {
+    /// Exact recorded harness id, or all harnesses.
+    pub harness: Option<String>,
+    /// Exact recorded project paths, or all projects when empty.
+    pub projects: Vec<PathBuf>,
 }
 
 impl SkillUsage {
     /// Seeds the index from `cache` when given. Never writes the file.
     pub fn load_read_only(cache: Option<&Path>) -> Self {
+        let index = cache
+            .map(SkillInvocationIndex::load_read_only)
+            .unwrap_or_default();
         Self {
-            index: cache
-                .map(SkillInvocationIndex::load_read_only)
-                .unwrap_or_default(),
+            loaded_index: index.clone(),
+            index,
         }
+    }
+
+    /// Atomically saves a caller-owned cache. The desktop cache must not be used here.
+    pub fn save_cache(&self, path: &Path) -> Result<(), String> {
+        if path.exists() && self.index == self.loaded_index {
+            return Ok(());
+        }
+        let temporary = path.with_extension(format!("{}.tmp", ulid::Ulid::generate()));
+        let result = self
+            .index
+            .save(&temporary)
+            .and_then(|()| std::fs::rename(&temporary, path).map_err(|error| error.to_string()));
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+            let _ = std::fs::remove_file(temporary.with_extension("tmp.tmp"));
+        }
+        result
     }
 
     /// Refreshes the index from `home`'s agent session history, in memory
@@ -107,15 +137,41 @@ impl SkillUsage {
         days: u32,
         now: DateTime<Utc>,
     ) -> UsageReport {
-        let sources = DiscoverySources::read(&RealFs::new(), home);
-        let mut refresh = self.index.refresh(home, &sources);
-        for _ in 1..MAX_REFRESH_PASSES {
-            if !refresh.incomplete || refresh.bytes_read == 0 {
-                break;
-            }
-            refresh = self.index.refresh(home, &sources);
-        }
+        self.report_filtered(home, inventory, days, now, &UsageFilter::default())
+    }
 
+    /// Reports uses that match the optional harness and project filters.
+    pub fn report_filtered(
+        &mut self,
+        home: &Path,
+        inventory: &Inventory,
+        days: u32,
+        now: DateTime<Utc>,
+        selection: &UsageFilter,
+    ) -> UsageReport {
+        let sources = DiscoverySources::read(&RealFs::new(), home);
+        let refresh = self.index.refresh_all(home, &sources);
+
+        let mut observations = self.index.observations(home, &sources);
+        observations.extend(refresh.observations);
+        if inventory.completeness == Completeness::Partial {
+            observations.push(crate::skill_uses::UsageObservation {
+                path: home.to_path_buf(),
+                reason: format!(
+                    "Installed skill scan is partial: {}",
+                    inventory
+                        .observations
+                        .iter()
+                        .map(|o| o.message.as_str())
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
+            });
+        }
+        observations.sort();
+        observations.dedup();
         let installed = active_skill_names(inventory);
         let filter = SkillUseFilter {
             known_skills: &installed,
@@ -126,13 +182,33 @@ impl SkillUsage {
             .iter()
             .map(|name| (name.as_str(), Tally::default()))
             .collect();
-        for use_ in counted_uses(self.index.all_uses(), &filter) {
+        let selected = self.index.all_uses().filter(|u| {
+            selection.harness.as_ref().is_none_or(|h| h == &u.harness)
+                && (selection.projects.is_empty()
+                    || selection.projects.iter().any(|p| {
+                        u.project_path
+                            .as_deref()
+                            .is_some_and(|recorded| Path::new(recorded) == p)
+                    }))
+        });
+        for use_ in counted_uses(selected, &filter) {
             let Some(tally) =
                 installed_name(&use_.skill, &installed).and_then(|name| by_skill.get_mut(name))
             else {
                 continue;
             };
             tally.total += 1;
+            if let Some(session) = &use_.session {
+                tally
+                    .sessions
+                    .insert((use_.harness.clone(), session.clone()));
+            }
+            let trigger = match use_.trigger {
+                skill_studio_core::skill_uses::SkillTrigger::User => "user",
+                skill_studio_core::skill_uses::SkillTrigger::Agent => "agent",
+                skill_studio_core::skill_uses::SkillTrigger::FileRead => "file_read",
+            };
+            *tally.triggers.entry(trigger.to_string()).or_default() += 1;
             if tally.last_used.is_none_or(|last| use_.at > last) {
                 tally.last_used = Some(use_.at);
             }
@@ -146,6 +222,16 @@ impl SkillUsage {
             .into_iter()
             .map(|(skill, tally)| SkillUsageRow {
                 skill: skill.to_string(),
+                sessions: tally.sessions.len(),
+                triggers: ["user", "agent", "file_read", "unknown"]
+                    .into_iter()
+                    .map(|key| {
+                        (
+                            key.to_string(),
+                            tally.triggers.get(key).copied().unwrap_or(0),
+                        )
+                    })
+                    .collect(),
                 recent_uses: tally.recent,
                 total_uses: tally.total,
                 last_used: tally.last_used.map(|at| at.to_rfc3339()),
@@ -168,13 +254,16 @@ impl SkillUsage {
             days,
             rows,
             unused,
-            partial: refresh.incomplete || inventory.completeness == Completeness::Partial,
+            partial: !observations.is_empty(),
+            observations,
         }
     }
 }
 
 #[derive(Default)]
 struct Tally {
+    sessions: BTreeSet<(String, String)>,
+    triggers: BTreeMap<String, u32>,
     recent: u32,
     total: u32,
     last_used: Option<DateTime<Utc>>,
@@ -334,7 +423,7 @@ mod tests {
         let report = SkillUsage::default().report(&fixture.home, &inventory, 30, now());
 
         assert_eq!(report.days, 30);
-        assert!(!report.partial, "{report:?}");
+        assert!(!report.partial, "absent history is complete: {report:?}");
         let names: Vec<&str> = report.rows.iter().map(|r| r.skill.as_str()).collect();
         assert_eq!(names, ["idle", "gamma"], "{report:?}");
         assert_eq!(report.unused, ["idle"]);

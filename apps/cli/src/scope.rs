@@ -32,6 +32,10 @@ pub struct ScopeArgs {
 }
 
 impl ScopeArgs {
+    pub fn project_paths(&self) -> &[PathBuf] {
+        &self.projects
+    }
+
     /// Builds the `RuntimeScope` and the lease root for this invocation.
     ///
     /// `--fixture <dir>` builds `RuntimeScope::fixture(dir)`, with its lease

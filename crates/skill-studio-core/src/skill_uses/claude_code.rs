@@ -25,25 +25,23 @@ const SKILL_MD_MARKER: &str = "SKILL.md";
 /// malformed line, a missing timestamp, or an unrecognized shape is skipped
 /// rather than failing the whole file.
 pub fn parse_claude_code_uses(text: &str) -> Vec<SkillInvocation> {
+    parse_claude_code_uses_checked(text, &mut 0)
+}
+
+/// Parses history and counts corrupt JSON records without parsing a record twice.
+pub fn parse_claude_code_uses_checked(text: &str, invalid: &mut usize) -> Vec<SkillInvocation> {
     let mut out = Vec::new();
 
     for line in text.lines() {
-        if !line.contains(SKILL_TOOL_MARKER)
-            && !line.contains(COMMAND_MARKER)
-            && !line.contains(SKILL_MD_MARKER)
-        {
-            continue;
-        }
-        let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+        let Some(record) = super::checked_history_line(
+            line,
+            &[SKILL_TOOL_MARKER, COMMAND_MARKER, SKILL_MD_MARKER],
+            invalid,
+        ) else {
             continue;
         };
-        let Some(timestamp) = record.get("timestamp").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Ok(at) = DateTime::parse_from_rfc3339(timestamp) else {
-            continue;
-        };
-        let at = at.with_timezone(&Utc);
+        let before = out.len();
+        let at = DateTime::<Utc>::UNIX_EPOCH;
         let project_path = record
             .get("cwd")
             .and_then(|v| v.as_str())
@@ -81,9 +79,12 @@ pub fn parse_claude_code_uses(text: &str) -> Vec<SkillInvocation> {
                 let input = block.get("input");
                 match tool_name {
                     Some("Skill") => {
-                        let Some(skill) =
-                            input.and_then(|i| i.get("skill")).and_then(|v| v.as_str())
+                        let Some(skill) = input
+                            .and_then(|i| i.get("skill"))
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
                         else {
+                            *invalid += 1;
                             continue;
                         };
                         push(skill, SkillTrigger::Agent);
@@ -145,6 +146,7 @@ pub fn parse_claude_code_uses(text: &str) -> Vec<SkillInvocation> {
             }
             push(name, SkillTrigger::User);
         }
+        super::validate_invocation_timestamp(&mut out, before, &record, invalid);
     }
 
     out
