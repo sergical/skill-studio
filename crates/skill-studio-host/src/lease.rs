@@ -488,18 +488,22 @@ mod tests {
         );
         write_fake_holder(&holder_file, dead_pid);
 
-        // Held until `acquire` returns, so only the bridge's own
-        // `STALE_TAKEOVER_TIMEOUT` (500ms) can end the wait. The 5s backstop
-        // turns a bridge that waits forever into a failure instead of a hang.
-        let (returned_tx, returned_rx) = std::sync::mpsc::channel::<()>();
-        let releaser = std::thread::spawn(move || {
-            let _ = returned_rx.recv_timeout(Duration::from_secs(5));
-            drop(holder_file);
+        // This thread holds the lock until `acquire` returns, so only the
+        // bridge's own `STALE_TAKEOVER_TIMEOUT` (500ms) can end the wait. The
+        // 5s watchdog turns a bridge that waits forever into a failure
+        // instead of a hang.
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = lease.acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(100));
+            let _ = result_tx.send(result.map(|_| ()));
         });
-
-        let result = lease.acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(100));
-        returned_tx.send(()).expect("signal the releasing thread");
-        releaser.join().expect("join the releasing thread");
+        let result = result_rx.recv_timeout(Duration::from_secs(5));
+        drop(holder_file);
+        worker.join().expect("join the acquiring thread");
+        let result = result.expect(
+            "acquire kept bridging for 5s while the OS lock stayed held; the stale-takeover \
+             bridge must give up once its own timeout elapses",
+        );
 
         assert!(
             matches!(result, Err(ref e) if e.code == ErrorCode::ScopeBusy),
