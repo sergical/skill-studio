@@ -1,8 +1,8 @@
 [
   {
     "owner": "dotagents",
-    "source_matches_original": true,
-    "owner_id_matches_original": true,
+    "live_source": "manual",
+    "live_owner": "manual",
     "project_matches_original": true,
     "watch_matches_scan": true,
     "human": "foo  (1 copy)\n  - $PARKED  id $ID\n    parked from project $PROJECT; dotagents\n",
@@ -10,8 +10,8 @@
   },
   {
     "owner": "wildcard_dotagents",
-    "source_matches_original": true,
-    "owner_id_matches_original": true,
+    "live_source": "manual",
+    "live_owner": "manual",
     "project_matches_original": true,
     "watch_matches_scan": true,
     "human": "foo  (1 copy)\n  - $PARKED  id $ID\n    parked from project $PROJECT; dotagents wildcard\n",
@@ -19,8 +19,8 @@
   },
   {
     "owner": "in_repo",
-    "source_matches_original": true,
-    "owner_id_matches_original": true,
+    "live_source": "manual",
+    "live_owner": "manual",
     "project_matches_original": true,
     "watch_matches_scan": true,
     "human": "foo  (1 copy)\n  - $PARKED  id $ID\n    parked from project $PROJECT; in repo\n",

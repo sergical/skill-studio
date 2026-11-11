@@ -49,12 +49,14 @@ the read-chain simplification and origin-note assertion update. These foreign
 metadata errors are ignored under the lead's shared-target rule. CI is the
 isolated full gate. Rust format and changed-document checks passed.
 
-| Issue | User flow                        | Expectation                                                            | Proof (file::test or command)                                                                                           | Red before fix?                                                 | Measured numbers |
-| ----- | -------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ---------------- |
-| #408  | Scan/watch a parked project copy | Keep original source type and report the current physical Git location | park_any_copy::parked_scan_keeps_the_project_source_type_but_reports_the_current_git_location; same CLI/MCP owner flows | Core, CLI and MCP all failed while the physical flag was frozen | No timing claim  |
+| Issue | User flow                        | Expectation                                                           | Proof (file::test or command)                                                                                          | Red before fix?                                                 | Measured numbers |
+| ----- | -------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ---------------- |
+| #408  | Scan/watch a parked project copy | Keep original owner type and report the current physical Git location | park_any_copy::parked_scan_keeps_the_project_owner_type_but_reports_the_current_git_location; same CLI/MCP owner flows | Core, CLI and MCP all failed while the physical flag was frozen | No timing claim  |
 
-The correction keeps only owner kind and ID in the origin note. The Git flag
-comes from the current folder. All 40 core Park tests, four CLI goldens, seven
+The origin note's second line keeps only the original owner kind. Scan
+reports it as `parked_owner_kind`. `owner_kind` stays the parked copy's current
+owner (`manual`) and `source_kind` follows it, so the app does not warn that a
+parked copy is still in dotagents or offer Update for it. The Git flag comes from the current folder. All 40 core Park tests, four CLI goldens, seven
 MCP Park tests, Rust format, and scoped clippy passed on main 4d1d4d52. The
 post-green pass found no further worthwhile simplification. The final scoped
 package run covers core, host, CLI, and MCP.

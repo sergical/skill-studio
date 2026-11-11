@@ -75,7 +75,10 @@ fn print_inventory(inventory: &Inventory) {
                     RootScope::Global => "global".to_string(),
                     RootScope::Project(project) => format!("project {}", project.0.display()),
                 };
-                let owner = match deployment.owner_kind {
+                let owner = match deployment
+                    .parked_owner_kind
+                    .unwrap_or(deployment.owner_kind)
+                {
                     LifecycleOwnerKind::SkillsSh => "skills.sh",
                     LifecycleOwnerKind::Dotagents => "dotagents",
                     LifecycleOwnerKind::WildcardDotagents => "dotagents wildcard",

@@ -1574,11 +1574,11 @@ async fn mcp_park_scan_keeps_project_and_original_owner_or_names_the_lost_type()
             displayed_foo(&call_tool(&client, "scan", serde_json::json!({})).await["data"]);
         client.cancel().await.ok();
         assert_eq!(
-            current["owner_kind"], original["owner_kind"],
+            current["parked_owner_kind"], original["owner_kind"],
             "lost {owner}"
         );
-        assert_eq!(current["owner_id"], original["owner_id"]);
-        assert_eq!(current["source_kind"], original["source_kind"]);
+        assert_eq!(current["owner_kind"], "manual", "{owner}: live owner");
+        assert_eq!(current["source_kind"], "manual", "{owner}: live source");
         let physically_in_git = Path::new(current["path"].as_str().unwrap())
             .ancestors()
             .any(|path| path.join(".git").exists());

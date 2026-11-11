@@ -94,12 +94,12 @@ fn cli_park_scan_watch_show_project_and_original_type_or_fail_the_display_golden
             .unwrap();
         let human = String::from_utf8(output.stdout).unwrap();
         rows.push(json!({
-            "owner": current["owner_kind"],
+            "owner": current["parked_owner_kind"],
+            "live_owner": current["owner_kind"],
             "physical_git_location_matches": current["in_git_repo"] == json!(physically_in_git),
-            "source_matches_original": current["source_kind"] == original["source_kind"],
-            "owner_id_matches_original": current["owner_id"] == original["owner_id"],
+            "live_source": current["source_kind"],
             "project_matches_original": current["parked_origin"]["scope"] == original["root"]["scope"],
-            "watch_matches_scan": watched["owner_kind"] == current["owner_kind"] && watched["parked_origin"] == current["parked_origin"],
+            "watch_matches_scan": watched["parked_owner_kind"] == current["parked_owner_kind"] && watched["owner_kind"] == current["owner_kind"] && watched["parked_origin"] == current["parked_origin"],
             "human": human.replace(current["id"].as_str().unwrap(), "$ID").replace(current["path"].as_str().unwrap(), "$PARKED").replace(project, "$PROJECT"),
         }));
     }

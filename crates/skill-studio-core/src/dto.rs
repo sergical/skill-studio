@@ -239,6 +239,12 @@ pub struct DeploymentDto {
     /// `None` for a copy that is not parked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_origin: Option<RootRef>,
+    /// For a parked copy, the owner type it had before Park, read from the
+    /// slot's origin marker. Provenance only: `owner_kind` still says what
+    /// manages the parked copy now. `None` for a copy that is not parked or
+    /// was parked before the marker recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked_owner_kind: Option<LifecycleOwnerKind>,
 }
 
 /// One skill with all of its deployments.

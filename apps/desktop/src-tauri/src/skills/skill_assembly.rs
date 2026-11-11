@@ -485,6 +485,7 @@ mod tests {
             studio_disabled: false,
             source_kind: SourceKind::Manual,
             parked_origin: None,
+            parked_owner_kind: None,
         }
     }
 

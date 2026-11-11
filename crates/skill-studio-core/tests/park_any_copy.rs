@@ -24,7 +24,7 @@ use skill_studio_core::dto::{
     DeploymentDto, ListEventsRequest, ParkCheckRequest, ParkRequest, ScanRequest, UnparkRequest,
 };
 use skill_studio_core::harness::HarnessCatalog;
-use skill_studio_core::identity::{AgentId, RootKind, RootScope, SkillName};
+use skill_studio_core::identity::{AgentId, RootKind, RootScope, SkillName, SourceKind};
 use skill_studio_core::ops;
 use skill_studio_core::ports::{Ports, ProcessSpawner, Runtime, ScopeFs, ToolLookup};
 use skill_studio_core::scope::{ProjectSelection, RuntimeScope};
@@ -1358,43 +1358,69 @@ fn park_scan_keeps_each_project_owner_or_names_the_lost_type() {
         )
         .unwrap();
         let parked = parked_copy(&rt, "foo", &RootKind::Universal);
-        assert_eq!(parked.owner_kind, expected, "lost {label}");
-        assert_eq!(parked.owner_id, original.owner_id, "lost {label} owner id");
+        assert_eq!(parked.parked_owner_kind, Some(expected), "lost {label}");
         assert_eq!(
-            parked.source_kind, original.source_kind,
-            "lost {label} source"
+            parked.owner_kind,
+            LifecycleOwnerKind::Manual,
+            "{label}: the parked copy is no longer managed by its old owner"
+        );
+        assert_eq!(
+            parked.source_kind,
+            SourceKind::Manual,
+            "{label}: the parked copy's source follows its current owner"
         );
         assert_eq!(parked.parked_origin.unwrap().scope, original.root.scope);
         std::fs::remove_dir_all(home).unwrap();
     }
 }
 
+/// Flow: park a Claude Code or `OpenCode` copy, then Turn it on. Expectation:
+/// the returned id is the id a fresh scan gives the restored copy, so a
+/// second Park with it works. Failure: the id names the park slot (for
+/// `OpenCode`, `open-code` instead of `opencode`) and the next Park fails.
 #[test]
-fn turn_on_claude_copy_returns_the_restored_id_or_names_the_parked_id() {
-    let home = unique_temp_dir("turn_on_display_id");
-    let live = home.join(".claude/skills/foo");
-    park_display::skill(&live);
-    let rt = runtime(&home, &[]);
-    let original = live_copy(&rt, "foo", &live);
-    ops::park(
-        &rt,
-        &ctx(),
-        &ParkRequest {
-            deployment_id: original.id.clone(),
-        },
-    )
-    .unwrap();
-    let parked = parked_copy(&rt, "foo", &RootKind::Harness(AgentId::CLAUDE_CODE.into()));
-    let result = ops::unpark(
-        &rt,
-        &ctx(),
-        &UnparkRequest {
-            deployment_id: parked.id,
-        },
-    )
-    .unwrap();
-    assert_eq!(result.deployment_id, original.id);
-    std::fs::remove_dir_all(home).unwrap();
+fn turn_on_harness_copy_returns_the_rescanned_id_or_names_the_parked_slot() {
+    for (agent, folder) in [
+        (AgentId::CLAUDE_CODE, ".claude/skills/foo"),
+        (AgentId::OPEN_CODE, ".config/opencode/skills/foo"),
+    ] {
+        let home = unique_temp_dir("turn_on_display_id");
+        let live = home.join(folder);
+        park_display::skill(&live);
+        let rt = runtime(&home, &[]);
+        let original = live_copy(&rt, "foo", &live);
+        ops::park(
+            &rt,
+            &ctx(),
+            &ParkRequest {
+                deployment_id: original.id.clone(),
+            },
+        )
+        .unwrap();
+        let parked = parked_copy(&rt, "foo", &RootKind::Harness(agent.into()));
+        let result = ops::unpark(
+            &rt,
+            &ctx(),
+            &UnparkRequest {
+                deployment_id: parked.id,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            result.deployment_id,
+            live_copy(&rt, "foo", &live).id,
+            "{agent}"
+        );
+        ops::park(
+            &rt,
+            &ctx(),
+            &ParkRequest {
+                deployment_id: result.deployment_id,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{agent}: second Park with the returned id: {e}"));
+        std::fs::remove_dir_all(home).unwrap();
+    }
 }
 
 #[test]
@@ -1424,7 +1450,7 @@ fn copy_update_after_split_explains_the_skill_page_instead_of_an_absent_shared_c
 }
 
 #[test]
-fn parked_scan_keeps_the_project_source_type_but_reports_the_current_git_location() {
+fn parked_scan_keeps_the_project_owner_type_but_reports_the_current_git_location() {
     let home = unique_temp_dir("park_physical_git");
     let project = park_display::project(&home, "in_repo");
     let rt = runtime(&home, std::slice::from_ref(&project));
@@ -1439,7 +1465,7 @@ fn parked_scan_keeps_the_project_source_type_but_reports_the_current_git_locatio
     )
     .unwrap();
     let parked = parked_copy(&rt, "foo", &RootKind::Universal);
-    assert_eq!(parked.source_kind, original.source_kind);
+    assert_eq!(parked.parked_owner_kind, Some(original.owner_kind));
     let physically_in_git = parked
         .path
         .ancestors()
