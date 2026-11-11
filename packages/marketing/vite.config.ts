@@ -76,6 +76,9 @@ function sentrySourceMaps(): Plugin[] {
     release: { name: process.env.WORKERS_CI_COMMIT_SHA },
     sourcemaps: { filesToDeleteAfterUpload: ["./dist/**/*.map"] },
     telemetry: false,
+    errorHandler(error) {
+      throw error;
+    },
   });
 }
 
