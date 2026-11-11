@@ -1739,15 +1739,23 @@ fn run_claimed_check(
 }
 
 #[tauri::command]
-pub async fn check_skill_updates_now(app: AppHandle) -> Result<UpdateCheckSummary, String> {
+pub async fn check_skill_updates_now(
+    trace: crate::timing_log::IpcTrace,
+    app: AppHandle,
+) -> Result<UpdateCheckSummary, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "check_skill_updates_now", move || {
-        check_now(
-            &app,
-            &app.state::<UpdateCheckState>(),
-            &app.state::<skill_refresh::SkillRefreshState>(),
-        )
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "check_skill_updates_now",
+        move || {
+            check_now(
+                &app,
+                &app.state::<UpdateCheckState>(),
+                &app.state::<skill_refresh::SkillRefreshState>(),
+            )
+        },
+    )
     .await
 }
 

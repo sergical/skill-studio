@@ -347,13 +347,14 @@ pub async fn list_github_skills_cached<A: GithubApi>(
 /// sheet, which calls this as the source field settles.
 #[tauri::command]
 pub async fn list_github_skills(
+    trace: crate::timing_log::IpcTrace,
     repo: String,
     path: Option<String>,
     git_ref: Option<String>,
     refresh: Option<bool>,
     app: tauri::AppHandle,
 ) -> Result<GithubSkillListing, String> {
-    crate::timing_log::time_command_async(&app, "list_github_skills", async move {
+    crate::timing_log::time_command_async(&app, trace, "list_github_skills", async move {
         let api = HttpGithubApi::new();
         list_github_skills_cached(
             &api,

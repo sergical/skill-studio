@@ -33,26 +33,43 @@ pub struct TelemetryState {
 /// The saved switch, straight off disk - like `get_discovery_sources`, this
 /// doesn't change anything, so it reads the registry directly.
 #[tauri::command]
-pub async fn get_telemetry_enabled(app: tauri::AppHandle) -> Result<bool, String> {
+pub async fn get_telemetry_enabled(
+    trace: crate::timing_log::IpcTrace,
+    app: tauri::AppHandle,
+) -> Result<bool, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "get_telemetry_enabled", move || {
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        Ok(super::skill_fork_registry::read_fork_registry(&home)?.telemetry_enabled)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "get_telemetry_enabled",
+        move || {
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            Ok(super::skill_fork_registry::read_fork_registry(&home)?.telemetry_enabled)
+        },
+    )
     .await
 }
 
 /// Saves the switch and flips the live `Consent` so it takes effect
 /// without a restart. Returns the saved value.
 #[tauri::command]
-pub async fn set_telemetry_enabled(enabled: bool, app: tauri::AppHandle) -> Result<bool, String> {
+pub async fn set_telemetry_enabled(
+    trace: crate::timing_log::IpcTrace,
+    enabled: bool,
+    app: tauri::AppHandle,
+) -> Result<bool, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "set_telemetry_enabled", move || {
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        let consent = app.state::<TelemetryState>().consent.clone();
-        set_telemetry_enabled_at(&home, enabled, &consent)?;
-        Ok(enabled)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "set_telemetry_enabled",
+        move || {
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            let consent = app.state::<TelemetryState>().consent.clone();
+            set_telemetry_enabled_at(&home, enabled, &consent)?;
+            Ok(enabled)
+        },
+    )
     .await
 }
 

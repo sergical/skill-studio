@@ -34,9 +34,13 @@ pub struct HarnessesChoice {
 
 /// Runs `ops::harnesses` off the UI thread, for the first-run screen.
 #[tauri::command]
-pub async fn detect_harnesses(app: tauri::AppHandle) -> Result<HarnessReport, String> {
+pub async fn detect_harnesses(
+    trace: crate::timing_log::IpcTrace,
+    app: tauri::AppHandle,
+) -> Result<HarnessReport, String> {
     crate::timing_log::time_command_async(
         &app,
+        trace,
         "detect_harnesses",
         detect_with_runtime(super::core_runtime::build_runtime_detect),
     )
@@ -51,7 +55,7 @@ pub async fn detect_harnesses(app: tauri::AppHandle) -> Result<HarnessReport, St
 pub async fn detect_with_runtime(
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String> + Send + 'static,
 ) -> Result<HarnessReport, String> {
-    let joined = tauri::async_runtime::spawn_blocking(move || {
+    let joined = crate::timing_log::spawn_blocking_in_span(move || {
         let rt = build_runtime()?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = ops::harnesses(&rt, &ctx, &HarnessesRequest {});
@@ -66,9 +70,10 @@ pub async fn detect_with_runtime(
 /// completed - the frontend's signal to show it.
 #[tauri::command]
 pub async fn get_harnesses_choice(
+    trace: crate::timing_log::IpcTrace,
     app: tauri::AppHandle,
 ) -> Result<Option<HarnessesChoice>, String> {
-    crate::timing_log::time_command_blocking(&app, "get_harnesses_choice", move || {
+    crate::timing_log::time_command_blocking(&app, trace, "get_harnesses_choice", move || {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         Ok(super::skill_fork_registry::read_fork_registry(&home)?.harnesses)
     })
@@ -86,6 +91,7 @@ pub async fn get_harnesses_choice(
 /// to be.
 #[tauri::command]
 pub async fn save_harnesses_choice(
+    trace: crate::timing_log::IpcTrace,
     choice: HarnessesChoice,
     telemetry_enabled: bool,
     app: tauri::AppHandle,
@@ -95,30 +101,36 @@ pub async fn save_harnesses_choice(
         .state::<super::telemetry_commands::TelemetryState>()
         .consent
         .clone();
-    crate::timing_log::time_command_blocking(&timing_app, "save_harnesses_choice", move || {
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        let write_lease = super::write_lease::WriteLease::default();
-        save_harnesses_choice_at(
-            &write_lease,
-            &home,
-            choice,
-            telemetry_enabled,
-            &consent,
-            std::env::var("SKILL_STUDIO_TELEMETRY").ok(),
-        )?;
-        Ok(())
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "save_harnesses_choice",
+        move || {
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            let write_lease = super::write_lease::WriteLease::default();
+            save_harnesses_choice_at(
+                &write_lease,
+                &home,
+                choice,
+                telemetry_enabled,
+                &consent,
+                std::env::var("SKILL_STUDIO_TELEMETRY").ok(),
+            )?;
+            Ok(())
+        },
+    )
     .await
 }
 
 #[tauri::command]
 pub async fn set_harness_enabled(
+    trace: crate::timing_log::IpcTrace,
     id: String,
     enabled: bool,
     app: tauri::AppHandle,
 ) -> Result<HarnessesChoice, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "set_harness_enabled", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "set_harness_enabled", move || {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         set_harness_enabled_at(
             &super::write_lease::WriteLease::default(),

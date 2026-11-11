@@ -71,11 +71,12 @@ fn with_authorized_lifecycle_command_target<T>(
 /// Search for skills on skills.sh
 #[tauri::command]
 pub async fn search_skills(
+    trace: crate::timing_log::IpcTrace,
     query: String,
     limit: Option<u32>,
     app: tauri::AppHandle,
 ) -> Result<PaginatedSkillsResponse, String> {
-    crate::timing_log::time_command_async(&app, "search_skills", async move {
+    crate::timing_log::time_command_async(&app, trace, "search_skills", async move {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let access = api::resolve_skills_sh_access(&home)?;
         api::search_skills(&access, &query, limit).await
@@ -86,11 +87,12 @@ pub async fn search_skills(
 /// Get popular skills (sorted by install count)
 #[tauri::command]
 pub async fn get_popular_skills(
+    trace: crate::timing_log::IpcTrace,
     page: Option<u32>,
     per_page: Option<u32>,
     app: tauri::AppHandle,
 ) -> Result<PaginatedSkillsResponse, String> {
-    crate::timing_log::time_command_async(&app, "get_popular_skills", async move {
+    crate::timing_log::time_command_async(&app, trace, "get_popular_skills", async move {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let access = api::resolve_skills_sh_access(&home)?;
         api::get_popular_skills(&access, page, per_page).await
@@ -101,10 +103,11 @@ pub async fn get_popular_skills(
 /// Get skill details from skills.sh
 #[tauri::command]
 pub async fn get_skill_details(
+    trace: crate::timing_log::IpcTrace,
     skill_id: String,
     app: tauri::AppHandle,
 ) -> Result<SkillDetails, String> {
-    crate::timing_log::time_command_async(&app, "get_skill_details", async move {
+    crate::timing_log::time_command_async(&app, trace, "get_skill_details", async move {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let access = api::resolve_skills_sh_access(&home)?;
         api::get_skill_details(&access, &skill_id).await
@@ -149,21 +152,29 @@ pub async fn get_install_counts(
 /// list comes from `~/.agents/skill-studio.json` (see
 /// `skill_refresh::effective_project_paths`), not from the caller.
 #[tauri::command]
-pub async fn get_installed_skills(app: tauri::AppHandle) -> Result<Vec<InstalledSkill>, String> {
+pub async fn get_installed_skills(
+    trace: crate::timing_log::IpcTrace,
+    app: tauri::AppHandle,
+) -> Result<Vec<InstalledSkill>, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "get_installed_skills", move || {
-        let refresh_state = app.state::<SkillRefreshState>();
-        let snapshot = refresh_state.snapshot.read().ok().and_then(|g| g.clone());
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "get_installed_skills",
+        move || {
+            let refresh_state = app.state::<SkillRefreshState>();
+            let snapshot = refresh_state.snapshot.read().ok().and_then(|g| g.clone());
 
-        if let Some(snapshot) = &snapshot {
-            if !refresh_state.is_skills_dirty() {
-                return Ok(snapshot.skills.clone());
+            if let Some(snapshot) = &snapshot {
+                if !refresh_state.is_skills_dirty() {
+                    return Ok(snapshot.skills.clone());
+                }
             }
-        }
 
-        let rebuilt = skill_refresh::rebuild_snapshot_now(&app, &refresh_state)?;
-        Ok(rebuilt.skills)
-    })
+            let rebuilt = skill_refresh::rebuild_snapshot_now(&app, &refresh_state)?;
+            Ok(rebuilt.skills)
+        },
+    )
     .await
 }
 
@@ -1830,12 +1841,14 @@ mod tests {
 /// adapters over `ops::park`/`ops::unpark`).
 #[tauri::command]
 pub async fn remove_skill(
+    trace: crate::timing_log::IpcTrace,
     target: LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<RemoveOutcome, String> {
     let snapshot_app = app.clone();
     crate::timing_log::time_command_async(
         &app,
+        trace,
         "remove_skill",
         remove_with_runtime(
             target,
@@ -1874,7 +1887,7 @@ pub(crate) async fn remove_with_runtime(
     if target.deployment_id.is_none() && target.owner_id.is_none() {
         return Err("Remove requires a deployment id".to_string());
     }
-    let joined = tauri::async_runtime::spawn_blocking(move || {
+    let joined = crate::timing_log::spawn_blocking_in_span(move || {
         let deployment_id = if let Some(raw) = target.deployment_id.as_deref() {
             DeploymentId::parse(raw).map_err(|e| e.message)?
         } else {
@@ -1949,15 +1962,21 @@ pub(crate) fn canonicalize_skill_md(
 /// becoming an arbitrary-file read.
 #[tauri::command]
 pub async fn read_installed_skill_md(
+    trace: crate::timing_log::IpcTrace,
     path: String,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "read_installed_skill_md", move || {
-        let refresh_state = app.state::<SkillRefreshState>();
-        let snapshot = refresh_state.snapshot.read().ok().and_then(|g| g.clone());
-        read_skill_md_for_snapshot(snapshot.as_ref(), &path)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "read_installed_skill_md",
+        move || {
+            let refresh_state = app.state::<SkillRefreshState>();
+            let snapshot = refresh_state.snapshot.read().ok().and_then(|g| g.clone());
+            read_skill_md_for_snapshot(snapshot.as_ref(), &path)
+        },
+    )
     .await
 }
 
@@ -2048,6 +2067,7 @@ fn write_skill_md_if_unchanged_for_snapshot(
 /// skill on this thread.
 #[tauri::command]
 pub async fn write_installed_skill_md_if_unchanged(
+    trace: crate::timing_log::IpcTrace,
     path: String,
     expected_content: String,
     content: String,
@@ -2056,6 +2076,7 @@ pub async fn write_installed_skill_md_if_unchanged(
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(
         &timing_app,
+        trace,
         "write_installed_skill_md_if_unchanged",
         move || {
             let refresh_state = app.state::<SkillRefreshState>();
@@ -2134,9 +2155,10 @@ pub fn open_skill_path(
 /// so it runs off the main thread.
 #[tauri::command]
 pub async fn get_editor_choices(
+    trace: crate::timing_log::IpcTrace,
     app: tauri::AppHandle,
 ) -> Result<skill_editor::EditorChoices, String> {
-    crate::timing_log::time_command_async(&app, "get_editor_choices", async move {
+    crate::timing_log::time_command_async(&app, trace, "get_editor_choices", async move {
         tauri::async_runtime::spawn_blocking(|| {
             let home = dirs::home_dir().ok_or("Could not find home directory")?;
             Ok(skill_editor::editor_choices(&home))
@@ -2341,11 +2363,12 @@ fn clear_outdated_state_and_emit(
 /// `ops_update::update_cli_args_and_cwd` owns that argv now.
 #[tauri::command]
 pub async fn update_skill(
+    trace: crate::timing_log::IpcTrace,
     target: LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "update_skill", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "update_skill", move || {
         let refresh_state = app.state::<SkillRefreshState>();
         let snapshot = rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
         let (skill, deployment) = resolve_lifecycle_target(&snapshot, &target, "Update")?;
@@ -2459,7 +2482,7 @@ async fn update_all_with_runtime(
         ) + Send
         + 'static,
 ) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
-    let joined = tauri::async_runtime::spawn_blocking(move || {
+    let joined = crate::timing_log::spawn_blocking_in_span(move || {
         run_update_all_sync(
             &requests,
             build_runtime,
@@ -2727,12 +2750,13 @@ pub fn cancel_update_all(batch_id: String, state: tauri::State<UpdateAllCancelSt
 /// the row still reads as outdated.
 #[tauri::command]
 pub async fn update_all_skills(
+    trace: crate::timing_log::IpcTrace,
     targets: Vec<LifecycleTarget>,
     batch_id: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "update_all_skills", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "update_all_skills", move || {
         let refresh_state = app.state::<SkillRefreshState>();
         let cancel_state = app.state::<UpdateAllCancelState>();
         // A caller with no id (the list's bulk Update) cannot be cancelled.
@@ -2820,13 +2844,14 @@ fn run_plugin_lifecycle_action<T>(
 /// ships - Claude Code tracks `enabledPlugins` per plugin, not per skill.
 #[tauri::command]
 pub async fn set_plugin_enabled(
+    trace: crate::timing_log::IpcTrace,
     plugin_id: String,
     harness: String,
     enabled: bool,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "set_plugin_enabled", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "set_plugin_enabled", move || {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         run_plugin_lifecycle_action(&harness, &app, &home, || {
             super::skill_plugin_lifecycle::set_plugin_enabled_with(
@@ -2850,6 +2875,7 @@ pub async fn set_plugin_enabled(
 /// the update to new sessions only.
 #[tauri::command]
 pub async fn update_plugin(
+    trace: crate::timing_log::IpcTrace,
     plugin_id: String,
     harness: String,
     scope: String,
@@ -2858,7 +2884,7 @@ pub async fn update_plugin(
     app: tauri::AppHandle,
 ) -> Result<super::skill_plugin_lifecycle::PluginUpdateResult, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "update_plugin", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "update_plugin", move || {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let result = run_plugin_lifecycle_action(&harness, &app, &home, || {
             super::skill_plugin_update::require_plugin_install(
@@ -2918,12 +2944,13 @@ fn recheck_plugin_versions(app: &tauri::AppHandle, home: &Path, plugin_id: &str)
 /// cache directory later.
 #[tauri::command]
 pub async fn uninstall_plugin(
+    trace: crate::timing_log::IpcTrace,
     plugin_id: String,
     harness: String,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "uninstall_plugin", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "uninstall_plugin", move || {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         run_plugin_lifecycle_action(&harness, &app, &home, || {
             super::skill_plugin_lifecycle::uninstall_plugin_with(

@@ -431,8 +431,11 @@ pub fn spawn_update_check_loop(app: AppHandle) {
 /// last checked, so a failure here (unlike the launch/four-hour loop) does
 /// surface as `Error` - the user just asked for this one.
 #[tauri::command]
-pub async fn check_for_update(app: AppHandle) -> Result<UpdateStatus, String> {
-    crate::timing_log::time_command_async(&app, "check_for_update", async {
+pub async fn check_for_update(
+    trace: crate::timing_log::IpcTrace,
+    app: AppHandle,
+) -> Result<UpdateStatus, String> {
+    crate::timing_log::time_command_async(&app, trace, "check_for_update", async {
         let engine = app.state::<UpdateEngineState>().0.clone();
         Ok(run_check_and_emit(&app, &engine, CheckTrigger::Manual).await)
     })
@@ -456,9 +459,12 @@ pub fn get_update_status(state: tauri::State<UpdateEngineState>) -> UpdateStatus
 /// (round B item 2) - emit that here so Settings updates without the
 /// restart it will now never get.
 #[tauri::command]
-pub async fn install_update(app: AppHandle) -> Result<(), String> {
+pub async fn install_update(
+    trace: crate::timing_log::IpcTrace,
+    app: AppHandle,
+) -> Result<(), String> {
     let restart_app = app.clone();
-    crate::timing_log::time_command_async(&app, "install_update", async move {
+    crate::timing_log::time_command_async(&app, trace, "install_update", async move {
         let engine = restart_app.state::<UpdateEngineState>().0.clone();
         match engine.confirm_install() {
             Ok(()) => {

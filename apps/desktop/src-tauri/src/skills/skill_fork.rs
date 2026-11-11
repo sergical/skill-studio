@@ -1188,11 +1188,12 @@ fn fork_skill_with_storage(
 
 #[tauri::command]
 pub async fn fork_skill(
+    trace: crate::timing_log::IpcTrace,
     target: super::skill_dto::LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<ForkRecord, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "fork_skill", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "fork_skill", move || {
         let refresh_state = app.state::<SkillRefreshState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
@@ -1610,11 +1611,12 @@ pub fn pull_fork_upstream_with(
 
 #[tauri::command]
 pub async fn pull_fork_upstream(
+    trace: crate::timing_log::IpcTrace,
     target: super::skill_dto::LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<PullResult, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "pull_fork_upstream", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "pull_fork_upstream", move || {
         let refresh_state = app.state::<SkillRefreshState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
@@ -1681,11 +1683,12 @@ pub fn unfork_skill_with(
 
 #[tauri::command]
 pub async fn unfork_skill(
+    trace: crate::timing_log::IpcTrace,
     target: super::skill_dto::LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "unfork_skill", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "unfork_skill", move || {
         let refresh_state = app.state::<SkillRefreshState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();

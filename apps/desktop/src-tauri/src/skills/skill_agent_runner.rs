@@ -960,12 +960,13 @@ fn new_run_id() -> String {
 /// frontend can start listening for it before the run exists.
 #[tauri::command]
 pub async fn start_skill_agent_run(
+    trace: crate::timing_log::IpcTrace,
     request: SkillAgentRunRequest,
     run_id: String,
     app: AppHandle,
 ) -> Result<String, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_async(&timing_app, "start_skill_agent_run", async move {
+    crate::timing_log::time_command_async(&timing_app, trace, "start_skill_agent_run", async move {
         validate_run_id(&run_id)?;
 
         let state = app.state::<SkillAgentRunnerState>();
@@ -983,7 +984,7 @@ pub async fn start_skill_agent_run(
 
         let resolve_app = app.clone();
         let harness = request.harness;
-        let resolved = tauri::async_runtime::spawn_blocking(move || {
+        let resolved = crate::timing_log::spawn_blocking_in_span(move || {
             let state = resolve_app.state::<SkillAgentRunnerState>();
             resolve_binary(harness, &state)
         })
@@ -1296,11 +1297,12 @@ async fn terminate_process_group(
 // `run_id` can't be borrowed from the caller - it must be owned.
 #[allow(clippy::needless_pass_by_value)]
 pub fn cancel_skill_agent_run(
+    trace: crate::timing_log::IpcTrace,
     run_id: String,
     state: tauri::State<SkillAgentRunnerState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    crate::timing_log::time_command(&app, "cancel_skill_agent_run", move || {
+    crate::timing_log::time_command(&app, trace, "cancel_skill_agent_run", move || {
         let handle = state
             .runs
             .lock()
@@ -1449,13 +1451,17 @@ pub(crate) fn create_skill_scratch_dir_at(
 
 #[tauri::command]
 pub async fn create_skill_scratch_dir(
+    trace: crate::timing_log::IpcTrace,
     app: AppHandle,
     skills: Vec<(String, String)>,
 ) -> Result<String, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "create_skill_scratch_dir", move || {
-        create_skill_scratch_dir_at(&app, &skills)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "create_skill_scratch_dir",
+        move || create_skill_scratch_dir_at(&app, &skills),
+    )
     .await
 }
 
@@ -1479,13 +1485,23 @@ fn remove_scratch_child(root: &Path, path: &Path) -> Result<(), String> {
 /// any path that isn't an immediate child of the scratch root, so a bad
 /// `path` can't delete unrelated files.
 #[tauri::command]
-pub async fn remove_skill_scratch_dir(app: AppHandle, path: String) -> Result<(), String> {
+pub async fn remove_skill_scratch_dir(
+    trace: crate::timing_log::IpcTrace,
+    app: AppHandle,
+    path: String,
+) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "remove_skill_scratch_dir", move || {
-        let root = scratch_root(&app)?;
-        fs::create_dir_all(&root).map_err(|e| format!("Could not resolve scratch root: {e}"))?;
-        remove_scratch_child(&root, Path::new(&path))
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "remove_skill_scratch_dir",
+        move || {
+            let root = scratch_root(&app)?;
+            fs::create_dir_all(&root)
+                .map_err(|e| format!("Could not resolve scratch root: {e}"))?;
+            remove_scratch_child(&root, Path::new(&path))
+        },
+    )
     .await
 }
 

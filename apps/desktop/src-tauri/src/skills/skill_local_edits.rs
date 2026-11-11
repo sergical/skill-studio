@@ -60,11 +60,12 @@ fn deployment_local_edits(
 /// resolves reads as not checked: Update itself reports that refusal.
 #[tauri::command]
 pub async fn skill_local_edits(
+    trace: crate::timing_log::IpcTrace,
     targets: Vec<LifecycleTarget>,
     app: tauri::AppHandle,
 ) -> Result<Vec<LocalEditsDto>, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "skill_local_edits", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "skill_local_edits", move || {
         let refresh_state = app.state::<SkillRefreshState>();
         let snapshot = skill_lifecycle::rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
         let home = dirs::home_dir().ok_or("Could not find home directory")?;

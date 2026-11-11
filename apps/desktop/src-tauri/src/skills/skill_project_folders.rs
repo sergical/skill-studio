@@ -133,8 +133,11 @@ pub fn project_folders(
 /// The Settings "Project folders" card's rows, freshly discovered - runs a
 /// full harness-history scan, so it's spawned off the main thread.
 #[tauri::command]
-pub async fn list_project_folders(app: tauri::AppHandle) -> Result<Vec<ProjectFolder>, String> {
-    crate::timing_log::time_command_async(&app, "list_project_folders", async move {
+pub async fn list_project_folders(
+    trace: crate::timing_log::IpcTrace,
+    app: tauri::AppHandle,
+) -> Result<Vec<ProjectFolder>, String> {
+    crate::timing_log::time_command_async(&app, trace, "list_project_folders", async move {
         tauri::async_runtime::spawn_blocking(move || {
             let home = dirs::home_dir().ok_or("Could not find home directory")?;
             let discovered = skill_studio_host::discover_skill_projects(&home);

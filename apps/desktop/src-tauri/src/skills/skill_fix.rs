@@ -18,8 +18,12 @@ use tauri::Manager;
 use super::skill_refresh::{self, SkillRefreshState, SkillSnapshot};
 
 #[tauri::command]
-pub async fn fix_skill(skill: String, app: tauri::AppHandle) -> Result<FixSkillOutcome, String> {
-    crate::timing_log::time_command_blocking(&app, "fix_skill", move || {
+pub async fn fix_skill(
+    trace: crate::timing_log::IpcTrace,
+    skill: String,
+    app: tauri::AppHandle,
+) -> Result<FixSkillOutcome, String> {
+    crate::timing_log::time_command_blocking(&app, trace, "fix_skill", move || {
         let rt = super::core_runtime::build_runtime_write()?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = ops::fix_skill(
@@ -59,9 +63,13 @@ fn require_conflict_path_is_owned(
 /// `open_skill_path` (`commands.rs`) applies - so the webview can't send an
 /// arbitrary path for us to open.
 #[tauri::command]
-pub async fn open_conflict_paths(paths: Vec<String>, app: tauri::AppHandle) -> Result<(), String> {
+pub async fn open_conflict_paths(
+    trace: crate::timing_log::IpcTrace,
+    paths: Vec<String>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "open_conflict_paths", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "open_conflict_paths", move || {
         let refresh_state = app.state::<SkillRefreshState>();
         let snapshot = refresh_state.snapshot.read().ok().and_then(|g| g.clone());
         let paths: Vec<std::path::PathBuf> =
