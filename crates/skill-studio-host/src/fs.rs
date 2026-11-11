@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
 use skill_studio_core::ports::{
-    DirEntryFacts, ExclusiveGuard, FileFacts, FileKind, ScopeFs, ScopedPath,
+    DirEntryFacts, ExclusiveGuard, FileFacts, FileKind, OpenedFile, ScopeFs, ScopedPath,
 };
 
 /// A counter mixed into temp file names so concurrent writers on the same
@@ -92,6 +92,15 @@ impl ScopeFs for RealFs {
             });
         }
         Ok(())
+    }
+
+    fn open_file(&self, path: &Path) -> io::Result<OpenedFile> {
+        let file = fs::File::open(path)?;
+        let len = file.metadata()?.len();
+        Ok(OpenedFile {
+            len,
+            reader: Box::new(file),
+        })
     }
 
     fn read_capped(&self, path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
@@ -250,7 +259,7 @@ impl ScopeFs for RealFs {
     }
 
     fn fsops_exchange(&self, a: &Path, b: &Path) -> io::Result<()> {
-        macos_exchange::exchange(a, b)
+        atomic_exchange::exchange(a, b)
     }
 }
 
@@ -264,7 +273,7 @@ impl ScopeFs for RealFs {
 /// [`fsops::swap`]: skill_studio_core::fsops::swap
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
-mod macos_exchange {
+mod atomic_exchange {
     use std::ffi::CString;
     use std::io;
     use std::os::raw::{c_char, c_int, c_uint};
@@ -301,23 +310,55 @@ mod macos_exchange {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-mod macos_exchange {
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+mod atomic_exchange {
+    use std::ffi::CString;
+    use std::io;
+    use std::os::raw::{c_char, c_int, c_uint};
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+
+    const AT_FDCWD: c_int = -100;
+    const RENAME_EXCHANGE: c_uint = 2;
+
+    extern "C" {
+        fn renameat2(
+            old_dir: c_int,
+            old_path: *const c_char,
+            new_dir: c_int,
+            new_path: *const c_char,
+            flags: c_uint,
+        ) -> c_int;
+    }
+
+    pub(super) fn exchange(a: &Path, b: &Path) -> io::Result<()> {
+        let a = CString::new(a.as_os_str().as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))?;
+        let b = CString::new(b.as_os_str().as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))?;
+        // SAFETY: the live CStrings are NUL-terminated. AT_FDCWD selects the
+        // process cwd for relative paths; renameat2 atomically exchanges the entries.
+        let result =
+            unsafe { renameat2(AT_FDCWD, a.as_ptr(), AT_FDCWD, b.as_ptr(), RENAME_EXCHANGE) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+mod atomic_exchange {
     use std::io;
     use std::path::Path;
 
-    /// Non-atomic fallback for platforms without `renamex_np`. Skill Studio
-    /// ships macOS only (see the crate doc comment); this exists so the
-    /// crate still builds elsewhere, not to give the same crash guarantee.
-    pub(super) fn exchange(a: &Path, b: &Path) -> io::Result<()> {
-        let tmp = a.with_file_name(format!(
-            ".exchange-{}-{}",
-            std::process::id(),
-            super::TMP_COUNTER.fetch_add(1, super::Ordering::Relaxed)
-        ));
-        std::fs::rename(a, &tmp)?;
-        std::fs::rename(b, a)?;
-        std::fs::rename(&tmp, b)
+    pub(super) fn exchange(_a: &Path, _b: &Path) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this platform has no atomic exchange adapter",
+        ))
     }
 }
 
@@ -330,6 +371,23 @@ mod tests {
     fn scope_for(root: &Path) -> NormalizedScope {
         let raw = RuntimeScope::fixture(root);
         NormalizedScope::normalize_with_discovery(&raw, &RealFs::new(), None).unwrap()
+    }
+
+    #[test]
+    fn exchange_missing_second_path_keeps_the_first_entry_or_moves_it_to_an_unowned_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first");
+        fs::write(&first, b"complete before bytes").unwrap();
+        let error = RealFs::new()
+            .fsops_exchange(&first, &dir.path().join("missing"))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(fs::read(&first).unwrap(), b"complete before bytes");
+        let entries: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, vec![std::ffi::OsString::from("first")]);
     }
 
     #[test]

@@ -107,6 +107,9 @@ pub fn time_command<T: CommandOutcome>(
     f: impl FnOnce() -> T,
 ) -> T {
     let start = std::time::Instant::now();
+    if let Some(state) = app.try_state::<crate::skills::event_commands::EventStoreState>() {
+        state.recovery_ready().wait();
+    }
     let result = f();
     let (outcome, error) = result.outcome();
     record_command(
@@ -129,6 +132,15 @@ pub async fn time_command_async<T: CommandOutcome>(
     fut: impl std::future::Future<Output = T>,
 ) -> T {
     let start = std::time::Instant::now();
+    if let Some(state) = app.try_state::<crate::skills::event_commands::EventStoreState>() {
+        let ready = state.recovery_ready();
+        if ready.get().is_none() {
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                ready.wait();
+            })
+            .await;
+        }
+    }
     let result = fut.await;
     let (outcome, error) = result.outcome();
     record_command(
@@ -157,7 +169,16 @@ pub async fn time_command_blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     let start = std::time::Instant::now();
-    let result = join_result_to_err(command, tauri::async_runtime::spawn_blocking(f).await);
+    let ready = app
+        .try_state::<crate::skills::event_commands::EventStoreState>()
+        .map(|state| state.recovery_ready());
+    let result = join_result_to_err(
+        command,
+        tauri::async_runtime::spawn_blocking(move || {
+            run_after_startup_recovery(ready.as_deref(), f)
+        })
+        .await,
+    );
     let (outcome, error) = result.outcome();
     record_command(
         app,
@@ -169,6 +190,21 @@ pub async fn time_command_blocking<T: Send + 'static>(
         error,
     );
     result
+}
+
+fn run_after_startup_recovery<T>(
+    ready: Option<&std::sync::OnceLock<crate::skills::event_commands::StartupRecoveryOutcome>>,
+    run: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    if let Some(ready) = ready {
+        match ready.wait() {
+            crate::skills::event_commands::StartupRecoveryOutcome::Completed => {}
+            crate::skills::event_commands::StartupRecoveryOutcome::Failed(error) => {
+                return Err(format!("Startup recovery failed: {error}"));
+            }
+        }
+    }
+    run()
 }
 
 /// The panic-to-`Err` conversion [`time_command_blocking`] applies to a
@@ -397,6 +433,25 @@ fn trim_log_file(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_failed_startup_recovery_blocks_a_timed_write_or_runs_the_command_after_failure() {
+        let ready = std::sync::OnceLock::new();
+        ready
+            .set(
+                crate::skills::event_commands::StartupRecoveryOutcome::Failed(
+                    "fixture recovery failed".into(),
+                ),
+            )
+            .unwrap();
+        let ran = std::cell::Cell::new(false);
+        let result = run_after_startup_recovery(Some(&ready), || {
+            ran.set(true);
+            Ok(())
+        });
+        assert!(!ran.get(), "a timed write ran after failed recovery");
+        assert!(result.unwrap_err().contains("fixture recovery failed"));
+    }
+
     use super::*;
     use std::fs::File;
     use std::io::BufRead;

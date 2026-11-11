@@ -29,6 +29,7 @@
 // out.
 #![forbid(unsafe_code)]
 
+pub mod backup_retention;
 pub mod discovery_sources;
 pub mod doctor;
 mod doctor_scope;

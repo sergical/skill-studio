@@ -1568,11 +1568,16 @@ fn run_undo(scope: &ScopeArgs, force: bool, json: bool, time: bool) -> ExitCode 
             use skill_studio_core::events::EventKind;
             !matches!(
                 (EventKind::parse(&event.kind), &event.restore),
-                (_, RestoreCapability::Reverted { .. })
-                    | (
-                        Some(EventKind::QuarantinePrune | EventKind::ReconcileRemoveStaleLink),
-                        _
-                    )
+                (
+                    _,
+                    RestoreCapability::Reverted { .. }
+                        | RestoreCapability::BackupExpired {
+                            reverted_by: Some(_)
+                        }
+                ) | (
+                    Some(EventKind::QuarantinePrune | EventKind::ReconcileRemoveStaleLink),
+                    _
+                )
             )
         }) {
             break Some(found.id);

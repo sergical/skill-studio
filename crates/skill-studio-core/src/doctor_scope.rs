@@ -730,6 +730,7 @@ mod tests {
                 label: "fixture".into(),
                 root: "/home".into(),
                 backups: Vec::new(),
+                expired_backups: Vec::new(),
                 steps: Vec::new(),
                 status: crate::ports::PlanStatus::Done,
             };

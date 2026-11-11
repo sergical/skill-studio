@@ -311,7 +311,10 @@ pub fn check_quarantine_within_cap(fs: &dyn ScopeFs, home: &Path) -> Vec<DoctorV
 pub fn check_journal_has_no_open_plan(journal: &dyn Journal) -> Vec<DoctorViolation> {
     let mut violations = Vec::new();
     let result = journal.visit(&mut |plan| {
-        if plan.status == crate::ports::PlanStatus::Pending {
+        if matches!(
+            plan.status,
+            crate::ports::PlanStatus::Pending | crate::ports::PlanStatus::Interrupted
+        ) {
             violations.push(DoctorViolation {
                 invariant: DoctorInvariant::JournalHasNoOpenPlan,
                 skill: None,
@@ -659,7 +662,13 @@ mod tests {
         let journal = FsJournal::new(PathBuf::from("/journal"), fs.clone());
         let lease = FakeLease::default();
         let handle = lease
-            .acquire(&[], LeaseMode::Exclusive, Duration::from_secs(0))
+            .acquire(
+                &[crate::ports::LeaseKey {
+                    canonical_root: home(),
+                }],
+                LeaseMode::Exclusive,
+                Duration::ZERO,
+            )
             .unwrap();
         let guard = ExclusiveGuard::from_handle(handle);
 
@@ -674,6 +683,11 @@ mod tests {
         )
         .unwrap();
         let id = plan.id().clone();
+        assert!(!check_journal_has_no_open_plan(&journal).is_empty());
+
+        journal
+            .finish(&guard, &id, crate::ports::PlanStatus::Interrupted)
+            .unwrap();
         assert!(!check_journal_has_no_open_plan(&journal).is_empty());
 
         crate::journal::reconcile(&journal, &guard, fs.as_ref()).unwrap();
