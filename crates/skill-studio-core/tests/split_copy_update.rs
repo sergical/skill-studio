@@ -1301,3 +1301,67 @@ fn split_update_lock_loss_alternating_force_restores_keep_source_or_next_update_
 fn split_update_lock_row_loss_alternating_force_restores_keep_source_or_next_update_refuses() {
     metadata_loss_restore_chain_keeps_next_update("lock-row");
 }
+
+#[test]
+fn split_update_undo_redo_four_times_restores_a_changed_existing_lock_row_and_keeps_an_unchanged_one_or_a_null_inverse_skips_the_row(
+) {
+    for changes_lock in [false, true] {
+        let home = split_home("split_update_lock_inverse_cycle");
+        let rt = runtime_with(&home, Arc::new(RealFs::new()));
+        let before = read_lock(&home);
+        let mut request = v2();
+        if !changes_lock {
+            request.lock_folder_hash = None;
+        }
+        ops::update_split_copies(&rt, &ctx(), &request).unwrap();
+        let after = read_lock(&home);
+        let mut id = latest_update(&rt);
+        let inverse = history_row(&rt, &id).inverse.unwrap();
+        if changes_lock {
+            assert!(inverse["lock_row_undo"].is_object());
+            assert_eq!(inverse["lock_row_undo"]["version"], 3);
+            assert_eq!(
+                inverse["lock_row_undo"]["path"],
+                home.join(".agents/.skill-lock.json").to_str().unwrap()
+            );
+            assert_eq!(
+                inverse["lock_row_undo"]["previous"],
+                before["skills"]["gamma"]
+            );
+            assert_eq!(
+                inverse["lock_row_undo"]["expected"],
+                after["skills"]["gamma"]
+            );
+            assert_ne!(before, after);
+        } else {
+            assert!(inverse["lock_row_undo"].is_null());
+            assert_eq!(before, after);
+        }
+        for step in 0..4 {
+            id = ops::restore_event(
+                &rt,
+                &ctx(),
+                &skill_studio_core::dto::RestoreRequest {
+                    event_id: id,
+                    force: false,
+                },
+            )
+            .unwrap()
+            .restore_event_id;
+            assert_eq!(
+                read_lock(&home),
+                if step % 2 == 0 {
+                    before.clone()
+                } else {
+                    after.clone()
+                }
+            );
+            let mirror = history_row(&rt, &id).inverse.unwrap();
+            assert_eq!(mirror["lock_row_undo"].is_object(), changes_lock);
+            if !changes_lock {
+                assert_eq!(mirror.get("lock_row_undo"), Some(&serde_json::Value::Null));
+            }
+        }
+        std::fs::remove_dir_all(home).unwrap();
+    }
+}

@@ -61,6 +61,11 @@ function devPrerender(): Plugin {
 
 export default defineConfig(({ isSsrBuild }) => ({
   plugins: [stylex.vite({ useCSSLayers: true }), react(), devPrerender()],
+  // Workers Builds sets these two variables; they are empty on a local build.
+  define: {
+    __SITE_RELEASE__: JSON.stringify(process.env.WORKERS_CI_COMMIT_SHA ?? ""),
+    __SITE_BRANCH__: JSON.stringify(process.env.WORKERS_CI_BRANCH ?? ""),
+  },
   build: isSsrBuild
     ? {}
     : {

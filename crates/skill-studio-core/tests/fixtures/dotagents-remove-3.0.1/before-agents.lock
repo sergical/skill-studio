@@ -1,0 +1,9 @@
+version = 1
+
+# exact alpha lock
+[skills.alpha]
+source = 'owner/alpha'
+resolved_url = 'https://github.com/owner/alpha.git'
+resolved_commit = '1234567890123456789012345678901234567890'
+resolved_path = 'skills/alpha'
+

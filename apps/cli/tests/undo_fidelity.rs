@@ -226,3 +226,66 @@ fn cli_update_restore_and_undo_restore_keep_the_owned_lock_row_or_erase_a_later_
         );
     }
 }
+
+#[test]
+fn cli_history_and_dotagents_remove_undo_restore_exact_saved_entries_or_erase_a_later_skill() {
+    for later in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let event = undo_fixtures::removed_dotagents(home.path(), later);
+        let history = cli(home.path(), &["history"]);
+        assert_eq!(history["data"][0]["id"], event.0);
+        let result = cli(home.path(), &["restore", "--event-id", &event.0]);
+        assert_eq!(result["status"], "ok", "{result}");
+        undo_fixtures::assert_dotagents_saved_entries(home.path(), later, true);
+        let restored = result["data"]["restore_event_id"].as_str().unwrap();
+        let history = cli(home.path(), &["history"]);
+        assert_eq!(history["data"][0]["id"], restored);
+        let undone = cli(home.path(), &["restore", "--event-id", restored]);
+        assert_eq!(undone["status"], "ok", "{undone}");
+        undo_fixtures::assert_dotagents_saved_entries(home.path(), later, false);
+    }
+}
+
+#[test]
+fn cli_dotagents_remove_undo_refuses_a_changed_slot_when_forced_or_replaces_another_entry() {
+    for (lock, link, original_link) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (true, true, false),
+        (false, true, true),
+        (true, true, true),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let event = undo_fixtures::removed_dotagents_with_link(
+            home.path(),
+            true,
+            original_link.then_some(lock),
+        );
+        let (path, newer) = undo_fixtures::conflict_dotagents_slot(home.path(), lock, link);
+        for force in [false, true] {
+            let mut args = vec!["restore", "--event-id", &event.0];
+            if force {
+                args.push("--force");
+            }
+            let result = cli(home.path(), &args);
+            assert_eq!(result["errors"][0]["code"], "drift_conflict", "{result}");
+            assert!(
+                result["errors"][0]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Dotagents"),
+                "{result}"
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
+            assert_eq!(
+                std::fs::symlink_metadata(&path)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+                link
+            );
+            assert!(!home.path().join(".agents/skills/alpha").exists());
+        }
+    }
+}
