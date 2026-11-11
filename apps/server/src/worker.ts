@@ -10,6 +10,7 @@ import * as Sentry from "@sentry/cloudflare";
 
 import {
   createSkillsProxyApp,
+  methodLabel,
   PROXY_ROUTE_TEMPLATES,
   proxyRouteFor,
   type RateLimiter,
@@ -44,16 +45,26 @@ interface ExecutionContext {
 // `@cloudflare/workers-types` package just for one global.
 declare const caches: { default: ResponseCache };
 
-/** The SDK names a streamed request span by its method only, so every route
- * would group as one `GET`. The template keeps skill names out of the name. */
+/** The SDK names a streamed request span by its raw method only, so every
+ * route would group as one `GET` and any invented method would open a new
+ * group. The template keeps skill names out of the name. */
 function nameRequestSpanByRoute(request: Request): void {
   const route = proxyRouteFor(new URL(request.url).pathname);
   const span = Sentry.getActiveSpan();
-  if (!span || route === "other") return;
-  Sentry.updateSpanName(
-    Sentry.getRootSpan(span),
-    `${request.method} ${PROXY_ROUTE_TEMPLATES[route]}`,
-  );
+  if (!span) return;
+  const path = route === "other" ? "other" : PROXY_ROUTE_TEMPLATES[route];
+  Sentry.updateSpanName(Sentry.getRootSpan(span), `${methodLabel(request.method)} ${path}`);
+}
+
+/** A caller's `sentry-trace` and `baggage` would make the SDK continue their
+ * trace and copy their baggage, such as a made-up transaction name, into the
+ * envelope header, where `beforeSendSpan` cannot reach it. */
+function withoutCallerTrace(request: Request): Request {
+  if (!request.headers.has("sentry-trace") && !request.headers.has("baggage")) return request;
+  const headers = new Headers(request.headers);
+  headers.delete("sentry-trace");
+  headers.delete("baggage");
+  return new Request(request, { headers });
 }
 
 const handler = {
@@ -98,4 +109,9 @@ function sentryOptionsFor(env: Env): CloudflareOptions {
   };
 }
 
-export default Sentry.withSentry(sentryOptionsFor, handler);
+const sentryHandler = Sentry.withSentry(sentryOptionsFor, handler);
+
+export default {
+  fetch: (request: Request, env: Env, ctx: ExecutionContext) =>
+    sentryHandler.fetch(withoutCallerTrace(request), env, ctx),
+};

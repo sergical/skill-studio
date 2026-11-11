@@ -96,7 +96,7 @@ export async function proxyGet(
 
 const LOGGED_METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
 
-function methodLabel(method: string): string {
+export function methodLabel(method: string): string {
   return LOGGED_METHODS.has(method) ? method : "OTHER";
 }
 

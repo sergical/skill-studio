@@ -4,6 +4,8 @@
 // sends must never leak who called it or what they asked for.
 // ============================================================================
 
+import { methodLabel } from "./skills-proxy-app";
+
 import type { CloudflareOptions, ErrorEvent } from "@sentry/cloudflare";
 
 /** Strips request headers, cookies, query strings, user data, breadcrumbs, and the
@@ -35,11 +37,21 @@ export function scrubSentryEvent<E extends ErrorEvent>(event: E): E {
 
 type StreamedSpan = Parameters<NonNullable<CloudflareOptions["beforeSendSpan"]>>[0];
 
-const UNSCRUBBED_SPAN_ATTRIBUTES = ["user_agent.original", "culture.timezone", "culture.locale"];
+const UNSCRUBBED_SPAN_ATTRIBUTES = [
+  "user_agent.original",
+  "culture.timezone",
+  "culture.locale",
+  "http.request.body.size",
+  "http.response.body.size",
+];
 
 /** Drops the request details `dataCollection` cannot turn off: the caller's
- * user agent and the timezone Cloudflare derives from their location. */
+ * user agent, the timezone Cloudflare derives from their location, and the
+ * `Content-Length` header values the SDK copies into body sizes. A made-up
+ * request method is reported as `OTHER`. */
 export function scrubSentrySpan(span: StreamedSpan): StreamedSpan {
   for (const key of UNSCRUBBED_SPAN_ATTRIBUTES) delete span.attributes[key];
+  const method = span.attributes["http.request.method"];
+  if (method !== undefined) span.attributes["http.request.method"] = methodLabel(String(method));
   return span;
 }
