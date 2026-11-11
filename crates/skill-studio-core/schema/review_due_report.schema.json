@@ -42,7 +42,7 @@
           "type": "string"
         },
         "sessions": {
-          "description": "Distinct sessions across all available history.",
+          "description": "Distinct sessions in the last 30 days, the `usage` default window.",
           "type": "integer",
           "format": "uint",
           "minimum": 0

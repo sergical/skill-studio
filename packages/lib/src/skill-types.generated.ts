@@ -278,7 +278,7 @@ export interface ReviewRow {
    */
   review_date: string;
   /**
-   * Distinct sessions across all available history.
+   * Distinct sessions in the last 30 days, the `usage` default window.
    */
   sessions: number;
 }
@@ -342,7 +342,7 @@ export interface SkillInvocationReport {
    */
   deployments: InvocationDeployment[];
   /**
-   * Skill-owned controls or copies disagree.
+   * One harness reads this skill as auto and another as manual; `unsupported` does not count.
    */
   mismatch: boolean;
 }

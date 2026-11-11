@@ -28,6 +28,37 @@ fn invocation_check_flags_missing_codex_policy_instead_of_hiding_mismatch() {
     assert_eq!(result["data"]["skills"][0]["mismatch"], true, "{result}");
 }
 
+/// Flow: `invocation` on a skill that one harness reads, or that a second
+/// harness reads without an invocation setting (Grok). Expect no mismatch:
+/// one reader cannot disagree with itself. Failure: a Codex-only copy with
+/// `allow_implicit_invocation: false` and no `disable-model-invocation`
+/// line is reported as a mismatch (20 false positives on a real home).
+#[test]
+fn invocation_single_reader_copies_never_mismatch_and_unsupported_copies_do_not_count() {
+    let home = tempfile::tempdir().unwrap();
+    let codex = home.path().join(".codex/skills/gamma");
+    std::fs::create_dir_all(codex.join("agents")).unwrap();
+    std::fs::write(codex.join("SKILL.md"), MD).unwrap();
+    std::fs::write(
+        codex.join("agents/openai.yaml"),
+        "policy:\n  allow_implicit_invocation: false\n",
+    )
+    .unwrap();
+    let grok = home.path().join(".grok/skills/gamma");
+    std::fs::create_dir_all(&grok).unwrap();
+    std::fs::write(grok.join("SKILL.md"), MD).unwrap();
+    let result = headless::cli(home.path(), &["invocation", "gamma"]);
+    let modes: Vec<_> = result["data"]["skills"][0]["deployments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| (d["harness"].as_str().unwrap(), d["mode"].as_str().unwrap()))
+        .collect();
+    assert!(modes.contains(&("codex", "manual")), "{result}");
+    assert!(modes.contains(&("grok-build", "unsupported")), "{result}");
+    assert_eq!(result["data"]["skills"][0]["mismatch"], false, "{result}");
+}
+
 #[test]
 fn invocation_manual_preserves_other_keys_and_undo_restores_instead_of_losing_bytes() {
     let home = fixture();
@@ -221,7 +252,7 @@ fn invocation_opencode_override_is_effective_and_patched() {
         .unwrap();
         let result = headless::cli(home.path(), &["invocation", "gamma"]);
         let auto = matches!(flag, "true" | "1");
-        assert_eq!(result["data"]["skills"][0]["mismatch"], auto, "{result}");
+        assert_eq!(result["data"]["skills"][0]["mismatch"], false, "{result}");
         assert_eq!(
             result["data"]["skills"][0]["deployments"][0]["mode"],
             if auto { "auto" } else { "manual" },

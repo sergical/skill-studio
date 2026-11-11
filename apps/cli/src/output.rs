@@ -367,10 +367,11 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
     if !unused.is_empty() {
         println!("Not used in the last {} days:", report.days);
         for row in &unused {
-            println!("  {:width$}  last used {}", row.skill, last_used(row));
             println!(
-                "    {} sessions, {} total uses; triggers {:?}",
-                row.sessions, row.total_uses, row.triggers
+                "  {:width$}  last used {}  ({} uses all time)",
+                row.skill,
+                last_used(row),
+                row.total_uses
             );
         }
     }
@@ -394,8 +395,8 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
                 last_used(row),
             );
             println!(
-                "    {} sessions, {} total uses; triggers {:?}",
-                row.sessions, row.total_uses, row.triggers
+                "    {} sessions, triggers {:?}; {} uses all time",
+                row.sessions, row.triggers, row.total_uses
             );
         }
     }
@@ -945,7 +946,7 @@ pub fn print_review_due(envelope: &ResultEnvelope<skill_studio_core::review::Rev
     if let Some(data) = &envelope.data {
         for row in &data.rows {
             println!(
-                "{}  {}  {} sessions",
+                "{}  {}  {} sessions in 30 days",
                 row.skill, row.review_date, row.sessions
             );
         }

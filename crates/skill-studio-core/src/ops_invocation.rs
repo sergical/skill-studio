@@ -48,7 +48,7 @@ pub struct SkillInvocationReport {
     pub skill: SkillName,
     /// Per-harness modes.
     pub deployments: Vec<InvocationDeployment>,
-    /// Skill-owned controls or copies disagree.
+    /// One harness reads this skill as auto and another as manual; `unsupported` does not count.
     pub mismatch: bool,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -266,7 +266,6 @@ pub fn invocation(
         };
         for skill in inventory.skills {
             let mut rows = Vec::new();
-            let mut modes = Vec::new();
             for d in skill.deployments {
                 let manual = d
                     .frontmatter
@@ -305,8 +304,6 @@ pub fn invocation(
                     .and_then(|p| p.get("allow_implicit_invocation"))
                     .and_then(serde_json::Value::as_bool)
                     == Some(false);
-                // Compare the two skill-owned controls even for a single copy.
-                modes.extend([manual, codex_manual]);
                 let harnesses = d.harness.clone().map_or_else(
                     || {
                         rt.ports
@@ -329,7 +326,6 @@ pub fn invocation(
                             }
                         }
                         AgentId::OPEN_CODE => {
-                            modes.push(opencode_manual);
                             if opencode_manual {
                                 InvocationMode::Manual
                             } else {
@@ -353,10 +349,11 @@ pub fn invocation(
                     });
                 }
             }
+            let reads = |mode| rows.iter().any(|row| row.mode == mode);
             report.skills.push(SkillInvocationReport {
                 skill: skill.name,
+                mismatch: reads(InvocationMode::Manual) && reads(InvocationMode::Auto),
                 deployments: rows,
-                mismatch: modes.iter().any(|m| *m) && modes.iter().any(|m| !*m),
             });
         }
         Ok(report)

@@ -122,8 +122,9 @@ fn exercise(flow: &str, surface: Surface) {
             ] {
                 std::fs::create_dir_all(f.home.path().join(root)).unwrap();
             }
+            let yesterday = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
             std::fs::write(f.home.path().join(".claude/projects/work/session.jsonl"),
-                "{\"type\":\"assistant\",\"timestamp\":\"2026-09-29T12:00:00Z\",\"sessionId\":\"usage-session\",\"cwd\":\"/work\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Skill\",\"input\":{\"skill\":\"gamma\"}}]}}\n").unwrap();
+                format!("{{\"type\":\"assistant\",\"timestamp\":\"{yesterday}\",\"sessionId\":\"usage-session\",\"cwd\":\"/work\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"name\":\"Skill\",\"input\":{{\"skill\":\"gamma\"}}}}]}}}}\n")).unwrap();
             std::fs::write(
                 f.home.path().join(".codex/sessions/irrelevant.jsonl"),
                 format!("{{\"output\":\"{}\"}}\n{{\"active\":", "x".repeat(300_000)),

@@ -252,3 +252,33 @@ fn usage_compressed_large_records_and_active_tail_are_complete_instead_of_false_
     assert_eq!(data["partial"], false, "{data}");
     assert_eq!(data["rows"][0]["total_uses"], 2, "{data}");
 }
+/// Flow: `usage --days 30` with one use in the window and one 60 days old.
+/// Expect `sessions` and `triggers` to count only the window, like
+/// `recent_uses`. Failure: they count all history, so `--days 1` and
+/// `--days 45` print the same sessions and triggers.
+#[test]
+fn usage_sessions_and_triggers_count_only_the_days_window() {
+    let dir = fixture();
+    let path = dir.path().join(".claude/projects/work");
+    fs::create_dir_all(&path).unwrap();
+    let records = [
+        serde_json::json!({"type":"user","sessionId":"recent","timestamp":"2026-09-29T12:00:00Z","message":{"content":"<command-name>/gamma</command-name>"}}),
+        serde_json::json!({"type":"assistant","sessionId":"old","timestamp":"2026-08-01T12:00:00Z","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"gamma"}}]}}),
+    ];
+    let mut text = String::new();
+    for mut record in records {
+        record["cwd"] = "/work".into();
+        text.push_str(&record.to_string());
+        text.push('\n');
+    }
+    fs::write(path.join("s.jsonl"), text).unwrap();
+    let row = &report(dir.path())["rows"][0];
+    assert_eq!(row["total_uses"], 2, "{row}");
+    assert_eq!(row["recent_uses"], 1, "{row}");
+    assert_eq!(row["sessions"], 1, "{row}");
+    assert_eq!(
+        row["triggers"],
+        serde_json::json!({"user":1,"agent":0,"file_read":0,"unknown":0}),
+        "{row}"
+    );
+}
