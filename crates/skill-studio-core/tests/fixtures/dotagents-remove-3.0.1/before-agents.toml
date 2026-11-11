@@ -1,0 +1,8 @@
+version = 1
+
+# exact alpha declaration
+[[skills]]
+name = 'alpha' # keep quote style
+source = 'owner/alpha'
+ref = 'old-revision'
+

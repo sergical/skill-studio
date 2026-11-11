@@ -4527,6 +4527,12 @@ fn restore_event_body(
             })
         })
         .transpose()?;
+    let saved_dotagents = crate::dotagents_saved_entries::prepare_saved_entry_restore(rt, &target)?;
+    let dotagents_paths: Vec<_> = saved_dotagents
+        .files
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect();
     let secondary_post = crate::events::parse_restore_secondary_post(inverse);
     let remove_links = crate::events::parse_restore_remove_links(inverse);
     let write_back = crate::events::parse_restore_write_back(inverse);
@@ -4558,6 +4564,9 @@ fn restore_event_body(
             }
         }
         for (secondary, expected) in &secondary_post {
+            if dotagents_paths.contains(secondary) {
+                continue;
+            }
             let live = crate::events::fingerprint_path(fs, secondary)?;
             let live = live
                 .as_ref()
@@ -4647,7 +4656,10 @@ fn restore_event_body(
         (&original_manifest, target.backup_dir.as_deref())
     {
         for other in &original_manifest.entries {
-            if other.original == path || write_back.contains(&other.original) {
+            if other.original == path
+                || write_back.contains(&other.original)
+                || dotagents_paths.contains(&other.original)
+            {
                 continue;
             }
             if other.fingerprint.is_none() {
@@ -4668,6 +4680,14 @@ fn restore_event_body(
         }
     }
 
+    for (metadata_path, bytes) in &saved_dotagents.files {
+        let plan = bytes
+            .as_ref()
+            .map_or(RestorePlan::RemoveIfPresent, |bytes| {
+                RestorePlan::Restore(BackupContent::File(bytes.clone()))
+            });
+        extra_plans.push((metadata_path.clone(), plan));
+    }
     let restore_id = rt.ports.ids.next_event_id();
     // Backs up the file's current bytes under the restore event's own id
     // before touching it: with `force` this is exactly "the drifted bytes
@@ -4741,6 +4761,9 @@ fn restore_event_body(
     );
     if let Some(mirror) = mirror_lock {
         restore_inverse["lock_row_undo"] = serde_json::json!(mirror);
+    }
+    if !saved_dotagents.inverse.is_null() {
+        restore_inverse["dotagents_saved_entries"] = saved_dotagents.inverse;
     }
     let draft = crate::events::EventDraft {
         kind: crate::events::EventKind::Restore,
@@ -4918,8 +4941,9 @@ fn restore_event_body(
     // put back: the restore is incomplete, not done (see after the lock and registry steps).
     let mut unrestored: Vec<PathBuf> = Vec::new();
     for (other_path, other_plan) in &extra_plans {
-        let required = secondary_post.iter().any(|(p, _)| p == other_path)
-            && !matches!(other_plan, RestorePlan::RemoveIfPresent);
+        let required = dotagents_paths.contains(other_path)
+            || (secondary_post.iter().any(|(p, _)| p == other_path)
+                && !matches!(other_plan, RestorePlan::RemoveIfPresent));
         // Removing takes down the path itself, never what a link there points at.
         let RestorePlan::Restore(content) = other_plan else {
             if let Ok(facts) = fs.symlink_metadata(other_path) {
@@ -4932,6 +4956,9 @@ fn restore_event_body(
                     }
                     Err(_) => {}
                 }
+            }
+            if required && fs.symlink_metadata(other_path).is_ok() {
+                unrestored.push(other_path.clone());
             }
             continue;
         };
@@ -5012,6 +5039,7 @@ fn restore_event_body(
     // one was edited since, like any other undo.
     let extra_post: Vec<(PathBuf, Result<Option<Fingerprint>, CoreError>)> = extra_plans
         .iter()
+        .filter(|(extra, _)| !dotagents_paths.contains(extra))
         .map(|(extra, _)| {
             // An unreadable path gets a value no live state matches, so its
             // undo needs `force` rather than skipping the check.
