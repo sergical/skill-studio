@@ -7005,6 +7005,39 @@ mod tests {
     }
 
     #[test]
+    fn an_edit_past_the_hash_file_cap_still_changes_the_fingerprint_instead_of_reusing_the_hash() {
+        use crate::testing::FixtureBuilder;
+
+        // Symlinked files count toward the hash side's file cap but never
+        // enter the fingerprint list, so `z.md` is in the fingerprint only.
+        let md = b"---\nname: demo\ndescription: demo\n---\nBody\n";
+        let parsed = frontmatter::parse_frontmatter(std::str::from_utf8(md).unwrap());
+        let ctx = OpContext::uncancellable(CorrelationId("hash-file-cap".into()));
+        let facts_with_last_file = |bytes: &[u8]| {
+            let mut fixture = FixtureBuilder::new()
+                .file("/h/target.md", b"target")
+                .file("/h/demo/SKILL.md", md)
+                .file("/h/demo/z.md", bytes);
+            for i in 0..MAX_FOLDER_FILES {
+                fixture = fixture.alias(&format!("/h/demo/link{i:04}.md"), "/h/target.md");
+            }
+            let fs = fixture.build_fs();
+            compute_content_facts(&fs, &ctx, Path::new("/h/demo"), md, false, &parsed).unwrap()
+        };
+        let before = facts_with_last_file(b"one");
+        let after = facts_with_last_file(b"two");
+
+        assert_eq!(
+            before.content_hash, after.content_hash,
+            "hash stops at the file cap"
+        );
+        assert_ne!(
+            before.content_fingerprint, after.content_fingerprint,
+            "an edit the hash cannot see must still change the fingerprint"
+        );
+    }
+
+    #[test]
     fn a_hash_budget_stop_does_not_shorten_the_fingerprint_file_list_or_names_the_missing_file() {
         // b.md is bigger than what's left of `max_bytes` after `a.md`, so
         // the hash side truncates there; `c.md` is small again, but must
