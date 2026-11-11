@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { MarketingSite } from "./MarketingSite";
+import { startSiteSentry } from "./site-sentry";
 import "./marketing-site.css";
 
 const root = document.getElementById("root");
@@ -21,3 +22,5 @@ flushSync(() => {
   );
 });
 delete root.dataset.prerendered;
+
+void startSiteSentry();

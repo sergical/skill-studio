@@ -13,6 +13,7 @@ import {
   rememberedSiteTheme,
   transitionSiteTheme,
 } from "../site-theme";
+import { startSiteSentry } from "../site-sentry";
 import "../marketing-site.css";
 import "./docs-prose.css";
 // Imported for its StyleX rules, which the build collects into the shared CSS file.
@@ -73,3 +74,5 @@ document.addEventListener("click", (event) => {
   const themeButton = event.target.closest<HTMLElement>("[data-theme-toggle]");
   if (themeButton) toggleTheme(themeButton);
 });
+
+void startSiteSentry();
