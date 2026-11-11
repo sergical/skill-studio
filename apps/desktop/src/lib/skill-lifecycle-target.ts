@@ -574,6 +574,17 @@ export async function skillsWithLocalEdits<
 export function forkableDeployment(
   skill: Pick<InstalledSkill, "deployments">,
 ): Deployment | undefined {
+  if (
+    skill.deployments.some(
+      (deployment) =>
+        deployment.scope === "global" &&
+        deployment.destination === "per-harness" &&
+        !deployment.is_symlink &&
+        !deployment.plugin &&
+        deployment.backing.kind === "independent",
+    )
+  )
+    return undefined;
   return skill.deployments.find(
     (deployment) =>
       deployment.scope === "global" &&
@@ -582,6 +593,16 @@ export function forkableDeployment(
       deployment.owner_kind === "skills-sh" &&
       !deployment.plugin,
   );
+}
+
+export function partitionForkableSkills(skills: readonly InstalledSkill[]) {
+  const forkable: InstalledSkill[] = [];
+  const unforkable: InstalledSkill[] = [];
+  for (const skill of skills) {
+    if (forkableDeployment(skill)) forkable.push(skill);
+    else unforkable.push(skill);
+  }
+  return { forkable, unforkable };
 }
 
 /** The lifecycle target a fork of `skill` starts from; throws when the skill has no forkable folder. */

@@ -1036,6 +1036,34 @@ fn fork_skill_with_storage(
 
     let agents_dir = home.join(".agents");
     let skill_dir = agents_dir.join("skills").join(name);
+    let canonical_skill = fs::canonicalize(&skill_dir).map_err(|error| error.to_string())?;
+    let copies = super::agents::AgentId::all()
+        .into_iter()
+        .map(|agent| agent.global_skills_dir(home).join(name))
+        .chain(std::iter::once(
+            home.join(".config/opencode/skill").join(name),
+        ))
+        .chain(skill_studio_core::skills_cli_agents::cli_removal_targets(
+            home,
+            &skill_studio_host::codex_home(home),
+            &skill_studio_core::identity::RootScope::Global,
+            name,
+        ));
+    for copy in copies {
+        let metadata = match fs::symlink_metadata(&copy) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("Cannot inspect {}: {error}", copy.display())),
+        };
+        if metadata.is_dir()
+            && fs::canonicalize(&copy).map_err(|error| error.to_string())? != canonical_skill
+        {
+            return Err(format!(
+                "Fork cannot preserve independent agent copies. Keep your edits or overwrite them with Update. Independent copy: {}",
+                copy.display()
+            ));
+        }
+    }
     let origin = resolve_fork_origin(&agents_dir, app_data, name, lookup)?;
 
     let recovery_dir = fork_live_recovery_dir(app_data, name);
@@ -2471,6 +2499,83 @@ mod tests {
         )
         .unwrap();
         assert_eq!(record.base_commit, "a".repeat(40));
+    }
+
+    /// Flow: Fork a skill that also has an independent edited copy in an
+    /// agent folder that global `skills remove` deletes: one the desktop
+    /// knows (Codex) and one only the skills CLI knows (Goose). Expectation:
+    /// Fork refuses and both folders keep their content. Failure: Fork runs
+    /// the removal and the agent copy's edits are gone.
+    #[test]
+    fn skill_local_edits_fork_refuses_independent_copy_or_global_removal_loses_agent_edits() {
+        for agent_folder in [".codex/skills", ".config/goose/skills"] {
+            fork_refuses_independent_copy_in(agent_folder);
+        }
+    }
+
+    fn fork_refuses_independent_copy_in(agent_folder: &str) {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_data = tmp.path().join("data");
+        write_file(&home.join(".agents/.skill-lock.json"), &serde_json::json!({
+            "version": 3, "skills": { "sample": {
+                "source": "owner/repo", "sourceType": "github", "sourceUrl": "https://github.com/owner/repo",
+                "skillFolderHash": "baseline", "installedAt": "2020-01-01T00:00:00Z", "updatedAt": "2020-01-01T00:00:00Z"
+            }}
+        }).to_string());
+        struct Lookup;
+        impl CommitLookup for Lookup {
+            fn latest_commit(
+                &self,
+                _: &str,
+                _: &str,
+                _: Option<&str>,
+            ) -> Result<Option<(String, String)>, String> {
+                Ok(Some(("a".repeat(40), "2020-01-01T00:00:00Z".to_string())))
+            }
+        }
+        let shared = home.join(".agents/skills/sample");
+        let copy = home.join(agent_folder).join("sample");
+        write_file(&shared.join("SKILL.md"), "original shared content");
+        write_file(&copy.join("SKILL.md"), "independent Codex edit");
+        struct RemovingBoth(Vec<PathBuf>);
+        impl LedgerTool for RemovingBoth {
+            fn remove(&self, _: OriginTool, _: &str) -> Result<(), String> {
+                for path in &self.0 {
+                    fs::remove_dir_all(path).unwrap();
+                }
+                Ok(())
+            }
+            fn reinstall(&self, _: &ForkRecord, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let result = fork_skill_with(
+            &test_guard(&home),
+            &home,
+            &app_data,
+            "sample",
+            &shared,
+            &RemovingBoth(vec![shared.clone(), copy.clone()]),
+            &FakeFetch {
+                files: vec![("SKILL.md", "upstream")],
+            },
+            &Lookup,
+        );
+        assert!(
+            result.is_err(),
+            "{agent_folder}: Fork must refuse before global removal loses an independent copy"
+        );
+        assert!(result.unwrap_err().contains("independent"));
+        assert_eq!(
+            fs::read_to_string(copy.join("SKILL.md")).unwrap(),
+            "independent Codex edit"
+        );
+        assert_eq!(
+            fs::read_to_string(shared.join("SKILL.md")).unwrap(),
+            "original shared content"
+        );
+        assert!(read_fork_registry(&home).unwrap().forks.is_empty());
     }
 
     #[test]
