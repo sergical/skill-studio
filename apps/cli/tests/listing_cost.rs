@@ -143,3 +143,166 @@ fn doctor_listing_cost_warns_and_names_top_skills_or_counts_manual_and_parked_sk
     assert_eq!(cursor["listed_skills"], 9);
     assert!(cursor["limit_tokens"].is_null());
 }
+
+fn write(home: &std::path::Path, path: &str, text: &str) {
+    let path = home.join(path);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+fn skill(home: &std::path::Path, path: &str) {
+    write(
+        home,
+        &format!("{path}/SKILL.md"),
+        "---\nname: review\ndescription: Review code\n---\n",
+    );
+}
+
+fn report(home: &std::path::Path, command: &str, project: bool) -> serde_json::Value {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_skill-studio"));
+    cmd.args([command, "--fixture", home.to_str().unwrap(), "--json"])
+        .env("HOME", home)
+        .env("CODEX_HOME", home.join(".codex"))
+        .env("XDG_CONFIG_HOME", home.join(".config"))
+        .env("SKILL_STUDIO_TELEMETRY", "0");
+    if project {
+        cmd.arg("--project").arg(home.join("project"));
+    }
+    let out = cmd.output().unwrap();
+    serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()["data"].clone()
+}
+
+fn row(data: &serde_json::Value, harness: &str, project: bool) -> serde_json::Value {
+    data["listing_cost"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["harness"] == harness && (r["scope"]["scope"] == "project") == project)
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn doctor_excludes_disabled_claude_plugins_instead_of_charging_their_listing() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write(
+        home,
+        ".claude/plugins/cache/mp/plug/1/.claude-plugin/plugin.json",
+        r#"{"name":"plug"}"#,
+    );
+    skill(home, ".claude/plugins/cache/mp/plug/1/skills/review");
+    write(
+        home,
+        ".claude/settings.json",
+        r#"{"enabledPlugins":{"plug@mp":false}}"#,
+    );
+    assert_eq!(
+        row(&report(home, "doctor", false), "claude-code", false)["listed_skills"],
+        0
+    );
+}
+
+#[test]
+fn doctor_keeps_same_name_files_in_codex_and_claude_instead_of_replacing_global_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    for path in [
+        ".agents/skills/review",
+        "project/.agents/skills/review",
+        ".claude/skills/review",
+        "project/.claude/skills/review",
+    ] {
+        skill(home, path);
+    }
+    let data = report(home, "doctor", true);
+    for harness in ["codex", "claude-code"] {
+        assert_eq!(row(&data, harness, true)["listed_skills"], 2, "{harness}");
+        assert_eq!(
+            row(&data, harness, true)["top_skills"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+}
+
+#[test]
+fn doctor_and_scan_apply_codex_path_disable_to_universal_skills_instead_of_only_codex_roots() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    skill(home, ".agents/skills/review");
+    write(
+        home,
+        ".codex/config.toml",
+        &format!(
+            "[[skills.config]]\npath = {:?}\nenabled = false\n",
+            home.join(".agents/skills/review/SKILL.md")
+        ),
+    );
+    let data = report(home, "scan", false);
+    assert!(data["skills"][0]["deployments"][0]["disabled_readers"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("codex")));
+    let data = report(home, "doctor", false);
+    assert_eq!(row(&data, "codex", false)["listed_skills"], 0);
+    assert_eq!(row(&data, "pi", false)["listed_skills"], 1);
+}
+
+#[test]
+fn doctor_excludes_missing_and_empty_codex_descriptions_instead_of_counting_rejected_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    for (name, description) in [
+        ("missing", ""),
+        ("empty", "description: ''\n"),
+        ("blank", "description: '   '\n"),
+    ] {
+        write(
+            home,
+            &format!(".agents/skills/{name}/SKILL.md"),
+            &format!("---\nname: {name}\n{description}---\n"),
+        );
+    }
+    skill(home, ".agents/skills/review");
+    assert_eq!(
+        row(&report(home, "doctor", false), "codex", false)["listed_skills"],
+        1
+    );
+}
+
+#[test]
+fn doctor_uses_trusted_project_codex_budget_instead_of_user_budget_or_untrusted_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    skill(home, "project/.agents/skills/review");
+    write(
+        home,
+        "project/.codex/config.toml",
+        "[skills]\nmax_context_tokens = 40\n",
+    );
+    let user = "[skills]\nmax_context_tokens = 20\n";
+    write(home, ".codex/config.toml", user);
+    assert_eq!(
+        row(&report(home, "doctor", true), "codex", true)["limit_tokens"],
+        20
+    );
+    write(
+        home,
+        ".codex/config.toml",
+        &format!(
+            "{user}\n[projects.{:?}]\ntrust_level = 'trusted'\n",
+            home.join("project")
+        ),
+    );
+    let data = report(home, "doctor", true);
+    assert_eq!(row(&data, "codex", false)["limit_tokens"], 20);
+    let project = row(&data, "codex", true);
+    assert_eq!(project["limit_tokens"], 40);
+    assert_eq!(
+        project["limit_source"],
+        home.join("project/.codex/config.toml").to_str().unwrap()
+    );
+}

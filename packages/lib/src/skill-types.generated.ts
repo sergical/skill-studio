@@ -1673,7 +1673,7 @@ export interface ListingCost {
    */
   harness: string;
   /**
-   * Project sessions include global skills, with project names taking priority.
+   * Project sessions include global skills. Identity rules depend on the harness.
    */
   scope:
     | {
@@ -1684,7 +1684,7 @@ export interface ListingCost {
         project: ProjectRef;
       };
   /**
-   * Number of unique model-visible names.
+   * Number of model-visible skill entries.
    */
   listed_skills: number;
   /**

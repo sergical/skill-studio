@@ -24,9 +24,9 @@ pub struct ListingSkillCost {
 pub struct ListingCost {
     /// Harness id.
     pub harness: AgentId,
-    /// Project sessions include global skills, with project names taking priority.
+    /// Project sessions include global skills. Identity rules depend on the harness.
     pub scope: RootScope,
-    /// Number of unique model-visible names.
+    /// Number of model-visible skill entries.
     pub listed_skills: usize,
     /// UTF-16 characters, divided by four and rounded up.
     pub estimated_tokens_chars_div_4: u64,
@@ -80,6 +80,64 @@ fn toml(rt: &Runtime, path: &Path) -> Result<toml::Value, CoreError> {
                 })
         },
     )
+}
+
+fn codex_settings(
+    rt: &Runtime,
+    scope: &RootScope,
+) -> Result<Vec<(std::path::PathBuf, toml::Value)>, CoreError> {
+    let user_path = rt.scope.codex_home.join("config.toml");
+    let user = toml(rt, &user_path)?;
+    let mut layers = Vec::new();
+    if let RootScope::Project(project) = scope {
+        let markers: Vec<&str> = user
+            .get("project_root_markers")
+            .and_then(toml::Value::as_array)
+            .map_or_else(
+                || vec![".git"],
+                |values| values.iter().filter_map(toml::Value::as_str).collect(),
+            );
+        let root = project
+            .0
+            .ancestors()
+            .find(|dir| {
+                markers
+                    .iter()
+                    .any(|marker| rt.ports.fs.symlink_metadata(&dir.join(marker)).is_ok())
+            })
+            .unwrap_or(&project.0);
+        let dirs: Vec<_> = project
+            .0
+            .ancestors()
+            .take_while(|dir| dir.starts_with(root))
+            .collect();
+        let trust = |dir: &Path| {
+            let canonical = rt
+                .ports
+                .fs
+                .canonicalize(dir)
+                .unwrap_or_else(|_| dir.to_path_buf());
+            let level = [dir, canonical.as_path()].into_iter().find_map(|key| {
+                user.get("projects")?
+                    .get(key.to_str()?)?
+                    .get("trust_level")?
+                    .as_str()
+            });
+            level
+        };
+        for dir in dirs.iter().rev() {
+            if trust(dir).or_else(|| trust(root)) != Some("trusted") {
+                continue;
+            }
+            let path = dir.join(".codex/config.toml");
+            if path == user_path {
+                continue;
+            }
+            layers.push((path.clone(), toml(rt, &path)?));
+        }
+    }
+    layers.insert(0, (user_path, user));
+    Ok(layers)
 }
 
 fn manual_only(rt: &Runtime, deployment: &DeploymentDto, harness: &str) -> Result<bool, CoreError> {
@@ -176,14 +234,29 @@ pub(crate) fn listing_cost(
                 fallback = true;
                 limit = Some((200_000.0 * fraction).floor().max(1.0) as u64);
             } else if harness == AgentId::CODEX {
-                let path = rt.scope.home.lexical.join(".codex/config.toml");
-                let settings = toml(rt, &path)?;
+                let mut window_setting = None;
+                let mut max_setting = None;
+                let mut path = rt.scope.codex_home.join("config.toml");
+                let mut window_path = path.clone();
+                for (layer_path, layer) in codex_settings(rt, &scope)? {
+                    if let Some(window) = layer.get("model_context_window") {
+                        window_setting = Some(window.clone());
+                        window_path.clone_from(&layer_path);
+                    }
+                    if let Some(max) = layer
+                        .get("skills")
+                        .and_then(|skills| skills.get("max_context_tokens"))
+                    {
+                        max_setting = Some(max.clone());
+                        path = layer_path;
+                    }
+                }
                 cap = 1024;
                 source = "Codex default: 8000 characters when session context is unknown".into();
                 limit = Some(2000);
                 fallback = true;
-                if let Some(window) = settings
-                    .get("model_context_window")
+                if let Some(window) = window_setting
+                    .as_ref()
                     .and_then(toml::Value::as_integer)
                     .and_then(|v| u64::try_from(v).ok())
                     .filter(|v| *v > 0)
@@ -191,12 +264,9 @@ pub(crate) fn listing_cost(
                     context = Some(window);
                     fallback = false;
                     limit = Some(window.saturating_mul(2).saturating_div(100).max(1));
-                    source = format!("{} (2% of model_context_window)", path.display());
+                    source = format!("{} (2% of model_context_window)", window_path.display());
                 }
-                if let Some(value) = settings
-                    .get("skills")
-                    .and_then(|s| s.get("max_context_tokens"))
-                {
+                if let Some(value) = max_setting.as_ref() {
                     limit = Some(
                         value
                             .as_integer()
@@ -226,6 +296,10 @@ pub(crate) fn listing_cost(
                             || deployment.studio_disabled
                             || deployment.disabled_by.is_some()
                             || deployment.disabled_readers.contains(&facts.id)
+                            || deployment
+                                .plugin
+                                .as_ref()
+                                .is_some_and(|plugin| plugin.enabled == Some(false))
                             || deployment.symlink_is_broken
                         {
                             continue;
@@ -244,8 +318,18 @@ pub(crate) fn listing_cost(
                             .and_then(|f| f.name.as_deref())
                             .unwrap_or(&skill.name.0)
                             .to_string();
+                        let key = if matches!(harness, AgentId::CODEX | AgentId::CLAUDE_CODE) {
+                            rt.ports
+                                .fs
+                                .canonicalize(&deployment.path)
+                                .unwrap_or_else(|_| deployment.path.clone())
+                                .to_string_lossy()
+                                .into_owned()
+                        } else {
+                            name.clone()
+                        };
                         if manual_only(rt, deployment, harness)? {
-                            entries.remove(&name);
+                            entries.remove(&key);
                             continue;
                         }
                         let description = deployment
@@ -253,6 +337,9 @@ pub(crate) fn listing_cost(
                             .as_ref()
                             .and_then(|f| f.description.as_deref())
                             .unwrap_or("");
+                        if harness == AgentId::CODEX && description.trim().is_empty() {
+                            continue;
+                        }
                         let mut chars = name.encode_utf16().count()
                             + description.encode_utf16().count().min(cap)
                             + 5;
@@ -265,11 +352,11 @@ pub(crate) fn listing_cost(
                                 .count()
                                 + 10;
                         }
-                        entries.insert(name, chars as u64);
+                        entries.insert(key, (name, chars as u64));
                     }
                 }
             }
-            let total_chars: u64 = entries.values().sum();
+            let total_chars: u64 = entries.values().map(|(_, chars)| chars).sum();
             let estimated = total_chars.div_ceil(4);
             let warning = limit.and_then(|max| {
                 if estimated > max {
@@ -282,7 +369,7 @@ pub(crate) fn listing_cost(
             });
             let count = entries.len();
             let mut top: Vec<_> = entries
-                .into_iter()
+                .into_values()
                 .map(|(name, chars)| ListingSkillCost {
                     name,
                     estimated_tokens_chars_div_4: chars.div_ceil(4),

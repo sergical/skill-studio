@@ -40,11 +40,11 @@
           "$ref": "#/$defs/AgentIdentity"
         },
         "scope": {
-          "description": "Project sessions include global skills, with project names taking priority.",
+          "description": "Project sessions include global skills. Identity rules depend on the harness.",
           "$ref": "#/$defs/RootScope"
         },
         "listed_skills": {
-          "description": "Number of unique model-visible names.",
+          "description": "Number of model-visible skill entries.",
           "type": "integer",
           "format": "uint",
           "minimum": 0
