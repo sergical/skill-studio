@@ -182,6 +182,68 @@ fn cursor_capabilities_and_detection_choose_the_same_specific_runner_or_name_the
 }
 
 #[test]
+fn repeated_detection_on_cli_and_mcp_reuses_unchanged_versions_or_spawns_twice() {
+    for surface in ["cli", "mcp"] {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let program = bin.join("claude");
+        let source = bin.join("probe.c");
+        std::fs::write(
+            &source,
+            r#"#include <stdio.h>
+#include <string.h>
+int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "--version") == 0) {
+        char calls[4096];
+        snprintf(calls, sizeof(calls), "%s.calls", argv[0]);
+        FILE *f = fopen(calls, "a");
+        if (!f) return 1;
+        fputs("called\n", f); fclose(f);
+    }
+    puts("1.2.3"); return 0;
+}
+"#,
+        )
+        .unwrap();
+        assert!(std::process::Command::new("/usr/bin/cc")
+            .arg(&source)
+            .arg("-o")
+            .arg(&program)
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new(&program)
+            .output()
+            .unwrap()
+            .status
+            .success());
+        let mut env = vec![(
+            "PATH".to_string(),
+            format!("{}:/usr/bin:/bin", bin.display()),
+        )];
+        if let Ok(developer_dir) = std::env::var("DEVELOPER_DIR") {
+            env.push(("DEVELOPER_DIR".into(), developer_dir));
+        }
+        for _ in 0..2 {
+            if surface == "cli" {
+                cli_with_env(home.path(), &["harnesses"], &env);
+            } else {
+                mcp_with_env(home.path(), "harnesses", &json!({}), &env);
+            }
+        }
+        assert_eq!(
+            std::fs::read_to_string(bin.join("claude.calls"))
+                .unwrap()
+                .lines()
+                .count(),
+            1,
+            "{surface} detection spawned the unchanged binary twice"
+        );
+    }
+}
+
+#[test]
 fn read_only_cli_and_mcp_preserve_absent_and_unversioned_history_or_name_the_writer() {
     for unversioned in [false, true] {
         let home = tempfile::tempdir().unwrap();

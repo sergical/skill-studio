@@ -1,0 +1,16 @@
+{
+  "uncached": {
+    "source_git_sha": "4c89efdb1218131702f5b03534a81834e5b330bd",
+    "binary_sha256": "c68a3f79fc04bfbaacded70bcc90b7423e718f0dcb9a13020697a03665eacbd2",
+    "load_average": "{ 7.36 7.24 8.08 }",
+    "cargo_processes": 11,
+    "rustc_processes": 1
+  },
+  "cached": {
+    "source_git_sha": "4c89efdb1218131702f5b03534a81834e5b330bd",
+    "binary_sha256": "c68a3f79fc04bfbaacded70bcc90b7423e718f0dcb9a13020697a03665eacbd2",
+    "load_average": "{ 5.16 6.57 7.73 }",
+    "cargo_processes": 9,
+    "rustc_processes": 0
+  }
+}
