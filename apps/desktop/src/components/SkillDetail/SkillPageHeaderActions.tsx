@@ -1,16 +1,15 @@
 // ============================================================================
 // SkillPageHeaderActions - The header bar's action cluster: the one primary
-// action, Fork, the assistant toggle, and the ⋯ overflow menu (which holds
+// action, Fork, and the ⋯ overflow menu (which holds
 // Park for every agent). Rendered as
 // `PageShell`'s `actions` - pulled out of `InstalledSkillHeader`, which now
 // shows identity only.
 // ============================================================================
 
-import type { ReactNode, RefObject } from "react";
-import { GitFork, MoreHorizontal, PanelRight } from "lucide-react";
+import type { ReactNode } from "react";
+import { GitFork, MoreHorizontal } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import { MenuControl, MenuItem, MenuSeparator } from "../ui/MenuControl";
-import { SKILL_ASSISTANT_DRAWER_ID } from "./SkillAssistantDrawer";
 import type { SkillPageAction, SkillPageActions } from "./skill-page-actions";
 
 // The header bar is 40px tall with gap-2 between controls: the hit area
@@ -36,20 +35,9 @@ function SecondaryActionButton({ action, icon }: { action: SkillPageAction; icon
 
 interface SkillPageHeaderActionsProps {
   actions: SkillPageActions;
-  assistantEnabled: boolean;
-  isAssistantOpen: boolean;
-  onOpenAssistant: () => void;
-  /** So the drawer can return focus here when it closes. */
-  assistantTriggerRef: RefObject<HTMLButtonElement | null>;
 }
 
-export function SkillPageHeaderActions({
-  actions,
-  assistantEnabled,
-  isAssistantOpen,
-  onOpenAssistant,
-  assistantTriggerRef,
-}: SkillPageHeaderActionsProps) {
+export function SkillPageHeaderActions({ actions }: SkillPageHeaderActionsProps) {
   return (
     <>
       {actions.primaryAction && (
@@ -66,20 +54,6 @@ export function SkillPageHeaderActions({
           action={actions.forkAction}
           icon={<GitFork size={16} aria-hidden />}
         />
-      )}
-      {assistantEnabled && (
-        <Button
-          ref={assistantTriggerRef}
-          variant="outline"
-          className={`${SECONDARY_BUTTON_CLASS} aria-expanded:border-border-focus aria-expanded:text-accent`}
-          onClick={onOpenAssistant}
-          aria-expanded={isAssistantOpen}
-          aria-controls={isAssistantOpen ? SKILL_ASSISTANT_DRAWER_ID : undefined}
-          aria-label="Assistant"
-        >
-          <PanelRight size={16} />
-          <span>Assistant</span>
-        </Button>
       )}
       <MenuControl
         triggerClassName={`${HEADER_CONTROL_CLASS} flex h-(--control-height) w-(--control-height) cursor-pointer items-center justify-center rounded-sm border border-border text-text-secondary hover:bg-bg-tertiary hover:text-text-primary`}

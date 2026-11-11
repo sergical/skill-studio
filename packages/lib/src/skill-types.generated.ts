@@ -24,10 +24,6 @@ export type DisabledBy =
  */
 export type OriginTool = "dotagents" | "skills-sh";
 /**
- * One of the four first-class agents a skill run can target.
- */
-export type HarnessId = "claude-code" | "codex" | "open-code" | "pi";
-/**
  * Which `OpenCode` config format is present, so a caller can tell the user
  * to hand-edit a `.jsonc` file rather than silently showing no disables.
  */
@@ -162,14 +158,6 @@ export interface SkillSnapshot {
   invocations: SkillInvocationStats[];
   heatmap: InvocationHeatmap;
   scanned_at: string;
-  /**
-   * The newest "Test" run outcome per skill, read cheaply from
-   * `skill_run_history::read_last_test_index` - not affected by the
-   * invocations-only rebuild path, only refreshed on a full rebuild.
-   */
-  last_test_by_skill: {
-    [k: string]: SkillRunSummary;
-  };
   update_check: UpdateCheckSummary;
   /**
    * Which `OpenCode` config format is present, if any - `None` when
@@ -660,15 +648,6 @@ export interface InvocationHeatmap {
   };
 }
 /**
- * The cheap per-skill index `build_snapshot` reads for every skill's
- * dashboard/list row, written alongside every full record.
- */
-export interface SkillRunSummary {
-  at: string;
-  harness: HarnessId;
-  passed: boolean | null;
-}
-/**
  * The latest background update-check result - see `skill_update_check`.
  */
 export interface UpdateCheckSummary {
@@ -995,24 +974,6 @@ export interface FrontmatterRepairPreview {
   allowed_apply_modes: FrontmatterRepairApplyMode[];
 }
 /**
- * One skill pack, as sent to the frontend.
- */
-export interface PackInfo {
-  name: string;
-  created_at: string;
-  dir: string;
-  repo: string | null;
-  skills: string[];
-}
-/**
- * Result of `update_skill_pack`: whether the rebuilt tree actually differed
- * from the pack's last commit.
- */
-export interface UpdatePackResult {
-  changed: boolean;
-  pack: PackInfo;
-}
-/**
  * One row of the event log, projected for the Activity view's History
  * section - see `event_store::EventRow` and `event_commands::list_skill_events`.
  */
@@ -1046,9 +1007,8 @@ export interface SkillEventDto {
   backup_path?: string | null;
 }
 /**
- * One skill bundled into a pack: `name` is its directory name, `path` is
- * the exact deployment directory it was bundled from - see
- * `skill_pack::resolve_members`.
+ * One skill in a pack record: `name` is its directory name, `path` is the
+ * deployment directory it was bundled from.
  */
 export interface PackMember {
   name: string;

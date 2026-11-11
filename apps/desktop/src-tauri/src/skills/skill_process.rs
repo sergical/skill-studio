@@ -513,8 +513,7 @@ pub fn run_controlled_program_with_control(
 
 // ============================================================================
 // CommandRunner - moved from `skill_add.rs` (unit 3.5c): the trait every
-// npx-shelling lifecycle path (`skill_pack`, `skill_plugin_lifecycle`,
-// `commands`) takes so it stays testable with a fake, without depending on
+// npx-shelling lifecycle path (`skill_plugin_lifecycle`, `commands`) takes so it stays testable with a fake, without depending on
 // the (now-deleted) Add Skill module for a plain process runner.
 // ============================================================================
 

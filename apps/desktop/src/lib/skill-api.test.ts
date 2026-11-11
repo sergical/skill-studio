@@ -1,6 +1,6 @@
 // ============================================================================
 // Skill Studio - skill-api tests
-// skill-api.ts is the one file that names a Tauri command; a wrapper's shape
+// Every frontend invoke must name a registered Tauri command. A wrapper's shape
 // or command string only changes with a test here. These tests pin the
 // wrapper-to-command map against `src-tauri/src/lib.rs`'s registration list
 // read straight off disk, guard the leftover-name allowlist unit 4.4 (#175)
@@ -289,7 +289,119 @@ function registeredCommandNames(libRs: string): Set<string> {
   return names;
 }
 
+type InvokeCall = { kind: "literal"; command: string } | { kind: "dynamic"; argument: string };
+
+const TAURI_CORE_IMPORT =
+  /import\s+(?!type\b)(?:\{([^}]*)\}|\*\s+as\s+(\w+))\s+from\s+["']@tauri-apps\/api\/core["']/g;
+
+/** The local names a file calls Tauri's `invoke` through: `invoke`, an `invoke as x` alias, or
+ * `ns.invoke` for a namespace import. Type-only specifiers bind nothing callable. */
+function invokeBindings(source: string): string[] {
+  const names: string[] = [];
+  for (const [, specifiers, namespace] of source.matchAll(TAURI_CORE_IMPORT)) {
+    if (namespace) names.push(`${namespace}.invoke`);
+    for (const specifier of specifiers?.split(",") ?? []) {
+      const m = specifier.trim().match(/^(?!type\b)invoke(?:\s+as\s+(\w+))?$/);
+      if (m) names.push(m[1] ?? "invoke");
+    }
+  }
+  return names;
+}
+
+/** Index just past a balanced `<...>` type-argument list that starts at `start`. `=>` inside a
+ * function type is not a closing bracket. */
+function skipTypeArguments(source: string, start: number): number {
+  let depth = 0;
+  for (let i = start; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "<") depth++;
+    else if (ch === ">" && source[i - 1] !== "=") {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return source.length;
+}
+
+/** Every call through an `invoke` binding, with its first argument: a plain string literal
+ * (any quote, a template only without `${}`) or the dynamic expression text. */
+function invokeCalls(source: string): InvokeCall[] {
+  const calls: InvokeCall[] = [];
+  for (const name of invokeBindings(source)) {
+    const escaped = name.replace(/[.$]/g, "\\$&");
+    for (const match of source.matchAll(new RegExp(`(?<![\\w.$])${escaped}\\b`, "g"))) {
+      let i = (match.index ?? 0) + match[0].length;
+      while (/\s/.test(source[i] ?? "")) i++;
+      if (source[i] === "<") i = skipTypeArguments(source, i);
+      while (/\s/.test(source[i] ?? "")) i++;
+      if (source[i] !== "(") continue;
+      i++;
+      while (/\s/.test(source[i] ?? "")) i++;
+      const quote = source[i];
+      if (quote === '"' || quote === "'" || quote === "`") {
+        const close = source.indexOf(quote, i + 1);
+        const text = source.slice(i + 1, close);
+        if (quote !== "`" || !text.includes("${")) {
+          calls.push({ kind: "literal", command: text });
+          continue;
+        }
+      }
+      calls.push({ kind: "dynamic", argument: source.slice(i, i + 40).split(/[,)]/)[0] });
+    }
+  }
+  return calls;
+}
+
+/** `skill-api.ts`'s `callCommand` is the one place a command name may be a variable; the
+ * wrapper-set test below pins every command that flows into it. */
+const DYNAMIC_INVOKE_FILE = "./skill-api.ts";
+
+describe("frontend invoke scanner", () => {
+  it("invoke_scanner_reads_every_call_form_or_names_the_form_it_skips", () => {
+    const fixture = [
+      'import { invoke as call, type InvokeArgs } from "@tauri-apps/api/core";',
+      'import * as core from "@tauri-apps/api/core";',
+      "call(`backtick_command`);",
+      'call<{ a: string; b: number }>("generic_command");',
+      "call<(x: number) => void>('arrow_generic_command');",
+      'core.invoke("namespace_command");',
+      "call(commandName, args);",
+      "call(`templated_${suffix}`);",
+      'invoke("not_bound_here");',
+    ].join("\n");
+    expect(invokeCalls(fixture)).toEqual([
+      { kind: "literal", command: "backtick_command" },
+      { kind: "literal", command: "generic_command" },
+      { kind: "literal", command: "arrow_generic_command" },
+      { kind: "dynamic", argument: "commandName" },
+      { kind: "dynamic", argument: "`templated_${suffix}`" },
+      { kind: "literal", command: "namespace_command" },
+    ]);
+  });
+});
+
 describe("skill-api wrapper set", () => {
+  it("every_frontend_invoke_names_a_registered_command", () => {
+    const sources = import.meta.glob<string>("../**/*.{ts,tsx}", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    });
+    const registered = registeredCommandNames(libRsSource);
+    const missing: string[] = [];
+    for (const [path, source] of Object.entries(sources)) {
+      if (path.includes(".test.")) continue;
+      for (const call of invokeCalls(source)) {
+        if (call.kind === "literal" && !registered.has(call.command)) {
+          missing.push(`${path}: ${call.command}`);
+        } else if (call.kind === "dynamic" && path !== DYNAMIC_INVOKE_FILE) {
+          missing.push(`${path}: dynamic command ${call.argument}`);
+        }
+      }
+    }
+    expect(missing, missing.join("\n")).toEqual([]);
+  });
+
   it("skill_api_wrapper_set_matches_ops_commands_or_names_the_drift", () => {
     const wrapperNames = exportedWrapperNames(skillApiSource);
     const expectedNames = Object.keys(EXPECTED_WRAPPER_COMMANDS);

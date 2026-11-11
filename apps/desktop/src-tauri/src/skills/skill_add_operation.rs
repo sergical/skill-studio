@@ -20,11 +20,11 @@ use serde::{Deserialize, Serialize};
 use skill_studio_core::ports::Runtime;
 use tauri::{AppHandle, Emitter, Manager};
 
-use super::skill_agent_runner::validate_run_id;
 use super::skill_dto::{AddSkillOutcome, AddSkillRequest, AddSkillResult, AddSkillsRequest};
 use super::skill_fork::RepoSnapshot;
 use super::skill_fork_registry::AddMethod;
 use super::skill_install;
+use super::skill_path_validation::validate_run_id;
 use super::skill_refresh::{self, SkillRefreshState};
 use super::skill_trust_policy::{
     normalize_confirmation_identity, record_trusted_dotagents_source_locked,

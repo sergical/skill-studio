@@ -40,7 +40,6 @@ function fixtureSnapshot(skills: InstalledSkill[]): SkillSnapshot {
     invocations: [],
     heatmap: { days: {} },
     scanned_at: "2026-01-01T00:00:00Z",
-    last_test_by_skill: {},
     update_check: {
       checked_at: null,
       gh_status: "ok",
