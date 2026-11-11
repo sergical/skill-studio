@@ -32,7 +32,7 @@ export class AppErrorBoundary extends React.Component<
     return (
       <div className="flex h-full items-center justify-center bg-bg-primary p-10 text-text-primary">
         <div className="flex w-full max-w-lg flex-col gap-4">
-          <h1 className="m-0 text-xl font-semibold">Skill Studio hit an error</h1>
+          <h1 className="m-0 text-title font-semibold">Skill Studio hit an error</h1>
           <p
             role="alert"
             className="m-0 select-text text-body text-text-secondary break-words whitespace-pre-wrap"
@@ -40,7 +40,9 @@ export class AppErrorBoundary extends React.Component<
             {error.message || "This screen stopped while it was drawing."}
           </p>
           <div>
-            <Button onClick={() => window.location.reload()}>Reload Skill Studio</Button>
+            <Button autoFocus onClick={() => window.location.reload()}>
+              Reload Skill Studio
+            </Button>
           </div>
           {error.stack && (
             <details className="text-small text-text-tertiary">

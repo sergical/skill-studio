@@ -69,6 +69,7 @@
   --color-success-soft: oklch(0.696 0.149 162.48 / 0.12);
   --color-warning: oklch(0.769 0.165 70.08);
   --color-warning-soft: oklch(0.769 0.165 70.08 / 0.12);
+  --color-error-solid: oklch(0.544 0.215 27.325);
   --color-error: oklch(0.645 0.208 25.331);
   --color-error-soft: oklch(0.645 0.208 25.331 / 0.12);
   --color-info: oklch(0.629 0.188 259.815);

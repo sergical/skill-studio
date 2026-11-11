@@ -187,6 +187,9 @@ function App() {
     } else if (kind === "skills") {
       list = (
         <SkillsView
+          isLoading={isLoading}
+          error={snapshotError}
+          onRetry={() => void requestRescan().catch(() => {})}
           backgroundStatus={backgroundStatus}
           snapshot={snapshot}
           onSelectSkill={onSelectSkill}
@@ -194,10 +197,21 @@ function App() {
         />
       );
     } else if (kind === "plugins") {
-      list = <PluginSkillsView snapshot={snapshot} onSelectSkill={onSelectSkill} />;
+      list = (
+        <PluginSkillsView
+          isLoading={isLoading}
+          error={snapshotError}
+          onRetry={() => void requestRescan().catch(() => {})}
+          snapshot={snapshot}
+          onSelectSkill={onSelectSkill}
+        />
+      );
     } else {
       list = (
         <SkillActivityView
+          isLoading={isLoading}
+          error={snapshotError}
+          onRetry={() => void requestRescan().catch(() => {})}
           backgroundStatus={backgroundStatus}
           snapshot={snapshot}
           onSelectSkill={onSelectSkill}

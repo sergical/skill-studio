@@ -161,7 +161,7 @@ function FolderRow({
 function FolderList({
   folders,
   sources,
-  loadFailed,
+  loadError,
   skillCounts,
   open,
   onOpenChange,
@@ -174,7 +174,7 @@ function FolderList({
 }: {
   folders: ProjectFolder[] | null;
   sources: DiscoverySourceSetting[] | null;
-  loadFailed: boolean;
+  loadError: string | null;
   skillCounts: Map<string, number>;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -189,7 +189,7 @@ function FolderList({
   if (folders === null || sources === null) {
     return (
       <p className="m-0 rounded-md border border-border-subtle px-3 py-2 text-small text-text-tertiary">
-        {loadFailed ? "Couldn't list project folders." : "Looking for project folders…"}
+        {loadError ?? "Looking for project folders…"}
       </p>
     );
   }
@@ -269,7 +269,7 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
   const [sources, setSources] = useState<DiscoverySourceSetting[] | null>(null);
   const [foldersOpen, setFoldersOpen] = useState(false);
   const [addFormOpen, setAddFormOpen] = useState(false);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const requestId = useRef(0);
   const foldersTriggerRef = useRef<HTMLButtonElement>(null);
 
@@ -281,7 +281,7 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
       })
       .catch((err) => {
         if (id !== requestId.current) return;
-        setLoadFailed(true);
+        setLoadError("Couldn't list project folders.");
         addToast({
           type: "error",
           title: "Couldn't list project folders",
@@ -297,7 +297,7 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
     getDiscoverySources()
       .then(setSources)
       .catch((err) => {
-        setLoadFailed(true);
+        setLoadError("Couldn't read discovery settings.");
         addToast({
           type: "error",
           title: "Couldn't read discovery settings",
@@ -426,7 +426,7 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
       <FolderList
         folders={folders}
         sources={sources}
-        loadFailed={loadFailed}
+        loadError={loadError}
         skillCounts={skillCounts}
         open={foldersOpen}
         onOpenChange={setFoldersOpen}

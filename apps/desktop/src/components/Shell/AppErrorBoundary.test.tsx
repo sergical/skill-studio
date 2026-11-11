@@ -25,6 +25,7 @@ it("a render error offers Reload and names the error, or the user's only way out
   );
 
   expect(screen.getByRole("alert").textContent).toContain("snapshot field missing");
-  await userEvent.setup().click(screen.getByRole("button", { name: "Reload Skill Studio" }));
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Reload Skill Studio" }));
+  await userEvent.setup().keyboard("{Enter}");
   expect(reload).toHaveBeenCalledOnce();
 });

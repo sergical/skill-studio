@@ -133,3 +133,26 @@ it.each([
     ).toBe(true);
   },
 );
+
+it("Enter in an empty git Skill name shows its field error", async () => {
+  mockIPC(
+    (command) => {
+      if (command === "get_add_method_defaults")
+        return {
+          dotagents_installed: true,
+          has_skill_lock: false,
+          installed_harnesses: [],
+          claude_reads_shared_folder: false,
+        };
+      return null;
+    },
+    { shouldMockEvents: true },
+  );
+  useAppStore.getState().openAddSkillSheet("https://git.example.com/owner/repo.git");
+  render(<AddSkillSheet skills={[]} />);
+  const name = await screen.findByRole("textbox", { name: "Skill name" });
+  await userEvent.setup().click(name);
+  await userEvent.setup().keyboard("{Enter}");
+  expect(screen.getByText("A git source needs a skill name.")).toBeTruthy();
+  expect(name.getAttribute("aria-invalid")).toBe("true");
+});

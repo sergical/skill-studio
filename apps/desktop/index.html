@@ -3,8 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/skill-studio-logo.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
+    />
     <title>Skill Studio</title>
+    <script>
+      let theme;
+      try {
+        theme = localStorage.getItem("theme");
+      } catch {}
+      document.documentElement.dataset.theme =
+        theme === "light" || theme === "dark"
+          ? theme
+          : matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light";
+    </script>
     <style>
       html,
       body,
@@ -13,16 +28,6 @@
         margin: 0;
         padding: 0;
         overflow: hidden;
-      }
-      body {
-        background-color: oklch(0.155 0.004 285.899);
-        color: oklch(0.967 0.001 286.375);
-      }
-      @media (prefers-color-scheme: light) {
-        body {
-          background-color: oklch(1 0 0);
-          color: oklch(0.141 0.004 285.823);
-        }
       }
     </style>
   </head>

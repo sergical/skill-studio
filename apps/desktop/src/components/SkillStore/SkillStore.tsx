@@ -144,6 +144,7 @@ function useSkillStoreData(
   // once instead of on every render.
   // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- the mount effect below depends on this callback's identity to run exactly once
   const loadInitialData = useCallback(() => {
+    const query = searchQueryRef.current;
     setBrowseError(null);
     return loadBrowseInitialData(
       { getInstalled: getInstalledSkills, getPopular: () => getPopularSkills(0, LIMIT) },
@@ -151,16 +152,16 @@ function useSkillStoreData(
     )
       .then(({ installed, popular }) => {
         setInstalledSkills(installed);
-        if (!popular) return;
+        if (!popular || searchQueryRef.current !== query) return;
         pageRef.current = 0;
         setHasMore(popular.has_more);
         setRawResults(popular.skills);
       })
       .catch((err) => {
-        setBrowseError(invokeErrorMessage(err));
+        if (searchQueryRef.current === query) setBrowseError(invokeErrorMessage(err));
       })
       .finally(() => {
-        setIsLoading(false);
+        if (searchQueryRef.current === query) setIsLoading(false);
       });
     // `projects` is not read here - `getInstalledSkills` covers every tracked project on its
     // own - but it stays a dependency purely to retrigger this callback (and the mount effect
@@ -245,18 +246,21 @@ function useSkillStoreData(
     // hasMore is always false while a search is active (the v1 search API
     // returns everything up to LIMIT in one shot), so this only ever pages
     // through popular skills.
-    if (isLoadingMore || !hasMore) return;
+    if (isLoadingMore || !hasMore || isSearchQuery(searchQueryRef.current)) return;
+    const query = searchQueryRef.current;
 
     setIsLoadingMore(true);
     const nextPage = pageRef.current + 1;
 
     return getPopularSkills(nextPage, LIMIT)
       .then((response) => {
+        if (searchQueryRef.current !== query) return;
         setRawResults((prev) => [...prev, ...response.skills]);
         setHasMore(response.has_more);
         pageRef.current = nextPage;
       })
       .catch((err) => {
+        if (searchQueryRef.current !== query) return;
         addToast({
           type: "error",
           title: "Load More Failed",

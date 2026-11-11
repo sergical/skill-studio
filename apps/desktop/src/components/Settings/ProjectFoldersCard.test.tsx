@@ -21,3 +21,14 @@ it("a failed folder list says so in the card, or Settings shows 'Looking for pro
   expect(await screen.findByText("Couldn't list project folders.")).toBeTruthy();
   expect(screen.queryByText("Looking for project folders…")).toBeNull();
 });
+
+it("a discovery settings failure names settings instead of the folder list", async () => {
+  mockIPC((command) => {
+    if (command === "list_project_folders") return [];
+    if (command === "get_discovery_sources") throw new Error("settings failed");
+    return null;
+  });
+  render(<ProjectFoldersCard snapshot={undefined} />);
+  expect(await screen.findByText("Couldn't read discovery settings.")).toBeTruthy();
+  expect(screen.queryByText("Couldn't list project folders.")).toBeNull();
+});

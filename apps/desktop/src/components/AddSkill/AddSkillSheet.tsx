@@ -289,7 +289,10 @@ function GitSkillNameField({
         className="h-(--control-height) rounded-sm border-border bg-bg-primary text-body text-text-primary focus-visible:border-border-focus focus-visible:ring-0"
         value={name}
         onChange={(e) => onChange(e.target.value)}
-        onKeyDown={onEnter}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) setTouched(true);
+          onEnter(event);
+        }}
         onBlur={() => setTouched(true)}
         placeholder="The folder name this skill installs under"
         aria-invalid={showError || undefined}
