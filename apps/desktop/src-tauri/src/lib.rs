@@ -174,6 +174,7 @@ fn reconcile_event_store_at_startup(store: &skills::event_store::EventStore) {
         }
         Err(e) => eprintln!("[event_store] startup reconcile failed: {e}"),
     }
+    store.retain_backups(guard.as_exclusive_guard());
 }
 
 /// Resolves and reverses every `skill-studio-core` plan a crash left

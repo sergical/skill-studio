@@ -673,6 +673,16 @@ pub trait HistoryStore: Send {
         backup_dir: &str,
         relative: &str,
     ) -> Result<Vec<crate::fsops::StageFile>, CoreError>;
+    /// Expires completed backups under the write lease and resumes pending
+    /// physical deletion. History rows remain with an explicit expiry marker.
+    fn retain_backups(
+        &mut self,
+        _guard: &ExclusiveGuard,
+        _now: DateTime<Utc>,
+        _scope: crate::backup_retention::BackupRetentionScope,
+    ) -> Result<(), CoreError> {
+        Ok(())
+    }
     /// Merges `patch`'s top-level keys into an already-recorded event's
     /// payload, leaving every other key as-is. For best-effort follow-up
     /// work a mutation performs after its own row already exists (e.g.
@@ -852,6 +862,10 @@ pub struct PlanRecord {
     pub root: PathBuf,
     /// Paths backed up before the plan's mutation, oldest first.
     pub backups: Vec<PlanBackupEntry>,
+    /// Backups durably expired before their bytes are removed. The list also
+    /// lets startup retry a deletion interrupted after this record landed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expired_backups: Vec<String>,
     /// Steps recorded so far, in the order they ran.
     pub steps: Vec<PlanStep>,
     /// Current status.
@@ -1458,6 +1472,12 @@ impl MutationSession {
             crate::journal::FsJournal::new(install_journal_root, rt.ports.fs.clone());
         let reconciliation =
             crate::journal::reconcile(&install_journal, &guard, rt.ports.fs.as_ref())?;
+        crate::journal::trim_backups(&install_journal, &guard, rt.ports.clock.now())?;
+        store.retain_backups(
+            &guard,
+            rt.ports.clock.now(),
+            crate::backup_retention::BackupRetentionScope::All,
+        )?;
         let repaired = !recovery.interrupted.is_empty()
             || !recovery.completed.is_empty()
             || !reconciliation.reversed.is_empty()

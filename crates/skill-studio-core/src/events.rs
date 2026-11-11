@@ -266,6 +266,11 @@ impl EventRecord {
     /// write never reached the filesystem, say - has nothing a restore can
     /// apply and stays `NotCompleted`.
     pub fn restore_capability(&self) -> RestoreCapability {
+        if crate::backup_retention::backup_is_expired(&self.payload) {
+            return RestoreCapability::BackupExpired {
+                reverted_by: self.reverted_by.clone(),
+            };
+        }
         let completed = match self.status {
             EventStatus::Done => true,
             EventStatus::Failed | EventStatus::Interrupted => {

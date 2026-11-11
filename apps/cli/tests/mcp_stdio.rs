@@ -247,3 +247,32 @@ fn mcp_history_and_restore_refuse_the_latest_park_or_unpark_or_name_the_wrong_ac
             .contains("Keep this skill."));
     }
 }
+
+#[test]
+fn mcp_history_and_restore_report_backup_expired_or_offer_a_missing_backup() {
+    let home = tempfile::tempdir().unwrap();
+    let (expired, live) = undo_fixtures::expired_backup(home.path());
+    let mut server = UndoMcp::new(home.path());
+    let history = server.call("list_events", &serde_json::json!({}));
+    let row = history["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == expired.0)
+        .unwrap();
+    assert_eq!(row["restore"]["restorable"], "backup_expired");
+    let restored = server.call("restore_event", &serde_json::json!({"event_id":expired.0}));
+    assert_eq!(restored["status"], "error", "{restored}");
+    assert_eq!(
+        restored["errors"][0]["code"], "backup_expired",
+        "{restored}"
+    );
+    assert!(restored["errors"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("expired"));
+    assert_eq!(
+        std::fs::read(home.path().join(".agents/skills/alpha/SKILL.md")).unwrap(),
+        live
+    );
+}

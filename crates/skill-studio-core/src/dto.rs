@@ -546,6 +546,12 @@ pub enum RestoreCapability {
         /// The restore event.
         by: EventId,
     },
+    /// Retention has expired the event's backup.
+    BackupExpired {
+        /// A previous restore, if the event had already been undone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reverted_by: Option<EventId>,
+    },
     /// The row has no inverse.
     NoInverse,
     /// The row's kind is not known to this version of the core.

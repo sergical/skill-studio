@@ -465,6 +465,15 @@ pub fn print_events_table(envelope: &ResultEnvelope<Vec<EventDto>>) {
             "{}  {}  {}  {}  {:?}",
             event.id.0, event.ts, event.kind, skill, event.drift
         );
+        if matches!(
+            event.restore,
+            skill_studio_core::dto::RestoreCapability::BackupExpired { .. }
+        ) {
+            println!(
+                "  {}",
+                skill_studio_core::backup_retention::BACKUP_EXPIRED_REASON
+            );
+        }
     }
 }
 
