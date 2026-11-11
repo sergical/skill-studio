@@ -150,20 +150,25 @@ fn manual_only(rt: &Runtime, deployment: &DeploymentDto, harness: &str) -> Resul
         AgentId::OPEN_CODE => Ok(fm
             .and_then(|f| f.metadata.as_ref())
             .and_then(|m| m.get("opencode/autoinvoke"))
-            .is_some_and(|v| v.as_bool() == Some(false) || v.as_str() == Some("false"))),
+            .is_some_and(|v| match v {
+                crate::yaml::Value::Bool(b) => !b,
+                crate::yaml::Value::String(s) => s == "false",
+                _ => false,
+            })),
         AgentId::CODEX => {
             let path = deployment.path.join("agents/openai.yaml");
             let Some(bytes) = read(rt, &path)? else {
                 return Ok(false);
             };
-            let value: serde_yaml::Value = serde_yaml::from_slice(&bytes).map_err(|_| {
-                CoreError::new(ErrorCode::InvalidRequest, "Invalid skill invocation policy")
-                    .at(&path)
-            })?;
+            let value: serde_json::Value = crate::yaml::from_str(&String::from_utf8_lossy(&bytes))
+                .map_err(|_| {
+                    CoreError::new(ErrorCode::InvalidRequest, "Invalid skill invocation policy")
+                        .at(&path)
+                })?;
             Ok(value
                 .get("policy")
                 .and_then(|p| p.get("allow_implicit_invocation"))
-                .and_then(serde_yaml::Value::as_bool)
+                .and_then(serde_json::Value::as_bool)
                 == Some(false))
         }
         _ => Ok(false),
