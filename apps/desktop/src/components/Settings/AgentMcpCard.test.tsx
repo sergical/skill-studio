@@ -28,7 +28,7 @@ const row = (id: "codex" | "claude-code" | "cursor", name: string) => ({
   used: false,
 });
 
-it("connecting Codex runs connect_mcp for codex and shows Connected, or names the stale row", async () => {
+it("connecting Codex runs connect_mcp for codex and shows Added, or names the stale row", async () => {
   const connected = new Set(["claude-code"]);
   const connectCalls: unknown[] = [];
   mockIPC((command, payload) => {
@@ -56,7 +56,7 @@ it("connecting Codex runs connect_mcp for codex and shows Connected, or names th
   try {
     await act(async () => root.render(<AgentMcpCard />));
     const text = () => host.textContent ?? "";
-    expect(text()).toContain("Claude CodeConnected");
+    expect(text()).toContain("Claude CodeAdded");
     expect(text()).not.toContain("Cursor");
     const buttons = Array.from(host.querySelectorAll("button"));
     expect(buttons.map((b) => b.textContent)).toEqual(["Connect"]);
@@ -64,7 +64,7 @@ it("connecting Codex runs connect_mcp for codex and shows Connected, or names th
     await act(async () => buttons[0].click());
 
     expect(connectCalls).toEqual(["codex"]);
-    expect(text()).toContain("CodexConnected");
+    expect(text()).toContain("CodexAdded");
     expect(host.querySelector("button")).toBeNull();
   } finally {
     await act(async () => root.unmount());

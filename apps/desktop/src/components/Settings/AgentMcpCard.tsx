@@ -35,7 +35,7 @@ export function AgentMcpCard() {
           {connected?.has(row.id) ? (
             <span className="flex items-center gap-1 text-small text-text-tertiary">
               <Check size={14} />
-              Connected
+              Added
             </span>
           ) : row.executable_on_path === false ? (
             <span className="text-small text-text-tertiary">Not on PATH</span>

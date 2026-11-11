@@ -11,9 +11,11 @@ D13).
 ## Tools
 
 One tool per core operation. The `#[tool]` methods in `src/lib.rs` are the
-tool list; an MCP client's `tools/list` shows the same names and
-descriptions. `docs/flows.md` maps each tool to its user flow, its CLI
-command and its parity test. Every tool's input schema is the core's own
+tool list. By default, `tools/list` leaves out the four tools in
+`DEV_TOOLS` (`capabilities`, `harnesses`, `sweep_quarantine`,
+`install_preferences`); set `SKILL_STUDIO_MCP_DEV_TOOLS=1` to publish them.
+`docs/flows.md` maps each tool to its user flow, its CLI command and its
+parity test. Every tool's input schema is the core's own
 request DTO's `schemars` output, unchanged; every tool's output is the same
 `ResultEnvelope` JSON `skill-studio` (the CLI) prints, as
 `structured_content`, with `is_error` set to match
