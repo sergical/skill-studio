@@ -3,8 +3,8 @@
 A new user-facing flow must add a row to this table and a flow-level test.
 The CLI and MCP columns name shared core calls. Gap rows are known missing
 adapters or desktop integrations, not claims of feature parity. The flow_parity
-integration test requires named CLI and MCP tests, invokes both for each supported
-flow, and checks their result envelopes and file effects. It rejects missing coverage.
+integration test requires named CLI and MCP tests for each supported
+flow. Those tests check result envelopes and file effects. It rejects missing coverage.
 Coverage test names below are in apps/cli/tests/flow_parity.rs. Agent ids use open-code;
 opencode remains an accepted input alias for compatibility.
 

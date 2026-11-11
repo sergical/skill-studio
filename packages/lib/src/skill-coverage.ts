@@ -9,7 +9,6 @@
 // ============================================================================
 
 import { ownDeployments } from "./skill-plugin-partition";
-import { homeRelativePath, parentDirectory } from "./skill-path-format";
 import type { AgentId, Deployment, InstalledSkill } from "./skill-types";
 
 /** The five first-class agents that read the shared `.agents/skills` root natively. */
@@ -130,29 +129,6 @@ export function deploymentLinkKind(
 /** The path a link chip's tooltip/relation text should show: the symlink target, or the canonical path reached through a linked root. */
 export function deploymentLinkTarget(deployment: Deployment): string | null | undefined {
   return deployment.symlink_target ?? deployment.resolved_path;
-}
-
-/**
- * A short, human relation between a deployment and the shared root, for the
- * Locations card's rows. Distinguishes a per-skill symlink (still toggleable
- * per harness) from a whole-dir link (`shared_via_whole_dir_link` - every
- * skill under that root moves together until it's materialized into
- * per-skill links, see `skill_materialize`).
- */
-export function deploymentRelationText(deployment: Deployment): string {
-  if (deployment.shared_via_whole_dir_link) {
-    return `reads this folder via ${homeRelativePath(parentDirectory(deployment.path))}`;
-  }
-  switch (deploymentLinkKind(deployment)) {
-    case "shared-root":
-      return "lives here";
-    case "linked-to-shared":
-      return "symlink";
-    case "broken":
-      return "broken link";
-    case "own":
-      return "copy";
-  }
 }
 
 /** Where a skill really lives, and who links to or copies it - see `SkillLocationCell`. */
@@ -368,72 +344,6 @@ export function skillVisibleToAgent(
     return "shared";
   }
   return "none";
-}
-
-/** Coverage totals for the dashboard's two-row table: Claude Code's own folder vs. the shared root. */
-export interface CoverageSummary {
-  claudeCode: {
-    visible: number;
-    missing: number;
-    /** Of the visible skills, how many are symlinks into a shared `.agents/skills` root. */
-    linkedToShared: number;
-  };
-  shared: {
-    visible: number;
-    missing: number;
-    /** Skills not in the shared root but present in that agent's own directory, keyed by agent (zeros omitted). */
-    onlyInOwnDir: Partial<Record<AgentId, number>>;
-  };
-  total: number;
-}
-
-/**
- * Summarizes effective visibility over `skills` (own skills only - see
- * `ownSkillsView`). Parked skills are excluded from the totals: parking
- * disables a skill globally, so it isn't "missing" coverage, it's off.
- */
-export function summarizeCoverage(allSkills: InstalledSkill[]): CoverageSummary {
-  const skills = allSkills.filter((skill) => !skill.parked);
-  const total = skills.length;
-  let claudeVisible = 0;
-  let claudeLinkedToShared = 0;
-  let sharedVisible = 0;
-  const onlyInOwnDir: Partial<Record<AgentId, number>> = {};
-
-  for (const skill of skills) {
-    if (skillVisibleToAgent(skill, "claude-code") !== "none") {
-      claudeVisible += 1;
-      const linked = ownDeployments(skill).some(
-        (d) =>
-          agentIdFromDeploymentLabel(d.agent) === "claude-code" &&
-          d.is_symlink &&
-          isLinkedToSharedRoot(d.symlink_target),
-      );
-      if (linked) claudeLinkedToShared += 1;
-    }
-
-    const inSharedRoot = isSharedRootDeployment(skill);
-    if (inSharedRoot) {
-      sharedVisible += 1;
-      continue;
-    }
-
-    for (const agent of AGENTS_READING_SHARED_ROOT) {
-      if (isOwnDirDeployment(skill, agent)) {
-        onlyInOwnDir[agent] = (onlyInOwnDir[agent] ?? 0) + 1;
-      }
-    }
-  }
-
-  return {
-    claudeCode: {
-      visible: claudeVisible,
-      missing: total - claudeVisible,
-      linkedToShared: claudeLinkedToShared,
-    },
-    shared: { visible: sharedVisible, missing: total - sharedVisible, onlyInOwnDir },
-    total,
-  };
 }
 
 // ============================================================================

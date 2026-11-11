@@ -78,31 +78,4 @@ impl<T> SnapshotCell<T> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
-
-    /// The current snapshot only when it is newer than `seen`.
-    pub fn newer_than(&self, seen: Revision) -> Option<Arc<Versioned<T>>> {
-        self.current().filter(|v| v.revision > seen)
-    }
-}
-
-/// Publishes snapshots to subscribers (desktop emit, MCP notification).
-pub trait SnapshotPublisher<T>: Send + Sync {
-    /// Publishes `value` and returns the revision assigned to it.
-    fn publish(&self, value: T) -> Revision;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn newer_than_filters_stale_readers() {
-        let cell = SnapshotCell::new();
-        assert!(cell.newer_than(Revision(0)).is_none());
-        let r1 = cell.publish("a");
-        assert_eq!(r1, Revision(1));
-        assert!(cell.newer_than(r1).is_none());
-        let r2 = cell.publish("b");
-        assert_eq!(cell.newer_than(r1).unwrap().revision, r2);
-    }
 }

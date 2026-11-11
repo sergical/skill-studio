@@ -10,45 +10,8 @@ import {
   agentsCoveredByDeployment,
 } from "./skill-health";
 import type { HealthIssue } from "./skill-health";
-import { ownSkillsView, pluginSkillsView } from "./skill-plugin-partition";
-import { invocationsInWindow } from "./skill-stats";
+import { ownSkillsView } from "./skill-plugin-partition";
 import type { InstalledSkill, SkillInvocationStats, SkillSnapshot } from "./skill-types";
-
-/** The counts on Home's summary line: "N skills · N harnesses · N projects · N uses in 30 days", plus the plugin-shipped skill count shown as a separate segment. */
-export interface HomeSummaryCounts {
-  skillCount: number;
-  /** Skills that ship inside a harness plugin, not installed or written by the user - shown as a separate segment, omitted when zero. */
-  pluginSkillCount: number;
-  harnessCount: number;
-  projectCount: number;
-  usesIn30Days: number;
-}
-
-/**
- * Counts for Home's summary line. `skillCount` and `harnessCount` are scoped
- * to the user's own skills (`ownSkillsView`) - plugin-shipped skills don't
- * count toward either, but do get their own `pluginSkillCount`.
- * `harnessCount` is how many of `FIRST_CLASS_AGENTS` have at least one own
- * deployment; `projectCount` is every project the snapshot tracks, own or
- * not, since tracking a project isn't tied to whether a skill happens to be
- * deployed there yet.
- */
-export function homeSummaryCounts(snapshot: SkillSnapshot): HomeSummaryCounts {
-  const own = ownSkillsView(snapshot.skills);
-
-  const usesIn30Days = snapshot.invocations.reduce(
-    (sum, stat) => sum + invocationsInWindow(stat, "30d"),
-    0,
-  );
-
-  return {
-    skillCount: own.length,
-    pluginSkillCount: pluginSkillsView(snapshot.skills).length,
-    harnessCount: harnessesPresent(snapshot).length,
-    projectCount: snapshot.projects.length,
-    usesIn30Days,
-  };
-}
 
 /**
  * Which of `FIRST_CLASS_AGENTS` at least one own deployment in the snapshot
