@@ -1843,13 +1843,33 @@ fn run_usage(
     let cli_cache = cache
         .as_ref()
         .map(|path| path.with_file_name("cli-skill-uses.json"));
-    let result = ops::scan(&rt, &ctx, &ScanRequest::default()).map(|inventory| {
+    let clock = rt.ports.clock.as_ref();
+    let started = std::time::Duration::ZERO;
+    let mut steps = vec![skill_studio_core::timing::step(
+        clock,
+        "scope_resolution",
+        started,
+    )];
+    let scan_start = clock.monotonic();
+    let result = ops::scan_for_usage(&rt, &ctx).map(|inventory| {
+        steps.push(skill_studio_core::timing::step(
+            clock,
+            "installed_scan",
+            scan_start,
+        ));
+        let step_start = clock.monotonic();
         let mut usage = skill_studio_host::SkillUsage::load_read_only(
             cli_cache
                 .as_deref()
                 .filter(|path| path.exists())
                 .or(cache.as_deref()),
         );
+        steps.push(skill_studio_core::timing::step(
+            clock,
+            "usage_cache_load",
+            step_start,
+        ));
+        let step_start = clock.monotonic();
         let report = usage.report_filtered(
             &rt.scope.home.canonical,
             &inventory,
@@ -1860,13 +1880,30 @@ fn run_usage(
                 projects: scope.project_paths().to_vec(),
             },
         );
+        steps.push(skill_studio_core::timing::step(
+            clock,
+            "history_refresh_and_tally",
+            step_start,
+        ));
+        let step_start = clock.monotonic();
         if let Some(path) = cli_cache {
             if let Err(error) = usage.save_cache(&path) {
                 eprintln!("Could not save usage cache: {error}");
             }
         }
+        steps.push(skill_studio_core::timing::step(
+            clock,
+            "usage_cache_save",
+            step_start,
+        ));
         report
     });
+    ctx.record_timing(skill_studio_core::timing::op_timing(
+        clock,
+        "skill_usage",
+        started,
+        steps,
+    ));
     let envelope = ResultEnvelope::from_result(Operation::SkillUsage, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_usage_table)
 }

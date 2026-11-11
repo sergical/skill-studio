@@ -151,7 +151,17 @@ impl SkillUsage {
         if inventory.completeness == Completeness::Partial {
             observations.push(crate::skill_uses::UsageObservation {
                 path: home.to_path_buf(),
-                reason: "Installed skill scan is partial".into(),
+                reason: format!(
+                    "Installed skill scan is partial: {}",
+                    inventory
+                        .observations
+                        .iter()
+                        .map(|o| o.message.as_str())
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
             });
         }
         observations.sort();

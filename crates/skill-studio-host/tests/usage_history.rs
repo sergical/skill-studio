@@ -194,3 +194,61 @@ fn usage_cache_round_trip_preserves_complete_history() {
     assert_eq!(fs::read(&cache).unwrap(), bytes);
     assert_eq!(fs::read_dir(cache.parent().unwrap()).unwrap().count(), 1);
 }
+
+#[test]
+fn usage_oversized_without_marker_is_complete_instead_of_a_gap() {
+    let dir = fixture();
+    let root = dir.path().join(".codex/sessions");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("large.jsonl"),
+        format!("{{\"output\":\"{}\"}}\n", "x".repeat(300_000)),
+    )
+    .unwrap();
+    assert_eq!(report(dir.path())["partial"], false);
+}
+
+#[test]
+fn usage_oversized_skill_is_counted_or_names_the_gap() {
+    let dir = fixture();
+    let root = dir.path().join(".claude/projects/work");
+    fs::create_dir_all(&root).unwrap();
+    let record = serde_json::json!({"type":"assistant","sessionId":"s","timestamp":"2026-09-29T12:00:00Z","padding":"x".repeat(300_000),"message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"gamma"}}]}});
+    fs::write(root.join("large.jsonl"), format!("{record}\n")).unwrap();
+    let data = report(dir.path());
+    assert!(data["rows"][0]["total_uses"] == 1 || data["partial"] == true);
+    assert_eq!(data["rows"][0]["total_uses"], 1);
+}
+
+#[test]
+fn usage_unterminated_tail_waits_instead_of_a_gap() {
+    let dir = fixture();
+    let root = dir.path().join(".codex/sessions");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("active.jsonl"), "{\"type\":").unwrap();
+    assert_eq!(report(dir.path())["partial"], false);
+}
+
+#[test]
+fn usage_compressed_large_records_and_active_tail_are_complete_instead_of_false_gaps() {
+    let dir = fixture();
+    let root = dir.path().join(".claude/projects/work");
+    fs::create_dir_all(&root).unwrap();
+    let record = serde_json::json!({"type":"assistant","sessionId":"s","timestamp":"2026-09-29T12:00:00Z","padding":"x".repeat(300_000),"message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"gamma"}}]}});
+    let codex_use = serde_json::json!({"type":"response_item","timestamp":"2026-09-29T12:00:00Z","padding":"x".repeat(300_000),"payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<skill>\n<name>gamma</name>\n<path>/u/.agents/skills/gamma/SKILL.md</path>"}]}});
+    let text = format!(
+        "{{\"output\":\"{}\"}}\n{codex_use}\n{{\"active\":",
+        "x".repeat(300_000)
+    );
+    let codex = dir.path().join(".codex/sessions");
+    fs::create_dir_all(&codex).unwrap();
+    fs::write(
+        codex.join("large.jsonl.zst"),
+        zstd::stream::encode_all(text.as_bytes(), 1).unwrap(),
+    )
+    .unwrap();
+    fs::write(root.join("large.jsonl"), format!("{record}\n")).unwrap();
+    let data = report(dir.path());
+    assert_eq!(data["partial"], false, "{data}");
+    assert_eq!(data["rows"][0]["total_uses"], 2, "{data}");
+}

@@ -18,14 +18,18 @@ mod cursor;
 mod grok;
 mod opencode;
 mod pi;
-pub use claude_code::parse_claude_code_uses;
-pub use codex::{codex_skill_name_from_package, parse_codex_uses};
-pub use cursor::parse_cursor_uses;
-pub use grok::parse_grok_uses;
+pub use claude_code::{parse_claude_code_uses, parse_claude_code_uses_checked};
+pub use codex::{codex_skill_name_from_package, parse_codex_uses, parse_codex_uses_checked};
+pub use cursor::{parse_cursor_uses, parse_cursor_uses_checked};
+pub use grok::{parse_grok_uses, parse_grok_uses_checked};
 pub use opencode::{
     parse_opencode_message, parse_opencode_part, OpenCodeMessageRow, OpenCodePartRow,
 };
-pub use pi::parse_pi_uses;
+pub use pi::{parse_pi_uses, parse_pi_uses_checked};
+
+fn contains_marker(text: &str, marker: &str) -> bool {
+    memchr::memmem::find(text.as_bytes(), marker.as_bytes()).is_some()
+}
 
 /// Facts a transcript states once, in a header line, that later lines need.
 /// The host keeps one per transcript file between refreshes.

@@ -124,6 +124,11 @@ fn exercise(flow: &str, surface: Surface) {
             }
             std::fs::write(f.home.path().join(".claude/projects/work/session.jsonl"),
                 "{\"type\":\"assistant\",\"timestamp\":\"2026-09-29T12:00:00Z\",\"sessionId\":\"usage-session\",\"cwd\":\"/work\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Skill\",\"input\":{\"skill\":\"gamma\"}}]}}\n").unwrap();
+            std::fs::write(
+                f.home.path().join(".codex/sessions/irrelevant.jsonl"),
+                format!("{{\"output\":\"{}\"}}\n{{\"active\":", "x".repeat(300_000)),
+            )
+            .unwrap();
             let report = f.call(&["usage"], "skill_usage", "skill_usage", &json!({}));
             let row = &report["data"]["rows"][0];
             assert_eq!(row["skill"], "gamma", "{report}");

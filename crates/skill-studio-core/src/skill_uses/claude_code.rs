@@ -25,16 +25,25 @@ const SKILL_MD_MARKER: &str = "SKILL.md";
 /// malformed line, a missing timestamp, or an unrecognized shape is skipped
 /// rather than failing the whole file.
 pub fn parse_claude_code_uses(text: &str) -> Vec<SkillInvocation> {
+    parse_claude_code_uses_checked(text, &mut 0)
+}
+
+/// Parses history and counts corrupt JSON records without parsing a record twice.
+pub fn parse_claude_code_uses_checked(text: &str, invalid: &mut usize) -> Vec<SkillInvocation> {
     let mut out = Vec::new();
 
     for line in text.lines() {
-        if !line.contains(SKILL_TOOL_MARKER)
-            && !line.contains(COMMAND_MARKER)
-            && !line.contains(SKILL_MD_MARKER)
+        if !super::contains_marker(line, SKILL_TOOL_MARKER)
+            && !super::contains_marker(line, COMMAND_MARKER)
+            && !super::contains_marker(line, SKILL_MD_MARKER)
         {
+            if serde_json::from_str::<serde::de::IgnoredAny>(line).is_err() {
+                *invalid += 1;
+            }
             continue;
         }
         let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+            *invalid += 1;
             continue;
         };
         let Some(timestamp) = record.get("timestamp").and_then(|v| v.as_str()) else {

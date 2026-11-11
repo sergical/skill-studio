@@ -31,11 +31,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use skill_studio_core::discovery_sources::DiscoverySources;
 use skill_studio_core::identity::AgentId;
-use skill_studio_core::skill_uses::parse_claude_code_uses;
+use skill_studio_core::skill_uses::parse_claude_code_uses_checked;
 use skill_studio_core::skill_uses::{
-    parse_codex_uses, parse_cursor_uses, parse_grok_uses, parse_pi_uses, skill_heatmap,
-    skill_stats, InvocationHeatmap, SkillInvocation, SkillInvocationStats, SkillUseFilter,
-    TranscriptContext,
+    parse_codex_uses_checked, parse_cursor_uses_checked, parse_grok_uses_checked,
+    parse_pi_uses_checked, skill_heatmap, skill_stats, InvocationHeatmap, SkillInvocation,
+    SkillInvocationStats, SkillUseFilter, TranscriptContext,
 };
 
 use crate::discovery::{cursor_workspace_folders, grok_session_cwd, MAX_GROK_SESSION_DIRS};
@@ -226,7 +226,8 @@ enum UseReader {
     /// offset.
     Transcripts {
         list: fn(&Path) -> SourceListing,
-        parse: fn(&TranscriptFile, &str, &mut TranscriptContext) -> Vec<SkillInvocation>,
+        parse:
+            fn(&TranscriptFile, &str, &mut TranscriptContext, &mut usize) -> Vec<SkillInvocation>,
     },
     /// `SQLite` databases, re-queried from a `time_updated` watermark.
     Databases {
@@ -404,7 +405,7 @@ fn list_claude_code_transcripts(home: &Path) -> SourceListing {
     }
 }
 
-/// Adapts [`parse_claude_code_uses`] to the [`UseReader::Transcripts`]
+/// Adapts [`parse_claude_code_uses_checked`] to the [`UseReader::Transcripts`]
 /// `parse` signature. Claude Code repeats its session id and cwd on every
 /// record, so unlike Codex it needs no [`TranscriptContext`], and it never
 /// needs the file itself.
@@ -412,18 +413,20 @@ fn parse_claude_code_uses_with_context(
     _file: &TranscriptFile,
     text: &str,
     _context: &mut TranscriptContext,
+    invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
-    parse_claude_code_uses(text)
+    parse_claude_code_uses_checked(text, invalid)
 }
 
-/// Adapts [`parse_codex_uses`] to the [`UseReader::Transcripts`] `parse`
+/// Adapts [`parse_codex_uses_checked`] to the [`UseReader::Transcripts`] `parse`
 /// signature; Codex never needs the file itself.
 fn parse_codex_uses_with_file(
     _file: &TranscriptFile,
     text: &str,
     context: &mut TranscriptContext,
+    invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
-    parse_codex_uses(text, context)
+    parse_codex_uses_checked(text, context, invalid)
 }
 
 fn opencode_root(home: &Path) -> PathBuf {
@@ -563,14 +566,15 @@ fn list_pi_sessions(home: &Path) -> SourceListing {
     }
 }
 
-/// Adapts [`parse_pi_uses`] to the [`UseReader::Transcripts`] `parse`
+/// Adapts [`parse_pi_uses_checked`] to the [`UseReader::Transcripts`] `parse`
 /// signature; pi never needs the file itself.
 fn parse_pi_uses_with_file(
     _file: &TranscriptFile,
     text: &str,
     context: &mut TranscriptContext,
+    invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
-    parse_pi_uses(text, context)
+    parse_pi_uses_checked(text, context, invalid)
 }
 
 /// Cursor keeps one directory per opened project here, each holding its own
@@ -686,7 +690,7 @@ fn cursor_project_path(home: &Path, project_dir_name: &str) -> Option<String> {
     Some(first.to_string_lossy().into_owned())
 }
 
-/// Adapts [`parse_cursor_uses`] to the [`UseReader::Transcripts`] `parse`
+/// Adapts [`parse_cursor_uses_checked`] to the [`UseReader::Transcripts`] `parse`
 /// signature. Cursor transcript lines carry no session id, project path, or
 /// timestamp of their own (see the core module doc), so the first call for
 /// a file fills the context from `file.path`/`file.home` before parsing;
@@ -696,13 +700,14 @@ fn parse_cursor_uses_with_file(
     file: &TranscriptFile,
     text: &str,
     context: &mut TranscriptContext,
+    invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
     if context.session.is_none() {
         context.session = cursor_session_from_path(file.path);
         context.project_path = cursor_project_dir_from_path(file.home, file.path)
             .and_then(|name| cursor_project_path(file.home, &name));
     }
-    parse_cursor_uses(text, context, file.modified)
+    parse_cursor_uses_checked(text, context, file.modified, invalid)
 }
 
 /// Grok Build keeps one directory per working folder here, each holding one
@@ -826,7 +831,7 @@ fn grok_forked_at(session_dir: &Path) -> Option<DateTime<Utc>> {
         .map(|at| at.with_timezone(&Utc))
 }
 
-/// Adapts [`parse_grok_uses`] to the [`UseReader::Transcripts`] `parse`
+/// Adapts [`parse_grok_uses_checked`] to the [`UseReader::Transcripts`] `parse`
 /// signature. Grok Build's `updates.jsonl` lines carry no session id or
 /// project path of their own, so the first call for a file fills the context
 /// from the file's path (the session directory name, and its parent decoded
@@ -837,6 +842,7 @@ fn parse_grok_uses_with_file(
     file: &TranscriptFile,
     text: &str,
     context: &mut TranscriptContext,
+    invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
     if context.session.is_none() {
         let session_dir = file.path.parent();
@@ -850,7 +856,7 @@ fn parse_grok_uses_with_file(
             .map(|cwd| cwd.to_string_lossy().into_owned());
         context.forked_at = session_dir.and_then(grok_forked_at);
     }
-    parse_grok_uses(text, context, file.modified)
+    parse_grok_uses_checked(text, context, file.modified, invalid)
 }
 
 /// Every harness this index reads uses from, in the order they're processed.
@@ -1075,6 +1081,8 @@ pub fn is_skill_use_change_with_databases(home: &Path, path: &Path, databases: &
 /// override).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillInvocationIndex {
+    #[serde(default)]
+    reader_version: u32,
     files: BTreeMap<PathBuf, IndexedTranscript>,
     #[serde(default)]
     databases: BTreeMap<PathBuf, IndexedDatabase>,
@@ -1087,6 +1095,7 @@ pub struct SkillInvocationIndex {
 impl Default for SkillInvocationIndex {
     fn default() -> Self {
         Self {
+            reader_version: 2,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: MAX_FILE_BYTES,
@@ -1102,6 +1111,7 @@ impl SkillInvocationIndex {
     #[cfg(test)]
     fn with_budgets(file_bytes: u64, run_bytes: u64) -> Self {
         Self {
+            reader_version: 2,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: file_bytes,
@@ -1220,6 +1230,11 @@ impl SkillInvocationIndex {
     /// cached entries. Never panics: unreadable dirs/files/databases are
     /// skipped.
     pub fn refresh(&mut self, home: &Path, sources: &DiscoverySources) -> SkillUseRefreshReport {
+        if self.reader_version != 2 {
+            self.files.clear();
+            self.databases.clear();
+            self.reader_version = 2;
+        }
         let mut report = SkillUseRefreshReport::default();
         let mut run_budget = self.run_budget;
 
@@ -1270,7 +1285,12 @@ impl SkillInvocationIndex {
         home: &Path,
         source: &UseSource,
         list: fn(&Path) -> SourceListing,
-        parse: fn(&TranscriptFile, &str, &mut TranscriptContext) -> Vec<SkillInvocation>,
+        parse: fn(
+            &TranscriptFile,
+            &str,
+            &mut TranscriptContext,
+            &mut usize,
+        ) -> Vec<SkillInvocation>,
         run_budget: &mut u64,
         report: &mut SkillUseRefreshReport,
     ) {
@@ -1360,7 +1380,8 @@ impl SkillInvocationIndex {
             }
 
             let file_budget = self.file_budget.min(*run_budget);
-            let Some((text, consumed, skipping_line)) = read_transcript_from_offset(
+            let budget_before = *run_budget;
+            let Some((text, consumed, skipping_line, gaps)) = read_transcript_from_offset(
                 &path,
                 start_offset,
                 file_budget,
@@ -1379,22 +1400,7 @@ impl SkillInvocationIndex {
                 .filter(|_| start_offset > 0)
                 .map(|e| e.observations.clone())
                 .unwrap_or_default();
-            let invalid = text
-                .lines()
-                .filter(|line| serde_json::from_str::<serde_json::Value>(line).is_err())
-                .count();
-            if invalid > 0 {
-                observations.push(UsageObservation {
-                    path: path.clone(),
-                    reason: format!("Skipped {invalid} unparseable lines"),
-                });
-            }
-            if skipping_line || (text.len() as u64) < consumed {
-                observations.push(UsageObservation {
-                    path: path.clone(),
-                    reason: "Skipped oversized or invalid UTF-8 lines".into(),
-                });
-            }
+            let mut invalid = 0;
             let parsed_bytes = start_offset + consumed;
             let modified_utc = meta
                 .modified()
@@ -1404,8 +1410,14 @@ impl SkillInvocationIndex {
                 path: &path,
                 modified: modified_utc,
             };
-            uses.extend(parse(&file, &text, &mut context));
-            if parsed_bytes < size {
+            uses.extend(parse(&file, &text, &mut context, &mut invalid));
+            if invalid > 0 || gaps > 0 {
+                observations.push(UsageObservation {
+                    path: path.clone(),
+                    reason: format!("Skipped {invalid} unparseable lines; {gaps} oversized or invalid UTF-8 lines"),
+                });
+            }
+            if parsed_bytes < size && budget_before.saturating_sub(*run_budget) == file_budget {
                 report.incomplete = true;
                 report.observations.push(UsageObservation {
                     path: log_root.clone(),
@@ -1463,7 +1475,12 @@ impl SkillInvocationIndex {
         transcript: &TranscriptFile,
         root: &Path,
         meta: &fs::Metadata,
-        parse: fn(&TranscriptFile, &str, &mut TranscriptContext) -> Vec<SkillInvocation>,
+        parse: fn(
+            &TranscriptFile,
+            &str,
+            &mut TranscriptContext,
+            &mut usize,
+        ) -> Vec<SkillInvocation>,
         run_budget: &mut u64,
         report: &mut SkillUseRefreshReport,
     ) {
@@ -1510,47 +1527,19 @@ impl SkillInvocationIndex {
                 ));
             }
             let mut reader = BufReader::new(decoder);
-            let mut remaining = self.file_budget.min(*run_budget);
-            while remaining > 0 {
-                let mut line = Vec::new();
-                let n = reader
-                    .by_ref()
-                    .take((MAX_LINE_BYTES as u64 + 1).min(remaining))
-                    .read_until(b'\n', &mut line)?;
-                if n == 0 {
-                    entry.compressed_complete = true;
-                    break;
-                }
-                remaining -= n as u64;
-                *run_budget -= n as u64;
-                report.bytes_read += n as u64;
-                entry.parsed_bytes += n as u64;
-                let terminated = line.last() == Some(&b'\n');
-                if !terminated
-                    && !entry.skipping_line
-                    && line.len() <= MAX_LINE_BYTES
-                    && remaining == 0
-                {
-                    entry.parsed_bytes -= n as u64;
-                    break;
-                }
-                let at_eof = !terminated && reader.fill_buf()?.is_empty();
-                if entry.skipping_line || line.len() > MAX_LINE_BYTES || (!terminated && !at_eof) {
-                    if !entry.skipping_line {
-                        entry.skipped_lines += 1;
-                    }
-                    entry.skipping_line = !terminated;
-                    continue;
-                }
-                match std::str::from_utf8(&line) {
-                    Ok(text) if serde_json::from_str::<serde_json::Value>(text).is_ok() => {
-                        entry
-                            .uses
-                            .extend(parse(transcript, text, &mut entry.context));
-                    }
-                    _ => entry.skipped_lines += 1,
-                }
-            }
+            let budget = self.file_budget.min(*run_budget);
+            let budget_before = *run_budget;
+            let (text, consumed, skipping, gaps) =
+                read_transcript_lines(&mut reader, budget, run_budget, entry.skipping_line)?;
+            let mut invalid = 0;
+            entry
+                .uses
+                .extend(parse(transcript, &text, &mut entry.context, &mut invalid));
+            entry.parsed_bytes += consumed;
+            entry.skipping_line = skipping;
+            entry.skipped_lines += gaps + invalid as u64;
+            report.bytes_read += consumed;
+            entry.compressed_complete = budget_before.saturating_sub(*run_budget) < budget;
             Ok(())
         })();
         if let Err(e) = result {
@@ -1703,154 +1692,104 @@ fn read_tail_sample(path: &Path, offset: u64) -> Vec<u8> {
     }
 }
 
-/// Read `path` starting at byte `start_offset`, line by line, bounded per
-/// line and by `file_budget`/`run_budget`. Returns the concatenated text of
-/// every *complete, `\n`-terminated* line read, the number of bytes consumed
-/// for those complete lines, and whether the read ended mid-drain of a line
-/// too big to fit this pass's budget (see below). An ordinary (in-budget)
-/// final line at true EOF with no trailing `\n` is never committed - it may
-/// still be being written - so the next refresh re-reads it from the same
-/// offset (and it will be parseable once complete). A line that overruns
-/// `MAX_LINE_BYTES`, or that alone can't fit `file_budget`, is drained and
-/// skipped rather than buffered or parsed - including an oversized line
-/// still unterminated at EOF: since an oversized line is unparseable even
-/// once complete, re-reading it would only loop on the same bytes forever,
-/// so it is committed (drained) and `skip_to_newline` resumes an in-progress
-/// drain left over from a previous, budget-truncated pass, so a persistently
-/// oversized line still makes progress instead of being re-read from
-/// scratch (and truncated at the same point) forever.
-/// `None` when the file can't be opened or seeked to; an empty read (nothing
-/// to do) still returns `Some(("", 0, false))`.
+/// Read complete records. Leave an unfinished tail at its previous offset.
 fn read_transcript_from_offset(
     path: &Path,
     start_offset: u64,
     file_budget: u64,
     run_budget: &mut u64,
     skip_to_newline: bool,
-) -> Option<(String, u64, bool)> {
+) -> Option<(String, u64, bool, u64)> {
     let mut file = fs::File::open(path).ok()?;
     file.seek(SeekFrom::Start(start_offset)).ok()?;
-    let mut reader = BufReader::new(file);
+    read_transcript_lines(
+        &mut BufReader::new(file),
+        file_budget,
+        run_budget,
+        skip_to_newline,
+    )
+    .ok()
+}
+
+fn could_hold_skill_use(bytes: &[u8]) -> bool {
+    [
+        "SKILL.md",
+        "<skill",
+        "\"Skill\"",
+        "<command-name>",
+        "session_meta",
+        "\"session\"",
+        "\"skills\"",
+        "user_message_chunk",
+        "tool_call",
+    ]
+    .iter()
+    .any(|marker| memchr::memmem::find(bytes, marker.as_bytes()).is_some())
+}
+
+fn read_transcript_lines(
+    reader: &mut impl BufRead,
+    budget: u64,
+    run_budget: &mut u64,
+    mut skipping: bool,
+) -> io::Result<(String, u64, bool, u64)> {
+    const SKILL_LINE_CAP: usize = 32 * 1024 * 1024;
     let mut text = String::new();
-    let mut consumed: u64 = 0;
-    let mut remaining = file_budget;
-    let mut skipping = skip_to_newline;
-
-    if skipping {
+    let mut consumed = 0;
+    let mut gaps = 0;
+    while consumed < budget {
+        let mut line = Vec::new();
+        let mut length = 0;
+        let mut marker = false;
+        let mut tail = Vec::new();
         loop {
-            if remaining == 0 {
-                // Still mid-drain: resume from here next pass.
-                return Some((text, consumed, true));
-            }
-            let chunk_cap = (MAX_LINE_BYTES as u64 + 1).min(remaining);
-            let mut chunk: Vec<u8> = Vec::new();
-            let read = reader
+            let mut chunk = Vec::new();
+            let n = reader
                 .by_ref()
-                .take(chunk_cap)
-                .read_until(b'\n', &mut chunk);
-            let n = match read {
-                Ok(0) => {
-                    skipping = false; // true EOF: nothing left to drain
-                    break;
-                }
-                Ok(n) => n as u64,
-                Err(_) => {
-                    skipping = false;
-                    break;
-                }
-            };
-            remaining = remaining.saturating_sub(n);
-            *run_budget = run_budget.saturating_sub(n);
-            consumed += n;
-            if chunk.last() == Some(&b'\n') {
-                skipping = false;
-                break;
+                .take((MAX_LINE_BYTES as u64).min(budget - consumed))
+                .read_until(b'\n', &mut chunk)?;
+            if n == 0 {
+                return Ok((text, consumed - length, skipping, gaps));
             }
-        }
-    }
-
-    'lines: loop {
-        if remaining == 0 {
-            break;
-        }
-        let mut line_buf: Vec<u8> = Vec::new();
-        let mut line_bytes: u64 = 0;
-        let mut terminated = false;
-
-        // Inner loop only exits via one of the `break`s below (a line is
-        // complete at a `\n`, at true EOF, or on a read error) or via
-        // `break 'lines` (budget exhausted mid-line, handled there).
-        loop {
-            if remaining == 0 {
-                if line_bytes > MAX_LINE_BYTES as u64 || line_bytes >= file_budget {
-                    // Too big to buffer, or too big to ever fit one pass's
-                    // budget: commit the bytes already drained and resume
-                    // draining (not re-reading from scratch) next pass.
-                    skipping = true;
-                } else {
-                    // An ordinary line cut short by the budget: don't count
-                    // it as consumed, so the next pass re-reads it whole.
-                    consumed -= line_bytes;
-                }
-                break 'lines;
+            consumed += n as u64;
+            length += n as u64;
+            *run_budget = run_budget.saturating_sub(n as u64);
+            if length > SKILL_LINE_CAP as u64 {
+                tail.extend_from_slice(&chunk);
+                marker |= could_hold_skill_use(&tail);
+                tail = tail[tail.len().saturating_sub(32)..].to_vec();
             }
-            // Cap each chunk at the line limit (+1, to distinguish "found
-            // the newline right at the cap" from "no newline within the
-            // cap") so a pathologically long line is never buffered in full
-            // in one read; a still-unterminated line loops for another chunk.
-            let chunk_cap = (MAX_LINE_BYTES as u64 + 1).min(remaining);
-            let mut chunk: Vec<u8> = Vec::new();
-            let read = reader
-                .by_ref()
-                .take(chunk_cap)
-                .read_until(b'\n', &mut chunk);
-            let n = match read {
-                Ok(0) | Err(_) => break, // true EOF, or a read error treated the same way
-                Ok(n) => n as u64,
-            };
-            remaining = remaining.saturating_sub(n);
-            *run_budget = run_budget.saturating_sub(n);
-            consumed += n;
-            line_bytes += n;
-            if line_buf.len() as u64 <= MAX_LINE_BYTES as u64 {
-                line_buf.extend_from_slice(&chunk);
+            if line.len() <= SKILL_LINE_CAP {
+                line.extend_from_slice(&chunk);
             }
             if chunk.last() == Some(&b'\n') {
-                terminated = true;
                 break;
             }
-        }
-
-        if line_bytes == 0 {
-            break; // nothing left to read
-        }
-
-        if !terminated {
-            // Final line at true EOF with no trailing `\n`. An ordinary
-            // (in-budget) line isn't committed so the next refresh re-reads
-            // it from this same offset once it's complete - and it *will* be
-            // parseable then. An oversized line, however, is never parsed
-            // even once complete (it's drained-and-skipped below), so
-            // reverting it would only re-read the same unparseable bytes
-            // forever and keep `incomplete` wedged. Mirror the budget branch:
-            // commit the drained bytes and resume draining next pass.
-            if line_bytes > MAX_LINE_BYTES as u64 {
-                skipping = true;
-            } else {
-                consumed -= line_bytes;
+            if consumed == budget {
+                if length >= budget || length > SKILL_LINE_CAP as u64 {
+                    return Ok((text, consumed, true, gaps + 1));
+                }
+                return Ok((text, consumed - length, false, gaps));
             }
-            break;
         }
-
-        let oversized = line_buf.len() as u64 > MAX_LINE_BYTES as u64;
-        if !oversized {
-            if let Ok(line) = std::str::from_utf8(&line_buf) {
-                text.push_str(line);
-            }
+        if skipping {
+            skipping = false;
+            continue;
+        }
+        marker |= length > MAX_LINE_BYTES as u64 && could_hold_skill_use(&line);
+        if length > MAX_LINE_BYTES as u64 && !marker {
+            continue;
+        }
+        if length > SKILL_LINE_CAP as u64 {
+            gaps += 1;
+            continue;
+        }
+        match std::str::from_utf8(&line) {
+            Ok(line) => text.push_str(line),
+            Err(_) => gaps += 1,
         }
     }
-
-    Some((text, consumed, skipping))
+    Ok((text, consumed, skipping, gaps))
 }
 
 #[cfg(test)]
@@ -2295,7 +2234,7 @@ mod tests {
     }
 
     #[test]
-    fn oversized_unterminated_final_line_does_not_stall() {
+    fn oversized_unterminated_tail_waits_for_the_next_append() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         let session_dir = home.join(CLAUDE_PROJECTS_ROOT).join("-my-project");
@@ -2310,17 +2249,14 @@ mod tests {
         let first = index.refresh(home, &sources);
         assert!(!first.incomplete);
         let entry = index.files.get(&path).unwrap();
-        assert_eq!(entry.parsed_bytes as usize, content.len());
-        assert!(entry.skipping_line);
+        assert_eq!(entry.parsed_bytes, 0);
+        assert!(!entry.skipping_line);
         assert!(stats(&index, &known_skills, &sources).is_empty());
 
         let second = index.refresh(home, &sources);
-        assert_eq!(second.files_reparsed, 0);
+        assert_eq!(second.files_reparsed, 1);
         assert!(!second.incomplete);
-        assert_eq!(
-            index.files.get(&path).unwrap().parsed_bytes as usize,
-            content.len()
-        );
+        assert_eq!(index.files.get(&path).unwrap().parsed_bytes, 0);
         assert!(stats(&index, &known_skills, &sources).is_empty());
     }
 

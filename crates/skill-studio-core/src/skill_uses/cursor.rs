@@ -30,13 +30,27 @@ pub fn parse_cursor_uses(
     context: &TranscriptContext,
     at: DateTime<Utc>,
 ) -> Vec<SkillInvocation> {
+    parse_cursor_uses_checked(text, context, at, &mut 0)
+}
+
+/// Parses history and counts corrupt JSON records without parsing a record twice.
+pub fn parse_cursor_uses_checked(
+    text: &str,
+    context: &TranscriptContext,
+    at: DateTime<Utc>,
+    invalid: &mut usize,
+) -> Vec<SkillInvocation> {
     let mut out = Vec::new();
 
     for line in text.lines() {
-        if !line.contains(SKILL_MD_MARKER) {
+        if !super::contains_marker(line, SKILL_MD_MARKER) {
+            if serde_json::from_str::<serde::de::IgnoredAny>(line).is_err() {
+                *invalid += 1;
+            }
             continue;
         }
         let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+            *invalid += 1;
             continue;
         };
         if record.get("role").and_then(|v| v.as_str()) != Some("assistant") {

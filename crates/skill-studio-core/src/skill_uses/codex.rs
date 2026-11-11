@@ -67,17 +67,30 @@ fn command_from_function_call_args(args: &serde_json::Value) -> Option<String> {
 /// panics: a malformed line, or one missing a `timestamp`, is skipped rather
 /// than failing the whole file.
 pub fn parse_codex_uses(text: &str, context: &mut TranscriptContext) -> Vec<SkillInvocation> {
+    parse_codex_uses_checked(text, context, &mut 0)
+}
+
+/// Parses history and counts corrupt JSON records without parsing a record twice.
+pub fn parse_codex_uses_checked(
+    text: &str,
+    context: &mut TranscriptContext,
+    invalid: &mut usize,
+) -> Vec<SkillInvocation> {
     let mut out = Vec::new();
 
     for line in text.lines() {
-        if !line.contains(SESSION_META_MARKER)
-            && !line.contains(SKILL_BLOCK_MARKER)
-            && !line.contains(SKILL_MD_MARKER)
-            && !line.contains(SKILLS_NAMESPACE_MARKER)
+        if !super::contains_marker(line, SESSION_META_MARKER)
+            && !super::contains_marker(line, SKILL_BLOCK_MARKER)
+            && !super::contains_marker(line, SKILL_MD_MARKER)
+            && !super::contains_marker(line, SKILLS_NAMESPACE_MARKER)
         {
+            if serde_json::from_str::<serde::de::IgnoredAny>(line).is_err() {
+                *invalid += 1;
+            }
             continue;
         }
         let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+            *invalid += 1;
             continue;
         };
         let record_type = record.get("type").and_then(|v| v.as_str());

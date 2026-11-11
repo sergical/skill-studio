@@ -313,7 +313,7 @@ impl SkillStudioServer {
     ) -> CallToolResult {
         let days = req.days.unwrap_or(skill_studio_host::DEFAULT_USAGE_DAYS);
         run_op(Operation::SkillUsage, false, &context, |rt, ctx| {
-            let inventory = ops::scan(rt, ctx, &ScanRequest::default())?;
+            let inventory = ops::scan_for_usage(rt, ctx)?;
             let mut usage = self.usage.lock().unwrap_or_else(PoisonError::into_inner);
             let usage = usage.get_or_insert_with(|| {
                 SkillUsage::load_read_only(scope::desktop_usage_cache().as_deref())

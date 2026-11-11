@@ -4465,6 +4465,7 @@ dependencies = [
  "chrono",
  "criterion",
  "filetime",
+ "memchr",
  "proptest",
  "schemars 1.2.3",
  "serde",
@@ -4487,6 +4488,7 @@ name = "skill-studio-host"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "memchr",
  "percent-encoding",
  "reqwest",
  "rusqlite",
