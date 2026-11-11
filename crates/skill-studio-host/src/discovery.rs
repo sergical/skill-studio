@@ -37,6 +37,60 @@ pub fn codex_home(home: &Path) -> PathBuf {
     }
 }
 
+fn agent_home_override(home: &Path, relative: &str) -> Option<PathBuf> {
+    if std::env::var_os("SKILL_STUDIO_FIXTURE").is_some()
+        || std::env::var_os("HOME").as_deref().map(Path::new) != Some(home)
+    {
+        return None;
+    }
+    let variable = match relative {
+        ".claude" => "CLAUDE_CONFIG_DIR",
+        ".pi/agent" => "PI_CODING_AGENT_DIR",
+        ".grok" => "GROK_HOME",
+        _ => return None,
+    };
+    let path = PathBuf::from(std::env::var_os(variable).filter(|v| !v.is_empty())?);
+    if relative == ".pi/agent" {
+        if let Ok(rest) = path.strip_prefix("~") {
+            return Some(home.join(rest));
+        }
+    }
+    Some(path)
+}
+
+/// Resolve an agent directory in the host. Fixture homes ignore ambient overrides.
+pub fn agent_home(home: &Path, relative: &str) -> PathBuf {
+    agent_home_override(home, relative).unwrap_or_else(|| home.join(relative))
+}
+
+/// Resolve a global agent path, including Claude's separate global MCP file.
+pub fn agent_path(home: &Path, relative: &str) -> PathBuf {
+    if relative == ".claude.json" {
+        return agent_home_override(home, ".claude")
+            .map_or_else(|| home.join(relative), |root| root.join(relative));
+    }
+    for prefix in [".claude", ".pi/agent", ".grok"] {
+        if let Ok(rest) = Path::new(relative).strip_prefix(prefix) {
+            return agent_home(home, prefix).join(rest);
+        }
+    }
+    home.join(relative)
+}
+
+/// Bind live agent roots once before the core normalizes the scope.
+pub fn resolve_agent_homes(
+    mut scope: skill_studio_core::RuntimeScope,
+) -> skill_studio_core::RuntimeScope {
+    if scope.kind == skill_studio_core::scope::ScopeKind::Live {
+        for relative in [".claude", ".pi/agent", ".grok"] {
+            if let Some(root) = agent_home_override(&scope.home_root, relative) {
+                scope.agent_home_roots.insert(relative.into(), root);
+            }
+        }
+    }
+    scope
+}
+
 /// Project paths recorded in Codex's `[projects."/abs/path"]` config
 /// sections (`~/.codex/config.toml`, or `$CODEX_HOME/config.toml`).
 fn codex_project_paths(home: &Path) -> Vec<PathBuf> {
@@ -76,12 +130,8 @@ const MAX_TRANSCRIPT_ATTEMPTS: usize = 10_000;
 
 /// Claude Code keeps one directory per project here. The directory name
 /// encodes the path lossily, so the `cwd` inside the transcripts is read.
+#[cfg(test)]
 const CLAUDE_TRANSCRIPT_ROOT: &str = ".claude/projects";
-
-/// pi keeps one `--<cwd with / \ : as ->--` directory per project here. That
-/// name cannot be decoded for folders whose own names contain `-`, so the
-/// `cwd` in each session's header record is read instead.
-const PI_TRANSCRIPT_ROOT: &str = ".pi/agent/sessions";
 
 /// Depth [`nested_pi_project_roots`] descends below a discovered project
 /// root while collecting nested `.pi/skills` folders. pi's own skills doc
@@ -465,14 +515,17 @@ fn opencode_legacy_worktrees(dir: &Path) -> Vec<PathBuf> {
 /// Grok Build's session store at its default `$GROK_HOME` location. Each
 /// child directory is named for the working directory its sessions ran in,
 /// by `encode_cwd_dirname` in Grok's `xai-grok-config/src/paths.rs`.
-const GROK_SESSIONS_ROOT: &str = ".grok/sessions";
-
+///
 /// Session store entries one discovery run may look at. Shared with
 /// `skill_uses.rs`'s `list_grok_sessions`, which walks the same tree.
 pub(crate) const MAX_GROK_SESSION_DIRS: usize = 10_000;
 
 fn grok_session_cwds(home: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(home.join(GROK_SESSIONS_ROOT)) else {
+    grok_session_cwds_at(&agent_home(home, ".grok"))
+}
+
+fn grok_session_cwds_at(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(root.join("sessions")) else {
         return Vec::new();
     };
     entries
@@ -547,11 +600,11 @@ fn is_home_root(home: &Path, path: &Path) -> bool {
 }
 
 fn claude_transcript_cwds(home: &Path) -> Vec<PathBuf> {
-    transcript_cwds(&home.join(CLAUDE_TRANSCRIPT_ROOT))
+    transcript_cwds(&agent_home(home, ".claude").join("projects"))
 }
 
 fn pi_transcript_cwds(home: &Path) -> Vec<PathBuf> {
-    transcript_cwds(&home.join(PI_TRANSCRIPT_ROOT))
+    transcript_cwds(&agent_home(home, ".pi/agent").join("sessions"))
 }
 
 type HistorySource = fn(&Path) -> Vec<PathBuf>;
@@ -584,12 +637,31 @@ pub fn discover_skill_projects(home: &Path) -> Vec<PathBuf> {
 /// filtered to directories that exist and have at least one first-class
 /// agent's skill dir. Sorted and deduped.
 fn discover_skill_projects_from(home: &Path, sources: &DiscoverySources) -> Vec<PathBuf> {
+    discover_with_roots(home, sources, None)
+}
+
+fn discover_with_roots(
+    home: &Path,
+    sources: &DiscoverySources,
+    roots: Option<&std::collections::BTreeMap<String, PathBuf>>,
+) -> Vec<PathBuf> {
     let mut paths: BTreeSet<PathBuf> = BTreeSet::new();
     for (harness, read_history) in HISTORY_SOURCES {
         if !sources.is_enabled(harness) {
             continue;
         }
-        let discovered = read_history(home);
+        let root = |name: &str| {
+            roots
+                .and_then(|roots| roots.get(name))
+                .cloned()
+                .unwrap_or_else(|| home.join(name))
+        };
+        let discovered = match (*harness, roots) {
+            (AgentId::CLAUDE_CODE, Some(_)) => transcript_cwds(&root(".claude").join("projects")),
+            (AgentId::PI, Some(_)) => transcript_cwds(&root(".pi/agent").join("sessions")),
+            (AgentId::GROK_BUILD, Some(_)) => grok_session_cwds_at(&root(".grok")),
+            _ => read_history(home),
+        };
         // pi walks project roots recursively to the git root
         // (docs/agent-skill-conventions.md), so a nested `.pi/skills`
         // several levels below a pi transcript's own `cwd` is still a
@@ -620,14 +692,23 @@ fn discover_skill_projects_from(home: &Path, sources: &DiscoverySources) -> Vec<
 
 /// `ProjectDiscovery` backed by the harness project histories under the home
 /// directory ([`ports::ProjectDiscovery`](ProjectDiscovery)).
-pub struct HostProjectDiscovery;
+pub struct HostProjectDiscovery {
+    roots: Option<std::collections::BTreeMap<String, PathBuf>>,
+}
 
 impl HostProjectDiscovery {
-    /// Builds a discovery adapter. Holds no state; every call re-reads the
+    /// Use the same resolved agent homes as scan and extras, including explicit scopes.
+    pub fn for_scope(scope: &skill_studio_core::RuntimeScope) -> Self {
+        Self {
+            roots: Some(scope.agent_home_roots.clone()),
+        }
+    }
+
+    /// Builds an adapter with ambient roots. Every call re-reads the
     /// discovery switches and the harness histories under the given home, so
     /// a long-running server sees a changed switch on its next call.
     pub fn new() -> Self {
-        HostProjectDiscovery
+        HostProjectDiscovery { roots: None }
     }
 }
 
@@ -639,7 +720,11 @@ impl Default for HostProjectDiscovery {
 
 impl ProjectDiscovery for HostProjectDiscovery {
     fn discover_projects(&self, home_root: &Path) -> Result<Vec<PathBuf>, CoreError> {
-        Ok(discover_skill_projects(home_root))
+        Ok(discover_with_roots(
+            home_root,
+            &DiscoverySources::read(&RealFs, home_root),
+            self.roots.as_ref(),
+        ))
     }
 }
 
@@ -1105,7 +1190,9 @@ mod tests {
                 }
             })
             .collect();
-        let session_dir = home.join(PI_TRANSCRIPT_ROOT).join(format!("--{encoded}--"));
+        let session_dir = agent_home(home, ".pi/agent")
+            .join("sessions")
+            .join(format!("--{encoded}--"));
         fs::create_dir_all(&session_dir).unwrap();
         fs::write(
             session_dir.join("2026-09-16T10-00-00-000Z_0192.jsonl"),
@@ -1140,7 +1227,9 @@ mod tests {
         let nested = project.join("packages/foo");
         fs::create_dir_all(nested.join(".pi/skills")).unwrap();
 
-        let session_dir = home.join(PI_TRANSCRIPT_ROOT).join("--proj--");
+        let session_dir = agent_home(home, ".pi/agent")
+            .join("sessions")
+            .join("--proj--");
         fs::create_dir_all(&session_dir).unwrap();
         fs::write(
             session_dir.join("a.jsonl"),
@@ -1609,7 +1698,7 @@ mod tests {
     }
 
     fn grok_sessions_root(home: &Path) -> PathBuf {
-        let root = home.join(GROK_SESSIONS_ROOT);
+        let root = agent_home(home, ".grok").join("sessions");
         fs::create_dir_all(&root).unwrap();
         root
     }

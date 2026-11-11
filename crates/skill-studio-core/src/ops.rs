@@ -433,6 +433,7 @@ pub(crate) fn scan_inner(
         home,
         rt.scope.opencode_config_root.as_deref(),
         &rt.scope.codex_home,
+        &rt.scope.global_root_path(Path::new(".claude")),
     );
 
     // Full ownership classification needs the dotagents and skills.sh
@@ -570,7 +571,7 @@ pub(crate) fn scan_inner(
     // through an explicit `~/.claude/skills/<name>` link, never the shared
     // root directly (`reads_universal_root: Support::No` in `harness.rs`).
     let step_start = clock.monotonic();
-    let claude_skills_dir = home.join(".claude").join("skills");
+    let claude_skills_dir = rt.scope.global_root_path(Path::new(".claude/skills"));
     for skill in skills.values_mut() {
         for deployment in &mut skill.deployments {
             let is_global_universal = matches!(deployment.root.kind, RootKind::Universal)
@@ -1733,7 +1734,9 @@ fn plugin_scan_targets(rt: &Runtime) -> Vec<PluginCacheTarget> {
                 ScopeLevel::Global => targets.push(PluginCacheTarget {
                     scope: RootScope::Global,
                     harness: facts.id.clone(),
-                    path: rt.scope.home.lexical.join(&root_spec.relative_path),
+                    path: rt
+                        .scope
+                        .global_root_path(Path::new(&root_spec.relative_path)),
                 }),
                 ScopeLevel::Project => {
                     for project in &rt.scope.projects {
@@ -1957,6 +1960,7 @@ impl DisableSources {
         home: &Path,
         opencode_config_root: Option<&Path>,
         codex_home: &Path,
+        claude_home: &Path,
     ) -> Self {
         let opencode_config_dir = opencode_config_root
             .map_or_else(|| home.join(".config").join("opencode"), Path::to_path_buf);
@@ -1966,14 +1970,16 @@ impl DisableSources {
                 fs,
                 &opencode_config_dir,
             ),
-            claude_enabled_plugins: read_claude_enabled_plugins(fs, home),
-            claude_skill_overrides_off: crate::harness::read_claude_skill_overrides(fs, home, None)
-                .into_iter()
-                .filter(|(_, v)| {
-                    v.as_str() == Some(crate::harness_switch::CLAUDE_SKILL_OVERRIDE_OFF)
-                })
-                .map(|(name, _)| name)
-                .collect(),
+            claude_enabled_plugins: read_claude_enabled_plugins(fs, claude_home),
+            claude_skill_overrides_off: crate::harness::read_claude_skill_overrides(
+                fs,
+                home,
+                Some(claude_home),
+            )
+            .into_iter()
+            .filter(|(_, v)| v.as_str() == Some(crate::harness_switch::CLAUDE_SKILL_OVERRIDE_OFF))
+            .map(|(name, _)| name)
+            .collect(),
         }
     }
 }
@@ -2067,8 +2073,8 @@ fn codex_skills_config_rows(
 /// Reads Claude Code's global `enabledPlugins` map, keyed
 /// `<plugin>@<marketplace>`. A missing or malformed `settings.json` yields
 /// an empty map, so every lookup falls back to `None`.
-fn read_claude_enabled_plugins(fs: &dyn ScopeFs, home: &Path) -> HashMap<String, bool> {
-    let path = home.join(".claude").join("settings.json");
+fn read_claude_enabled_plugins(fs: &dyn ScopeFs, claude_home: &Path) -> HashMap<String, bool> {
+    let path = claude_home.join("settings.json");
     let Ok(bytes) = fs.read_capped(&path, SKILL_MD_MAX_BYTES) else {
         return HashMap::new();
     };
@@ -3724,6 +3730,7 @@ fn harnesses_body(
     let op_start = clock.monotonic();
     let step_start = clock.monotonic();
     let ports = DetectionPorts {
+        scope: Some(&rt.scope),
         fs: rt.ports.fs.as_ref(),
         home: &rt.scope.home.canonical,
         tools: rt.ports.tools.as_deref(),

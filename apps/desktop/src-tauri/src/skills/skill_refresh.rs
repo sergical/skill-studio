@@ -1344,7 +1344,7 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
         );
         return;
     };
-    let claude_projects_dir = home.join(".claude/projects");
+    let claude_projects_dir = skill_studio_host::agent_path(&home, ".claude/projects");
 
     let (tx, rx) = mpsc::channel();
     let mut debouncer = match new_debouncer(DEBOUNCE, tx) {
@@ -2127,12 +2127,18 @@ pub(crate) fn apply_skill_snapshot_overlays(
         "open-code",
         skill_studio_core::opencode_config::opencode_json_path(&opencode_config_dir),
     );
-    let claude_config_file = config_file("claude-code", home.join(".claude").join("settings.json"));
+    let claude_config_file = config_file(
+        "claude-code",
+        skill_studio_host::agent_path(home, ".claude").join("settings.json"),
+    );
     let opencode_rules =
         skill_studio_core::opencode_config::read_skill_rules(&real_fs, &opencode_config_dir);
-    let claude_overrides =
-        skill_studio_core::harness::read_claude_skill_overrides(&real_fs, home, None);
-    let claude_skills_dir = home.join(".claude").join("skills");
+    let claude_overrides = skill_studio_core::harness::read_claude_skill_overrides(
+        &real_fs,
+        home,
+        Some(&skill_studio_host::agent_home(home, ".claude")),
+    );
+    let claude_skills_dir = skill_studio_host::agent_path(home, ".claude").join("skills");
     for skill in skills.iter_mut() {
         let open_code_deployment_count = skill
             .deployments
@@ -2303,7 +2309,10 @@ pub(crate) fn core_scan_installed_skills(
         skill_studio_core::scope::RuntimeScope::fixture(home)
     } else {
         let codex_home = skill_studio_host::codex_home(home);
-        skill_studio_core::scope::RuntimeScope::live(home, history_root).with_codex_home(codex_home)
+        skill_studio_host::resolve_agent_homes(
+            skill_studio_core::scope::RuntimeScope::live(home, history_root)
+                .with_codex_home(codex_home),
+        )
     };
     scope.projects = skill_studio_core::scope::ProjectSelection::Explicit {
         paths: project_paths.to_vec(),
@@ -2790,7 +2799,7 @@ fn has_skill_dir_component(path: &Path) -> bool {
 
 /// Whether `path` is, or is under, a native plugin cache directory.
 fn is_under_plugin_cache(path: &Path, home: &Path) -> bool {
-    path.starts_with(home.join(".claude/plugins/cache"))
+    path.starts_with(skill_studio_host::agent_path(home, ".claude/plugins/cache"))
         || path.starts_with(home.join(".codex/plugins/cache"))
 }
 
@@ -2897,7 +2906,7 @@ pub fn desired_watch_paths(home: &Path, projects: &[PathBuf]) -> Vec<WatchPath> 
     }
 
     for cache_dir in [
-        home.join(".claude/plugins/cache"),
+        skill_studio_host::agent_path(home, ".claude/plugins/cache"),
         home.join(".codex/plugins/cache"),
     ] {
         if let Some(parent) = cache_dir.parent() {
@@ -2918,7 +2927,11 @@ pub fn desired_watch_paths(home: &Path, projects: &[PathBuf]) -> Vec<WatchPath> 
         }
         add(&mut merged, watch.path, watch.recursive);
     }
-    add(&mut merged, home.join(".claude"), false);
+    add(
+        &mut merged,
+        skill_studio_host::agent_path(home, ".claude"),
+        false,
+    );
 
     for project in projects {
         for sub in HARNESS_DIR_NAMES {

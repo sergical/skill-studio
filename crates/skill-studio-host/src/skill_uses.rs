@@ -63,10 +63,11 @@ const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Claude Code keeps one directory per project here, and (for subagent
 /// sessions) one `<session>/subagents/*.jsonl` per parent session inside it.
+#[cfg(test)]
 const CLAUDE_PROJECTS_ROOT: &str = ".claude/projects";
 
 fn claude_projects_watch_dir(home: &Path) -> PathBuf {
-    home.join(CLAUDE_PROJECTS_ROOT)
+    crate::discovery::agent_home(home, ".claude").join("projects")
 }
 
 fn default_file_budget() -> u64 {
@@ -304,7 +305,7 @@ fn is_jsonl(path: &Path) -> bool {
 }
 
 fn claude_code_root(home: &Path) -> PathBuf {
-    home.join(CLAUDE_PROJECTS_ROOT)
+    crate::discovery::agent_home(home, ".claude").join("projects")
 }
 
 /// Lists Claude Code's transcripts: `<home>/.claude/projects/<project>/*.jsonl`
@@ -508,6 +509,7 @@ fn walk_jsonl_files(
 
 /// pi keeps one directory per session here:
 /// `.pi/agent/sessions/<dir>/<file>.jsonl`.
+#[cfg(test)]
 const PI_SESSIONS_ROOT: &str = ".pi/agent/sessions";
 
 /// How many directory levels [`list_pi_sessions`] descends below
@@ -516,7 +518,7 @@ const PI_SESSIONS_ROOT: &str = ".pi/agent/sessions";
 const PI_WALK_DEPTH: u32 = 4;
 
 fn pi_root(home: &Path) -> PathBuf {
-    home.join(PI_SESSIONS_ROOT)
+    crate::discovery::agent_home(home, ".pi/agent").join("sessions")
 }
 
 /// Lists pi's session transcripts: `<home>/.pi/agent/sessions/**/*.jsonl`. A
@@ -528,7 +530,7 @@ fn list_pi_sessions(home: &Path) -> SourceListing {
     let mut incomplete = false;
 
     walk_jsonl_files(
-        &home.join(PI_SESSIONS_ROOT),
+        &crate::discovery::agent_home(home, ".pi/agent").join("sessions"),
         PI_WALK_DEPTH,
         &mut files,
         &mut listed_dirs,
@@ -688,6 +690,7 @@ fn parse_cursor_uses_with_file(
 /// subdirectory per session (`<encoded cwd>/<session id>/{updates.jsonl,
 /// summary.json}`); a session only counts once it has a `summary.json` (see
 /// `list_grok_sessions`).
+#[cfg(test)]
 const GROK_SESSIONS_ROOT: &str = ".grok/sessions";
 
 /// `summary.json` is read only to check for `forked_at`; a file bigger than
@@ -695,7 +698,7 @@ const GROK_SESSIONS_ROOT: &str = ".grok/sessions";
 const MAX_GROK_SUMMARY_BYTES: u64 = 1024 * 1024;
 
 fn grok_root(home: &Path) -> PathBuf {
-    home.join(GROK_SESSIONS_ROOT)
+    crate::discovery::agent_home(home, ".grok").join("sessions")
 }
 
 /// True when `rel` (relative to `.grok/sessions`) is a session's
@@ -723,7 +726,7 @@ fn list_grok_sessions(home: &Path) -> SourceListing {
     let mut listed_dirs = BTreeSet::new();
     let mut incomplete = false;
 
-    let sessions_dir = home.join(GROK_SESSIONS_ROOT);
+    let sessions_dir = crate::discovery::agent_home(home, ".grok").join("sessions");
     let cwd_dirs = match fs::read_dir(&sessions_dir) {
         Ok(dirs) => dirs,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {

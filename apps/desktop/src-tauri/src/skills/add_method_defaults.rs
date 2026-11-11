@@ -27,15 +27,15 @@ const DOTAGENTS_BINARY: &str = "npx";
 /// (`.config/opencode`) and legacy (`.opencode`) locations.
 fn harness_config_dirs(id: AgentId, home: &Path) -> Vec<PathBuf> {
     match id {
-        AgentId::ClaudeCode => vec![home.join(".claude")],
+        AgentId::ClaudeCode => vec![skill_studio_host::agent_path(home, ".claude")],
         AgentId::Codex => vec![home.join(".codex")],
         AgentId::OpenCode => vec![
             home.join(".config").join("opencode"),
             home.join(".opencode"),
         ],
-        AgentId::Pi => vec![home.join(".pi")],
+        AgentId::Pi => vec![skill_studio_host::agent_home(home, ".pi/agent")],
         AgentId::Cursor => vec![home.join(".cursor")],
-        AgentId::GrokBuild => vec![home.join(".grok")],
+        AgentId::GrokBuild => vec![skill_studio_host::agent_path(home, ".grok")],
         _ => vec![],
     }
 }
@@ -89,7 +89,7 @@ fn lexical(path: &Path) -> PathBuf {
 /// whose target does not exist yet is compared by its written target, the
 /// same way the core install plan decides it.
 fn claude_reads_shared_folder(root: &Path) -> bool {
-    let claude = root.join(".claude").join("skills");
+    let claude = skill_studio_host::agent_path(root, ".claude/skills");
     let shared = root.join(".agents").join("skills");
     let is_link =
         std::fs::symlink_metadata(&claude).is_ok_and(|meta| meta.file_type().is_symlink());
@@ -101,8 +101,10 @@ fn claude_reads_shared_folder(root: &Path) -> bool {
         std::fs::canonicalize(&shared),
     ) {
         (Ok(resolved), Ok(shared)) => resolved == shared,
-        _ => std::fs::read_link(&claude)
-            .is_ok_and(|target| lexical(&root.join(".claude").join(target)) == lexical(&shared)),
+        _ => std::fs::read_link(&claude).is_ok_and(|target| {
+            lexical(&skill_studio_host::agent_home(root, ".claude").join(target))
+                == lexical(&shared)
+        }),
     }
 }
 

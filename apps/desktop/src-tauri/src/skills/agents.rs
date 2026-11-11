@@ -311,7 +311,7 @@ impl AgentId {
 
     /// This agent's global skills directory, resolved against `home`.
     pub fn global_skills_dir(&self, home: &Path) -> PathBuf {
-        home.join(self.global_path())
+        skill_studio_host::agent_path(home, self.global_path())
     }
 
     /// This agent's project-scoped skills directory, resolved against `project`.

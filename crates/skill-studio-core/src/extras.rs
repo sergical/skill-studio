@@ -66,6 +66,9 @@ pub fn extras(rt: &Runtime, ctx: &OpContext, _: &ExtrasRequest) -> Result<Extras
                     entries: &mut entries,
                 };
                 let agent_dir = match harness {
+                    "claude-code" if project.is_none() => {
+                        rt.scope.global_root_path(Path::new(".claude"))
+                    }
                     "claude-code" => root.join(".claude"),
                     "codex" if project.is_none() => rt.scope.codex_home.clone(),
                     "codex" => root.join(".codex"),
@@ -75,9 +78,10 @@ pub fn extras(rt: &Runtime, ctx: &OpContext, _: &ExtrasRequest) -> Result<Extras
                         .clone()
                         .unwrap_or_else(|| home.join(".config/opencode")),
                     "opencode" => root.join(".opencode"),
-                    "pi" if project.is_none() => root.join(".pi/agent"),
+                    "pi" if project.is_none() => rt.scope.global_root_path(Path::new(".pi/agent")),
                     "pi" => root.join(".pi"),
                     "cursor" => root.join(".cursor"),
+                    _ if project.is_none() => rt.scope.global_root_path(Path::new(".grok")),
                     _ => root.join(".grok"),
                 };
                 match harness {
@@ -87,9 +91,15 @@ pub fn extras(rt: &Runtime, ctx: &OpContext, _: &ExtrasRequest) -> Result<Extras
                             scan.config(&agent_dir.join("settings.local.json"), "", true);
                         }
                         if project.is_none() {
-                            scan.config(&home.join(".claude.json"), "mcpServers", false);
+                            scan.config(
+                                &rt.scope.global_root_path(Path::new(".claude.json")),
+                                "mcpServers",
+                                false,
+                            );
                         } else {
-                            scan.claude_project(&home.join(".claude.json"));
+                            scan.claude_project(
+                                &rt.scope.global_root_path(Path::new(".claude.json")),
+                            );
                             scan.config(&root.join(".mcp.json"), "mcpServers", false);
                         }
                     }
@@ -137,7 +147,7 @@ pub fn extras(rt: &Runtime, ctx: &OpContext, _: &ExtrasRequest) -> Result<Extras
                     });
                 }
                 if harness == "opencode" && project.is_none() {
-                    scan.instruction(&home.join(".claude/CLAUDE.md"));
+                    scan.instruction(&rt.scope.global_root_path(Path::new(".claude/CLAUDE.md")));
                 }
                 if harness == "pi" {
                     for file in ["SYSTEM.md", "APPEND_SYSTEM.md"] {

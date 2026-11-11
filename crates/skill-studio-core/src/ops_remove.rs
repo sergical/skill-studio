@@ -233,14 +233,15 @@ struct CliAgentBackups {
 }
 
 fn cli_agent_folder_backups(
+    normalized: &crate::scope::NormalizedScope,
     fs: &dyn ScopeFs,
-    home: &Path,
-    codex_home: &Path,
     scope: &RootScope,
     name: &str,
     removed: &Path,
     links: &[PathBuf],
 ) -> Result<CliAgentBackups, CoreError> {
+    let home = &normalized.home.lexical;
+    let codex_home = &normalized.codex_home;
     let removed_real = fs.canonicalize(removed).ok();
     let mut backups = CliAgentBackups::default();
     let mut folder_reals: Vec<PathBuf> = Vec::new();
@@ -250,6 +251,14 @@ fn cli_agent_folder_backups(
         scope,
         &cli_sanitize_name(name),
     ) {
+        let path = if matches!(scope, RootScope::Global) {
+            path.strip_prefix(home).map_or_else(
+                |_| path.clone(),
+                |relative| normalized.global_root_path(relative),
+            )
+        } else {
+            path
+        };
         // Before any fs call: the caller's link loop reads these paths next.
         if links.contains(&path) {
             continue;
@@ -323,10 +332,7 @@ fn remove_via_cli(
         program: "npx".to_string(),
         args,
         cwd,
-        env: crate::skills_cli_agents::cli_environment(
-            &rt.scope.home.lexical,
-            &rt.scope.codex_home,
-        ),
+        env: crate::skills_cli_agents::cli_environment(&rt.scope),
         timeout_ms: 120_000,
     };
     let output = spawner.run(&spec, ctx.cancel.as_ref())?;
@@ -647,9 +653,8 @@ fn remove_body(
         links: cli_links,
     } = if deployment.owner_kind == LifecycleOwnerKind::SkillsSh {
         cli_agent_folder_backups(
+            &rt.scope,
             fs,
-            &rt.scope.home.lexical,
-            &rt.scope.codex_home,
             &deployment.root.scope,
             &skill.name.0,
             &deployment.path,

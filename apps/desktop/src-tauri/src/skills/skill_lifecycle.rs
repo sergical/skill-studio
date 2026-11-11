@@ -361,7 +361,7 @@ pub fn claude_skills_dir_for_scope(
     project_path: Option<&Path>,
 ) -> PathBuf {
     match scope {
-        InstallScope::Global => home.join(".claude").join("skills"),
+        InstallScope::Global => skill_studio_host::agent_path(home, ".claude").join("skills"),
         InstallScope::Project => project_path
             .unwrap_or_else(|| Path::new(""))
             .join(".claude")
