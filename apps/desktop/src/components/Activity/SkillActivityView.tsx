@@ -1,3 +1,4 @@
+import { FirstScanState, type FirstScanStateProps } from "../SkillList/FirstScanState";
 import { ScanStatusNote } from "../SkillList/ScanStatusNote";
 import type { BackgroundStatus } from "@skill-studio/lib";
 // ============================================================================
@@ -18,7 +19,7 @@ import { useActivityEscape } from "./useActivityEscape";
 import { PageShell } from "../Shell/PageShell";
 import { useAppStore } from "../../store/appStore";
 
-interface SkillActivityViewProps {
+interface SkillActivityViewProps extends FirstScanStateProps {
   snapshot: SkillSnapshot | undefined;
   backgroundStatus?: BackgroundStatus;
   onSelectSkill: (name: string) => void;
@@ -38,6 +39,9 @@ export function SkillActivityView({
   snapshot,
   backgroundStatus,
   onSelectSkill,
+  isLoading,
+  error,
+  onRetry,
 }: SkillActivityViewProps) {
   const day = useAppStore((state) => state.activityDay);
   const setDay = useAppStore((state) => state.setActivityDay);
@@ -49,6 +53,14 @@ export function SkillActivityView({
   const now = activityNow(snapshot?.scanned_at);
   const lens = useActivityLens(stats, now);
   const hasAnyInvocations = snapshot ? snapshot.invocations.some((s) => s.total > 0) : false;
+
+  if (!snapshot) {
+    return (
+      <PageShell title="Activity">
+        <FirstScanState isLoading={isLoading} error={error} onRetry={onRetry} />
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell

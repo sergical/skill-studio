@@ -314,6 +314,7 @@ export function SkillMarkdownEditor({
             value={content}
             onChange={(e) => handleContentChange(e.target.value)}
             onScroll={(e) => syncScroll(e.currentTarget.scrollTop)}
+            aria-label="SKILL.md"
             aria-describedby={markedLine === undefined ? undefined : diagnosticId}
             aria-invalid={markedLine === undefined ? undefined : true}
             spellCheck={false}

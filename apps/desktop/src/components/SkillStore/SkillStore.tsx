@@ -144,6 +144,7 @@ function useSkillStoreData(
   // once instead of on every render.
   // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- the mount effect below depends on this callback's identity to run exactly once
   const loadInitialData = useCallback(() => {
+    const query = searchQueryRef.current;
     setBrowseError(null);
     return loadBrowseInitialData(
       { getInstalled: getInstalledSkills, getPopular: () => getPopularSkills(0, LIMIT) },
@@ -151,16 +152,16 @@ function useSkillStoreData(
     )
       .then(({ installed, popular }) => {
         setInstalledSkills(installed);
-        if (!popular) return;
+        if (!popular || searchQueryRef.current !== query) return;
         pageRef.current = 0;
         setHasMore(popular.has_more);
         setRawResults(popular.skills);
       })
       .catch((err) => {
-        setBrowseError(invokeErrorMessage(err));
+        if (searchQueryRef.current === query) setBrowseError(invokeErrorMessage(err));
       })
       .finally(() => {
-        setIsLoading(false);
+        if (searchQueryRef.current === query) setIsLoading(false);
       });
     // `projects` is not read here - `getInstalledSkills` covers every tracked project on its
     // own - but it stays a dependency purely to retrigger this callback (and the mount effect
@@ -205,14 +206,16 @@ function useSkillStoreData(
       // Show popular skills when no search query
       return getPopularSkills(0, LIMIT)
         .then((response) => {
+          if (searchQueryRef.current !== query) return;
           setRawResults(response.skills);
           setHasMore(response.has_more);
         })
         .catch((err) => {
+          if (searchQueryRef.current !== query) return;
           setBrowseError(err instanceof Error ? err.message : "Failed to load popular skills");
         })
         .finally(() => {
-          setIsLoading(false);
+          if (searchQueryRef.current === query) setIsLoading(false);
         });
     }
 
@@ -220,14 +223,16 @@ function useSkillStoreData(
     // everything up to LIMIT.
     return searchSkills(query, LIMIT)
       .then((response) => {
+        if (searchQueryRef.current !== query) return;
         setRawResults(response.skills);
         setHasMore(false);
       })
       .catch((err) => {
+        if (searchQueryRef.current !== query) return;
         setBrowseError(err instanceof Error ? err.message : "Failed to search skills");
       })
       .finally(() => {
-        setIsLoading(false);
+        if (searchQueryRef.current === query) setIsLoading(false);
       });
   };
 
@@ -241,18 +246,21 @@ function useSkillStoreData(
     // hasMore is always false while a search is active (the v1 search API
     // returns everything up to LIMIT in one shot), so this only ever pages
     // through popular skills.
-    if (isLoadingMore || !hasMore) return;
+    if (isLoadingMore || !hasMore || isSearchQuery(searchQueryRef.current)) return;
+    const query = searchQueryRef.current;
 
     setIsLoadingMore(true);
     const nextPage = pageRef.current + 1;
 
     return getPopularSkills(nextPage, LIMIT)
       .then((response) => {
+        if (searchQueryRef.current !== query) return;
         setRawResults((prev) => [...prev, ...response.skills]);
         setHasMore(response.has_more);
         pageRef.current = nextPage;
       })
       .catch((err) => {
+        if (searchQueryRef.current !== query) return;
         addToast({
           type: "error",
           title: "Load More Failed",
@@ -433,37 +441,37 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
         <SkillStoreTabList installedCount={installedSkills.length} tabsPadding={tabsPadding} />
 
         <TabsContent value="browse" className="flex flex-1 flex-col overflow-hidden">
+          <div className={`flex items-center gap-4 border-b border-border py-4 ${tabsPadding}`}>
+            <SkillSearchBar
+              value={searchQuery}
+              onChange={setSearchQuery}
+              onSearch={handleSearch}
+              isLoading={isLoading}
+            />
+            {!browseError && (
+              <div className="ml-auto flex items-center gap-4">
+                <span className="text-small tabular-nums text-text-tertiary">
+                  {searchResultsWithStatus.length} skill
+                  {searchResultsWithStatus.length !== 1 ? "s" : ""}
+                </span>
+              </div>
+            )}
+          </div>
+
           {browseError ? (
             <BrowseErrorEmptyState error={browseError} onRetry={retry} />
           ) : (
-            <>
-              <div className={`flex items-center gap-4 border-b border-border py-4 ${tabsPadding}`}>
-                <SkillSearchBar
-                  value={searchQuery}
-                  onChange={setSearchQuery}
-                  onSearch={handleSearch}
-                  isLoading={isLoading}
-                />
-                <div className="ml-auto flex items-center gap-4">
-                  <span className="text-small tabular-nums text-text-tertiary">
-                    {searchResultsWithStatus.length} skill
-                    {searchResultsWithStatus.length !== 1 ? "s" : ""}
-                  </span>
-                </div>
-              </div>
-
-              <div className={`flex flex-1 overflow-hidden ${compact ? "flex-col" : ""}`}>
-                <SkillBrowser
-                  skills={searchResultsWithStatus}
-                  selectedSkill={selectedSkill}
-                  onSelectSkill={(skill) => setSelectedSkillName(skill.name)}
-                  mode={{ kind: "browse", isLoading, isLoadingMore, hasMore, onLoadMore: loadMore }}
-                  emptyMessage={
-                    searchQuery ? "No skills found matching your search" : "Loading popular skills…"
-                  }
-                />
-              </div>
-            </>
+            <div className={`flex flex-1 overflow-hidden ${compact ? "flex-col" : ""}`}>
+              <SkillBrowser
+                skills={searchResultsWithStatus}
+                selectedSkill={selectedSkill}
+                onSelectSkill={(skill) => setSelectedSkillName(skill.name)}
+                mode={{ kind: "browse", isLoading, isLoadingMore, hasMore, onLoadMore: loadMore }}
+                emptyMessage={
+                  searchQuery ? "No skills found matching your search" : "Loading popular skills…"
+                }
+              />
+            </div>
           )}
         </TabsContent>
 

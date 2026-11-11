@@ -259,7 +259,7 @@ function SidebarFooter({
             onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
             aria-label={resolvedTheme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
           >
-            {resolvedTheme === "dark" ? <Moon size={13} /> : <Sun size={13} />}
+            {resolvedTheme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
           </Button>
         </TooltipControl>
       </div>

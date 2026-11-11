@@ -52,7 +52,7 @@ export function ActivityOverview({
           )}
         </>
       )}
-      <p className="text-small text-pretty text-text-quaternary">
+      <p className="text-small text-pretty text-text-tertiary">
         Click a day to see its details here.
       </p>
     </>

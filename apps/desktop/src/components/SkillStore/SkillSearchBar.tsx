@@ -21,6 +21,7 @@ export function SkillSearchBar({
   isLoading,
   placeholder = "Search skills.sh…",
 }: SkillSearchBarProps) {
+  const lastSearchedValue = useRef(value);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -38,6 +39,8 @@ export function SkillSearchBar({
     }
 
     debounceRef.current = setTimeout(() => {
+      if (lastSearchedValue.current === value) return;
+      lastSearchedValue.current = value;
       onDebouncedSearch(value);
     }, 300);
 
@@ -71,6 +74,7 @@ export function SkillSearchBar({
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
+        aria-label="Search skills.sh"
         className="h-(--control-height) pr-8.5 pl-8.5"
       />
       {value && (

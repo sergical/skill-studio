@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/skill-studio-logo.png" />
@@ -8,6 +8,18 @@
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
     />
     <title>Skill Studio</title>
+    <script>
+      let theme;
+      try {
+        theme = localStorage.getItem("theme");
+      } catch {}
+      document.documentElement.dataset.theme =
+        theme === "light" || theme === "dark"
+          ? theme
+          : matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light";
+    </script>
     <style>
       html,
       body,
@@ -16,10 +28,6 @@
         margin: 0;
         padding: 0;
         overflow: hidden;
-      }
-      body {
-        background-color: #0f0f0f;
-        color: #f6f6f6;
       }
     </style>
   </head>

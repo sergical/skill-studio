@@ -57,7 +57,7 @@ export function ActivityDayCard({ stats, dayKey, filter, hint }: ActivityDayCard
           })}
         </div>
       )}
-      {hint && <span className="text-caption text-text-quaternary">{hint}</span>}
+      {hint && <span className="text-caption text-text-tertiary">{hint}</span>}
     </div>
   );
 }

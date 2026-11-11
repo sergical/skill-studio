@@ -166,15 +166,18 @@ function PullLatestButton({ skill, isBusy = false }: { skill: InstalledSkill; is
     setIsPulling(false);
   };
 
+  const pullBusy = isPulling || guard.isResolving || isBusy;
+
   return (
     <>
       <Button
         variant="ghost"
         className={ROW_ACTION_CLASS}
         onClick={handlePull}
-        disabled={isPulling || guard.isResolving || isBusy}
+        disabled={pullBusy}
+        aria-label={pullBusy ? "Pulling latest…" : undefined}
       >
-        {isPulling || guard.isResolving || isBusy ? (
+        {pullBusy ? (
           <span className="inline-block size-3 animate-spin motion-reduce:animate-none rounded-full border-2 border-current border-t-transparent" />
         ) : (
           "Pull latest"
@@ -207,7 +210,13 @@ function ParkButton({ skill }: { skill: InstalledSkill }) {
   };
 
   return (
-    <Button variant="ghost" className={ROW_ACTION_CLASS} onClick={handlePark} disabled={isParking}>
+    <Button
+      variant="ghost"
+      className={ROW_ACTION_CLASS}
+      onClick={handlePark}
+      disabled={isParking}
+      aria-label={isParking ? "Parking…" : undefined}
+    >
       {isParking ? (
         <span className="inline-block size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
       ) : (
@@ -439,7 +448,7 @@ function UnusedGroup({
                     {modelInvocable ? (
                       "description in every prompt"
                     ) : (
-                      <span className="text-text-quaternary">user-only, not in the prompt</span>
+                      <span className="text-text-tertiary">user-only, not in the prompt</span>
                     )}
                   </span>
                 }

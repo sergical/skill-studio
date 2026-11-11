@@ -1,3 +1,4 @@
+import { FirstScanState, type FirstScanStateProps } from "../SkillList/FirstScanState";
 import { ScanStatusNote } from "../SkillList/ScanStatusNote";
 import type { BackgroundStatus } from "@skill-studio/lib";
 // ============================================================================
@@ -21,7 +22,7 @@ import { ownSkillsView, ownSkillsWithPluginUpdates } from "@skill-studio/lib";
 import type { SkillSnapshot } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 
-interface SkillsViewProps {
+interface SkillsViewProps extends FirstScanStateProps {
   snapshot: SkillSnapshot | undefined;
   backgroundStatus?: BackgroundStatus;
   onSelectSkill: (name: string, deploymentPath?: string) => void;
@@ -36,7 +37,15 @@ interface SkillsViewProps {
  * the store's `skillListFilter`/`showCoverage`, so opening a skill and
  * coming back never loses them.
  */
-export function SkillsView({ snapshot, backgroundStatus, onSelectSkill, active }: SkillsViewProps) {
+export function SkillsView({
+  snapshot,
+  backgroundStatus,
+  onSelectSkill,
+  active,
+  isLoading,
+  error,
+  onRetry,
+}: SkillsViewProps) {
   const filter = useAppStore((state) => state.skillListFilter);
   const setSkillListFilter = useAppStore((state) => state.setSkillListFilter);
   const resetSkillListFilter = useAppStore((state) => state.resetSkillListFilter);
@@ -72,6 +81,14 @@ export function SkillsView({ snapshot, backgroundStatus, onSelectSkill, active }
     const added = await addProject();
     if (added) setSkillListFilter({ scope: { project: added } });
   };
+
+  if (!snapshot) {
+    return (
+      <PageShell title="Skills">
+        <FirstScanState isLoading={isLoading} error={error} onRetry={onRetry} />
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell

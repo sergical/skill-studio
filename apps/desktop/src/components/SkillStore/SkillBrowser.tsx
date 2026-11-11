@@ -166,7 +166,7 @@ function InstalledSkillTags({
       {installedInfo.deployments.map((deployment) => (
         <span
           key={deployment.path}
-          className="inline-flex items-center gap-[3px] rounded-sm bg-bg-tertiary px-1.5 py-0.5 text-caption text-text-tertiary"
+          className="inline-flex items-center gap-[3px] rounded-sm bg-bg-tertiary px-1.5 py-0.5 text-caption text-text-secondary"
         >
           {deployment.is_symlink && <Link2 size={10} />}
           {deployment.plugin
@@ -233,7 +233,7 @@ function SkillCard({ skill, isSelected, onClick, hideInstalledIndicator }: Skill
             {skill.tags.slice(0, 2).map((tag) => (
               <span
                 key={tag}
-                className="rounded-xs bg-bg-tertiary px-1.5 py-0.5 text-caption text-text-tertiary"
+                className="rounded-xs bg-bg-tertiary px-1.5 py-0.5 text-caption text-text-secondary"
               >
                 {tag}
               </span>

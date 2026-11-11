@@ -288,7 +288,7 @@ export function ActivityHeatmap({
         </div>
       </div>
       <div
-        className="flex items-center justify-end gap-1 text-caption text-text-quaternary"
+        className="flex items-center justify-end gap-1 text-caption text-text-tertiary"
         aria-hidden="true"
       >
         <span className="mr-1">Less</span>
