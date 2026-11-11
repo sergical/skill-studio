@@ -4,6 +4,14 @@
   "description": "Result of `park`.",
   "type": "object",
   "properties": {
+    "retained_copies": {
+      "description": "Retained source copies. Open handles can still change these bytes.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RetainedCopy"
+      },
+      "default": []
+    },
     "event_id": {
       "description": "The `park` event.",
       "$ref": "#/$defs/EventId"
@@ -30,6 +38,26 @@
     "parked_path"
   ],
   "$defs": {
+    "RetainedCopy": {
+      "description": "A retained cross-volume copy. Sizes are snapshots; open writers can change them.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Absolute path to the retained folder.",
+          "type": "string"
+        },
+        "bytes": {
+          "description": "Total file bytes at the snapshot; an open writer can change this later.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "bytes"
+      ]
+    },
     "EventId": {
       "description": "History event id (ULID string).\n\nInvariant: lexical order equals creation order inside one store.",
       "type": "string"
