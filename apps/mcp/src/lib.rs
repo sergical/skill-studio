@@ -43,6 +43,7 @@ use skill_studio_core::dto::{
     RepairApplyRequest, RepairPreviewRequest, RestoreRequest, ScanRequest, SweepQuarantineRequest,
     UnparkRequest, UpdateAllRequest, UpdateRequest,
 };
+use skill_studio_core::extras::ExtrasRequest;
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::CorrelationId;
 use skill_studio_core::ops::{self, Operation, Outcome, ResultEnvelope};
@@ -446,6 +447,21 @@ impl SkillStudioServer {
     ) -> CallToolResult {
         run_op(Operation::DiagnoseConflict, false, &context, |rt, ctx| {
             ops::diagnose_conflict(rt, ctx, &req)
+        })
+        .await
+    }
+
+    #[tool(
+        description = "List hook event names and counts, MCP server names, and instruction paths. No config values or file contents. Writes nothing; declarations may be disabled or untrusted.",
+        annotations(read_only_hint = true)
+    )]
+    async fn extras(
+        &self,
+        Parameters(req): Parameters<ExtrasRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(Operation::Extras, false, &context, |rt, ctx| {
+            ops::extras(rt, ctx, &req)
         })
         .await
     }

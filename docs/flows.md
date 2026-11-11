@@ -110,3 +110,9 @@ its retention cap, and the journal has no open plan at rest. Quarantine uses
 
 The app data folder's `schema_version` marker prevents an older app from
 opening a folder written by a newer schema. A folder with no marker is version 0.
+
+## Non-skill configuration (CLI/MCP-only)
+
+| Flow | Desktop entry | CLI | MCP tool | Flow tests |
+| --- | --- | --- | --- | --- |
+| List hook events, MCP names, and instruction paths | CLI/MCP-only | `skill-studio extras [--project <path>] [--json]` | `extras` | `apps/cli/tests/extras.rs::extras_lists_names_and_locations_instead_of_secret_values_with_cli_mcp_parity`; `extras_reports_each_bad_file_as_unreadable_instead_of_exposing_parser_errors` |

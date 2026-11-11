@@ -342,6 +342,13 @@ enum Command {
     },
     /// Start the MCP server so an agent can tidy your skills.
     Mcp,
+    /// List hook events, MCP server names, and instruction file paths. Writes nothing.
+    Extras {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        #[arg(long)]
+        json: bool,
+    },
     /// Run every lifecycle invariant in `docs/flows.md`
     /// over the whole scope; writes nothing. Exit code 0 with an empty
     /// violation list on a healthy home, 1 when any violation is found
@@ -619,6 +626,7 @@ fn main() -> ExitCode {
             json,
         } => run_install_preferences(&scope, project_path, json, time),
         Command::Conflicts { scope, json } => run_diagnose_conflict(&scope, json, time),
+        Command::Extras { scope, json } => run_extras(&scope, json, time),
         Command::Doctor { scope, json } => run_doctor(&scope, json, time),
         Command::TurnOff {
             scope,
@@ -2153,4 +2161,23 @@ fn run_turn_off(
             );
         }
     })
+}
+
+fn run_extras(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
+    let rt = match build_runtime::<skill_studio_core::extras::ExtrasReport>(
+        scope,
+        Operation::Extras,
+        json,
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = ops::extras(
+        &rt,
+        &ctx,
+        &skill_studio_core::extras::ExtrasRequest::default(),
+    );
+    let envelope = ResultEnvelope::from_result(Operation::Extras, &rt.scope, &ctx, result);
+    finish(&envelope, json, time, output::print_extras_table)
 }
