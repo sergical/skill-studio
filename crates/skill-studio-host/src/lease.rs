@@ -488,15 +488,17 @@ mod tests {
         );
         write_fake_holder(&holder_file, dead_pid);
 
-        // Held well past `STALE_TAKEOVER_TIMEOUT` (500ms), so the bridge
-        // must have given up and reported busy before this release ever
-        // happens.
+        // Held until `acquire` returns, so only the bridge's own
+        // `STALE_TAKEOVER_TIMEOUT` (500ms) can end the wait. The 5s backstop
+        // turns a bridge that waits forever into a failure instead of a hang.
+        let (returned_tx, returned_rx) = std::sync::mpsc::channel::<()>();
         let releaser = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(650));
+            let _ = returned_rx.recv_timeout(Duration::from_secs(5));
             drop(holder_file);
         });
 
         let result = lease.acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(100));
+        returned_tx.send(()).expect("signal the releasing thread");
         releaser.join().expect("join the releasing thread");
 
         assert!(
