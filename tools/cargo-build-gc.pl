@@ -57,16 +57,24 @@ sub logline { print strftime('%F %T', localtime), " @_\n" }
 open(my $instance, '>>', "$root/.gc.lock") or die "cannot open $root/.gc.lock: $!\n";
 exit 0 unless flock($instance, LOCK_EX | LOCK_NB);
 
+# True when $dir has no symlink in any part of its path below $ws.
+sub inside {
+    my ($ws, $dir) = @_;
+    my $real = realpath($dir);
+    return defined $real && $real eq $dir && index($real, "$ws/") == 0;
+}
+
 # Returns exclusively locked handles for every Cargo lock in the folder, or
 # undef when Cargo holds one of them.
 sub lock_all {
     my ($ws) = @_;
     my @held;
     for my $path (map { bsd_glob("$ws/$_") } '*/.cargo-lock', '*/*/.cargo-lock') {
-        next if -l $path;
+        my $dir = dirname($path);
+        next if -l $path || !inside($ws, $dir);
         open(my $fh, '<', $path) or return undef;
         flock($fh, LOCK_EX | LOCK_NB) or return undef;
-        push @held, { fh => $fh, dir => dirname($path) };
+        push @held, { fh => $fh, dir => $dir };
     }
     return \@held;
 }
@@ -181,6 +189,7 @@ for my $w (sort { $a->{used} <=> $b->{used} } @workspaces) {
 
     my @failed;
     for my $lock (@$locks) {
+        next unless inside($w->{ws}, $lock->{dir});
         opendir(my $pd, $lock->{dir}) or next;
         for my $entry (grep { $_ ne '.' && $_ ne '..' && $_ ne '.cargo-lock' } readdir($pd)) {
             remove_tree("$lock->{dir}/$entry", { error => \my $err });
