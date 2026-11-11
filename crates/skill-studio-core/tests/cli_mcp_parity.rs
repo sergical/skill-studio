@@ -82,6 +82,10 @@ struct SurfaceName {
 /// `Command` variants, in snake case, that do not repeat their op's name.
 const CLI_SUBCOMMANDS: &[SurfaceName] = &[
     SurfaceName {
+        op: "review_due",
+        surface: "review",
+    },
+    SurfaceName {
         op: "scan_for_usage",
         surface: "usage",
     },
@@ -131,6 +135,10 @@ const CLI_SUBCOMMANDS: &[SurfaceName] = &[
 
 /// `#[tool]` method names that do not repeat their op's name.
 const MCP_TOOLS: &[SurfaceName] = &[
+    SurfaceName {
+        op: "review",
+        surface: "review_set",
+    },
     SurfaceName {
         op: "scan_for_usage",
         surface: "skill_usage",

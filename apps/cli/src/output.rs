@@ -828,6 +828,15 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         ("doctor_request", || {
             schemars::schema_for!(skill_studio_core::dto::DoctorRequest)
         }),
+        ("review_request", || {
+            schemars::schema_for!(skill_studio_core::review::ReviewRequest)
+        }),
+        ("review_outcome", || {
+            schemars::schema_for!(skill_studio_core::review::ReviewOutcome)
+        }),
+        ("review_due_report", || {
+            schemars::schema_for!(skill_studio_core::review::ReviewDueReport)
+        }),
         ("invocation_request", || {
             schemars::schema_for!(skill_studio_core::ops_invocation::InvocationRequest)
         }),
@@ -919,6 +928,32 @@ pub fn print_invocation_table(
         }
         for id in &report.event_ids {
             println!("Undo: skill-studio restore --event-id {}", id.0);
+        }
+    }
+}
+
+pub fn print_review(envelope: &ResultEnvelope<skill_studio_core::review::ReviewOutcome>) {
+    if let Some(data) = &envelope.data {
+        println!(
+            "{}: {}",
+            data.skill,
+            data.review_date.as_deref().unwrap_or("review date cleared")
+        );
+    }
+}
+pub fn print_review_due(envelope: &ResultEnvelope<skill_studio_core::review::ReviewDueReport>) {
+    if let Some(data) = &envelope.data {
+        for row in &data.rows {
+            println!(
+                "{}  {}  {} sessions",
+                row.skill, row.review_date, row.sessions
+            );
+        }
+        if data.partial {
+            println!("Partial usage counts:");
+        }
+        for observation in &data.observations {
+            println!("{}: {}", observation.path.display(), observation.reason);
         }
     }
 }

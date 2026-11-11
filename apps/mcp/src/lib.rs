@@ -347,6 +347,56 @@ impl SkillStudioServer {
     }
 
     #[tool(
+        description = "Set a skill review date in YYYY-MM-DD form. Undo with review_clear.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn review_set(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::review::ReviewRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(Operation::Review, true, &context, |rt, ctx| {
+            if req.date.is_none() {
+                return Err(skill_studio_core::CoreError::new(
+                    skill_studio_core::ErrorCode::InvalidRequest,
+                    "review_set requires a date",
+                ));
+            }
+            ops::review(rt, ctx, &req)
+        })
+        .await
+    }
+    #[tool(
+        description = "Clear a skill review date. Undo with review_set and the old date.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn review_clear(
+        &self,
+        Parameters(mut req): Parameters<skill_studio_core::review::ReviewRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        req.date = None;
+        run_op(Operation::Review, true, &context, |rt, ctx| {
+            ops::review(rt, ctx, &req)
+        })
+        .await
+    }
+    #[tool(
+        description = "List skills past their review date with session counts and usage observations.",
+        annotations(read_only_hint = true)
+    )]
+    async fn review_due(
+        &self,
+        Parameters(_req): Parameters<ScanRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(Operation::ReviewDue, false, &context, |rt, ctx| {
+            skill_studio_host::review_due_report(rt, ctx, scope::desktop_usage_cache().as_deref())
+        })
+        .await
+    }
+
+    #[tool(
         description = "Show how often each skill was used in the last N days, and which skills were not used. Use it to find skills to park.",
         annotations(read_only_hint = true)
     )]

@@ -142,3 +142,17 @@ Batch unpark checks every recorded link path before moving a skill. The CLI
 command is `skill-studio unpark alpha beta`; the MCP tool is `unpark` with
 `skills`. `apps/cli/tests/batch_park.rs::blocked_recorded_link_refuses_batch_unpark_before_restoring_any_copy_on_cli_and_mcp`
 checks that a blocked link keeps both skills parked on CLI and MCP.
+
+## Skill review dates (CLI/MCP-only)
+
+| Flow                               | Desktop entry | CLI                                                     | MCP tool       | Flow tests                                                                                                                                                                                                                                 |
+| ---------------------------------- | ------------- | ------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Set a skill review date            | CLI/MCP-only  | `skill-studio review set <skill> <YYYY-MM-DD> [--json]` | `review_set`   | `review_set_due_counts_fixture_sessions_and_clear_removes_or_future_dates_leak`; `review_unknown_skill_is_refused_instead_of_storing_a_date`                                                                                               |
+| Clear a review date                | CLI/MCP-only  | `skill-studio review clear <skill> [--json]`            | `review_clear` | `review_set_due_counts_fixture_sessions_and_clear_removes_or_future_dates_leak`; `review_removed_skill_leaves_due_and_can_be_cleared_instead_of_staying_stuck`                                                                             |
+| List skills past their review date | CLI/MCP-only  | `skill-studio review due [--json]`                      | `review_due`   | `review_due_uses_fake_clock_and_excludes_today_instead_of_reading_wall_time`; `review_due_reuses_the_cli_usage_cache_instead_of_writing_a_second_index`; `review_cli_mcp_json_matches_for_set_due_clear_and_unknown_or_one_adapter_drifts` |
+
+Dates use UTC. A date becomes due on the next day. Counts cover distinct
+sessions across all available history. The due list refreshes the same usage cache as
+`skill-studio usage` and includes every usage observation when counts are
+partial. A removed skill leaves the due list, and its date can still be cleared.
+Review dates are Skill Studio data in `~/.agents/review-dates.json`.

@@ -33,6 +33,11 @@ pub fn desktop_usage_cache_path(data_dir: &Path) -> PathBuf {
     data_dir.join("com.skillstudio.app").join("skill-uses.json")
 }
 
+/// The CLI and MCP cache beside the desktop cache. Only the desktop app writes the desktop cache.
+pub fn cli_usage_cache_path(desktop_cache: &Path) -> PathBuf {
+    desktop_cache.with_file_name("cli-skill-uses.json")
+}
+
 /// One installed skill's uses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkillUsageRow {
@@ -149,6 +154,25 @@ impl SkillUsage {
         now: DateTime<Utc>,
         selection: &UsageFilter,
     ) -> UsageReport {
+        self.report_named(
+            home,
+            inventory,
+            days,
+            now,
+            selection,
+            &active_skill_names(inventory),
+        )
+    }
+
+    pub(crate) fn report_named(
+        &mut self,
+        home: &Path,
+        inventory: &Inventory,
+        days: u32,
+        now: DateTime<Utc>,
+        selection: &UsageFilter,
+        installed: &BTreeSet<String>,
+    ) -> UsageReport {
         let sources = DiscoverySources::read(&RealFs::new(), home);
         let refresh = self.index.refresh_all(home, &sources);
 
@@ -172,9 +196,8 @@ impl SkillUsage {
         }
         observations.sort();
         observations.dedup();
-        let installed = active_skill_names(inventory);
         let filter = SkillUseFilter {
-            known_skills: &installed,
+            known_skills: installed,
             sources: &sources,
         };
         let cutoff = now - chrono::Duration::days(i64::from(days));
@@ -193,7 +216,7 @@ impl SkillUsage {
         });
         for use_ in counted_uses(selected, &filter) {
             let Some(tally) =
-                installed_name(&use_.skill, &installed).and_then(|name| by_skill.get_mut(name))
+                installed_name(&use_.skill, installed).and_then(|name| by_skill.get_mut(name))
             else {
                 continue;
             };
