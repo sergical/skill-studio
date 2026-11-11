@@ -38,6 +38,52 @@ pub struct WebviewItem {
     pub payload: Value,
 }
 
+/// Bounds the serialized request before allocating JSON payload trees.
+/// Item bodies remain borrowed until their individual byte limits pass.
+pub fn parse_webview_items(raw: &str) -> Option<Vec<WebviewItem>> {
+    if raw.len() > MAX_ITEM_BYTES * MAX_ITEMS_PER_ENVELOPE {
+        return None;
+    }
+    struct Items<'a>(Vec<&'a serde_json::value::RawValue>);
+    impl<'de> serde::Deserialize<'de> for Items<'de> {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct Visitor;
+            impl<'de> serde::de::Visitor<'de> for Visitor {
+                type Value = Items<'de>;
+                fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str("at most eight webview items")
+                }
+                fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                    self,
+                    mut seq: A,
+                ) -> Result<Self::Value, A::Error> {
+                    let mut items = Vec::new();
+                    while items.len() < MAX_ITEMS_PER_ENVELOPE {
+                        let Some(item) = seq.next_element::<&serde_json::value::RawValue>()? else {
+                            return Ok(Items(items));
+                        };
+                        if item.get().len() > MAX_ITEM_BYTES {
+                            return Err(serde::de::Error::custom("webview item too large"));
+                        }
+                        items.push(item);
+                    }
+                    if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                        return Err(serde::de::Error::custom("too many webview items"));
+                    }
+                    Ok(Items(items))
+                }
+            }
+            deserializer.deserialize_seq(Visitor)
+        }
+    }
+    let items: Items<'_> = serde_json::from_str(raw).ok()?;
+    items
+        .0
+        .into_iter()
+        .map(|item| serde_json::from_str(item.get()).ok())
+        .collect()
+}
+
 /// A Sentry client for the webview project, gated by the same [`Consent`]
 /// as the Rust client.
 pub struct WebviewTelemetry {
@@ -85,7 +131,14 @@ impl WebviewTelemetry {
 
     /// Scrubs `items` and sends the ones that survive as one envelope.
     /// Sends nothing while consent is off. Returns how many items it sent.
-    pub fn send(&self, items: Vec<WebviewItem>) -> usize {
+    pub fn send_json(&self, raw: &str) -> usize {
+        if !self.consent.enabled() {
+            return 0;
+        }
+        parse_webview_items(raw).map_or(0, |items| self.send(items))
+    }
+
+    fn send(&self, items: Vec<WebviewItem>) -> usize {
         if !self.consent.enabled() {
             return 0;
         }
@@ -113,7 +166,11 @@ impl WebviewTelemetry {
                 continue;
             }
             trace_id = trace_id.or_else(|| item_trace_id(&payload));
-            let header = serde_json::json!({ "type": item.kind, "length": bytes.len() });
+            let mut header = serde_json::json!({ "type": item.kind, "length": bytes.len() });
+            if item.kind == "span" && payload.get("version") == Some(&Value::from(2)) {
+                header["item_count"] = Value::from(payload["items"].as_array().map_or(0, Vec::len));
+                header["content_type"] = "application/vnd.sentry.items.span.v2+json".into();
+            }
             body.extend_from_slice(header.to_string().as_bytes());
             body.push(b'\n');
             body.extend_from_slice(&bytes);
@@ -160,7 +217,8 @@ struct Stamp<'a> {
 
 fn item_trace_id(payload: &Value) -> Option<String> {
     payload
-        .pointer("/contexts/trace/trace_id")
+        .pointer("/items/0/trace_id")
+        .or_else(|| payload.pointer("/contexts/trace/trace_id"))
         .or_else(|| payload.get("trace_id"))
         .and_then(Value::as_str)
         .map(str::to_string)
@@ -170,10 +228,220 @@ fn scrub_item(kind: &str, payload: &Value, stamp: &Stamp<'_>) -> Option<Value> {
     match kind {
         "event" => scrub_event(payload, stamp),
         "transaction" => scrub_transaction(payload, stamp),
-        "span" => scrub_span(payload),
+        "span" => scrub_span_container(payload),
         _ => None,
     }
 }
+
+fn scrub_span_container(payload: &Value) -> Option<Value> {
+    if payload.get("version").and_then(Value::as_u64) != Some(2) {
+        return scrub_span(payload);
+    }
+    let items: Vec<Value> = payload
+        .get("items")?
+        .as_array()?
+        .iter()
+        .take(MAX_SPANS)
+        .filter_map(scrub_streamed_span)
+        .collect();
+    if items.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({"version": 2, "ingest_settings": {
+        "infer_ip": "never", "infer_user_agent": "never"
+    }, "items": items}))
+}
+
+fn scrub_streamed_span(span: &Value) -> Option<Value> {
+    let mut out = Map::new();
+    out.insert("trace_id".into(), hex_id(span.get("trace_id"), 32)?);
+    out.insert("span_id".into(), hex_id(span.get("span_id"), 16)?);
+    put(
+        &mut out,
+        "parent_span_id",
+        hex_id(span.get("parent_span_id"), 16),
+    );
+    out.insert(
+        "start_timestamp".into(),
+        number(span.get("start_timestamp"))?,
+    );
+    out.insert("end_timestamp".into(), number(span.get("end_timestamp"))?);
+    put(&mut out, "is_segment", boolean(span.get("is_segment")));
+    let attrs = span.get("attributes")?.as_object()?;
+    let untyped: Map<String, Value> = attrs
+        .iter()
+        .filter_map(|(key, value)| value.get("value").map(|v| (key.clone(), v.clone())))
+        .collect();
+    let op = untyped.get("sentry.op").and_then(Value::as_str);
+    let name = if op == Some("ipc") {
+        Some(command_name(span.get("name")).unwrap_or_else(|| "ipc.unknown".into()))
+    } else {
+        Some(view_name(span.get("name")))
+    };
+    put(&mut out, "name", name);
+    let data = scrub_span_data(Some(&Value::Object(untyped)));
+    let attributes: Map<String, Value> = data
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(k, v)| {
+            let kind = if v.is_string() {
+                "string"
+            } else if v.is_boolean() {
+                "boolean"
+            } else if v.is_u64() || v.is_i64() {
+                "integer"
+            } else {
+                "double"
+            };
+            (k, serde_json::json!({"type": kind, "value": v}))
+        })
+        .collect();
+    out.insert("attributes".into(), Value::Object(attributes));
+    put(
+        &mut out,
+        "status",
+        allowed(span.get("status"), &["ok", "error"]),
+    );
+    Some(Value::Object(out))
+}
+
+fn allowed(value: Option<&Value>, names: &[&str]) -> Option<Value> {
+    let raw = value?.as_str()?;
+    names.contains(&raw).then(|| raw.into())
+}
+
+fn span_op(value: Option<&Value>) -> Option<Value> {
+    allowed(
+        value,
+        &[
+            "ipc",
+            "navigation",
+            "pageload",
+            "ui.long-task",
+            "ui.interaction.click",
+            "ui.interaction.keypress",
+            "ui.interaction",
+            "ui.long-animation-frame",
+        ],
+    )
+}
+fn span_origin(value: Option<&Value>) -> Option<Value> {
+    allowed(
+        value,
+        &[
+            "manual",
+            "auto.navigation.browser",
+            "auto.pageload.browser",
+            "auto.ui.browser",
+            "auto.ui.browser.inp",
+            "auto.ui.browser.metrics",
+        ],
+    )
+}
+fn span_status(value: Option<&Value>) -> Option<Value> {
+    allowed(
+        value,
+        &[
+            "ok",
+            "error",
+            "cancelled",
+            "unknown_error",
+            "invalid_argument",
+            "deadline_exceeded",
+            "not_found",
+            "permission_denied",
+            "internal_error",
+            "unavailable",
+        ],
+    )
+}
+
+fn command_name(value: Option<&Value>) -> Option<Value> {
+    allowed(value, COMMAND_NAMES)
+}
+
+const COMMAND_NAMES: &[&str] = &[
+    "add_skill",
+    "app_version",
+    "apply_skill_frontmatter_repair",
+    "cancel_add_skill_operation",
+    "cancel_update_all",
+    "check_for_update",
+    "check_skill_updates_now",
+    "confirm_add_skill_trust",
+    "data_folder_status",
+    "detect_harnesses",
+    "discard_skill_copy",
+    "fix_skill",
+    "fork_skill",
+    "get_add_method_defaults",
+    "get_add_skill_operation",
+    "get_background_status",
+    "get_discovery_sources",
+    "get_editor_choices",
+    "get_harnesses_choice",
+    "get_install_counts",
+    "get_installed_skills",
+    "get_popular_skills",
+    "get_skill_details",
+    "get_skill_snapshot",
+    "get_telemetry_enabled",
+    "get_tracked_projects",
+    "get_update_status",
+    "get_webview_telemetry",
+    "import_tracked_projects",
+    "install_update",
+    "list_github_skills",
+    "list_project_folders",
+    "list_skill_events",
+    "make_skill_independent_copy",
+    "materialize_harness_root",
+    "materialize_harness_root_then_disable",
+    "open_conflict_paths",
+    "open_skill_path",
+    "park_check",
+    "park_skill",
+    "park_skills",
+    "preview_skill_frontmatter_repair",
+    "pull_fork_upstream",
+    "read_installed_skill_md",
+    "register_skill_projects",
+    "remove_skill",
+    "remove_skill_project",
+    "repair_skill_link",
+    "request_skill_rescan",
+    "rescan_skills_now",
+    "restore_moved_deployment",
+    "restore_skill_event",
+    "save_harnesses_choice",
+    "scan_skills",
+    "search_skills",
+    "send_webview_envelope",
+    "set_discovery_source",
+    "set_harness_enabled",
+    "set_plugin_enabled",
+    "set_preferred_editor",
+    "set_skills_invocation",
+    "set_telemetry_enabled",
+    "skill_local_edits",
+    "split_skill",
+    "split_skill_targets",
+    "start_add_skill_operation",
+    "start_add_skills_operation",
+    "turn_off_check",
+    "turn_off_for_agent",
+    "unfork_skill",
+    "uninstall_plugin",
+    "unlist_parked_dotagents",
+    "unpark_skill",
+    "unpark_skills",
+    "unregister_skill_project",
+    "update_all_skills",
+    "update_plugin",
+    "update_skill",
+    "write_installed_skill_md_if_unchanged",
+];
 
 fn hex_id(value: Option<&Value>, len: usize) -> Option<Value> {
     let raw = value?.as_str()?;
@@ -223,7 +491,19 @@ fn code_name(value: Option<&Value>) -> Option<Value> {
 fn view_name(value: Option<&Value>) -> Value {
     value
         .and_then(Value::as_str)
-        .filter(|raw| raw.strip_prefix("view.").is_some_and(is_code_name))
+        .filter(|raw| {
+            matches!(
+                *raw,
+                "view.home"
+                    | "view.skills"
+                    | "view.plugins"
+                    | "view.activity"
+                    | "view.learn"
+                    | "view.settings"
+                    | "view.skill"
+                    | "view.unknown"
+            )
+        })
         .map_or_else(|| "view.unknown".into(), |raw| raw.to_string().into())
 }
 
@@ -367,18 +647,23 @@ fn scrub_frame(frame: &Value) -> Value {
 }
 
 /// `tauri://localhost/assets/index-abc.js?v=1` becomes
-/// `app:///assets/index-abc.js`. Any other location becomes
-/// `app:///<basename>`, so no folder name survives. A basename that is not
-/// a plain file name is dropped.
+/// the fixed bundle name `app:///assets/index.js`. Other filenames are dropped.
 fn app_file(raw: &str) -> Option<String> {
-    let path = raw.split(['?', '#']).next().unwrap_or_default();
-    let mut parts = path.rsplit('/');
-    let base = parts.next().filter(|base| is_code_name(base))?;
-    if parts.next() == Some("assets") {
-        Some(format!("app:///assets/{base}"))
-    } else {
-        Some(format!("app:///{base}"))
+    let path = raw.split(['?', '#']).next()?;
+    let base = path
+        .strip_prefix("tauri://localhost/assets/")
+        .or_else(|| path.strip_prefix("http://tauri.localhost/assets/"))
+        .or_else(|| path.strip_prefix("app:///assets/"))?;
+    let hash = base.strip_prefix("index-")?.strip_suffix(".js")?;
+    if hash.is_empty()
+        || hash.len() > 16
+        || !hash
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return None;
     }
+    Some("app:///assets/index.js".into())
 }
 
 /// Rebuilds React's component stack from component names only. Each line
@@ -410,9 +695,9 @@ fn scrub_trace_context(trace: Option<&Value>, with_data: bool) -> Option<Value> 
         "parent_span_id",
         hex_id(trace.get("parent_span_id"), 16),
     );
-    put(&mut out, "op", code_name(trace.get("op")));
-    put(&mut out, "status", code_name(trace.get("status")));
-    put(&mut out, "origin", code_name(trace.get("origin")));
+    put(&mut out, "op", span_op(trace.get("op")));
+    put(&mut out, "status", span_status(trace.get("status")));
+    put(&mut out, "origin", span_origin(trace.get("origin")));
     if with_data {
         put(&mut out, "data", scrub_span_data(trace.get("data")));
     }
@@ -485,13 +770,17 @@ fn scrub_span(span: &Value) -> Option<Value> {
         number(span.get("exclusive_time")),
     );
     put(&mut out, "is_segment", boolean(span.get("is_segment")));
-    let op = code_name(span.get("op"));
+    let op = span_op(span.get("op"));
     if op.as_ref().and_then(Value::as_str) == Some("ipc") {
-        put(&mut out, "description", identifier(span.get("description")));
+        put(
+            &mut out,
+            "description",
+            command_name(span.get("description")),
+        );
     }
     put(&mut out, "op", op);
-    put(&mut out, "status", code_name(span.get("status")));
-    put(&mut out, "origin", code_name(span.get("origin")));
+    put(&mut out, "status", span_status(span.get("status")));
+    put(&mut out, "origin", span_origin(span.get("origin")));
     put(&mut out, "data", scrub_span_data(span.get("data")));
     put(
         &mut out,
@@ -501,22 +790,27 @@ fn scrub_span(span: &Value) -> Option<Value> {
     Some(Value::Object(out))
 }
 
-/// Keeps the SDK's own `sentry.*` attributes when their value is a number,
-/// a boolean, or a code name, plus a `transaction` screen name.
+/// Keeps fixed SDK attributes and validates each value for its field.
 fn scrub_span_data(data: Option<&Value>) -> Option<Value> {
     let data = data?.as_object()?;
     let mut out = Map::new();
     for (key, value) in data {
-        let kept = if key == "transaction" {
-            Some(view_name(Some(value)))
-        } else if key.starts_with("sentry.") && is_code_name(key) {
-            match value {
-                Value::Number(_) | Value::Bool(_) => Some(value.clone()),
-                Value::String(raw) if is_code_name(raw) => Some(value.clone()),
-                _ => None,
+        let kept = match key.as_str() {
+            "transaction" | "sentry.transaction" | "sentry.segment.name" => {
+                Some(view_name(Some(value)))
             }
-        } else {
-            None
+            "sentry.op" => span_op(Some(value)),
+            "sentry.origin" => span_origin(Some(value)),
+            "sentry.source" => allowed(Some(value), &["custom", "component", "route", "task"]),
+            "sentry.exclusive_time"
+            | "sentry.sample_rate"
+            | "browser.web_vital.inp.value"
+            | "browser.web_vital.lcp.value"
+            | "browser.web_vital.cls.value"
+            | "browser.web_vital.fcp.value"
+            | "browser.web_vital.ttfb.value" => number(Some(value)),
+            "sentry.segment.id" => hex_id(Some(value), 16),
+            _ => None,
         };
         put(&mut out, key, kept);
     }
@@ -527,7 +821,10 @@ fn scrub_measurements(measurements: Option<&Value>) -> Option<Value> {
     let measurements = measurements?.as_object()?;
     let mut out = Map::new();
     for (name, measurement) in measurements {
-        if !is_code_name(name) {
+        if !matches!(
+            name.as_str(),
+            "lcp" | "fcp" | "fp" | "cls" | "inp" | "ttfb" | "fid"
+        ) {
             continue;
         }
         let Some(value) = number(measurement.get("value")) else {
@@ -535,7 +832,11 @@ fn scrub_measurements(measurements: Option<&Value>) -> Option<Value> {
         };
         let mut kept = Map::new();
         kept.insert("value".into(), value);
-        put(&mut kept, "unit", code_name(measurement.get("unit")));
+        put(
+            &mut kept,
+            "unit",
+            allowed(measurement.get("unit"), &["millisecond", "second", "none"]),
+        );
         out.insert(name.clone(), Value::Object(kept));
     }
     (!out.is_empty()).then_some(Value::Object(out))
@@ -547,6 +848,106 @@ mod tests {
     use std::sync::Mutex;
 
     use sentry::Transport;
+
+    #[test]
+    fn sdk11_streamed_screen_ipc_long_task_and_inp_envelope_survives_without_schema_loss() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("fixtures/sdk11-spans.json")).unwrap();
+        let consent = Consent::new(true);
+        let (telemetry, recording) = webview(&consent);
+        let sdk_item = &fixture[1][0];
+        let raw =
+            serde_json::json!([{"type": sdk_item[0]["type"], "payload": sdk_item[1]}]).to_string();
+        assert_eq!(telemetry.send_json(&raw), 1);
+        let bodies = sent(&recording);
+        let header: Value = serde_json::from_str(bodies[0].lines().nth(1).unwrap()).unwrap();
+        assert_eq!(header["item_count"], 4);
+        assert_eq!(
+            header["content_type"],
+            "application/vnd.sentry.items.span.v2+json"
+        );
+        let payload = &items_of(&bodies[0])[0];
+        assert_eq!(payload["version"], 2);
+        for (actual, expected) in payload["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(sdk_item[1]["items"].as_array().unwrap())
+        {
+            for key in [
+                "trace_id",
+                "span_id",
+                "parent_span_id",
+                "start_timestamp",
+                "end_timestamp",
+                "status",
+            ] {
+                assert_eq!(actual[key], expected[key], "lost SDK field {key}");
+            }
+            assert_eq!(
+                actual["attributes"]["sentry.op"],
+                expected["attributes"]["sentry.op"]
+            );
+        }
+        assert_eq!(payload["items"][1]["name"], "scan_skills");
+        assert_eq!(
+            payload["items"][3]["attributes"]["browser.web_vital.inp.value"]["value"],
+            100
+        );
+    }
+
+    #[test]
+    fn webview_permitted_character_secrets_are_removed_from_names_attributes_and_frames() {
+        let stamp = Stamp {
+            release: None,
+            environment: None,
+        };
+        let payload = serde_json::json!({
+            "transaction": "view.secret-skill", "start_timestamp": 1, "timestamp": 2,
+            "contexts": {"trace": {"trace_id": "0123456789abcdef0123456789abcdef", "span_id": "0123456789abcdef",
+                "data": {"sentry.skill": "secret-skill", "sentry.user": "alice", "sentry.op": "secret-skill", "sentry.origin": "alice"}}},
+            "measurements": {"secret-skill": {"value": 1}, "lcp": {"value": 2, "unit": "alice"}},
+            "spans": [{"trace_id": "0123456789abcdef0123456789abcdef", "span_id": "0123456789abcdef",
+                "start_timestamp": 1, "op": "ipc", "description": "secret_skill"}]
+        });
+        let result = scrub_transaction(&payload, &stamp).unwrap().to_string();
+        for secret in ["secret-skill", "secret_skill", "alice"] {
+            assert!(!result.contains(secret));
+        }
+        for file in [
+            "file:///Users/alice/private-skill.js",
+            "tauri://localhost/assets/private-skill.js",
+            "file:///Users/alice/assets/index-alice.js",
+        ] {
+            assert!(app_file(file).is_none());
+        }
+    }
+
+    #[test]
+    fn webview_oversized_discarded_field_is_rejected_before_scrubbing_can_hide_its_size() {
+        let raw = serde_json::json!([{"type": "event", "payload": {"discarded": "x".repeat(MAX_ITEM_BYTES)}}]).to_string();
+        assert!(parse_webview_items(&raw).is_none());
+        assert!(
+            parse_webview_items(&" ".repeat(MAX_ITEM_BYTES * MAX_ITEMS_PER_ENVELOPE + 1)).is_none()
+        );
+    }
+
+    #[test]
+    fn webview_excess_items_are_rejected_before_payload_trees_are_allocated() {
+        let item = serde_json::json!({"type": "event", "payload": {}});
+        assert_eq!(
+            parse_webview_items(
+                &serde_json::to_string(&vec![item.clone(); MAX_ITEMS_PER_ENVELOPE]).unwrap()
+            )
+            .unwrap()
+            .len(),
+            MAX_ITEMS_PER_ENVELOPE
+        );
+        assert!(parse_webview_items(
+            &serde_json::to_string(&vec![item; MAX_ITEMS_PER_ENVELOPE + 1]).unwrap()
+        )
+        .is_none());
+    }
 
     const SENTINELS: &[&str] = &[
         "Users",
@@ -724,9 +1125,9 @@ mod tests {
             .as_array()
             .expect("frames are kept");
         assert_eq!(frames[0]["function"], "renderRow");
-        assert_eq!(frames[0]["filename"], "app:///assets/index-abc123.js");
+        assert_eq!(frames[0]["filename"], "app:///assets/index.js");
         assert_eq!(frames[0]["lineno"], 12);
-        assert_eq!(frames[1]["filename"], "app:///run.js");
+        assert!(frames[1].get("filename").is_none());
         assert_eq!(
             event["contexts"]["react"]["componentStack"],
             "\n    at SkillRow\n    at div"
@@ -749,7 +1150,7 @@ mod tests {
         let transaction = serde_json::json!({
             "event_id": "1123456789abcdef0123456789abcdef",
             "type": "transaction",
-            "transaction": "view.dashboard",
+            "transaction": "view.home",
             "start_timestamp": 1_700_000_000.0,
             "timestamp": 1_700_000_001.0,
             "contexts": { "trace": {
@@ -790,7 +1191,7 @@ mod tests {
             "description": "body > div.secret-skill > button",
             "start_timestamp": 1_700_000_002.0, "timestamp": 1_700_000_002.1,
             "is_segment": true,
-            "data": { "transaction": "view.dashboard", "sentry.exclusive_time": 80, "user_agent.original": "alices-mbp" },
+            "data": { "transaction": "view.home", "sentry.exclusive_time": 80, "user_agent.original": "alices-mbp" },
             "measurements": { "inp": { "value": 80, "unit": "millisecond" } }
         });
 
@@ -811,10 +1212,10 @@ mod tests {
         assert_eq!(spans[0]["description"], "scan_skills");
         assert!(spans[1].get("description").is_none());
         assert!(spans[2].get("description").is_none());
-        assert_eq!(items[0]["transaction"], "view.dashboard");
+        assert_eq!(items[0]["transaction"], "view.home");
         assert_eq!(items[0]["measurements"]["lcp"]["value"], 120.5);
         assert_eq!(items[1]["measurements"]["inp"]["value"], 80);
-        assert_eq!(items[1]["data"]["transaction"], "view.dashboard");
+        assert_eq!(items[1]["data"]["transaction"], "view.home");
     }
 
     /// guards: a replay, attachment, session, or client report from the JS

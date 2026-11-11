@@ -75,12 +75,12 @@ describe("the WebView IPC transport", () => {
     await createIpcTransport(() => true).send(MIXED_ITEMS);
 
     expect(sent).toEqual([
-      {
-        items: [
-          expect.objectContaining({ type: "event" }),
-          expect.objectContaining({ type: "transaction" }),
-        ],
-      },
+      new TextEncoder().encode(
+        JSON.stringify([
+          { type: "event", payload: { event_id: EVENT_ID } },
+          { type: "transaction", payload: { event_id: EVENT_ID, type: "transaction" } },
+        ]),
+      ),
     ]);
   });
 });

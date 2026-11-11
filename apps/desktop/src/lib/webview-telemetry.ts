@@ -54,7 +54,7 @@ export function createIpcTransport(isEnabled: () => boolean): Transport {
         SENT_ITEM_TYPES.has(header.type) ? [{ type: header.type, payload }] : [],
       );
       if (items.length === 0) return Promise.resolve({});
-      return invoke("send_webview_envelope", { items }).then(
+      return invoke("send_webview_envelope", new TextEncoder().encode(JSON.stringify(items))).then(
         () => ({}),
         () => ({}),
       );

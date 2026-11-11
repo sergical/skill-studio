@@ -1,0 +1,119 @@
+[
+  {
+    "sent_at": "2026-11-11T02:33:44.781Z"
+  },
+  [
+    [
+      {
+        "type": "span",
+        "item_count": 4,
+        "content_type": "application/vnd.sentry.items.span.v2+json"
+      },
+      {
+        "version": 2,
+        "items": [
+          {
+            "name": "view.home",
+            "span_id": "0123456789abcde0",
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "parent_span_id": "fedcba9876543210",
+            "start_timestamp": 1700000000,
+            "end_timestamp": 1700000000.1,
+            "is_segment": true,
+            "status": "ok",
+            "attributes": {
+              "sentry.origin": {
+                "value": "manual",
+                "type": "string"
+              },
+              "sentry.op": {
+                "value": "navigation",
+                "type": "string"
+              },
+              "sentry.segment.name": {
+                "value": "view.home",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "scan_skills",
+            "span_id": "0123456789abcde1",
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "parent_span_id": "fedcba9876543210",
+            "start_timestamp": 1700000001,
+            "end_timestamp": 1700000001.1,
+            "is_segment": true,
+            "status": "ok",
+            "attributes": {
+              "sentry.origin": {
+                "value": "manual",
+                "type": "string"
+              },
+              "sentry.op": {
+                "value": "ipc",
+                "type": "string"
+              },
+              "sentry.segment.name": {
+                "value": "view.home",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "view.home",
+            "span_id": "0123456789abcde2",
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "parent_span_id": "fedcba9876543210",
+            "start_timestamp": 1700000002,
+            "end_timestamp": 1700000002.1,
+            "is_segment": true,
+            "status": "ok",
+            "attributes": {
+              "sentry.origin": {
+                "value": "manual",
+                "type": "string"
+              },
+              "sentry.op": {
+                "value": "ui.long-task",
+                "type": "string"
+              },
+              "sentry.segment.name": {
+                "value": "view.home",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "view.home",
+            "span_id": "0123456789abcde3",
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "parent_span_id": "fedcba9876543210",
+            "start_timestamp": 1700000003,
+            "end_timestamp": 1700000003.1,
+            "is_segment": true,
+            "status": "ok",
+            "attributes": {
+              "sentry.origin": {
+                "value": "manual",
+                "type": "string"
+              },
+              "sentry.op": {
+                "value": "ui.interaction.click",
+                "type": "string"
+              },
+              "sentry.segment.name": {
+                "value": "view.home",
+                "type": "string"
+              },
+              "browser.web_vital.inp.value": {
+                "value": 100,
+                "type": "integer"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  ]
+]

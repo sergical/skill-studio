@@ -16,7 +16,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use skill_studio_host::telemetry::{Consent, TelemetryGuard, WebviewItem, WebviewTelemetry};
+use skill_studio_host::telemetry::{Consent, TelemetryGuard, WebviewTelemetry};
 use tauri::Manager;
 
 /// The Tauri-managed telemetry state: the live consent flag every command
@@ -125,19 +125,25 @@ pub fn get_webview_telemetry(state: tauri::State<'_, TelemetryState>) -> bool {
 }
 
 /// The webview Sentry SDK's only way out: it hands its envelope items here,
-/// and `WebviewTelemetry::send` drops them while the switch is off and
+/// and `WebviewTelemetry::send_json` drops them while the switch is off and
 /// scrubs them otherwise. Returns how many items were sent. Not timed, so
 /// sending telemetry does not make more telemetry.
 #[allow(clippy::needless_pass_by_value)] // Tauri's command extractor requires owned arguments.
 #[tauri::command(async)]
 pub fn send_webview_envelope(
-    items: Vec<WebviewItem>,
+    request: tauri::ipc::Request<'_>,
     state: tauri::State<'_, TelemetryState>,
 ) -> usize {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return 0;
+    };
+    let Ok(items) = std::str::from_utf8(bytes) else {
+        return 0;
+    };
     state
         .webview
         .as_ref()
-        .map_or(0, |webview| webview.send(items))
+        .map_or(0, |webview| webview.send_json(items))
 }
 
 #[cfg(test)]
