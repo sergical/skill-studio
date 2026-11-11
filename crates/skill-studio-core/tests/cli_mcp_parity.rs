@@ -64,6 +64,11 @@ const EXCLUSIONS: &[Exclusion] = &[
                   desktop's Locations card; the CLI and MCP park through `park`, which already \
                   unlists the skill",
     },
+    Exclusion {
+        name: "resolve_batch_names",
+        reason: "the name-to-id step `park_batch` and `unpark_batch` share; MCP tools that \
+                  take a `skills` list call it to find one copy's id, not a request/outcome op",
+    },
 ];
 
 /// An `ops` function whose surface spells it differently: the op's name,
@@ -76,6 +81,14 @@ struct SurfaceName {
 
 /// `Command` variants, in snake case, that do not repeat their op's name.
 const CLI_SUBCOMMANDS: &[SurfaceName] = &[
+    SurfaceName {
+        op: "park_batch",
+        surface: "park",
+    },
+    SurfaceName {
+        op: "unpark_batch",
+        surface: "unpark",
+    },
     SurfaceName {
         op: "preview_frontmatter_repair",
         surface: "preview_repair",
@@ -114,6 +127,14 @@ const CLI_SUBCOMMANDS: &[SurfaceName] = &[
 
 /// `#[tool]` method names that do not repeat their op's name.
 const MCP_TOOLS: &[SurfaceName] = &[
+    SurfaceName {
+        op: "park_batch",
+        surface: "park",
+    },
+    SurfaceName {
+        op: "unpark_batch",
+        surface: "unpark",
+    },
     SurfaceName {
         op: "fix_skill",
         surface: "fix",

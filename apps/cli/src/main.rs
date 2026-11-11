@@ -157,7 +157,7 @@ enum Command {
         #[command(flatten)]
         scope: ScopeArgs,
         #[command(flatten)]
-        target: TargetArgs,
+        target: BatchTargets,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -184,7 +184,7 @@ enum Command {
         #[command(flatten)]
         scope: ScopeArgs,
         #[command(flatten)]
-        target: TargetArgs,
+        target: BatchTargets,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -194,7 +194,7 @@ enum Command {
         #[command(flatten)]
         scope: ScopeArgs,
         #[command(flatten)]
-        target: TargetArgs,
+        target: BatchTargets,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -204,7 +204,7 @@ enum Command {
         #[command(flatten)]
         scope: ScopeArgs,
         #[command(flatten)]
-        target: TargetArgs,
+        target: BatchTargets,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -513,6 +513,16 @@ struct TargetArgs {
     id: Option<String>,
 }
 
+#[derive(clap::Args)]
+struct BatchTargets {
+    /// Names of the skills to change.
+    #[arg(required_unless_present = "id", conflicts_with = "id")]
+    skills: Vec<String>,
+    /// Id of one copy, as printed by scan.
+    #[arg(long, alias = "deployment-id")]
+    id: Option<String>,
+}
+
 fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some("--perf-build-id") {
         println!(
@@ -691,7 +701,7 @@ fn main() -> ExitCode {
             scope,
             target,
             json,
-        } => run_park(&scope, &target, json, time),
+        } => run_park_targets(&scope, &target, json, time),
         Command::Split {
             scope,
             deployment_id,
@@ -707,7 +717,7 @@ fn main() -> ExitCode {
             scope,
             target,
             json,
-        } => run_unpark(&scope, &target, json, time),
+        } => run_unpark_targets(&scope, &target, json, time),
         Command::Outdated {
             scope,
             skills,
@@ -1781,6 +1791,50 @@ fn run_remove(scope: &ScopeArgs, target: &TargetArgs, json: bool, time: bool) ->
     finish(&envelope, json, time, output::print_remove_outcome_table)
 }
 
+fn run_park_targets(scope: &ScopeArgs, target: &BatchTargets, json: bool, time: bool) -> ExitCode {
+    if target.skills.len() <= 1 {
+        return run_park(
+            scope,
+            &TargetArgs {
+                skill: target.skills.first().cloned(),
+                id: target.id.clone(),
+            },
+            json,
+            time,
+        );
+    }
+    let rt = match build_runtime_write::<skill_studio_core::dto::BatchParkOutcome>(
+        scope,
+        Operation::Park,
+        json,
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = ops::park_batch(
+        &rt,
+        &ctx,
+        &skill_studio_core::dto::BatchParkRequest {
+            skills: target.skills.iter().cloned().map(SkillName).collect(),
+        },
+    );
+    if let Ok(outcome) = &result {
+        for item in &outcome.items {
+            for warning in &item.warnings {
+                eprintln!("warning: {warning}");
+            }
+        }
+    }
+    let envelope = ResultEnvelope::from_result(Operation::Park, &rt.scope, &ctx, result);
+    finish(
+        &envelope,
+        json,
+        time,
+        output::print_batch_park_outcome_table,
+    )
+}
+
 /// Moves one real copy to the parked root, via `ops::park`.
 fn run_park(scope: &ScopeArgs, target: &TargetArgs, json: bool, time: bool) -> ExitCode {
     let rt = match build_runtime_write::<skill_studio_core::dto::ParkOutcome>(
@@ -1836,6 +1890,48 @@ fn run_split(
     let result = parsed.and_then(|req| ops::split(&rt, &ctx, &req));
     let envelope = ResultEnvelope::from_result(Operation::Split, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_split_outcome_table)
+}
+
+fn run_unpark_targets(
+    scope: &ScopeArgs,
+    target: &BatchTargets,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    if target.skills.len() <= 1 {
+        return run_unpark(
+            scope,
+            &TargetArgs {
+                skill: target.skills.first().cloned(),
+                id: target.id.clone(),
+            },
+            json,
+            time,
+        );
+    }
+    let rt = match build_runtime_write::<skill_studio_core::dto::BatchUnparkOutcome>(
+        scope,
+        Operation::Unpark,
+        json,
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = ops::unpark_batch(
+        &rt,
+        &ctx,
+        &skill_studio_core::dto::BatchParkRequest {
+            skills: target.skills.iter().cloned().map(SkillName).collect(),
+        },
+    );
+    let envelope = ResultEnvelope::from_result(Operation::Unpark, &rt.scope, &ctx, result);
+    finish(
+        &envelope,
+        json,
+        time,
+        output::print_batch_unpark_outcome_table,
+    )
 }
 
 /// Moves a parked deployment back to the universal root, via `ops::unpark`.
