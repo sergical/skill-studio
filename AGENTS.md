@@ -404,6 +404,28 @@ Enabled in `apps/desktop/tsconfig.json`:
 - Rust: `cargo test` in `apps/desktop/src-tauri`, tests live in colocated `#[cfg(test)]` modules
 - Frontend: no test runner is configured yet; use Vitest (compatible with Vite) when adding tests
 
+## Before you implement an issue
+
+Review findings and follow-up issues often ask for a guarantee in one rare
+case. If you implement each case as written, you get fixes on top of fixes:
+the Park chain #485, #487 and #491 reached 11,000 lines and was replaced by
+#531. Before you write code for an issue:
+
+1. Write the user need in one sentence. Write the smallest change that meets
+   it. If the issue asks for more than the need (for example byte-exact
+   output), implement the need and say why in the PR.
+2. Check that the approach follows the rules in
+   `docs/agent-skill-conventions.md`. The main rule: the tool that owns a file
+   writes it. Skill Studio runs `npx skills` and `npx @sentry/dotagents`. It
+   does not hand-edit `agents.toml`, `agents.lock`, `.gitignore` or
+   `.skill-lock.json`.
+3. For edits that happen at the same time, use one shared guard: read, keep
+   the hash, check again before the write, and refuse on change (#531 adds
+   it). Do not add a guard for one case only.
+4. A rare race or a rare layout becomes a follow-up issue, not part of the PR.
+5. If the change grows past about 500 lines, or a fix needs a fix, stop and
+   write a design note in the issue before you continue.
+
 ## Reference docs
 
 - `docs/agent-skill-conventions.md` — agentskills.io spec rules, per-agent discovery paths, invocation control (explicit vs model-invocable), the agent settings that hide a skill (read only; Park is the only off), and the local data sources Skill Studio reads. Check it before researching agent behavior again.
