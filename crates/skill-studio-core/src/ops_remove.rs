@@ -742,7 +742,19 @@ fn remove_body(
     // link this removes goes in `inverse.links` instead (see
     // `restore_backup_inverse_with_links`'s own doc): a symlink copied into
     // a backup manifest would restore as a plain file, not a link.
+    let mut saved_dotagents = if deployment.owner_kind == LifecycleOwnerKind::Dotagents {
+        Some(crate::dotagents_saved_entries::SavedEntries::capture(
+            rt,
+            &deployment.root.scope,
+            &skill.name.0,
+        )?)
+    } else {
+        None
+    };
     let mut backup_targets = vec![deployment.path.clone()];
+    if let Some(saved) = &saved_dotagents {
+        backup_targets.extend(saved.backup_paths());
+    }
     backup_targets.extend(cli_folders.iter().cloned());
     // The registry row goes in the inverse's `registry_undo` instead of a
     // whole-file backup: undo puts back only this row, so registry edits made
@@ -755,12 +767,6 @@ fn remove_body(
         .entries
         .first()
         .and_then(|e| e.fingerprint.as_ref());
-    // `SkillsSh` is the only owner kind whose CLI-owned row `remove_via_cli`
-    // is about to drop lives in `.skill-lock.json` - `Dotagents` tracks its
-    // own row in `agents.lock`/`agents.toml` instead (a TOML array, not this
-    // JSON map), which this op never reads or writes today, so there is
-    // nothing here for it to save. Read before `remove_and_link` runs: after
-    // it, the real CLI has already deleted the row.
     let lock_entry = if deployment.owner_kind == LifecycleOwnerKind::SkillsSh {
         let lock_path = crate::lock_file::lock_file_path(&rt.scope.home.lexical);
         crate::lock_file::read_lock_entry_value(fs, &lock_path, &skill.name.0)?
@@ -776,6 +782,9 @@ fn remove_body(
             .as_ref()
             .map(|entry| (skill.name.0.as_str(), entry)),
     );
+    if let Some(saved) = &saved_dotagents {
+        inverse["dotagents_saved_entries"] = serde_json::json!(saved);
+    }
     if let Some(entry) = registry_undo {
         inverse["registry_undo"] = serde_json::json!([entry]);
     }
@@ -846,6 +855,18 @@ fn remove_body(
             crate::events::with_secondary_post(serde_json::json!({}), &secondary_post),
         );
     }
+    let metadata_result = saved_dotagents
+        .as_mut()
+        .map(|saved| {
+            saved.capture_after(fs)?;
+            session.store.patch_inverse(
+                &session.guard,
+                &id,
+                serde_json::json!({"dotagents_saved_entries": saved}),
+            )
+        })
+        .transpose();
+    let write_result = write_result.and(metadata_result.map(|_| ()));
     if let Err(e) = write_result {
         let _ = session
             .store
