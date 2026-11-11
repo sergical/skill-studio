@@ -12,6 +12,7 @@ import * as Sentry from "@sentry/browser";
 import {
   bufferEarlyErrors,
   scrubSentryEnvelope,
+  setUpPageThenStartSiteSentry,
   siteSentryEnvironment,
   siteSentryInitOptions,
   startSiteSentry,
@@ -96,6 +97,34 @@ describe("startSiteSentry", () => {
     await startSiteSentry(earlyErrors, { ...ENV, dsn: undefined }, vi.fn());
     page.dispatchEvent(errorEvent(new Error("later")));
     expect(earlyErrors.stop()).toEqual([]);
+  });
+});
+
+describe("setUpPageThenStartSiteSentry", () => {
+  it("still starts Sentry and reports the error when page setup throws", async () => {
+    // Failure: a missing root element stops the script before Sentry starts, so the error is never sent.
+    const page = new EventTarget();
+    // SAFETY: see above.
+    const earlyErrors = bufferEarlyErrors(page as Window);
+    const crash = new Error("Marketing site root element is missing");
+    const sdk = fakeSdk();
+    let started = Promise.resolve();
+
+    expect(() =>
+      setUpPageThenStartSiteSentry(
+        () => {
+          throw crash;
+        },
+        earlyErrors,
+        (buffer) => (started = startSiteSentry(buffer, ENV, async () => sdk)),
+      ),
+    ).toThrow(crash);
+    page.dispatchEvent(errorEvent(crash));
+    await started;
+
+    expect(sdk.captureException).toHaveBeenCalledWith(crash, {
+      mechanism: { type: "auto.browser.global_handlers.onerror", handled: false },
+    });
   });
 });
 
@@ -222,6 +251,24 @@ describe("sent data", () => {
     expect(recordingHeader).toMatchObject({
       length: new TextEncoder().encode(String(recordingText)).length,
     });
+  });
+
+  it.each([
+    [
+      "single quotes",
+      "Failed to replace state with URL 'https://useskillstudio.com/docs?email=PRIVATE#TOKEN'",
+    ],
+    ["brackets", "link (https://useskillstudio.com/docs?email=PRIVATE) failed"],
+    ["an equals sign", "redirect url=https://useskillstudio.com/docs#PRIVATE"],
+    ["a line break", "failed:\n/docs?email=PRIVATE"],
+    ["an escaped character in the path", "at /docs\\a?token=PRIVATE"],
+  ])("drops the query and fragment from a URL after %s in a message", (_, message) => {
+    // Failure: a browser error message that quotes the page URL sends the visitor's query to Sentry.
+    const envelope: SentryEnvelope = [
+      { event_id: "1", sent_at: "2026-11-10T00:00:00.000Z" },
+      [[{ type: "event" }, { message, transaction: "/docs" }]],
+    ];
+    expect(JSON.stringify(scrubSentryEnvelope(envelope))).not.toContain("PRIVATE");
   });
 
   it("keeps text that is not a URL", () => {

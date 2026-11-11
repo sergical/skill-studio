@@ -2,26 +2,26 @@ import { StrictMode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { MarketingSite } from "./MarketingSite";
-import { bufferEarlyErrors, startSiteSentry } from "./site-sentry";
+import { bufferEarlyErrors, setUpPageThenStartSiteSentry } from "./site-sentry";
 import "./marketing-site.css";
 
 const earlyErrors = bufferEarlyErrors();
-const root = document.getElementById("root");
+setUpPageThenStartSiteSentry(() => {
+  const root = document.getElementById("root");
 
-if (!root) {
-  throw new Error("Marketing site root element is missing");
-}
+  if (!root) {
+    throw new Error("Marketing site root element is missing");
+  }
 
-// The prerendered markup is for crawlers and first paint. The client render replaces it
-// instead of hydrating, because the prerender cannot know the visitor's theme.
-const reactRoot = createRoot(root);
-flushSync(() => {
-  reactRoot.render(
-    <StrictMode>
-      <MarketingSite />
-    </StrictMode>,
-  );
-});
-delete root.dataset.prerendered;
-
-void startSiteSentry(earlyErrors);
+  // The prerendered markup is for crawlers and first paint. The client render replaces it
+  // instead of hydrating, because the prerender cannot know the visitor's theme.
+  const reactRoot = createRoot(root);
+  flushSync(() => {
+    reactRoot.render(
+      <StrictMode>
+        <MarketingSite />
+      </StrictMode>,
+    );
+  });
+  delete root.dataset.prerendered;
+}, earlyErrors);

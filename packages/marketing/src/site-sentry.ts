@@ -36,9 +36,10 @@ const REPLAYS_ON_ERROR_SAMPLE_RATE = 1;
 
 const MAX_EARLY_ERRORS = 20;
 
-// A JSON string value that starts with a URL or a path, cut at its first `?` or `#`.
-const URL_QUERY_OR_FRAGMENT_IN_JSON =
-  /((?:"|\s)(?:[a-z][a-z0-9+.-]*:\/\/|\/)[^"\s?#\\]*)[?#](?:[^"\s\\]|\\.)*/gi;
+// In JSON text: a URL or path, from its first `/`, cut at its first `?` or `#`. No
+// prefix is required, so a URL inside quotes, brackets, `url=` or after `\n` is cut too.
+// The cut runs to the end of the JSON string or to whitespace, never stops early.
+const URL_QUERY_OR_FRAGMENT_IN_JSON = /(\/(?:[^"\s?#\\]|\\.)*)[?#](?:[^"\s\\]|\\.)*/g;
 
 export function siteSentryEnvironment({ branch, mode }: Pick<SiteSentryEnv, "branch" | "mode">) {
   if (branch === "") return mode;
@@ -172,5 +173,18 @@ export async function startSiteSentry(
   } catch {
     // Monitoring must never break the page, for example when an ad blocker stops the chunk.
     earlyErrors.stop();
+  }
+}
+
+// Page setup can throw before the SDK starts; the start still runs, so the buffer sends that error.
+export function setUpPageThenStartSiteSentry(
+  setUpPage: () => void,
+  earlyErrors: EarlyErrors,
+  start: (earlyErrors: EarlyErrors) => Promise<void> = startSiteSentry,
+): void {
+  try {
+    setUpPage();
+  } finally {
+    void start(earlyErrors);
   }
 }
