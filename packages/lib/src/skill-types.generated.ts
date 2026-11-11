@@ -1034,6 +1034,10 @@ export interface SkillEventDto {
    * False when force restore could cross an independent Copy boundary.
    */
   force_restorable: boolean;
+  /**
+   * Why Undo is unavailable when a completed backup has expired.
+   */
+  restore_unavailable_reason?: string | null;
   reverted_by: string | null;
   /**
    * Absolute path to this event's backup directory, for a "Reveal in
@@ -1653,6 +1657,10 @@ export interface DoctorReport {
  * the skill when it has one (see each `doctor::check_*` function).
  */
 export interface DoctorViolation {
+  /**
+   * Warning for a retained entry or external link; error for broken state.
+   */
+  severity: "off" | "warning" | "error";
   /**
    * Which invariant is violated.
    */

@@ -511,12 +511,19 @@ pub struct DoctorRequest {}
 /// the skill when it has one (see each `doctor::check_*` function).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DoctorViolation {
+    /// Warning for a retained entry or external link; error for broken state.
+    #[serde(default = "doctor_error_severity")]
+    pub severity: Severity,
     /// Which invariant is violated.
     pub invariant: crate::doctor::DoctorInvariant,
     /// Path of the offending entry, when the invariant names one.
     pub path: PathBuf,
     /// Message for a person.
     pub detail: String,
+}
+
+fn doctor_error_severity() -> Severity {
+    Severity::Error
 }
 
 /// Result of `doctor`: one pass over every lifecycle invariant in
@@ -545,6 +552,12 @@ pub enum RestoreCapability {
     Reverted {
         /// The restore event.
         by: EventId,
+    },
+    /// Retention has expired the event's backup.
+    BackupExpired {
+        /// A previous restore, if the event had already been undone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reverted_by: Option<EventId>,
     },
     /// The row has no inverse.
     NoInverse,

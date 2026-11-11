@@ -23,7 +23,6 @@
 // recreating bytes cannot recreate the matching ownership metadata.
 // ============================================================================
 
-use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -32,7 +31,6 @@ use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use skill_studio_core::events::EventStatus as CoreEventStatus;
 
 use super::skill_md_write::{begin_skill_md_write_transaction, SkillMdWriteTransaction};
@@ -427,6 +425,28 @@ impl EventStore {
             .map_err(|e| format!("Failed to finish event {id}: {e}"))
     }
 
+    /// Runs the shared retention policy before the writer releases its lease.
+    /// Cleanup errors leave durable expiry records for the startup retry.
+    pub fn retain_backups(&self, guard: &skill_studio_core::ports::ExclusiveGuard) {
+        let Some(db_path) = self.conn.path() else {
+            return;
+        };
+        let opener = skill_studio_host::SqliteHistoryOpener::new(db_path)
+            .with_backup_roots(vec![self.app_data.join("backups")]);
+        if let Err(error) = opener.retain_backups(
+            guard,
+            chrono::Utc::now(),
+            skill_studio_core::backup_retention::BackupRetentionScope::All,
+        ) {
+            eprintln!("[backup_retention] cleanup deferred: {error}");
+        }
+        if let Err(error) =
+            skill_studio_core::journal::trim_backups(self, guard, chrono::Utc::now())
+        {
+            eprintln!("[backup_retention] plan cleanup deferred: {error}");
+        }
+    }
+
     /// Looks up one event row by id - used by callers (e.g.
     /// `restore_guard_for_explode`) that need to inspect an event before
     /// deciding whether to restore it.
@@ -600,6 +620,9 @@ impl EventStore {
         let target = self
             .get_event(target_id)?
             .ok_or_else(|| format!("Event {target_id} not found"))?;
+        if skill_studio_core::backup_retention::backup_is_expired(&target.payload) {
+            return Err(skill_studio_core::backup_retention::BACKUP_EXPIRED_REASON.to_owned());
+        }
         if target.reverted_by.is_some() {
             return Err(format!("Event {target_id} was already restored"));
         }
@@ -1231,48 +1254,7 @@ pub fn fingerprint_path_checked(path: &Path) -> std::io::Result<Option<String>> 
 }
 
 fn hash_entry(path: &Path) -> std::io::Result<String> {
-    let meta = fs::symlink_metadata(path)?;
-    let file_type = meta.file_type();
-    let mut hasher = Sha256::new();
-    if file_type.is_symlink() {
-        let target = fs::read_link(path)?;
-        hasher.update(b"L");
-        hasher.update(target.to_string_lossy().as_bytes());
-    } else if file_type.is_dir() {
-        hasher.update(b"D");
-        let mut entries: Vec<_> = fs::read_dir(path)?.collect::<Result<_, _>>()?;
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for entry in entries {
-            let name_bytes = entry
-                .file_name()
-                .to_string_lossy()
-                .into_owned()
-                .into_bytes();
-            let child_fp = hash_entry(&entry.path())?;
-            hasher.update((name_bytes.len() as u64).to_le_bytes());
-            hasher.update(&name_bytes);
-            hasher.update((child_fp.len() as u64).to_le_bytes());
-            hasher.update(child_fp.as_bytes());
-        }
-    } else {
-        hasher.update(b"F");
-        let bytes = fs::read(path)?;
-        hasher.update((bytes.len() as u64).to_le_bytes());
-        hasher.update(&bytes);
-    }
-    let digest = hasher.finalize();
-    Ok(to_hex(&digest))
-}
-
-/// Lower-case hex, one `write!` per byte into a single pre-sized `String`
-/// rather than collecting a `Vec<String>` of two-char fragments.
-fn to_hex(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut acc, b| {
-            let _ = write!(acc, "{b:02x}");
-            acc
-        })
+    skill_studio_host::hash_entry(path)
 }
 
 /// Copies `src` into `dest`, preserving regular files as bytes, directories
@@ -1605,7 +1587,9 @@ mod tests {
         let lease = skill_studio_host::FileLease::new(lease_dir);
         let handle = skill_studio_core::ports::LeaseProvider::acquire(
             &lease,
-            &[],
+            &[skill_studio_core::ports::LeaseKey {
+                canonical_root: root_path.canonicalize().unwrap(),
+            }],
             skill_studio_core::ports::LeaseMode::Exclusive,
             std::time::Duration::from_secs(5),
         )

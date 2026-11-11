@@ -466,19 +466,18 @@ pub fn swap(
             // committed yet, rather than after the old folder has already
             // been swapped out.
             let quarantine_root = root.confine(quarantine_dir)?;
-            match root.fs.symlink_metadata(&quarantine_root) {
+            let created_quarantine_dir = match root.fs.symlink_metadata(&quarantine_root) {
                 Ok(existing) if existing.kind != FileKind::Dir => {
                     return Err(FsOpsError::ReplacedBySymlink {
                         path: quarantine_root,
                     });
                 }
-                Ok(_) => {}
-                Err(_) => {
-                    root.fs
-                        .fsops_create_dir(&quarantine_root)
-                        .fs_err(&quarantine_root)?;
+                Ok(_) => None,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    Some(quarantine_root.clone())
                 }
-            }
+                Err(error) => return Err(FsOpsError::io(&quarantine_root, error)),
+            };
             let leaf = final_path
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -489,13 +488,20 @@ pub fn swap(
             // exchange runs: a crash between the exchange and the
             // follow-up move into quarantine still leaves reversal knowing
             // exactly where the old folder must have gone.
-            plan.record_swap(
+            plan.record_swap_with_parent(
                 &final_path,
                 &staged.path,
                 staged_binding,
                 Some(quarantine_target.clone()),
+                created_quarantine_dir.clone(),
             )
             .map_err(FsOpsError::Journal)?;
+            if created_quarantine_dir.is_some() {
+                root.fs
+                    .fsops_create_dir(&quarantine_root)
+                    .fs_err(&quarantine_root)?;
+                fsync_up_to_root(root, quarantine_root.clone())?;
+            }
             root.fs
                 .fsops_exchange(&staged.path, &final_path)
                 .fs_err(&final_path)?;
@@ -551,7 +557,7 @@ pub fn link(
     // Recorded before the rename that makes the new link visible, with the
     // target it will point at so reversal can later tell whether that
     // rename landed.
-    plan.record_link(&link_path, target, previous_target)
+    plan.record_link_with_temp(&link_path, target, previous_target, Some(tmp_path.clone()))
         .map_err(FsOpsError::Journal)?;
     root.fs.fsops_symlink(target, &tmp_path).fs_err(&tmp_path)?;
     root.fs
@@ -581,8 +587,10 @@ pub enum ReadStamp {
 /// Reads `path`'s current stamp through `fs`, for a caller to hold and pass
 /// back to [`write_file`] once it has decided what to write.
 pub fn read_stamp(fs: &dyn ScopeFs, path: &Path) -> Result<ReadStamp, FsOpsError> {
-    if fs.symlink_metadata(path).is_err() {
-        return Ok(ReadStamp::Absent);
+    match fs.symlink_metadata(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(ReadStamp::Absent),
+        Err(error) => return Err(FsOpsError::io(path, error)),
     }
     let bytes = fs.read_capped(path, u64::MAX).fs_err(path)?;
     Ok(ReadStamp::Present(sha256(&bytes)))
@@ -613,11 +621,28 @@ pub fn write_file(
     // Captured once, up front: both this call's stale-read check and the
     // journal backup below need the target's pre-write bytes, and reading
     // twice would widen the race `expected` exists to catch.
-    let previous = if root.fs.symlink_metadata(&target).is_ok() {
+    let facts = match root.fs.symlink_metadata(&target) {
+        Ok(facts) => Some(facts),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(FsOpsError::io(&target, error)),
+    };
+    let previous = if facts.is_some() {
         Some(root.fs.read_capped(&target, u64::MAX).fs_err(&target)?)
     } else {
         None
     };
+    let previous_link = if facts
+        .as_ref()
+        .is_some_and(|facts| facts.kind == FileKind::Symlink)
+    {
+        Some(root.fs.read_link(&target).fs_err(&target)?)
+    } else {
+        None
+    };
+    let previous_mode = facts
+        .as_ref()
+        .filter(|facts| facts.kind == FileKind::File)
+        .and_then(|facts| facts.mode);
     let current = match &previous {
         Some(bytes) => ReadStamp::Present(sha256(bytes)),
         None => ReadStamp::Absent,
@@ -637,10 +662,21 @@ pub fn write_file(
     // `previous` is `Some`, this fsyncs it into the plan's own backup store
     // first, so a crash right after the rename below still has somewhere
     // durable to restore from.
-    plan.record_write_file(&target, previous.as_deref())
-        .map_err(FsOpsError::Journal)?;
+    let backup_bytes = if previous_link.is_some() {
+        None
+    } else {
+        previous.as_deref()
+    };
+    plan.record_write_file_with_state(
+        &target,
+        backup_bytes,
+        Some(tmp_path.clone()),
+        previous_link,
+        previous_mode,
+    )
+    .map_err(FsOpsError::Journal)?;
     root.fs
-        .fsops_write_new_file(&tmp_path, bytes)
+        .fsops_write_new_file_with_mode(&tmp_path, bytes, previous_mode.unwrap_or(0o644))
         .fs_err(&tmp_path)?;
     root.fs.fsops_fsync_file(&tmp_path).fs_err(&tmp_path)?;
     root.fs.fsops_rename(&tmp_path, &target).fs_err(&target)?;

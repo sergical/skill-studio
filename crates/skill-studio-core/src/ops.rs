@@ -2923,10 +2923,33 @@ pub fn diagnose(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Diag
 }
 
 fn diagnose_body(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Diagnosis, CoreError> {
+    diagnose_with_scan(rt, ctx, req, true)
+}
+
+pub(crate) fn diagnose_inspect(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &ScanRequest,
+) -> Result<Diagnosis, CoreError> {
+    rt.run(Operation::Diagnose, ctx, || {
+        diagnose_with_scan(rt, ctx, req, false)
+    })
+}
+
+fn diagnose_with_scan(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &ScanRequest,
+    lease: bool,
+) -> Result<Diagnosis, CoreError> {
     let clock = rt.ports.clock.as_ref();
     let op_start = clock.monotonic();
     let step_start = clock.monotonic();
-    let inventory = scan(rt, ctx, req);
+    let inventory = if lease {
+        scan(rt, ctx, req)
+    } else {
+        rt.run(Operation::Scan, ctx, || scan_inner(rt, ctx, req))
+    };
     // Discard `scan`'s own timing immediately: an error below must leave
     // `ctx` with `diagnose`'s own timing or none, never `scan`'s.
     ctx.take_timing();
@@ -4424,6 +4447,9 @@ fn restore_event_body(
         .get(&req.event_id)?
         .ok_or_else(|| CoreError::new(ErrorCode::InvalidRequest, "event not found"))?;
     match target.restore_capability() {
+        crate::dto::RestoreCapability::BackupExpired { .. } => {
+            return Err(CoreError::new(ErrorCode::BackupExpired, crate::backup_retention::BACKUP_EXPIRED_REASON));
+        }
         crate::dto::RestoreCapability::Reverted { .. } => {
             return Err(CoreError::new(
                 ErrorCode::AlreadyReverted,
@@ -4568,6 +4594,20 @@ fn restore_event_body(
     // Mirrors of an earlier restore's own work (see `with_write_back`): the
     // links it recreated must still be exactly those links, and the places
     // its removed copies go back to must be empty or hold such a link.
+    let lock_undo = crate::lock_file::LockRowUndo::from_inverse(inverse)?;
+    let mirror_lock = lock_undo
+        .as_ref()
+        .map(|lock| {
+            let current = lock.check(fs, &rt.scope, req.force)?;
+            Ok::<_, CoreError>(crate::lock_file::LockRowUndo {
+                path: lock.path.clone(),
+                skill: lock.skill.clone(),
+                version: lock.version,
+                previous: current,
+                expected: lock.previous.clone(),
+            })
+        })
+        .transpose()?;
     let secondary_post = crate::events::parse_restore_secondary_post(inverse);
     let remove_links = crate::events::parse_restore_remove_links(inverse);
     let write_back = crate::events::parse_restore_write_back(inverse);
@@ -4836,16 +4876,8 @@ fn restore_event_body(
         }
         restore_inverse["registry_undo"] = serde_json::json!(mirror);
     }
-    if let Some(edit) = inverse.get("lock_row_undo").filter(|v| !v.is_null()) {
-        let lock = crate::lock_file::lock_file_path(&rt.scope.home.lexical);
-        let live = crate::lock_file::read_lock_entry_value(
-            fs,
-            &lock,
-            edit["skill"].as_str().unwrap_or_default(),
-        )?;
-        restore_inverse["lock_row_undo"] = serde_json::json!({
-            "skill": edit["skill"], "previous": live, "expected": edit["previous"]
-        });
+    if let Some(mirror) = mirror_lock {
+        restore_inverse["lock_row_undo"] = serde_json::json!(mirror);
     }
     let displaced_inverse = restore_inverse.clone();
     let mut attempt_inverse = inverse.clone();
@@ -5160,6 +5192,19 @@ fn restore_event_body(
             unrestored.push(other_path.clone());
         }
     }
+    let mut metadata_error = None;
+    if let Some(lock) = crate::lock_file::LockRowUndo::from_inverse(&attempt_inverse)? {
+        if let Err(error) = lock
+            .check(fs, &rt.scope, false)
+            .and_then(|_| lock.apply(&session.guard, fs, &rt.scope))
+        {
+            unrestored.push(lock.path.clone());
+            copy_errors.push(error.to_string());
+            if error.code == ErrorCode::DriftConflict {
+                metadata_error = Some(error);
+            }
+        }
+    }
     if !copy_errors.is_empty() {
         let _ = session.store.patch_payload(
             &session.guard,
@@ -5249,20 +5294,6 @@ fn restore_event_body(
         }
     }
 
-    let mut metadata_error = None;
-    if let Some(edit) = attempt_inverse
-        .get("lock_row_undo")
-        .filter(|v| !v.is_null())
-    {
-        if let Err(error) =
-            crate::lock_file::restore_updated_row(&session.guard, fs, &rt.scope, edit, req.force)
-        {
-            if error.code == ErrorCode::DriftConflict {
-                metadata_error = Some(error);
-            }
-            unrestored.push(crate::lock_file::lock_file_path(&rt.scope.home.lexical));
-        }
-    }
     if let Err(error) = crate::ops_install::restore_registry(&session.guard, fs, &attempt_inverse) {
         unrestored.push(crate::ops_install::registry_path(&rt.scope.home.lexical));
         let _ = session.store.patch_payload(

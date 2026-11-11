@@ -135,7 +135,7 @@ impl LeaseProvider for FileLease {
 
         fs::create_dir_all(&self.lease_root).map_err(|e| CoreError::io(&self.lease_root, e))?;
 
-        let deadline = Instant::now() + wait;
+        let deadline = Instant::now().checked_add(wait);
         let mut files = Vec::with_capacity(sorted_keys.len());
         for key in &sorted_keys {
             let path = self.lock_path(key);
@@ -181,7 +181,8 @@ impl LeaseProvider for FileLease {
                         // process closes and releases the same lock under
                         // heavy concurrent load - into a false "busy". Always
                         // re-check once before trusting the first read.
-                        if Instant::now() >= deadline && attempted {
+                        if deadline.is_some_and(|deadline| Instant::now() >= deadline) && attempted
+                        {
                             let mut err = CoreError::new(
                                 ErrorCode::ScopeBusy,
                                 format!(

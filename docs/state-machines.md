@@ -24,8 +24,8 @@ a status field, a phase enum, or a busy flag.
 | ---------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Event row lifecycle    | `crates/skill-studio-core/src/events.rs` (`EventStatus::settle`)              | `pending → done \| failed \| interrupted`; `interrupted → done \| failed` (recovery); a move to the current state is a no-op; nothing moves to `pending`. Both the host and the desktop event stores use it.                                                                                                                                                                                                                                                               | `an_event_row_only_moves_along_its_lifecycle_or_names_the_illegal_move`                                                                                                                                                                |
 | Desktop event store    | `apps/desktop/src-tauri/src/skills/event_store.rs` (`finish`)                 | Reads the row and settles it through the core rule in one transaction.                                                                                                                                                                                                                                                                                                                                                                                                     | `an_event_settles_once_and_recovery_settles_interrupted_rows_or_names_the_overwrite`                                                                                                                                                   |
-| Journal plan status    | `crates/skill-studio-core/src/ports.rs` (`PlanStatus::settle`)                | `pending` settles once; `pending` is never a target.                                                                                                                                                                                                                                                                                                                                                                                                                       | `journal.rs` tests                                                                                                                                                                                                                     |
-| History store finish   | `crates/skill-studio-host/src/history.rs` (`SqliteHistoryStore::finish`)      | Reads the row and settles it through `EventStatus::settle` in one transaction. That is the event row rule, not the journal rule: a repeat of the current status is a no-op and recovery may move `interrupted` on, where `PlanStatus::settle` refuses every settle after the first.                                                                                                                                                                                        | `history.rs` tests                                                                                                                                                                                                                     |
+| Journal plan status    | `crates/skill-studio-core/src/ports.rs` (`PlanStatus::settle`)                | `pending → done \| failed \| interrupted`; `interrupted → interrupted \| failed \| reversed`; the other states are terminal. `pending` is never a target.                                                                                                                                                                                                                                                                                                                  | `journal.rs` tests                                                                                                                                                                                                                     |
+| History store finish   | `crates/skill-studio-host/src/history.rs` (`SqliteHistoryStore::finish`)      | Reads the row and settles it through `EventStatus::settle` in one transaction. A repeat of the current status is a no-op. Recovery may settle an interrupted event. Journal recovery may retry an interrupted plan and settle it as failed or reversed.                                                                                                                                                                                                                    | `history.rs` tests                                                                                                                                                                                                                     |
 | Restore claim          | `crates/skill-studio-core/src/events.rs` (`recover_interrupted`)              | Each mutation session releases the `target_event` claim of every `pending` or `interrupted` Restore row, before it marks a `pending` row `interrupted`, so a crash between the two writes repeats both. A restore of a `make_independent_copy` row keeps its claim, because desktop startup resumes it. Recovery reads only the ids and the target kind (`held_restore_claims`), so rows that older desktop builds wrote with display-name harness labels do not block it. | `a_restore_cut_off_by_a_crash_releases_its_target_claim_or_the_target_stays_reverted`                                                                                                                                                  |
 | Add Skill operation    | `apps/desktop/src-tauri/src/skills/skill_add_operation.rs` (`can_advance_to`) | `queued → validating → [fetching] → installing… → reconciling → completed \| failed \| needs-trust`; `needs-trust → needs-trust (trusted) \| cancelled`; `queued → cancelled`; work phases `→ failed`. No Rust path enters `finalizing` or `timed-out`.                                                                                                                                                                                                                    | `an_add_operation_only_moves_forward_or_names_the_illegal_move`                                                                                                                                                                        |
 | Snapshot refresh loop  | `apps/desktop/src-tauri/src/skills/skill_refresh.rs` (`next_refresh_step`)    | One `RefreshTick` in, one `RefreshStep` out: `Idle`, `Full`, `InvocationsOnly`, `HourlyWindows`. A failed rebuild keeps its dirty flags and waits 5 s before the next try.                                                                                                                                                                                                                                                                                                 | `each_refresh_tick_picks_the_rebuild_its_state_needs_or_names_the_wrong_step`                                                                                                                                                          |
@@ -57,6 +57,56 @@ works today. Make one explicit when you next change it.
 | Add Skill sheet submit    | `apps/desktop/src/components/AddSkill/AddSkillSheet.tsx`        | Form step, operation id, and trust prompt held in separate `useState` calls.                                                         |
 | Update check              | `apps/desktop/src-tauri/src/skills/skill_update_check.rs`       | Check results land in a shared store with no request generation.                                                                     |
 | Write lease               | `apps/desktop/src-tauri/src/skills/write_lease.rs`              | Held or free, tracked by lock files.                                                                                                 |
+
+## Backup expiry
+
+The constants `BACKUP_RETENTION_COUNT` (20) and `BACKUP_RETENTION_AGE` (30 days)
+live in core. A completed backup stays if it is among the newest 20 backups for
+its skill target, is younger than 30 days, belongs to that target's newest
+undoable event, or is needed by a pending or interrupted restore or plan.
+Only a backup outside all four protections expires. Unknown legacy targets and
+unfinished rows stay protected.
+
+Expiry does not change event or plan status. Event expiry clears `backup_dir`
+and records `backup_expired` in the same SQLite transaction that queues deletion.
+Plan expiry records the relative backup name in `expired_backups` through the
+journal's durable write before unlinking it. Reads return `backup_expired` even
+if cleanup has not yet finished. Startup retries the deletion under the target's
+write lease. Rows and expiry reasons stay in history.
+
+`history::tests::retention_crash_at_each_durable_step_preserves_files_and_recovery_or_exposes_a_partial_backup`
+and `journal::tests::completed_plan_retention_crash_at_every_durable_step_recovers_or_leaves_an_available_partial_backup`
+cut every filesystem mutation and flush, then run recovery.
+
+## Startup recovery readiness
+
+`EventStoreState` publishes one empty `OnceLock<StartupRecoveryOutcome>` before
+commands can run.
+The recovery worker holds the event store and waits for the home and every
+trusted project write lease. The timing wrappers wait for that same once-only
+gate. The worker publishes success or failure before releasing the store. Its
+drop guard publishes failure on unwind, so commands return a reason instead of
+waiting forever. After startup,
+commands do not wait on an active write's event-store mutex to cancel it.
+
+`a_command_during_startup_waits_for_recovery_or_reads_the_unrecovered_store`
+uses channels to hold recovery while a command arrives.
+`startup_recovery_holds_home_and_project_leases_or_reverses_a_project_under_only_home`
+checks both real lease files. Pending and interrupted plans recover before the
+startup gate opens; one failed status write does not stop later plans.
+
+### Desktop startup recovery gate
+
+| State      | Stored outcome                                     | Command behavior                  | Next state                |
+| ---------- | -------------------------------------------------- | --------------------------------- | ------------------------- |
+| Recovering | Outcome not published; worker owns the store mutex | Wait for the worker               | Ready or Failed           |
+| Ready      | Completed                                          | Store commands may run            | Terminal for this startup |
+| Failed     | Failed with a reason                               | Store commands return that reason | Restart retries recovery  |
+
+The worker owns the mutex before Tauri receives the state. It publishes the
+outcome before releasing the mutex. Its drop guard publishes failure if the
+worker unwinds. Core writes also retry journal recovery under the write lease
+and refuse to start while any plan remains interrupted.
 
 ## Audit follow-up UI requests
 

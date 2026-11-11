@@ -27,6 +27,8 @@ pub enum ErrorCode {
     AmbiguousTarget,
     /// The harness has no support for the requested mechanism.
     Unsupported,
+    /// Retention has expired the backup needed to undo an event.
+    BackupExpired,
     /// A child process or external tool failed.
     ExecutionFailed,
     /// A filesystem or store read or write failed.
@@ -58,6 +60,7 @@ impl ErrorCode {
             | ErrorCode::InvalidScope
             | ErrorCode::AmbiguousTarget
             | ErrorCode::Unsupported
+            | ErrorCode::BackupExpired
             | ErrorCode::ExecutionFailed
             | ErrorCode::Io => 2,
             ErrorCode::ScopeBusy
@@ -77,6 +80,7 @@ impl ErrorCode {
             ErrorCode::InvalidScope => "invalid_scope",
             ErrorCode::AmbiguousTarget => "ambiguous_target",
             ErrorCode::Unsupported => "unsupported",
+            ErrorCode::BackupExpired => "backup_expired",
             ErrorCode::ExecutionFailed => "execution_failed",
             ErrorCode::Io => "io",
             ErrorCode::ScopeBusy => "scope_busy",
@@ -213,6 +217,7 @@ mod tests {
             ErrorCode::InvalidScope,
             ErrorCode::AmbiguousTarget,
             ErrorCode::Unsupported,
+            ErrorCode::BackupExpired,
             ErrorCode::ExecutionFailed,
             ErrorCode::Io,
             ErrorCode::ScopeBusy,
@@ -229,6 +234,7 @@ mod tests {
                 ErrorCode::InvalidScope => "invalid_scope",
                 ErrorCode::AmbiguousTarget => "ambiguous_target",
                 ErrorCode::Unsupported => "unsupported",
+                ErrorCode::BackupExpired => "backup_expired",
                 ErrorCode::ExecutionFailed => "execution_failed",
                 ErrorCode::Io => "io",
                 ErrorCode::ScopeBusy => "scope_busy",

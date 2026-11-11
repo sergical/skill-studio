@@ -27,6 +27,11 @@
       "description": "One violation of a [`crate::doctor::DoctorInvariant`] found by `doctor`,\nprojected from `crate::doctor::DoctorViolation` into a serializable\nshape: `skill` folds into `detail`'s message text rather than a\nseparate field, since every existing violation message already names\nthe skill when it has one (see each `doctor::check_*` function).",
       "type": "object",
       "properties": {
+        "severity": {
+          "description": "Warning for a retained entry or external link; error for broken state.",
+          "$ref": "#/$defs/Severity",
+          "default": "error"
+        },
         "invariant": {
           "description": "Which invariant is violated.",
           "$ref": "#/$defs/DoctorInvariant"
@@ -44,6 +49,26 @@
         "invariant",
         "path",
         "detail"
+      ]
+    },
+    "Severity": {
+      "description": "How serious an issue is.\n\nInvariant: `Error` blocks a mutation on the deployment; `Warning` does\nnot; `Off` is informational (the deployment is intentionally disabled).",
+      "oneOf": [
+        {
+          "description": "Informational.",
+          "type": "string",
+          "const": "off"
+        },
+        {
+          "description": "Should be fixed.",
+          "type": "string",
+          "const": "warning"
+        },
+        {
+          "description": "Must be fixed before the deployment can be changed.",
+          "type": "string",
+          "const": "error"
+        }
       ]
     },
     "DoctorInvariant": {

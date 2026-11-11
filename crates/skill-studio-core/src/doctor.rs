@@ -20,12 +20,14 @@
 //! those two is `ops::fix_skill`'s deferred follow-up; this module still
 //! detects and names them.
 
+pub use crate::doctor_scope::RETAINED_ENTRY_MAX_AGE_DAYS;
+
 use std::path::{Path, PathBuf};
 
 use crate::dto::{Diagnosis, Inventory, IssueKind};
 use crate::identity::{BackingRelationship, DeploymentId, RootKind, SkillName};
 use crate::lock_file::{lock_file_path, read_lock_file, SkillLockFile};
-use crate::ownership::read_home_registry;
+use crate::ownership::read_home_registry_result;
 use crate::ports::{Journal, ScopeFs};
 
 /// Relative path of the universal shared skills root under a scope home.
@@ -124,7 +126,17 @@ pub fn check_link_resolves_in_root(diagnosis: &Diagnosis) -> Vec<DoctorViolation
 /// entry has a folder at the path it names. Detect-only; see the module
 /// doc comment for why.
 pub fn check_registry_entry_has_folder(fs: &dyn ScopeFs, home: &Path) -> Vec<DoctorViolation> {
-    let registry = read_home_registry(fs, home);
+    let registry = match read_home_registry_result(fs, home) {
+        Ok(registry) => registry,
+        Err(error) => {
+            return vec![DoctorViolation {
+                invariant: DoctorInvariant::RegistryEntryHasFolder,
+                skill: None,
+                path: home.join(".agents/skill-studio.json"),
+                message: format!("registry could not be read: {error}"),
+            }]
+        }
+    };
     let mut violations = Vec::new();
     for (name, record) in &registry.copies {
         if fs.symlink_metadata(&record.path).is_err() {
@@ -297,17 +309,29 @@ pub fn check_quarantine_within_cap(fs: &dyn ScopeFs, home: &Path) -> Vec<DoctorV
 
 /// Invariant 6: the journal has no open plan at rest.
 pub fn check_journal_has_no_open_plan(journal: &dyn Journal) -> Vec<DoctorViolation> {
-    journal
-        .pending()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|plan| DoctorViolation {
+    let mut violations = Vec::new();
+    let result = journal.visit(&mut |plan| {
+        if matches!(
+            plan.status,
+            crate::ports::PlanStatus::Pending | crate::ports::PlanStatus::Interrupted
+        ) {
+            violations.push(DoctorViolation {
+                invariant: DoctorInvariant::JournalHasNoOpenPlan,
+                skill: None,
+                path: plan.root,
+                message: format!("plan {} ({}) is still open", plan.id.0, plan.label),
+            });
+        }
+    });
+    if let Err(error) = result {
+        violations.push(DoctorViolation {
             invariant: DoctorInvariant::JournalHasNoOpenPlan,
             skill: None,
-            path: plan.root.clone(),
-            message: format!("plan {} ({}) is still open", plan.id.0, plan.label),
-        })
-        .collect()
+            path: error.path.clone().unwrap_or_default(),
+            message: format!("journal could not be read: {error}"),
+        });
+    }
+    violations
 }
 
 #[cfg(test)]
@@ -638,7 +662,13 @@ mod tests {
         let journal = FsJournal::new(PathBuf::from("/journal"), fs.clone());
         let lease = FakeLease::default();
         let handle = lease
-            .acquire(&[], LeaseMode::Exclusive, Duration::from_secs(0))
+            .acquire(
+                &[crate::ports::LeaseKey {
+                    canonical_root: home(),
+                }],
+                LeaseMode::Exclusive,
+                Duration::ZERO,
+            )
             .unwrap();
         let guard = ExclusiveGuard::from_handle(handle);
 
@@ -653,6 +683,11 @@ mod tests {
         )
         .unwrap();
         let id = plan.id().clone();
+        assert!(!check_journal_has_no_open_plan(&journal).is_empty());
+
+        journal
+            .finish(&guard, &id, crate::ports::PlanStatus::Interrupted)
+            .unwrap();
         assert!(!check_journal_has_no_open_plan(&journal).is_empty());
 
         crate::journal::reconcile(&journal, &guard, fs.as_ref()).unwrap();

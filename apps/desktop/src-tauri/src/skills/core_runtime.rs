@@ -126,6 +126,7 @@ pub fn build_runtime_write_at_with_search_dirs(
         RuntimeScope::live(home.to_path_buf(), history_root).with_codex_home(codex_home);
     scope.opencode_config_root = Some(skill_studio_host::opencode_config_dir(home));
     let catalog = Arc::new(HarnessCatalog::builtin());
+    scope.data_root = Some(data_root.to_path_buf());
     let lease_root = data_root.join("leases");
     let db_path = history_db_path(data_root);
     let mut ports = skill_studio_host::default_ports_with_history(lease_root, catalog, db_path);

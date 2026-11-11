@@ -266,6 +266,11 @@ impl EventRecord {
     /// write never reached the filesystem, say - has nothing a restore can
     /// apply and stays `NotCompleted`.
     pub fn restore_capability(&self) -> RestoreCapability {
+        if crate::backup_retention::backup_is_expired(&self.payload) {
+            return RestoreCapability::BackupExpired {
+                reverted_by: self.reverted_by.clone(),
+            };
+        }
         let completed = match self.status {
             EventStatus::Done => true,
             EventStatus::Failed | EventStatus::Interrupted => {
@@ -473,10 +478,7 @@ fn release_restore_claim(
 /// directory backed up there (`ops::update`'s `backup_paths` call) and one
 /// fingerprinted here for a live drift check produce the same hash for the
 /// same tree.
-pub(crate) fn fingerprint_path(
-    fs: &dyn ScopeFs,
-    path: &Path,
-) -> Result<Option<Fingerprint>, CoreError> {
+pub fn fingerprint_path(fs: &dyn ScopeFs, path: &Path) -> Result<Option<Fingerprint>, CoreError> {
     let meta = match fs.symlink_metadata(path) {
         Ok(meta) => meta,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -522,15 +524,48 @@ fn fingerprint_entry(
             }
             buf
         }
-        FileKind::File | FileKind::Other => {
-            let bytes = fs
-                .read_capped(path, crate::ops::SKILL_MD_MAX_BYTES)
-                .map_err(|e| CoreError::io(path, e))?;
-            let mut buf = Vec::with_capacity(bytes.len() + 9);
-            buf.push(b'F');
-            buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-            buf.extend_from_slice(&bytes);
-            buf
+        FileKind::File => {
+            use sha2::{Digest, Sha256};
+            let mut file = fs
+                .open_file(path)
+                .map_err(|error| CoreError::io(path, error))?;
+            let mut hasher = Sha256::new();
+            hasher.update(b"F");
+            hasher.update(file.len.to_le_bytes());
+            let mut buffer = [0u8; 8192];
+            let mut length = 0u64;
+            loop {
+                let read = file
+                    .reader
+                    .read(&mut buffer)
+                    .map_err(|error| CoreError::io(path, error))?;
+                if read == 0 {
+                    break;
+                }
+                length += read as u64;
+                hasher.update(&buffer[..read]);
+            }
+            if length != file.len {
+                return Err(CoreError::new(
+                    ErrorCode::Io,
+                    "file changed while its fingerprint was read",
+                )
+                .at(path));
+            }
+            use std::fmt::Write as _;
+            let digest: [u8; 32] = hasher.finalize().into();
+            let mut hex = String::with_capacity(digest.len() * 2);
+            for byte in digest {
+                let _ = write!(hex, "{byte:02x}");
+            }
+            return Fingerprint::parse(&hex);
+        }
+        FileKind::Other => {
+            return Err(CoreError::new(
+                ErrorCode::Unsupported,
+                "cannot fingerprint this entry type",
+            )
+            .at(path))
         }
     };
     Ok(Fingerprint::of_bytes(&buf))
@@ -946,5 +981,31 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn a_large_asset_fingerprint_matches_the_complete_framed_bytes_or_ignores_its_tail() {
+        use crate::testing::FixtureBuilder;
+        let size = usize::try_from(crate::ops::SKILL_MD_MAX_BYTES).unwrap() + 1;
+        let mut before = vec![b'a'; size];
+        let path = Path::new("/home/skill/asset.bin");
+        let fs = FixtureBuilder::new()
+            .file(path.to_str().unwrap(), &before)
+            .build_fs();
+        let mut framed = vec![b'F'];
+        framed.extend_from_slice(&(before.len() as u64).to_le_bytes());
+        framed.extend_from_slice(&before);
+        assert_eq!(
+            fingerprint_path(&fs, path).unwrap(),
+            Some(Fingerprint::of_bytes(&framed))
+        );
+        before[size - 1] = b'b';
+        let changed = FixtureBuilder::new()
+            .file(path.to_str().unwrap(), &before)
+            .build_fs();
+        assert_ne!(
+            fingerprint_path(&fs, path).unwrap(),
+            fingerprint_path(&changed, path).unwrap(),
+            "a tail edit beyond the parse cap must change the fingerprint"
+        );
     }
 }

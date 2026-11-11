@@ -7,7 +7,7 @@
 //! it verbatim rather than reimplementing the write order. [`reconcile`]
 //! resolves every plan a crash left `Pending` by undoing its recorded steps
 //! in reverse - or, for a plan with none, marking it `Failed` since nothing
-//! mutated anything yet. [`trim_backups`] enforces a size-and-age quota on
+//! mutated anything yet. [`trim_backups`] applies count, age, Undo and recovery protections to
 //! the backups plans keep for undo. Neither one ever deletes a plan row.
 //!
 //! [`PlanWriter`]'s `record_*` methods are how `crate::fsops`'s four
@@ -28,7 +28,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
@@ -71,6 +70,52 @@ impl FsJournal {
         FsJournal { root, fs }
     }
 
+    fn validate_id(id: &PlanId) -> Result<(), CoreError> {
+        let mut components = Path::new(&id.0).components();
+        if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+            || components.next().is_some()
+        {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "a plan ID must name one folder",
+            ));
+        }
+        Ok(())
+    }
+
+    fn checked_backup_path(&self, id: &PlanId, relative: &str) -> Result<PathBuf, CoreError> {
+        Self::validate_id(id)?;
+        if relative.is_empty()
+            || Path::new(relative)
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "a backup path must stay inside its plan",
+            ));
+        }
+        let root = Root::open(self.fs.as_ref(), self.root.clone())
+            .map_err(|error| CoreError::new(ErrorCode::InvalidRequest, error.to_string()))?;
+        let path = PathBuf::from("plans")
+            .join(&id.0)
+            .join("backups")
+            .join(relative);
+        root.confine(&path)
+            .map_err(|error| CoreError::new(ErrorCode::InvalidRequest, error.to_string()))
+    }
+
+    fn confine_journal_path(&self, path: &Path) -> std::io::Result<()> {
+        let relative = path
+            .strip_prefix(&self.root)
+            .map_err(std::io::Error::other)?;
+        let root =
+            Root::open(self.fs.as_ref(), self.root.clone()).map_err(std::io::Error::other)?;
+        root.confine(relative)
+            .map(|_| ())
+            .map_err(std::io::Error::other)
+    }
+
     fn plan_dir(&self, id: &PlanId) -> PathBuf {
         self.root.join("plans").join(&id.0)
     }
@@ -83,6 +128,7 @@ impl FsJournal {
         self.plan_dir(id).join("plan.json")
     }
 
+    #[cfg(test)]
     fn backup_path(&self, id: &PlanId, relative: &str) -> PathBuf {
         self.plan_dir(id).join("backups").join(relative)
     }
@@ -99,7 +145,13 @@ impl FsJournal {
             }
         }
         match self.fs.fsops_create_dir(path) {
-            Ok(()) => self.fs.fsops_fsync_dir(path),
+            Ok(()) => {
+                self.fs.fsops_fsync_dir(path)?;
+                if let Some(parent) = path.parent() {
+                    self.fs.fsops_fsync_dir(parent)?;
+                }
+                Ok(())
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
             Err(e) => Err(e),
         }
@@ -110,7 +162,17 @@ impl FsJournal {
     /// `fsops::write_file` gives a caller's own files.
     fn write_through_tmp(&self, path: &Path, tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let parent = path.parent().unwrap_or(path);
+        match self.fs.symlink_metadata(&self.root) {
+            Ok(_) => {
+                self.confine_journal_path(path)?;
+                self.confine_journal_path(tmp)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
         self.ensure_dir(parent)?;
+        self.confine_journal_path(path)?;
+        self.confine_journal_path(tmp)?;
         if self.fs.symlink_metadata(tmp).is_ok() {
             self.fs.fsops_remove_file(tmp)?;
         }
@@ -131,6 +193,19 @@ impl FsJournal {
     }
 
     fn read_json<T: serde::de::DeserializeOwned>(&self, path: &Path) -> Result<T, CoreError> {
+        self.confine_journal_path(path)
+            .map_err(|error| CoreError::io(path, error))?;
+        let facts = self
+            .fs
+            .symlink_metadata(path)
+            .map_err(|error| CoreError::io(path, error))?;
+        if facts.kind != FileKind::File {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "journal metadata must be a regular file",
+            )
+            .at(path));
+        }
         let bytes = self
             .fs
             .read_capped(path, MAX_JOURNAL_JSON_BYTES)
@@ -141,6 +216,7 @@ impl FsJournal {
     }
 
     fn write_record(&self, record: &PlanRecord) -> Result<(), CoreError> {
+        Self::validate_id(&record.id)?;
         let path = self.plan_path(&record.id);
         let bytes = serde_json::to_vec_pretty(record)
             .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(&path))?;
@@ -151,6 +227,7 @@ impl FsJournal {
 
 impl Journal for FsJournal {
     fn begin(&self, _guard: &ExclusiveGuard, plan: &PlanRecord) -> Result<(), CoreError> {
+        Self::validate_id(&plan.id)?;
         if plan.status != PlanStatus::Pending {
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
@@ -174,6 +251,7 @@ impl Journal for FsJournal {
         id: &PlanId,
         step: PlanStep,
     ) -> Result<(), CoreError> {
+        Self::validate_id(id)?;
         let mut record: PlanRecord = self.read_json(&self.plan_path(id))?;
         // A `WriteFile` step's backup was written by `write_backup` before
         // this call, but the manifest `begin` fsynced only knows the
@@ -192,39 +270,64 @@ impl Journal for FsJournal {
 
     fn finish(
         &self,
-        _guard: &ExclusiveGuard,
+        guard: &ExclusiveGuard,
         id: &PlanId,
         status: PlanStatus,
     ) -> Result<(), CoreError> {
+        Self::validate_id(id)?;
         let mut record: PlanRecord = self.read_json(&self.plan_path(id))?;
         record.status = record.status.settle(status)?;
-        self.write_record(&record)
+        self.write_record(&record)?;
+        if status == PlanStatus::Done {
+            // The write has committed. Failed cleanup is retried at startup.
+            let _ = trim_backups(self, guard, Utc::now());
+        }
+        Ok(())
+    }
+
+    fn visit(&self, visit: &mut dyn FnMut(PlanRecord)) -> Result<(), CoreError> {
+        let plans_dir = self.root.join("plans");
+        let mut failure = None;
+        let result = self.fs.visit_dir(&plans_dir, &mut |entry| {
+            if entry.kind != FileKind::Dir || failure.is_some() {
+                return;
+            }
+            let path = plans_dir.join(&entry.name).join("plan.json");
+            match self.fs.symlink_metadata(&path) {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(error) => {
+                    failure = Some(CoreError::io(path, error));
+                    return;
+                }
+            }
+            let record = self.read_json::<PlanRecord>(&path).and_then(|record| {
+                Self::validate_id(&record.id)?;
+                if record.id.0 != entry.name {
+                    return Err(CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "the plan ID does not match its folder",
+                    )
+                    .at(path));
+                }
+                Ok(record)
+            });
+            match record {
+                Ok(plan) => visit(plan),
+                Err(error) => failure = Some(error),
+            }
+        });
+        match result {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(CoreError::io(plans_dir, error)),
+            Ok(()) => {}
+        }
+        failure.map_or(Ok(()), Err)
     }
 
     fn all(&self) -> Result<Vec<PlanRecord>, CoreError> {
-        let plans_dir = self.root.join("plans");
-        let entries = match self.fs.read_dir(&plans_dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(CoreError::io(plans_dir, e)),
-        };
         let mut records = Vec::new();
-        for entry in entries {
-            if entry.kind != FileKind::Dir {
-                continue;
-            }
-            let plan_path = plans_dir.join(&entry.name).join("plan.json");
-            // R9: `begin` writes `manifest.json` before `plan.json` (see its
-            // own doc), so a crash between the two leaves a plan dir with
-            // only a manifest. Nothing was ever `Pending` from this op's
-            // perspective - the plan row itself never landed - so skip it
-            // rather than failing every later `all()`/`reconcile` call on a
-            // dir this journal never finished creating.
-            if self.fs.symlink_metadata(&plan_path).is_err() {
-                continue;
-            }
-            records.push(self.read_json::<PlanRecord>(&plan_path)?);
-        }
+        self.visit(&mut |plan| records.push(plan))?;
         records.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(records)
     }
@@ -233,7 +336,7 @@ impl Journal for FsJournal {
         Ok(self
             .all()?
             .into_iter()
-            .filter(|p| p.status == PlanStatus::Pending)
+            .filter(|p| matches!(p.status, PlanStatus::Pending | PlanStatus::Interrupted))
             .collect())
     }
 
@@ -243,12 +346,43 @@ impl Journal for FsJournal {
         id: &PlanId,
         relative: &str,
     ) -> Result<(), CoreError> {
-        let path = self.backup_path(id, relative);
-        match self.fs.fsops_remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(CoreError::io(path, e)),
+        Self::validate_id(id)?;
+        let mut record: PlanRecord = self.read_json(&self.plan_path(id))?;
+        match record.status {
+            PlanStatus::Pending | PlanStatus::Interrupted => {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "recovery still needs this plan's backups",
+                ))
+            }
+            PlanStatus::Done | PlanStatus::Failed | PlanStatus::Reversed => {}
         }
+        let path = self.checked_backup_path(id, relative)?;
+        if !record
+            .backups
+            .iter()
+            .any(|backup| backup.relative == relative)
+        {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "the backup is not recorded by this plan",
+            ));
+        }
+        if !record.expired_backups.iter().any(|name| name == relative) {
+            record.expired_backups.push(relative.to_owned());
+            self.write_record(&record)?;
+        }
+        match self.fs.fsops_remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(CoreError::io(&path, error)),
+        }
+        if let Some(parent) = path.parent() {
+            self.fs
+                .fsops_fsync_dir(parent)
+                .map_err(|error| CoreError::io(parent, error))?;
+        }
+        Ok(())
     }
 
     fn write_backup(
@@ -258,13 +392,32 @@ impl Journal for FsJournal {
         relative: &str,
         bytes: &[u8],
     ) -> Result<(), CoreError> {
-        let path = self.backup_path(id, relative);
+        let path = self.checked_backup_path(id, relative)?;
         self.write_bytes(&path, bytes)
             .map_err(|e| CoreError::io(path, e))
     }
 
     fn read_backup(&self, id: &PlanId, relative: &str) -> Result<Vec<u8>, CoreError> {
-        let path = self.backup_path(id, relative);
+        Self::validate_id(id)?;
+        let record: PlanRecord = self.read_json(&self.plan_path(id))?;
+        if record.expired_backups.iter().any(|name| name == relative) {
+            return Err(CoreError::new(
+                ErrorCode::BackupExpired,
+                crate::backup_retention::BACKUP_EXPIRED_REASON,
+            ));
+        }
+        let path = self.checked_backup_path(id, relative)?;
+        let facts = self
+            .fs
+            .symlink_metadata(&path)
+            .map_err(|error| CoreError::io(&path, error))?;
+        if facts.kind != FileKind::File {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "a plan backup must be a regular file",
+            )
+            .at(&path));
+        }
         self.fs
             .read_capped(&path, MAX_BACKUP_BYTES)
             .map_err(|e| CoreError::io(path, e))
@@ -301,6 +454,7 @@ impl<'a> PlanWriter<'a> {
             label: label.into(),
             root,
             backups,
+            expired_backups: Vec::new(),
             steps: Vec::new(),
             status: PlanStatus::Pending,
         };
@@ -340,6 +494,18 @@ impl<'a> PlanWriter<'a> {
         staged_binding: (u64, u64),
         quarantined: Option<PathBuf>,
     ) -> Result<(), CoreError> {
+        self.record_swap_with_parent(path, staged, staged_binding, quarantined, None)
+    }
+
+    /// Records the quarantine directory before the first create can land.
+    pub fn record_swap_with_parent(
+        &self,
+        path: &Path,
+        staged: &Path,
+        staged_binding: (u64, u64),
+        quarantined: Option<PathBuf>,
+        created_quarantine_dir: Option<PathBuf>,
+    ) -> Result<(), CoreError> {
         self.journal.record_step(
             self.guard,
             &self.id,
@@ -348,6 +514,7 @@ impl<'a> PlanWriter<'a> {
                 staged: staged.to_path_buf(),
                 staged_binding,
                 quarantined,
+                created_quarantine_dir,
             },
         )
     }
@@ -362,6 +529,17 @@ impl<'a> PlanWriter<'a> {
         target: &Path,
         previous_target: Option<PathBuf>,
     ) -> Result<(), CoreError> {
+        self.record_link_with_temp(path, target, previous_target, None)
+    }
+
+    /// Records the exact link temp name before creating it.
+    pub fn record_link_with_temp(
+        &self,
+        path: &Path,
+        target: &Path,
+        previous_target: Option<PathBuf>,
+        temporary: Option<PathBuf>,
+    ) -> Result<(), CoreError> {
         self.journal.record_step(
             self.guard,
             &self.id,
@@ -369,6 +547,7 @@ impl<'a> PlanWriter<'a> {
                 path: path.to_path_buf(),
                 target: target.to_path_buf(),
                 previous_target,
+                temporary,
             },
         )
     }
@@ -380,6 +559,18 @@ impl<'a> PlanWriter<'a> {
     /// backup, so reversal can read them back. Called before the rename
     /// that puts the new bytes in place.
     pub fn record_write_file(&self, path: &Path, previous: Option<&[u8]>) -> Result<(), CoreError> {
+        self.record_write_file_with_state(path, previous, None, None, None)
+    }
+
+    /// Records the original kind, mode and exact temp name for reversal.
+    pub fn record_write_file_with_state(
+        &self,
+        path: &Path,
+        previous: Option<&[u8]>,
+        temporary: Option<PathBuf>,
+        previous_link: Option<PathBuf>,
+        previous_mode: Option<u32>,
+    ) -> Result<(), CoreError> {
         let backup = match previous {
             Some(bytes) => {
                 let relative = backup_relative_name(path);
@@ -399,6 +590,9 @@ impl<'a> PlanWriter<'a> {
             PlanStep::WriteFile {
                 path: path.to_path_buf(),
                 backup,
+                temporary,
+                previous_link,
+                previous_mode,
             },
         )
     }
@@ -456,7 +650,7 @@ pub struct Reconciliation {
 /// `Interrupted` (listed with the error) the moment one step's undo fails.
 /// A plan with no recorded steps becomes `Failed` (nothing on disk needed
 /// undoing). Idempotent - a second call finds nothing left `Pending` (a
-/// `Reversed` or `Interrupted` plan is terminal either way).
+/// reversed plan stays settled; interrupted recovery is retried).
 ///
 /// Newest-first matters when two pending plans stack on the same path -
 /// plan A swaps it, left `Pending`; plan B swaps it again, over A's result,
@@ -474,25 +668,79 @@ pub fn reconcile(
 ) -> Result<Reconciliation, CoreError> {
     let mut report = Reconciliation::default();
     for plan in journal.pending()?.into_iter().rev() {
-        if plan.steps.is_empty() {
-            journal.finish(guard, &plan.id, PlanStatus::Failed)?;
-            report.resolved_without_steps.push(plan.id);
+        let canonical_root = fs
+            .canonicalize(&plan.root)
+            .map_err(|error| CoreError::io(&plan.root, error));
+        let owned = canonical_root.as_ref().is_ok_and(|root| {
+            guard
+                .keys()
+                .iter()
+                .any(|key| root.starts_with(&key.canonical_root))
+        });
+        let (status, reversal_error) = if !owned {
+            (
+                PlanStatus::Interrupted,
+                Some(format!(
+                    "{}: recovery root is not covered by the held write lease",
+                    plan.root.display()
+                )),
+            )
+        } else if plan.steps.is_empty() {
+            (PlanStatus::Failed, None)
+        } else {
+            match reverse_steps(journal, &plan, fs) {
+                Ok(()) => (PlanStatus::Reversed, None),
+                Err(error) => (PlanStatus::Interrupted, Some(error.to_string())),
+            }
+        };
+        if let Err(error) = journal.finish(guard, &plan.id, status) {
+            report.interrupted.push(InterruptedPlan {
+                id: plan.id,
+                error: error.to_string(),
+            });
             continue;
         }
-        match reverse_steps(journal, &plan, fs) {
-            Ok(()) => {
-                journal.finish(guard, &plan.id, PlanStatus::Reversed)?;
-                report.reversed.push(plan.id);
-            }
-            Err(error) => {
-                journal.finish(guard, &plan.id, PlanStatus::Interrupted)?;
-                report.interrupted.push(InterruptedPlan {
-                    id: plan.id,
-                    error: error.to_string(),
-                });
+        match status {
+            PlanStatus::Reversed => report.reversed.push(plan.id),
+            PlanStatus::Failed => report.resolved_without_steps.push(plan.id),
+            PlanStatus::Interrupted => report.interrupted.push(InterruptedPlan {
+                id: plan.id,
+                error: reversal_error.unwrap_or_else(|| "recovery did not finish".into()),
+            }),
+            PlanStatus::Pending | PlanStatus::Done => {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "invalid recovery settlement",
+                ))
             }
         }
     }
+    Ok(report)
+}
+
+/// Recovers the core journal using the same trusted roots and lease as a write.
+pub fn reconcile_scope_journal(
+    rt: &crate::ports::Runtime,
+    guard: &ExclusiveGuard,
+) -> Result<Reconciliation, CoreError> {
+    let journal = FsJournal::new(
+        crate::ops_install::journal_root(&rt.scope.home.lexical),
+        rt.ports.fs.clone(),
+    );
+    let report = reconcile(&journal, guard, rt.ports.fs.as_ref())?;
+    if !report.interrupted.is_empty() {
+        let plans = report
+            .interrupted
+            .iter()
+            .map(|plan| plan.id.0.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(CoreError::new(
+            ErrorCode::Incomplete,
+            format!("Recovery did not finish for plans: {plans}. No new write ran."),
+        ));
+    }
+    trim_backups(&journal, guard, rt.ports.clock.now())?;
     Ok(report)
 }
 
@@ -506,15 +754,30 @@ fn step_paths(step: &PlanStep) -> Vec<&Path> {
             path,
             staged,
             quarantined,
+            created_quarantine_dir,
             ..
         } => {
             let mut paths = vec![path.as_path(), staged.as_path()];
             if let Some(quarantined) = quarantined {
                 paths.push(quarantined);
             }
+            if let Some(parent) = created_quarantine_dir {
+                paths.push(parent);
+            }
             paths
         }
-        PlanStep::Link { path, .. } | PlanStep::WriteFile { path, .. } => vec![path],
+        PlanStep::Link {
+            path, temporary, ..
+        }
+        | PlanStep::WriteFile {
+            path, temporary, ..
+        } => {
+            let mut paths = vec![path.as_path()];
+            if let Some(temporary) = temporary {
+                paths.push(temporary);
+            }
+            paths
+        }
     }
 }
 
@@ -535,6 +798,21 @@ fn confine_to_root(root: &Root, plan_root: &Path, path: &Path) -> std::io::Resul
     root.confine(relative).map(|_| ()).map_err(|e| {
         std::io::Error::other(format!("{}: escapes the plan root ({e})", path.display()))
     })
+}
+
+fn sync_step_parents(fs: &dyn ScopeFs, step: &PlanStep) -> std::io::Result<()> {
+    let parents: std::collections::BTreeSet<&Path> = step_paths(step)
+        .into_iter()
+        .filter_map(Path::parent)
+        .collect();
+    for parent in parents {
+        match fs.fsops_fsync_dir(parent) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 /// Whether `name` is a temp link a link restore minted: the `.{leaf}-`
@@ -605,6 +883,7 @@ fn reverse_steps(
                 staged,
                 staged_binding,
                 quarantined,
+                created_quarantine_dir,
             } => {
                 let landed = match fs.fsops_device_inode(path) {
                     Ok(inode) => inode == *staged_binding,
@@ -616,37 +895,61 @@ fn reverse_steps(
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
                     Err(e) => return Err(e),
                 };
-                if !landed {
-                    // The exchange never ran; `path` still shows whatever
-                    // was there before this plan. Nothing to undo here -
-                    // the preceding `Stage` step's own reversal removes
-                    // the still-unswapped staged folder.
-                    continue;
+                if landed {
+                    match quarantined {
+                        Some(quarantined) if fs.symlink_metadata(quarantined).is_ok() => {
+                            // Both the exchange and the follow-up move into
+                            // quarantine landed.
+                            fs.fsops_exchange(quarantined, path)?;
+                            remove_tree(fs, quarantined)?;
+                        }
+                        Some(_) => {
+                            // The exchange landed but the move into quarantine
+                            // never did: the pre-swap folder is still sitting
+                            // at `staged`'s temp name. Exchange it back; the
+                            // preceding `Stage` step's own reversal then
+                            // removes what is left at `staged` (the folder
+                            // this step is undoing).
+                            fs.fsops_exchange(staged, path)?;
+                        }
+                        None => remove_tree(fs, path)?,
+                    }
                 }
-                match quarantined {
-                    Some(quarantined) if fs.symlink_metadata(quarantined).is_ok() => {
-                        // Both the exchange and the follow-up move into
-                        // quarantine landed.
-                        fs.fsops_exchange(quarantined, path)?;
-                        remove_tree(fs, quarantined)?;
+                if let Some(quarantined) = quarantined {
+                    match fs.fsops_device_inode(quarantined) {
+                        Ok(binding) if binding == *staged_binding => remove_tree(fs, quarantined)?,
+                        Ok(_) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error),
                     }
-                    Some(_) => {
-                        // The exchange landed but the move into quarantine
-                        // never did: the pre-swap folder is still sitting
-                        // at `staged`'s temp name. Exchange it back; the
-                        // preceding `Stage` step's own reversal then
-                        // removes what is left at `staged` (the folder
-                        // this step is undoing).
-                        fs.fsops_exchange(staged, path)?;
+                }
+                if let Some(parent) = created_quarantine_dir {
+                    match fs.fsops_remove_dir(parent) {
+                        Ok(()) => {
+                            if let Some(ancestor) = parent.parent() {
+                                fs.fsops_fsync_dir(ancestor)?;
+                            }
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::NotFound
+                                    | std::io::ErrorKind::DirectoryNotEmpty
+                            ) => {}
+                        Err(error) => return Err(error),
                     }
-                    None => remove_tree(fs, path)?,
                 }
             }
+
             PlanStep::Link {
                 path,
                 target,
                 previous_target,
+                temporary,
             } => {
+                if let Some(temporary) = temporary {
+                    remove_tree(fs, temporary)?;
+                }
                 let landed = match fs.read_link(path) {
                     Ok(current) => current == *target,
                     // A missing path is still "landed" when a previous
@@ -659,6 +962,7 @@ fn reverse_steps(
                     Err(e) => return Err(e),
                 };
                 if !landed {
+                    sync_step_parents(fs, step)?;
                     continue;
                 }
                 match previous_target {
@@ -683,65 +987,104 @@ fn reverse_steps(
                         // `previous_target`; one `fsops::link` minted points
                         // at `target`. A symlink with the same name shape
                         // but any other target is a user's own and stays.
-                        for entry in fs.read_dir(&parent)? {
-                            if entry.kind != FileKind::Symlink
-                                || !is_link_restore_temp_name(&entry.name, &temp_prefix)
-                            {
-                                continue;
-                            }
-                            let stale = parent.join(&entry.name);
-                            let points_at_ours = match fs.read_link(&stale) {
-                                Ok(current) => current == *previous_target || current == *target,
-                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-                                Err(e) => return Err(e),
-                            };
-                            if !points_at_ours {
-                                continue;
-                            }
-                            // Under the exclusive lease nothing else removes
-                            // the entry between `read_dir` and here, so the
-                            // `NotFound` arm is defensive only.
-                            match fs.fsops_remove_file(&stale) {
-                                Ok(()) => {}
-                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                                Err(e) => return Err(e),
+                        if temporary.is_none() {
+                            for entry in fs.read_dir(&parent)? {
+                                if entry.kind != FileKind::Symlink
+                                    || !is_link_restore_temp_name(&entry.name, &temp_prefix)
+                                {
+                                    continue;
+                                }
+                                let stale = parent.join(&entry.name);
+                                let points_at_ours = match fs.read_link(&stale) {
+                                    Ok(current) => {
+                                        current == *previous_target || current == *target
+                                    }
+                                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                                    Err(e) => return Err(e),
+                                };
+                                if !points_at_ours {
+                                    continue;
+                                }
+                                // Under the exclusive lease no other Skill Studio
+                                // process removes the entry between `read_dir` and here, so the
+                                // `NotFound` arm is defensive only.
+                                match fs.fsops_remove_file(&stale) {
+                                    Ok(()) => {}
+                                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                                    Err(e) => return Err(e),
+                                }
                             }
                         }
-                        let tmp_path =
-                            parent.join(format!("{temp_prefix}{}", fsops::unique_suffix()));
+                        let tmp_path = temporary.clone().unwrap_or_else(|| {
+                            parent.join(format!("{temp_prefix}{}", fsops::unique_suffix()))
+                        });
                         fs.fsops_symlink(previous_target, &tmp_path)?;
                         fs.fsops_rename(&tmp_path, path)?;
                     }
                     None => fs.fsops_remove_file(path)?,
                 }
+                if let Some(parent) = path.parent() {
+                    fs.fsops_fsync_dir(parent)?;
+                }
             }
-            PlanStep::WriteFile { path, backup } => match backup {
-                Some(entry) => {
-                    let backup_bytes = journal
-                        .read_backup(&plan.id, &entry.relative)
-                        .map_err(|e| std::io::Error::other(e.to_string()))?;
-                    let landed = match fs.read_capped(path, u64::MAX) {
-                        Ok(live) => live != backup_bytes,
-                        // A backup means a file was at `path` before the
-                        // plan, and the forward write's rename never leaves
-                        // `path` empty. A missing file is what a reversal
-                        // from before the atomic restore below left when it
-                        // crashed between its remove and its write: still
-                        // landed, and the backup is the only copy left.
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
-                        Err(e) => return Err(e),
-                    };
-                    if landed {
-                        restore_file_from_backup(fs, path, &backup_bytes)?;
+            PlanStep::WriteFile {
+                path,
+                backup,
+                temporary,
+                previous_link,
+                previous_mode,
+            } => {
+                if let Some(temporary) = temporary {
+                    remove_tree(fs, temporary)?;
+                }
+                if let Some(previous_link) = previous_link {
+                    if fs.read_link(path).ok().as_ref() != Some(previous_link) {
+                        let parent = path
+                            .parent()
+                            .ok_or_else(|| std::io::Error::other("write path has no parent"))?;
+                        let temporary = temporary.clone().unwrap_or_else(|| {
+                            parent.join(format!(".restore-{}", fsops::unique_suffix()))
+                        });
+                        fs.fsops_symlink(previous_link, &temporary)?;
+                        fs.fsops_rename(&temporary, path)?;
+                        fs.fsops_fsync_dir(parent)?;
+                    }
+                } else {
+                    match backup {
+                        Some(entry) => {
+                            let backup_bytes = journal
+                                .read_backup(&plan.id, &entry.relative)
+                                .map_err(|e| std::io::Error::other(e.to_string()))?;
+                            let landed = match fs.read_capped(path, u64::MAX) {
+                                Ok(live) => live != backup_bytes,
+                                // A backup means a file was at `path` before the
+                                // plan, and the forward write's rename never leaves
+                                // `path` empty. A missing file is what a reversal
+                                // from before the atomic restore below left when it
+                                // crashed between its remove and its write: still
+                                // landed, and the backup is the only copy left.
+                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+                                Err(e) => return Err(e),
+                            };
+                            if landed {
+                                restore_file_from_backup(
+                                    fs,
+                                    path,
+                                    &backup_bytes,
+                                    temporary.as_deref(),
+                                    *previous_mode,
+                                )?;
+                            }
+                        }
+                        None => {
+                            remove_tree(fs, path)?;
+                        }
                     }
                 }
-                None => {
-                    if fs.symlink_metadata(path).is_ok() {
-                        fs.fsops_remove_file(path)?;
-                    }
-                }
-            },
+            }
         }
+        sync_step_parents(fs, step)?;
+        root.revalidate().map_err(std::io::Error::other)?;
     }
     Ok(())
 }
@@ -751,33 +1094,47 @@ fn reverse_steps(
 /// the backup, never no file at all. Leftover temps from a crashed earlier
 /// attempt are removed first, but only those holding exactly `backup`: a
 /// file with the same name pattern and other bytes is the user's own.
-fn restore_file_from_backup(fs: &dyn ScopeFs, path: &Path, backup: &[u8]) -> std::io::Result<()> {
+fn restore_file_from_backup(
+    fs: &dyn ScopeFs,
+    path: &Path,
+    backup: &[u8],
+    temporary: Option<&Path>,
+    mode: Option<u32>,
+) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or(Path::new("/")).to_path_buf();
     let leaf = path.file_name().and_then(|s| s.to_str()).unwrap_or("write");
     let temp_prefix = format!(".{leaf}-");
-    for entry in fs.read_dir(&parent)? {
-        if entry.kind != FileKind::File || !is_file_restore_temp_name(&entry.name, &temp_prefix) {
-            continue;
-        }
-        let stale = parent.join(&entry.name);
-        let holds_backup = match fs.read_capped(&stale, u64::MAX) {
-            Ok(bytes) => bytes == backup,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => return Err(e),
-        };
-        if holds_backup {
-            match fs.fsops_remove_file(&stale) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+    if temporary.is_none() {
+        for entry in fs.read_dir(&parent)? {
+            if entry.kind != FileKind::File || !is_file_restore_temp_name(&entry.name, &temp_prefix)
+            {
+                continue;
+            }
+            let stale = parent.join(&entry.name);
+            let holds_backup = match fs.read_capped(&stale, u64::MAX) {
+                Ok(bytes) => bytes == backup,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
                 Err(e) => return Err(e),
+            };
+            if holds_backup {
+                match fs.fsops_remove_file(&stale) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
+                }
             }
         }
     }
-    let tmp_path = parent.join(format!(
-        "{temp_prefix}{}{FILE_RESTORE_TEMP_SUFFIX}",
-        fsops::unique_suffix()
-    ));
-    fs.fsops_write_new_file(&tmp_path, backup)?;
+    let tmp_path = temporary.map_or_else(
+        || {
+            parent.join(format!(
+                "{temp_prefix}{}{FILE_RESTORE_TEMP_SUFFIX}",
+                fsops::unique_suffix()
+            ))
+        },
+        Path::to_path_buf,
+    );
+    fs.fsops_write_new_file_with_mode(&tmp_path, backup, mode.unwrap_or(0o644))?;
     fs.fsops_fsync_file(&tmp_path)?;
     fs.fsops_rename(&tmp_path, path)?;
     fs.fsops_fsync_dir(&parent)
@@ -800,21 +1157,17 @@ fn remove_tree(fs: &dyn ScopeFs, path: &Path) -> std::io::Result<()> {
         Err(e) => return Err(e),
     };
     if facts.kind != FileKind::Dir {
-        return fs.fsops_remove_file(path);
+        fs.fsops_remove_file(path)?;
+        return path
+            .parent()
+            .map_or(Ok(()), |parent| fs.fsops_fsync_dir(parent));
     }
     for entry in fs.read_dir(path)? {
         remove_tree(fs, &path.join(&entry.name))?;
     }
-    fs.fsops_remove_dir(path)
-}
-
-/// Size-and-age limit on the backups plans keep for undo.
-#[derive(Debug, Clone, Copy)]
-pub struct BackupQuota {
-    /// Total bytes every kept backup may sum to.
-    pub max_total_bytes: u64,
-    /// A backup older than this, regardless of total size, is trimmed.
-    pub max_age: Duration,
+    fs.fsops_remove_dir(path)?;
+    path.parent()
+        .map_or(Ok(()), |parent| fs.fsops_fsync_dir(parent))
 }
 
 /// One backup [`trim_backups`] removed.
@@ -826,57 +1179,90 @@ pub struct TrimmedBackup {
     pub relative: String,
 }
 
-/// Trims backups over `quota`, oldest first, using each backup's plan's
-/// `created_at` as its age. Age violations are removed first, then size
-/// violations, until both the age and the total-size budget hold; never
-/// touches a plan row, only the backup bytes [`Journal::remove_backup`]
-/// deletes.
+fn plan_backup_target(plan: &PlanRecord) -> Option<PathBuf> {
+    plan.steps
+        .iter()
+        .find_map(|step| match step {
+            PlanStep::Swap { path, .. } => Some(path),
+            _ => None,
+        })
+        .or_else(|| plan.backups.first().map(|entry| &entry.original))
+        .or_else(|| {
+            plan.steps.iter().find_map(|step| match step {
+                PlanStep::Link { path, .. } | PlanStep::WriteFile { path, .. } => Some(path),
+                PlanStep::Stage { .. } | PlanStep::Swap { .. } => None,
+            })
+        })
+        .map(|path| crate::backup_retention::skill_target(path))
+}
+
+/// Expires completed plan backups only when count, age, newest undoable
+/// plan, and recovery protections all permit it. Pending and interrupted
+/// plans remain protected. Rows stay; expiry is durable before deletion.
 pub fn trim_backups(
     journal: &dyn Journal,
     guard: &ExclusiveGuard,
     now: DateTime<Utc>,
-    quota: &BackupQuota,
 ) -> Result<Vec<TrimmedBackup>, CoreError> {
-    let mut entries: Vec<(DateTime<Utc>, PlanId, PlanBackupEntry)> = journal
-        .all()?
-        .into_iter()
-        .flat_map(|plan| {
-            plan.backups
-                .into_iter()
-                .map(move |backup| (plan.created_at, plan.id.clone(), backup))
-        })
-        .collect();
-    entries.sort_by_key(|a| a.0);
-
+    use crate::backup_retention::{BACKUP_RETENTION_AGE, BACKUP_RETENTION_COUNT};
+    let mut plans = journal.all()?;
+    plans.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.id.cmp(&left.id))
+    });
+    let mut targets: std::collections::BTreeMap<PathBuf, Vec<(&PlanRecord, &PlanBackupEntry)>> =
+        std::collections::BTreeMap::new();
     let mut trimmed = Vec::new();
-    let mut kept = Vec::new();
-    for entry in entries {
-        let age = now.signed_duration_since(entry.0);
-        let over_age = age.to_std().is_ok_and(|d| d > quota.max_age);
-        if over_age {
-            journal.remove_backup(guard, &entry.1, &entry.2.relative)?;
-            trimmed.push(TrimmedBackup {
-                plan: entry.1,
-                relative: entry.2.relative,
-            });
-        } else {
-            kept.push(entry);
+    for plan in &plans {
+        match plan.status {
+            PlanStatus::Pending | PlanStatus::Interrupted => continue,
+            PlanStatus::Done | PlanStatus::Failed | PlanStatus::Reversed => {}
+        }
+        for backup in &plan.backups {
+            if !guard
+                .keys()
+                .iter()
+                .any(|key| backup.original.starts_with(&key.canonical_root))
+            {
+                continue;
+            }
+            if plan.expired_backups.contains(&backup.relative) {
+                journal.remove_backup(guard, &plan.id, &backup.relative)?;
+                continue;
+            }
+            let Some(target) = plan_backup_target(plan) else {
+                continue;
+            };
+            targets.entry(target).or_default().push((plan, backup));
         }
     }
-
-    let mut total: u64 = kept.iter().map(|(_, _, backup)| backup.bytes).sum();
-    let mut i = 0;
-    while total > quota.max_total_bytes && i < kept.len() {
-        let (_, plan, backup) = kept[i].clone();
-        journal.remove_backup(guard, &plan, &backup.relative)?;
-        total -= backup.bytes;
-        trimmed.push(TrimmedBackup {
-            plan,
-            relative: backup.relative,
-        });
-        i += 1;
+    for (target, backups) in &targets {
+        let newest_undoable = plans
+            .iter()
+            .find(|plan| {
+                plan.status == PlanStatus::Done && plan_backup_target(plan).as_ref() == Some(target)
+            })
+            .map(|plan| &plan.id);
+        let mut completed = Vec::new();
+        for (plan, backup) in backups {
+            if !completed.contains(&plan.id) {
+                completed.push(plan.id.clone());
+            }
+            if completed.len() <= BACKUP_RETENTION_COUNT
+                || now.signed_duration_since(plan.created_at) < BACKUP_RETENTION_AGE
+                || newest_undoable == Some(&plan.id)
+            {
+                continue;
+            }
+            journal.remove_backup(guard, &plan.id, &backup.relative)?;
+            trimmed.push(TrimmedBackup {
+                plan: plan.id.clone(),
+                relative: backup.relative.clone(),
+            });
+        }
     }
-
     Ok(trimmed)
 }
 
@@ -886,12 +1272,719 @@ mod tests {
     use crate::fsops::{self, Root};
     use crate::ports::{LeaseMode, LeaseProvider};
     use crate::testing::{FailingFs, FakeLease, FixtureBuilder};
+    use std::time::Duration;
 
     fn guard(lease: &FakeLease) -> ExclusiveGuard {
         let handle = lease
-            .acquire(&[], LeaseMode::Exclusive, Duration::from_secs(0))
+            .acquire(
+                &[crate::ports::LeaseKey {
+                    canonical_root: PathBuf::from("/root"),
+                }],
+                LeaseMode::Exclusive,
+                Duration::ZERO,
+            )
             .expect("acquire exclusive lease");
         ExclusiveGuard::from_handle(handle)
+    }
+
+    fn retention_fixture(
+        protection: &str,
+    ) -> (FsJournal, ExclusiveGuard, Arc<dyn ScopeFs>, Vec<PlanId>) {
+        use crate::backup_retention::{BACKUP_RETENTION_AGE, BACKUP_RETENTION_COUNT};
+        let fs: Arc<dyn ScopeFs> = Arc::new(
+            FixtureBuilder::new()
+                .dir("/journal")
+                .dir("/root")
+                .build_fs(),
+        );
+        let journal = journal_over(fs.clone());
+        let lease = FakeLease::default();
+        let guard = guard(&lease);
+        let now = Utc::now();
+        let mut ids = Vec::new();
+        for index in 0..BACKUP_RETENTION_COUNT + 2 {
+            let id = PlanId(format!("retention-{index:04}"));
+            let age = if protection == "recent" && index == 0 {
+                chrono::Duration::days(1)
+            } else {
+                BACKUP_RETENTION_AGE + chrono::Duration::days(1)
+            };
+            let plan = PlanWriter::begin(
+                &journal,
+                &guard,
+                id.clone(),
+                now - age + chrono::Duration::seconds(i64::try_from(index).unwrap()),
+                "retention",
+                PathBuf::from("/root"),
+                Vec::new(),
+            )
+            .unwrap();
+            plan.record_write_file(Path::new("/root/alpha/SKILL.md"), Some(b"backup bytes"))
+                .unwrap();
+            let status = match (protection, index) {
+                ("pending", 0) => PlanStatus::Pending,
+                ("interrupted", 0) => PlanStatus::Interrupted,
+                ("undoable", 0) => PlanStatus::Done,
+                _ => PlanStatus::Reversed,
+            };
+            if status != PlanStatus::Pending {
+                plan.finish(status).unwrap();
+            }
+            ids.push(id);
+        }
+        (journal, guard, fs, ids)
+    }
+
+    #[test]
+    fn a_newer_undoable_plan_without_a_backup_expires_the_old_backup_or_pins_it_forever() {
+        let (journal, guard, fs, ids) = retention_fixture("undoable");
+        let old = journal
+            .all()
+            .unwrap()
+            .into_iter()
+            .find(|plan| plan.id == ids[0])
+            .unwrap();
+        let backup = journal.backup_path(&old.id, &old.backups[0].relative);
+        assert!(fs.symlink_metadata(&backup).is_ok());
+        fs.fsops_create_dir(Path::new("/root/alpha")).unwrap();
+        let root = Root::open(fs.as_ref(), PathBuf::from("/root")).unwrap();
+        let plan = PlanWriter::begin(
+            &journal,
+            &guard,
+            PlanId("new-without-backup".into()),
+            Utc::now(),
+            "new file",
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .unwrap();
+        fsops::write_file(
+            &root,
+            &plan,
+            Path::new("alpha/SKILL.md"),
+            b"new user bytes",
+            &fsops::ReadStamp::Absent,
+        )
+        .unwrap();
+        plan.finish(PlanStatus::Done).unwrap();
+        trim_backups(&journal, &guard, Utc::now()).unwrap();
+        assert!(
+            fs.symlink_metadata(&backup).is_err(),
+            "a newer undoable plan no longer needs the old backup"
+        );
+        assert_eq!(
+            fs.read_capped(Path::new("/root/alpha/SKILL.md"), u64::MAX)
+                .unwrap(),
+            b"new user bytes"
+        );
+    }
+
+    #[test]
+    fn completed_plan_retention_keeps_the_count_and_age_union_or_deletes_a_protected_backup() {
+        use crate::backup_retention::BACKUP_RETENTION_COUNT;
+        for protection in ["count", "recent", "undoable", "pending", "interrupted"] {
+            let (journal, guard, fs, ids) = retention_fixture(protection);
+            trim_backups(&journal, &guard, Utc::now()).unwrap();
+            let records = journal.all().unwrap();
+            let protected = if protection == "count" {
+                ids.len() - BACKUP_RETENTION_COUNT
+            } else {
+                0
+            };
+            let control = usize::from(protected == 0);
+            let path = |index: usize| {
+                journal.backup_path(&ids[index], &records[index].backups[0].relative)
+            };
+            assert!(
+                fs.symlink_metadata(&path(protected)).is_ok(),
+                "{protection} must protect this backup"
+            );
+            assert!(
+                fs.symlink_metadata(&path(control)).is_err(),
+                "an old unprotected plan backup must expire"
+            );
+            assert_eq!(records.len(), ids.len(), "retention must keep plan rows");
+        }
+    }
+
+    fn crash_retention_plans() -> (Arc<dyn ScopeFs>, ExclusiveGuard) {
+        let fs: Arc<dyn ScopeFs> = Arc::new(
+            FixtureBuilder::new()
+                .dir("/journal")
+                .dir("/root")
+                .file("/root/SKILL.md", b"user file")
+                .build_fs(),
+        );
+        let journal = journal_over(fs.clone());
+        let guard = guard(&FakeLease::default());
+        for index in 0..crate::backup_retention::BACKUP_RETENTION_COUNT + 2 {
+            let plan = PlanWriter::begin(
+                &journal,
+                &guard,
+                PlanId(format!("crash-{index:04}")),
+                Utc::now(),
+                "plan",
+                PathBuf::from("/root"),
+                Vec::new(),
+            )
+            .unwrap();
+            plan.record_write_file(Path::new("/root/alpha/SKILL.md"), Some(b"backup bytes"))
+                .unwrap();
+            plan.finish(PlanStatus::Done).unwrap();
+        }
+        (fs, guard)
+    }
+
+    #[test]
+    fn completed_plan_retention_crash_at_every_durable_step_recovers_or_leaves_an_available_partial_backup(
+    ) {
+        use crate::testing::CrashFs;
+        let now =
+            Utc::now() + crate::backup_retention::BACKUP_RETENTION_AGE + chrono::Duration::days(1);
+        let (fs, guard) = crash_retention_plans();
+        let counted = Arc::new(CrashFs::new(fs, 0));
+        trim_backups(&journal_over(counted.clone()), &guard, now).unwrap();
+        let steps = counted.calls();
+        assert!(steps > 0);
+        for cut in 1..=steps {
+            let (fs, guard) = crash_retention_plans();
+            let before = tree_snapshot(fs.as_ref(), Path::new("/root"));
+            let crashing = journal_over(Arc::new(CrashFs::new(fs.clone(), cut)));
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| trim_backups(
+                    &crashing, &guard, now
+                )))
+                .is_err()
+            );
+            let recovered = journal_over(fs.clone());
+            for plan in recovered.all().unwrap() {
+                for backup in plan.backups {
+                    let result = recovered.read_backup(&plan.id, &backup.relative);
+                    if plan.expired_backups.contains(&backup.relative) {
+                        assert_eq!(result.unwrap_err().code, ErrorCode::BackupExpired);
+                    } else {
+                        assert_eq!(
+                            result.unwrap(),
+                            b"backup bytes",
+                            "cut {cut}: available backup is incomplete"
+                        );
+                    }
+                }
+            }
+            reconcile(&recovered, &guard, fs.as_ref()).unwrap();
+            trim_backups(&recovered, &guard, now).unwrap();
+            assert_eq!(
+                tree_snapshot(fs.as_ref(), Path::new("/root")),
+                before,
+                "cut {cut}: user files changed"
+            );
+            let remaining = recovered
+                .all()
+                .unwrap()
+                .iter()
+                .map(|plan| plan.backups.len() - plan.expired_backups.len())
+                .sum::<usize>();
+            assert_eq!(remaining, crate::backup_retention::BACKUP_RETENTION_COUNT);
+        }
+    }
+
+    #[test]
+    fn recovery_refuses_a_row_that_widens_its_root_or_changes_foreign_files() {
+        let fs: Arc<dyn ScopeFs> = Arc::new(
+            FixtureBuilder::new()
+                .dir("/journal")
+                .dir("/root")
+                .file("/foreign/keep.txt", b"foreign")
+                .build_fs(),
+        );
+        let journal = journal_over(fs.clone());
+        let guard = guard(&FakeLease::default());
+        let plan = PlanWriter::begin(
+            &journal,
+            &guard,
+            PlanId("foreign-root".into()),
+            Utc::now(),
+            "corrupt root",
+            PathBuf::from("/"),
+            Vec::new(),
+        )
+        .unwrap();
+        plan.record_write_file(Path::new("/foreign/keep.txt"), None)
+            .unwrap();
+        let report = reconcile(&journal, &guard, fs.as_ref()).unwrap();
+        assert_eq!(
+            report.interrupted.len(),
+            1,
+            "an unowned root must be refused"
+        );
+        assert_eq!(
+            fs.read_capped(Path::new("/foreign/keep.txt"), u64::MAX)
+                .unwrap(),
+            b"foreign"
+        );
+    }
+
+    #[test]
+    fn recovery_retries_an_interrupted_plan_or_leaves_the_post_write_bytes() {
+        let inner: Arc<dyn ScopeFs> = Arc::new(
+            FixtureBuilder::new()
+                .dir("/journal")
+                .file("/root/SKILL.md", b"before")
+                .build_fs(),
+        );
+        let failing = Arc::new(FailingFs::wrap(inner.clone()));
+        let journal = journal_over(failing.clone());
+        let guard = guard(&FakeLease::default());
+        let root = Root::open(failing.as_ref(), PathBuf::from("/root")).unwrap();
+        let plan = PlanWriter::begin(
+            &journal,
+            &guard,
+            PlanId("retry".into()),
+            Utc::now(),
+            "retry",
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .unwrap();
+        fsops::write_file(
+            &root,
+            &plan,
+            Path::new("SKILL.md"),
+            b"after",
+            &fsops::read_stamp(failing.as_ref(), Path::new("/root/SKILL.md")).unwrap(),
+        )
+        .unwrap();
+        failing.fail_nth_fsops_device_inode(2);
+        assert_eq!(
+            reconcile(&journal, &guard, failing.as_ref())
+                .unwrap()
+                .interrupted
+                .len(),
+            1
+        );
+        assert_eq!(journal.all().unwrap()[0].status, PlanStatus::Interrupted);
+        assert_eq!(
+            reconcile(&journal, &guard, failing.as_ref())
+                .unwrap()
+                .reversed
+                .len(),
+            1
+        );
+        assert_eq!(
+            inner
+                .read_capped(Path::new("/root/SKILL.md"), u64::MAX)
+                .unwrap(),
+            b"before"
+        );
+    }
+
+    #[test]
+    fn recovery_continues_after_one_finish_fails_or_leaves_later_plans_pending() {
+        let fs: Arc<dyn ScopeFs> = Arc::new(
+            FixtureBuilder::new()
+                .dir("/journal")
+                .dir("/root")
+                .build_fs(),
+        );
+        let failing = Arc::new(FailingFs::wrap(fs));
+        let journal = journal_over(failing.clone());
+        let guard = guard(&FakeLease::default());
+        for id in ["first", "second"] {
+            PlanWriter::begin(
+                &journal,
+                &guard,
+                PlanId(id.into()),
+                Utc::now(),
+                "finish retry",
+                PathBuf::from("/root"),
+                Vec::new(),
+            )
+            .unwrap();
+        }
+        failing.fail_next_fsops_rename();
+        let report = reconcile(&journal, &guard, failing.as_ref())
+            .expect("one failed finish must not abort the sweep");
+        assert_eq!(report.resolved_without_steps, vec![PlanId("first".into())]);
+        assert_eq!(report.interrupted.len(), 1);
+        assert_eq!(
+            reconcile(&journal, &guard, failing.as_ref())
+                .unwrap()
+                .resolved_without_steps,
+            vec![PlanId("second".into())]
+        );
+    }
+
+    fn primitive_fixture(kind: &str) -> Arc<dyn ScopeFs> {
+        let mut fixture = FixtureBuilder::new()
+            .dir("/journal")
+            .dir("/root")
+            .file("/root/keep.txt", b"untouched")
+            .file("/root/old-target", b"old link bytes")
+            .file("/root/new-target", b"new link bytes");
+        if kind == "swap_exchange" {
+            fixture = fixture.file("/root/skill/old.txt", b"old tree");
+        }
+        if kind == "link_replace" || kind == "write_symlink" {
+            fixture = fixture.alias("/root/link", "/root/old-target");
+        }
+        if kind == "write_replace" {
+            fixture = fixture.file("/root/a", b"old a").file("/root/b", b"old b");
+        }
+        Arc::new(fixture.build_fs())
+    }
+
+    fn run_primitive_plan(kind: &str, fs: &Arc<dyn ScopeFs>, guard: &ExclusiveGuard) {
+        let journal = journal_over(fs.clone());
+        let root = Root::open(fs.as_ref(), PathBuf::from("/root")).unwrap();
+        let plan = PlanWriter::begin(
+            &journal,
+            guard,
+            PlanId("matrix".into()),
+            Utc::now(),
+            kind,
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .unwrap();
+        match kind {
+            "swap_fresh" | "swap_exchange" => {
+                let staged = fsops::stage(
+                    &root,
+                    &plan,
+                    &[
+                        (PathBuf::from("SKILL.md"), b"new tree".to_vec()),
+                        (PathBuf::from("nested/new.txt"), b"new child".to_vec()),
+                    ],
+                )
+                .unwrap();
+                fsops::swap(
+                    &root,
+                    &plan,
+                    Path::new("skill"),
+                    &staged,
+                    Path::new(".trash"),
+                )
+                .unwrap();
+            }
+            "link_new" | "link_replace" => fsops::link(
+                &root,
+                &plan,
+                Path::new("link"),
+                Path::new("/root/new-target"),
+            )
+            .unwrap(),
+            "write_new" | "write_replace" => {
+                for name in ["a", "b"] {
+                    let stamp =
+                        fsops::read_stamp(fs.as_ref(), &Path::new("/root").join(name)).unwrap();
+                    fsops::write_file(
+                        &root,
+                        &plan,
+                        Path::new(name),
+                        format!("new {name}").as_bytes(),
+                        &stamp,
+                    )
+                    .unwrap();
+                }
+            }
+            "write_symlink" => {
+                let stamp = fsops::read_stamp(fs.as_ref(), Path::new("/root/link")).unwrap();
+                fsops::write_file(&root, &plan, Path::new("link"), b"replacement file", &stamp)
+                    .unwrap();
+            }
+            _ => panic!("unknown primitive fixture"),
+        }
+    }
+
+    fn complete_snapshot(
+        fs: &dyn ScopeFs,
+        root: &Path,
+    ) -> std::collections::BTreeMap<PathBuf, (FileKind, Vec<u8>)> {
+        fn visit(
+            fs: &dyn ScopeFs,
+            path: &Path,
+            out: &mut std::collections::BTreeMap<PathBuf, (FileKind, Vec<u8>)>,
+        ) {
+            let kind = fs.symlink_metadata(path).unwrap().kind;
+            let content = match kind {
+                FileKind::File => fs.read_capped(path, u64::MAX).unwrap(),
+                FileKind::Symlink => fs
+                    .read_link(path)
+                    .unwrap()
+                    .to_string_lossy()
+                    .as_bytes()
+                    .to_vec(),
+                FileKind::Dir | FileKind::Other => Vec::new(),
+            };
+            out.insert(path.to_path_buf(), (kind, content));
+            if kind == FileKind::Dir {
+                for entry in fs.read_dir(path).unwrap() {
+                    visit(fs, &path.join(entry.name), out);
+                }
+            }
+        }
+        let mut out = std::collections::BTreeMap::new();
+        visit(fs, root, &mut out);
+        out
+    }
+
+    #[test]
+    fn primitive_crash_at_every_durable_step_recovers_the_whole_tree_or_leaves_mixed_files_and_temps(
+    ) {
+        use crate::testing::CrashFs;
+        for kind in [
+            "swap_fresh",
+            "swap_exchange",
+            "link_new",
+            "link_replace",
+            "write_new",
+            "write_replace",
+            "write_symlink",
+        ] {
+            let guard = guard(&FakeLease::default());
+            let counted = Arc::new(CrashFs::new(primitive_fixture(kind), 0));
+            let counted_port: Arc<dyn ScopeFs> = counted.clone();
+            run_primitive_plan(kind, &counted_port, &guard);
+            for cut in 1..=counted.calls() {
+                let fs = primitive_fixture(kind);
+                let before = complete_snapshot(fs.as_ref(), Path::new("/root"));
+                let crashing: Arc<dyn ScopeFs> = Arc::new(CrashFs::new(fs.clone(), cut));
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_primitive_plan(
+                        kind, &crashing, &guard
+                    )))
+                    .is_err(),
+                    "{kind} cut {cut}"
+                );
+                let journal = journal_over(fs.clone());
+                for _ in 0..2 {
+                    assert!(
+                        reconcile(&journal, &guard, fs.as_ref())
+                            .unwrap()
+                            .interrupted
+                            .is_empty(),
+                        "{kind} cut {cut}"
+                    );
+                }
+                assert_eq!(
+                    complete_snapshot(fs.as_ref(), Path::new("/root")),
+                    before,
+                    "{kind} cut {cut}: recovery left a mixed tree or owned temp"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn recovery_crash_at_every_durable_step_can_run_twice_or_loses_old_links_and_quarantined_bytes()
+    {
+        use crate::testing::CrashFs;
+        for kind in [
+            "swap_fresh",
+            "swap_exchange",
+            "link_new",
+            "link_replace",
+            "write_new",
+            "write_replace",
+            "write_symlink",
+        ] {
+            let guard = guard(&FakeLease::default());
+            let fs = primitive_fixture(kind);
+            run_primitive_plan(kind, &fs, &guard);
+            let counted = Arc::new(CrashFs::new(fs, 0));
+            reconcile(&journal_over(counted.clone()), &guard, counted.as_ref()).unwrap();
+            for cut in 1..=counted.calls() {
+                let fs = primitive_fixture(kind);
+                let before = complete_snapshot(fs.as_ref(), Path::new("/root"));
+                run_primitive_plan(kind, &fs, &guard);
+                let crashing = Arc::new(CrashFs::new(fs.clone(), cut));
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reconcile(
+                        &journal_over(crashing.clone()),
+                        &guard,
+                        crashing.as_ref()
+                    )))
+                    .is_err(),
+                    "{kind} recovery cut {cut}"
+                );
+                for _ in 0..2 {
+                    assert!(
+                        reconcile(&journal_over(fs.clone()), &guard, fs.as_ref())
+                            .unwrap()
+                            .interrupted
+                            .is_empty(),
+                        "{kind} recovery cut {cut}"
+                    );
+                }
+                assert_eq!(
+                    complete_snapshot(fs.as_ref(), Path::new("/root")),
+                    before,
+                    "{kind} recovery cut {cut}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn finishing_crash_keeps_the_whole_before_or_after_tree_or_marks_a_mixed_tree_done() {
+        use crate::testing::CrashFs;
+        for kind in [
+            "swap_fresh",
+            "swap_exchange",
+            "link_new",
+            "link_replace",
+            "write_new",
+            "write_replace",
+            "write_symlink",
+        ] {
+            let guard = guard(&FakeLease::default());
+            let fs = primitive_fixture(kind);
+            run_primitive_plan(kind, &fs, &guard);
+            let counted = Arc::new(CrashFs::new(fs, 0));
+            journal_over(counted.clone())
+                .finish(&guard, &PlanId("matrix".into()), PlanStatus::Done)
+                .unwrap();
+            for cut in 1..=counted.calls() {
+                let fs = primitive_fixture(kind);
+                let before = complete_snapshot(fs.as_ref(), Path::new("/root"));
+                run_primitive_plan(kind, &fs, &guard);
+                let after = complete_snapshot(fs.as_ref(), Path::new("/root"));
+                let crashing = journal_over(Arc::new(CrashFs::new(fs.clone(), cut)));
+                assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || crashing.finish(&guard, &PlanId("matrix".into()), PlanStatus::Done)
+                ))
+                .is_err());
+                reconcile(&journal_over(fs.clone()), &guard, fs.as_ref()).unwrap();
+                let actual = complete_snapshot(fs.as_ref(), Path::new("/root"));
+                assert!(
+                    actual == before || actual == after,
+                    "{kind} finish cut {cut}: mixed tree"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn journal_backup_paths_refuse_traversal_or_replace_a_user_file_outside_the_plan() {
+        let fs: Arc<dyn ScopeFs> = Arc::new(
+            FixtureBuilder::new()
+                .dir("/journal")
+                .file("/root/keep.txt", b"user file")
+                .build_fs(),
+        );
+        let journal = journal_over(fs.clone());
+        let guard = guard(&FakeLease::default());
+        let id = PlanId("valid".into());
+        PlanWriter::begin(
+            &journal,
+            &guard,
+            id.clone(),
+            Utc::now(),
+            "backup confinement",
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .unwrap();
+        for (id, relative) in [
+            (id, "../../../../root/keep.txt"),
+            (PlanId("../../../root".into()), "keep.txt"),
+        ] {
+            assert!(journal
+                .write_backup(&guard, &id, relative, b"bad replacement")
+                .is_err());
+            assert_eq!(
+                fs.read_capped(Path::new("/root/keep.txt"), u64::MAX)
+                    .unwrap(),
+                b"user file"
+            );
+        }
+    }
+
+    #[test]
+    fn every_plan_transition_follows_recovery_rules_or_reopens_a_completed_plan() {
+        use PlanStatus::*;
+        let legal = [
+            (Pending, Done),
+            (Pending, Failed),
+            (Pending, Reversed),
+            (Pending, Interrupted),
+            (Interrupted, Interrupted),
+            (Interrupted, Failed),
+            (Interrupted, Reversed),
+        ];
+        for from in [Pending, Done, Failed, Reversed, Interrupted] {
+            for to in [Pending, Done, Failed, Reversed, Interrupted] {
+                let result = from.settle(to);
+                assert_eq!(
+                    result.is_ok(),
+                    legal.contains(&(from, to)),
+                    "{from:?} -> {to:?}"
+                );
+                if let Ok(actual) = result {
+                    assert_eq!(actual, to);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retrying_an_already_restored_file_flushes_its_parent_or_settles_before_the_restore_is_durable(
+    ) {
+        let inner: Arc<dyn ScopeFs> = Arc::new(
+            FixtureBuilder::new()
+                .dir("/journal")
+                .file("/root/value", b"before")
+                .build_fs(),
+        );
+        let failing = Arc::new(FailingFs::wrap(inner.clone()));
+        let journal = journal_over(failing.clone());
+        let guard = guard(&FakeLease::default());
+        let root = Root::open(failing.as_ref(), PathBuf::from("/root")).unwrap();
+        let plan = PlanWriter::begin(
+            &journal,
+            &guard,
+            PlanId("flush-retry".into()),
+            Utc::now(),
+            "flush retry",
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .unwrap();
+        let path = Path::new("/root/value");
+        fsops::write_file(
+            &root,
+            &plan,
+            Path::new("value"),
+            b"after",
+            &fsops::read_stamp(failing.as_ref(), path).unwrap(),
+        )
+        .unwrap();
+        inner
+            .fsops_write_new_file(Path::new("/root/restore-temp"), b"before")
+            .unwrap();
+        inner
+            .fsops_rename(Path::new("/root/restore-temp"), path)
+            .unwrap();
+        failing.fail_next_fsops_fsync_dir();
+        assert_eq!(
+            reconcile(&journal, &guard, failing.as_ref())
+                .unwrap()
+                .interrupted
+                .len(),
+            1
+        );
+        assert_eq!(
+            journal.all().unwrap()[0].status,
+            PlanStatus::Interrupted,
+            "the user folder must be durable before the row settles"
+        );
+        assert_eq!(
+            reconcile(&journal, &guard, failing.as_ref())
+                .unwrap()
+                .reversed
+                .len(),
+            1
+        );
     }
 
     fn journal_over(fs: Arc<dyn ScopeFs>) -> FsJournal {
@@ -1111,6 +2204,21 @@ mod tests {
         let g = guard(&lease);
 
         let id = PlanId("01PLANREMOVEBACKUP0000001".into());
+        let plan = PlanWriter::begin(
+            &journal,
+            &g,
+            id.clone(),
+            Utc::now(),
+            "completed backup with metadata",
+            PathBuf::from("/root"),
+            vec![PlanBackupEntry {
+                original: PathBuf::from("/root/SKILL.md"),
+                relative: "skill/SKILL.md".into(),
+                bytes: 12,
+            }],
+        )
+        .unwrap();
+        plan.finish(PlanStatus::Done).unwrap();
         journal
             .write_backup(&g, &id, "skill/SKILL.md", b"backup bytes")
             .expect("write the backup");
@@ -1144,6 +2252,25 @@ mod tests {
         let g = guard(&lease);
 
         let id = PlanId("01PLANREMOVEBACKUPTWICE01".into());
+        let plan = PlanWriter::begin(
+            &journal,
+            &g,
+            id.clone(),
+            Utc::now(),
+            "completed backup with metadata",
+            PathBuf::from("/root"),
+            vec![PlanBackupEntry {
+                original: PathBuf::from("/root/SKILL.md"),
+                relative: "never-written.bin".into(),
+                bytes: 12,
+            }],
+        )
+        .unwrap();
+        plan.finish(PlanStatus::Done).unwrap();
+        journal
+            .write_backup(&g, &id, "never-written.bin", b"old")
+            .unwrap();
+        journal.remove_backup(&g, &id, "never-written.bin").unwrap();
         journal
             .remove_backup(&g, &id, "never-written.bin")
             .expect("removing a backup that was never written must be a no-op, not an error");
@@ -2190,8 +3317,7 @@ mod tests {
     /// clears both and the restored link points at the previous target; on
     /// failure the tree diff names the leaked entry it left behind.
     #[test]
-    fn a_leaked_temp_link_under_the_same_prefix_is_cleared_by_a_fresh_process_retry_or_names_the_entry_it_left(
-    ) {
+    fn a_legacy_plan_clears_old_prefix_temps_on_retry_or_leaves_a_leak() {
         let fixture = FixtureBuilder::new()
             .dir("/journal")
             .dir("/root")
@@ -2252,6 +3378,16 @@ mod tests {
         )
         .expect("link");
         drop(plan);
+        let mut legacy: serde_json::Value = journal.read_json(&journal.plan_path(&id)).unwrap();
+        for step in legacy["steps"].as_array_mut().unwrap() {
+            step.as_object_mut().unwrap().shift_remove("temporary");
+        }
+        journal
+            .write_json(
+                &journal.plan_path(&id),
+                &serde_json::to_vec(&legacy).unwrap(),
+            )
+            .unwrap();
 
         // Simulates the leaked temp symlink a first reversal attempt left
         // behind after minting it but before the rename that would have
@@ -2606,120 +3742,76 @@ mod tests {
             }
         }
     }
-
-    /// Given a backup set with one entry older than the age quota, one
-    /// entry that pushes the kept total over the size quota, and one recent,
-    /// small entry that must survive, when `trim_backups` runs, then only
-    /// the survivor is left; on failure the panic names whichever stale or
-    /// oversized entry survived instead.
     #[test]
-    fn a_backup_set_over_the_size_or_age_quota_is_trimmed_oldest_first_or_names_the_surviving_stale_entry(
-    ) {
-        let fs: Arc<dyn ScopeFs> = Arc::new(FixtureBuilder::new().dir("/journal").build_fs());
-        let journal = journal_over(fs.clone());
-        let lease = FakeLease::default();
-        let g = guard(&lease);
-        let now = Utc::now();
-
-        let stale_id = PlanId("01PLAN0000000000000000005".into());
-        write_backup(&fs, &stale_id, "stale.bin", b"01");
-        begin_with_backups(
-            &journal,
-            &g,
-            stale_id.clone(),
-            now - chrono::Duration::days(30),
-            vec![PlanBackupEntry {
-                original: PathBuf::from("/root/stale"),
-                relative: "stale.bin".into(),
-                bytes: 2,
-            }],
-        );
-
-        let oversized_id = PlanId("01PLAN0000000000000000006".into());
-        write_backup(&fs, &oversized_id, "big.bin", &[0u8; 100]);
-        begin_with_backups(
-            &journal,
-            &g,
-            oversized_id.clone(),
-            now - chrono::Duration::minutes(5),
-            vec![PlanBackupEntry {
-                original: PathBuf::from("/root/big"),
-                relative: "big.bin".into(),
-                bytes: 100,
-            }],
-        );
-
-        let survivor_id = PlanId("01PLAN0000000000000000007".into());
-        write_backup(&fs, &survivor_id, "small.bin", b"x");
-        begin_with_backups(
-            &journal,
-            &g,
-            survivor_id.clone(),
-            now - chrono::Duration::minutes(1),
-            vec![PlanBackupEntry {
-                original: PathBuf::from("/root/small"),
-                relative: "small.bin".into(),
-                bytes: 1,
-            }],
-        );
-
-        let quota = BackupQuota {
-            max_total_bytes: 10,
-            max_age: Duration::from_hours(1),
-        };
-        let trimmed = trim_backups(&journal, &g, now, &quota).expect("trim must run");
-        let trimmed_ids: Vec<&PlanId> = trimmed.iter().map(|t| &t.plan).collect();
-
-        assert!(
-            trimmed_ids.contains(&&stale_id),
-            "the entry over the age quota must be trimmed"
-        );
-        assert!(
-            trimmed_ids.contains(&&oversized_id),
-            "the entry that pushes the kept total over the size quota must be trimmed"
-        );
-        assert!(
-            !trimmed_ids.contains(&&survivor_id),
-            "surviving stale entry: {survivor_id:?} was trimmed but should have stayed within quota"
-        );
-        assert!(
-            fs.symlink_metadata(Path::new(&format!(
-                "/journal/plans/{}/backups/small.bin",
-                survivor_id.0
-            )))
-            .is_ok(),
-            "the survivor's bytes must remain on disk"
-        );
-    }
-
-    fn write_backup(fs: &Arc<dyn ScopeFs>, id: &PlanId, relative: &str, bytes: &[u8]) {
-        let dir = PathBuf::from(format!("/journal/plans/{}/backups", id.0));
-        let mut built = PathBuf::from("/journal");
-        for component in dir.strip_prefix("/journal").unwrap().components() {
-            built.push(component);
-            let _ = fs.fsops_create_dir(&built);
-        }
-        fs.fsops_write_new_file(&dir.join(relative), bytes)
-            .expect("write backup bytes");
-    }
-
-    fn begin_with_backups(
-        journal: &FsJournal,
-        g: &ExclusiveGuard,
-        id: PlanId,
-        created_at: DateTime<Utc>,
-        backups: Vec<PlanBackupEntry>,
-    ) {
+    fn recorded_temp_file_keeps_a_matching_user_temp_or_deletes_unowned_bytes() {
+        let fs = FixtureBuilder::new()
+            .dir("/journal")
+            .file("/root/value", b"before")
+            .file("/root/.value-123-4.restore", b"before")
+            .build_fs();
+        let journal = journal_over(Arc::new(fs.clone()));
+        let guard = guard(&FakeLease::default());
+        let root = Root::open(&fs, PathBuf::from("/root")).unwrap();
+        let before = tree_snapshot(&fs, Path::new("/root"));
         let plan = PlanWriter::begin(
-            journal,
-            g,
-            id,
-            created_at,
-            "backup fixture",
+            &journal,
+            &guard,
+            PlanId("recorded-temp-file".into()),
+            Utc::now(),
+            "replace value",
             PathBuf::from("/root"),
-            backups,
+            Vec::new(),
         )
-        .expect("begin");
-        plan.finish(PlanStatus::Done).expect("finish");
+        .unwrap();
+        fsops::write_file(
+            &root,
+            &plan,
+            Path::new("value"),
+            b"after",
+            &fsops::read_stamp(&fs, Path::new("/root/value")).unwrap(),
+        )
+        .unwrap();
+        drop(plan);
+        assert_eq!(reconcile(&journal, &guard, &fs).unwrap().reversed.len(), 1);
+        assert_eq!(
+            tree_snapshot(&fs, Path::new("/root")),
+            before,
+            "only the recorded temp belongs to this plan"
+        );
+    }
+
+    #[test]
+    fn recorded_temp_link_keeps_a_matching_user_link_or_deletes_an_unowned_entry() {
+        let fs = FixtureBuilder::new()
+            .dir("/journal")
+            .file("/root/old", b"old")
+            .file("/root/new", b"new")
+            .build_fs();
+        fs.fsops_symlink(Path::new("old"), Path::new("/root/current"))
+            .unwrap();
+        fs.fsops_symlink(Path::new("old"), Path::new("/root/.current-123-4"))
+            .unwrap();
+        let journal = journal_over(Arc::new(fs.clone()));
+        let guard = guard(&FakeLease::default());
+        let root = Root::open(&fs, PathBuf::from("/root")).unwrap();
+        let before = tree_snapshot(&fs, Path::new("/root"));
+        let plan = PlanWriter::begin(
+            &journal,
+            &guard,
+            PlanId("recorded-temp-link".into()),
+            Utc::now(),
+            "replace link",
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .unwrap();
+        fsops::link(&root, &plan, Path::new("current"), Path::new("new")).unwrap();
+        drop(plan);
+        assert_eq!(reconcile(&journal, &guard, &fs).unwrap().reversed.len(), 1);
+        assert_eq!(
+            tree_snapshot(&fs, Path::new("/root")),
+            before,
+            "only the recorded temp belongs to this plan"
+        );
     }
 }

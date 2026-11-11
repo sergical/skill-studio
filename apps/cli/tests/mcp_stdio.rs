@@ -20,7 +20,7 @@ use std::time::Duration;
 #[test]
 fn mcp_subcommand_answers_initialize_and_tools_list_over_stdio() {
     let home = tempfile::tempdir().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+    let mut child = Command::new(undo_fixtures::cli_binary())
         .arg("mcp")
         .env("HOME", home.path())
         .env("SKILL_STUDIO_HOME", home.path())
@@ -108,7 +108,7 @@ struct UndoMcp {
 
 impl UndoMcp {
     fn new(home: &std::path::Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+        let mut child = Command::new(undo_fixtures::cli_binary())
             .arg("mcp")
             .env("HOME", home)
             .env("SKILL_STUDIO_HOME", home)
@@ -245,5 +245,151 @@ fn mcp_history_and_restore_refuse_the_latest_park_or_unpark_or_name_the_wrong_ac
         assert!(std::fs::read_to_string(home.path().join(location))
             .unwrap()
             .contains("Keep this skill."));
+    }
+}
+
+#[test]
+fn mcp_history_and_restore_report_backup_expired_or_offer_a_missing_backup() {
+    let home = tempfile::tempdir().unwrap();
+    let (expired, live) = undo_fixtures::expired_backup(home.path());
+    let mut server = UndoMcp::new(home.path());
+    let history = server.call("list_events", &serde_json::json!({}));
+    let row = history["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == expired.0)
+        .unwrap();
+    assert_eq!(row["restore"]["restorable"], "backup_expired");
+    let restored = server.call("restore_event", &serde_json::json!({"event_id":expired.0}));
+    assert_eq!(restored["status"], "error", "{restored}");
+    assert_eq!(
+        restored["errors"][0]["code"], "backup_expired",
+        "{restored}"
+    );
+    assert!(restored["errors"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("expired"));
+    assert_eq!(
+        std::fs::read(home.path().join(".agents/skills/alpha/SKILL.md")).unwrap(),
+        live
+    );
+}
+
+#[test]
+fn mcp_history_and_restore_refuse_unfinished_recovery_or_write_over_an_interrupted_plan() {
+    let home = tempfile::tempdir().unwrap();
+    let foreign = tempfile::tempdir().unwrap();
+    std::fs::write(foreign.path().join("sentinel"), b"foreign bytes stay").unwrap();
+    let event = undo_fixtures::interrupted_plan_before_restore(home.path(), foreign.path());
+    let mut mcp = UndoMcp::new(home.path());
+    assert_eq!(
+        mcp.call("list_events", &serde_json::json!({}))["data"][0]["id"],
+        event.0
+    );
+    let result = mcp.call(
+        "restore_event",
+        &serde_json::json!({"event_id":event.0,"force":true}),
+    );
+    assert_eq!(result["errors"][0]["code"], "incomplete", "{result}");
+    assert!(
+        result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Recovery"),
+        "{result}"
+    );
+    undo_fixtures::assert_secondary_replacement(home.path());
+    assert!(!home.path().join(".agents/skills/alpha").exists());
+    assert_eq!(
+        std::fs::read(foreign.path().join("sentinel")).unwrap(),
+        b"foreign bytes stay"
+    );
+    assert_eq!(
+        mcp.call("list_events", &serde_json::json!({}))["data"][0]["id"],
+        event.0
+    );
+}
+
+#[test]
+fn mcp_history_and_restore_hash_the_whole_large_asset_or_miss_a_tail_edit() {
+    for (drift, failed) in [(false, false), (true, false), (false, true), (true, true)] {
+        let home = tempfile::tempdir().unwrap();
+        let (event, before, mut after) = undo_fixtures::large_asset_update(home.path(), failed);
+        let asset = home.path().join(".agents/skills/alpha/asset.bin");
+        if drift {
+            *after.last_mut().unwrap() = b'c';
+            std::fs::write(&asset, &after).unwrap();
+        }
+        let mut mcp = UndoMcp::new(home.path());
+        let history = mcp.call("list_events", &serde_json::json!({}));
+        assert_eq!(history["data"][0]["id"], event.0);
+        assert_eq!(
+            history["data"][0]["status"],
+            if failed { "failed" } else { "done" }
+        );
+        let result = mcp.call(
+            "restore_event",
+            &serde_json::json!({"event_id":event.0,"force":false}),
+        );
+        if drift {
+            assert_eq!(result["errors"][0]["code"], "drift_conflict", "{result}");
+            assert!(
+                std::fs::read(&asset).unwrap() == after,
+                "refused Restore changed the large asset"
+            );
+        } else {
+            assert_eq!(result["status"], "ok", "{result}");
+            assert!(
+                std::fs::read(&asset).unwrap() == before,
+                "Restore did not recover the complete large asset"
+            );
+        }
+    }
+}
+
+#[test]
+fn mcp_update_restore_and_undo_restore_keep_the_owned_lock_row_or_erase_a_later_skill() {
+    for forced in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let (event, trace) = undo_fixtures::recorded_update(home.path());
+        let edited = undo_fixtures::edit_recorded_lock(home.path(), forced);
+        let mut mcp = UndoMcp::new(home.path());
+        let history = mcp.call("list_events", &serde_json::json!({}));
+        assert_eq!(history["data"][0]["id"], event.0);
+        let mut result = mcp.call(
+            "restore_event",
+            &serde_json::json!({"event_id":event.0,"force":false}),
+        );
+        if forced {
+            assert_eq!(result["errors"][0]["code"], "drift_conflict", "{result}");
+            undo_fixtures::assert_recorded_lock(
+                home.path(),
+                &edited["skills"]["trace-skill"],
+                &edited["skills"]["unrelated"],
+            );
+            result = mcp.call(
+                "restore_event",
+                &serde_json::json!({"event_id":event.0,"force":true}),
+            );
+        }
+        assert_eq!(result["status"], "ok", "{result}");
+        undo_fixtures::assert_recorded_lock(
+            home.path(),
+            &trace["lock_before"]["skills"]["trace-skill"],
+            &edited["skills"]["unrelated"],
+        );
+        let restored = result["data"]["restore_event_id"].as_str().unwrap();
+        let undone = mcp.call(
+            "restore_event",
+            &serde_json::json!({"event_id":restored,"force":false}),
+        );
+        assert_eq!(undone["status"], "ok", "{undone}");
+        undo_fixtures::assert_recorded_lock(
+            home.path(),
+            &edited["skills"]["trace-skill"],
+            &edited["skills"]["unrelated"],
+        );
     }
 }

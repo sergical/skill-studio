@@ -20,15 +20,81 @@ use super::skill_materialize;
 use super::skill_refresh::{self, SkillRefreshState, SkillSnapshot};
 use tauri::Manager;
 
-pub struct EventStoreState(pub Mutex<Option<EventStore>>);
+pub struct EventStoreState(
+    pub std::sync::Arc<Mutex<Option<EventStore>>>,
+    std::sync::Arc<std::sync::OnceLock<StartupRecoveryOutcome>>,
+);
+
+#[derive(Debug)]
+pub(crate) enum StartupRecoveryOutcome {
+    Completed,
+    Failed(String),
+}
+
+struct RecoveryReady(std::sync::Arc<std::sync::OnceLock<StartupRecoveryOutcome>>);
+
+impl Drop for RecoveryReady {
+    fn drop(&mut self) {
+        let _ = self.0.set(StartupRecoveryOutcome::Failed(
+            "Startup recovery stopped before it completed.".into(),
+        ));
+    }
+}
+
+impl EventStoreState {
+    /// Holds the command gate before publishing state. Recovery may wait for
+    /// another writer; commands wait on this same mutex until it finishes.
+    pub fn with_recovery(
+        store: Option<EventStore>,
+        recover: impl FnOnce(&EventStore) -> Result<(), String> + Send + 'static,
+    ) -> Result<Self, String> {
+        let state = std::sync::Arc::new(Mutex::new(store));
+        let worker_state = state.clone();
+        let completed = std::sync::Arc::new(std::sync::OnceLock::new());
+        let worker_completed = completed.clone();
+        let (started, ready) = std::sync::mpsc::sync_channel(0);
+        std::thread::Builder::new()
+            .name("skill-studio-recovery".into())
+            .spawn(move || {
+                let _ready = RecoveryReady(worker_completed.clone());
+                if let Ok(guard) = worker_state.lock() {
+                    if started.send(()).is_err() {
+                        return;
+                    }
+                    let result = guard.as_ref().map_or(Ok(()), recover);
+                    let outcome = match result {
+                        Ok(()) => StartupRecoveryOutcome::Completed,
+                        Err(error) => {
+                            eprintln!("[event_store] startup recovery failed: {error}");
+                            StartupRecoveryOutcome::Failed(error)
+                        }
+                    };
+                    let _ = worker_completed.set(outcome);
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        ready.recv().map_err(|error| error.to_string())?;
+        Ok(Self(state, completed))
+    }
+
+    pub(crate) fn recovery_ready(
+        &self,
+    ) -> std::sync::Arc<std::sync::OnceLock<StartupRecoveryOutcome>> {
+        self.1.clone()
+    }
+}
 
 fn locked_store(
     state: &EventStoreState,
 ) -> Result<std::sync::MutexGuard<'_, Option<EventStore>>, String> {
-    state
+    let guard = state
         .0
         .lock()
-        .map_err(|e| format!("event store lock poisoned: {e}"))
+        .map_err(|error| format!("event store lock poisoned: {error}"))?;
+    if let Some(StartupRecoveryOutcome::Failed(error)) = state.1.get() {
+        return Err(format!("Startup recovery failed: {error}"));
+    }
+    Ok(guard)
 }
 
 /// `backup_dir` is written by both stores as the same relative shape
@@ -89,7 +155,9 @@ pub fn dto_from_row(
     data_root: &Path,
     row: EventRow,
 ) -> SkillEventDto {
+    let expired = skill_studio_core::backup_retention::backup_is_expired(&row.payload);
     let restorable = row.restorable
+        && !expired
         && !is_agent_config_event(store, &row)
         && row.inverse.is_some()
         && row
@@ -123,6 +191,8 @@ pub fn dto_from_row(
         status: row.status,
         restorable,
         force_restorable,
+        restore_unavailable_reason: expired
+            .then(|| skill_studio_core::backup_retention::BACKUP_EXPIRED_REASON.to_owned()),
         reverted_by: row.reverted_by,
         backup_path,
     }
@@ -276,6 +346,9 @@ pub fn restore_event_with_runtime(
     let target = store
         .get(event_id)?
         .ok_or_else(|| format!("Event {event_id} not found"))?;
+    if skill_studio_core::backup_retention::backup_is_expired(&target.payload) {
+        return Err(skill_studio_core::backup_retention::BACKUP_EXPIRED_REASON.to_owned());
+    }
     skill_materialize::restore_guard_for_explode(store, &target, home)?;
     if target.kind == "make_independent_copy" {
         if force {
@@ -286,10 +359,9 @@ pub fn restore_event_with_runtime(
         }
         let write_lease = super::write_lease::WriteLease::default();
         let guard = write_lease.try_acquire(home)?;
-        return super::skill_independent_copy::restore_independent_copy(
-            store, home, &target, &guard,
-        )
-        .map(|_| ());
+        super::skill_independent_copy::restore_independent_copy(store, home, &target, &guard)?;
+        store.retain_backups(guard.as_exclusive_guard());
+        return Ok(());
     }
 
     // A row with a `backup_dir` is dispatched by which root actually has its
@@ -312,8 +384,9 @@ pub fn restore_event_with_runtime(
     }
 
     let write_lease = super::write_lease::WriteLease::default();
-    let _guard = write_lease.try_acquire(home)?;
+    let retention_guard = write_lease.try_acquire(home)?;
     store.restore(event_id, force)?;
+    store.retain_backups(retention_guard.as_exclusive_guard());
     if target.kind == "explode_shared_dir" {
         if let Some(root) = target.payload.get("root").and_then(|v| v.as_str()) {
             store.unregister_materialized_root(Path::new(root))?;
@@ -429,7 +502,7 @@ pub async fn materialize_harness_root(
         let event_store = app.state::<EventStoreState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
-        let _guard = write_lease.try_acquire(&home)?;
+        let retention_guard = write_lease.try_acquire(&home)?;
         let root_path = PathBuf::from(&root);
         skill_materialize::validate_materialize_root(&root_path)?;
 
@@ -454,6 +527,7 @@ pub async fn materialize_harness_root(
         let guard = locked_store(&event_store)?;
         let store = guard.as_ref().ok_or("Event store is unavailable")?;
         skill_materialize::explode_shared_dir(store, &root_path, &harness)?;
+        store.retain_backups(retention_guard.as_exclusive_guard());
         drop(guard);
 
         skill_refresh::request_snapshot_rebuild(&app);
@@ -479,7 +553,7 @@ pub async fn materialize_harness_root_then_disable(
             let event_store = app.state::<EventStoreState>();
             let home = dirs::home_dir().ok_or("Could not find home directory")?;
             let write_lease = super::write_lease::WriteLease::default();
-            let _guard = write_lease.try_acquire(&home)?;
+            let retention_guard = write_lease.try_acquire(&home)?;
             let deployment_id = target
                 .deployment_id
                 .as_deref()
@@ -541,6 +615,7 @@ pub async fn materialize_harness_root_then_disable(
                     project_path: deployment.project_path.as_deref(),
                 },
             )?;
+            store.retain_backups(retention_guard.as_exclusive_guard());
             drop(guard);
             skill_refresh::request_snapshot_rebuild(&app);
             Ok(())
@@ -654,6 +729,7 @@ pub async fn make_skill_independent_copy(
                 },
                 &write_guard,
             )?;
+            store.retain_backups(write_guard.as_exclusive_guard());
             drop(guard);
             let affected_projects: Vec<PathBuf> = project_path.iter().map(PathBuf::from).collect();
             if let Err(error) = skill_refresh::reconcile_skill_names_and_emit(
@@ -728,7 +804,7 @@ pub async fn repair_skill_link(
         let event_store = app.state::<EventStoreState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
-        let _guard = write_lease.try_acquire(&home)?;
+        let retention_guard = write_lease.try_acquire(&home)?;
         let link = PathBuf::from(&path);
 
         let snapshot =
@@ -772,6 +848,7 @@ pub async fn repair_skill_link(
             }
             other => return Err(format!("Unknown repair action: {other}")),
         }
+        store.retain_backups(retention_guard.as_exclusive_guard());
         drop(guard);
 
         let normalized_link = normalize_link_path(&link);
@@ -831,6 +908,58 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn a_command_during_startup_waits_for_recovery_or_reads_the_unrecovered_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = EventStore::open(directory.path()).unwrap();
+        let (entered, recovery_entered) = std::sync::mpsc::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let recovered = finished.clone();
+        let state = EventStoreState::with_recovery(Some(store), move |_| {
+            entered.send(()).unwrap();
+            resume.recv().unwrap();
+            recovered.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+        recovery_entered.recv().unwrap();
+        assert!(
+            state.0.try_lock().is_err(),
+            "recovery must own the command gate before state is published"
+        );
+        let ready = state.recovery_ready();
+        assert!(ready.get().is_none());
+        let (attempted, attempt) = std::sync::mpsc::channel();
+        let command = std::thread::spawn(move || {
+            attempted.send(()).unwrap();
+            ready.wait();
+            let store = state.0.lock().unwrap();
+            assert!(store.is_some());
+            assert!(
+                finished.load(std::sync::atomic::Ordering::SeqCst),
+                "command entered before recovery finished"
+            );
+        });
+        attempt.recv().unwrap();
+        release.send(()).unwrap();
+        command.join().unwrap();
+    }
+
+    #[test]
+    fn a_failed_startup_recovery_refuses_store_commands_or_runs_a_write_after_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = EventStore::open(directory.path()).unwrap();
+        let state =
+            EventStoreState::with_recovery(Some(store), |_| Err("fixture recovery failed".into()))
+                .unwrap();
+        state.recovery_ready().wait();
+        let error = locked_store(&state)
+            .err()
+            .expect("failed recovery must keep store commands closed");
+        assert!(error.contains("fixture recovery failed"), "{error}");
+    }
 
     #[test]
     fn event_dto_keeps_non_restorable_backend_policy() {

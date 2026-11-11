@@ -1519,7 +1519,7 @@ fn quarantine_prune_drops_entries_older_than_the_age_cap_or_names_the_kept_entry
     );
 }
 
-/// One recorded (here, hand-built) `npx skills remove` call's shape: the
+/// A recorded `npx skills@1.7.0 remove` call's shape: the
 /// argv, the tree it deletes, the harness link it also deletes, and the
 /// lock entry it drops. Mirrors `install.rs`'s own `CliTrace`, plus
 /// `claude_code_link`/`lock_before`/`lock_entry_removed`, which that
@@ -1541,6 +1541,11 @@ struct RemoveCliTrace {
     /// entry's presence.
     lock_before: serde_json::Value,
     lock_entry_removed: String,
+    links_before: std::collections::BTreeMap<String, String>,
+    links_after: std::collections::BTreeMap<String, String>,
+    lock_after: serde_json::Value,
+    exit_status: i32,
+    recorded_cli_version: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -1549,20 +1554,8 @@ struct CliTraceFile {
     content: String,
 }
 
-/// `cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_timestamps_or_names_the_diverging_file`
-/// (coordinator round 2, Q5 - not deferrable per the shared brief's "do not
-/// skip the test"): the hand-built counterpart to `install.rs`'s own CLI
-/// trace parity test, for `remove` instead of `add`. Recording a real `npx
-/// skills remove` run needs a real `npx`, out of reach in this worktree -
-/// unit 5.4 owns swapping this fixture for a recorded one
-/// (`issue-3.9a-followup-a.md`). Seeds the fixture's pre-existing tree and a
-/// matching `.skill-lock.json` entry directly on disk (not through
-/// `FakeNpxSpawner`, which only ever writes what a real `add` call would),
-/// then asserts `remove_via_cli`'s own argv/cwd match the trace exactly,
-/// that the tree, the Claude Code link, and the lock entry are gone
-/// afterward, and that the lock file's remaining bytes match `lock_before`
-/// with only that entry removed - `docs/action-map/definition-of-done.md`
-/// check 4's "lockfile entry matches ... byte for byte" (round 2, N1).
+/// Replays the pinned CLI's recorded remove and compares its argv, deleted
+/// files, raw agent links, and remaining lock document.
 #[test]
 fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_timestamps_or_names_the_diverging_file(
 ) {
@@ -1593,13 +1586,13 @@ fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_times
     std::fs::write(&lock_path, serde_json::to_vec(&trace.lock_before).unwrap()).unwrap();
 
     let claude_link = home.join(CLAUDE_ROOT_RELATIVE).join(skill);
-    if trace.claude_code_link {
-        let claude_dir = home.join(CLAUDE_ROOT_RELATIVE);
-        std::fs::create_dir_all(&claude_dir).unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&skill_dir, &claude_link).unwrap();
+    for (relative, target) in &trace.links_before {
+        let path = home.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(target.replace("$HOME", &home.to_string_lossy()), path).unwrap();
     }
-
+    assert_eq!(trace.exit_status, 0);
+    assert_eq!(trace.recorded_cli_version, "1.7.0");
     let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
     let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
     let deployment_id = resolve_deployment_id(&rt, skill);
@@ -1613,11 +1606,7 @@ fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_times
         "remove_via_cli must call npx exactly once"
     );
     let (args, cwd, env) = &recorded[0];
-    // The recorded run used the bare `skills` package; the core pins the version whose
-    // agent folders `skills_cli_agents` backs up.
-    let mut pinned_args = trace.args.clone();
-    assert_eq!(pinned_args[0], "skills", "the trace names the bare package");
-    pinned_args[0] = "skills@1.7.0".to_string();
+    let pinned_args = trace.args.clone();
     assert_eq!(
         args, &pinned_args,
         "remove_via_cli's argv drifted from the recorded skills.sh trace"
@@ -1626,7 +1615,10 @@ fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_times
     // home folder so the CLI also clears Eve's `~/agent/skills`.
     assert_eq!(
         cwd,
-        &trace.cwd.clone().or_else(|| Some(home.clone())),
+        &trace.cwd.as_ref().map(|path| PathBuf::from(
+            path.to_string_lossy()
+                .replace("$HOME", &home.to_string_lossy())
+        )),
         "remove_via_cli's cwd drifted from the recorded skills.sh trace"
     );
     // The CLI reads its home from `$HOME`, so a `--home` run must point it at
@@ -1656,17 +1648,14 @@ fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_times
         );
     }
 
-    let mut expected_lock = trace.lock_before.clone();
-    expected_lock
-        .get_mut("skills")
-        .and_then(|s| s.as_object_mut())
-        .and_then(|m| m.shift_remove(skill));
-    let expected_bytes = serde_json::to_vec(&expected_lock).unwrap();
     let lock_bytes = std::fs::read(&lock_path).unwrap();
-    assert_eq!(
-        lock_bytes, expected_bytes,
-        "the lock file's remaining bytes must match lock_before with only {skill:?} removed"
-    );
+    let lock: serde_json::Value = serde_json::from_slice(&lock_bytes).unwrap();
+    assert_eq!(lock, trace.lock_after);
+    assert!(trace.links_after.is_empty());
+    for path in trace.links_before.keys() {
+        assert!(std::fs::symlink_metadata(home.join(path)).is_err());
+    }
+    std::fs::remove_dir_all(home).unwrap();
 }
 
 /// Flow: Copy-install `lambda`, remove it, Copy-install `mu` and save a

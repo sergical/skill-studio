@@ -1,0 +1,16 @@
+{
+  "before": {
+    "source_git_sha": "301f6c691e524286784d39b37524dd64ef9d35b6",
+    "binary_sha256": "65973dc194cf5b3c939998082e437ea9f8e76fdd4eb93128cb998b28b2303367",
+    "load_average": "{ 6.21 7.86 8.55 }",
+    "cargo_processes": 5,
+    "rustc_processes": 1
+  },
+  "after": {
+    "source_git_sha": "b639223f1e83c4875b7e3ee69038ff9cfc26657f",
+    "binary_sha256": "6944c5d3d35b03583a20214468cfd7afed02725da64359b85542028d353aca2d",
+    "load_average": "{ 7.03 7.93 8.55 }",
+    "cargo_processes": 5,
+    "rustc_processes": 0
+  }
+}

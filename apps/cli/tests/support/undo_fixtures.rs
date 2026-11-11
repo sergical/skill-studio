@@ -181,3 +181,235 @@ pub fn parked_after_install(home: &Path, unpark: bool) -> EventId {
         parked.event_id
     }
 }
+
+pub fn expired_backup(home: &Path) -> (EventId, Vec<u8>) {
+    use skill_studio_core::backup_retention::{
+        BackupRetentionScope, BACKUP_RETENTION_AGE, BACKUP_RETENTION_COUNT,
+    };
+    use skill_studio_core::events::{EventDraft, EventKind, EventStatus};
+    use skill_studio_core::ports::{acquire_exclusive, HistoryAccess};
+    let rt = runtime(home);
+    let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+    let mut store = rt
+        .ports
+        .history
+        .open(&rt.scope, HistoryAccess::ReadWrite)
+        .unwrap()
+        .unwrap();
+    let target = home.join(".agents/skills/alpha");
+    let mut ids = Vec::new();
+    for index in 0..BACKUP_RETENTION_COUNT + 2 {
+        write_skill(home, "alpha", &format!("version {index}"));
+        let id = EventId::from_ulid(ulid::Ulid::generate());
+        let manifest = store
+            .backup_paths(&guard, &id, std::slice::from_ref(&target))
+            .unwrap();
+        let fingerprint = manifest.entries[0].fingerprint.as_ref().unwrap().bare_hex();
+        store.record(&guard, &id, &EventDraft {
+            kind:EventKind::Update, skill:SkillName("alpha".into()), harness:None, scope:Some("global".into()), project_path:None,
+            payload:serde_json::json!({}), inverse:Some(serde_json::json!({"op":"restore_backup","path":target,"pre_fingerprint":fingerprint,"post_fingerprint":fingerprint})), backup_dir:Some(manifest.backup_dir),
+        }).unwrap();
+        store.finish(&guard, &id, EventStatus::Done, None).unwrap();
+        ids.push(id);
+    }
+    store
+        .retain_backups(
+            &guard,
+            chrono::Utc::now() + BACKUP_RETENTION_AGE + chrono::Duration::days(1),
+            BackupRetentionScope::All,
+        )
+        .unwrap();
+    (
+        ids.remove(0),
+        std::fs::read(target.join("SKILL.md")).unwrap(),
+    )
+}
+
+pub fn cli_binary() -> PathBuf {
+    std::env::var_os("SKILL_STUDIO_TEST_BINARY").map_or_else(
+        || PathBuf::from(env!("CARGO_BIN_EXE_skill-studio")),
+        PathBuf::from,
+    )
+}
+
+pub fn interrupted_plan_before_restore(home: &Path, foreign: &Path) -> EventId {
+    use skill_studio_core::ports::{acquire_exclusive, Journal, PlanRecord, PlanStatus, PlanStep};
+    let event = removed_with_secondary_replacement(home);
+    let rt = runtime(home);
+    let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+    let journal = skill_studio_core::journal::FsJournal::new(
+        home.join(".agents/skill-studio-journal"),
+        rt.ports.fs.clone(),
+    );
+    journal
+        .begin(
+            &guard,
+            &PlanRecord {
+                id: skill_studio_core::identity::PlanId("unrecoverable-fixture".into()),
+                created_at: rt.ports.clock.now(),
+                label: "recovery needs an unavailable root".into(),
+                root: foreign.to_path_buf(),
+                backups: Vec::new(),
+                expired_backups: Vec::new(),
+                steps: vec![PlanStep::Stage {
+                    staged: foreign.join("sentinel"),
+                }],
+                status: PlanStatus::Pending,
+            },
+        )
+        .unwrap();
+    event
+}
+
+pub fn large_asset_update(home: &Path, failed: bool) -> (EventId, Vec<u8>, Vec<u8>) {
+    use skill_studio_core::events::{EventDraft, EventKind, EventStatus};
+    use skill_studio_core::identity::Fingerprint;
+    use skill_studio_core::ports::{acquire_exclusive, HistoryAccess};
+    write_skill(home, "alpha", "A skill with a large asset.");
+    let target = home.join(".agents/skills/alpha");
+    let asset = target.join("asset.bin");
+    let size = usize::try_from(ops::SKILL_MD_MAX_BYTES).unwrap() + 1;
+    let before = vec![b'a'; size];
+    std::fs::write(&asset, &before).unwrap();
+    let rt = runtime(home);
+    let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+    let mut store = rt
+        .ports
+        .history
+        .open(&rt.scope, HistoryAccess::ReadWrite)
+        .unwrap()
+        .unwrap();
+    let id = EventId::from_ulid(ulid::Ulid::generate());
+    let manifest = store
+        .backup_paths(&guard, &id, std::slice::from_ref(&target))
+        .unwrap();
+    let pre = manifest.entries[0].fingerprint.as_ref().unwrap().bare_hex();
+    let mut after = before.clone();
+    after[size - 1] = b'b';
+    std::fs::write(&asset, &after).unwrap();
+    let post = skill_studio_host::hash_entry(&target).unwrap();
+    store.record(&guard, &id, &EventDraft {
+        kind: EventKind::Update, skill: SkillName("alpha".into()), harness: None,
+        scope: Some("global".into()), project_path: None, payload: serde_json::json!({}),
+        inverse: Some(serde_json::json!({"op":"restore_backup","path":target,"pre_fingerprint":pre,"post_fingerprint":post})),
+        backup_dir: Some(manifest.backup_dir),
+    }).unwrap();
+    store
+        .finish(
+            &guard,
+            &id,
+            if failed {
+                EventStatus::Failed
+            } else {
+                EventStatus::Done
+            },
+            Some(Fingerprint::parse(&post).unwrap()),
+        )
+        .unwrap();
+    (id, before, after)
+}
+
+struct RecordedUpdateCli {
+    home: PathBuf,
+    trace: serde_json::Value,
+}
+
+fn recorded_files(home: &Path, files: &serde_json::Value) {
+    use std::os::unix::fs::PermissionsExt;
+    let root = home.join(".agents/skills/trace-skill");
+    std::fs::create_dir_all(&root).unwrap();
+    for file in files.as_array().unwrap() {
+        let path = root.join(file["relative_path"].as_str().unwrap());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, file["content"].as_str().unwrap()).unwrap();
+        std::fs::set_permissions(
+            path,
+            std::fs::Permissions::from_mode(u32::try_from(file["mode"].as_u64().unwrap()).unwrap()),
+        )
+        .unwrap();
+    }
+}
+
+impl ProcessSpawner for RecordedUpdateCli {
+    fn run(
+        &self,
+        spec: &ProcessSpec,
+        _: &dyn CancelToken,
+    ) -> Result<ProcessOutput, skill_studio_core::CoreError> {
+        assert_eq!(serde_json::json!(spec.args), self.trace["args"]);
+        std::fs::remove_dir_all(self.home.join(".agents/skills/trace-skill")).unwrap();
+        recorded_files(&self.home, &self.trace["files_after"]);
+        std::fs::write(
+            self.home.join(".agents/.skill-lock.json"),
+            serde_json::to_vec(&self.trace["lock_after"]).unwrap(),
+        )
+        .unwrap();
+        Ok(ProcessOutput {
+            status: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+        })
+    }
+}
+
+pub fn recorded_update(home: &Path) -> (EventId, serde_json::Value) {
+    let trace:serde_json::Value=serde_json::from_str(include_str!("../../../../crates/skill-studio-core/tests/fixtures/cli_traces/skills_sh_update_global.trace.json")).unwrap();
+    recorded_files(home, &trace["files_before"]);
+    std::fs::write(
+        home.join(".agents/.skill-lock.json"),
+        serde_json::to_vec(&trace["lock_before"]).unwrap(),
+    )
+    .unwrap();
+    for (relative, target) in trace["links_before"].as_object().unwrap() {
+        let path = home.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(
+            target
+                .as_str()
+                .unwrap()
+                .replace("$HOME", &home.to_string_lossy()),
+            path,
+        )
+        .unwrap();
+    }
+    let mut rt = runtime(home);
+    rt.ports.spawner = Some(Arc::new(RecordedUpdateCli {
+        home: home.to_path_buf(),
+        trace: trace.clone(),
+    }));
+    let result = ops::update(
+        &rt,
+        &ctx(),
+        &UpdateRequest {
+            skill: SkillName("trace-skill".into()),
+            method: InstallMethod::SkillsSh,
+            scope: RootScope::Global,
+            files: Vec::new(),
+            source: Some("skill-studio-trace/fixture".into()),
+            ref_pin: None,
+        },
+    )
+    .unwrap();
+    (result.event_id, trace)
+}
+
+pub fn edit_recorded_lock(home: &Path, forced: bool) -> serde_json::Value {
+    let path = home.join(".agents/.skill-lock.json");
+    let mut lock: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    lock["skills"]["unrelated"] = lock["skills"]["trace-skill"].clone();
+    if forced {
+        lock["skills"]["trace-skill"]["skillFolderHash"] = serde_json::json!("a later user edit");
+    }
+    std::fs::write(path, serde_json::to_vec(&lock).unwrap()).unwrap();
+    lock
+}
+
+pub fn assert_recorded_lock(home: &Path, own: &serde_json::Value, unrelated: &serde_json::Value) {
+    let lock: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.join(".agents/.skill-lock.json")).unwrap())
+            .unwrap();
+    assert_eq!(&lock["skills"]["trace-skill"], own);
+    assert_eq!(&lock["skills"]["unrelated"], unrelated);
+}
