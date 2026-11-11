@@ -1,5 +1,8 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use std::process::Command;
+#[allow(dead_code)]
+#[path = "support/headless.rs"]
+mod headless;
 
 #[test]
 fn doctor_listing_cost_warns_and_names_top_skills_or_counts_manual_and_parked_skills() {
@@ -169,7 +172,25 @@ fn report(home: &std::path::Path, command: &str, project: bool) -> serde_json::V
         cmd.arg("--project").arg(home.join("project"));
     }
     let out = cmd.output().unwrap();
-    serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()["data"].clone()
+    let data = serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()["data"].clone();
+    if command == "doctor" {
+        let mut env = vec![(
+            "SKILL_STUDIO_FIXTURE".to_string(),
+            home.to_str().unwrap().to_string(),
+        )];
+        if project {
+            env.push((
+                "SKILL_STUDIO_PROJECT".to_string(),
+                home.join("project").to_str().unwrap().to_string(),
+            ));
+        }
+        let mcp = headless::mcp_with_env(home, "doctor", &serde_json::json!({}), &env);
+        assert_eq!(
+            data["listing_cost"],
+            mcp["result"]["structuredContent"]["data"]["listing_cost"]
+        );
+    }
+    data
 }
 
 fn row(data: &serde_json::Value, harness: &str, project: bool) -> serde_json::Value {
@@ -342,4 +363,69 @@ fn doctor_charges_codex_utf8_bytes_instead_of_utf16_units_for_non_ascii_descript
     let codex = row(&report(home, "doctor", false), "codex", false);
     assert!(codex["estimated_tokens_chars_div_4"].as_u64().unwrap() >= 750);
     assert_eq!(codex["warning"], "over_limit");
+}
+
+#[test]
+fn doctor_and_scan_apply_codex_name_rules_in_order_instead_of_counting_disabled_skills() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    skill(home, ".agents/skills/review");
+    skill(home, ".codex/skills/folder");
+    for (rules, expected) in [
+        ("[[skills.config]]\nname = ' review '\nenabled = false\n".to_string(), 0),
+        (format!("[[skills.config]]\nname = 'review'\nenabled = false\n[[skills.config]]\npath = {:?}\nenabled = true\n", home.join(".codex/skills/folder/SKILL.md")), 1),
+        (format!("[[skills.config]]\npath = {:?}\nenabled = true\n[[skills.config]]\nname = 'review'\nenabled = false\n", home.join(".codex/skills/folder/SKILL.md")), 0),
+    ] {
+        write(home, ".codex/config.toml", &rules);
+        assert_eq!(row(&report(home, "doctor", false), "codex", false)["listed_skills"], expected);
+        let scan = report(home, "scan", false);
+        if expected == 0 {
+            for deployment in scan["skills"][0]["deployments"].as_array().unwrap() {
+                assert!(deployment["disabled_by"] == "codex-config" || deployment["disabled_readers"].as_array().unwrap().contains(&serde_json::json!("codex")));
+            }
+        }
+    }
+}
+
+#[test]
+fn doctor_merges_project_plugin_switches_instead_of_using_global_enablement() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write(
+        home,
+        ".claude/plugins/cache/mp/plug/1/.claude-plugin/plugin.json",
+        r#"{"name":"plug"}"#,
+    );
+    skill(home, ".claude/plugins/cache/mp/plug/1/skills/review");
+    write(
+        home,
+        ".claude/settings.json",
+        r#"{"enabledPlugins":{"plug@mp":true}}"#,
+    );
+    write(
+        home,
+        "project/.claude/settings.json",
+        r#"{"enabledPlugins":{"plug@mp":false}}"#,
+    );
+    let data = report(home, "doctor", true);
+    assert_eq!(row(&data, "claude-code", false)["listed_skills"], 1);
+    assert_eq!(row(&data, "claude-code", true)["listed_skills"], 0);
+    write(
+        home,
+        "project/.claude/settings.local.json",
+        r#"{"enabledPlugins":{"plug@mp":true}}"#,
+    );
+    assert_eq!(
+        row(&report(home, "doctor", true), "claude-code", true)["listed_skills"],
+        1
+    );
+    write(
+        home,
+        ".claude/settings.json",
+        r#"{"enabledPlugins":{"plug@mp":false}}"#,
+    );
+    assert_eq!(
+        row(&report(home, "doctor", true), "claude-code", true)["listed_skills"],
+        1
+    );
 }

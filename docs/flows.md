@@ -137,3 +137,11 @@ opening a folder written by a newer schema. A folder with no marker is version 0
 | Skill listing cost per harness                     | CLI/MCP-only  | `skill-studio doctor --json`                      | `doctor` | `apps/cli/tests/listing_cost.rs::doctor_listing_cost_warns_and_names_top_skills_or_counts_manual_and_parked_skills`; `apps/mcp/tests/mcp_server.rs::doctor_listing_cost_matches_cli_and_warns_or_loses_the_budget_in_one_adapter`; `apps/cli/tests/listing_cost.rs::doctor_keeps_a_codex_disabled_skill_in_the_cursor_row_instead_of_hiding_it_from_every_reader`; `apps/cli/tests/listing_cost.rs::doctor_charges_codex_utf8_bytes_instead_of_utf16_units_for_non_ascii_descriptions` |
 
 Agent home overrides use the existing scan, extras, park and unpark flows. The CLI commands are `skill-studio scan`, `skill-studio extras`, `skill-studio park moved` and `skill-studio unpark moved`; the MCP tools are `scan`, `extras`, `park` and `unpark`. `apps/cli/tests/agent_home_env.rs` covers each variable with `claude_env_scan_and_extras_use_moved_home_instead_of_default`, `pi_env_scan_and_extras_use_moved_home_instead_of_default` and `grok_env_scan_and_extras_use_moved_home_instead_of_default`.
+
+Native disable switches use the existing scan and doctor flows. CLI commands are
+`skill-studio scan --json` and `skill-studio doctor --project <path> --json`; MCP
+tools are `scan` and `doctor`. CLI/MCP-only listing checks in
+`apps/cli/tests/listing_cost.rs` are
+`doctor_and_scan_apply_codex_name_rules_in_order_instead_of_counting_disabled_skills`
+and `doctor_merges_project_plugin_switches_instead_of_using_global_enablement`.
+Both compare the doctor listing with MCP.

@@ -644,9 +644,16 @@ fn scan_inner_with_budget(
                         .harness
                         .as_ref()
                         .is_some_and(|id| id.as_str() == AgentId::CODEX))
-                && disable_sources
-                    .codex_disabled_skill_md
-                    .contains(&codex_path_form(fs, &deployment.path.join("SKILL.md")))
+                && codex_skill_disabled(
+                    fs,
+                    &disable_sources,
+                    &deployment.path,
+                    deployment
+                        .frontmatter
+                        .as_ref()
+                        .and_then(|fm| fm.name.as_deref())
+                        .unwrap_or(&skill.name.0),
+                )
             {
                 deployment
                     .disabled_readers
@@ -1383,7 +1390,16 @@ fn process_entries(
                 cx.disable_sources,
                 &cx.target.kind,
                 &skill_dir,
-                &entry.name,
+                if matches!(&cx.target.kind, RootKind::Harness(id) if id.as_str() == AgentId::CODEX)
+                {
+                    facts
+                        .frontmatter
+                        .as_ref()
+                        .and_then(|fm| fm.name.as_deref())
+                        .unwrap_or(&entry.name)
+                } else {
+                    &entry.name
+                },
             )
         });
 
@@ -2016,9 +2032,8 @@ fn walk_for_plugin_roots(
 /// Codex and `OpenCode`'s own per-skill disable switches, read once per
 /// `scan` call (they are global config files, not per-root).
 struct DisableSources {
-    /// [`codex_disabled_skill_md_paths`]: the `SKILL.md` paths Codex treats
-    /// as off, in [`codex_path_form`].
-    codex_disabled_skill_md: std::collections::BTreeSet<PathBuf>,
+    /// Ordered Codex name and path rules.
+    codex_config: Option<toml_edit::DocumentMut>,
     /// `permission.skill` (v1) and `permissions[]` (v2) skill rules
     /// `opencode.json` holds, from [`crate::opencode_config::read_skill_rules`]
     /// - the same read the write path and every adapter use, so a scan and
@@ -2043,7 +2058,7 @@ impl DisableSources {
         let opencode_config_dir = opencode_config_root
             .map_or_else(|| home.join(".config").join("opencode"), Path::to_path_buf);
         DisableSources {
-            codex_disabled_skill_md: codex_disabled_skill_md_paths(fs, codex_home),
+            codex_config: read_codex_skill_config(fs, codex_home),
             opencode_skill_rules: crate::opencode_config::read_skill_rules(
                 fs,
                 &opencode_config_dir,
@@ -2073,16 +2088,44 @@ pub fn codex_disabled_skill_md_paths(
     fs: &dyn ScopeFs,
     codex_home: &Path,
 ) -> std::collections::BTreeSet<PathBuf> {
-    let Ok(bytes) = fs.read_capped(&codex_config_path(codex_home), SKILL_MD_MAX_BYTES) else {
-        return Default::default();
+    read_codex_skill_config(fs, codex_home)
+        .map(|doc| codex_disabled_forms(fs, &doc))
+        .unwrap_or_default()
+}
+
+fn read_codex_skill_config(fs: &dyn ScopeFs, codex_home: &Path) -> Option<toml_edit::DocumentMut> {
+    let bytes = fs
+        .read_capped(&codex_config_path(codex_home), SKILL_MD_MAX_BYTES)
+        .ok()?;
+    String::from_utf8(bytes).ok()?.parse().ok()
+}
+
+fn codex_skill_disabled(
+    fs: &dyn ScopeFs,
+    sources: &DisableSources,
+    dir: &Path,
+    name: &str,
+) -> bool {
+    let Some(doc) = &sources.codex_config else {
+        return false;
     };
-    let Ok(text) = String::from_utf8(bytes) else {
-        return Default::default();
-    };
-    let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
-        return Default::default();
-    };
-    codex_disabled_forms(fs, &doc)
+    let path = codex_path_form(fs, &dir.join("SKILL.md"));
+    let mut disabled = false;
+    for row in codex_skills_config_rows(doc) {
+        let matches = match (row.get("path"), row.get("name")) {
+            (Some(selector), None) => selector
+                .as_str()
+                .is_some_and(|p| codex_path_form(fs, Path::new(p)) == path),
+            (None, Some(selector)) => selector
+                .as_str()
+                .is_some_and(|n| !n.trim().is_empty() && n.trim() == name),
+            _ => false,
+        };
+        if matches {
+            disabled = row.get("enabled").and_then(toml_edit::Item::as_bool) == Some(false);
+        }
+    }
+    disabled
 }
 
 fn codex_disabled_forms(
@@ -2091,6 +2134,9 @@ fn codex_disabled_forms(
 ) -> std::collections::BTreeSet<PathBuf> {
     let mut disabled = std::collections::BTreeSet::new();
     for row in codex_skills_config_rows(doc) {
+        if row.get("name").is_some() {
+            continue;
+        }
         let Some(path) = row.get("path").and_then(toml_edit::Item::as_str) else {
             continue;
         };
@@ -2190,10 +2236,9 @@ fn native_disabled_by(
     name: &str,
 ) -> Option<DisabledBy> {
     match kind {
-        RootKind::Harness(id) if id.as_str() == AgentId::CODEX => sources
-            .codex_disabled_skill_md
-            .contains(&codex_path_form(fs, &skill_dir.join("SKILL.md")))
-            .then_some(DisabledBy::CodexConfig),
+        RootKind::Harness(id) if id.as_str() == AgentId::CODEX => {
+            codex_skill_disabled(fs, sources, skill_dir, name).then_some(DisabledBy::CodexConfig)
+        }
         RootKind::Harness(id) | RootKind::Legacy(id) if id.as_str() == AgentId::OPEN_CODE => {
             sources
                 .opencode_skill_rules
