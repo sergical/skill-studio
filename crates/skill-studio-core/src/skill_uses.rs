@@ -31,6 +31,51 @@ fn contains_marker(text: &str, marker: &str) -> bool {
     memchr::memmem::find(text.as_bytes(), marker.as_bytes()).is_some()
 }
 
+fn checked_history_line(
+    line: &str,
+    markers: &[&str],
+    invalid: &mut usize,
+) -> Option<serde_json::Value> {
+    if line.trim().is_empty() {
+        return None;
+    }
+    if !markers.iter().any(|marker| contains_marker(line, marker)) {
+        if serde_json::from_str::<serde::de::IgnoredAny>(line).is_err() {
+            *invalid += 1;
+        }
+        return None;
+    }
+    if let Ok(record) = serde_json::from_str(line) {
+        Some(record)
+    } else {
+        *invalid += 1;
+        None
+    }
+}
+
+fn validate_invocation_timestamp(
+    uses: &mut Vec<SkillInvocation>,
+    start: usize,
+    record: &serde_json::Value,
+    invalid: &mut usize,
+) {
+    if uses.len() == start {
+        return;
+    }
+    let at = record
+        .get("timestamp")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok());
+    if let Some(at) = at {
+        for invocation in &mut uses[start..] {
+            invocation.at = at.with_timezone(&Utc);
+        }
+    } else {
+        uses.truncate(start);
+        *invalid += 1;
+    }
+}
+
 /// Facts a transcript states once, in a header line, that later lines need.
 /// The host keeps one per transcript file between refreshes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -518,6 +563,63 @@ fn push_shell_reads<S: AsRef<str>>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn usage_checked_parsers_ignore_blank_lines_instead_of_inventing_gaps() {
+        let mut counts = [0; 5];
+        let text = "{}\n\n \t\n";
+        let mut ctx = super::TranscriptContext::default();
+        super::parse_claude_code_uses_checked(text, &mut counts[0]);
+        super::parse_codex_uses_checked(text, &mut ctx, &mut counts[1]);
+        super::parse_pi_uses_checked(text, &mut ctx, &mut counts[2]);
+        super::parse_cursor_uses_checked(text, &ctx, chrono::Utc::now(), &mut counts[3]);
+        super::parse_grok_uses_checked(text, &mut ctx, chrono::Utc::now(), &mut counts[4]);
+        assert_eq!(counts, [0; 5]);
+    }
+
+    #[test]
+    fn usage_recognized_invocations_report_invalid_fields_instead_of_silent_drops() {
+        let fixtures = [
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"foo"}}]}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call","namespace":"skills","name":"read","arguments":"{\"package\":\"/x/foo\"}"}}"#,
+            r#"{"type":"message","message":{"role":"user","content":"<skill name=\"foo\" location=\"/x/foo/SKILL.md\">"}}"#,
+        ];
+        for timestamp in [None, Some(serde_json::json!("bad"))] {
+            let mut counts = [0; 3];
+            for (i, fixture) in fixtures.iter().enumerate() {
+                let mut record: serde_json::Value = serde_json::from_str(fixture).unwrap();
+                if let Some(value) = &timestamp {
+                    record["timestamp"] = value.clone();
+                }
+                let text = record.to_string();
+                let mut ctx = super::TranscriptContext::default();
+                let uses = match i {
+                    0 => super::parse_claude_code_uses_checked(&text, &mut counts[i]),
+                    1 => super::parse_codex_uses_checked(&text, &mut ctx, &mut counts[i]),
+                    _ => super::parse_pi_uses_checked(&text, &mut ctx, &mut counts[i]),
+                };
+                assert!(uses.is_empty());
+            }
+            assert_eq!(counts, [1; 3]);
+        }
+        let mut counts = [0; 3];
+        super::parse_claude_code_uses_checked(
+            r#"{"type":"assistant","timestamp":"2026-11-01T00:00:00Z","message":{"content":[{"type":"tool_use","name":"Skill","input":{}}]}}"#,
+            &mut counts[0],
+        );
+        super::parse_codex_uses_checked(
+            r#"{"type":"response_item","timestamp":"2026-11-01T00:00:00Z","payload":{"type":"function_call","namespace":"skills","name":"read","arguments":"{}"}}"#,
+            &mut super::TranscriptContext::default(),
+            &mut counts[1],
+        );
+        super::parse_grok_uses_checked(
+            r#"{"update":{"sessionUpdate":"tool_call","title":"Skill: foo"}}"#,
+            &mut super::TranscriptContext::default(),
+            chrono::Utc::now(),
+            &mut counts[2],
+        );
+        assert_eq!(counts, [1; 3]);
+    }
+
     use super::*;
     use chrono::Timelike;
 

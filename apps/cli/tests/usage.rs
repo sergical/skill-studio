@@ -167,3 +167,44 @@ fn usage_filters_history_by_harness_and_project() {
         "{text}"
     );
 }
+
+#[test]
+fn usage_cached_run_keeps_cache_file_instead_of_rewriting_unchanged_history() {
+    let (_dir, home) = home();
+    let run_cached = || {
+        Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+            .args(["usage", "--json"])
+            .env("HOME", &home)
+            .env("SKILL_STUDIO_TELEMETRY", "0")
+            .output()
+            .unwrap()
+    };
+    assert!(run_cached().status.success());
+    fn find_cache(dir: &Path) -> Option<PathBuf> {
+        for entry in std::fs::read_dir(dir).ok()?.flatten() {
+            let path = entry.path();
+            if path.file_name().unwrap() == "cli-skill-uses.json" {
+                return Some(path);
+            }
+            if path.is_dir() {
+                if let Some(found) = find_cache(&path) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+    let cache = find_cache(&home).expect("CLI cache in temporary home");
+    let old_time = std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH);
+    std::fs::File::options()
+        .write(true)
+        .open(&cache)
+        .unwrap()
+        .set_times(old_time)
+        .unwrap();
+    assert!(run_cached().status.success());
+    assert_eq!(
+        std::fs::metadata(&cache).unwrap().modified().unwrap(),
+        std::time::SystemTime::UNIX_EPOCH
+    );
+}

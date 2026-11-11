@@ -33,26 +33,15 @@ pub fn parse_claude_code_uses_checked(text: &str, invalid: &mut usize) -> Vec<Sk
     let mut out = Vec::new();
 
     for line in text.lines() {
-        if !super::contains_marker(line, SKILL_TOOL_MARKER)
-            && !super::contains_marker(line, COMMAND_MARKER)
-            && !super::contains_marker(line, SKILL_MD_MARKER)
-        {
-            if serde_json::from_str::<serde::de::IgnoredAny>(line).is_err() {
-                *invalid += 1;
-            }
-            continue;
-        }
-        let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
-            *invalid += 1;
+        let Some(record) = super::checked_history_line(
+            line,
+            &[SKILL_TOOL_MARKER, COMMAND_MARKER, SKILL_MD_MARKER],
+            invalid,
+        ) else {
             continue;
         };
-        let Some(timestamp) = record.get("timestamp").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Ok(at) = DateTime::parse_from_rfc3339(timestamp) else {
-            continue;
-        };
-        let at = at.with_timezone(&Utc);
+        let before = out.len();
+        let at = DateTime::<Utc>::UNIX_EPOCH;
         let project_path = record
             .get("cwd")
             .and_then(|v| v.as_str())
@@ -90,9 +79,12 @@ pub fn parse_claude_code_uses_checked(text: &str, invalid: &mut usize) -> Vec<Sk
                 let input = block.get("input");
                 match tool_name {
                     Some("Skill") => {
-                        let Some(skill) =
-                            input.and_then(|i| i.get("skill")).and_then(|v| v.as_str())
+                        let Some(skill) = input
+                            .and_then(|i| i.get("skill"))
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
                         else {
+                            *invalid += 1;
                             continue;
                         };
                         push(skill, SkillTrigger::Agent);
@@ -154,6 +146,7 @@ pub fn parse_claude_code_uses_checked(text: &str, invalid: &mut usize) -> Vec<Sk
             }
             push(name, SkillTrigger::User);
         }
+        super::validate_invocation_timestamp(&mut out, before, &record, invalid);
     }
 
     out

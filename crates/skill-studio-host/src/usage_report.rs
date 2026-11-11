@@ -86,6 +86,7 @@ impl Outcome for UsageReport {
 #[derive(Debug, Clone, Default)]
 pub struct SkillUsage {
     index: SkillInvocationIndex,
+    loaded_index: SkillInvocationIndex,
 }
 
 /// Optional exact matches over recorded history. Paths use lexical path equality.
@@ -100,15 +101,20 @@ pub struct UsageFilter {
 impl SkillUsage {
     /// Seeds the index from `cache` when given. Never writes the file.
     pub fn load_read_only(cache: Option<&Path>) -> Self {
+        let index = cache
+            .map(SkillInvocationIndex::load_read_only)
+            .unwrap_or_default();
         Self {
-            index: cache
-                .map(SkillInvocationIndex::load_read_only)
-                .unwrap_or_default(),
+            loaded_index: index.clone(),
+            index,
         }
     }
 
     /// Atomically saves a caller-owned cache. The desktop cache must not be used here.
     pub fn save_cache(&self, path: &Path) -> Result<(), String> {
+        if path.exists() && self.index == self.loaded_index {
+            return Ok(());
+        }
         let temporary = path.with_extension(format!("{}.tmp", ulid::Ulid::generate()));
         let result = self
             .index

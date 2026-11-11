@@ -82,7 +82,7 @@ fn default_run_budget() -> u64 {
 /// the end of the last fully-parsed line, so an append-only transcript can be
 /// resumed from where the previous refresh left off instead of reparsed from
 /// scratch.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct IndexedTranscript {
     size: u64,
     modified: SystemTime,
@@ -167,7 +167,7 @@ fn database_stamp(path: &Path) -> DatabaseStamp {
 
 /// A database's cached parse result, keyed by [`DatabaseStamp`] so a refresh
 /// can tell whether it needs to be re-queried.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct IndexedDatabase {
     stamp: DatabaseStamp,
     /// Highest `time_updated` seen per table (`session_message`, `part`), so
@@ -1079,7 +1079,7 @@ pub fn is_skill_use_change_with_databases(home: &Path, path: &Path, databases: &
 /// file or database so unchanged sources are never re-read. `file_budget`/
 /// `run_budget` are not persisted (see `with_budgets` for the test-only
 /// override).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SkillInvocationIndex {
     #[serde(default)]
     reader_version: u32,
@@ -1095,7 +1095,7 @@ pub struct SkillInvocationIndex {
 impl Default for SkillInvocationIndex {
     fn default() -> Self {
         Self {
-            reader_version: 2,
+            reader_version: 3,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: MAX_FILE_BYTES,
@@ -1111,7 +1111,7 @@ impl SkillInvocationIndex {
     #[cfg(test)]
     fn with_budgets(file_bytes: u64, run_bytes: u64) -> Self {
         Self {
-            reader_version: 2,
+            reader_version: 3,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: file_bytes,
@@ -1204,6 +1204,18 @@ impl SkillInvocationIndex {
                     Err(error) if error.kind() == io::ErrorKind::NotFound => None,
                     Err(error) => Some(error.to_string()),
                     Ok(_) if sources.is_enabled(source.harness) => None,
+                    Ok(_)
+                        if match &source.reader {
+                            UseReader::Transcripts { list, .. } => {
+                                !list(home).files.iter().any(|file| file.starts_with(&path))
+                            }
+                            UseReader::Databases { list, .. } => !list(home)
+                                .iter()
+                                .any(|file| file.starts_with(&path) && file.is_file()),
+                        } =>
+                    {
+                        None
+                    }
                     Ok(_) => Some(format!(
                         "{} history disabled in discovery settings",
                         source.harness
@@ -1230,10 +1242,10 @@ impl SkillInvocationIndex {
     /// cached entries. Never panics: unreadable dirs/files/databases are
     /// skipped.
     pub fn refresh(&mut self, home: &Path, sources: &DiscoverySources) -> SkillUseRefreshReport {
-        if self.reader_version != 2 {
+        if self.reader_version != 3 {
             self.files.clear();
             self.databases.clear();
-            self.reader_version = 2;
+            self.reader_version = 3;
         }
         let mut report = SkillUseRefreshReport::default();
         let mut run_budget = self.run_budget;
@@ -1799,6 +1811,19 @@ mod tests {
     use skill_studio_core::skill_uses::SkillTrigger;
     use std::collections::BTreeSet as StdBTreeSet;
     use std::time::Duration;
+
+    #[test]
+    fn usage_disabled_empty_root_stays_complete_instead_of_inventing_a_gap() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".codex/sessions");
+        fs::create_dir_all(&root).unwrap();
+        let mut sources = DiscoverySources::default();
+        sources.set("codex", false);
+        let index = SkillInvocationIndex::default();
+        assert!(index.observations(home.path(), &sources).is_empty());
+        fs::write(root.join("session.jsonl"), "{}\n").unwrap();
+        assert_eq!(index.observations(home.path(), &sources).len(), 1);
+    }
 
     fn skill_line(skill: &str, timestamp: &str, cwd: &str) -> String {
         format!(

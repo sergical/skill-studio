@@ -43,14 +43,7 @@ pub fn parse_cursor_uses_checked(
     let mut out = Vec::new();
 
     for line in text.lines() {
-        if !super::contains_marker(line, SKILL_MD_MARKER) {
-            if serde_json::from_str::<serde::de::IgnoredAny>(line).is_err() {
-                *invalid += 1;
-            }
-            continue;
-        }
-        let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
-            *invalid += 1;
+        let Some(record) = super::checked_history_line(line, &[SKILL_MD_MARKER], invalid) else {
             continue;
         };
         if record.get("role").and_then(|v| v.as_str()) != Some("assistant") {

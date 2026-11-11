@@ -78,17 +78,11 @@ pub fn parse_pi_uses_checked(
     let mut out = Vec::new();
 
     for line in text.lines() {
-        if !super::contains_marker(line, SESSION_MARKER)
-            && !super::contains_marker(line, SKILL_BLOCK_MARKER)
-            && !super::contains_marker(line, SKILL_MD_MARKER)
-        {
-            if serde_json::from_str::<serde::de::IgnoredAny>(line).is_err() {
-                *invalid += 1;
-            }
-            continue;
-        }
-        let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
-            *invalid += 1;
+        let Some(record) = super::checked_history_line(
+            line,
+            &[SESSION_MARKER, SKILL_BLOCK_MARKER, SKILL_MD_MARKER],
+            invalid,
+        ) else {
             continue;
         };
         let record_type = record.get("type").and_then(|v| v.as_str());
@@ -112,13 +106,8 @@ pub fn parse_pi_uses_checked(
             continue;
         }
 
-        let Some(timestamp) = record.get("timestamp").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Ok(at) = DateTime::parse_from_rfc3339(timestamp) else {
-            continue;
-        };
-        let at = at.with_timezone(&Utc);
+        let before = out.len();
+        let at = DateTime::<Utc>::UNIX_EPOCH;
 
         let Some(message) = record.get("message") else {
             continue;
@@ -182,6 +171,7 @@ pub fn parse_pi_uses_checked(
             }
             _ => {}
         }
+        super::validate_invocation_timestamp(&mut out, before, &record, invalid);
     }
 
     out
