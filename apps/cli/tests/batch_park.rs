@@ -301,3 +301,30 @@ fn one_name_mcp_matches_cli_instead_of_returning_a_batch() {
         assert_eq!(cli(home.path(), &[reverse, "alpha"])["status"], "ok");
     }
 }
+
+/// Flow: park one name that has two real copies. Expectation: the CLI and the
+/// MCP both return `ambiguous_target` and list the id of each copy. Failure
+/// means the MCP hides the ids the caller needs to pick one copy.
+#[test]
+fn one_ambiguous_name_returns_the_same_code_and_copy_ids_on_cli_and_mcp() {
+    for surface in ["park", "mcp"] {
+        let home = tempfile::tempdir().unwrap();
+        skill(home.path(), "alpha");
+        let other = home.path().join(".codex/skills/alpha");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::copy(
+            home.path().join(".agents/skills/alpha/SKILL.md"),
+            other.join("SKILL.md"),
+        )
+        .unwrap();
+        let result = park(home.path(), surface, &["alpha"]);
+        assert_eq!(
+            result["errors"][0]["code"], "ambiguous_target",
+            "{surface}: {result}"
+        );
+        let message = result["errors"][0]["message"].as_str().unwrap();
+        assert_eq!(message.matches(" id ").count(), 2, "{surface}: {result}");
+        assert!(other.join("SKILL.md").exists());
+        assert!(home.path().join(".agents/skills/alpha/SKILL.md").exists());
+    }
+}

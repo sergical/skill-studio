@@ -5661,11 +5661,16 @@ pub fn resolve_batch_names(
                     "No copy can be changed. Park needs a real folder; unpark needs a parked copy.",
                 )),
                 [only] => *only,
-                _ => {
-                    return Err(CoreError::new(
-                        ErrorCode::AmbiguousTarget,
-                        "More than one copy can be changed. Pass --id for one copy.",
-                    ))
+                several => {
+                    let mut message =
+                        String::from("More than one copy can be changed. Pass one of these ids:");
+                    for copy in several {
+                        message.push_str("\n  ");
+                        message.push_str(&copy.path.display().to_string());
+                        message.push_str("  id ");
+                        message.push_str(copy.id.as_str());
+                    }
+                    return Err(CoreError::new(ErrorCode::AmbiguousTarget, message));
                 }
             };
             if unpark {
@@ -5691,13 +5696,21 @@ pub fn resolve_batch_names(
         })();
         match resolved {
             Ok(id) => ids.push(id),
-            Err(error) => errors.push(format!("{}: {}", name.0, error.message)),
+            Err(error) => errors.push((name, error)),
         }
     }
-    if !errors.is_empty() {
-        return Err(CoreError::new(ErrorCode::InvalidRequest, errors.join("\n")));
+    match errors.len() {
+        0 => Ok(ids),
+        1 if names.len() == 1 => Err(errors.remove(0).1),
+        _ => Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            errors
+                .iter()
+                .map(|(name, error)| format!("{}: {}", name.0, error.message))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )),
     }
-    Ok(ids)
 }
 
 fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOutcome, CoreError> {
