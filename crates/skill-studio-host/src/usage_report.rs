@@ -41,6 +41,10 @@ pub fn desktop_usage_cache_path(data_dir: &Path) -> PathBuf {
 /// One installed skill's uses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkillUsageRow {
+    /// Distinct (harness, session id) pairs across the selected history.
+    pub sessions: usize,
+    /// Uses by trigger across the selected history.
+    pub triggers: BTreeMap<String, u32>,
     /// The skill's name.
     pub skill: String,
     /// Uses in the last `days` days of the report.
@@ -56,6 +60,8 @@ pub struct SkillUsageRow {
 /// Uses for every installed, not parked skill over one window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UsageReport {
+    /// Roots or files whose history was unavailable or skipped.
+    pub observations: Vec<crate::skill_uses::UsageObservation>,
     /// The window, in days, that `recent_uses` and `unused` cover.
     pub days: u32,
     /// Skills not used in the window first, by name; then the rest, most
@@ -87,6 +93,15 @@ pub struct SkillUsage {
     index: SkillInvocationIndex,
 }
 
+/// Optional exact matches over recorded history. Paths use lexical path equality.
+#[derive(Debug, Clone, Default)]
+pub struct UsageFilter {
+    /// Exact recorded harness id, or all harnesses.
+    pub harness: Option<String>,
+    /// Exact recorded project paths, or all projects when empty.
+    pub projects: Vec<PathBuf>,
+}
+
 impl SkillUsage {
     /// Seeds the index from `cache` when given. Never writes the file.
     pub fn load_read_only(cache: Option<&Path>) -> Self {
@@ -107,6 +122,18 @@ impl SkillUsage {
         days: u32,
         now: DateTime<Utc>,
     ) -> UsageReport {
+        self.report_filtered(home, inventory, days, now, &UsageFilter::default())
+    }
+
+    /// Reports uses that match the optional harness and project filters.
+    pub fn report_filtered(
+        &mut self,
+        home: &Path,
+        inventory: &Inventory,
+        days: u32,
+        now: DateTime<Utc>,
+        selection: &UsageFilter,
+    ) -> UsageReport {
         let sources = DiscoverySources::read(&RealFs::new(), home);
         let mut refresh = self.index.refresh(home, &sources);
         for _ in 1..MAX_REFRESH_PASSES {
@@ -116,6 +143,22 @@ impl SkillUsage {
             refresh = self.index.refresh(home, &sources);
         }
 
+        let mut observations = self.index.observations(home, &sources);
+        observations.extend(refresh.observations);
+        if refresh.incomplete {
+            observations.push(crate::skill_uses::UsageObservation {
+                path: home.to_path_buf(),
+                reason: "History refresh is incomplete (read budget or listing failure)".into(),
+            });
+        }
+        if inventory.completeness == Completeness::Partial {
+            observations.push(crate::skill_uses::UsageObservation {
+                path: home.to_path_buf(),
+                reason: "Installed skill scan is partial".into(),
+            });
+        }
+        observations.sort();
+        observations.dedup();
         let installed = active_skill_names(inventory);
         let filter = SkillUseFilter {
             known_skills: &installed,
@@ -126,13 +169,33 @@ impl SkillUsage {
             .iter()
             .map(|name| (name.as_str(), Tally::default()))
             .collect();
-        for use_ in counted_uses(self.index.all_uses(), &filter) {
+        let selected = self.index.all_uses().filter(|u| {
+            selection.harness.as_ref().is_none_or(|h| h == &u.harness)
+                && (selection.projects.is_empty()
+                    || selection.projects.iter().any(|p| {
+                        u.project_path
+                            .as_deref()
+                            .is_some_and(|recorded| Path::new(recorded) == p)
+                    }))
+        });
+        for use_ in counted_uses(selected, &filter) {
             let Some(tally) =
                 installed_name(&use_.skill, &installed).and_then(|name| by_skill.get_mut(name))
             else {
                 continue;
             };
             tally.total += 1;
+            if let Some(session) = &use_.session {
+                tally
+                    .sessions
+                    .insert((use_.harness.clone(), session.clone()));
+            }
+            let trigger = match use_.trigger {
+                skill_studio_core::skill_uses::SkillTrigger::User => "user",
+                skill_studio_core::skill_uses::SkillTrigger::Agent => "agent",
+                skill_studio_core::skill_uses::SkillTrigger::FileRead => "file_read",
+            };
+            *tally.triggers.entry(trigger.to_string()).or_default() += 1;
             if tally.last_used.is_none_or(|last| use_.at > last) {
                 tally.last_used = Some(use_.at);
             }
@@ -146,6 +209,16 @@ impl SkillUsage {
             .into_iter()
             .map(|(skill, tally)| SkillUsageRow {
                 skill: skill.to_string(),
+                sessions: tally.sessions.len(),
+                triggers: ["user", "agent", "file_read", "unknown"]
+                    .into_iter()
+                    .map(|key| {
+                        (
+                            key.to_string(),
+                            tally.triggers.get(key).copied().unwrap_or(0),
+                        )
+                    })
+                    .collect(),
                 recent_uses: tally.recent,
                 total_uses: tally.total,
                 last_used: tally.last_used.map(|at| at.to_rfc3339()),
@@ -168,13 +241,16 @@ impl SkillUsage {
             days,
             rows,
             unused,
-            partial: refresh.incomplete || inventory.completeness == Completeness::Partial,
+            partial: !observations.is_empty(),
+            observations,
         }
     }
 }
 
 #[derive(Default)]
 struct Tally {
+    sessions: BTreeSet<(String, String)>,
+    triggers: BTreeMap<String, u32>,
     recent: u32,
     total: u32,
     last_used: Option<DateTime<Utc>>,
@@ -334,7 +410,10 @@ mod tests {
         let report = SkillUsage::default().report(&fixture.home, &inventory, 30, now());
 
         assert_eq!(report.days, 30);
-        assert!(!report.partial, "{report:?}");
+        assert!(
+            report.partial,
+            "missing harness roots must be reported: {report:?}"
+        );
         let names: Vec<&str> = report.rows.iter().map(|r| r.skill.as_str()).collect();
         assert_eq!(names, ["idle", "gamma"], "{report:?}");
         assert_eq!(report.unused, ["idle"]);

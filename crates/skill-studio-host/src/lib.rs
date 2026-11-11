@@ -77,6 +77,6 @@ pub use skill_uses::{
 };
 pub use tools::{terminal_editor_command, LoginShellToolLookup, PathToolLookup};
 pub use usage_report::{
-    desktop_usage_cache_path, usage_report, SkillUsage, SkillUsageRow, UsageReport,
+    desktop_usage_cache_path, usage_report, SkillUsage, SkillUsageRow, UsageFilter, UsageReport,
     DEFAULT_USAGE_DAYS,
 };

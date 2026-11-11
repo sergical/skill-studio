@@ -130,6 +130,9 @@ enum Command {
     },
     /// Show which skills your agents used, and which they never used.
     Usage {
+        /// Keep uses from this harness id only.
+        #[arg(long)]
+        harness: Option<String>,
         #[command(flatten)]
         scope: ScopeArgs,
         /// How many days back to count uses.
@@ -578,7 +581,12 @@ fn main() -> ExitCode {
             json,
         } => run_restore(&scope, event_id, force, json, time),
         Command::Undo { scope, force, json } => run_undo(&scope, force, json, time),
-        Command::Usage { scope, days, json } => run_usage(&scope, days, json, time),
+        Command::Usage {
+            scope,
+            days,
+            json,
+            harness,
+        } => run_usage(&scope, days, json, time, harness),
         Command::Mcp => unreachable!("handled before telemetry starts"),
         Command::Add {
             scope,
@@ -1818,7 +1826,13 @@ fn run_unpark(scope: &ScopeArgs, target: &TargetArgs, json: bool, time: bool) ->
 /// Counts each skill's uses over the last `days` days, via
 /// [`skill_studio_host::usage_report`]. Reads the desktop app's use cache
 /// only for the real home, and never writes it.
-fn run_usage(scope: &ScopeArgs, days: u32, json: bool, time: bool) -> ExitCode {
+fn run_usage(
+    scope: &ScopeArgs,
+    days: u32,
+    json: bool,
+    time: bool,
+    harness: Option<String>,
+) -> ExitCode {
     let rt =
         match build_runtime::<skill_studio_host::UsageReport>(scope, Operation::SkillUsage, json) {
             Ok(rt) => rt,
@@ -1827,11 +1841,15 @@ fn run_usage(scope: &ScopeArgs, days: u32, json: bool, time: bool) -> ExitCode {
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let cache = scope.desktop_usage_cache();
     let result = ops::scan(&rt, &ctx, &ScanRequest::default()).map(|inventory| {
-        skill_studio_host::usage_report(
+        skill_studio_host::SkillUsage::load_read_only(cache.as_deref()).report_filtered(
             &rt.scope.home.canonical,
             &inventory,
             days,
-            cache.as_deref(),
+            chrono::Utc::now(),
+            &skill_studio_host::UsageFilter {
+                harness,
+                projects: scope.project_paths().to_vec(),
+            },
         )
     });
     let envelope = ResultEnvelope::from_result(Operation::SkillUsage, &rt.scope, &ctx, result);

@@ -342,6 +342,10 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
         println!("Not used in the last {} days:", report.days);
         for row in &unused {
             println!("  {:width$}  last used {}", row.skill, last_used(row));
+            println!(
+                "    {} sessions, {} total uses; triggers {:?}",
+                row.sessions, row.total_uses, row.triggers
+            );
         }
     }
     if !used.is_empty() {
@@ -363,6 +367,10 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
                 if row.recent_uses == 1 { "use " } else { "uses" },
                 last_used(row),
             );
+            println!(
+                "    {} sessions, {} total uses; triggers {:?}",
+                row.sessions, row.total_uses, row.triggers
+            );
         }
     }
     if !report.rows.is_empty() {
@@ -375,7 +383,10 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
         report.days
     );
     if report.partial {
-        println!("note: some session history could not be read, so some counts may be low.");
+        println!("Partial report. Some counts may be low:");
+        for observation in &report.observations {
+            println!("  {}: {}", observation.path.display(), observation.reason);
+        }
     }
 }
 

@@ -109,6 +109,12 @@ struct IndexedTranscript {
     /// session or project path.
     #[serde(default)]
     context: TranscriptContext,
+    #[serde(default)]
+    observations: Vec<UsageObservation>,
+    #[serde(default)]
+    compressed_complete: bool,
+    #[serde(default)]
+    skipped_lines: u64,
 }
 
 /// How many bytes of a transcript's already-parsed tail are kept for
@@ -172,9 +178,20 @@ struct IndexedDatabase {
     rows: BTreeMap<String, Vec<SkillInvocation>>,
 }
 
+/// History that was unavailable or skipped. A path may identify a root or a file.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct UsageObservation {
+    /// Root or transcript that could not be fully read.
+    pub path: PathBuf,
+    /// Why history was unavailable.
+    pub reason: String,
+}
+
 /// Outcome of one `SkillInvocationIndex::refresh` call.
 #[derive(Debug, Clone, Default)]
 pub struct SkillUseRefreshReport {
+    /// Read or listing failures during this pass.
+    pub observations: Vec<UsageObservation>,
     /// Number of transcript files re-parsed (in full or in part) this call.
     pub files_reparsed: usize,
     /// Number of cached files or databases removed because they no longer
@@ -299,8 +316,12 @@ fn is_regular_file(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
 }
 
+fn is_zstd(path: &Path) -> bool {
+    path.to_str().is_some_and(|p| p.ends_with(".jsonl.zst"))
+}
+
 fn is_jsonl(path: &Path) -> bool {
-    path.extension().is_some_and(|ext| ext == "jsonl") && is_regular_file(path)
+    (path.extension().is_some_and(|ext| ext == "jsonl") || is_zstd(path)) && is_regular_file(path)
 }
 
 fn claude_code_root(home: &Path) -> PathBuf {
@@ -412,25 +433,25 @@ fn opencode_root(home: &Path) -> PathBuf {
 /// Codex's live rollouts under the default `<home>/.codex`; also used
 /// (stripped of its `.codex/` prefix) as the sub-path under an overridden
 /// [`codex_root`].
+#[cfg(test)]
 const CODEX_SESSIONS_DIR: &str = ".codex/sessions";
 /// Rollouts Codex has moved aside (still readable, never appended to again),
 /// under the default `<home>/.codex`; see [`CODEX_SESSIONS_DIR`].
+#[cfg(test)]
 const CODEX_ARCHIVED_SESSIONS_DIR: &str = ".codex/archived_sessions";
 
 /// Codex's own directory: `$CODEX_HOME`, or `<home>/.codex` when unset (see
-/// [`crate::discovery::codex_home`]). [`SourceWatch`] entries still watch
-/// the default `.codex/sessions` and `.codex/archived_sessions` under
-/// `home` - watching a `CODEX_HOME` override too is a follow-up.
+/// [`crate::discovery::codex_home`]). Watch paths use the same resolved root.
 fn codex_root(home: &Path) -> PathBuf {
     crate::discovery::codex_home(home)
 }
 
 fn codex_sessions_watch_dir(home: &Path) -> PathBuf {
-    home.join(CODEX_SESSIONS_DIR)
+    codex_root(home).join("sessions")
 }
 
 fn codex_archived_sessions_watch_dir(home: &Path) -> PathBuf {
-    home.join(CODEX_ARCHIVED_SESSIONS_DIR)
+    codex_root(home).join("archived_sessions")
 }
 
 /// How many directory levels [`list_codex_rollouts`] descends below each of
@@ -1159,6 +1180,37 @@ impl SkillInvocationIndex {
         fs::rename(&tmp_path, cache_path).map_err(|e| e.to_string())
     }
 
+    /// Reports missing, disabled, or unreadable roots and cached file diagnostics.
+    pub fn observations(&self, home: &Path, sources: &DiscoverySources) -> Vec<UsageObservation> {
+        let mut out = Vec::new();
+        for source in SOURCES {
+            let roots = if source.watch.is_empty() {
+                opencode_watch_dirs(home, &opencode_databases(home))
+            } else {
+                source.watch.iter().map(|watch| (watch.dir)(home)).collect()
+            };
+            for path in roots {
+                let reason = if !sources.is_enabled(source.harness) {
+                    Some(format!(
+                        "{} history disabled in discovery settings",
+                        source.harness
+                    ))
+                } else {
+                    fs::read_dir(&path).err().map(|e| e.to_string())
+                };
+                if let Some(reason) = reason {
+                    out.push(UsageObservation { path, reason });
+                }
+            }
+        }
+        out.extend(
+            self.files
+                .values()
+                .flat_map(|entry| entry.observations.clone()),
+        );
+        out
+    }
+
     /// Re-reads every enabled source in `SOURCES` that changed since the
     /// last refresh - transcript files by size/mtime, databases by
     /// [`DatabaseStamp`] - and drops cached entries that no longer exist. A
@@ -1211,6 +1263,10 @@ impl SkillInvocationIndex {
         let listing = list(home);
         if listing.incomplete {
             report.incomplete = true;
+            report.observations.push(UsageObservation {
+                path: owned_root.clone(),
+                reason: "Could not list all history directories".into(),
+            });
         }
         let listed_dirs = listing.listed_dirs;
         let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
@@ -1223,6 +1279,11 @@ impl SkillInvocationIndex {
             };
             let size = meta.len();
             let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+
+            if is_zstd(&path) {
+                self.refresh_compressed(home, &path, &meta, parse, run_budget, report);
+                continue;
+            }
 
             let (start_offset, mut uses, skip_to_newline, mut context) = match self.files.get(&path)
             {
@@ -1276,8 +1337,34 @@ impl SkillInvocationIndex {
                 run_budget,
                 skip_to_newline,
             ) else {
+                report.observations.push(UsageObservation {
+                    path: path.clone(),
+                    reason: "Could not read transcript".into(),
+                });
                 continue;
             };
+            let mut observations = self
+                .files
+                .get(&path)
+                .filter(|_| start_offset > 0)
+                .map(|e| e.observations.clone())
+                .unwrap_or_default();
+            let invalid = text
+                .lines()
+                .filter(|line| serde_json::from_str::<serde_json::Value>(line).is_err())
+                .count();
+            if invalid > 0 {
+                observations.push(UsageObservation {
+                    path: path.clone(),
+                    reason: format!("Skipped {invalid} unparseable lines"),
+                });
+            }
+            if skipping_line || (text.len() as u64) < consumed {
+                observations.push(UsageObservation {
+                    path: path.clone(),
+                    reason: "Skipped oversized or invalid UTF-8 lines".into(),
+                });
+            }
             let parsed_bytes = start_offset + consumed;
             let modified_utc = meta
                 .modified()
@@ -1305,6 +1392,9 @@ impl SkillInvocationIndex {
                     skipping_line,
                     tail_sample,
                     context,
+                    observations,
+                    compressed_complete: false,
+                    skipped_lines: 0,
                 },
             );
         }
@@ -1332,6 +1422,120 @@ impl SkillInvocationIndex {
             )
         });
         report.files_dropped += before - self.files.len();
+    }
+
+    fn refresh_compressed(
+        &mut self,
+        home: &Path,
+        path: &Path,
+        meta: &fs::Metadata,
+        parse: fn(&TranscriptFile, &str, &mut TranscriptContext) -> Vec<SkillInvocation>,
+        run_budget: &mut u64,
+        report: &mut SkillUseRefreshReport,
+    ) {
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let previous = self
+            .files
+            .get(path)
+            .filter(|e| e.size == meta.len() && e.modified == modified);
+        if previous.is_some_and(|e| e.compressed_complete) {
+            return;
+        }
+        if *run_budget == 0 {
+            report.incomplete = true;
+            return;
+        }
+        let mut entry = previous.cloned().unwrap_or(IndexedTranscript {
+            size: meta.len(),
+            modified,
+            parsed_bytes: 0,
+            uses: Vec::new(),
+            skipping_line: false,
+            tail_sample: Vec::new(),
+            context: TranscriptContext::default(),
+            observations: Vec::new(),
+            compressed_complete: false,
+            skipped_lines: 0,
+        });
+        let result = (|| -> io::Result<()> {
+            let file = fs::File::open(path)?;
+            let mut decoder = zstd::stream::read::Decoder::new(file)?;
+            // Zstd has no byte seek. Replay to the decoded offset without buffering it.
+            let skipped = io::copy(
+                &mut decoder.by_ref().take(entry.parsed_bytes),
+                &mut io::sink(),
+            )?;
+            if skipped != entry.parsed_bytes {
+                return Err(io::Error::other(
+                    "Compressed transcript changed while reading",
+                ));
+            }
+            let mut reader = BufReader::new(decoder);
+            let mut remaining = self.file_budget.min(*run_budget);
+            let file = TranscriptFile {
+                home,
+                path,
+                modified: DateTime::<Utc>::from(modified),
+            };
+            while remaining > 0 {
+                let mut line = Vec::new();
+                let n = reader
+                    .by_ref()
+                    .take((MAX_LINE_BYTES as u64 + 1).min(remaining))
+                    .read_until(b'\n', &mut line)?;
+                if n == 0 {
+                    entry.compressed_complete = true;
+                    break;
+                }
+                remaining -= n as u64;
+                *run_budget -= n as u64;
+                report.bytes_read += n as u64;
+                entry.parsed_bytes += n as u64;
+                let terminated = line.last() == Some(&b'\n');
+                if !terminated
+                    && !entry.skipping_line
+                    && line.len() <= MAX_LINE_BYTES
+                    && remaining == 0
+                {
+                    entry.parsed_bytes -= n as u64;
+                    break;
+                }
+                let at_eof = !terminated && reader.fill_buf()?.is_empty();
+                if entry.skipping_line || line.len() > MAX_LINE_BYTES || (!terminated && !at_eof) {
+                    if !entry.skipping_line {
+                        entry.skipped_lines += 1;
+                    }
+                    entry.skipping_line = !terminated;
+                    continue;
+                }
+                match std::str::from_utf8(&line) {
+                    Ok(text) if serde_json::from_str::<serde_json::Value>(text).is_ok() => {
+                        entry.uses.extend(parse(&file, text, &mut entry.context))
+                    }
+                    _ => entry.skipped_lines += 1,
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            report.observations.push(UsageObservation {
+                path: path.to_path_buf(),
+                reason: format!("Could not decode compressed transcript: {e}"),
+            });
+            return;
+        }
+        if entry.skipped_lines > 0 {
+            entry.observations = vec![UsageObservation {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "Skipped {} unparseable or oversized lines",
+                    entry.skipped_lines
+                ),
+            }];
+        }
+        report.files_reparsed += 1;
+        report.incomplete |= !entry.compressed_complete;
+        self.files.insert(path.to_path_buf(), entry);
     }
 
     /// One [`UseReader::Databases`] source's share of `refresh`: lists its
@@ -1365,6 +1569,11 @@ impl SkillInvocationIndex {
                 entry.stamp = stamp;
                 self.databases.insert(path, entry);
                 report.databases_read += 1;
+            } else {
+                report.observations.push(UsageObservation {
+                    path,
+                    reason: "Could not read history database".into(),
+                });
             }
             // A failed read leaves the old cached stamp in place, so the
             // next refresh retries it on its own - `report.incomplete`
