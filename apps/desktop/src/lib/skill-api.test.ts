@@ -1,6 +1,6 @@
 // ============================================================================
 // Skill Studio - skill-api tests
-// skill-api.ts is the one file that names a Tauri command; a wrapper's shape
+// Every frontend invoke must name a registered Tauri command. A wrapper's shape
 // or command string only changes with a test here. These tests pin the
 // wrapper-to-command map against `src-tauri/src/lib.rs`'s registration list
 // read straight off disk, guard the leftover-name allowlist unit 4.4 (#175)
@@ -290,6 +290,22 @@ function registeredCommandNames(libRs: string): Set<string> {
 }
 
 describe("skill-api wrapper set", () => {
+  it("every_frontend_invoke_names_a_registered_command", () => {
+    const sources = import.meta.glob<string>("../**/*.{ts,tsx}", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    });
+    const registered = registeredCommandNames(libRsSource);
+    const missing: string[] = [];
+    for (const [path, source] of Object.entries(sources)) {
+      for (const match of source.matchAll(/\binvoke(?:<[^;]*?>)?\s*\(\s*["']([^"']+)["']/g)) {
+        if (!registered.has(match[1])) missing.push(`${path}: ${match[1]}`);
+      }
+    }
+    expect(missing, missing.join("\n")).toEqual([]);
+  });
+
   it("skill_api_wrapper_set_matches_ops_commands_or_names_the_drift", () => {
     const wrapperNames = exportedWrapperNames(skillApiSource);
     const expectedNames = Object.keys(EXPECTED_WRAPPER_COMMANDS);

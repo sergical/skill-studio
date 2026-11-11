@@ -25,7 +25,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
-use super::skill_agent_runner::{is_executable_file, pick_executable_line};
+use super::executable_path::{is_executable_file, pick_executable_line};
 use super::skill_dto::InstallScope;
 use super::skill_ownership::{load_ownership_ledgers, owner_id_for};
 use super::skill_refresh;
@@ -914,9 +914,8 @@ pub fn summarize_current(
     summary
 }
 
-/// Resolve `gh` on `$PATH` via a login shell, the same way
-/// `skill_agent_runner::resolve_binary` finds harness binaries. `None` when
-/// `gh` isn't installed.
+/// Resolve `gh` on `$PATH` via a login shell. Returns `None` when
+/// `gh` is not installed.
 pub(crate) fn resolve_gh_binary() -> Option<PathBuf> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let output = std::process::Command::new(&shell)

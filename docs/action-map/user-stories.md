@@ -6,8 +6,6 @@ One person doing one thing end to end. Each story says what happens today, what 
 
 The user has several hundred skills (378 at the last count). Most (63%) are global. The skills reach four harnesses, Claude Code, Codex, OpenCode, and pi, through the shared `~/.agents/skills` root and each harness's own folder. The user wants the app to feel like a fast native tool: nothing waits on the UI thread, every write is safe to interrupt, and the app uses the tools already on the machine (the `npx skills` CLI, `git`, `gh`, the `claude plugin` CLI, the user's editor) instead of rebuilding them.
 
-Deferred, kept usable through the API: Ask, Audit, and Test runs (assistant-runs.md) and packs (packs.md). Nothing here depends on them.
-
 ## Index
 
 | #   | Story                                                                         | Slice       | Status                                                              |

@@ -93,7 +93,6 @@ pub(crate) fn fixture_snapshot_owning(dep_dir: &Path) -> SkillSnapshot {
         invocations: Vec::new(),
         heatmap: InvocationHeatmap::default(),
         scanned_at: Utc::now().to_rfc3339(),
-        last_test_by_skill: Default::default(),
         update_check: Default::default(),
         opencode_config_kind: None,
         scan_partial: false,

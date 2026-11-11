@@ -342,7 +342,7 @@ fn cli_source_arg(source: &ParsedSkillSource) -> Option<String> {
 /// guard checks the source against before `build_install_request` runs.
 fn derive_and_validate_name(request: &AddSkillRequest) -> Result<String, String> {
     let name = derive_name(&request.source)?;
-    Ok(super::skill_agent_runner::validate_skill_dir_name(&name)?.to_string())
+    Ok(super::skill_path_validation::validate_skill_dir_name(&name)?.to_string())
 }
 
 /// `request.scope`'s filesystem root (home or project) - shared by

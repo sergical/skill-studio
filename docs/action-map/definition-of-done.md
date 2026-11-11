@@ -4,7 +4,7 @@
 
 Done means every gap in this folder is closed and every check below is green in CI, on a fresh clone, with no single-thread flag.
 
-Scope note, 2026-09-17: assistant runs (Ask, Audit, Test) and packs are deferred from the first release. The six checks below do not change; the per-area checklists for those two areas are not part of the first-release gate. The definition of done per unit of work (primitive, harness adapter, vertical slice, baseline) is in plan.md section 9.
+Assistant runs and packs were removed in #208.
 
 ## The six checks
 
@@ -139,30 +139,6 @@ Each item names a command, file, or grep. Items that repeat the same fix across 
 - [ ] `docs/spec-event-store.md` names the `skill-studio-core` location, not the pre-#73 `skills/event_store.rs` path.
 - [ ] Activity and History read from the same live event feed, or the map records the two as intentionally separate.
 
-### packs
-
-- [ ] `create_skill_pack` records a journal event with an inverse; a git failure after tree build does not leave an orphan directory (shared: journal-every-write).
-- [ ] `update_skill_pack` records a journal event; a late git failure rolls back the tree instead of leaving it half-rewritten.
-- [ ] `publish_skill_pack` compensates or warns the user when a registry write fails after `gh repo create` succeeds.
-- [ ] `delete_skill_pack` shows a success toast and compensates when a registry write fails after directory removal.
-- [ ] The four packs.rs-native write commands take a per-pack lease, not the single global `ForkMutationLock` (shared: per-scope-lease).
-- [ ] The four packs.rs-native write commands move into `skill-studio-core` (shared: one-write-path-in-core).
-- [ ] `publish_skill_pack`'s backend `private` visibility option gets a UI path in `PacksView`.
-
-### assistant-runs
-
-- [ ] `create_skill_scratch_dir` gets a journal event and a direct test; a mid-copy failure does not leave a partial scratch dir (shared: journal-every-write).
-- [ ] `remove_skill_scratch_dir`'s failure surfaces to the user with a retry path, not a swallowed error.
-- [ ] `prepare_skill_run_target` (Worktree) records a journal event; a late failure does not leave an orphan git worktree.
-- [ ] `apply_skill_run_target_diff`'s three-step chain (patch write, apply, worktree removal) is one transaction, or each step has a compensating step.
-- [ ] `discard_skill_run_target` (InPlace) reverts against a stored baseline, not live git status, in one grouped step.
-- [ ] `record_skill_run` takes a lock around the trim step; a write failure between `.json` and `.events.jsonl` does not leave a half pair.
-- [ ] `list_skill_runs` and `read_skill_run_events` surface their errors in the UI instead of showing an empty list indistinguishable from "no runs yet."
-- [ ] An InPlace target is discarded on panel unmount; a Worktree target's "Keep" state and a late `skill-agent://event` after unmount are both handled, not lost.
-- [ ] Runs and targets each take a per-skill or per-target lease, not a single mutex (shared: per-scope-lease).
-- [ ] The logic in `skill_agent_runner.rs` and its sibling files moves into a shared core crate reusable by the CLI and MCP server (shared: one-write-path-in-core).
-- [ ] `skill_run_target_diff`'s `git add -N .` index reset gets a direct test and a journal entry confirming the reset happened.
-
 ### settings-and-projects
 
 - [ ] Every project-folder and editor/key writer records a journal event with a backup and an inverse (shared: journal-every-write).
@@ -213,13 +189,12 @@ This area collects the fixes that repeat across every other area above. Closing 
 | 3     | 2    | First mutation end to end: park and unpark with journal, recovery, and UI   | crash test (park/unpark plan)                                         | park-fork-trial (park_skill, unpark_skill items)                               |
 | 4     | 4    | Remove, then install with own fetch, tree hash, and lockfile, parity vs CLI | parity test (traces 1-5, 8-9), crash test (remove/install plans)      | install, remove-and-update                                                     |
 | 5     | 5    | Update, fork, pull, unfork, invocation edit, harness disable as plans       | parity test (traces 6-7), crash test (all remaining plans)            | park-fork-trial (fork, pull, unfork items), skill-md-editing, enable-and-links |
-| 6     | 2    | Delete old desktop mutation code, port CLI and MCP adapters                 | contention test                                                       | shared-state (one-write-path-in-core, closed), assistant-runs, packs           |
+| 6     | 2    | Delete old desktop mutation code, port CLI and MCP adapters                 | contention test                                                       | shared-state (one-write-path-in-core, closed)                                  |
 | 7     | 2    | Benchmark, doctor, and CI                                                   | doctor pass, all budgets measured                                     | events-and-history, settings-and-projects                                      |
 
 ## What is out of scope
 
 - Packs stay behind the `skill-packs` flag; this work does not turn the flag on.
-- The assistant runs (Ask, Audit, Test) keep their current runner process model; this work journals and leases the run-target and scratch-dir writes but does not rewrite the harness spawn path.
 - The skills.sh proxy server (`apps/server`) is untouched; it holds the API key and stays a separate Node process.
 - The marketing site (`packages/marketing`) is untouched.
 - The CLI (`apps/cli`) and MCP server (`apps/mcp`) adapters gain the new core write path in slice 6, but their own command surfaces are not redesigned here.

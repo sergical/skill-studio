@@ -327,8 +327,6 @@ pub fn run() {
             app.manage(refresh_state);
             app.manage(skills::skill_add_operation::AddSkillOperationState::default());
             app.manage(skills::commands::UpdateAllCancelState::default());
-            app.manage(skills::skill_agent_runner::SkillAgentRunnerState::default());
-            app.manage(skills::skill_run_target::SkillRunTargetState::default());
             skills::skill_update_check::spawn_update_check_loop(app.handle().clone());
             // Unit 6.2: in-app update through tauri-plugin-updater. The
             // engine is managed state so the launch check below, the
@@ -458,9 +456,6 @@ pub fn run() {
             skills::harness_first_run::get_harnesses_choice,
             skills::harness_first_run::save_harnesses_choice,
             skills::harness_first_run::set_harness_enabled,
-            // Agent runs and packs are deferred (unit 4.3): skill_agent_runner,
-            // skill_run_target, skill_run_history, skill_pack, and skill_process still
-            // compile and test, but none of their commands are registered here.
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
