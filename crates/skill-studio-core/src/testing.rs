@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -843,21 +843,14 @@ pub struct FailingFs {
     corrupt_next_new_file_with_mode: AtomicBool,
     fail_rename_after_cross_device: AtomicBool,
     fail_next_remove_file: AtomicBool,
-    /// `-1` means unlimited. Otherwise the number of `write_atomic` calls
-    /// still allowed to succeed before every later call fails; see
-    /// [`Self::fail_write_atomic_after`].
-    write_atomic_budget: AtomicI64,
     fail_next_create_dir: AtomicBool,
     fail_next_symlink: AtomicBool,
-    fail_next_create_dir_all: AtomicBool,
     fail_next_read_capped: AtomicBool,
     fail_next_fsops_rename: AtomicBool,
     fail_next_fsops_exchange: AtomicBool,
     fail_next_fsops_fsync_dir: AtomicBool,
-    fail_next_fsops_device_inode: AtomicBool,
-    /// 1-based call index to fail, or 0 when disarmed. Distinct from
-    /// `fail_next_fsops_device_inode` so a test can target a call that is
-    /// not the next one - e.g. the second `fsops_device_inode` call in a
+    /// 1-based call index to fail, or 0 when disarmed. A test can target a call that is
+    /// not the next one, e.g. the second `fsops_device_inode` call in a
     /// `reverse_steps` run, skipping past `Root::open`'s own probe.
     fail_nth_fsops_device_inode: AtomicU64,
     fsops_device_inode_calls: AtomicU64,
@@ -900,15 +893,12 @@ impl FailingFs {
             corrupt_next_new_file_with_mode: AtomicBool::new(false),
             fail_rename_after_cross_device: AtomicBool::new(false),
             fail_next_remove_file: AtomicBool::new(false),
-            write_atomic_budget: AtomicI64::new(-1),
             fail_next_create_dir: AtomicBool::new(false),
             fail_next_symlink: AtomicBool::new(false),
-            fail_next_create_dir_all: AtomicBool::new(false),
             fail_next_read_capped: AtomicBool::new(false),
             fail_next_fsops_rename: AtomicBool::new(false),
             fail_next_fsops_exchange: AtomicBool::new(false),
             fail_next_fsops_fsync_dir: AtomicBool::new(false),
-            fail_next_fsops_device_inode: AtomicBool::new(false),
             fail_nth_fsops_device_inode: AtomicU64::new(0),
             fsops_device_inode_calls: AtomicU64::new(0),
             fail_nth_fsops_rename: AtomicU64::new(0),
@@ -925,15 +915,6 @@ impl FailingFs {
     /// `inner`; later calls delegate normally again.
     pub fn fail_next_write_atomic(&self) {
         self.fail_next_write_atomic.store(true, Ordering::SeqCst);
-    }
-
-    /// The next `successes` calls to `write_atomic` reach `inner` normally;
-    /// every call after that fails, permanently. Models a multi-step write
-    /// loop (one `write_atomic` per step) that crashes partway through, so a
-    /// test can assert exactly how many steps landed before the failure.
-    pub fn fail_write_atomic_after(&self, successes: u32) {
-        self.write_atomic_budget
-            .store(i64::from(successes), Ordering::SeqCst);
     }
 
     /// The next `rename` call returns an error instead of reaching `inner`;
@@ -990,15 +971,6 @@ impl FailingFs {
         self.fail_next_symlink.store(true, Ordering::SeqCst);
     }
 
-    /// The next `create_dir_all` call returns an error instead of reaching
-    /// `inner`; later calls delegate normally again. Distinct from
-    /// [`Self::fail_next_create_dir`], which targets `fsops_create_dir` (the
-    /// `fsops::swap` quarantine step) rather than the `ensure_dir_all` helper
-    /// a harness switch calls to create its config file's parent directory.
-    pub fn fail_next_create_dir_all(&self) {
-        self.fail_next_create_dir_all.store(true, Ordering::SeqCst);
-    }
-
     /// The next `read_capped` call returns an error instead of reaching
     /// `inner`; later calls delegate normally again. Lets a test simulate a
     /// harness switch's read of its own config file failing after the
@@ -1035,16 +1007,6 @@ impl FailingFs {
     /// mutation) while the caller never sees `Ok`.
     pub fn fail_next_fsops_fsync_dir(&self) {
         self.fail_next_fsops_fsync_dir.store(true, Ordering::SeqCst);
-    }
-
-    /// The next `fsops_device_inode` call returns a non-`NotFound` error
-    /// instead of reaching `inner`; later calls delegate normally again.
-    /// Lets a test simulate a probe that fails for a reason other than "the
-    /// path is absent" - e.g. EACCES or EIO - during reversal's landed
-    /// check, which must not be read as "the mutation never landed".
-    pub fn fail_next_fsops_device_inode(&self) {
-        self.fail_next_fsops_device_inode
-            .store(true, Ordering::SeqCst);
     }
 
     /// The `n`-th `fsops_device_inode` call (1-based, counting every call
@@ -1215,15 +1177,6 @@ impl ScopeFs for FailingFs {
                 "FailingFs: injected write_atomic failure",
             ));
         }
-        let budget = self.write_atomic_budget.load(Ordering::SeqCst);
-        if budget >= 0 {
-            if budget == 0 {
-                return Err(std::io::Error::other(
-                    "FailingFs: injected write_atomic failure (budget exhausted)",
-                ));
-            }
-            self.write_atomic_budget.fetch_sub(1, Ordering::SeqCst);
-        }
         self.inner.write_atomic(guard, path, bytes)
     }
     fn rename(
@@ -1258,11 +1211,6 @@ impl ScopeFs for FailingFs {
         self.inner.remove_file(guard, path)
     }
     fn create_dir_all(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
-        if self.fail_next_create_dir_all.swap(false, Ordering::SeqCst) {
-            return Err(std::io::Error::other(
-                "FailingFs: injected create_dir_all failure",
-            ));
-        }
         self.inner.create_dir_all(guard, path)
     }
     fn symlink(
@@ -1290,15 +1238,6 @@ impl ScopeFs for FailingFs {
             .symlink_relative(guard, target, relative_target, link)
     }
     fn fsops_device_inode(&self, path: &Path) -> std::io::Result<(u64, u64)> {
-        if self
-            .fail_next_fsops_device_inode
-            .swap(false, Ordering::SeqCst)
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "FailingFs: injected fsops_device_inode failure",
-            ));
-        }
         let call = self.fsops_device_inode_calls.fetch_add(1, Ordering::SeqCst) + 1;
         if self.fail_nth_fsops_device_inode.load(Ordering::SeqCst) == call {
             self.fail_nth_fsops_device_inode.store(0, Ordering::SeqCst);

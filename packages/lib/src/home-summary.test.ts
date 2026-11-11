@@ -7,17 +7,11 @@ import {
   attentionGroups,
   homeInvocationCounts,
   homePromptCost,
-  homeSummaryCounts,
   recentlyUsedSkills,
   unusedSkills,
 } from "./home-summary";
 import type { HealthIssue } from "./skill-health";
-import type {
-  Deployment,
-  InstalledSkill,
-  SkillInvocationStats,
-  SkillSnapshot,
-} from "./skill-types";
+import type { Deployment, InstalledSkill, SkillInvocationStats } from "./skill-types";
 
 function fixtureDeployment(overrides: Partial<Deployment> = {}): Deployment {
   return {
@@ -73,87 +67,6 @@ function fixtureStats(overrides: Partial<SkillInvocationStats> = {}): SkillInvoc
     ...overrides,
   };
 }
-
-function fixtureSnapshot(overrides: Partial<SkillSnapshot> = {}): SkillSnapshot {
-  return {
-    skills: [],
-    projects: [],
-    invocations: [],
-    heatmap: { days: {} },
-    scanned_at: "2026-01-01T00:00:00Z",
-    update_check: {
-      checked_at: null,
-      gh_status: "ok",
-      message: null,
-      updates_available: 0,
-      upstream_ahead: [],
-    },
-    ...overrides,
-  };
-}
-
-describe("homeSummaryCounts", () => {
-  it("counts own skills, first-class harnesses present, tracked projects, and 30-day uses", () => {
-    const skills = [
-      fixtureSkill({ name: "a", deployments: [fixtureDeployment({ agent: "Claude Code" })] }),
-      fixtureSkill({ name: "b", deployments: [fixtureDeployment({ agent: "Codex" })] }),
-    ];
-    const snapshot = fixtureSnapshot({
-      skills,
-      projects: ["/repo-a", "/repo-b", "/repo-c"],
-      invocations: [
-        fixtureStats({ skill: "a", last_30_days: 10 }),
-        fixtureStats({ skill: "b", last_30_days: 5 }),
-      ],
-    });
-    expect(homeSummaryCounts(snapshot)).toEqual({
-      skillCount: 2,
-      pluginSkillCount: 0,
-      harnessCount: 2,
-      projectCount: 3,
-      usesIn30Days: 15,
-    });
-  });
-
-  it("excludes plugin-only skills and non-first-class agents from the harness count", () => {
-    const skills = [
-      fixtureSkill({
-        name: "plugin-only",
-        deployments: [
-          fixtureDeployment({
-            agent: "Claude Code",
-            plugin: { name: "acme", harness: "claude-code" },
-          }),
-        ],
-      }),
-      fixtureSkill({
-        name: "own",
-        deployments: [fixtureDeployment({ agent: "Amp" })],
-      }),
-    ];
-    const snapshot = fixtureSnapshot({ skills });
-    const counts = homeSummaryCounts(snapshot);
-    expect(counts.skillCount).toBe(1);
-    expect(counts.harnessCount).toBe(0);
-  });
-
-  it("counts plugin-shipped skills separately, zero when there are none", () => {
-    const skills = [
-      fixtureSkill({ name: "own" }),
-      fixtureSkill({
-        name: "plugin-only",
-        deployments: [
-          fixtureDeployment({
-            agent: "Claude Code",
-            plugin: { name: "acme", harness: "claude-code" },
-          }),
-        ],
-      }),
-    ];
-    expect(homeSummaryCounts(fixtureSnapshot({ skills: [skills[0]] })).pluginSkillCount).toBe(0);
-    expect(homeSummaryCounts(fixtureSnapshot({ skills })).pluginSkillCount).toBe(1);
-  });
-});
 
 describe("recentlyUsedSkills", () => {
   it("returns the n skills with the most recent invocation, newest first", () => {

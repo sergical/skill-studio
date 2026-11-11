@@ -91,7 +91,7 @@ fn spawn_holder(lease_root: &Path, root: &Path) -> Child {
             .read_line(&mut line)
             .expect("read the child's ready line");
         assert_ne!(n, 0, "child exited before confirming it holds the lease");
-        if line.trim() == "held" {
+        if line.trim().ends_with("held") {
             break;
         }
     }

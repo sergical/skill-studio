@@ -445,8 +445,6 @@ pub enum UnrepairedIssueKind {
     Link,
     /// A frontmatter field or value `fix_skill` could not repair.
     Frontmatter,
-    /// Two deployments differ and need the user to reconcile them.
-    Conflict,
     /// Anything else (registry/lockfile drift, quarantine cap, and so on).
     Other,
 }

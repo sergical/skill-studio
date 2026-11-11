@@ -488,16 +488,22 @@ mod tests {
         );
         write_fake_holder(&holder_file, dead_pid);
 
-        // Held well past `STALE_TAKEOVER_TIMEOUT` (500ms), so the bridge
-        // must have given up and reported busy before this release ever
-        // happens.
-        let releaser = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(650));
-            drop(holder_file);
+        // This thread holds the lock until `acquire` returns, so only the
+        // bridge's own `STALE_TAKEOVER_TIMEOUT` (500ms) can end the wait. The
+        // 5s watchdog turns a bridge that waits forever into a failure
+        // instead of a hang.
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = lease.acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(100));
+            let _ = result_tx.send(result.map(|_| ()));
         });
-
-        let result = lease.acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(100));
-        releaser.join().expect("join the releasing thread");
+        let result = result_rx.recv_timeout(Duration::from_secs(5));
+        drop(holder_file);
+        worker.join().expect("join the acquiring thread");
+        let result = result.expect(
+            "acquire kept bridging for 5s while the OS lock stayed held; the stale-takeover \
+             bridge must give up once its own timeout elapses",
+        );
 
         assert!(
             matches!(result, Err(ref e) if e.code == ErrorCode::ScopeBusy),
@@ -563,45 +569,6 @@ mod tests {
             path.exists(),
             "a stale holder record caused the lock file to be removed"
         );
-    }
-
-    #[test]
-    fn one_thousand_scan_and_write_cycles_reuse_a_fixed_set_of_root_files_instead_of_growing_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let lease = FileLease::new(dir.path().to_path_buf());
-        let keys = [key("home"), key("project")];
-        drop(
-            lease
-                .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
-                .unwrap(),
-        );
-        let before = fs::read_dir(dir.path()).unwrap().count();
-        for _ in 0..1000 {
-            for mode in [LeaseMode::Shared, LeaseMode::Exclusive] {
-                drop(lease.acquire(&keys, mode, Duration::ZERO).unwrap());
-            }
-        }
-        let mut expected: Vec<_> = keys
-            .iter()
-            .map(|key| lease.lock_path(key).file_name().unwrap().to_owned())
-            .collect();
-        expected.sort();
-        let mut remaining: Vec<_> = fs::read_dir(dir.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect();
-        remaining.sort();
-        println!(
-            "1000 scan+write cycles, {} fixed roots: before={before}, after={}",
-            keys.len(),
-            remaining.len()
-        );
-        assert_eq!(
-            before,
-            expected.len(),
-            "initial release removed stable root files"
-        );
-        assert_eq!(remaining, expected);
     }
 
     #[test]

@@ -114,11 +114,6 @@
           "const": "frontmatter"
         },
         {
-          "description": "Two deployments differ and need the user to reconcile them.",
-          "type": "string",
-          "const": "conflict"
-        },
-        {
           "description": "Anything else (registry/lockfile drift, quarantine cap, and so on).",
           "type": "string",
           "const": "other"

@@ -479,42 +479,8 @@ impl TreeLookup for GhTreeLookup {
         // trusted, and `--jq` would already have thrown that field away.
         let stdout_bytes = super::gh_cli::run_gh(&self.gh_bin, &["api", &api_path], None)
             .map_err(|e| e.message())?;
-        parse_tree_response(repo, &stdout_bytes)
+        skill_studio_host::parse_tree_response(repo, &stdout_bytes).map_err(|error| error.message)
     }
-}
-
-/// Parses a `gh api repos/<repo>/git/trees/HEAD?recursive=1` response body,
-/// the same shape `skill_studio_host::gh_currency::parse_tree_response`
-/// parses for the core stack's own tree lookup. A `truncated: true` response
-/// means GitHub's recursive listing stopped early - the caller cannot tell
-/// "not in the tree" from "not fetched yet" for the paths past the cutoff,
-/// so this is an error naming the repo rather than a partial (and silently
-/// misleading) map.
-fn parse_tree_response(repo: &str, stdout: &[u8]) -> Result<HashMap<String, String>, String> {
-    let value: serde_json::Value = serde_json::from_slice(stdout)
-        .map_err(|e| format!("{repo}: could not parse tree listing: {e}"))?;
-    if value.get("truncated").and_then(serde_json::Value::as_bool) == Some(true) {
-        return Err(format!("{repo}: tree listing truncated"));
-    }
-    let mut shas = HashMap::new();
-    for entry in value
-        .get("tree")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if entry.get("type").and_then(serde_json::Value::as_str) != Some("tree") {
-            continue;
-        }
-        let (Some(path), Some(sha)) = (
-            entry.get("path").and_then(serde_json::Value::as_str),
-            entry.get("sha").and_then(serde_json::Value::as_str),
-        ) else {
-            continue;
-        };
-        shas.insert(path.to_string(), sha.to_string());
-    }
-    Ok(shas)
 }
 
 /// A repo's fork facts, as `gh api repos/{repo}` reports them.
@@ -1839,9 +1805,11 @@ mod tests {
             "truncated": true,
             "tree": [{"path": "skills/a", "type": "tree", "sha": "sha-a"}]
         });
-        let err = parse_tree_response("obra/write-tests", body.to_string().as_bytes()).unwrap_err();
-        assert!(err.contains("obra/write-tests"));
-        assert!(err.contains("truncated"));
+        let err =
+            skill_studio_host::parse_tree_response("obra/write-tests", body.to_string().as_bytes())
+                .unwrap_err();
+        assert!(err.message.contains("obra/write-tests"));
+        assert!(err.message.contains("truncated"));
     }
 
     /// Flow: the tree endpoint's real JSON shape, `tree[]` entries with a
@@ -1862,7 +1830,9 @@ mod tests {
                 {"path": "skills/b", "type": "tree", "sha": "sha-b"},
             ]
         });
-        let shas = parse_tree_response("obra/write-tests", body.to_string().as_bytes()).unwrap();
+        let shas =
+            skill_studio_host::parse_tree_response("obra/write-tests", body.to_string().as_bytes())
+                .unwrap();
         assert_eq!(shas.get("skills/a"), Some(&"sha-a".to_string()));
         assert_eq!(shas.get("skills/b"), Some(&"sha-b".to_string()));
         assert_eq!(shas.len(), 2);

@@ -28,60 +28,11 @@ fn login_shell_search_dirs() -> Vec<PathBuf> {
         .to_vec()
 }
 
-/// Resolves a bare `program` (no path separator) to the first executable
-/// match under `search_dirs`, and builds the `PATH` its child should search
-/// for a second binary itself (`npx`'s shebang needs `node` on the child's
-/// own `PATH`, not just `argv[0]` resolved). Mirrors
-/// `RealProcessSpawner::resolve_program`/`child_path` in
-/// `skill-studio-host`'s `harness_detect.rs`; kept as a local copy because
-/// those are private methods on that crate's spawner, not a `pub` function
-/// this crate can call.
 fn resolve_program_and_path(program: &str, search_dirs: &[PathBuf]) -> (PathBuf, OsString) {
-    let resolved = if program.contains('/') {
-        PathBuf::from(program)
-    } else {
-        search_dirs
-            .iter()
-            .map(|dir| dir.join(program))
-            .find(|candidate| is_executable_file(candidate))
-            .unwrap_or_else(|| PathBuf::from(program))
-    };
-
-    let inherited = std::env::var_os("PATH").unwrap_or_default();
-    // A dir containing the PATH separator can't be represented in a joined
-    // PATH string; skip just that dir rather than letting `join_paths` fail
-    // and falling back to `inherited` alone, which would silently drop every
-    // other `search_dirs` entry too.
-    let filtered_search_dirs = search_dirs
-        .iter()
-        .filter(|dir| !dir.as_os_str().to_string_lossy().contains(':'))
-        .cloned();
-    // An empty (unset or "") inherited PATH must contribute nothing, not an
-    // empty path segment: `split_paths` on "" yields one empty component,
-    // which `Command` resolves as the child's cwd.
-    let inherited_dirs: Vec<PathBuf> = if inherited.is_empty() {
-        Vec::new()
-    } else {
-        std::env::split_paths(&inherited).collect()
-    };
-    let path =
-        std::env::join_paths(filtered_search_dirs.chain(inherited_dirs)).unwrap_or(inherited);
-    (resolved, path)
-}
-
-fn is_executable_file(path: &Path) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        metadata.is_file()
-    }
+    (
+        skill_studio_host::resolve_program(program, search_dirs),
+        skill_studio_host::child_path(search_dirs),
+    )
 }
 
 /// How long a cancelled or timed-out child gets after SIGTERM before SIGKILL.

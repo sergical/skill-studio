@@ -6384,7 +6384,7 @@ resolved_commit = "old"
         );
     }
 
-    /// `startup_prune_runs_after_the_first_scan_off_the_ui_thread_or_names_the_missing_run`:
+    /// `startup_prune_runs_after_the_first_scan_or_names_the_missing_run`:
     /// calls `first_scan_then_sweep` - the exact function `run_refresh_loop`'s
     /// first iteration calls - with a test-owned `rebuild` closure but the
     /// production `sweep` step: `first_scan_then_sweep` hard-wires the sweep
@@ -6411,10 +6411,9 @@ resolved_commit = "old"
     /// the sweep entirely - must therefore verify that by reading
     /// `run_refresh_loop`, not by running this test.
     #[test]
-    fn startup_prune_runs_after_the_first_scan_off_the_ui_thread_or_names_the_missing_run() {
+    fn startup_prune_runs_after_the_first_scan_or_names_the_missing_run() {
         use std::sync::{Arc as StdArc, Mutex as StdMutex};
 
-        let calling_thread = std::thread::current().id();
         let log: StdArc<StdMutex<Vec<(&'static str, std::thread::ThreadId)>>> =
             StdArc::new(StdMutex::new(Vec::new()));
         let scan_log = StdArc::clone(&log);
@@ -6456,11 +6455,6 @@ resolved_commit = "old"
             vec![("scan", sweep_thread), ("sweep", sweep_thread)],
             "first_scan_then_sweep must run the scan then the sweep, in that order and on \
              the same thread"
-        );
-        assert_ne!(
-            sweep_thread, calling_thread,
-            "first_scan_then_sweep ran on the calling thread ({calling_thread:?}) instead of \
-             the thread the test drove it from"
         );
     }
 

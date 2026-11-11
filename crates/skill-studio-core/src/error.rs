@@ -200,12 +200,6 @@ mod tests {
         assert_eq!(ErrorCode::Cancelled.exit_status(), 130);
     }
 
-    #[test]
-    fn serde_name_equals_as_str() {
-        let json = serde_json::to_string(&ErrorCode::DriftConflict).unwrap();
-        assert_eq!(json, format!("\"{}\"", ErrorCode::DriftConflict.as_str()));
-    }
-
     /// Guards against `as_str()` and the `Serialize` impl drifting apart:
     /// telemetry tags carry `as_str()`, Sentry groups on it, and the CLI
     /// prints the serde name. An exhaustive match over every variant, so a
