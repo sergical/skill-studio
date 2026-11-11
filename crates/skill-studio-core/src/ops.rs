@@ -299,7 +299,7 @@ impl Outcome for crate::dto::ConflictReport {
 }
 impl Outcome for crate::dto::DoctorReport {
     fn found_issues(&self) -> bool {
-        !self.violations.is_empty()
+        !self.violations.is_empty() || self.listing_cost.iter().any(|row| row.warning.is_some())
     }
 }
 impl Outcome for crate::dto::RemoveOutcome {
@@ -619,6 +619,20 @@ pub(crate) fn scan_inner(
     let claude_skills_dir = home.join(".claude").join("skills");
     for skill in skills.values_mut() {
         for deployment in &mut skill.deployments {
+            if deployment.disabled_by.is_none()
+                && (deployment.root.kind == RootKind::Universal
+                    || deployment
+                        .harness
+                        .as_ref()
+                        .is_some_and(|id| id.as_str() == AgentId::CODEX))
+                && disable_sources
+                    .codex_disabled_skill_md
+                    .contains(&codex_path_form(fs, &deployment.path.join("SKILL.md")))
+            {
+                deployment
+                    .disabled_readers
+                    .push(AgentId::from(AgentId::CODEX));
+            }
             let is_global_universal = matches!(deployment.root.kind, RootKind::Universal)
                 && matches!(deployment.root.scope, RootScope::Global);
             if is_global_universal

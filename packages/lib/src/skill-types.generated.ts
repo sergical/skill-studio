@@ -164,6 +164,13 @@ export type FixApplied = {
    */
   event_id: string;
 };
+/**
+ * Absolute path of a tracked project directory.
+ *
+ * Invariant: the path is canonical inside a [`crate::scope::NormalizedScope`].
+ * Wire values are the lexical path the caller gave.
+ */
+export type ProjectRef = string;
 
 /**
  * Flat list of declarations. Trust and enable settings are not evaluated.
@@ -1883,6 +1890,10 @@ export interface UpdateAllItem {
  */
 export interface DoctorReport {
   /**
+   * Estimated skill listing cost per harness and session scope.
+   */
+  listing_cost: ListingCost[];
+  /**
    * Every violation found; empty means a healthy scope.
    */
   violations: DoctorViolation[];
@@ -1893,6 +1904,75 @@ export interface DoctorReport {
    * so this does not add them in.
    */
   checked: number;
+}
+/**
+ * Listing cost for one harness in one session scope.
+ */
+export interface ListingCost {
+  /**
+   * Kebab-case harness identifier, for example `claude-code` or `open-code`.
+   *
+   * Invariant: the string is the serde wire name used by the desktop app
+   * today. `open-code` is canonical; `opencode` is only a CLI binary name and
+   * is never stored in an `AgentId`.
+   */
+  harness: string;
+  /**
+   * Project sessions include global skills. Identity rules depend on the harness.
+   */
+  scope:
+    | {
+        scope: "global";
+      }
+    | {
+        scope: "project";
+        project: ProjectRef;
+      };
+  /**
+   * Number of model-visible skill entries.
+   */
+  listed_skills: number;
+  /**
+   * UTF-16 characters (UTF-8 bytes for Codex), divided by four and rounded up.
+   */
+  estimated_tokens_chars_div_4: number;
+  /**
+   * Budget in estimated tokens, or null when not verified.
+   */
+  limit_tokens: number | null;
+  /**
+   * Setting file path, default, or reason the limit is unknown.
+   */
+  limit_source: string;
+  /**
+   * Context size used for a fractional budget.
+   */
+  context_window_tokens: number | null;
+  /**
+   * Whether a verified fallback was used instead of a session context size.
+   */
+  uses_default_context_window: boolean;
+  /**
+   * `over_limit` or `near_limit` at 80 percent, otherwise null.
+   */
+  warning: string | null;
+  /**
+   * The five largest entries, with names as a stable tie break.
+   */
+  top_skills: ListingSkillCost[];
+}
+/**
+ * One skill's contribution to the listing.
+ */
+export interface ListingSkillCost {
+  /**
+   * Model-visible name.
+   */
+  name: string;
+  /**
+   * UTF-16 characters (UTF-8 bytes for Codex), divided by four and rounded up.
+   */
+  estimated_tokens_chars_div_4: number;
 }
 /**
  * One violation of a [`crate::doctor::DoctorInvariant`] found by `doctor`,

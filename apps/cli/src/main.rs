@@ -362,11 +362,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Run every lifecycle invariant in `docs/flows.md`
-    /// over the whole scope; writes nothing. Exit code 0 with an empty
-    /// violation list on a healthy home, 1 when any violation is found
-    /// (the same "found something" code `scan`/`diagnose`/`fix` use).
-    #[command(hide = true)]
+    /// Check skill state and model listing budgets. This writes nothing.
     Doctor {
         #[command(flatten)]
         scope: ScopeArgs,

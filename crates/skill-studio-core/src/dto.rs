@@ -537,6 +537,9 @@ fn doctor_error_severity() -> Severity {
 /// command's own rollback logic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DoctorReport {
+    /// Estimated skill listing cost per harness and session scope.
+    #[serde(default)]
+    pub listing_cost: Vec<crate::listing_cost::ListingCost>,
     /// Every violation found; empty means a healthy scope.
     pub violations: Vec<DoctorViolation>,
     /// Skills the pass examined for invariants 1-4 (link, registry,
