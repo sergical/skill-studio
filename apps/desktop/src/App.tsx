@@ -1,3 +1,4 @@
+import { useParkRecovery } from "./hooks/useParkRecovery";
 // ============================================================================
 // Skill Studio - Main Application
 // Shell: Sidebar + main view (Home, Skills, Activity, or a full-page
@@ -82,6 +83,8 @@ function App() {
   const setTrackedProjects = useAppStore((state) => state.setTrackedProjects);
   const setKnownSkillNames = useAppStore((state) => state.setKnownSkillNames);
   const addToast = useAppStore((state) => state.addToast);
+
+  useParkRecovery(addToast);
 
   const onSelectSkill = (name: string, deploymentPath?: string) => openSkill(name, deploymentPath);
 

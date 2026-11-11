@@ -840,12 +840,20 @@ impl ScopeFs for FixtureFs {
     }
 }
 
+type StageHook = Box<dyn FnOnce(&Path) -> std::io::Result<()> + Send>;
+
 type FsHook = Box<dyn FnOnce() -> std::io::Result<()> + Send>;
 
 /// A filesystem wrapper with deterministic fault and race injection.
 pub struct FailingFs {
     full_sync_calls: AtomicU64,
     after_full_sync: Mutex<Option<FsHook>>,
+    after_new_file: Mutex<Option<(PathBuf, FsHook)>>,
+    after_inode: Mutex<Option<(PathBuf, FsHook)>>,
+    before_stage_create: Mutex<Option<StageHook>>,
+    before_create_for: Mutex<Option<(PathBuf, FsHook)>>,
+    before_rename_from: Mutex<Option<(PathBuf, FsHook)>>,
+    after_read_for: Mutex<Option<(PathBuf, FsHook)>>,
     fail_next_full_sync: AtomicBool,
     preserves_modes: AtomicBool,
     before_write_for: Mutex<Option<(PathBuf, FsHook)>>,
@@ -908,6 +916,12 @@ impl FailingFs {
         FailingFs {
             full_sync_calls: AtomicU64::new(0),
             after_full_sync: Mutex::new(None),
+            after_new_file: Mutex::new(None),
+            after_inode: Mutex::new(None),
+            before_stage_create: Mutex::new(None),
+            before_create_for: Mutex::new(None),
+            before_rename_from: Mutex::new(None),
+            after_read_for: Mutex::new(None),
             fail_next_full_sync: AtomicBool::new(false),
             preserves_modes: AtomicBool::new(true),
             before_write_for: Mutex::new(None),
@@ -978,6 +992,59 @@ impl FailingFs {
         hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
     ) {
         *self.after_rename_from.lock().expect("hook lock") = Some((path, Box::new(hook)));
+    }
+
+    /// Runs once after bytes have been read from the named file.
+    pub fn after_read_once(
+        &self,
+        path: PathBuf,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.after_read_for.lock().expect("hook lock") = Some((path, Box::new(hook)));
+    }
+
+    /// Runs once at the named filesystem boundary.
+    pub fn before_rename_once(
+        &self,
+        path: PathBuf,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.before_rename_from.lock().expect("hook lock") = Some((path, Box::new(hook)));
+    }
+
+    /// Runs before creating a hidden Park staging directory, with its generated path.
+    pub fn before_stage_create_once(
+        &self,
+        hook: impl FnOnce(&Path) -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.before_stage_create.lock().expect("hook lock") = Some(Box::new(hook));
+    }
+
+    /// Runs once at the named filesystem boundary.
+    pub fn before_create_once(
+        &self,
+        path: PathBuf,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.before_create_for.lock().expect("hook lock") = Some((path, Box::new(hook)));
+    }
+
+    /// Runs after exclusive file creation, before the caller can inspect its path.
+    pub fn after_new_file_once(
+        &self,
+        path: PathBuf,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.after_new_file.lock().expect("hook lock") = Some((path, Box::new(hook)));
+    }
+
+    /// Runs after reading identity, before the caller can act on that identity.
+    pub fn after_inode_once(
+        &self,
+        path: PathBuf,
+        hook: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    ) {
+        *self.after_inode.lock().expect("hook lock") = Some((path, Box::new(hook)));
     }
 
     fn run_hook(slot: &Mutex<Option<(PathBuf, FsHook)>>, path: &Path) -> std::io::Result<()> {
@@ -1239,7 +1306,9 @@ impl ScopeFs for FailingFs {
                 "FailingFs: injected read_capped failure",
             ));
         }
-        self.inner.read_capped(path, max_bytes)
+        let bytes = self.inner.read_capped(path, max_bytes)?;
+        Self::run_hook(&self.after_read_for, path)?;
+        Ok(bytes)
     }
     fn read_prefix(&self, path: &Path, limit: u64) -> std::io::Result<(Vec<u8>, bool)> {
         let mut target = self
@@ -1299,6 +1368,7 @@ impl ScopeFs for FailingFs {
             }
             return Err(std::io::Error::from_raw_os_error(18));
         }
+        Self::run_hook(&self.before_rename_from, from.as_path())?;
         self.inner.rename(guard, from, to)?;
         Self::run_hook(&self.after_rename_from, from.as_path())
     }
@@ -1311,6 +1381,7 @@ impl ScopeFs for FailingFs {
         self.inner.remove_file(guard, path)
     }
     fn create_dir_all(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
+        Self::run_hook(&self.before_create_for, path.as_path())?;
         if self.fail_next_create_dir_all.swap(false, Ordering::SeqCst) {
             return Err(std::io::Error::other(
                 "FailingFs: injected create_dir_all failure",
@@ -1360,8 +1431,11 @@ impl ScopeFs for FailingFs {
                 "FailingFs: injected fsops_device_inode failure",
             ));
         }
-        self.inner.fsops_device_inode(path)
+        let identity = self.inner.fsops_device_inode(path)?;
+        Self::run_hook(&self.after_inode, path)?;
+        Ok(identity)
     }
+
     fn fsops_fsync_file(&self, path: &Path) -> std::io::Result<()> {
         self.inner.fsops_fsync_file(path)
     }
@@ -1395,6 +1469,16 @@ impl ScopeFs for FailingFs {
         self.inner.fsops_fsync_dir(path)
     }
     fn fsops_create_dir(&self, path: &Path) -> std::io::Result<()> {
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with(".park-stage-"))
+        {
+            let hook = self.before_stage_create.lock().expect("hook lock").take();
+            if let Some(hook) = hook {
+                hook(path)?;
+            }
+        }
+        Self::run_hook(&self.before_create_for, path)?;
         if self.fail_next_create_dir.swap(false, Ordering::SeqCst) {
             return Err(std::io::Error::other(
                 "FailingFs: injected fsops_create_dir failure",
@@ -1426,7 +1510,9 @@ impl ScopeFs for FailingFs {
                 .inner
                 .fsops_write_new_file_with_mode(path, &flipped, mode);
         }
-        self.inner.fsops_write_new_file_with_mode(path, bytes, mode)
+        self.inner
+            .fsops_write_new_file_with_mode(path, bytes, mode)?;
+        Self::run_hook(&self.after_new_file, path)
     }
     fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
         if self.fail_next_fsops_rename.swap(false, Ordering::SeqCst) {

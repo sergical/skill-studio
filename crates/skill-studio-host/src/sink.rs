@@ -29,6 +29,9 @@ mod tests {
 
     #[test]
     fn noop_sink_accepts_every_notice_without_panicking() {
-        NoopSink.notify(CoreNotice::Recovered { events: Vec::new() });
+        NoopSink.notify(CoreNotice::Recovered {
+            events: Vec::new(),
+            retained_quarantines: Vec::new(),
+        });
     }
 }

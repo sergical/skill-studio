@@ -149,6 +149,10 @@ impl SqliteHistoryStore {
             .map_err(sql_err)?;
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(sql_err)?;
+        conn.pragma_update(None, "synchronous", "FULL")
+            .map_err(sql_err)?;
+        conn.pragma_update(None, "fullfsync", true)
+            .map_err(sql_err)?;
         // `reverted_by` is claimed before the restore row that references it
         // exists (see `claim_revert`), so foreign key enforcement on that
         // column must stay off - matches the desktop's `event_store::open`.
@@ -429,6 +433,51 @@ impl HistoryStore for SqliteHistoryStore {
         Ok(())
     }
 
+    fn record_move_copy(
+        &self,
+        _guard: &ExclusiveGuard,
+        from: &Path,
+        to: &Path,
+        quarantine: &Path,
+        phase: &str,
+        bytes: u64,
+    ) -> Result<(), CoreError> {
+        let entry = serde_json::json!({
+            "phase": phase, "from": from, "to": to, "path": quarantine, "bytes": bytes,
+        });
+        let changed = self.conn.execute(
+            "UPDATE events SET payload = json_insert(json_insert(payload, '$.quarantines', json('[]')), '$.quarantines[#]', json(?1))
+             WHERE id = (SELECT id FROM events WHERE status = 'pending' ORDER BY rowid DESC LIMIT 1)",
+            params![entry.to_string()],
+        ).map_err(sql_err)?;
+        if changed != 1 {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "quarantine requires a pending event",
+            ));
+        }
+        for parent in [Some(self.root.as_path()), self.root.parent()]
+            .into_iter()
+            .flatten()
+        {
+            fs::File::open(parent)
+                .and_then(|dir| dir.sync_all())
+                .map_err(|e| CoreError::io(parent, e))?;
+        }
+        Ok(())
+    }
+
+    fn acknowledge_recovery(
+        &self,
+        _guard: &ExclusiveGuard,
+        ids: &[EventId],
+    ) -> Result<(), CoreError> {
+        for id in ids {
+            self.conn.execute("UPDATE events SET payload = json_set(payload, '$.recovery_acknowledged', json('true')) WHERE id = ?1 AND status IN ('interrupted', 'failed')", params![id.0]).map_err(sql_err)?;
+        }
+        Ok(())
+    }
+
     fn finish(
         &mut self,
         _guard: &ExclusiveGuard,
@@ -705,7 +754,14 @@ fn row_from(row: &rusqlite::Row) -> rusqlite::Result<EventRecord> {
         )
     })?;
     let harness = harness
-        .map(|h| AgentId::parse(&h))
+        .map(|h| {
+            // Older desktop releases stored display names in this column.
+            AgentId::parse_harness(match h.as_str() {
+                "Claude Code" => AgentId::CLAUDE_CODE,
+                "Grok Build" => AgentId::GROK_BUILD,
+                _ => &h,
+            })
+        })
         .transpose()
         .map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(

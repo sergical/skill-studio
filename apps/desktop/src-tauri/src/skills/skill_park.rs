@@ -206,7 +206,7 @@ pub async fn park_skills(
         let results = run_batch("Park", &targets, |rt, ctx, deployment_id| {
             let result = ops::park(rt, ctx, &ParkRequest { deployment_id });
             let envelope = ResultEnvelope::from_result(Operation::Park, &rt.scope, ctx, result);
-            super::core_runtime::to_command_result(envelope).map(|_| ())
+            bulk_move_result(envelope, |outcome| outcome.retained_copies)
         })?;
         emit_snapshot_for_names(&state_app, "park_skills", written_names(&targets, &results));
         Ok(results)
@@ -224,7 +224,7 @@ pub async fn unpark_skills(
         let results = run_batch("Unpark", &targets, |rt, ctx, deployment_id| {
             let result = ops::unpark(rt, ctx, &UnparkRequest { deployment_id });
             let envelope = ResultEnvelope::from_result(Operation::Unpark, &rt.scope, ctx, result);
-            super::core_runtime::to_command_result(envelope).map(|_| ())
+            bulk_move_result(envelope, |outcome| outcome.retained_copies)
         })?;
         emit_snapshot_for_names(
             &state_app,
@@ -248,18 +248,44 @@ fn written_names(targets: &[LifecycleTarget], results: &[BulkTargetResult]) -> V
     skill_names_for_deployments(&ids)
 }
 
+fn bulk_move_result<T: skill_studio_core::ops::Outcome>(
+    envelope: ResultEnvelope<T>,
+    copies: impl FnOnce(T) -> Vec<skill_studio_core::dto::RetainedCopy>,
+) -> BulkTargetResult {
+    let retained_copies = envelope.recovery.retained_copies.clone();
+    match super::core_runtime::to_command_result(envelope) {
+        Ok(outcome) => BulkTargetResult {
+            error: None,
+            retained_copies: copies(outcome),
+        },
+        Err(error) => BulkTargetResult {
+            error: Some(error),
+            retained_copies,
+        },
+    }
+}
+
 fn run_batch(
     action: &'static str,
     targets: &[LifecycleTarget],
-    op: impl Fn(&skill_studio_core::ports::Runtime, &OpContext, DeploymentId) -> Result<(), String>,
+    op: impl Fn(&skill_studio_core::ports::Runtime, &OpContext, DeploymentId) -> BulkTargetResult,
 ) -> Result<Vec<BulkTargetResult>, String> {
     let start = std::time::Instant::now();
     let rt = super::core_runtime::build_runtime_write()?;
-    let results = BulkTargetResult::collect(targets, |target| {
-        let deployment_id = deployment_id_from_target(target, action)?;
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
-        op(&rt, &ctx, deployment_id)
-    });
+    let results = targets
+        .iter()
+        .map(|target| match deployment_id_from_target(target, action) {
+            Ok(deployment_id) => {
+                let ctx =
+                    OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+                op(&rt, &ctx, deployment_id)
+            }
+            Err(error) => BulkTargetResult {
+                error: Some(error),
+                retained_copies: Vec::new(),
+            },
+        })
+        .collect();
     eprintln!(
         "skill refresh: batch {} {} targets in {} ms",
         action.to_lowercase(),
@@ -304,12 +330,61 @@ mod tests {
     fn written_names_skips_targets_whose_write_failed() {
         let targets = [target(ALPHA), target(BETA)];
         let results = [
-            BulkTargetResult { error: None },
+            BulkTargetResult {
+                error: None,
+                retained_copies: Vec::new(),
+            },
             BulkTargetResult {
                 error: Some("refused".to_string()),
+                retained_copies: Vec::new(),
             },
         ];
 
         assert_eq!(written_names(&targets, &results), vec!["alpha".to_string()]);
     }
+}
+
+/// Returns durable interrupted-move notices for the startup toast.
+#[tauri::command]
+pub async fn park_recovery_notices() -> Result<skill_studio_core::events::RecoveryReport, String> {
+    let rt = super::core_runtime::build_runtime_write()?;
+    let guard = skill_studio_core::ports::acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)
+        .map_err(|e| e.message)?;
+    let mut store = rt
+        .ports
+        .history
+        .open(
+            &rt.scope,
+            skill_studio_core::ports::HistoryAccess::ReadWrite,
+        )
+        .map_err(|e| e.message)?
+        .ok_or("history is unavailable")?;
+    skill_studio_core::events::recover_interrupted(
+        &guard,
+        store.as_mut(),
+        rt.ports.fs.as_ref(),
+        rt.ports.sink.as_ref(),
+    )
+    .map_err(|e| e.message)
+}
+
+#[tauri::command]
+pub async fn acknowledge_park_recovery(
+    events: Vec<skill_studio_core::identity::EventId>,
+) -> Result<(), String> {
+    let rt = super::core_runtime::build_runtime_write()?;
+    let guard = skill_studio_core::ports::acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)
+        .map_err(|e| e.message)?;
+    let store = rt
+        .ports
+        .history
+        .open(
+            &rt.scope,
+            skill_studio_core::ports::HistoryAccess::ReadWrite,
+        )
+        .map_err(|e| e.message)?
+        .ok_or("history is unavailable")?;
+    store
+        .acknowledge_recovery(&guard, &events)
+        .map_err(|e| e.message)
 }

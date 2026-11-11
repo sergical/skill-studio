@@ -397,8 +397,8 @@ pub trait ScopeFs: Send + Sync {
             "directory modes are not supported",
         ))
     }
-    /// Probes whether the destination preserves Unix modes. May create and
-    /// remove a temporary directory under `path`.
+    /// Checks mode support on an exclusively created staging directory.
+    /// Restores its mode and creates no probe files.
     fn fsops_preserves_modes(&self, _path: &Path) -> std::io::Result<bool> {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
@@ -635,6 +635,32 @@ pub trait HistoryStore: Send {
         id: &EventId,
         draft: &EventDraft,
     ) -> Result<(), CoreError>;
+    /// Durably records a retained cross-volume backup before its rename.
+    fn record_move_copy(
+        &self,
+        _guard: &ExclusiveGuard,
+        _from: &Path,
+        _to: &Path,
+        _quarantine: &Path,
+        _phase: &str,
+        _bytes: u64,
+    ) -> Result<(), CoreError> {
+        Err(CoreError::new(
+            crate::error::ErrorCode::Unsupported,
+            "durable quarantine journal is unavailable",
+        ))
+    }
+    /// Acknowledges a recovery notice after explicit user action.
+    fn acknowledge_recovery(
+        &self,
+        _guard: &ExclusiveGuard,
+        _ids: &[EventId],
+    ) -> Result<(), CoreError> {
+        Err(CoreError::new(
+            ErrorCode::Unsupported,
+            "recovery acknowledgement is unavailable",
+        ))
+    }
     /// Sets the final status and the post-mutation fingerprint.
     fn finish(
         &mut self,
@@ -984,6 +1010,8 @@ pub enum CoreNotice {
     Recovered {
         /// Ids now marked `interrupted`.
         events: Vec<EventId>,
+        /// Retained backups from interrupted cross-volume moves.
+        retained_quarantines: Vec<PathBuf>,
     },
 }
 
@@ -1157,6 +1185,8 @@ pub struct OpContext {
     pub cancel: Arc<dyn CancelToken>,
     /// Where the op function in progress files its [`crate::timing::OpTiming`].
     pub timing: std::sync::Mutex<Option<crate::timing::OpTiming>>,
+    /// Durable recovery records to include in the response.
+    pub recovery: std::sync::Mutex<crate::events::RecoveryReport>,
     /// How many [`Runtime::run`] calls are currently nested through this
     /// context - `0` outside any call, `1` for a top-level op, `2+` for an
     /// op called from inside another op's own body. Not `pub`: only
@@ -1189,6 +1219,7 @@ impl OpContext {
             correlation_id,
             cancel,
             timing: std::sync::Mutex::new(None),
+            recovery: std::sync::Mutex::new(Default::default()),
             depth: std::sync::atomic::AtomicUsize::new(0),
             nested: std::sync::Mutex::new(Vec::new()),
             root_start: std::sync::Mutex::new(None),
@@ -1459,6 +1490,9 @@ impl MutationSession {
             rt.ports.fs.as_ref(),
             rt.ports.sink.as_ref(),
         )?;
+        *ctx.recovery
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = recovery.clone();
         // Sweeps `install`'s `Copy` staging journal for a plan an earlier
         // crash left `Pending`, per `docs/action-map/plan.md`'s Correction
         // for units 3.5/3.6/3.9: nothing wires a journal into `Ports` yet,
@@ -1473,7 +1507,7 @@ impl MutationSession {
             crate::journal::FsJournal::new(install_journal_root, rt.ports.fs.clone());
         let reconciliation =
             crate::journal::reconcile(&install_journal, &guard, rt.ports.fs.as_ref())?;
-        let repaired = !recovery.interrupted.is_empty()
+        let repaired = recovery.reconciled_pending
             || !recovery.completed.is_empty()
             || !reconciliation.reversed.is_empty()
             || !reconciliation.interrupted.is_empty()

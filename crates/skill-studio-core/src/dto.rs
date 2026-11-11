@@ -689,6 +689,9 @@ pub struct ParkCheck {
 /// Result of `park`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ParkOutcome {
+    /// Retained source copies. Open handles can still change these bytes.
+    #[serde(default)]
+    pub retained_copies: Vec<RetainedCopy>,
     /// The `park` event.
     pub event_id: EventId,
     /// The deployment that was parked.
@@ -699,6 +702,15 @@ pub struct ParkOutcome {
     /// ran `park_check` first puts its git warning here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+/// A retained cross-volume copy. Sizes are snapshots; open writers can change them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RetainedCopy {
+    /// Absolute path to the retained folder.
+    pub path: PathBuf,
+    /// Total file bytes at the snapshot; an open writer can change this later.
+    pub bytes: u64,
 }
 
 /// Request to delete one real copy: a parked copy or a live one. Undo is in
@@ -732,6 +744,9 @@ pub struct UnparkRequest {
 /// Result of `unpark`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UnparkOutcome {
+    /// Retained source copies. Open handles can still change these bytes.
+    #[serde(default)]
+    pub retained_copies: Vec<RetainedCopy>,
     /// The `unpark` event.
     pub event_id: EventId,
     /// The deployment that was restored.

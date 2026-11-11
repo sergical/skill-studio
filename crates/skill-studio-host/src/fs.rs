@@ -11,48 +11,21 @@ use skill_studio_core::ports::{
     DirEntryFacts, ExclusiveGuard, FileFacts, FileKind, ScopeFs, ScopedPath,
 };
 
-fn probe_mode_preservation(parent: &Path) -> io::Result<bool> {
-    let dir = parent.join(format!(
-        ".park-mode-probe-{}-{}",
-        std::process::id(),
-        TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::create_dir(&dir)?;
-    let path = dir.join("file");
-    let checked = (|| {
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
-        for mode in [0o640, 0o751] {
-            if !mode_change_supported(file.set_permissions(fs::Permissions::from_mode(mode)))?
-                || file.metadata()?.mode() & 0o7777 != mode
-            {
-                return Ok(false);
-            }
-        }
-        for mode in [0o710, 0o750] {
-            if !mode_change_supported(fs::set_permissions(&dir, fs::Permissions::from_mode(mode)))?
-                || fs::metadata(&dir)?.mode() & 0o7777 != mode
+fn probe_mode_preservation(path: &Path) -> io::Result<bool> {
+    let dir = fs::File::open(path)?;
+    let original = dir.metadata()?.permissions();
+    let result = (|| {
+        for mode in [0o700, 0o750] {
+            if !mode_change_supported(dir.set_permissions(fs::Permissions::from_mode(mode)))?
+                || dir.metadata()?.mode() & 0o7777 != mode
             {
                 return Ok(false);
             }
         }
         Ok(true)
     })();
-    let cleanup = fs::remove_file(&path)
-        .or_else(|e| {
-            if e.kind() == io::ErrorKind::NotFound {
-                Ok(())
-            } else {
-                Err(e)
-            }
-        })
-        .and_then(|()| fs::remove_dir(&dir));
-    match checked {
-        Ok(supported) => cleanup.map(|()| supported),
-        Err(e) => Err(e),
-    }
+    let restored = mode_change_supported(dir.set_permissions(original))?;
+    result.map(|supported| supported && restored)
 }
 
 fn mode_change_supported(result: io::Result<()>) -> io::Result<bool> {
@@ -617,5 +590,21 @@ mod tests {
             "fsops_symlink must create a real link pointing at the target, not return Ok \
              without creating anything"
         );
+    }
+}
+
+#[cfg(test)]
+mod probe_races {
+    use super::*;
+    #[test]
+    fn stage_mode_check_restores_mode_without_probe_files_or_accumulates_files() {
+        let parent = tempfile::tempdir().unwrap();
+        fs::write(parent.path().join(".park-mode-probe-1-0"), b"foreign").unwrap();
+        let before = fs::metadata(parent.path()).unwrap().mode();
+        for _ in 0..3 {
+            assert!(probe_mode_preservation(parent.path()).unwrap());
+        }
+        assert_eq!(fs::metadata(parent.path()).unwrap().mode(), before);
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 1);
     }
 }

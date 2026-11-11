@@ -315,6 +315,12 @@ pub struct ResultEnvelope<T> {
     pub data: Option<T>,
     /// Errors, empty on `Ok`.
     pub errors: Vec<ErrorEntry>,
+    /// Recovery records retained across calls, including calls after a lost response.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::events::RecoveryReport::is_empty"
+    )]
+    pub recovery: crate::events::RecoveryReport,
     /// Request correlation id.
     pub correlation_id: CorrelationId,
     /// History event created by the call, when one was.
@@ -361,6 +367,11 @@ impl<T: Outcome> ResultEnvelope<T> {
             correlation_id: ctx.correlation_id.clone(),
             event_id,
             timings: ctx.take_timing(),
+            recovery: ctx
+                .recovery
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
         }
     }
 }
@@ -5193,7 +5204,77 @@ pub use crate::ops_update::{update, update_all, update_split_copies};
 /// per-skill link into the folder (any harness) is removed first, then the
 /// directory is renamed into `.agents/skills-parked`.
 pub fn park(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOutcome, CoreError> {
-    rt.run(Operation::Park, ctx, || park_body(rt, ctx, req))
+    rt.run(Operation::Park, ctx, || {
+        let result = park_body(rt, ctx, req);
+        if result.is_err() {
+            report_failed_move(rt, ctx, &req.deployment_id);
+        }
+        result
+    })
+}
+
+fn report_failed_move(rt: &Runtime, ctx: &OpContext, deployment: &DeploymentId) {
+    let Ok(Some(store)) = rt
+        .ports
+        .history
+        .open(&rt.scope, crate::ports::HistoryAccess::ReadIfExists)
+    else {
+        return;
+    };
+    let Ok(rows) = store.list(&crate::events::EventFilter {
+        skill: deployment.skill_name(),
+        limit: 1,
+        ..Default::default()
+    }) else {
+        return;
+    };
+    let Some(row) = rows.first().filter(|row| {
+        row.payload
+            .get("deployment_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(deployment.as_str())
+    }) else {
+        return;
+    };
+    let (paths, copies) = crate::events::retained_move_data(rt.ports.fs.as_ref(), &row.payload);
+    if row.payload.get("quarantines").is_some() && !paths.is_empty() {
+        let mut report = ctx
+            .recovery
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !report.interrupted.contains(&row.id) {
+            report.interrupted.push(row.id.clone());
+        }
+        report.retained_quarantines.extend(paths);
+        report.retained_copies.extend(copies);
+    }
+}
+
+fn retained_move_copies(
+    session: &crate::ports::MutationSession,
+    rt: &Runtime,
+    id: &EventId,
+) -> Result<Vec<crate::dto::RetainedCopy>, CoreError> {
+    let Some(row) = session.store.get(id)? else {
+        return Ok(Vec::new());
+    };
+    Ok(row
+        .payload
+        .get("quarantines")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|entry| {
+            entry.get("phase").and_then(serde_json::Value::as_str) == Some("retain_before_rename")
+        })
+        .filter_map(|entry| {
+            Some(crate::dto::RetainedCopy {
+                path: PathBuf::from(entry.get("path")?.as_str()?),
+                bytes: entry.get("bytes")?.as_u64()?,
+            })
+        })
+        .filter(|copy| rt.ports.fs.symlink_metadata(&copy.path).is_ok())
+        .collect())
 }
 
 fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOutcome, CoreError> {
@@ -5212,6 +5293,7 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
 
     let step_start = clock.monotonic();
     let parked = park_found_copy(rt, ctx, &mut session, &deployment, &skill)?;
+    let retained_copies = retained_move_copies(&session, rt, &parked.event_id)?;
     session.finish(rt, ctx);
     let write_step = crate::timing::step(clock, "remove_link_and_rename", step_start);
     ctx.record_timing(crate::timing::op_timing(
@@ -5221,6 +5303,7 @@ fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOut
         vec![begin_step, write_step],
     ));
     Ok(ParkOutcome {
+        retained_copies,
         event_id: parked.event_id,
         deployment_id: deployment.id,
         parked_path: parked.parked_dir,
@@ -5438,8 +5521,6 @@ pub(crate) fn park_found_copy(
     // What this attempt created, so a failed move leaves no empty key folder.
     let mut created_dirs: Vec<PathBuf> = Vec::new();
     let mut written_files: Vec<PathBuf> = Vec::new();
-    // Set when a failed `dotagents remove` could not move the copy back: the
-    // marker that names its origin is then the only record of where it goes.
     let mut copy_stays_parked = false;
     let write_result = (|| -> Result<(), CoreError> {
         for (link, scoped_link) in links.iter().zip(&scoped_links) {
@@ -5480,7 +5561,11 @@ pub(crate) fn park_found_copy(
             .map_err(|e| CoreError::io(&marker, std::io::Error::other(e)))?;
             write_marker(marker, &format!("{relative}\n{owner}"), true)?;
         }
-        crate::park_move::move_dir(rt, session, &deployment.path, &parked_dir)?;
+        if let Err(failure) = crate::park_move::move_dir(rt, session, &deployment.path, &parked_dir)
+        {
+            copy_stays_parked = failure.destination_published;
+            return Err(failure.error);
+        }
         if let Some(plan) = &dotagents {
             if let Err(e) = crate::ops_park_dotagents::unlist(
                 rt,
@@ -5500,7 +5585,7 @@ pub(crate) fn park_found_copy(
                     message = format!(
                         "{message} The copy could not be moved back and is still at {}: {}",
                         parked_dir.display(),
-                        move_error.message
+                        move_error.error.message
                     );
                 }
                 if let Err(files_error) = &files_back {
@@ -5586,7 +5671,13 @@ pub fn unpark(
     ctx: &OpContext,
     req: &UnparkRequest,
 ) -> Result<UnparkOutcome, CoreError> {
-    rt.run(Operation::Unpark, ctx, || unpark_body(rt, ctx, req))
+    rt.run(Operation::Unpark, ctx, || {
+        let result = unpark_body(rt, ctx, req);
+        if result.is_err() {
+            report_failed_move(rt, ctx, &req.deployment_id);
+        }
+        result
+    })
 }
 
 fn unpark_body(
@@ -5751,10 +5842,10 @@ fn unpark_body(
             None,
         );
         if let Err(mut restore_error) = restored_files {
-            restore_error.message = format!("{} {}", e.message, restore_error.message);
+            restore_error.message = format!("{} {}", e.error.message, restore_error.message);
             return Err(restore_error);
         }
-        return Err(e);
+        return Err(e.error);
     }
     if let Some(parent) = deployment.path.parent() {
         let marker = parent
@@ -5807,6 +5898,7 @@ fn unpark_body(
     session
         .store
         .finish(&session.guard, &id, crate::events::EventStatus::Done, None)?;
+    let retained_copies = retained_move_copies(&session, rt, &id)?;
     session.finish(rt, ctx);
     let write_step = crate::timing::step(clock, "rename_and_relink", step_start);
     ctx.record_timing(crate::timing::op_timing(
@@ -5816,6 +5908,7 @@ fn unpark_body(
         vec![begin_step, write_step],
     ));
     Ok(UnparkOutcome {
+        retained_copies,
         event_id: id,
         deployment_id: restored_id,
         restored_path: restored_dir,
@@ -5994,15 +6087,20 @@ fn migrate_legacy_flat_copy(
     // window for a crash to strand the skill under a hidden name.
     let holding = parked_root.join(format!(".legacy-{}", crate::fsops::unique_suffix()));
     let result = if top_level == "universal" {
-        crate::park_move::move_dir(rt, &*session, &legacy, &holding).and_then(|()| {
-            let parent = destination.parent().unwrap_or(&destination).to_path_buf();
-            ensure_dir_all(rt, &*session, fs, &parent)?;
-            crate::park_move::move_dir(rt, &*session, &holding, &destination)
-        })
+        crate::park_move::move_dir(rt, &*session, &legacy, &holding)
+            .map_err(CoreError::from)
+            .and_then(|()| {
+                let parent = destination.parent().unwrap_or(&destination).to_path_buf();
+                ensure_dir_all(rt, &*session, fs, &parent)?;
+                crate::park_move::move_dir(rt, &*session, &holding, &destination)
+                    .map_err(CoreError::from)
+            })
     } else {
         let parent = destination.parent().unwrap_or(&destination).to_path_buf();
-        ensure_dir_all(rt, &*session, fs, &parent)
-            .and_then(|()| crate::park_move::move_dir(rt, &*session, &legacy, &destination))
+        ensure_dir_all(rt, &*session, fs, &parent).and_then(|()| {
+            crate::park_move::move_dir(rt, &*session, &legacy, &destination)
+                .map_err(CoreError::from)
+        })
     };
     let status = if result.is_ok() {
         crate::events::EventStatus::Done

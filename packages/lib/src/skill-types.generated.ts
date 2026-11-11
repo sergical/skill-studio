@@ -1000,11 +1000,8 @@ export interface UpdatePackResult {
   changed: boolean;
   pack: PackInfo;
 }
-/**
- * One row of the event log, projected for the Activity view's History
- * section - see `event_store::EventRow` and `event_commands::list_skill_events`.
- */
 export interface SkillEventDto {
+  retained_copies?: RetainedMoveCopy[];
   id: string;
   ts: string;
   kind: string;
@@ -1028,6 +1025,14 @@ export interface SkillEventDto {
    * Finder" action - `None` when the event backed up nothing.
    */
   backup_path?: string | null;
+}
+/**
+ * One row of the event log, projected for the Activity view's History
+ * section - see `event_store::EventRow` and `event_commands::list_skill_events`.
+ */
+export interface RetainedMoveCopy {
+  path: string;
+  bytes: number | null;
 }
 /**
  * One skill bundled into a pack: `name` is its directory name, `path` is
@@ -1345,6 +1350,10 @@ export interface ConflictSummary {
  */
 export interface ParkOutcome {
   /**
+   * Retained source copies. Open handles can still change these bytes.
+   */
+  retained_copies: RetainedCopy[];
+  /**
    * The `park` event.
    */
   event_id: string;
@@ -1361,6 +1370,19 @@ export interface ParkOutcome {
    * ran `park_check` first puts its git warning here.
    */
   warnings?: string[];
+}
+/**
+ * A retained cross-volume copy. Sizes are snapshots; open writers can change them.
+ */
+export interface RetainedCopy {
+  /**
+   * Absolute path to the retained folder.
+   */
+  path: string;
+  /**
+   * Total file bytes at the snapshot; an open writer can change this later.
+   */
+  bytes: number;
 }
 /**
  * Result of `park_check`.
@@ -1384,6 +1406,10 @@ export interface ParkCheck {
  * Result of `unpark`.
  */
 export interface UnparkOutcome {
+  /**
+   * Retained source copies. Open handles can still change these bytes.
+   */
+  retained_copies: RetainedCopy[];
   /**
    * The `unpark` event.
    */
@@ -1661,6 +1687,7 @@ export interface DoctorViolation {
  * order the targets were sent, so the caller pairs them by index.
  */
 export interface BulkTargetResult {
+  retained_copies?: RetainedCopy[];
   /**
    * `None` when the target was written; otherwise why it was not.
    */

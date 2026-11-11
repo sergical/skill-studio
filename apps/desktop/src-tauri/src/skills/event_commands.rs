@@ -112,7 +112,38 @@ pub fn dto_from_row(
         && row.kind != "make_independent_copy"
         && (row.kind != "explode_shared_dir"
             || skill_materialize::restore_guard_for_explode(store, &row, home).is_ok());
+    let payload = if row.status == "done" {
+        serde_json::json!({
+            "quarantines": row.payload.get("quarantines")
+                .and_then(serde_json::Value::as_array)
+                .into_iter().flatten()
+                .filter(|entry| entry.get("phase").and_then(serde_json::Value::as_str)
+                    == Some("retain_before_rename"))
+                .collect::<Vec<_>>()
+        })
+    } else if row.payload.get("quarantines").is_some()
+        || matches!(row.kind.as_str(), "park" | "unpark")
+    {
+        row.payload.clone()
+    } else {
+        serde_json::Value::Null
+    };
+    let (paths, copies) =
+        skill_studio_core::events::retained_move_data(&skill_studio_host::RealFs::new(), &payload);
     SkillEventDto {
+        retained_copies: paths
+            .into_iter()
+            .map(|path| {
+                let bytes = copies
+                    .iter()
+                    .find(|copy| copy.path == path)
+                    .map(|copy| copy.bytes);
+                super::skill_dto::RetainedMoveCopy {
+                    path: path.to_string_lossy().into_owned(),
+                    bytes,
+                }
+            })
+            .collect(),
         id: row.id,
         ts: row.ts,
         kind: row.kind,
@@ -824,6 +855,70 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::os::unix::fs::symlink;
+
+    fn interrupted_copy_dto(published: bool) -> (tempfile::TempDir, SkillEventDto) {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let source = home.join("source");
+        let stage = home.join(".park-stage-copy");
+        let destination = home.join("destination");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "skill").unwrap();
+        fs::write(source.join("script.sh"), "script").unwrap();
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(stage.join("SKILL.md"), "skill").unwrap();
+        if published {
+            fs::write(stage.join("script.sh"), "script").unwrap();
+            fs::rename(&stage, &destination).unwrap();
+        }
+        let store = EventStore::open(&tmp.path().join("history")).unwrap();
+        let row = EventRow {
+            id: "crashed-copy".into(),
+            ts: "2026-11-10T00:00:00Z".into(),
+            kind: "park".into(),
+            skill: "example".into(),
+            harness: None,
+            scope: None,
+            project_path: None,
+            inverse: None,
+            backup_dir: None,
+            status: "interrupted".into(),
+            reverted_by: None,
+            restorable: false,
+            payload: serde_json::json!({
+                "from": source, "to": destination,
+                "quarantines": [{"path": stage, "bytes": 11, "phase": "stage_before_create"}]
+            }),
+        };
+        let dto = dto_from_row(&store, &home, tmp.path(), row);
+        (tmp, dto)
+    }
+
+    #[test]
+    fn activity_after_partial_copy_measures_stage_or_reports_planned_source_size() {
+        let (_tmp, dto) = interrupted_copy_dto(false);
+        assert_eq!(dto.retained_copies.len(), 1);
+        assert!(dto.retained_copies[0].path.ends_with(".park-stage-copy"));
+        assert_eq!(dto.retained_copies[0].bytes, Some(5));
+    }
+
+    #[test]
+    fn activity_after_publication_lists_existing_copies_or_reports_renamed_stage() {
+        let (_tmp, dto) = interrupted_copy_dto(true);
+        assert_eq!(dto.retained_copies.len(), 2);
+        for copy in &dto.retained_copies {
+            assert!(Path::new(&copy.path).exists());
+            assert_eq!(copy.bytes, Some(11));
+        }
+        assert!(dto
+            .retained_copies
+            .iter()
+            .any(|copy| copy.path.ends_with("destination")));
+        assert!(dto
+            .retained_copies
+            .iter()
+            .any(|copy| copy.path.ends_with("source")));
+    }
 
     #[test]
     fn event_dto_keeps_non_restorable_backend_policy() {

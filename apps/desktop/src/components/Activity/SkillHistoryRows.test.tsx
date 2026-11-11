@@ -102,3 +102,23 @@ it("a failed Park row explains unavailable restore without promising Unpark or g
   expect(screen.queryByText("Unpark the skill to reverse this.")).toBeNull();
   await user.click(screen.getByRole("button", { name: "Reveal in Finder" }));
 });
+
+it("Activity shows retained backup paths and unknown legacy sizes or hides old recovery bytes", async () => {
+  mockIPC((command) =>
+    command === "list_skill_events"
+      ? [
+          {
+            ...event("park"),
+            retained_copies: [
+              { path: "/fixture/.park-quarantine-old", bytes: null },
+              { path: "/fixture/.park-quarantine-new", bytes: 256 },
+            ],
+          },
+        ]
+      : undefined,
+  );
+  render(<SkillHistorySection />);
+  expect(await screen.findByText(/\/fixture\/\.park-quarantine-old/)).toBeTruthy();
+  expect(screen.getByText(/unknown bytes/)).toBeTruthy();
+  expect(screen.getByText(/256 bytes/)).toBeTruthy();
+});

@@ -465,6 +465,8 @@ pub fn run() {
             // Park (disable globally) / per-harness disable / invocation policy
             skills::skill_local_edits::skill_local_edits,
             skills::skill_park::park_skill,
+            skills::skill_park::park_recovery_notices,
+            skills::skill_park::acknowledge_park_recovery,
             skills::skill_park::unpark_skill,
             skills::skill_park::park_check,
             skills::skill_park::discard_skill_copy,

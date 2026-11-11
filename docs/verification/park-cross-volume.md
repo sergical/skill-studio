@@ -65,3 +65,124 @@ cargo test -p skill-studio-core --all-features \
   --config 'profile.test.package.skill-studio-core.opt-level=1' \
   --test park_any_copy during_sync
 ```
+
+## Quarantine and destination ownership, 2026-11-10
+
+The final source check runs after a same-volume rename into `.park-quarantine-*`.
+A conflict keeps that source and the complete, flushed destination and reports
+`DriftConflict` with the retained path. Quarantine names are outside the trash
+sweeper's namespace. Only a verified source enters ordinary trash cleanup.
+Destination verification uses the hashes of the bytes read during copying.
+Failure cleanup checks device/inode identities and removes only recorded entries.
+
+Against `8fbb56e3`, these deterministic hook tests failed at their assertions:
+
+- `cross_volume_park_keeps_edit_before_quarantine_or_deletes_already_hashed_bytes`
+- `cross_volume_park_keeps_replacement_before_quarantine_or_deletes_another_inode`
+- `cross_volume_park_keeps_edit_while_hashing_later_file_or_deletes_already_hashed_source`
+- `cross_volume_park_keeps_complete_copy_on_early_drift_or_returns_io_and_deletes_backup`
+- `cross_volume_park_preserves_racing_destination_or_chmods_and_deletes_foreign_skill`
+- `cross_volume_park_refuses_cleanup_of_replaced_destination_or_deletes_foreign_tree`
+- `cross_volume_park_cleans_only_created_entries_or_removes_foreign_file`
+
+The first baseline run failed all six new tests. A separate baseline run of the
+later-file hash test returned success and deleted the edit, so its assertion failed.
+No sleeps or timing assertions are used. Each test uses a temporary home fixture.
+
+Local acceptance, also repeated after simplification:
+
+- `cargo fmt --all --check`
+- `CARGO_TARGET_DIR=/Users/sergiydybskiy/src/skill-studio/target/clippy cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test --release -p skill-studio-core --all-features --test park_any_copy --test park_install_aware --test agent_off`: 126 passed.
+
+Builds use Command Line Tools, the shared target folder, and a temporary `HOME`.
+
+## Review fixes for PR 491
+
+Cross-volume moves retain the quarantined source as a backup. Open file handles
+can write after verification. The event records the backup path and the
+`retain_before_rename` phase before the rename. SQLite uses FULL synchronous
+writes and macOS fullfsync. The journal directory and source parent are synced.
+Recovery reports existing backups and keeps their bytes.
+
+Failed copies now stay at the destination reported in the error. Cleanup cannot
+prove ownership across a path replacement and unlink, so the move no longer
+captures destination ownership or deletes failed copies. This also keeps foreign
+entries inserted before identity capture or after an identity check.
+
+The mode probe creates one empty file exclusively and changes permissions
+through its creation handle. It retains the empty file because unlink cannot
+exclude replacement after an identity check. No probe directory is created.
+
+Deterministic tests cover writes through an open handle after hashing, both
+destination replacement points, a probe creation race, a probe symlink
+replacement, and interruption immediately after the quarantine rename.
+
+The four new core tests fail with `park_move.rs` restored from `6df5b679`.
+Both new probe tests fail when unconditional path cleanup is restored in the
+probe test hook. The fixes were restored after these checks. All tests use
+temporary home directories.
+
+## PR 491 review fixes
+
+Cross-volume copies now use a journaled `.park-stage-*` sibling on the destination
+volume. The move verifies bytes and modes, fully syncs the stage, and checks its
+identity and bytes again before publication. A failed copy or replaced stage stays
+hidden. The live destination stays absent. A staging name collision retries with a
+new name. Permission support is checked on the stage itself; no probe file is made.
+
+History keeps recovery notices until explicit acknowledgement. Desktop startup and
+move completion read these notices into a persistent toast. CLI emits a stderr
+warning and a JSON recovery report. MCP returns the report in the tool result.
+Recovery also covers interruptions before the first stage record and failures from
+the current call. Retained paths have measured sizes when readable. Successful
+Park and Turn on results include source backup paths and size snapshots. Desktop
+batch results keep that metadata on success and failure. Activity keeps legacy
+paths whose size is unknown. Open writers can still change retained source copies.
+
+The regression suite uses fault hooks and temporary homes. It covers failed Turn
+on after copying SKILL.md but before copying a script, interruption before stage
+publication, stage replacement during sync, stage name collisions, repeated
+recovery through a NoopSink, explicit acknowledgement, open-handle writes, CLI
+stderr and JSON, MCP restart delivery, and desktop notice and Activity rendering.
+
+Shared-target stale builds occurred during verification. Workspace crates use
+`RUSTC_WORKSPACE_WRAPPER=/tmp/skill-studio-pr491-rustc`, a script that runs its
+arguments unchanged. Cargo gives these workspace artifacts a separate cache key
+inside the same shared target. No other Cargo process or target file was removed.
+
+## Recovery notice and Activity review fixes
+
+Desktop recovery keeps one persistent notice per record ID across refreshes.
+Acknowledgement dismisses that record's notice after the command succeeds.
+Activity uses the recovery path resolver to measure copies that still exist.
+A partial stage shows its current size. After publication, Activity finds the
+source and destination instead of showing the staging path removed by rename.
+An existing path whose size cannot be measured keeps an unknown size.
+
+Regressions use temporary folders and IPC fixtures, without sleeps:
+
+- `refresh twice then acknowledge removes the record notice or leaves duplicate persistent warnings`
+- `activity_after_partial_copy_measures_stage_or_reports_planned_source_size`
+- `activity_after_publication_lists_existing_copies_or_reports_renamed_stage`
+
+All three regressions failed with their corresponding fix removed and passed
+with the fixes restored. The partial-copy baseline reported 11 bytes instead
+of 5. The publication baseline kept one obsolete stage entry instead of the
+two existing paths. The frontend baseline added two notices for one record.
+
+Missing-item errors from shared Cargo artifacts survived two timestamp
+refreshes. Validation uses a pass-through compiler wrapper at
+`/tmp/pr491-review-rustc` to separate workspace cache keys within
+`/Users/sergiydybskiy/src/skill-studio/target`. No target files were deleted
+and no other Cargo process was stopped.
+
+Final validation passed: Rust formatting, workspace Clippy with all targets
+and features and warnings denied, the full desktop crate tests, the full core
+crate tests, frontend typecheck, lint, formatting, and all three recovery-hook
+tests. The desktop parity run first used another worktree's CLI binary; building
+this branch's CLI before the rerun resolved that schema mismatch.
+
+The post-green simplify-code pass found no worthwhile simplification. Scoped
+Rust regressions passed again through the compiled test binary, and frontend
+checks and hook tests passed again. Final diff review found no further changes.

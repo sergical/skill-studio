@@ -565,6 +565,7 @@ pub fn print_park_outcome_table(envelope: &ResultEnvelope<ParkOutcome>) {
         "Parked. The skill is now in {}. Run `unpark` to turn it on again.",
         outcome.parked_path.display()
     );
+    print_retained_copies(&outcome.retained_copies);
 }
 
 /// Prints `split`'s table: one line per copy, then the update note.
@@ -594,6 +595,7 @@ pub fn print_unpark_outcome_table(envelope: &ResultEnvelope<UnparkOutcome>) {
         "Turned on again. The skill is back in {}.",
         outcome.restored_path.display()
     );
+    print_retained_copies(&outcome.retained_copies);
 }
 
 /// Prints `outdated`'s table: one `NAME CURRENCY LATEST_SHA` row per skill,
@@ -776,4 +778,14 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         println!("wrote {}", path.display());
     }
     ExitCode::SUCCESS
+}
+
+fn print_retained_copies(copies: &[skill_studio_core::dto::RetainedCopy]) {
+    for copy in copies {
+        println!(
+            "Retained source copy: {} ({} bytes at copy time; open writers can change it)",
+            copy.path.display(),
+            copy.bytes
+        );
+    }
 }

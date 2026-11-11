@@ -118,7 +118,16 @@ pub struct SkillsShAccessInfo {
 /// One row of the event log, projected for the Activity view's History
 /// section - see `event_store::EventRow` and `event_commands::list_skill_events`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RetainedMoveCopy {
+    pub path: String,
+    #[serde(default)]
+    pub bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SkillEventDto {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retained_copies: Vec<RetainedMoveCopy>,
     pub id: String,
     pub ts: String,
     pub kind: String,
@@ -573,6 +582,8 @@ pub struct LocalEditsDto {
 /// order the targets were sent, so the caller pairs them by index.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BulkTargetResult {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retained_copies: Vec<skill_studio_core::dto::RetainedCopy>,
     /// `None` when the target was written; otherwise why it was not.
     pub error: Option<String>,
 }
@@ -584,6 +595,7 @@ impl BulkTargetResult {
         targets
             .iter()
             .map(|target| Self {
+                retained_copies: Vec::new(),
                 error: apply(target).err(),
             })
             .collect()

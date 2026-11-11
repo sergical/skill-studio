@@ -811,6 +811,7 @@ fn error_envelope<T: ops::Outcome>(
     // the envelope is never empty just because normalization failed first.
     use skill_studio_core::scope::EffectiveScope;
     ResultEnvelope {
+        recovery: Default::default(),
         schema_version: skill_studio_core::SCHEMA_VERSION,
         operation,
         scope: EffectiveScope {
@@ -2095,6 +2096,12 @@ fn finish<T: serde::Serialize + ops::Outcome>(
     print_table: impl FnOnce(&ResultEnvelope<T>),
 ) -> ExitCode {
     let code = exit_code(envelope.exit_status());
+    if !envelope.recovery.interrupted.is_empty() {
+        eprintln!(
+            "Warning: interrupted operations {:?}; retained copies: {:?}",
+            envelope.recovery.interrupted, envelope.recovery.retained_quarantines
+        );
+    }
     if json {
         output::print_json(envelope);
     } else {
