@@ -27,10 +27,10 @@ const USER_COMMANDS: &[&str] = &[
     "outdated",
     "update",
     "mcp",
+    "doctor",
 ];
 
 const HIDDEN_COMMANDS: &[&str] = &[
-    "doctor",
     "split",
     "capabilities",
     "harnesses",

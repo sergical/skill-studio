@@ -84,3 +84,7 @@ Doctor link warnings, retained-entry ages, and pending history checks are covere
 
 Returning launches and new agents are covered by `useFirstRun.test.ts` and `DetectedAgentsCard.test.tsx`.
 Scan progress and worker error reporting are covered by `apps/desktop/src/components/SkillList/ScanProgress.test.tsx` and described in `docs/perf/desktop-scan-status.md`.
+
+| Flow | Desktop | CLI | MCP | Test |
+| --- | --- | --- | --- | --- |
+| Skill listing cost, CLI/MCP-only | None | `skill-studio doctor --json` | `doctor` | `apps/cli/tests/listing_cost.rs::doctor_listing_cost_warns_and_names_top_skills_or_counts_manual_and_parked_skills`; `apps/mcp/tests/mcp_server.rs::doctor_listing_cost_matches_cli_and_warns_or_loses_the_budget_in_one_adapter` |

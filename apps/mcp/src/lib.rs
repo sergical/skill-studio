@@ -56,7 +56,6 @@ use skill_studio_host::SkillUsage;
 const DEV_TOOLS: &[&str] = &[
     "capabilities",
     "harnesses",
-    "doctor",
     "sweep_quarantine",
     "install_preferences",
 ];
@@ -493,7 +492,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Check all skills for broken state. This writes nothing. An empty list means all is well.",
+        description = "Check skill state and model listing cost per harness. Reports near or over budget warnings and the five largest skills. This writes nothing.",
         annotations(read_only_hint = true)
     )]
     async fn doctor(

@@ -4,6 +4,14 @@
   "description": "Result of `doctor`: one pass over every lifecycle invariant in\n`docs/action-map/lifecycle-states.md`'s Invariants section, over the\nwhole scope (every root `scan` knows, every registry and lockfile\nentry, the quarantine dirs, the journal), independent of any single\ncommand's own rollback logic.",
   "type": "object",
   "properties": {
+    "listing_cost": {
+      "description": "Estimated skill listing cost per harness and session scope.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ListingCost"
+      },
+      "default": []
+    },
     "violations": {
       "description": "Every violation found; empty means a healthy scope.",
       "type": "array",
@@ -23,6 +31,144 @@
     "checked"
   ],
   "$defs": {
+    "ListingCost": {
+      "description": "Listing cost for one harness in one session scope.",
+      "type": "object",
+      "properties": {
+        "harness": {
+          "description": "Harness id.",
+          "$ref": "#/$defs/AgentIdentity"
+        },
+        "scope": {
+          "description": "Project sessions include global skills, with project names taking priority.",
+          "$ref": "#/$defs/RootScope"
+        },
+        "listed_skills": {
+          "description": "Number of unique model-visible names.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "estimated_tokens_chars_div_4": {
+          "description": "UTF-16 characters, divided by four and rounded up.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "limit_tokens": {
+          "description": "Budget in estimated tokens, or null when not verified.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "limit_source": {
+          "description": "Setting file path, default, or reason the limit is unknown.",
+          "type": "string"
+        },
+        "context_window_tokens": {
+          "description": "Context size used for a fractional budget.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "uses_default_context_window": {
+          "description": "Whether a verified fallback was used instead of a session context size.",
+          "type": "boolean"
+        },
+        "warning": {
+          "description": "`over_limit` or `near_limit` at 80 percent, otherwise null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "top_skills": {
+          "description": "The five largest entries, with names as a stable tie break.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListingSkillCost"
+          }
+        }
+      },
+      "required": [
+        "harness",
+        "scope",
+        "listed_skills",
+        "estimated_tokens_chars_div_4",
+        "limit_source",
+        "uses_default_context_window",
+        "top_skills"
+      ]
+    },
+    "AgentIdentity": {
+      "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+      "type": "string"
+    },
+    "RootScope": {
+      "description": "Where a root lives.",
+      "oneOf": [
+        {
+          "description": "Under the scope home.",
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "const": "global"
+            }
+          },
+          "required": [
+            "scope"
+          ]
+        },
+        {
+          "description": "Under one tracked project.",
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "const": "project"
+            },
+            "project": {
+              "$ref": "#/$defs/ProjectRef"
+            }
+          },
+          "required": [
+            "scope",
+            "project"
+          ]
+        }
+      ]
+    },
+    "ProjectRef": {
+      "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
+      "type": "string"
+    },
+    "ListingSkillCost": {
+      "description": "One skill's contribution to the listing.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Model-visible name.",
+          "type": "string"
+        },
+        "estimated_tokens_chars_div_4": {
+          "description": "UTF-16 characters, divided by four and rounded up.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "name",
+        "estimated_tokens_chars_div_4"
+      ]
+    },
     "DoctorViolation": {
       "description": "One violation of a [`crate::doctor::DoctorInvariant`] found by `doctor`,\nprojected from `crate::doctor::DoctorViolation` into a serializable\nshape: `skill` folds into `detail`'s message text rather than a\nseparate field, since every existing violation message already names\nthe skill when it has one (see each `doctor::check_*` function).",
       "type": "object",

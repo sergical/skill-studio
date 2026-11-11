@@ -251,7 +251,7 @@ impl Outcome for crate::dto::ConflictReport {
 }
 impl Outcome for crate::dto::DoctorReport {
     fn found_issues(&self) -> bool {
-        !self.violations.is_empty()
+        !self.violations.is_empty() || self.listing_cost.iter().any(|row| row.warning.is_some())
     }
 }
 impl Outcome for crate::dto::RemoveOutcome {

@@ -1067,6 +1067,7 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
 /// The tools an agent sees by default, read-only ones first. A change to
 /// this list changes what every client loads into context.
 const READ_TOOLS: &[&str] = &[
+    "doctor",
     "turn_off_check",
     "scan",
     "diagnose",
@@ -1635,4 +1636,47 @@ async fn mcp_copy_update_after_split_points_to_update_on_the_skill_page() {
     .unwrap();
     assert_ne!(result["status"], "ok");
     assert_eq!(result["errors"][0]["message"], expected["message"]);
+}
+
+#[tokio::test]
+async fn doctor_listing_cost_matches_cli_and_warns_or_loses_the_budget_in_one_adapter() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join(".claude/skills/large");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("SKILL.md"),
+        format!("---\nname: large\ndescription: {}\n---\n", "x".repeat(1000)),
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join(".claude/settings.json"),
+        r#"{"skillListingBudgetFraction":0.0001}"#,
+    )
+    .unwrap();
+    let home_str = home.path().to_str().unwrap();
+    let (client, _) = connect(&[
+        ("HOME", home_str),
+        ("SKILL_STUDIO_FIXTURE", home_str),
+        ("SKILL_STUDIO_MCP_DEV_TOOLS", "1"),
+        ("SKILL_STUDIO_TELEMETRY", "0"),
+    ])
+    .await;
+    let mcp = call_tool(&client, "doctor", serde_json::json!({})).await;
+    let cli =
+        std::process::Command::new(Path::new(&mcp_bin()).parent().unwrap().join("skill-studio"))
+            .args(["doctor", "--fixture", home_str, "--json"])
+            .env("HOME", home_str)
+            .env("SKILL_STUDIO_TELEMETRY", "0")
+            .output()
+            .unwrap();
+    let cli: serde_json::Value = serde_json::from_slice(&cli.stdout).unwrap();
+    assert_eq!(normalize(mcp.clone()), normalize(cli));
+    let claude = mcp["data"]["listing_cost"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["harness"] == "claude-code")
+        .unwrap();
+    assert_eq!(claude["warning"], "over_limit");
+    client.cancel().await.unwrap();
 }

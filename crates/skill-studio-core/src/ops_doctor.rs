@@ -94,6 +94,7 @@ fn doctor_body(
     ));
     ctx.take_timing();
     Ok(DoctorReport {
+        listing_cost: crate::listing_cost::listing_cost(rt, &diagnosis.inventory)?,
         violations,
         checked: skill_names.len() as u32,
     })
