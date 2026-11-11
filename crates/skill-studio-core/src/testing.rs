@@ -419,6 +419,8 @@ fn insert_map<V>(
 #[derive(Debug, Clone)]
 pub struct FixtureFs {
     state: Arc<Mutex<FixtureState>>,
+    /// Number of capped file reads.
+    pub capped_reads: Arc<AtomicU64>,
 }
 
 impl FixtureFs {
@@ -435,6 +437,7 @@ impl FixtureFs {
         }
         FixtureFs {
             state: Arc::new(Mutex::new(state)),
+            capped_reads: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -612,6 +615,7 @@ impl ScopeFs for FixtureFs {
     }
 
     fn read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+        self.capped_reads.fetch_add(1, Ordering::Relaxed);
         let resolved = self.canonicalize(path)?;
         let state = self.lock();
         let bytes = state

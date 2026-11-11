@@ -2906,6 +2906,20 @@ fn compute_content_facts(
         bytes: skill_md_bytes,
         truncated: skill_md_truncated,
     };
+    let same_files = walk.hashable.len() == walk.fingerprint_files.len()
+        && walk
+            .hashable
+            .iter()
+            .zip(&walk.fingerprint_files)
+            .all(|(file, (rel, abs, len))| {
+                file.rel_path == *rel && file.abs_path == *abs && file.len == *len
+            });
+    let content_hash = content_hash_from_walk(walk.hashable, fs, ctx, MAX_FOLDER_BYTES, &skill_md)?;
+    let content_fingerprint = if same_files {
+        Fingerprint::parse(&content_hash)?
+    } else {
+        content_fingerprint(fs, &walk.fingerprint_files, &skill_md)
+    };
     let tok = tokenizer();
     Ok(ContentFacts {
         frontmatter_fields: frontmatter::frontmatter_fields(&content),
@@ -2917,8 +2931,8 @@ fn compute_content_facts(
             &format!("{name_for_tokens}: {description_for_tokens}"),
             tok,
         ),
-        content_fingerprint: content_fingerprint(fs, &walk.fingerprint_files, &skill_md),
-        content_hash: content_hash_from_walk(walk.hashable, fs, ctx, MAX_FOLDER_BYTES, &skill_md)?,
+        content_fingerprint,
+        content_hash,
         modified_at: walk.newest,
         folder_truncated: walk.truncated || skill_md_truncated,
         frontmatter,
@@ -7271,6 +7285,57 @@ mod tests {
         );
         assert_eq!(env.exit_status(), 3);
         assert!(env.data.is_none());
+    }
+
+    #[test]
+    fn scan_reads_support_files_once_instead_of_once_per_hash() {
+        use crate::testing::FixtureBuilder;
+        use std::sync::atomic::Ordering;
+
+        let md = b"---\nname: demo\ndescription: demo\n---\nBody\n";
+        let fs = FixtureBuilder::new()
+            .file("/h/demo/SKILL.md", md)
+            .file("/h/demo/reference.md", b"reference")
+            .build_fs();
+        let parsed = frontmatter::parse_frontmatter(std::str::from_utf8(md).unwrap());
+        let ctx = OpContext::uncancellable(CorrelationId("hash-reads".into()));
+        let facts =
+            compute_content_facts(&fs, &ctx, Path::new("/h/demo"), md, false, &parsed).unwrap();
+        assert_eq!(facts.content_fingerprint.bare_hex(), facts.content_hash);
+        assert_eq!(fs.capped_reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn an_edit_past_the_hash_file_cap_still_changes_the_fingerprint_instead_of_reusing_the_hash() {
+        use crate::testing::FixtureBuilder;
+
+        // Symlinked files count toward the hash side's file cap but never
+        // enter the fingerprint list, so `z.md` is in the fingerprint only.
+        let md = b"---\nname: demo\ndescription: demo\n---\nBody\n";
+        let parsed = frontmatter::parse_frontmatter(std::str::from_utf8(md).unwrap());
+        let ctx = OpContext::uncancellable(CorrelationId("hash-file-cap".into()));
+        let facts_with_last_file = |bytes: &[u8]| {
+            let mut fixture = FixtureBuilder::new()
+                .file("/h/target.md", b"target")
+                .file("/h/demo/SKILL.md", md)
+                .file("/h/demo/z.md", bytes);
+            for i in 0..MAX_FOLDER_FILES {
+                fixture = fixture.alias(&format!("/h/demo/link{i:04}.md"), "/h/target.md");
+            }
+            let fs = fixture.build_fs();
+            compute_content_facts(&fs, &ctx, Path::new("/h/demo"), md, false, &parsed).unwrap()
+        };
+        let before = facts_with_last_file(b"one");
+        let after = facts_with_last_file(b"two");
+
+        assert_eq!(
+            before.content_hash, after.content_hash,
+            "hash stops at the file cap"
+        );
+        assert_ne!(
+            before.content_fingerprint, after.content_fingerprint,
+            "an edit the hash cannot see must still change the fingerprint"
+        );
     }
 
     #[test]
