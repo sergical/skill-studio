@@ -317,11 +317,11 @@ describe("skill-api wrapper set", () => {
 
   it("set_deployment_enabled_and_trial_wrappers_are_removed_or_names_the_leftover", () => {
     // setDeploymentEnabled: unit 4.4 (#175) removed it end to end - park is the generic off
-    // switch now, see docs/action-map/frontend-keep.md.
+    // switch now, see docs/flows.md.
     expect(skillApiSource).not.toMatch(/\bsetDeploymentEnabled\b/);
 
     // keepSkillTrial, restoreTrashedSkill, onTrialExpired: #278 removed the trial feature end
-    // to end, folded into park's existing quarantine cap - see docs/action-map/frontend-keep.md.
+    // to end, folded into park's existing quarantine cap - see docs/flows.md.
     for (const removed of ["keepSkillTrial", "restoreTrashedSkill", "onTrialExpired"]) {
       expect(skillApiSource).not.toMatch(new RegExp(`\\b${removed}\\b`));
     }

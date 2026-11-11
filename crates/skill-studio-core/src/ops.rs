@@ -981,7 +981,7 @@ fn scan_one_plugin_target(
 /// the root's own harness owns, from
 /// [`crate::harness::reserved_skills_root_entry`]: Claude Code's `synced`
 /// folder is the vendor's, so it is skipped even when it holds a
-/// `SKILL.md` (`docs/action-map/harnesses/claude-code.md`: "`synced` under
+/// `SKILL.md` (`docs/agent-skill-conventions.md`: "`synced` under
 /// `~/.claude/skills` is reserved; the scanner must skip it").
 /// As [`read_root_entries`], accumulating the read's duration onto
 /// `sc.timings.dir_walk` (the scan step this call is part of).
@@ -3058,7 +3058,7 @@ fn conflicts_in(inventory: &Inventory) -> Vec<crate::dto::ConflictSummary> {
     conflicts
 }
 
-/// Runs the doctor invariants from `docs/action-map/lifecycle-states.md`
+/// Runs the doctor invariants from `docs/flows.md`
 /// for one skill and applies whichever repair exists.
 ///
 /// A [`IssueKind::RepairableFrontmatter`] issue is repaired the same way
@@ -5485,7 +5485,7 @@ pub use crate::ops_update::{update, update_all, update_split_copies};
 /// build: the event's `inverse` is `None`, and `restore_event` refuses it
 /// ([`ErrorCode::Unsupported`]); use `unpark` instead.
 ///
-/// Sequence, matching `docs/action-map/primitives-and-call-stack.md`'s Park
+/// Sequence, matching `docs/flows.md`'s Park
 /// row: the journal row is recorded before any filesystem step, every
 /// per-skill link into the folder (any harness) is removed first, then the
 /// directory is renamed into `.agents/skills-parked`.

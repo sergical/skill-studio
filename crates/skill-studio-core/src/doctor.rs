@@ -1,4 +1,4 @@
-//! The six doctor invariants named in `docs/action-map/lifecycle-states.md`'s
+//! The six doctor invariants named in `docs/flows.md`'s
 //! Invariants section, checked independently of any single command's own
 //! rollback logic so a violation left by an old bug or a manual edit
 //! surfaces even when no command is running. [`ops::fix_skill`] runs checks
@@ -33,7 +33,7 @@ use crate::ports::{Journal, ScopeFs};
 /// Relative path of the universal shared skills root under a scope home.
 const UNIVERSAL_SKILLS_RELATIVE: &str = ".agents/skills";
 /// Quarantine holding directory under the universal root, per
-/// `docs/action-map/primitives-and-call-stack.md`'s `<root>/.skill-studio-quarantine/<id>` convention.
+/// `docs/flows.md`'s `<root>/.skill-studio-quarantine/<id>` convention.
 /// `pub(crate)`, not private: unit 3.9 owns the retention-cap repair and
 /// reaches for this same directory name rather than redefining it.
 pub(crate) const QUARANTINE_DIR_NAME: &str = ".skill-studio-quarantine";

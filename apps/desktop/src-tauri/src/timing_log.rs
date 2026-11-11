@@ -2,7 +2,7 @@
 // Skill Studio - timing_log
 // Appends one JSON line per Tauri command call to `timing.jsonl` in the app
 // data dir, rotating to `timing.prev.jsonl` at a size threshold. Action-map
-// perf work (`docs/action-map/performance.md`) reads this file to see which
+// perf work (`docs/flows.md`) reads this file to see which
 // commands are slow on a real install, the same way core's `--time` flag
 // reports per-step timing for the CLI.
 // ============================================================================

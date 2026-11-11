@@ -84,3 +84,19 @@ Doctor link warnings, retained-entry ages, and pending history checks are covere
 
 Returning launches and new agents are covered by `useFirstRun.test.ts` and `DetectedAgentsCard.test.tsx`.
 Scan progress and worker error reporting are covered by `apps/desktop/src/components/SkillList/ScanProgress.test.tsx` and described in `docs/perf/desktop-scan-status.md`.
+
+## Operation guarantees
+
+The disk determines a skill's state. Scan reports the roots it could read and
+keeps skills found in those roots when another root fails. Doctor checks the
+whole scope, including links, ownership records, quarantine, and the journal.
+Core filesystem operations stage writes and record inverse operations before
+changing live paths. Copy removal moves bytes into quarantine so Undo can
+restore them. Provider-owned installs and removals use the provider's CLI.
+
+Harness detection and the editor picker share one cached login-shell probe
+for PATH, VISUAL, and EDITOR. Detection runs in the blocking pool. A fallback
+binary lookup reports its source; a folder alone does not prove that a CLI
+is installed. See `docs/agent-skill-conventions.md` for agent roots and sources,
+`docs/state-machines.md` for lifecycle transitions, and
+`docs/perf/launch-detection.md` for launch measurements.

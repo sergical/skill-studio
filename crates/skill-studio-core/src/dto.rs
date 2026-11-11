@@ -533,7 +533,7 @@ fn doctor_error_severity() -> Severity {
 }
 
 /// Result of `doctor`: one pass over every lifecycle invariant in
-/// `docs/action-map/lifecycle-states.md`'s Invariants section, over the
+/// `docs/flows.md`, over the
 /// whole scope (every root `scan` knows, every registry and lockfile
 /// entry, the quarantine dirs, the journal), independent of any single
 /// command's own rollback logic.
@@ -1045,7 +1045,7 @@ pub struct RemoveOutcome {
     /// The removed folder's `TreeHash`, taken before the first write.
     pub tree_hash_before: String,
     /// Where the folder now lives under quarantine, for `Copy`/`Fork`
-    /// (never deleted - see `docs/action-map/primitives-and-call-stack.md`'s
+    /// (never deleted - see `docs/flows.md`'s
     /// Remove row). `None` for `Dotagents`/`SkillsSh`, whose own CLI deletes
     /// the bytes directly, the same as it does for every other build's
     /// remove today.

@@ -342,7 +342,7 @@ enum Command {
     },
     /// Start the MCP server so an agent can tidy your skills.
     Mcp,
-    /// Run every lifecycle invariant in `docs/action-map/lifecycle-states.md`
+    /// Run every lifecycle invariant in `docs/flows.md`
     /// over the whole scope; writes nothing. Exit code 0 with an empty
     /// violation list on a healthy home, 1 when any violation is found
     /// (the same "found something" code `scan`/`diagnose`/`fix` use).

@@ -4,7 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 //! Unit 5.3: `ops::doctor` must run all six lifecycle invariants from
-//! `docs/action-map/lifecycle-states.md`'s Invariants section as one
+//! `docs/flows.md` as one
 //! whole-scope pass - not one skill at a time like `ops::fix_skill` - and
 //! report zero violations on a healthy home. One fixture per invariant,
 //! named in the issue; each failure message names the invariant and the

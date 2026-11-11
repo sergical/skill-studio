@@ -81,7 +81,7 @@ const PATH_MARKER_START: &str = "__skill_studio_path_start__";
 const PATH_MARKER_END: &str = "__skill_studio_path_end__";
 
 /// Deadline for the login-shell `PATH` probe. Longer than the two seconds
-/// `docs/action-map/harnesses/harness-detection.md` gives other processes:
+/// `docs/agent-skill-conventions.md` gives other processes:
 /// a `.zshrc` that loads nvm or mise routinely needs more, and a timeout
 /// drops the user onto the fallback directories.
 const SHELL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -125,7 +125,7 @@ fn run_with_timeout(mut command: Command, end_marker: &str, timeout: Duration) -
 }
 
 /// The login shell command that prints `$PATH`, per
-/// `docs/action-map/harnesses/harness-detection.md`'s "PATH resolution":
+/// `docs/agent-skill-conventions.md`'s "PATH resolution":
 /// macOS launches a desktop app with the minimal `launchd` PATH, so this
 /// asks the user's own login shell instead.
 fn login_shell_path_probe(shell: &str) -> Command {
