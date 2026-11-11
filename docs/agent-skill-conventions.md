@@ -410,8 +410,9 @@ settings. The [host merge](https://github.com/openai/codex/blob/rust-v0.167.0/co
 uses document paths as identity. Each distinct file keeps its own locator.
 The [parser](https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/skills/src/parser.rs)
 rejects descriptions that are empty after whitespace normalization.
-`[[skills.config]] enabled = false` selects a document by canonical path in
-any root, including Universal. Other readers of that file stay enabled.
+`[[skills.config]] enabled = false` selects a document by canonical path or
+frontmatter name in any root, including Universal. Rules apply in order; later
+matching rules override earlier rules. Other readers of that file stay enabled.
 The [config loader](https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/config/src/loader/mod.rs)
 loads project layers from the project root to the working directory. It checks
 user `projects.<path>.trust_level` records for the directory, then the project

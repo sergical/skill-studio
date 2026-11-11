@@ -143,6 +143,16 @@ command is `skill-studio unpark alpha beta`; the MCP tool is `unpark` with
 `skills`. `apps/cli/tests/batch_park.rs::blocked_recorded_link_refuses_batch_unpark_before_restoring_any_copy_on_cli_and_mcp`
 checks that a blocked link keeps both skills parked on CLI and MCP.
 
+Native disable switches use the existing scan and doctor flows. CLI commands are
+`skill-studio scan --json` and `skill-studio doctor --project <path> --json`; MCP
+tools are `scan` and `doctor`. CLI/MCP-only listing checks in
+`apps/cli/tests/listing_cost.rs` are
+`doctor_and_scan_apply_codex_name_rules_in_order_instead_of_counting_disabled_skills`
+and `doctor_merges_project_plugin_switches_instead_of_using_global_enablement`.
+Both compare the doctor listing with MCP.
+`doctor_matches_spaced_names_and_inline_codex_rules_like_codex_instead_of_counting_disabled_skills`
+checks spaced names and inline `config = [...]` rules.
+
 ## Skill review dates (CLI/MCP-only)
 
 | Flow                               | Desktop entry | CLI                                                     | MCP tool       | Flow tests                                                                                                                                                                                                                                 |

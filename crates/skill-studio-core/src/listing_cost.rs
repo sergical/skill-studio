@@ -196,11 +196,14 @@ pub(crate) fn listing_cost(
             let mut source = "no known limit".to_string();
             let mut context = None;
             let mut fallback = false;
+            let mut enabled_plugins = BTreeMap::new();
             if harness == AgentId::CLAUDE_CODE {
                 let mut fraction = 0.01;
                 cap = 1536;
                 source = "Claude Code 2.1.319 default (1%)".into();
-                let mut paths = vec![rt.scope.home.lexical.join(".claude/settings.json")];
+                let mut paths = vec![rt
+                    .scope
+                    .global_root_path(Path::new(".claude/settings.json"))];
                 if let RootScope::Project(project) = &scope {
                     paths.extend([
                         project.0.join(".claude/settings.json"),
@@ -209,6 +212,14 @@ pub(crate) fn listing_cost(
                 }
                 for path in paths {
                     let settings = json(rt, &path)?;
+                    if let Some(plugins) = settings
+                        .get("enabledPlugins")
+                        .and_then(serde_json::Value::as_object)
+                    {
+                        enabled_plugins.extend(plugins.iter().filter_map(|(name, value)| {
+                            value.as_bool().map(|enabled| (name.clone(), enabled))
+                        }));
+                    }
                     if let Some(value) = settings.get("skillListingBudgetFraction") {
                         fraction = value
                             .as_f64()
@@ -304,10 +315,17 @@ pub(crate) fn listing_cost(
                                 .disabled_by
                                 .is_some_and(|by| disables_reader(by, &facts.id))
                             || deployment.disabled_readers.contains(&facts.id)
-                            || deployment
-                                .plugin
-                                .as_ref()
-                                .is_some_and(|plugin| plugin.enabled == Some(false))
+                            || deployment.plugin.as_ref().is_some_and(|plugin| {
+                                if harness == AgentId::CLAUDE_CODE {
+                                    enabled_plugins
+                                        .get(&format!("{}@{}", plugin.plugin, plugin.marketplace))
+                                        .copied()
+                                        .or(plugin.enabled)
+                                        == Some(false)
+                                } else {
+                                    plugin.enabled == Some(false)
+                                }
+                            })
                             || deployment.symlink_is_broken
                         {
                             continue;
