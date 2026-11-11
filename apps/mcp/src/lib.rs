@@ -131,8 +131,8 @@ pub fn run_stdio() -> anyhow::Result<()> {
     })
 }
 
-/// Builds the `Runtime` for a read-only tool: no history store (a plain
-/// `NoHistoryOpener`), discovery enabled outside fixture mode. Matches
+/// Builds the `Runtime` with a history version guard before read leases.
+/// Discovery is enabled outside fixture mode. Matches
 /// `apps/cli/src/main.rs::build_runtime`.
 fn build_runtime(with_history: bool) -> Result<Runtime, CoreError> {
     let (runtime_scope, lease_root) = scope::resolve();
@@ -143,6 +143,11 @@ fn build_runtime(with_history: bool) -> Result<Runtime, CoreError> {
     } else {
         skill_studio_host::default_ports_with_discovery(lease_root, catalog)
     };
+    if !with_history {
+        ports.history = Arc::new(skill_studio_host::GuardedNoHistoryOpener::new(
+            runtime_scope.history_root.clone(),
+        ));
+    }
     ports.telemetry = skill_studio_host::telemetry::port(
         skill_studio_host::telemetry::Surface::Mcp,
         env!("CARGO_PKG_VERSION"),

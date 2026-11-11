@@ -31,16 +31,11 @@ import { SkillStore } from "../SkillStore/SkillStore";
 import { CheckboxControl } from "../ui/CheckboxControl";
 import { availableAddSkillMethods, isAddSkillFormValid } from "./add-skill-form";
 import { TrustConfirmFooter } from "./TrustConfirmFooter";
-import type { PackTrustState } from "./TrustConfirmFooter";
-import type { AddSkillSheetMethod } from "./add-skill-form";
 import {
-  abandonPackImportTrust,
   cancelAddSkillOperation,
   confirmAddSkillTrust,
-  confirmSkillPackTrust,
   getAddMethodDefaults,
   getAddSkillOperation,
-  importSkillPack,
   invokeErrorMessage,
   listGithubSkills,
   onAddSkillOperation,
@@ -70,11 +65,7 @@ import {
   toWireParsedSkillSource,
   universalLockReason,
 } from "@skill-studio/lib";
-import type {
-  AddSkillOperationEvent,
-  PackImportRequest,
-  ParsedSkillSource,
-} from "@skill-studio/lib";
+import type { AddSkillOperationEvent, ParsedSkillSource } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 import { otherScopeNote } from "../../lib/skill-scope-model";
 import type {
@@ -102,32 +93,17 @@ const ALL_METHODS = ["skills-sh", "dotagents", "copy"] as const satisfies AddMet
 const DOTAGENTS_HARNESS_REASON =
   "dotagents sets the folders itself, so you cannot change the agents for it.";
 
-/**
- * "Pack" isn't a real `AddMethod` - it doesn't run `addSkill`, it runs
- * `importSkillPack` against a share pack's repo (see `skill_pack.rs`'s
- * `import_skill_pack`). Kept out of the shared `AddMethod` type so every
- * other `AddMethod` switch never has to account for it.
- */
-type SheetMethod = AddSkillSheetMethod;
-
-/** Pack import is deferred - see unit 4.3. Local-source Add Skill never offers it. */
-function sheetMethods(): readonly SheetMethod[] {
-  return ALL_METHODS;
-}
-
 const METHOD_LABELS = {
   dotagents: "dotagents",
   "skills-sh": "skills.sh",
   copy: "Copy",
-  pack: "Pack",
-} satisfies Record<SheetMethod, string>;
+} satisfies Record<AddMethod, string>;
 
 const METHOD_TOOLTIPS = {
   dotagents: "Tracked in agents.toml. Installs to Universal and updates with dotagents.",
   "skills-sh": "Tracked in .skill-lock.json. Installs to Universal.",
   copy: "Untracked. Installs to Universal.",
-  pack: "Imports every skill in this share pack to Universal.",
-} satisfies Record<SheetMethod, string>;
+} satisfies Record<AddMethod, string>;
 
 /** One-line parse feedback shown beneath the Source field. */
 function parseSummary(parsed: ParsedSkillSource | { error: string }): string {
@@ -151,7 +127,7 @@ interface FormState {
    * infer one from, so the sheet asks for it directly (see `derive_name`
    * in skill_install.rs). Unused for every other source kind. */
   gitSkillName: string;
-  methodChoice: SheetMethod;
+  methodChoice: AddMethod;
   /** The harnesses the user picked. `null` until they change one, so the
    * default follows `getAddMethodDefaults` when it answers late. */
   pickedHarnesses: AgentId[] | null;
@@ -183,7 +159,7 @@ type FormAction =
   | { type: "set_tab"; tab: FormState["sheetTab"] }
   | { type: "set_source"; source: string }
   | { type: "set_git_skill_name"; name: string }
-  | { type: "set_method"; method: SheetMethod }
+  | { type: "set_method"; method: AddMethod }
   | { type: "set_harnesses"; harnesses: AgentId[] }
   | { type: "set_universal"; universal: boolean; chosen: AgentId[] }
   | { type: "set_scope"; scope: InstallScope }
@@ -564,11 +540,11 @@ function MethodPicker({
   caption,
   onChange,
 }: {
-  method: SheetMethod;
-  methods: SheetMethod[];
+  method: AddMethod;
+  methods: AddMethod[];
   noMethodsAvailable: boolean;
   caption: string;
-  onChange: (method: SheetMethod) => void;
+  onChange: (method: AddMethod) => void;
 }) {
   const methodSet = new Set(methods);
   return (
@@ -580,9 +556,9 @@ function MethodPicker({
         variant="segmented"
         aria-label="Install method"
         value={[method]}
-        onValueChange={(next) => singleSelectToggleValue<SheetMethod>(next, onChange)}
+        onValueChange={(next) => singleSelectToggleValue<AddMethod>(next, onChange)}
       >
-        {sheetMethods().map((m) => {
+        {ALL_METHODS.map((m) => {
           const disabled = noMethodsAvailable || (methods.length > 0 && !methodSet.has(m));
           return (
             <ToggleGroupItem
@@ -688,7 +664,6 @@ function applyFinishAction(
  */
 function useAddSkillSubmit(input: {
   parsed: ParsedSkillSource | { error: string };
-  method: SheetMethod;
   noMethodsAvailable: boolean;
   destination: InstallDestinationFields;
   scope: InstallScope;
@@ -701,7 +676,6 @@ function useAddSkillSubmit(input: {
 }) {
   const {
     parsed,
-    method,
     noMethodsAvailable,
     destination,
     scope,
@@ -713,14 +687,10 @@ function useAddSkillSubmit(input: {
     addToast,
   } = input;
   const [operation, setOperation] = useState<AddSkillOperationEvent | undefined>(undefined);
-  const [packTrust, setPackTrust] = useState<
-    { identities: string[]; confirmationToken: string; requestKey: string } | undefined
-  >(undefined);
   const [trustBusy, setTrustBusy] = useState(false);
   const operationIdRef = useRef<string | undefined>(undefined);
   const consumedIdRef = useRef<string | undefined>(undefined);
   const unlistenRef = useRef<(() => void) | undefined>(undefined);
-  const packTrustTokenRef = useRef<string | undefined>(undefined);
   const isValid = isAddSkillFormValid({
     parsed,
     noMethodsAvailable,
@@ -731,49 +701,7 @@ function useAddSkillSubmit(input: {
     githubEntries,
   });
 
-  const packSource =
-    "error" in parsed
-      ? undefined
-      : parsed.kind === "github"
-        ? parsed.repo
-        : parsed.kind === "local"
-          ? parsed.localPath
-          : undefined;
-  const packRequest: PackImportRequest | undefined =
-    method === "pack" && packSource
-      ? {
-          source: packSource,
-          agents: destination.agents,
-          method: "pack",
-          destination: "universal",
-          scope: "global",
-          project_path: null,
-        }
-      : undefined;
-  const packRequestKey = packRequest ? JSON.stringify(packRequest) : undefined;
-  const activePackTrust = packTrust?.requestKey === packRequestKey ? packTrust : undefined;
-
-  useEffect(() => {
-    return () => {
-      unlistenRef.current?.();
-      const token = packTrustTokenRef.current;
-      packTrustTokenRef.current = undefined;
-      if (token) void abandonPackImportTrust(token).catch(() => undefined);
-    };
-  }, []);
-
-  const claimPackTrustToken = (expected?: string) => {
-    const token = packTrustTokenRef.current;
-    if (!token || (expected && token !== expected)) return undefined;
-    packTrustTokenRef.current = undefined;
-    return token;
-  };
-
-  const abandonActivePackTrust = () => {
-    const token = claimPackTrustToken();
-    setPackTrust(undefined);
-    if (token) void abandonPackImportTrust(token).catch(() => undefined);
-  };
+  useEffect(() => () => unlistenRef.current?.(), []);
 
   useEffect(() => {
     if (!operation || !shouldConsumeAddSkillOperation(operation, consumedIdRef.current)) return;
@@ -782,51 +710,11 @@ function useAddSkillSubmit(input: {
     operationIdRef.current = undefined;
   }, [addToast, closeSheet, dispatch, openSkill, operation]);
 
-  /** Shows the pack import's outcome toast - a warning with the joined
-   * errors when any skill failed, else a plain success. Pulled out of
-   * `handleSubmit`'s try block: a ternary building a template-literal title
-   * is a "value block" the compiler won't optimize a try/catch around. */
-  const showPackImportToast = (result: {
-    bundled: unknown[];
-    referenced: unknown[];
-    errors: string[];
-  }) => {
-    const total = result.bundled.length + result.referenced.length;
-    const title = `Imported ${total} skill${total !== 1 ? "s" : ""}`;
-    if (result.errors.length > 0) {
-      addToast({ type: "warning", title, message: result.errors.join("; ") });
-    } else {
-      addToast({ type: "success", title });
-    }
-  };
-
   const handleSubmit = async () => {
     if ("error" in parsed || !isValid || operationIdRef.current) return;
-    if (method === "pack" && !packRequest) {
-      dispatch({ type: "submit_error", error: "Pack import needs a repository or local folder" });
-      return;
-    }
     dispatch({ type: "submit_start" });
     const projectArg = scope === "project" ? (projectPath ?? null) : null;
     try {
-      if (method === "pack") {
-        const preflight = await importSkillPack(packRequest!);
-        if (preflight.status === "needs-trust") {
-          abandonActivePackTrust();
-          packTrustTokenRef.current = preflight.confirmation_token;
-          setPackTrust({
-            identities: preflight.identities,
-            confirmationToken: preflight.confirmation_token,
-            requestKey: packRequestKey!,
-          });
-          dispatch({ type: "submit_end" });
-          return;
-        }
-        closeSheet();
-        showPackImportToast(preflight.result);
-        dispatch({ type: "submit_end" });
-        return;
-      }
       const operationId = crypto.randomUUID();
       operationIdRef.current = operationId;
       consumedIdRef.current = undefined;
@@ -876,12 +764,6 @@ function useAddSkillSubmit(input: {
   };
 
   const handleCancelOperation = async () => {
-    if (activePackTrust) {
-      abandonActivePackTrust();
-      dispatch({ type: "submit_end" });
-      closeSheet();
-      return;
-    }
     const operationId = operationIdRef.current;
     if (operationId && operation?.phase === "needs-trust") {
       unlistenRef.current?.();
@@ -917,27 +799,6 @@ function useAddSkillSubmit(input: {
   };
 
   const handleTrustAndRetry = async () => {
-    if (activePackTrust) {
-      if (!packRequest || trustBusy) return;
-      const confirmationToken = claimPackTrustToken(activePackTrust.confirmationToken);
-      if (!confirmationToken) return;
-      setTrustBusy(true);
-      try {
-        const result = await confirmSkillPackTrust(confirmationToken, packRequest);
-        setPackTrust(undefined);
-        closeSheet();
-        showPackImportToast(result);
-      } catch (error) {
-        void abandonPackImportTrust(confirmationToken).catch(() => undefined);
-        setPackTrust(undefined);
-        dispatch({
-          type: "submit_error",
-          error: error instanceof Error ? error.message : "Pack trust confirmation failed",
-        });
-      }
-      setTrustBusy(false);
-      return;
-    }
     const operationId = operationIdRef.current;
     const identity = operation?.untrusted_source?.identity;
     if (!operationId || !identity || trustBusy) return;
@@ -973,7 +834,6 @@ function useAddSkillSubmit(input: {
     handleCancelOperation,
     handleTrustAndRetry,
     operation,
-    packTrust: activePackTrust,
     trustBusy,
   };
 }
@@ -995,7 +855,7 @@ function ManualTabFields({
   claudeReadsShared,
   scopeNote,
 }: {
-  method: SheetMethod;
+  method: AddMethod;
   scope: InstallScope;
   projectPath: string | null;
   userAddedProjects: string[];
@@ -1012,24 +872,15 @@ function ManualTabFields({
 }) {
   return (
     <>
-      {method === "pack" && (
-        <p className="m-0 text-caption text-text-tertiary">
-          Imports every skill in this repo's pack to the Universal folder, plus any agents.toml row
-          pointing elsewhere - see the "Packs" section of the docs.
-        </p>
-      )}
-
-      {method !== "pack" && (
-        <ScopePicker
-          scope={scope}
-          projectPath={projectPath}
-          userAddedProjects={userAddedProjects}
-          note={scopeNote}
-          onScopeChange={(next) => dispatch({ type: "set_scope", scope: next })}
-          onProjectPathChange={(path) => dispatch({ type: "set_project_path", path })}
-          onBrowseProject={onBrowseProject}
-        />
-      )}
+      <ScopePicker
+        scope={scope}
+        projectPath={projectPath}
+        userAddedProjects={userAddedProjects}
+        note={scopeNote}
+        onScopeChange={(next) => dispatch({ type: "set_scope", scope: next })}
+        onProjectPathChange={(path) => dispatch({ type: "set_project_path", path })}
+        onBrowseProject={onBrowseProject}
+      />
 
       <InstallHarnessSelector
         offered={offeredHarnesses}
@@ -1042,7 +893,7 @@ function ManualTabFields({
         universalLockedReason={universalLockedReason}
         error={destinationError}
         claudeReadsShared={claudeReadsShared}
-        scope={method === "pack" ? "global" : scope}
+        scope={scope}
         lockedReason={method === "dotagents" ? DOTAGENTS_HARNESS_REASON : undefined}
       />
 
@@ -1057,7 +908,6 @@ function ManualTabFields({
 
 /** The normal Cancel/Submit footer, with its in-progress and terminal-failure copy. */
 function SubmitFooter({
-  method,
   submitLabel,
   isValid,
   isSubmitting,
@@ -1065,7 +915,6 @@ function SubmitFooter({
   onCancel,
   onSubmit,
 }: {
-  method: SheetMethod;
   submitLabel: string;
   isValid: boolean;
   isSubmitting: boolean;
@@ -1104,7 +953,7 @@ function SubmitFooter({
           onClick={onSubmit}
           disabled={!isValid || isSubmitting}
         >
-          {inProgress ? "Adding…" : method === "pack" ? "Import pack" : submitLabel}
+          {inProgress ? "Adding…" : submitLabel}
         </Button>
       </div>
     </div>
@@ -1114,32 +963,27 @@ function SubmitFooter({
 /** Cancel/submit footer, shown only on the "Add by source" tab. Picks
  * between the trust-confirmation footer and the normal one. */
 function ManualTabFooter({
-  method,
   submitLabel,
   isValid,
   isSubmitting,
   operation,
-  packTrust,
   trustBusy,
   onCancel,
   onSubmit,
   onTrustAndRetry,
 }: {
-  method: SheetMethod;
   submitLabel: string;
   isValid: boolean;
   isSubmitting: boolean;
   operation: AddSkillOperationEvent | undefined;
-  packTrust: PackTrustState | undefined;
   trustBusy: boolean;
   onCancel: () => void;
   onSubmit: () => void;
   onTrustAndRetry: () => void;
 }) {
-  if (packTrust || operation?.phase === "needs-trust") {
+  if (operation?.phase === "needs-trust") {
     return (
       <TrustConfirmFooter
-        packTrust={packTrust}
         untrustedIdentity={operation?.untrusted_source?.identity}
         trustBusy={trustBusy}
         onCancel={onCancel}
@@ -1149,7 +993,6 @@ function ManualTabFooter({
   }
   return (
     <SubmitFooter
-      method={method}
       submitLabel={submitLabel}
       isValid={isValid}
       isSubmitting={isSubmitting}
@@ -1165,7 +1008,7 @@ function ManualTabFooter({
  * out of `AddSkillSheet` so its body doesn't also carry this branch chain. */
 function deriveMethodAndVisibility(
   source: string,
-  methodChoice: SheetMethod,
+  methodChoice: AddMethod,
   pickedHarnesses: AgentId[] | null,
   universalChoice: boolean,
   keptHarnesses: string[],
@@ -1188,11 +1031,7 @@ function deriveMethodAndVisibility(
       : METHOD_TOOLTIPS[method];
 
   const detected = defaults?.installed_harnesses ?? [];
-  // Universal stays ticked when the source has no Copy method, and for a pack.
-  const universalLockedReason =
-    method === "pack"
-      ? "Pack import always writes the shared folder."
-      : universalLockReason(methods);
+  const universalLockedReason = universalLockReason(methods);
   const universal = universalChoice || universalLockedReason !== null;
   const claudeReadsShared = defaults?.claude_reads_shared_folder ?? false;
   const offeredHarnesses = offeredInstallHarnesses(detected, keptHarnesses);
@@ -1206,8 +1045,7 @@ function deriveMethodAndVisibility(
   );
   const destination = installDestinationFields({
     chosen: chosenHarnesses,
-    // A pack has its own request; only its agents come from here.
-    method: method === "pack" ? "copy" : method,
+    method,
     universal,
   });
   const destinationError = installDestinationError(universal, chosenHarnesses);
@@ -1233,14 +1071,8 @@ function deriveMethodAndVisibility(
  * which of them are checked. Pulled out of `AddSkillSheet` since it bundles
  * its own `useState` (the checked paths) with the listing hook above it.
  */
-function useAddSkillGithubSelection(
-  parsed: ParsedSkillSource | { error: string },
-  method: SheetMethod,
-) {
-  // A GitHub source is resolved to its actual skill folders before install -
-  // a pasted `/tree/.../skills` URL can hold many of them. Pack imports read
-  // the repo's own agents.toml instead, so they skip the listing.
-  const listingEnabled = !("error" in parsed) && parsed.kind === "github" && method !== "pack";
+function useAddSkillGithubSelection(parsed: ParsedSkillSource | { error: string }) {
+  const listingEnabled = !("error" in parsed) && parsed.kind === "github";
   const listingState = useGithubSkillListing(parsed, listingEnabled);
   const listedSkills = listingState.listing?.skills ?? [];
 
@@ -1372,7 +1204,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
       : parsed;
 
   const { listingState, githubEntries, selectedPaths, setSelectedPaths, listingBlocks } =
-    useAddSkillGithubSelection(submitParsed, method);
+    useAddSkillGithubSelection(submitParsed);
 
   const {
     isValid,
@@ -1380,11 +1212,9 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
     handleCancelOperation,
     handleTrustAndRetry,
     operation,
-    packTrust,
     trustBusy,
   } = useAddSkillSubmit({
     parsed: submitParsed,
-    method,
     noMethodsAvailable,
     destination,
     scope,
@@ -1532,12 +1362,10 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
 
         {sheetTab === "manual" && (
           <ManualTabFooter
-            method={method}
             submitLabel={submitLabel}
             isValid={isValid && !listingBlocks}
             isSubmitting={isSubmitting}
             operation={operation}
-            packTrust={packTrust}
             trustBusy={trustBusy}
             onCancel={handleCancelOperation}
             onSubmit={handleSubmit}

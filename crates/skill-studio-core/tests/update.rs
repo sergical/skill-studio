@@ -1916,9 +1916,11 @@ fn update_that_cannot_list_the_skills_root_fails_before_any_backup() {
     assert!(result.is_err());
     assert!(skill_body(&home, "alpha").contains("Body at v1"));
     assert!(
-        walk_files(&home.join(".history")).iter().all(|f| f
-            .file_name()
-            .is_some_and(|n| n.to_string_lossy().starts_with("events.sqlite3"))),
+        walk_files(&home.join(".history"))
+            .iter()
+            .all(|f| f.file_name().is_some_and(
+                |n| n == "schema_version" || n.to_string_lossy().starts_with("events.sqlite3")
+            )),
         "no backup may exist before the listing succeeds"
     );
 

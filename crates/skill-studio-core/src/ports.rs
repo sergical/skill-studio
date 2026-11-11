@@ -561,6 +561,16 @@ pub enum HistoryAccess {
 
 /// Opens the history store for a scope.
 pub trait HistoryOpener: Send + Sync {
+    /// Holds the history format guard before any mutation lease can write files.
+    fn guard_data_folder(&self) -> Result<Box<dyn Send>, CoreError> {
+        Ok(Box::new(()))
+    }
+
+    /// Checks history compatibility without creating or migrating history.
+    fn guard_read_data_folder(&self) -> Result<Box<dyn Send>, CoreError> {
+        self.guard_data_folder()
+    }
+
     /// Returns `None` for [`HistoryAccess::ReadIfExists`] when no store exists.
     fn open(
         &self,
@@ -1405,6 +1415,7 @@ pub struct MutationSession {
     pub store: Box<dyn HistoryStore>,
     /// Inventory scanned under the lease.
     pub fresh: Inventory,
+    _folder_guard: Box<dyn Send>,
 }
 
 impl MutationSession {
@@ -1429,6 +1440,7 @@ impl MutationSession {
         skills: &[crate::identity::SkillName],
     ) -> Result<Self, CoreError> {
         ctx.checkpoint()?;
+        let folder_guard = rt.ports.history.guard_data_folder()?;
         let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)?;
         let Some(mut store) = rt.ports.history.open(&rt.scope, HistoryAccess::ReadWrite)? else {
             return Err(CoreError::new(
@@ -1487,6 +1499,7 @@ impl MutationSession {
             guard,
             store,
             fresh,
+            _folder_guard: folder_guard,
         })
     }
 

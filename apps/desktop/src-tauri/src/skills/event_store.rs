@@ -39,11 +39,34 @@ use super::skill_md_write::{begin_skill_md_write_transaction, SkillMdWriteTransa
 
 /// Opens (creating if absent) the event store DB at `db_path` and ensures
 /// its schema exists.
-pub fn open(db_path: &Path) -> Result<Connection, String> {
-    if let Some(parent) = db_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+pub fn open(db_path: &Path) -> Result<GuardedConnection, String> {
+    let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+    let guard = skill_studio_host::lock_data_folders(&[parent])?;
+    Ok(GuardedConnection {
+        conn: open_locked(db_path)?,
+        _guard: guard,
+    })
+}
+
+pub struct GuardedConnection {
+    conn: Connection,
+    _guard: skill_studio_host::DataFolderGuard,
+}
+
+impl std::ops::Deref for GuardedConnection {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.conn
     }
+}
+
+impl std::ops::DerefMut for GuardedConnection {
+    fn deref_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
+}
+
+fn open_locked(db_path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(db_path)
         .map_err(|e| format!("Failed to open {}: {e}", db_path.display()))?;
     // The desktop's `EventStore` and the core's `SqliteHistoryStore`
@@ -83,6 +106,7 @@ pub fn open(db_path: &Path) -> Result<Connection, String> {
             restorable  INTEGER NOT NULL DEFAULT 1
         );
         CREATE INDEX IF NOT EXISTS idx_events_skill ON events(skill, ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 
         CREATE TABLE IF NOT EXISTS materialized_roots (
             root_path   TEXT PRIMARY KEY,
@@ -145,7 +169,7 @@ pub fn open(db_path: &Path) -> Result<Connection, String> {
 /// reconciliation now calls `skill_studio_core::journal::reconcile`
 /// against this store directly.
 pub struct EventStore {
-    pub conn: Connection,
+    pub conn: GuardedConnection,
     pub app_data: PathBuf,
     journal: skill_studio_core::journal::FsJournal,
 }
@@ -167,9 +191,12 @@ impl EventStore {
     /// history_db_path`), so Activity and Undo see every core `ops` mutation
     /// alongside the desktop's own.
     pub fn open_with_db(app_data: &Path, db_path: &Path) -> Result<Self, String> {
-        fs::create_dir_all(app_data)
-            .map_err(|e| format!("Failed to create {}: {e}", app_data.display()))?;
-        let conn = open(db_path)?;
+        let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+        let guard = skill_studio_host::lock_data_folders(&[app_data, parent])?;
+        let conn = GuardedConnection {
+            conn: open_locked(db_path)?,
+            _guard: guard,
+        };
         let journal = skill_studio_core::journal::FsJournal::new(
             app_data.join("journal"),
             std::sync::Arc::new(skill_studio_host::RealFs::new()),
@@ -1510,6 +1537,51 @@ mod tests {
     use super::*;
     use crate::skills::skill_md_write::skill_md_write_transaction_is_held;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn desktop_history_open_indexes_timestamp_pages_and_keeps_tie_order_or_sorts_the_whole_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("events.sqlite3");
+        let conn = open(&path).unwrap();
+        conn.execute("DROP INDEX IF EXISTS idx_events_ts", [])
+            .unwrap();
+        let fixtures = [
+            ("old", "2026-01-01T00:00:00Z"),
+            ("tied-first", "2026-02-01T00:00:00Z"),
+            ("tied-last", "2026-02-01T00:00:00Z"),
+        ];
+        for (id, ts) in fixtures {
+            conn.execute("INSERT INTO events (id,ts,kind,skill,payload,status) VALUES (?1,?2,'install','alpha','{}','done')", params![id, ts]).unwrap();
+        }
+        drop(conn);
+        let store = EventStore::open_with_db(tmp.path(), &path).unwrap();
+        let plan: Vec<String> = store
+            .conn
+            .prepare("EXPLAIN QUERY PLAN SELECT * FROM events ORDER BY ts DESC,rowid DESC LIMIT 2")
+            .unwrap()
+            .query_map([], |row| row.get(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|line| line.contains("idx_events_ts")),
+            "timestamp index missing: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|line| line.contains("TEMP B-TREE")),
+            "page still sorts the store: {plan:?}"
+        );
+        let rows = store.list(2, None).unwrap();
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            fixtures
+                .iter()
+                .rev()
+                .take(2)
+                .map(|(id, _)| *id)
+                .collect::<Vec<_>>()
+        );
+    }
 
     fn store(dir: &Path) -> EventStore {
         EventStore::open(&dir.join("app_data")).expect("open store")

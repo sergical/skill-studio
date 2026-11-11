@@ -77,3 +77,29 @@ write lease. Rows and expiry reasons stay in history.
 `history::tests::retention_crash_at_each_durable_step_preserves_files_and_recovery_or_exposes_a_partial_backup`
 and `journal::tests::completed_plan_retention_crash_at_every_durable_step_recovers_or_leaves_an_available_partial_backup`
 cut every filesystem mutation and flush, then run recovery.
+
+## Audit follow-up UI requests
+
+| Machine                   | Owner                           | States and legal moves                                                                                                                                                                                                                                             | Proof                                                                                                                                                                              |
+| ------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Manual skill update check | HomeUpdateCheck useActionState  | Result starts initial. A request from initial, checked or failed settles as checked or failed. React owns pending; Check now is disabled while pending. No request produces initial.                                                                               | HomeUpdateCheck.test.tsx walks initial → failed → checked and initial → checked → checked → failed → failed → checked, plus deferred busy state and both keyboard activation keys. |
+| Browse details            | SkillDetailsContent load effect | Remote sources start loading; a local source with no remote id starts failed. Current request settles loaded or failed. Retry moves failed → loading. A new skill id remounts in loading. Effect cleanup ignores old completions after unmount or a newer request. | SkillDetailPanel.test.tsx covers loading → failed → loading → loaded, normal loading → loaded, and a selected source change while loading.                                         |
+
+## Desktop background work
+
+`skills/background_work.rs::BackgroundState::run` owns scan, invocation, and
+update-check runs. Start adds one in-flight run. Finish removes one and records
+the result. The wire `running` value follows the in-flight count. It is not
+stored as a second flag. A successful finish clears the last error.
+`overlapping_runs_keep_the_worker_running_until_both_finish_or_hide_the_remaining_scan`
+and `background_failure_exposes_its_run_and_error_and_a_later_success_clears_it_or_leaves_stale_health`
+cover these moves. Each update advances the status revision.
+
+Unreadable update sources keep cached owners under the affected roots and finish
+with an error. Invocation cache write failures publish usable memory results and
+finish with an error. Startup begins with an empty snapshot and invocation index;
+the refresh thread loads the cache before its first scan.
+`unreadable_sources_keep_cached_owners_and_report_failure_or_erase_commits`,
+`invocation_refresh_publishes_results_and_failure_when_cache_write_fails_or_reports_healthy`,
+and `startup_returns_with_empty_state_before_cache_load_or_blocks_setup` guard
+these failure and startup paths.

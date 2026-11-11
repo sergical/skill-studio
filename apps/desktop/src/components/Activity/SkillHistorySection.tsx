@@ -14,6 +14,13 @@ import {
   Link2,
   Link2Off,
   Undo2,
+  Download,
+  Trash2,
+  RefreshCw,
+  GitFork,
+  SlidersHorizontal,
+  FilePenLine,
+  GitBranch,
 } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import { formatRelativeTime } from "@skill-studio/lib";
@@ -26,6 +33,7 @@ import {
   eventLabel,
   kindLabel,
   shouldOfferForceRestore,
+  restoreUnavailableReason,
 } from "./skill-history-restore-policy";
 
 const HARNESS_LABEL_BY_ID = new Map<string, string>(HARNESS_LABELS);
@@ -34,20 +42,41 @@ const HARNESS_LABEL_BY_ID = new Map<string, string>(HARNESS_LABELS);
 function iconForKind(kind: string, className: string) {
   const props = { size: 14, className: `shrink-0 ${className}` };
   switch (kind) {
+    case "install":
+      return <Download {...props} />;
+    case "remove":
+    case "quarantine_prune":
+      return <Trash2 {...props} />;
+    case "update":
+      return <RefreshCw {...props} />;
+    case "fork":
+      return <GitFork {...props} />;
+    case "invocation_change":
+      return <SlidersHorizontal {...props} />;
+    case "repair_skill_frontmatter":
+      return <FilePenLine {...props} />;
+    case "split":
+      return <GitBranch {...props} />;
     case "restore":
       return <Undo2 {...props} />;
     case "unlink_harness":
+    case "materialize_then_disable":
+    case "reconcile_remove_stale_link":
+    case "repair_remove_link":
     case "harness_disable":
       return <Link2Off {...props} />;
     case "relink_harness":
+    case "repair_relink_link":
     case "harness_enable":
       return <Link2 {...props} />;
     case "explode_shared_dir":
     case "distribute_from_shared":
     case "make_independent_copy":
       return <FolderSymlink {...props} />;
+    case "park":
     case "move_aside_disable":
       return <Archive {...props} />;
+    case "unpark":
     case "move_aside_restore":
       return <ArchiveRestore {...props} />;
     default:
@@ -171,7 +200,7 @@ function EventActions({
           Reveal in Finder
         </Button>
       )}
-      {canRestoreSkillEvent(event) && (
+      {canRestoreSkillEvent(event) ? (
         <Button
           variant="outline"
           size="sm"
@@ -181,6 +210,8 @@ function EventActions({
         >
           Restore
         </Button>
+      ) : (
+        <span className="text-caption text-text-tertiary">{restoreUnavailableReason(event)}</span>
       )}
     </>
   );

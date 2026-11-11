@@ -52,6 +52,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter skill-studio run types:check
 
+  host-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master, 2026-09-12
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo test -p skill-studio-host --all-features
+
   # Report-only for now: uploads the survivor list as an artifact and writes
   # a per-module score to the job summary, but never fails the PR. The
   # weekly job (.github/workflows/mutants.yml) has not produced a clean
