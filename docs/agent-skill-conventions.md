@@ -67,6 +67,13 @@ Frontmatter-based controls (`disable-model-invocation`, `user-invocable`) edit t
 Universal SKILL.md, so they apply to every agent that reads that folder or a symlink
 to it. Config-based controls for Codex and OpenCode apply to one harness.
 
+`skill-studio invocation [skill]` checks both skill-owned controls and reports
+manual, auto, or unsupported for each harness and copy. `--manual` or `--auto`
+writes both controls to all editable copies of the named skill. OpenCode's
+permission config cannot express this skill-owned manual-only policy, and Grok
+Build has no verified control. Both report unsupported; the setter does not
+change harness config files.
+
 ### Other Claude Code frontmatter fields
 
 `allowed-tools`, `disallowed-tools`, `context: fork`, `agent`, `background`, `paths`

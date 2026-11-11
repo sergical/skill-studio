@@ -127,6 +127,8 @@ pub enum Operation {
     /// it: the host crate's `usage_report` reads agent session history,
     /// which the core never touches.
     SkillUsage,
+    /// Check or set skill invocation across harnesses.
+    Invocation,
 }
 
 /// Outcome status of one call.
@@ -7965,6 +7967,7 @@ mod tests {
                     Operation::Split => "split",
                     Operation::TurnOffForAgent => "turn_off_for_agent",
                     Operation::SkillUsage => "skill_usage",
+                    Operation::Invocation => "invocation",
                 };
                 let value = serde_json::to_value(operation).unwrap();
                 assert_eq!(

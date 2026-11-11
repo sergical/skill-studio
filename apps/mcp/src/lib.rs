@@ -508,6 +508,24 @@ impl SkillStudioServer {
     }
 
     #[tool(
+        description = "Check invocation per harness. Supply skill and policy (user-only or both) to set all copies. Undo with the returned event_ids.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn invocation(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::ops_invocation::InvocationRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(
+            Operation::Invocation,
+            req.policy.is_some(),
+            &context,
+            |rt, ctx| skill_studio_core::ops_invocation::invocation(rt, ctx, &req),
+        )
+        .await
+    }
+
+    #[tool(
         description = "Update one installed skill from its source. Undo with restore_event and the event_id from the result.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]

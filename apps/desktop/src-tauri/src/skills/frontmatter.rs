@@ -6,7 +6,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// SKILL.md frontmatter, per the agentskills.io spec. Unknown keys are
@@ -65,16 +64,7 @@ impl FrontmatterParseResult {
 
 /// The three invocation-control states a skill's frontmatter can express -
 /// see `docs/agent-skill-conventions.md`'s "Invocation control" section.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum InvocationPolicy {
-    /// Both explicit (`/name`) and model auto-invoke are available.
-    Both,
-    /// `disable-model-invocation: true` - explicit invocation only.
-    UserOnly,
-    /// `user-invocable: false` - model auto-invoke only.
-    ModelOnly,
-}
+pub use skill_studio_core::frontmatter::InvocationPolicy;
 
 /// Reads `disable-model-invocation` and `user-invocable` off `frontmatter`
 /// into an `InvocationPolicy`, plus a spec-violation note when both keys are
@@ -91,19 +81,7 @@ pub fn invocation_policy(frontmatter: Option<&SkillFrontmatter>) -> (InvocationP
 /// `invocation_policy`, taking the two raw key values directly rather than a
 /// `SkillFrontmatter` - used by `skill_refresh::build_snapshot`, which only
 /// has `InstalledSkill.frontmatter_fields`'s stringified form to work from.
-pub fn invocation_policy_from(
-    disable_model_invocation: Option<bool>,
-    user_invocable: Option<bool>,
-) -> (InvocationPolicy, bool) {
-    let disable_model = disable_model_invocation.unwrap_or(false);
-    let user_invocable = user_invocable.unwrap_or(true);
-    match (disable_model, user_invocable) {
-        (true, false) => (InvocationPolicy::UserOnly, true), // conflicting keys
-        (true, true) => (InvocationPolicy::UserOnly, false),
-        (false, false) => (InvocationPolicy::ModelOnly, false),
-        (false, true) => (InvocationPolicy::Both, false),
-    }
-}
+pub use skill_studio_core::frontmatter::invocation_policy_from;
 
 /// Parse a complete SKILL.md frontmatter fence without losing YAML errors.
 pub fn parse_frontmatter(content: &str) -> FrontmatterParseResult {

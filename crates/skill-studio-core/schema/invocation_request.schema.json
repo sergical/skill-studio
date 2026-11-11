@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InvocationRequest",
+  "description": "Check a scope or set invocation for one skill.",
+  "type": "object",
+  "properties": {
+    "skill": {
+      "description": "Name filter; required for writes.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SkillName"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "policy": {
+      "description": "Absent checks only. A policy writes all copies of the named skill.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InvocationPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "deployment_id": {
+      "description": "Desktop edits one exact copy.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DeploymentId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "SkillName": {
+      "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
+      "type": "string"
+    },
+    "InvocationPolicy": {
+      "description": "The three invocation-control states a skill's frontmatter can express.",
+      "oneOf": [
+        {
+          "description": "Both explicit (`/name`) and model auto-invoke are available.",
+          "type": "string",
+          "const": "both"
+        },
+        {
+          "description": "`disable-model-invocation: true` - explicit invocation only.",
+          "type": "string",
+          "const": "user-only"
+        },
+        {
+          "description": "`user-invocable: false` - model auto-invoke only.",
+          "type": "string",
+          "const": "model-only"
+        }
+      ]
+    },
+    "DeploymentId": {
+      "description": "Opaque deployment id.\n\nInvariant: the string starts with `dep:v1/`. Its internal layout is a core\ndetail; adapters and the UI compare it as a string and never split it.",
+      "type": "string"
+    }
+  }
+}

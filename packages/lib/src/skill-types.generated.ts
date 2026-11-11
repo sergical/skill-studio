@@ -8,6 +8,31 @@
 // ============================================================================
 
 /**
+ * Lexical skill name: the directory name that holds `SKILL.md`.
+ *
+ * Invariant: two deployments with the same `SkillName` are the same skill,
+ * even when their bytes differ. A symlink alias with another name is another
+ * skill.
+ */
+export type SkillName = string;
+/**
+ * The three invocation-control states a skill's frontmatter can express.
+ */
+export type InvocationPolicy = "both" | "user-only" | "model-only";
+/**
+ * Opaque deployment id.
+ *
+ * Invariant: the string starts with `dep:v1/`. Its internal layout is a core
+ * detail; adapters and the UI compare it as a string and never split it.
+ */
+export type DeploymentId = string;
+/**
+ * History event id (ULID string).
+ *
+ * Invariant: lexical order equals creation order inside one store.
+ */
+export type EventId = string;
+/**
  * Which mechanism `Deployment.disabled` came from - see
  * `skill_harness_disable`. The first three are native per-harness switches;
  * `StudioMoved` is the universal fallback that renames the deployment's
@@ -130,23 +155,95 @@ export type AgentIdentity = string;
 export type FixApplied = {
   kind: "frontmatter_repair";
   /**
-   * Deployment written.
+   * Opaque deployment id.
+   *
+   * Invariant: the string starts with `dep:v1/`. Its internal layout is a core
+   * detail; adapters and the UI compare it as a string and never split it.
    */
   deployment_id: string;
   /**
-   * History event.
+   * History event id (ULID string).
+   *
+   * Invariant: lexical order equals creation order inside one store.
    */
   event_id: string;
 };
-/**
- * Lexical skill name: the directory name that holds `SKILL.md`.
- *
- * Invariant: two deployments with the same `SkillName` are the same skill,
- * even when their bytes differ. A symlink alias with another name is another
- * skill.
- */
-export type SkillName = string;
 
+/**
+ * Check a scope or set invocation for one skill.
+ */
+export interface InvocationRequest {
+  /**
+   * Name filter; required for writes.
+   */
+  skill: SkillName | null;
+  /**
+   * Absent checks only. A policy writes all copies of the named skill.
+   */
+  policy: InvocationPolicy | null;
+  /**
+   * Desktop edits one exact copy.
+   */
+  deployment_id: DeploymentId | null;
+}
+/**
+ * Scope invocation report and undo event ids.
+ */
+export interface InvocationReport {
+  /**
+   * Checked skills.
+   */
+  skills: SkillInvocationReport[];
+  /**
+   * Changes that can be undone through `restore_event`.
+   */
+  event_ids: EventId[];
+}
+/**
+ * Invocation agreement across a skill's copies.
+ */
+export interface SkillInvocationReport {
+  /**
+   * Lexical skill name: the directory name that holds `SKILL.md`.
+   *
+   * Invariant: two deployments with the same `SkillName` are the same skill,
+   * even when their bytes differ. A symlink alias with another name is another
+   * skill.
+   */
+  skill: string;
+  /**
+   * Per-harness modes.
+   */
+  deployments: InvocationDeployment[];
+  /**
+   * Skill-owned controls or copies disagree.
+   */
+  mismatch: boolean;
+}
+/**
+ * One harness reading an installed copy.
+ */
+export interface InvocationDeployment {
+  /**
+   * Opaque deployment id.
+   *
+   * Invariant: the string starts with `dep:v1/`. Its internal layout is a core
+   * detail; adapters and the UI compare it as a string and never split it.
+   */
+  deployment_id: string;
+  /**
+   * Harness that reads this copy.
+   */
+  harness: string;
+  /**
+   * Copy directory.
+   */
+  path: string;
+  /**
+   * Mode this harness reads.
+   */
+  mode: "manual" | "auto" | "unsupported";
+}
 /**
  * Everything the frontend needs about installed skills, discovered
  * projects, and invocation history, built together in one background pass.
@@ -311,8 +408,7 @@ export interface InstalledSkill {
    */
   parked_at: string | null;
   /**
-   * Which invocation channels this skill allows - see
-   * `frontmatter::invocation_policy`.
+   * The three invocation-control states a skill's frontmatter can express.
    */
   invocation: "both" | "user-only" | "model-only";
 }
@@ -474,10 +570,7 @@ export interface Deployment {
    */
   spec_violations: string[];
   /**
-   * Which invocation channels this deployment's own SKILL.md allows - see
-   * `frontmatter::invocation_policy`. Defaults to `Both`, same as
-   * `InstalledSkill.invocation`, for deployments serialized before this
-   * field existed (fixtures, cached snapshots).
+   * The three invocation-control states a skill's frontmatter can express.
    */
   invocation: "both" | "user-only" | "model-only";
   /**
@@ -1304,7 +1397,11 @@ export interface HarnessesChoice {
  */
 export interface FixSkillOutcome {
   /**
-   * Skill the fix ran for.
+   * Lexical skill name: the directory name that holds `SKILL.md`.
+   *
+   * Invariant: two deployments with the same `SkillName` are the same skill,
+   * even when their bytes differ. A symlink alias with another name is another
+   * skill.
    */
   skill: string;
   /**
@@ -1344,7 +1441,11 @@ export interface UnrepairedIssue {
  */
 export interface ConflictSummary {
   /**
-   * Skill the conflict belongs to.
+   * Lexical skill name: the directory name that holds `SKILL.md`.
+   *
+   * Invariant: two deployments with the same `SkillName` are the same skill,
+   * even when their bytes differ. A symlink alias with another name is another
+   * skill.
    */
   skill: string;
   /**
@@ -1365,11 +1466,16 @@ export interface ConflictSummary {
  */
 export interface ParkOutcome {
   /**
-   * The `park` event.
+   * History event id (ULID string).
+   *
+   * Invariant: lexical order equals creation order inside one store.
    */
   event_id: string;
   /**
-   * The deployment that was parked.
+   * Opaque deployment id.
+   *
+   * Invariant: the string starts with `dep:v1/`. Its internal layout is a core
+   * detail; adapters and the UI compare it as a string and never split it.
    */
   deployment_id: string;
   /**
@@ -1405,11 +1511,16 @@ export interface ParkCheck {
  */
 export interface UnparkOutcome {
   /**
-   * The `unpark` event.
+   * History event id (ULID string).
+   *
+   * Invariant: lexical order equals creation order inside one store.
    */
   event_id: string;
   /**
-   * The deployment that was restored.
+   * Opaque deployment id.
+   *
+   * Invariant: the string starts with `dep:v1/`. Its internal layout is a core
+   * detail; adapters and the UI compare it as a string and never split it.
    */
   deployment_id: string;
   /**
@@ -1422,15 +1533,24 @@ export interface UnparkOutcome {
  */
 export interface SplitOutcome {
   /**
-   * The `split` event.
+   * History event id (ULID string).
+   *
+   * Invariant: lexical order equals creation order inside one store.
    */
   event_id: string;
   /**
-   * The Universal deployment that was split.
+   * Opaque deployment id.
+   *
+   * Invariant: the string starts with `dep:v1/`. Its internal layout is a core
+   * detail; adapters and the UI compare it as a string and never split it.
    */
   deployment_id: string;
   /**
-   * The skill's name.
+   * Lexical skill name: the directory name that holds `SKILL.md`.
+   *
+   * Invariant: two deployments with the same `SkillName` are the same skill,
+   * even when their bytes differ. A symlink alias with another name is another
+   * skill.
    */
   skill: string;
   /**
@@ -1473,16 +1593,24 @@ export interface SplitCopy {
  */
 export interface AgentOffOutcome {
   /**
-   * The one event Activity can undo: it puts the shared folder back and
-   * removes the per-agent copies and the parked copy.
+   * History event id (ULID string).
+   *
+   * Invariant: lexical order equals creation order inside one store.
    */
   event_id: string;
   /**
-   * The Universal deployment that was split.
+   * Opaque deployment id.
+   *
+   * Invariant: the string starts with `dep:v1/`. Its internal layout is a core
+   * detail; adapters and the UI compare it as a string and never split it.
    */
   deployment_id: string;
   /**
-   * The skill's name.
+   * Lexical skill name: the directory name that holds `SKILL.md`.
+   *
+   * Invariant: two deployments with the same `SkillName` are the same skill,
+   * even when their bytes differ. A symlink alias with another name is another
+   * skill.
    */
   skill: string;
   /**
@@ -1543,15 +1671,24 @@ export interface AgentOffRefusal {
  */
 export interface RemoveOutcome {
   /**
-   * The `remove` event.
+   * History event id (ULID string).
+   *
+   * Invariant: lexical order equals creation order inside one store.
    */
   event_id: string;
   /**
-   * The deployment that was removed.
+   * Opaque deployment id.
+   *
+   * Invariant: the string starts with `dep:v1/`. Its internal layout is a core
+   * detail; adapters and the UI compare it as a string and never split it.
    */
   deployment_id: string;
   /**
-   * The skill that was removed.
+   * Lexical skill name: the directory name that holds `SKILL.md`.
+   *
+   * Invariant: two deployments with the same `SkillName` are the same skill,
+   * even when their bytes differ. A symlink alias with another name is another
+   * skill.
    */
   skill: string;
   /**
@@ -1572,11 +1709,17 @@ export interface RemoveOutcome {
  */
 export interface UpdateOutcome {
   /**
-   * The `update` event.
+   * History event id (ULID string).
+   *
+   * Invariant: lexical order equals creation order inside one store.
    */
   event_id: string;
   /**
-   * The skill that was updated.
+   * Lexical skill name: the directory name that holds `SKILL.md`.
+   *
+   * Invariant: two deployments with the same `SkillName` are the same skill,
+   * even when their bytes differ. A symlink alias with another name is another
+   * skill.
    */
   skill: string;
   /**
@@ -1619,7 +1762,11 @@ export interface UpdateAllOutcome {
  */
 export interface UpdateAllItem {
   /**
-   * The skill this result is for.
+   * Lexical skill name: the directory name that holds `SKILL.md`.
+   *
+   * Invariant: two deployments with the same `SkillName` are the same skill,
+   * even when their bytes differ. A symlink alias with another name is another
+   * skill.
    */
   skill: string;
   /**
