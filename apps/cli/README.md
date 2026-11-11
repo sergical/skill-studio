@@ -96,3 +96,13 @@ bare. Every invocation carries a fresh ULID `correlation_id`.
 
 The mapping is exact: it is `ErrorCode::exit_status()` in the core, tested
 there and exercised end-to-end in `apps/cli/tests/envelope.rs`.
+
+List hook events and counts, MCP server names, and instruction file paths:
+
+```sh
+skill-studio extras --project /path/to/repo --json
+```
+
+This reads declarations only. It does not show config values or instruction
+contents. Unreadable files have an `unreadable` row. Agent trust and enable
+settings can prevent a declaration from loading.

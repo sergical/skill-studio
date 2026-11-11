@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExtrasRequest",
+  "description": "Empty input. The runtime scope selects the home and projects.",
+  "type": "object"
+}

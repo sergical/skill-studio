@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExtrasReport",
+  "description": "Flat list of declarations. Trust and enable settings are not evaluated.",
+  "type": "object",
+  "properties": {
+    "entries": {
+      "description": "Declarations in stable harness, scope, path, kind, and name order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ExtraEntry"
+      }
+    }
+  },
+  "required": [
+    "entries"
+  ],
+  "$defs": {
+    "ExtraEntry": {
+      "description": "One declaration, or one file that could not be read.",
+      "type": "object",
+      "properties": {
+        "harness": {
+          "description": "Agent wire name.",
+          "type": "string"
+        },
+        "scope": {
+          "description": "`global` or `project`.",
+          "type": "string"
+        },
+        "project": {
+          "description": "Project root for a project declaration.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "`hook`, `mcp_server`, `instruction`, or `config` for an unreadable file.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Event, server, or instruction filename. Absent on unreadable files.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "File that declares this item.",
+          "type": "string"
+        },
+        "count": {
+          "description": "Handler count for hooks. One for other declarations, zero for unreadable files.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "status": {
+          "description": "`found` or `unreadable`. Parser errors are never exposed.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "harness",
+        "scope",
+        "kind",
+        "path",
+        "count",
+        "status"
+      ]
+    }
+  }
+}

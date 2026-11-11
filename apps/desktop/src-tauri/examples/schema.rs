@@ -35,6 +35,8 @@ use skill_studio_lib::skills::skill_refresh::{DiscoverySourceSetting, SkillSnaps
 #[derive(JsonSchema)]
 #[allow(dead_code)]
 struct WireTypes {
+    extras_report: skill_studio_core::extras::ExtrasReport,
+    extras_request: skill_studio_core::extras::ExtrasRequest,
     invocation_request: skill_studio_core::ops_invocation::InvocationRequest,
     invocation_report: skill_studio_core::ops_invocation::InvocationReport,
     skill_snapshot: SkillSnapshot,

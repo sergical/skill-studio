@@ -38,6 +38,7 @@ mod dotagents_saved_entries;
 pub mod dto;
 pub mod error;
 pub mod events;
+pub mod extras;
 pub mod frontmatter;
 pub mod frontmatter_repair;
 pub mod fsops;
