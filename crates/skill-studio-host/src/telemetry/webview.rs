@@ -5,8 +5,9 @@
 //! message text, URL, path, breadcrumb, user, or free-text span description
 //! survives.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use sentry::{ClientOptions, Envelope, TransportFactory};
 use serde_json::{Map, Value};
@@ -26,6 +27,39 @@ const MAX_EXCEPTIONS: usize = 5;
 const MAX_FRAMES: usize = 100;
 const MAX_SPANS: usize = 1000;
 const MAX_COMPONENT_STACK_LINES: usize = 50;
+
+/// The identifiers in the app's own JavaScript bundle. A function, class, or
+/// React component name in a webview report is kept only when it is one of
+/// these, so a skill, user, or path name reaches Sentry only when the
+/// shipped app already holds the same word.
+#[derive(Debug, Default)]
+pub struct CodeNames(HashSet<Box<str>>);
+
+impl CodeNames {
+    /// Collects every identifier in `sources`, the app's JavaScript files.
+    pub fn from_sources(sources: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        let mut names = HashSet::new();
+        for source in sources {
+            names.extend(
+                source
+                    .as_ref()
+                    .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '$')))
+                    .filter(|word| {
+                        word.len() <= 64 && word.starts_with(|c: char| !c.is_ascii_digit())
+                    })
+                    .map(Box::from),
+            );
+        }
+        Self(names)
+    }
+
+    /// `name`, or each part of a dotted `Object.render`, is in the bundle.
+    fn contains(&self, name: &str) -> bool {
+        is_identifier(name) && name.split('.').all(|part| self.0.contains(part))
+    }
+}
+
+type CodeNamesLoader = Box<dyn FnOnce() -> CodeNames + Send>;
 
 /// One envelope item as the webview transport sends it.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -90,13 +124,19 @@ pub struct WebviewTelemetry {
     client: Arc<sentry::Client>,
     consent: Consent,
     errors_sent: AtomicU32,
+    code_names: LazyLock<CodeNames, CodeNamesLoader>,
 }
 
 impl WebviewTelemetry {
     /// Builds the client when a webview DSN is available (compile-time
     /// `SKILL_STUDIO_SENTRY_WEBVIEW_DSN` wins, then the same variable at run
-    /// time). Returns `None` when there is no valid DSN.
-    pub fn init(app_version: &str, consent: Consent) -> Option<Self> {
+    /// time). Returns `None` when there is no valid DSN. `code_names` runs
+    /// once, on the first send, so reading the bundle never delays launch.
+    pub fn init(
+        app_version: &str,
+        consent: Consent,
+        code_names: impl FnOnce() -> CodeNames + Send + 'static,
+    ) -> Option<Self> {
         let dsn = resolve_dsn(
             option_env!("SKILL_STUDIO_SENTRY_WEBVIEW_DSN"),
             std::env::var(WEBVIEW_DSN_ENV_VAR).ok(),
@@ -104,7 +144,13 @@ impl WebviewTelemetry {
         let transport = Arc::new(ConsentTransportFactory {
             consent: consent.clone(),
         });
-        Some(Self::with_transport(dsn, app_version, consent, transport))
+        Some(Self::with_transport(
+            dsn,
+            app_version,
+            consent,
+            transport,
+            Box::new(code_names),
+        ))
     }
 
     fn with_transport(
@@ -112,6 +158,7 @@ impl WebviewTelemetry {
         app_version: &str,
         consent: Consent,
         transport: Arc<dyn TransportFactory>,
+        code_names: CodeNamesLoader,
     ) -> Self {
         let mut options = ClientOptions::default();
         options.dsn = Some(dsn);
@@ -126,6 +173,7 @@ impl WebviewTelemetry {
             client: Arc::new(sentry::Client::with_options(options)),
             consent,
             errors_sent: AtomicU32::new(0),
+            code_names: LazyLock::new(code_names),
         }
     }
 
@@ -146,6 +194,7 @@ impl WebviewTelemetry {
         let stamp = Stamp {
             release: options.release.as_deref(),
             environment: options.environment.as_deref(),
+            code_names: &self.code_names,
         };
         let mut body = Vec::new();
         let mut trace_id = None;
@@ -213,6 +262,7 @@ impl WebviewTelemetry {
 struct Stamp<'a> {
     release: Option<&'a str>,
     environment: Option<&'a str>,
+    code_names: &'a CodeNames,
 }
 
 fn item_trace_id(payload: &Value) -> Option<String> {
@@ -318,11 +368,14 @@ fn span_op(value: Option<&Value>) -> Option<Value> {
             "ipc",
             "navigation",
             "pageload",
-            "ui.long-task",
+            "ui.long_task",
+            "ui.long_animation_frame",
             "ui.interaction.click",
-            "ui.interaction.keypress",
-            "ui.interaction",
-            "ui.long-animation-frame",
+            "ui.interaction.press",
+            "ui.interaction.drag",
+            "ui.interaction.hover",
+            "ui.webvital.lcp",
+            "ui.webvital.cls",
         ],
     )
 }
@@ -333,8 +386,9 @@ fn span_origin(value: Option<&Value>) -> Option<Value> {
             "manual",
             "auto.navigation.browser",
             "auto.pageload.browser",
-            "auto.ui.browser",
             "auto.ui.browser.inp",
+            "auto.ui.browser.lcp",
+            "auto.ui.browser.cls",
             "auto.ui.browser.metrics",
         ],
     )
@@ -467,24 +521,62 @@ fn is_identifier(raw: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '$' | '.'))
 }
 
-/// A code-defined name such as an op (`ui.long-task`), a status
-/// (`deadline_exceeded`), or a view (`view.dashboard`).
-fn is_code_name(raw: &str) -> bool {
-    !raw.is_empty()
-        && raw.len() <= 64
+fn code_identifier(value: Option<&Value>, code_names: &CodeNames) -> Option<Value> {
+    let raw = value?.as_str()?;
+    code_names.contains(raw).then(|| raw.into())
+}
+
+/// The SDKs the webview can load. Any other name is dropped.
+const SDK_NAMES: &[&str] = &["sentry.javascript.react", "sentry.javascript.browser"];
+
+/// The built-in JavaScript error classes. An app class such as
+/// `ForkPullError` passes as a name from the bundle.
+const ERROR_TYPES: &[&str] = &[
+    "Error",
+    "TypeError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "EvalError",
+    "URIError",
+    "AggregateError",
+    "InternalError",
+    "DOMException",
+    "UnhandledRejection",
+];
+
+/// The mechanism types SDK 11's browser, core, and React packages set.
+const MECHANISM_TYPES: &[&str] = &[
+    "generic",
+    "chained",
+    "onerror",
+    "onunhandledrejection",
+    "instrument",
+    "auto.browser.global_handlers.onerror",
+    "auto.browser.global_handlers.onunhandledrejection",
+    "auto.browser.browserapierrors.setTimeout",
+    "auto.browser.browserapierrors.setInterval",
+    "auto.browser.browserapierrors.requestAnimationFrame",
+    "auto.browser.browserapierrors.addEventListener",
+    "auto.browser.browserapierrors.handleEvent",
+    "auto.browser.browserapierrors.xhr.onload",
+    "auto.browser.browserapierrors.xhr.onerror",
+    "auto.browser.browserapierrors.xhr.onprogress",
+    "auto.browser.browserapierrors.xhr.onreadystatechange",
+    "auto.core.linked_errors",
+    "auto.function.react.error_boundary",
+    "auto.function.react.error_handler",
+];
+
+/// `11.11.0`: digits and dots only, so it cannot carry a name.
+fn sdk_version(value: Option<&Value>) -> Option<Value> {
+    let raw = value?.as_str()?;
+    (raw.len() <= 16
+        && raw.split('.').count() <= 3
         && raw
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
-}
-
-fn identifier(value: Option<&Value>) -> Option<Value> {
-    let raw = value?.as_str()?;
-    is_identifier(raw).then(|| Value::String(raw.to_string()))
-}
-
-fn code_name(value: Option<&Value>) -> Option<Value> {
-    let raw = value?.as_str()?;
-    is_code_name(raw).then(|| Value::String(raw.to_string()))
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())))
+    .then(|| raw.into())
 }
 
 /// Keeps only `view.<name>`, the names the webview gives its screens.
@@ -526,12 +618,12 @@ fn stamp_common(out: &mut Map<String, Value>, payload: &Value, stamp: &Stamp<'_>
     put(
         &mut sdk_out,
         "name",
-        code_name(sdk.and_then(|sdk| sdk.get("name"))),
+        allowed(sdk.and_then(|sdk| sdk.get("name")), SDK_NAMES),
     );
     put(
         &mut sdk_out,
         "version",
-        code_name(sdk.and_then(|sdk| sdk.get("version"))),
+        sdk_version(sdk.and_then(|sdk| sdk.get("version"))),
     );
     if !sdk_out.is_empty() {
         out.insert("sdk".into(), Value::Object(sdk_out));
@@ -556,7 +648,7 @@ fn scrub_event(payload: &Value, stamp: &Stamp<'_>) -> Option<Value> {
         .rev()
         .take(MAX_EXCEPTIONS)
         .rev()
-        .map(scrub_exception)
+        .map(|exception| scrub_exception(exception, stamp.code_names))
         .collect();
     if exceptions.is_empty() {
         return None;
@@ -586,24 +678,29 @@ fn scrub_event(payload: &Value, stamp: &Stamp<'_>) -> Option<Value> {
     put(
         &mut contexts,
         "react",
-        scrub_react_context(payload.pointer("/contexts/react/componentStack")),
+        scrub_react_context(
+            payload.pointer("/contexts/react/componentStack"),
+            stamp.code_names,
+        ),
     );
     out.insert("contexts".into(), Value::Object(contexts));
     stamp_common(&mut out, payload, stamp);
     Some(Value::Object(out))
 }
 
-fn scrub_exception(exception: &Value) -> Value {
+fn scrub_exception(exception: &Value, code_names: &CodeNames) -> Value {
     let mut out = Map::new();
     out.insert(
         "type".into(),
-        identifier(exception.get("type")).unwrap_or_else(|| "Error".into()),
+        allowed(exception.get("type"), ERROR_TYPES)
+            .or_else(|| code_identifier(exception.get("type"), code_names))
+            .unwrap_or_else(|| "Error".into()),
     );
     if let Some(mechanism) = exception.get("mechanism") {
         let mut mechanism_out = Map::new();
         mechanism_out.insert(
             "type".into(),
-            code_name(mechanism.get("type")).unwrap_or_else(|| "generic".into()),
+            allowed(mechanism.get("type"), MECHANISM_TYPES).unwrap_or_else(|| "generic".into()),
         );
         put(
             &mut mechanism_out,
@@ -621,16 +718,20 @@ fn scrub_exception(exception: &Value) -> Value {
             .rev()
             .take(MAX_FRAMES)
             .rev()
-            .map(scrub_frame)
+            .map(|frame| scrub_frame(frame, code_names))
             .collect();
         out.insert("stacktrace".into(), serde_json::json!({ "frames": frames }));
     }
     Value::Object(out)
 }
 
-fn scrub_frame(frame: &Value) -> Value {
+fn scrub_frame(frame: &Value, code_names: &CodeNames) -> Value {
     let mut out = Map::new();
-    put(&mut out, "function", identifier(frame.get("function")));
+    put(
+        &mut out,
+        "function",
+        code_identifier(frame.get("function"), code_names),
+    );
     let file = frame
         .get("abs_path")
         .or_else(|| frame.get("filename"))
@@ -669,13 +770,13 @@ fn app_file(raw: &str) -> Option<String> {
 /// Rebuilds React's component stack from component names only. Each line
 /// of React's own stack (`at SkillRow (tauri://localhost/assets/x.js:1:2)`)
 /// becomes `at SkillRow`.
-fn scrub_react_context(component_stack: Option<&Value>) -> Option<Value> {
+fn scrub_react_context(component_stack: Option<&Value>, code_names: &CodeNames) -> Option<Value> {
     let raw = component_stack?.as_str()?;
     let names: Vec<&str> = raw
         .lines()
         .filter_map(|line| line.trim().strip_prefix("at "))
         .filter_map(|rest| rest.split([' ', '(']).next())
-        .filter(|name| is_identifier(name))
+        .filter(|name| code_names.contains(name))
         .take(MAX_COMPONENT_STACK_LINES)
         .collect();
     if names.is_empty() {
@@ -850,7 +951,7 @@ mod tests {
     use sentry::Transport;
 
     #[test]
-    fn sdk11_streamed_screen_ipc_long_task_and_inp_envelope_survives_without_schema_loss() {
+    fn sdk11_streamed_spans_keep_every_sdk_op_and_origin_without_schema_loss() {
         let fixture: Value =
             serde_json::from_str(include_str!("fixtures/sdk11-spans.json")).unwrap();
         let consent = Consent::new(true);
@@ -861,7 +962,8 @@ mod tests {
         assert_eq!(telemetry.send_json(&raw), 1);
         let bodies = sent(&recording);
         let header: Value = serde_json::from_str(bodies[0].lines().nth(1).unwrap()).unwrap();
-        assert_eq!(header["item_count"], 4);
+        let expected_items = sdk_item[1]["items"].as_array().unwrap();
+        assert_eq!(header["item_count"], expected_items.len());
         assert_eq!(
             header["content_type"],
             "application/vnd.sentry.items.span.v2+json"
@@ -872,7 +974,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .zip(sdk_item[1]["items"].as_array().unwrap())
+            .zip(expected_items)
         {
             for key in [
                 "trace_id",
@@ -884,10 +986,12 @@ mod tests {
             ] {
                 assert_eq!(actual[key], expected[key], "lost SDK field {key}");
             }
-            assert_eq!(
-                actual["attributes"]["sentry.op"],
-                expected["attributes"]["sentry.op"]
-            );
+            for attribute in ["sentry.op", "sentry.origin"] {
+                assert_eq!(
+                    actual["attributes"][attribute], expected["attributes"][attribute],
+                    "lost SDK attribute {attribute}"
+                );
+            }
         }
         assert_eq!(payload["items"][1]["name"], "scan_skills");
         assert_eq!(
@@ -901,6 +1005,7 @@ mod tests {
         let stamp = Stamp {
             release: None,
             environment: None,
+            code_names: &CodeNames::default(),
         };
         let payload = serde_json::json!({
             "transaction": "view.secret-skill", "start_timestamp": 1, "timestamp": 2,
@@ -948,6 +1053,10 @@ mod tests {
         )
         .is_none());
     }
+
+    /// Stands in for the shipped bundle: the names the test events use.
+    const APP_BUNDLE: &str =
+        "function renderRow(){} class ForkPullError extends Error{} const SkillRow=()=>jsx(\"div\")";
 
     const SENTINELS: &[&str] = &[
         "Users",
@@ -997,6 +1106,7 @@ mod tests {
             "9.9.9",
             consent.clone(),
             Arc::new(FixedTransportFactory(recording.clone())),
+            Box::new(|| CodeNames::from_sources([APP_BUNDLE])),
         );
         (telemetry, recording)
     }
@@ -1140,6 +1250,56 @@ mod tests {
         assert_eq!(event["release"], "skill-studio@9.9.9");
     }
 
+    /// guards: a skill or user name that uses only identifier characters
+    /// reaching Sentry as an SDK name, SDK version, exception type,
+    /// mechanism type, function name, or React component name. Also guards
+    /// the scrub dropping an app error class or a dotted function name from
+    /// the bundle.
+    #[test]
+    fn webview_names_not_in_the_sdk_or_the_app_bundle_are_replaced() {
+        let consent = Consent::new(true);
+        let (telemetry, recording) = webview(&consent);
+        let event = serde_json::json!({
+            "exception": { "values": [
+                {
+                    "type": "private_skill",
+                    "mechanism": { "type": "secret_skill", "handled": true },
+                    "stacktrace": { "frames": [
+                        { "function": "private_skill" },
+                        { "function": "renderRow.private_skill" },
+                        { "function": "SkillRow.renderRow" }
+                    ] }
+                },
+                { "type": "ForkPullError", "mechanism": { "type": "auto.core.linked_errors" } }
+            ] },
+            "contexts": { "react": { "componentStack": "\n    at private_skill\n    at SkillRow" } },
+            "sdk": { "name": "alice", "version": "secret_skill" }
+        });
+
+        telemetry.send(vec![item("event", event)]);
+
+        let body = sent(&recording).pop().expect("one envelope was sent");
+        for secret in ["private_skill", "secret_skill", "alice"] {
+            assert!(!body.contains(secret), "{secret:?} reached Sentry: {body}");
+        }
+        let event = &items_of(&body)[0];
+        let first = &event["exception"]["values"][0];
+        assert_eq!(first["type"], "Error");
+        assert_eq!(first["mechanism"]["type"], "generic");
+        let frames = first["stacktrace"]["frames"].as_array().unwrap();
+        assert!(frames[0].get("function").is_none());
+        assert!(frames[1].get("function").is_none());
+        assert_eq!(frames[2]["function"], "SkillRow.renderRow");
+        let second = &event["exception"]["values"][1];
+        assert_eq!(second["type"], "ForkPullError");
+        assert_eq!(second["mechanism"]["type"], "auto.core.linked_errors");
+        assert_eq!(
+            event["contexts"]["react"]["componentStack"],
+            "\n    at SkillRow"
+        );
+        assert!(event.get("sdk").is_none());
+    }
+
     /// guards: a span description, span attribute, or transaction name that
     /// carries a path or a skill name reaching Sentry, and an `ipc` span
     /// losing the command name that links it to the Rust command root.
@@ -1170,7 +1330,7 @@ mod tests {
                 {
                     "span_id": "d7ad6b7169203331", "parent_span_id": "b7ad6b7169203331",
                     "trace_id": "0af7651916cd43dd8448eb211c80319c",
-                    "op": "ui.long-task", "description": "/Users/alice/secret-skill",
+                    "op": "ui.long_task", "description": "/Users/alice/secret-skill",
                     "start_timestamp": 1_700_000_000.3, "timestamp": 1_700_000_000.4
                 },
                 {

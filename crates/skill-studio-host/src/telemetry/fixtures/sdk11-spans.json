@@ -1,12 +1,12 @@
 [
   {
-    "sent_at": "2026-11-11T02:33:44.781Z"
+    "sent_at": "2026-11-11T02:50:33.084Z"
   },
   [
     [
       {
         "type": "span",
-        "item_count": 4,
+        "item_count": 11,
         "content_type": "application/vnd.sentry.items.span.v2+json"
       },
       {
@@ -14,7 +14,7 @@
         "items": [
           {
             "name": "view.home",
-            "span_id": "0123456789abcde0",
+            "span_id": "0123456789abcd00",
             "trace_id": "0123456789abcdef0123456789abcdef",
             "parent_span_id": "fedcba9876543210",
             "start_timestamp": 1700000000,
@@ -23,7 +23,7 @@
             "status": "ok",
             "attributes": {
               "sentry.origin": {
-                "value": "manual",
+                "value": "auto.navigation.browser",
                 "type": "string"
               },
               "sentry.op": {
@@ -38,7 +38,7 @@
           },
           {
             "name": "scan_skills",
-            "span_id": "0123456789abcde1",
+            "span_id": "0123456789abcd01",
             "trace_id": "0123456789abcdef0123456789abcdef",
             "parent_span_id": "fedcba9876543210",
             "start_timestamp": 1700000001,
@@ -62,7 +62,7 @@
           },
           {
             "name": "view.home",
-            "span_id": "0123456789abcde2",
+            "span_id": "0123456789abcd02",
             "trace_id": "0123456789abcdef0123456789abcdef",
             "parent_span_id": "fedcba9876543210",
             "start_timestamp": 1700000002,
@@ -71,11 +71,11 @@
             "status": "ok",
             "attributes": {
               "sentry.origin": {
-                "value": "manual",
+                "value": "auto.ui.browser.metrics",
                 "type": "string"
               },
               "sentry.op": {
-                "value": "ui.long-task",
+                "value": "ui.long_task",
                 "type": "string"
               },
               "sentry.segment.name": {
@@ -86,7 +86,7 @@
           },
           {
             "name": "view.home",
-            "span_id": "0123456789abcde3",
+            "span_id": "0123456789abcd03",
             "trace_id": "0123456789abcdef0123456789abcdef",
             "parent_span_id": "fedcba9876543210",
             "start_timestamp": 1700000003,
@@ -95,7 +95,7 @@
             "status": "ok",
             "attributes": {
               "sentry.origin": {
-                "value": "manual",
+                "value": "auto.ui.browser.inp",
                 "type": "string"
               },
               "sentry.op": {
@@ -109,6 +109,174 @@
               "browser.web_vital.inp.value": {
                 "value": 100,
                 "type": "integer"
+              }
+            }
+          },
+          {
+            "name": "view.home",
+            "span_id": "0123456789abcd04",
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "parent_span_id": "fedcba9876543210",
+            "start_timestamp": 1700000004,
+            "end_timestamp": 1700000004.1,
+            "is_segment": true,
+            "status": "ok",
+            "attributes": {
+              "sentry.origin": {
+                "value": "auto.pageload.browser",
+                "type": "string"
+              },
+              "sentry.op": {
+                "value": "pageload",
+                "type": "string"
+              },
+              "sentry.segment.name": {
+                "value": "view.home",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "view.home",
+            "span_id": "0123456789abcd05",
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "parent_span_id": "fedcba9876543210",
+            "start_timestamp": 1700000005,
+            "end_timestamp": 1700000005.1,
+            "is_segment": true,
+            "status": "ok",
+            "attributes": {
+              "sentry.origin": {
+                "value": "auto.ui.browser.metrics",
+                "type": "string"
+              },
+              "sentry.op": {
+                "value": "ui.long_animation_frame",
+                "type": "string"
+              },
+              "sentry.segment.name": {
+                "value": "view.home",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "view.home",
+            "span_id": "0123456789abcd06",
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "parent_span_id": "fedcba9876543210",
+            "start_timestamp": 1700000006,
+            "end_timestamp": 1700000006.1,
+            "is_segment": true,
+            "status": "ok",
+            "attributes": {
+              "sentry.origin": {
+                "value": "auto.ui.browser.inp",
+                "type": "string"
+              },
+              "sentry.op": {
+                "value": "ui.interaction.press",
+                "type": "string"
+              },
+              "sentry.segment.name": {
+                "value": "view.home",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "view.home",
+            "span_id": "0123456789abcd07",
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "parent_span_id": "fedcba9876543210",
+            "start_timestamp": 1700000007,
+            "end_timestamp": 1700000007.1,
+            "is_segment": true,
+            "status": "ok",
+            "attributes": {
+              "sentry.origin": {
+                "value": "auto.ui.browser.inp",
+                "type": "string"
+              },
+              "sentry.op": {
+                "value": "ui.interaction.drag",
+                "type": "string"
+              },
+              "sentry.segment.name": {
+                "value": "view.home",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "view.home",
+            "span_id": "0123456789abcd08",
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "parent_span_id": "fedcba9876543210",
+            "start_timestamp": 1700000008,
+            "end_timestamp": 1700000008.1,
+            "is_segment": true,
+            "status": "ok",
+            "attributes": {
+              "sentry.origin": {
+                "value": "auto.ui.browser.inp",
+                "type": "string"
+              },
+              "sentry.op": {
+                "value": "ui.interaction.hover",
+                "type": "string"
+              },
+              "sentry.segment.name": {
+                "value": "view.home",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "view.home",
+            "span_id": "0123456789abcd09",
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "parent_span_id": "fedcba9876543210",
+            "start_timestamp": 1700000009,
+            "end_timestamp": 1700000009.1,
+            "is_segment": true,
+            "status": "ok",
+            "attributes": {
+              "sentry.origin": {
+                "value": "auto.ui.browser.lcp",
+                "type": "string"
+              },
+              "sentry.op": {
+                "value": "ui.webvital.lcp",
+                "type": "string"
+              },
+              "sentry.segment.name": {
+                "value": "view.home",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "view.home",
+            "span_id": "0123456789abcd0a",
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "parent_span_id": "fedcba9876543210",
+            "start_timestamp": 1700000010,
+            "end_timestamp": 1700000010.1,
+            "is_segment": true,
+            "status": "ok",
+            "attributes": {
+              "sentry.origin": {
+                "value": "auto.ui.browser.cls",
+                "type": "string"
+              },
+              "sentry.op": {
+                "value": "ui.webvital.cls",
+                "type": "string"
+              },
+              "sentry.segment.name": {
+                "value": "view.home",
+                "type": "string"
               }
             }
           }

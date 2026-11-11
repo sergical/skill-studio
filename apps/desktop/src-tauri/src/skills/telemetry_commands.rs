@@ -16,7 +16,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use skill_studio_host::telemetry::{Consent, TelemetryGuard, WebviewTelemetry};
+use skill_studio_host::telemetry::{CodeNames, Consent, TelemetryGuard, WebviewTelemetry};
 use tauri::Manager;
 
 /// The Tauri-managed telemetry state: the live consent flag every command
@@ -32,6 +32,26 @@ pub struct TelemetryState {
     /// The client for webview envelopes. `None` when no
     /// `SKILL_STUDIO_SENTRY_WEBVIEW_DSN` was set at build or run time.
     pub webview: Option<WebviewTelemetry>,
+}
+
+/// The identifiers in the JavaScript the app ships. A dev build serves the
+/// webview from the dev server and embeds no assets, so its set is empty.
+pub fn bundle_code_names<R: tauri::Runtime>(assets: &tauri::AssetResolver<R>) -> CodeNames {
+    let scripts: Vec<String> = assets
+        .iter()
+        .map(|(path, _)| path.into_owned())
+        .filter(|path| {
+            Path::new(path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("js"))
+        })
+        .collect();
+    CodeNames::from_sources(
+        scripts
+            .into_iter()
+            .filter_map(|path| assets.get(path))
+            .map(|asset| String::from_utf8_lossy(&asset.bytes).into_owned()),
+    )
 }
 
 /// The saved switch, straight off disk - like `get_discovery_sources`, this
