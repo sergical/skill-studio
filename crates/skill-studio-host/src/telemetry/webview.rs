@@ -175,13 +175,10 @@ fn scrub_item(kind: &str, payload: &Value, stamp: &Stamp<'_>) -> Option<Value> {
     }
 }
 
-fn is_hex_id(raw: &str, len: usize) -> bool {
-    raw.len() == len && raw.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
 fn hex_id(value: Option<&Value>, len: usize) -> Option<Value> {
     let raw = value?.as_str()?;
-    is_hex_id(raw, len).then(|| Value::String(raw.to_ascii_lowercase()))
+    (raw.len() == len && raw.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| Value::String(raw.to_ascii_lowercase()))
 }
 
 fn number(value: Option<&Value>) -> Option<Value> {
