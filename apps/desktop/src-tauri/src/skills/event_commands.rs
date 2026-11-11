@@ -493,42 +493,48 @@ pub async fn materialize_harness_root(
     root: String,
 ) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, trace, "materialize_harness_root", move || {
-        let refresh_state = app.state::<SkillRefreshState>();
-        let event_store = app.state::<EventStoreState>();
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        let write_lease = super::write_lease::WriteLease::default();
-        let retention_guard = write_lease.try_acquire(&home)?;
-        let root_path = PathBuf::from(&root);
-        skill_materialize::validate_materialize_root(&root_path)?;
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "materialize_harness_root",
+        move || {
+            let refresh_state = app.state::<SkillRefreshState>();
+            let event_store = app.state::<EventStoreState>();
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            let write_lease = super::write_lease::WriteLease::default();
+            let retention_guard = write_lease.try_acquire(&home)?;
+            let root_path = PathBuf::from(&root);
+            skill_materialize::validate_materialize_root(&root_path)?;
 
-        let snapshot =
-            super::skill_lifecycle::rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
-        let universal_root = validate_materialize_request(&snapshot, &target, &harness, &root)?;
-        let resolved_harness_root = std::fs::canonicalize(&root_path)
-            .map_err(|error| format!("Failed to resolve {root}: {error}"))?;
-        let resolved_universal_root = std::fs::canonicalize(&universal_root).map_err(|error| {
-            format!(
-                "Failed to resolve selected Universal root {}: {error}",
-                universal_root.display()
-            )
-        })?;
-        if resolved_harness_root != resolved_universal_root {
-            return Err(format!(
-                "{root} does not point to the selected copy's exact scoped Universal root {}",
-                universal_root.display()
-            ));
-        }
+            let snapshot =
+                super::skill_lifecycle::rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
+            let universal_root = validate_materialize_request(&snapshot, &target, &harness, &root)?;
+            let resolved_harness_root = std::fs::canonicalize(&root_path)
+                .map_err(|error| format!("Failed to resolve {root}: {error}"))?;
+            let resolved_universal_root =
+                std::fs::canonicalize(&universal_root).map_err(|error| {
+                    format!(
+                        "Failed to resolve selected Universal root {}: {error}",
+                        universal_root.display()
+                    )
+                })?;
+            if resolved_harness_root != resolved_universal_root {
+                return Err(format!(
+                    "{root} does not point to the selected copy's exact scoped Universal root {}",
+                    universal_root.display()
+                ));
+            }
 
-        let guard = locked_store(&event_store)?;
-        let store = guard.as_ref().ok_or("Event store is unavailable")?;
-        skill_materialize::explode_shared_dir(store, &root_path, &harness)?;
-        store.retain_backups(retention_guard.as_exclusive_guard());
-        drop(guard);
+            let guard = locked_store(&event_store)?;
+            let store = guard.as_ref().ok_or("Event store is unavailable")?;
+            skill_materialize::explode_shared_dir(store, &root_path, &harness)?;
+            store.retain_backups(retention_guard.as_exclusive_guard());
+            drop(guard);
 
-        skill_refresh::request_snapshot_rebuild(&app);
-        Ok(())
-    })
+            skill_refresh::request_snapshot_rebuild(&app);
+            Ok(())
+        },
+    )
     .await
 }
 
