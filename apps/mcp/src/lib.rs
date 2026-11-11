@@ -36,7 +36,27 @@ struct SkillSelectionRequest {
 impl SkillSelectionRequest {
     fn single_id(
         self,
+        rt: &Runtime,
+        ctx: &OpContext,
+        unpark: bool,
     ) -> Result<skill_studio_core::identity::DeploymentId, skill_studio_core::CoreError> {
+        if let Some(skills) = self.skills {
+            if self.deployment_id.is_some() {
+                return Err(CoreError::new(
+                    skill_studio_core::ErrorCode::InvalidRequest,
+                    "Pass deployment_id or skills, not both.",
+                ));
+            }
+            return ops::resolve_batch_names(rt, ctx, &skills, unpark)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    CoreError::new(
+                        skill_studio_core::ErrorCode::InvalidRequest,
+                        "Pass at least one skill name.",
+                    )
+                });
+        }
         self.deployment_id.ok_or_else(|| {
             skill_studio_core::CoreError::new(
                 skill_studio_core::ErrorCode::InvalidRequest,
@@ -613,7 +633,7 @@ impl SkillStudioServer {
         Parameters(req): Parameters<SkillSelectionRequest>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        if let Some(skills) = req.skills.clone() {
+        if let Some(skills) = req.skills.clone().filter(|names| names.len() != 1) {
             return run_op(Operation::Park, true, &context, |rt, ctx| {
                 if req.deployment_id.is_some() {
                     return Err(skill_studio_core::CoreError::new(
@@ -631,7 +651,7 @@ impl SkillStudioServer {
         }
         run_op(Operation::Park, true, &context, |rt, ctx| {
             let req = ParkRequest {
-                deployment_id: req.single_id()?,
+                deployment_id: req.single_id(rt, ctx, false)?,
             };
             let warning = ops::park_git_warning(rt, ctx, &req.deployment_id);
             let mut outcome = ops::park(rt, ctx, &req)?;
@@ -700,7 +720,7 @@ impl SkillStudioServer {
         Parameters(req): Parameters<SkillSelectionRequest>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        if let Some(skills) = req.skills.clone() {
+        if let Some(skills) = req.skills.clone().filter(|names| names.len() != 1) {
             return run_op(Operation::Unpark, true, &context, |rt, ctx| {
                 if req.deployment_id.is_some() {
                     return Err(skill_studio_core::CoreError::new(
@@ -718,7 +738,7 @@ impl SkillStudioServer {
         }
         run_op(Operation::Unpark, true, &context, |rt, ctx| {
             let req = UnparkRequest {
-                deployment_id: req.single_id()?,
+                deployment_id: req.single_id(rt, ctx, true)?,
             };
             ops::unpark(rt, ctx, &req)
         })

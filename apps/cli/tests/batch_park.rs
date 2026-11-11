@@ -186,3 +186,118 @@ fn batch_unpark_refuses_bad_names_before_restoring_any_copy_on_cli_and_mcp() {
         }
     }
 }
+
+#[test]
+fn occupied_park_slot_refuses_all_names_instead_of_parking_alpha() {
+    for surface in ["park", "mcp"] {
+        let home = tempfile::tempdir().unwrap();
+        for name in ["alpha", "beta"] {
+            skill(home.path(), name);
+        }
+        std::fs::create_dir_all(home.path().join(".agents/skills-parked/universal/beta")).unwrap();
+        let result = park(home.path(), surface, &["alpha", "beta"]);
+        assert_eq!(result["status"], "error", "{result}");
+        assert!(result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("beta"));
+        assert!(
+            home.path().join(".agents/skills/alpha/SKILL.md").exists(),
+            "alpha moved: {result}"
+        );
+    }
+}
+
+#[test]
+fn occupied_restore_destination_refuses_all_names_instead_of_restoring_alpha() {
+    for surface in ["park", "mcp"] {
+        let home = tempfile::tempdir().unwrap();
+        for name in ["alpha", "beta"] {
+            skill(home.path(), name);
+        }
+        assert_eq!(
+            park(home.path(), surface, &["alpha", "beta"])["status"],
+            "ok"
+        );
+        std::fs::create_dir_all(home.path().join(".agents/skills/beta")).unwrap();
+        let result = if surface == "mcp" {
+            mcp(home.path(), "unpark", &json!({"skills": ["alpha", "beta"]}))["result"]
+                ["structuredContent"]
+                .clone()
+        } else {
+            cli(home.path(), &["unpark", "alpha", "beta"])
+        };
+        assert_eq!(result["status"], "error", "{result}");
+        assert!(result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("beta"));
+        assert!(
+            !home.path().join(".agents/skills/alpha").exists(),
+            "alpha restored: {result}"
+        );
+    }
+}
+
+#[test]
+fn mid_batch_io_failure_keeps_done_event_and_names_failed_and_untried_items() {
+    use std::os::unix::fs::PermissionsExt;
+    for surface in ["park", "mcp"] {
+        let home = tempfile::tempdir().unwrap();
+        for name in ["alpha", "beta", "gamma"] {
+            skill(home.path(), name);
+        }
+        let parent = home.path().join(".codex/skills");
+        std::fs::create_dir_all(&parent).unwrap();
+        std::fs::rename(home.path().join(".agents/skills/beta"), parent.join("beta")).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = park(home.path(), surface, &["alpha", "beta", "gamma"]);
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(result["status"], "partial", "{result}");
+        assert!(
+            result["data"]["items"][0]["event_id"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()),
+            "{result}"
+        );
+        let history = cli(home.path(), &["events", "--skill", "alpha"]);
+        assert_eq!(
+            history["data"][0]["id"],
+            result["data"]["items"][0]["event_id"]
+        );
+        assert_eq!(result["data"]["failure"]["skill"], "beta");
+        assert_eq!(result["data"]["not_tried"], json!(["gamma"]));
+        assert!(home.path().join(".agents/skills/gamma/SKILL.md").exists());
+    }
+}
+
+#[test]
+fn one_name_mcp_matches_cli_instead_of_returning_a_batch() {
+    let home = tempfile::tempdir().unwrap();
+    skill(home.path(), "alpha");
+    for operation in ["park", "unpark"] {
+        if operation == "unpark" {
+            assert_eq!(cli(home.path(), &["park", "alpha"])["status"], "ok");
+        }
+        let mut cli_result = cli(home.path(), &[operation, "alpha"]);
+        let reverse = if operation == "park" {
+            "unpark"
+        } else {
+            "park"
+        };
+        assert_eq!(cli(home.path(), &[reverse, "alpha"])["status"], "ok");
+        let mut mcp_result = mcp(home.path(), operation, &json!({"skills":["alpha"]}))["result"]
+            ["structuredContent"]
+            .clone();
+        assert_eq!(cli_result["status"], "ok", "{cli_result}");
+        assert_eq!(mcp_result["status"], "ok", "{mcp_result}");
+        for result in [&mut cli_result, &mut mcp_result] {
+            for key in ["correlation_id", "event_id", "timings"] {
+                result.as_object_mut().unwrap().remove(key);
+            }
+            result["data"].as_object_mut().unwrap().remove("event_id");
+        }
+        assert_eq!(cli_result, mcp_result);
+        assert_eq!(cli(home.path(), &[reverse, "alpha"])["status"], "ok");
+    }
+}

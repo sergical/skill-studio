@@ -581,6 +581,9 @@ pub fn print_batch_park_outcome_table(
                 item.parked_path.display()
             );
         }
+        for name in &outcome.not_tried {
+            println!("Not tried: {}.", name.0);
+        }
     }
 }
 
@@ -624,6 +627,9 @@ pub fn print_batch_unpark_outcome_table(
                 item.deployment_id.as_str(),
                 item.event_id.0
             );
+        }
+        for name in &outcome.not_tried {
+            println!("Not tried: {}.", name.0);
         }
     }
 }

@@ -62,6 +62,13 @@ Batch CLI and MCP checks are in `apps/cli/tests/batch_park.rs`:
 `batch_unpark_refuses_bad_names_before_restoring_any_copy_on_cli_and_mcp`.
 The core checks every name before the first move. Each item keeps its event id
 and git warnings. Use `unpark a b` to turn parked skills on again.
+`occupied_park_slot_refuses_all_names_instead_of_parking_alpha` and
+`occupied_restore_destination_refuses_all_names_instead_of_restoring_alpha`
+check destinations before any move.
+`mid_batch_io_failure_keeps_done_event_and_names_failed_and_untried_items`
+checks that a runtime failure retains completed results and event ids, names
+the failed item, and lists the items not tried.
+`one_name_mcp_matches_cli_instead_of_returning_a_batch` checks the single-name shape.
 
 ## Timing
 

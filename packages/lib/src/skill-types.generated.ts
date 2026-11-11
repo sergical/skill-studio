@@ -1399,6 +1399,59 @@ export interface BatchParkOutcome {
    * One normal park result per skill.
    */
   items: ParkOutcome[];
+  /**
+   * Item that failed after validation, when a runtime error stopped the batch.
+   */
+  failure: BatchFailure | null;
+  /**
+   * Items skipped after the failure.
+   */
+  not_tried: SkillName[];
+}
+/**
+ * The failed item and its error. Earlier items keep their normal results.
+ */
+export interface BatchFailure {
+  /**
+   * Lexical skill name: the directory name that holds `SKILL.md`.
+   *
+   * Invariant: two deployments with the same `SkillName` are the same skill,
+   * even when their bytes differ. A symlink alias with another name is another
+   * skill.
+   */
+  skill: string;
+  error: ErrorEntry;
+}
+/**
+ * Reason the item failed.
+ */
+export interface ErrorEntry {
+  /**
+   * Stable code.
+   */
+  code:
+    | "invalid_request"
+    | "invalid_scope"
+    | "ambiguous_target"
+    | "unsupported"
+    | "backup_expired"
+    | "execution_failed"
+    | "io"
+    | "scope_busy"
+    | "stale_proposal"
+    | "drift_conflict"
+    | "ownership_changed"
+    | "already_reverted"
+    | "incomplete"
+    | "cancelled";
+  /**
+   * Human-readable message.
+   */
+  message: string;
+  /**
+   * Display path relative to the scope home, when there is one.
+   */
+  path: string | null;
 }
 /**
  * Results of turning a batch of parked skills on.
@@ -1408,6 +1461,14 @@ export interface BatchUnparkOutcome {
    * One normal unpark result per skill, in request order.
    */
   items: UnparkOutcome[];
+  /**
+   * Item that failed after validation, when a runtime error stopped the batch.
+   */
+  failure: BatchFailure | null;
+  /**
+   * Items skipped after the failure.
+   */
+  not_tried: SkillName[];
 }
 /**
  * Result of `unpark`.
