@@ -1273,6 +1273,12 @@ impl SkillInvocationIndex {
 
         for path in listing.files {
             seen.insert(path.clone());
+            let log_root = source
+                .watch
+                .iter()
+                .map(|watch| (watch.dir)(home))
+                .find(|root| path.starts_with(root))
+                .unwrap_or_else(|| owned_root.clone());
 
             let Ok(meta) = fs::metadata(&path) else {
                 continue;
@@ -1281,7 +1287,12 @@ impl SkillInvocationIndex {
             let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
 
             if is_zstd(&path) {
-                self.refresh_compressed(home, &path, &meta, parse, run_budget, report);
+                let file = TranscriptFile {
+                    home,
+                    path: &path,
+                    modified: DateTime::<Utc>::from(modified),
+                };
+                self.refresh_compressed(&file, &log_root, &meta, parse, run_budget, report);
                 continue;
             }
 
@@ -1326,6 +1337,10 @@ impl SkillInvocationIndex {
 
             if *run_budget == 0 {
                 report.incomplete = true;
+                report.observations.push(UsageObservation {
+                    path: log_root.clone(),
+                    reason: "History read byte budget reached".into(),
+                });
                 continue;
             }
 
@@ -1377,6 +1392,10 @@ impl SkillInvocationIndex {
             uses.extend(parse(&file, &text, &mut context));
             if parsed_bytes < size {
                 report.incomplete = true;
+                report.observations.push(UsageObservation {
+                    path: log_root.clone(),
+                    reason: "Transcript read stopped before end of file".into(),
+                });
             }
 
             report.files_reparsed += 1;
@@ -1426,13 +1445,14 @@ impl SkillInvocationIndex {
 
     fn refresh_compressed(
         &mut self,
-        home: &Path,
-        path: &Path,
+        transcript: &TranscriptFile,
+        root: &Path,
         meta: &fs::Metadata,
         parse: fn(&TranscriptFile, &str, &mut TranscriptContext) -> Vec<SkillInvocation>,
         run_budget: &mut u64,
         report: &mut SkillUseRefreshReport,
     ) {
+        let path = transcript.path;
         let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let previous = self
             .files
@@ -1443,6 +1463,10 @@ impl SkillInvocationIndex {
         }
         if *run_budget == 0 {
             report.incomplete = true;
+            report.observations.push(UsageObservation {
+                path: root.to_path_buf(),
+                reason: "History read byte budget reached".into(),
+            });
             return;
         }
         let mut entry = previous.cloned().unwrap_or(IndexedTranscript {
@@ -1472,11 +1496,6 @@ impl SkillInvocationIndex {
             }
             let mut reader = BufReader::new(decoder);
             let mut remaining = self.file_budget.min(*run_budget);
-            let file = TranscriptFile {
-                home,
-                path,
-                modified: DateTime::<Utc>::from(modified),
-            };
             while remaining > 0 {
                 let mut line = Vec::new();
                 let n = reader
@@ -1510,7 +1529,9 @@ impl SkillInvocationIndex {
                 }
                 match std::str::from_utf8(&line) {
                     Ok(text) if serde_json::from_str::<serde_json::Value>(text).is_ok() => {
-                        entry.uses.extend(parse(&file, text, &mut entry.context));
+                        entry
+                            .uses
+                            .extend(parse(transcript, text, &mut entry.context));
                     }
                     _ => entry.skipped_lines += 1,
                 }
@@ -1534,7 +1555,13 @@ impl SkillInvocationIndex {
             }];
         }
         report.files_reparsed += 1;
-        report.incomplete |= !entry.compressed_complete;
+        if !entry.compressed_complete {
+            report.incomplete = true;
+            report.observations.push(UsageObservation {
+                path: root.to_path_buf(),
+                reason: "Compressed transcript read stopped at the byte budget".into(),
+            });
+        }
         self.files.insert(path.to_path_buf(), entry);
     }
 

@@ -145,12 +145,6 @@ impl SkillUsage {
 
         let mut observations = self.index.observations(home, &sources);
         observations.extend(refresh.observations);
-        if refresh.incomplete {
-            observations.push(crate::skill_uses::UsageObservation {
-                path: home.to_path_buf(),
-                reason: "History refresh is incomplete (read budget or listing failure)".into(),
-            });
-        }
         if inventory.completeness == Completeness::Partial {
             observations.push(crate::skill_uses::UsageObservation {
                 path: home.to_path_buf(),
