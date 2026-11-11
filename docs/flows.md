@@ -162,7 +162,7 @@ checks spaced names and inline `config = [...]` rules.
 | List skills past their review date | CLI/MCP-only  | `skill-studio review due [--json]`                      | `review_due`   | `review_due_uses_fake_clock_and_excludes_today_instead_of_reading_wall_time`; `review_due_reuses_the_cli_usage_cache_instead_of_writing_a_second_index`; `review_cli_mcp_json_matches_for_set_due_clear_and_unknown_or_one_adapter_drifts` |
 
 Dates use UTC. A date becomes due on the next day. Counts cover distinct
-sessions across all available history. The due list refreshes the same usage cache as
+sessions in the last 30 days, the `usage` default window. The due list refreshes the same usage cache as
 `skill-studio usage` and includes every usage observation when counts are
 partial. A removed skill leaves the due list, and its date can still be cleared.
 Review dates are Skill Studio data in `~/.agents/review-dates.json`.

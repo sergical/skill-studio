@@ -1747,9 +1747,10 @@ async fn review_cli_mcp_json_matches_for_set_due_clear_and_unknown_or_one_adapte
     .unwrap();
     let logs = home.path().join(".claude/projects/work");
     std::fs::create_dir_all(&logs).unwrap();
+    let yesterday = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
     std::fs::write(logs.join("session.jsonl"), concat!(
         r#"{"type":"assistant","sessionId":"session-1","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"gamma"}}]}}"#,
-        "\nbad json\n")).unwrap();
+        "\nbad json\n").replace("2026-01-01T00:00:00Z", &yesterday)).unwrap();
     let home_str = home.path().to_str().unwrap();
     let (client, _) = connect(&[
         ("HOME", home_str),

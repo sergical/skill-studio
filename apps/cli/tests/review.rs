@@ -26,9 +26,10 @@ fn review_set_due_counts_fixture_sessions_and_clear_removes_or_future_dates_leak
     .unwrap();
     let logs = home.path().join(".claude/projects/work");
     std::fs::create_dir_all(&logs).unwrap();
+    let yesterday = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
     std::fs::write(logs.join("session.jsonl"), concat!(
         "{\"type\":\"assistant\",\"sessionId\":\"session-1\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Skill\",\"input\":{\"skill\":\"gamma\"}}]}}\n",
-        "bad json\n")).unwrap();
+        "bad json\n").replace("2026-01-01T00:00:00Z", &yesterday)).unwrap();
     assert_eq!(
         run(home.path(), &["set", "gamma", "2000-01-01"])["status"],
         "ok"
@@ -78,7 +79,8 @@ fn gamma_with_one_session(home: &Path) {
     .unwrap();
     let logs = home.join(".claude/projects/work");
     std::fs::create_dir_all(&logs).unwrap();
-    std::fs::write(logs.join("session.jsonl"), "{\"type\":\"assistant\",\"sessionId\":\"session-1\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Skill\",\"input\":{\"skill\":\"gamma\"}}]}}\n").unwrap();
+    let yesterday = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
+    std::fs::write(logs.join("session.jsonl"), "{\"type\":\"assistant\",\"sessionId\":\"session-1\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Skill\",\"input\":{\"skill\":\"gamma\"}}]}}\n".replace("2026-01-01T00:00:00Z", &yesterday)).unwrap();
 }
 
 #[test]

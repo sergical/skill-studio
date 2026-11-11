@@ -119,7 +119,7 @@ pub struct ReviewRow {
     pub skill: String,
     /// Saved date in YYYY-MM-DD form.
     pub review_date: String,
-    /// Distinct sessions across all available history.
+    /// Distinct sessions in the last 30 days, the `usage` default window.
     pub sessions: usize,
 }
 /// History that could not be counted.

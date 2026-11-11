@@ -37,6 +37,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The welcome screen stays open and shows the reason when saving the choice fails.
 - Interrupted writes are recovered before new commands; Undo restores every backup; history pages stay fast.
 - Network requests to skills.sh, GitHub and the proxy time out instead of hanging.
+- `usage` counts sessions and triggers only in the `--days` window; all-time uses stay in `total_uses`.
+- `invocation` reports a mismatch only when one harness reads a skill as auto and another as manual; one copy or `unsupported` copies never mismatch.
 
 ### Removed
 

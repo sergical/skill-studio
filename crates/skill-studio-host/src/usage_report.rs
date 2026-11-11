@@ -41,9 +41,9 @@ pub fn cli_usage_cache_path(desktop_cache: &Path) -> PathBuf {
 /// One installed skill's uses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkillUsageRow {
-    /// Distinct (harness, session id) pairs across the selected history.
+    /// Distinct (harness, session id) pairs in the last `days` days.
     pub sessions: usize,
-    /// Uses by trigger across the selected history.
+    /// Uses in the last `days` days, by trigger.
     pub triggers: BTreeMap<String, u32>,
     /// The skill's name.
     pub skill: String,
@@ -221,6 +221,14 @@ impl SkillUsage {
                 continue;
             };
             tally.total += 1;
+            if tally.last_used.is_none_or(|last| use_.at > last) {
+                tally.last_used = Some(use_.at);
+            }
+            if use_.at < cutoff {
+                continue;
+            }
+            tally.recent += 1;
+            *tally.agents.entry(use_.harness.clone()).or_insert(0) += 1;
             if let Some(session) = &use_.session {
                 tally
                     .sessions
@@ -232,13 +240,6 @@ impl SkillUsage {
                 skill_studio_core::skill_uses::SkillTrigger::FileRead => "file_read",
             };
             *tally.triggers.entry(trigger.to_string()).or_default() += 1;
-            if tally.last_used.is_none_or(|last| use_.at > last) {
-                tally.last_used = Some(use_.at);
-            }
-            if use_.at >= cutoff {
-                tally.recent += 1;
-                *tally.agents.entry(use_.harness.clone()).or_insert(0) += 1;
-            }
         }
 
         let mut rows: Vec<SkillUsageRow> = by_skill

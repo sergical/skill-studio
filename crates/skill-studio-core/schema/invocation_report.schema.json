@@ -40,7 +40,7 @@
           }
         },
         "mismatch": {
-          "description": "Skill-owned controls or copies disagree.",
+          "description": "One harness reads this skill as auto and another as manual; `unsupported` does not count.",
           "type": "boolean"
         }
       },
