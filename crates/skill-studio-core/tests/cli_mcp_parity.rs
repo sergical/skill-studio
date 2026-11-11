@@ -64,6 +64,11 @@ const EXCLUSIONS: &[Exclusion] = &[
                   desktop's Locations card; the CLI and MCP park through `park`, which already \
                   unlists the skill",
     },
+    Exclusion {
+        name: "resolve_batch_names",
+        reason: "the name-to-id step `park_batch` and `unpark_batch` share; MCP tools that \
+                  take a `skills` list call it to find one copy's id, not a request/outcome op",
+    },
 ];
 
 /// An `ops` function whose surface spells it differently: the op's name,
@@ -79,6 +84,14 @@ const CLI_SUBCOMMANDS: &[SurfaceName] = &[
     SurfaceName {
         op: "scan_for_usage",
         surface: "usage",
+    },
+    SurfaceName {
+        op: "park_batch",
+        surface: "park",
+    },
+    SurfaceName {
+        op: "unpark_batch",
+        surface: "unpark",
     },
     SurfaceName {
         op: "preview_frontmatter_repair",
@@ -121,6 +134,14 @@ const MCP_TOOLS: &[SurfaceName] = &[
     SurfaceName {
         op: "scan_for_usage",
         surface: "skill_usage",
+    },
+    SurfaceName {
+        op: "park_batch",
+        surface: "park",
+    },
+    SurfaceName {
+        op: "unpark_batch",
+        surface: "unpark",
     },
     SurfaceName {
         op: "fix_skill",

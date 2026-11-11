@@ -366,6 +366,85 @@ something worth fixing for every skill) and a skill with an update available
 (that's the "Updates" section on Home, a routine action, not a health
 problem).
 
+## Model listing budgets
+
+Verified on 2026-11-11 against installed Claude Code 2.1.319 and Codex CLI
+0.167.0. `skill-studio doctor --json` and the MCP `doctor` tool return
+`listing_cost` for each harness and session scope. Project rows include global
+skills. Codex and Claude keep same-name skills from different files and remove
+duplicate file paths. Parked, hidden, disabled-plugin, and manual-only skills
+do not enter the count. Codex also rejects missing or blank descriptions.
+The five largest entries help the owner choose skills to park or make manual-only.
+
+Claude's installed executable at `~/.local/share/claude/versions/2.1.319`
+contains its JavaScript. `dOt` computes the character budget as context tokens
+multiplied by four, then by `skillListingBudgetFraction`, default 0.01.
+`Z9t` reads `skillListingMaxDescChars`, default 1536. `Y_n` counts the name,
+capped description, list punctuation, and newlines. `X_n` keeps names and removes
+lower-priority descriptions when the list is over budget. `cOt` adds
+`when_to_use` text. `yt` reads merged settings, including user
+`~/.claude/settings.json`, project `.claude/settings.json`, and project
+`.claude/settings.local.json`. Managed settings and session flags can also apply.
+The skill directory loader removes duplicate real file paths. It keeps name
+collisions and calls `t0t` with `resolves: false`. Plugin skill loading also
+removes duplicate real paths. Disabled plugins do not supply skills.
+The listing call uses `Xh(mainLoopModel, jp())` for the active context size and
+`E_(mainLoopModel)` for the character ratio. If no context is supplied, `dOt`
+uses 200000 tokens. An environment character-budget override and experiments
+can change the live budget.
+
+Codex's installed package identifies version 0.167.0. Its binary contains
+`SkillsConfig.max_context_tokens`, `SkillMetadataBudget`, and the bounded-list
+warnings from `ext/skills/src/render.rs`. The matching
+[tagged renderer source](https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/ext/skills/src/render.rs)
+sets the budget to 2% of the supplied context window. Without one, it uses 8000
+characters. An explicit `skills.max_context_tokens` overrides this and is capped
+at 10000 tokens. The renderer caps descriptions at 1024 characters. It counts
+names, descriptions, locators, line syntax, and any root-alias overhead. It uses
+UTF-8 bytes divided by four for token estimates. It shortens descriptions, then
+omits entries if even their names and locators do not fit. Extension listings
+can use `interface.short_description` from `agents/openai.yaml`. The
+[config type](https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/config/src/skills_config.rs)
+loads through Codex's config layers, which can include user, project, and session
+settings. The [host merge](https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/ext/skills/src/loader/host_merge.rs)
+uses document paths as identity. Each distinct file keeps its own locator.
+The [parser](https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/skills/src/parser.rs)
+rejects descriptions that are empty after whitespace normalization.
+`[[skills.config]] enabled = false` selects a document by canonical path in
+any root, including Universal. Other readers of that file stay enabled.
+The [config loader](https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/config/src/loader/mod.rs)
+loads project layers from the project root to the working directory. It checks
+user `projects.<path>.trust_level` records for the directory, then the project
+root, then the repository trust root. Untrusted project layers do not apply.
+The active model supplies the context size; `model_context_window`
+can override it.
+
+Skill Studio estimates name, capped description, punctuation, and Codex's file
+locator in UTF-16 characters, or UTF-8 bytes for Codex, divided by four,
+rounded up. This is a planning
+estimate before budget reduction, not a copy of a running session's prompt.
+It does not reproduce plugin namespaces, cloud skills, alias tables, short
+descriptions, runtime flags, environment overrides, managed policy, or model
+catalog selection. The scan's completeness still applies. It reads Claude user
+and selected project settings. It reads Codex's user config,
+`model_context_window`, and trusted project
+`.codex/config.toml` layers. Each budget reports the file that supplied it.
+Project trust uses exact and canonical path records and the nearest configured
+project root marker, `.git` by default. Separate worktree repository trust
+roots, system config, and session overrides are not resolved. Without a session
+context, it reports Claude's 200000
+token default or Codex's 8000-character fallback as 2000 estimated tokens. The
+`limit_source` and `uses_default_context_window` fields state the fallback.
+An unknown limit is null with source `no known limit`. OpenCode, pi, Cursor, and
+Grok Build currently have no known listing limit. `near_limit` starts at 80%;
+`over_limit` means the estimate exceeds the budget. These are warning findings.
+
+Manual-only checks are per harness. Claude, pi, and Cursor read
+`disable-model-invocation: true`; Codex reads
+`policy.allow_implicit_invocation: false` in `agents/openai.yaml`; OpenCode reads
+`metadata["opencode/autoinvoke"]: false`. A restriction for one harness does not
+hide a skill from another harness that does not support that field.
+
 ## Non-skill configuration inventory
 
 `skill-studio extras [--project <path>] [--json]` and the MCP `extras` tool

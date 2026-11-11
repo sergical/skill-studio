@@ -309,7 +309,33 @@ pub fn print_doctor_report_table(envelope: &ResultEnvelope<DoctorReport>) {
     let Some(report) = &envelope.data else {
         return;
     };
-    if report.violations.is_empty() {
+    for row in &report.listing_cost {
+        println!(
+            "{} {:?}: {} skills, ~{} tokens (chars/4), limit {} [{}]{}",
+            row.harness,
+            row.scope,
+            row.listed_skills,
+            row.estimated_tokens_chars_div_4,
+            row.limit_tokens
+                .map_or_else(|| "no known limit".into(), |n| n.to_string()),
+            row.limit_source,
+            if row.uses_default_context_window {
+                " (default context window)"
+            } else {
+                ""
+            }
+        );
+        if let Some(warning) = &row.warning {
+            println!("warning: {warning}");
+        }
+        for skill in &row.top_skills {
+            println!(
+                "  {}: ~{} tokens",
+                skill.name, skill.estimated_tokens_chars_div_4
+            );
+        }
+    }
+    if report.violations.is_empty() && report.listing_cost.iter().all(|r| r.warning.is_none()) {
         println!("No problems found ({} skills checked).", report.checked);
         return;
     }
@@ -579,6 +605,25 @@ pub fn print_remove_outcome_table(envelope: &ResultEnvelope<RemoveOutcome>) {
     }
 }
 
+pub fn print_batch_park_outcome_table(
+    envelope: &ResultEnvelope<skill_studio_core::dto::BatchParkOutcome>,
+) {
+    print_errors(envelope);
+    if let Some(outcome) = &envelope.data {
+        for item in &outcome.items {
+            println!(
+                "Parked {}. Event {}. Now in {}.",
+                item.deployment_id.as_str(),
+                item.event_id.0,
+                item.parked_path.display()
+            );
+        }
+        for name in &outcome.not_tried {
+            println!("Not tried: {}.", name.0);
+        }
+    }
+}
+
 /// Prints `park`'s table: the deployment and where its directory now lives.
 pub fn print_park_outcome_table(envelope: &ResultEnvelope<ParkOutcome>) {
     print_errors(envelope);
@@ -606,6 +651,24 @@ pub fn print_split_outcome_table(envelope: &ResultEnvelope<skill_studio_core::dt
         );
     }
     println!("{}", outcome.update_note);
+}
+
+pub fn print_batch_unpark_outcome_table(
+    envelope: &ResultEnvelope<skill_studio_core::dto::BatchUnparkOutcome>,
+) {
+    print_errors(envelope);
+    if let Some(outcome) = &envelope.data {
+        for item in &outcome.items {
+            println!(
+                "Turned on {}. Event {}.",
+                item.deployment_id.as_str(),
+                item.event_id.0
+            );
+        }
+        for name in &outcome.not_tried {
+            println!("Not tried: {}.", name.0);
+        }
+    }
 }
 
 /// Prints `unpark`'s table: the deployment and where its directory now lives.

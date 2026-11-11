@@ -24,6 +24,48 @@
 //! test needs to call a tool handler directly (as opposed to spawning the
 //! binary and talking stdio) lives here instead.
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SkillSelectionRequest {
+    /// One copy to change. Cannot be used with skills.
+    deployment_id: Option<skill_studio_core::identity::DeploymentId>,
+    /// Names to change together. All names are checked before any move.
+    skills: Option<Vec<skill_studio_core::identity::SkillName>>,
+}
+
+impl SkillSelectionRequest {
+    fn single_id(
+        self,
+        rt: &Runtime,
+        ctx: &OpContext,
+        unpark: bool,
+    ) -> Result<skill_studio_core::identity::DeploymentId, skill_studio_core::CoreError> {
+        if let Some(skills) = self.skills {
+            if self.deployment_id.is_some() {
+                return Err(CoreError::new(
+                    skill_studio_core::ErrorCode::InvalidRequest,
+                    "Pass deployment_id or skills, not both.",
+                ));
+            }
+            return ops::resolve_batch_names(rt, ctx, &skills, unpark)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    CoreError::new(
+                        skill_studio_core::ErrorCode::InvalidRequest,
+                        "Pass at least one skill name.",
+                    )
+                });
+        }
+        self.deployment_id.ok_or_else(|| {
+            skill_studio_core::CoreError::new(
+                skill_studio_core::ErrorCode::InvalidRequest,
+                "Pass deployment_id or skills.",
+            )
+        })
+    }
+}
+
 pub mod scope;
 
 use std::sync::{Arc, Mutex, PoisonError};
@@ -57,7 +99,6 @@ use skill_studio_host::SkillUsage;
 const DEV_TOOLS: &[&str] = &[
     "capabilities",
     "harnesses",
-    "doctor",
     "sweep_quarantine",
     "install_preferences",
 ];
@@ -475,7 +516,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Check all skills for broken state. This writes nothing. An empty list means all is well.",
+        description = "Check skill state and model listing cost per harness. Reports near or over budget warnings and the five largest skills. This writes nothing.",
         annotations(read_only_hint = true)
     )]
     async fn doctor(
@@ -583,15 +624,34 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Turn a skill off for every agent by moving it aside. Use it for unused skills. Undo with unpark.",
+        description = "Turn skills off for every agent by moving them aside. Pass skills as a list of names, or deployment_id for one copy. All names are checked before any move. Each result has an event_id. Undo with unpark.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn park(
         &self,
-        Parameters(req): Parameters<ParkRequest>,
+        Parameters(req): Parameters<SkillSelectionRequest>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
+        if let Some(skills) = req.skills.clone().filter(|names| names.len() != 1) {
+            return run_op(Operation::Park, true, &context, |rt, ctx| {
+                if req.deployment_id.is_some() {
+                    return Err(skill_studio_core::CoreError::new(
+                        skill_studio_core::ErrorCode::InvalidRequest,
+                        "Pass deployment_id or skills, not both.",
+                    ));
+                }
+                ops::park_batch(
+                    rt,
+                    ctx,
+                    &skill_studio_core::dto::BatchParkRequest { skills },
+                )
+            })
+            .await;
+        }
         run_op(Operation::Park, true, &context, |rt, ctx| {
+            let req = ParkRequest {
+                deployment_id: req.single_id(rt, ctx, false)?,
+            };
             let warning = ops::park_git_warning(rt, ctx, &req.deployment_id);
             let mut outcome = ops::park(rt, ctx, &req)?;
             outcome.warnings.extend(warning);
@@ -651,15 +711,34 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Turn a parked skill back on for every agent. This undoes park.",
+        description = "Turn parked skills back on for every agent. Pass skills as a list of names, or deployment_id for one copy. All names are checked before any move. Undo with park.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn unpark(
         &self,
-        Parameters(req): Parameters<UnparkRequest>,
+        Parameters(req): Parameters<SkillSelectionRequest>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
+        if let Some(skills) = req.skills.clone().filter(|names| names.len() != 1) {
+            return run_op(Operation::Unpark, true, &context, |rt, ctx| {
+                if req.deployment_id.is_some() {
+                    return Err(skill_studio_core::CoreError::new(
+                        skill_studio_core::ErrorCode::InvalidRequest,
+                        "Pass deployment_id or skills, not both.",
+                    ));
+                }
+                ops::unpark_batch(
+                    rt,
+                    ctx,
+                    &skill_studio_core::dto::BatchParkRequest { skills },
+                )
+            })
+            .await;
+        }
         run_op(Operation::Unpark, true, &context, |rt, ctx| {
+            let req = UnparkRequest {
+                deployment_id: req.single_id(rt, ctx, true)?,
+            };
             ops::unpark(rt, ctx, &req)
         })
         .await

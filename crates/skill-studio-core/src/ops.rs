@@ -155,6 +155,11 @@ pub trait Outcome {
         OpStatus::Ok
     }
 
+    /// Errors reported with retained result data.
+    fn errors(&self) -> Vec<ErrorEntry> {
+        Vec::new()
+    }
+
     /// True when a complete result still reports problems the user must
     /// look at (`diagnose` with issues). Maps to exit status `1`.
     fn found_issues(&self) -> bool {
@@ -214,6 +219,44 @@ impl Outcome for RestoreOutcome {
         Some(self.restore_event_id.clone())
     }
 }
+impl Outcome for crate::dto::BatchParkOutcome {
+    fn status(&self) -> OpStatus {
+        if self.failure.is_some() {
+            OpStatus::Partial
+        } else {
+            OpStatus::Ok
+        }
+    }
+    fn errors(&self) -> Vec<ErrorEntry> {
+        self.failure
+            .as_ref()
+            .map(|failure| {
+                let mut error = failure.error.clone();
+                error.message = format!("{}: {}", failure.skill.0, error.message);
+                vec![error]
+            })
+            .unwrap_or_default()
+    }
+}
+impl Outcome for crate::dto::BatchUnparkOutcome {
+    fn status(&self) -> OpStatus {
+        if self.failure.is_some() {
+            OpStatus::Partial
+        } else {
+            OpStatus::Ok
+        }
+    }
+    fn errors(&self) -> Vec<ErrorEntry> {
+        self.failure
+            .as_ref()
+            .map(|failure| {
+                let mut error = failure.error.clone();
+                error.message = format!("{}: {}", failure.skill.0, error.message);
+                vec![error]
+            })
+            .unwrap_or_default()
+    }
+}
 impl Outcome for ParkOutcome {
     fn event_id(&self) -> Option<EventId> {
         Some(self.event_id.clone())
@@ -256,7 +299,7 @@ impl Outcome for crate::dto::ConflictReport {
 }
 impl Outcome for crate::dto::DoctorReport {
     fn found_issues(&self) -> bool {
-        !self.violations.is_empty()
+        !self.violations.is_empty() || self.listing_cost.iter().any(|row| row.warning.is_some())
     }
 }
 impl Outcome for crate::dto::RemoveOutcome {
@@ -316,7 +359,7 @@ pub struct ResultEnvelope<T> {
     pub scope: EffectiveScope,
     /// Outcome.
     pub status: OpStatus,
-    /// Result data, `None` on error.
+    /// Result data, including completed items when a batch stops.
     pub data: Option<T>,
     /// Errors, empty on `Ok`.
     pub errors: Vec<ErrorEntry>,
@@ -342,7 +385,10 @@ impl<T: Outcome> ResultEnvelope<T> {
         let (status, data, errors) = match result {
             Ok(value) => {
                 let status = value.status();
-                let errors = if status == OpStatus::Partial {
+                let reported_errors = value.errors();
+                let errors = if !reported_errors.is_empty() {
+                    reported_errors
+                } else if status == OpStatus::Partial {
                     vec![ErrorEntry {
                         code: ErrorCode::Incomplete,
                         message: "some roots were not read; see observations".into(),
@@ -591,6 +637,20 @@ fn scan_inner_with_budget(
     let claude_skills_dir = home.join(".claude").join("skills");
     for skill in skills.values_mut() {
         for deployment in &mut skill.deployments {
+            if deployment.disabled_by.is_none()
+                && (deployment.root.kind == RootKind::Universal
+                    || deployment
+                        .harness
+                        .as_ref()
+                        .is_some_and(|id| id.as_str() == AgentId::CODEX))
+                && disable_sources
+                    .codex_disabled_skill_md
+                    .contains(&codex_path_form(fs, &deployment.path.join("SKILL.md")))
+            {
+                deployment
+                    .disabled_readers
+                    .push(AgentId::from(AgentId::CODEX));
+            }
             let is_global_universal = matches!(deployment.root.kind, RootKind::Universal)
                 && matches!(deployment.root.scope, RootScope::Global);
             if is_global_universal
@@ -5526,6 +5586,180 @@ pub fn park(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOutc
     rt.run(Operation::Park, ctx, || park_body(rt, ctx, req))
 }
 
+/// Resolve and validate every name before parking any copy. Runtime failures
+/// during a move can leave earlier items parked; use unpark to turn them on.
+pub fn park_batch(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &crate::dto::BatchParkRequest,
+) -> Result<crate::dto::BatchParkOutcome, CoreError> {
+    let ids = resolve_batch_names(rt, ctx, &req.skills, false)?;
+    let (items, failure, not_tried) = run_batch(rt, &req.skills, ids, |deployment_id| {
+        let warning = park_git_warning(rt, ctx, &deployment_id);
+        let mut outcome = park(rt, ctx, &ParkRequest { deployment_id })?;
+        outcome.warnings.extend(warning);
+        Ok(outcome)
+    });
+    Ok(crate::dto::BatchParkOutcome {
+        items,
+        failure,
+        not_tried,
+    })
+}
+
+/// Resolve every parked name before turning any copy on.
+pub fn unpark_batch(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &crate::dto::BatchParkRequest,
+) -> Result<crate::dto::BatchUnparkOutcome, CoreError> {
+    let ids = resolve_batch_names(rt, ctx, &req.skills, true)?;
+    let (items, failure, not_tried) = run_batch(rt, &req.skills, ids, |deployment_id| {
+        unpark(rt, ctx, &UnparkRequest { deployment_id })
+    });
+    Ok(crate::dto::BatchUnparkOutcome {
+        items,
+        failure,
+        not_tried,
+    })
+}
+
+fn run_batch<T>(
+    rt: &Runtime,
+    names: &[SkillName],
+    ids: Vec<DeploymentId>,
+    mut run: impl FnMut(DeploymentId) -> Result<T, CoreError>,
+) -> (Vec<T>, Option<crate::dto::BatchFailure>, Vec<SkillName>) {
+    let mut items = Vec::new();
+    for (index, deployment_id) in ids.into_iter().enumerate() {
+        match run(deployment_id) {
+            Ok(item) => items.push(item),
+            Err(error) => {
+                return (
+                    items,
+                    Some(crate::dto::BatchFailure {
+                        skill: names[index].clone(),
+                        error: error.sanitized(&rt.scope),
+                    }),
+                    names[index + 1..].to_vec(),
+                )
+            }
+        }
+    }
+    (items, None, Vec::new())
+}
+
+/// Resolve names and check the destinations before a park or unpark batch.
+pub fn resolve_batch_names(
+    rt: &Runtime,
+    ctx: &OpContext,
+    names: &[SkillName],
+    unpark: bool,
+) -> Result<Vec<DeploymentId>, CoreError> {
+    if names.is_empty() {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "Pass at least one skill name.",
+        ));
+    }
+    let inventory = scan(
+        rt,
+        ctx,
+        &ScanRequest {
+            skills: names.to_vec(),
+            timings: false,
+        },
+    )?;
+    let mut ids = Vec::new();
+    let mut errors = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for name in names {
+        let resolved = (|| {
+            if !seen.insert(name.0.clone()) {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "Name is repeated.",
+                ));
+            }
+            let skill = inventory
+                .skills
+                .iter()
+                .find(|s| s.name == *name)
+                .ok_or_else(|| {
+                    CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "No skill with this name was found.",
+                    )
+                })?;
+            let copies: Vec<_> = skill
+                .deployments
+                .iter()
+                .filter(|d| {
+                    if unpark {
+                        d.root.kind == RootKind::Parked
+                    } else {
+                        refuse_unparkable(d).is_ok()
+                    }
+                })
+                .collect();
+            let deployment = match copies.as_slice() {
+                [] => return Err(CoreError::new(
+                    ErrorCode::Unsupported,
+                    "No copy can be changed. Park needs a real folder; unpark needs a parked copy.",
+                )),
+                [only] => *only,
+                several => {
+                    let mut message =
+                        String::from("More than one copy can be changed. Pass one of these ids:");
+                    for copy in several {
+                        message.push_str("\n  ");
+                        message.push_str(&copy.path.display().to_string());
+                        message.push_str("  id ");
+                        message.push_str(copy.id.as_str());
+                    }
+                    return Err(CoreError::new(ErrorCode::AmbiguousTarget, message));
+                }
+            };
+            if unpark {
+                let store = rt
+                    .ports
+                    .history
+                    .open(&rt.scope, HistoryAccess::ReadIfExists)?;
+                let row = match store {
+                    Some(store) => find_active_park_row(
+                        store.as_ref(),
+                        name,
+                        &deployment.path,
+                        rt.ports.fs.as_ref(),
+                    )?,
+                    None => None,
+                };
+                unpark_destination(rt, deployment, name, row.as_ref())?;
+            } else {
+                park_destination(rt, deployment, name)?;
+                crate::ops_park_dotagents::plan_park(rt, deployment, name)?;
+            }
+            Ok(deployment.id.clone())
+        })();
+        match resolved {
+            Ok(id) => ids.push(id),
+            Err(error) => errors.push((name, error)),
+        }
+    }
+    match errors.len() {
+        0 => Ok(ids),
+        1 if names.len() == 1 => Err(errors.remove(0).1),
+        _ => Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            errors
+                .iter()
+                .map(|(name, error)| format!("{}: {}", name.0, error.message))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )),
+    }
+}
+
 fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOutcome, CoreError> {
     ctx.checkpoint()?;
     let clock = rt.ports.clock.as_ref();
@@ -5639,6 +5873,52 @@ pub(crate) struct ParkedCopy {
     pub origin_note: Option<PathBuf>,
 }
 
+fn park_destination(
+    rt: &Runtime,
+    deployment: &DeploymentDto,
+    name: &SkillName,
+) -> Result<(PathBuf, PathBuf, Option<String>), CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let origin = deployment.root.clone();
+    let parked_root = rt.scope.home.lexical.join(PARKED_ROOT_RELATIVE);
+    let project_key = match &origin.scope {
+        RootScope::Global => None,
+        RootScope::Project(project) => Some(crate::park_layout::project_key(
+            &fs.canonicalize(&project.0)
+                .unwrap_or_else(|_| project.0.clone()),
+        )),
+    };
+    let slot_dir =
+        crate::park_layout::parked_slot_dir(&parked_root, &origin, project_key.as_deref())
+            .ok_or_else(|| {
+                CoreError::new(ErrorCode::Unsupported, "this folder cannot be parked")
+                    .at(&deployment.path)
+            })?;
+    let parked_dir = slot_dir.join(&name.0);
+    // Only a folder with a `SKILL.md` is a legacy flat copy; a folder without
+    // one may be a slot that happens to share this skill's name.
+    let legacy_flat_taken = origin.kind == RootKind::Universal
+        && origin.scope == RootScope::Global
+        && fs
+            .symlink_metadata(&parked_root.join(&name.0).join("SKILL.md"))
+            .is_ok();
+    if fs.symlink_metadata(&parked_dir).is_ok() || legacy_flat_taken {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "a parked copy from this folder already exists for this skill",
+        )
+        .at(&parked_dir));
+    }
+    if let Some(top_level) = slot_dir
+        .strip_prefix(&parked_root)
+        .ok()
+        .and_then(|relative| relative.components().next())
+    {
+        check_legacy_destination(rt, &parked_root, &top_level.as_os_str().to_string_lossy())?;
+    }
+    Ok((slot_dir, parked_dir, project_key))
+}
+
 /// The park steps that run once `deployment` is resolved and checked
 /// parkable: remove every link into it, migrate a legacy flat copy that
 /// would swallow the slot, write the `.origin` notes, move the folder into
@@ -5680,34 +5960,7 @@ pub(crate) fn park_found_copy(
 
     let origin = deployment.root.clone();
     let parked_root = rt.scope.home.lexical.join(PARKED_ROOT_RELATIVE);
-    let project_key = match &origin.scope {
-        RootScope::Global => None,
-        RootScope::Project(project) => Some(crate::park_layout::project_key(
-            &fs.canonicalize(&project.0)
-                .unwrap_or_else(|_| project.0.clone()),
-        )),
-    };
-    let slot_dir =
-        crate::park_layout::parked_slot_dir(&parked_root, &origin, project_key.as_deref())
-            .ok_or_else(|| {
-                CoreError::new(ErrorCode::Unsupported, "this folder cannot be parked")
-                    .at(&deployment.path)
-            })?;
-    let parked_dir = slot_dir.join(&skill.name.0);
-    // Only a folder with a `SKILL.md` is a legacy flat copy; a folder without
-    // one may be a slot that happens to share this skill's name.
-    let legacy_flat_taken = origin.kind == RootKind::Universal
-        && origin.scope == RootScope::Global
-        && fs
-            .symlink_metadata(&parked_root.join(&skill.name.0).join("SKILL.md"))
-            .is_ok();
-    if fs.symlink_metadata(&parked_dir).is_ok() || legacy_flat_taken {
-        return Err(CoreError::new(
-            ErrorCode::InvalidRequest,
-            "a parked copy from this folder already exists for this skill",
-        )
-        .at(&parked_dir));
-    }
+    let (slot_dir, parked_dir, project_key) = park_destination(rt, deployment, &skill.name)?;
     // A legacy flat copy named like this slot would swallow the new copy:
     // move it to `universal/<name>` first.
     if let Some(top_level) = slot_dir
@@ -5918,6 +6171,27 @@ pub fn unpark(
     rt.run(Operation::Unpark, ctx, || unpark_body(rt, ctx, req))
 }
 
+fn unpark_destination(
+    rt: &Runtime,
+    deployment: &DeploymentDto,
+    name: &SkillName,
+    park_row: Option<&crate::events::EventRecord>,
+) -> Result<PathBuf, CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let restored_dir = match recorded_origin_dir(park_row, name) {
+        Some(dir) => dir,
+        None => unrecorded_origin_dir(rt, deployment, name)?,
+    };
+    if fs.symlink_metadata(&restored_dir).is_ok() {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "a copy already exists where this skill was parked from",
+        )
+        .at(&restored_dir));
+    }
+    Ok(restored_dir)
+}
+
 fn unpark_body(
     rt: &Runtime,
     ctx: &OpContext,
@@ -5953,17 +6227,7 @@ fn unpark_body(
     let begin_step = crate::timing::step(clock, "begin_session", step_start);
 
     let step_start = clock.monotonic();
-    let restored_dir = match recorded_origin_dir(park_row.as_ref(), &skill.name) {
-        Some(dir) => dir,
-        None => unrecorded_origin_dir(rt, &deployment, &skill.name)?,
-    };
-    if fs.symlink_metadata(&restored_dir).is_ok() {
-        return Err(CoreError::new(
-            ErrorCode::InvalidRequest,
-            "a copy already exists where this skill was parked from",
-        )
-        .at(&restored_dir));
-    }
+    let restored_dir = unpark_destination(rt, &deployment, &skill.name, park_row.as_ref())?;
     let origin_scope = deployment
         .parked_origin
         .as_ref()
@@ -6265,6 +6529,27 @@ fn unrecorded_origin_dir(
     }
 }
 
+fn check_legacy_destination(
+    rt: &Runtime,
+    parked_root: &Path,
+    top_level: &str,
+) -> Result<(), CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let legacy = parked_root.join(top_level);
+    if fs.symlink_metadata(&legacy.join("SKILL.md")).is_err() {
+        return Ok(());
+    }
+    let destination = parked_root.join("universal").join(top_level);
+    if fs.symlink_metadata(&destination).is_ok() {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "an old parked copy named like this folder is in the way, and its new place is taken",
+        )
+        .at(&legacy));
+    }
+    Ok(())
+}
+
 /// Moves an old flat parked copy of a skill named `top_level` (the name of a
 /// slot folder) to `universal/<top_level>`, so the slot folder holds only
 /// slot content. Does nothing when `top_level` holds no `SKILL.md`. Journaled
@@ -6282,13 +6567,7 @@ fn migrate_legacy_flat_copy(
         return Ok(());
     }
     let destination = parked_root.join("universal").join(top_level);
-    if fs.symlink_metadata(&destination).is_ok() {
-        return Err(CoreError::new(
-            ErrorCode::InvalidRequest,
-            "an old parked copy named like this folder is in the way, and its new place is taken",
-        )
-        .at(&legacy));
-    }
+    check_legacy_destination(rt, parked_root, top_level)?;
     let origin = RootRef {
         scope: RootScope::Global,
         kind: RootKind::Universal,
