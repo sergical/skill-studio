@@ -1,8 +1,7 @@
 // ============================================================================
 // SkillPage - Full-page view of an installed skill: header (name, one
-// primary action, an assistant trigger, overflow menu, chips, source ledger),
-// the "where it lives" locations card, the SKILL.md card, and the
-// assistant panel in a right-hand overlay drawer.
+// primary action, overflow menu, chips, source ledger),
+// the "where it lives" locations card and the SKILL.md card.
 // ============================================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -12,7 +11,6 @@ import {
   writeInstalledSkillMdIfUnchanged,
 } from "../../lib/skill-api";
 import { lifecycleTargetForDeployment } from "../../lib/skill-lifecycle-target";
-import { isFeatureEnabled } from "../../lib/feature-flags";
 import { editableDeployments, parseYamlFrontmatterError } from "@skill-studio/lib";
 import type {
   Deployment,
@@ -27,9 +25,6 @@ import { PageShell } from "../Shell/PageShell";
 import { DiscardChangesDialog } from "./DiscardChangesDialog";
 import { InstalledSkillHeader } from "./InstalledSkillHeader";
 import { backLabel } from "./skill-page-nav";
-import { SkillAssistantDrawer } from "./SkillAssistantDrawer";
-import { SkillAssistantPanel } from "./SkillAssistantPanel";
-import { useSkillAssistantNavigation } from "./skill-assistant-view-policy";
 import { SkillCompareDialog } from "./SkillCompareDialog";
 import { SkillFrontmatterRepairDialog } from "./SkillFrontmatterRepairDialog";
 import { SkillLocationsCard } from "./SkillLocationsCard";
@@ -68,7 +63,7 @@ interface UseSkillMdContentParams {
 /**
  * Owns SKILL.md's raw content, its loading/error/saving state, and the fork-
  * before-save flow - all keyed on `skillMdPath`. Pulled out of `SkillPage`
- * since every piece here (state, the load effect, save, retry, apply) closes
+ * since every piece here (state, the load effect, save, retry) closes
  * over the same `currentSkillMdPathRef` staleness check.
  */
 function useSkillMdContent({ skill, skillMdPath, deployment, addToast }: UseSkillMdContentParams) {
@@ -176,13 +171,6 @@ function useSkillMdContent({ skill, skillMdPath, deployment, addToast }: UseSkil
     if (skillMdPath) loadContent(skillMdPath, true);
   };
 
-  /** Applies assistant-written content only while the page still shows the path it was written to. */
-  const handleApplied = (content: string) => {
-    if (skillMdPath !== undefined && currentSkillMdPathRef.current === skillMdPath) {
-      setRawContent(content);
-    }
-  };
-
   return {
     rawContent,
     isLoadingContent,
@@ -192,16 +180,14 @@ function useSkillMdContent({ skill, skillMdPath, deployment, addToast }: UseSkil
     loadContent,
     handleSave,
     handleRetryLoad,
-    handleApplied,
   };
 }
 
 /**
  * Full-page view of an installed skill: `InstalledSkillHeader` (which owns
- * the back button, name, primary action, assistant trigger, overflow menu,
+ * the back button, name, primary action, overflow menu,
  * chips, and source ledger), then a single-column body - `SkillLocationsCard`
- * and `SkillMarkdownCard` - with `SkillAssistantPanel` rendered inside a
- * `SkillAssistantDrawer` overlay.
+ * and `SkillMarkdownCard`.
  */
 export function SkillPage({
   skill,
@@ -215,13 +201,8 @@ export function SkillPage({
   const openSkill = useAppStore((state) => state.openSkill);
   const activeView = useAppStore((state) => state.activeView);
   const clearSkillIntent = useAppStore((state) => state.clearSkillIntent);
-  const isAssistantOpen = useAppStore((state) => state.isAssistantOpen);
-  const setIsAssistantOpen = useAppStore((state) => state.setIsAssistantOpen);
-  const { isRunsOpen, openAssistant, closeAssistant, openRuns, closeRuns } =
-    useSkillAssistantNavigation(skill?.name, setIsAssistantOpen);
   const pageActions = useSkillPageActions(skill, onRemoveComplete);
   const [openRepairKind, setOpenRepairKind] = useState<FrontmatterRepairKind | null>(null);
-  const assistantTriggerRef = useRef<HTMLButtonElement>(null);
 
   const { isCompareOpen, setIsCompareOpen } = useSkillCompareDialog(skill?.name);
 
@@ -259,7 +240,6 @@ export function SkillPage({
     loadContent,
     handleSave: saveContent,
     handleRetryLoad,
-    handleApplied,
   } = useSkillMdContent({ skill, skillMdPath, deployment, addToast });
 
   const {
@@ -327,15 +307,7 @@ export function SkillPage({
     <PageShell
       title={skill.name}
       parent={{ label: backLabel(from), onClick: onBack }}
-      actions={
-        <SkillPageHeaderActions
-          actions={pageActions}
-          assistantEnabled={isFeatureEnabled("skill-assistant")}
-          isAssistantOpen={isAssistantOpen}
-          onOpenAssistant={openAssistant}
-          assistantTriggerRef={assistantTriggerRef}
-        />
-      }
+      actions={<SkillPageHeaderActions actions={pageActions} />}
     >
       <div className="grid grid-cols-1 gap-8 min-[900px]:grid-cols-[minmax(0,1fr)_260px]">
         <div className="flex min-w-0 flex-col gap-6">
@@ -392,26 +364,6 @@ export function SkillPage({
 
         <SkillPropertiesRail skill={skill} />
       </div>
-
-      <SkillAssistantDrawer
-        isOpen={isAssistantOpen && isFeatureEnabled("skill-assistant")}
-        onClose={closeAssistant}
-        triggerRef={assistantTriggerRef}
-      >
-        <SkillAssistantPanel
-          skill={skill}
-          rawContent={rawContent}
-          skillMdPath={skillMdPath}
-          isPluginManaged={isPluginManaged}
-          onApplied={handleApplied}
-          onDiskChanged={() => {
-            if (skillMdPath) loadContent(skillMdPath, false);
-          }}
-          showHistory={isRunsOpen}
-          onOpenHistory={openRuns}
-          onCloseHistory={closeRuns}
-        />
-      </SkillAssistantDrawer>
 
       {isCompareOpen && (
         <SkillCompareDialog skill={skill} onClose={() => setIsCompareOpen(false)} />

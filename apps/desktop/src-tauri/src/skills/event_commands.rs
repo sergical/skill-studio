@@ -14,9 +14,9 @@ use std::sync::Mutex;
 
 use super::agents::AgentId;
 use super::event_store::{EventRow, EventStore};
-use super::skill_agent_runner::validate_skill_dir_name;
 use super::skill_dto::{Deployment, LifecycleTarget, SkillEventDto};
 use super::skill_materialize;
+use super::skill_path_validation::validate_skill_dir_name;
 use super::skill_refresh::{self, SkillRefreshState, SkillSnapshot};
 use tauri::Manager;
 
@@ -1070,7 +1070,6 @@ mod tests {
             invocations: Vec::new(),
             heatmap: skill_studio_core::skill_uses::InvocationHeatmap::default(),
             scanned_at: chrono::Utc::now().to_rfc3339(),
-            last_test_by_skill: Default::default(),
             update_check: Default::default(),
             opencode_config_kind: None,
             scan_partial: false,

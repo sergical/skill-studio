@@ -2,7 +2,7 @@
 // Skills Module - gh_cli
 // One place that spawns the `gh` CLI and classifies its failures. Every
 // caller (`skill_update_check`'s commit lookup, `skill_fork`'s tarball
-// fetch, `skill_pack`'s repo-create/publish/read) shells out through
+// fetch) shells out through
 // `run_gh` instead of building its own `Command`, so "not logged in" is
 // detected the same way everywhere: `gh`'s own error text tells the user to
 // run `gh auth login`.

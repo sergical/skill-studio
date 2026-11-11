@@ -1,4 +1,4 @@
-import { createElement, createRef } from "react";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { SkillPageHeaderActions } from "./SkillPageHeaderActions";
@@ -23,10 +23,6 @@ function headerMarkup(parkLabel: string) {
   return renderToStaticMarkup(
     createElement(SkillPageHeaderActions, {
       actions,
-      assistantEnabled: false,
-      isAssistantOpen: false,
-      onOpenAssistant: noop,
-      assistantTriggerRef: createRef<HTMLButtonElement>(),
     }),
   );
 }

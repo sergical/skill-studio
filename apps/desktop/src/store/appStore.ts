@@ -173,13 +173,6 @@ interface AppState {
   activityDay: string | null;
   setActivityDay: (dayKey: string | null) => void;
 
-  // === Skill Page Assistant Drawer ===
-  // Whether the skill page's assistant panel shows as a right-hand overlay
-  // drawer - kept here (not local component state) so it survives navigating
-  // between skills. Session-only: always starts closed.
-  isAssistantOpen: boolean;
-  setIsAssistantOpen: (open: boolean) => void;
-
   // === Theme ===
   theme: Theme;
   /** What's actually painted right now - resolves "system" against the OS, and follows it live. */
@@ -420,9 +413,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActivityFilter: (filter) => set({ activityFilter: filter }),
   activityDay: null,
   setActivityDay: (dayKey) => set({ activityDay: dayKey }),
-
-  isAssistantOpen: false,
-  setIsAssistantOpen: (open) => set({ isAssistantOpen: open }),
 
   theme: initialTheme,
   resolvedTheme: resolveTheme(initialTheme, systemPrefersDark()),
