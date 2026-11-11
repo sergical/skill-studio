@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewOutcome",
+  "description": "Saved review date after a set or clear.",
+  "type": "object",
+  "properties": {
+    "skill": {
+      "description": "Installed skill name.",
+      "type": "string"
+    },
+    "review_date": {
+      "description": "None after clear.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "skill"
+  ]
+}

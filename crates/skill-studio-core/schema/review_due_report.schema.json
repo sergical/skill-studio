@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewDueReport",
+  "description": "Due skills with usage completeness facts.",
+  "type": "object",
+  "properties": {
+    "rows": {
+      "description": "Skills sorted by name.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ReviewRow"
+      }
+    },
+    "partial": {
+      "description": "Counts may miss sessions.",
+      "type": "boolean"
+    },
+    "observations": {
+      "description": "All usage observations.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ReviewObservation"
+      }
+    }
+  },
+  "required": [
+    "rows",
+    "partial",
+    "observations"
+  ],
+  "$defs": {
+    "ReviewRow": {
+      "description": "One skill past its review date.",
+      "type": "object",
+      "properties": {
+        "skill": {
+          "description": "Skill name.",
+          "type": "string"
+        },
+        "review_date": {
+          "description": "Saved date in YYYY-MM-DD form.",
+          "type": "string"
+        },
+        "sessions": {
+          "description": "Distinct sessions across all available history.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "skill",
+        "review_date",
+        "sessions"
+      ]
+    },
+    "ReviewObservation": {
+      "description": "History that could not be counted.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Skipped file or root.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why this history is unavailable.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "reason"
+      ]
+    }
+  }
+}

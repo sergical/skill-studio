@@ -68,6 +68,7 @@ mod park_layout;
 mod park_move;
 pub mod ports;
 pub mod registry;
+pub mod review;
 pub mod scope;
 pub mod skill_update_check;
 pub mod skill_uses;

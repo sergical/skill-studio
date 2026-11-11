@@ -74,6 +74,9 @@ const PLUGIN_MANIFEST_CANDIDATES: &[&str] = &[
 /// up on finding a manifest.
 const PLUGIN_CACHE_MAX_DEPTH: u8 = 3;
 
+/// Review date operations shared by CLI and MCP.
+pub use crate::review::{review, review_due};
+
 /// Name of an operation, as it appears in the envelope and in MCP tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -131,6 +134,10 @@ pub enum Operation {
     Extras,
     /// Check or set skill invocation across harnesses.
     Invocation,
+    /// Set or clear a review date.
+    Review,
+    /// List skills past their review date.
+    ReviewDue,
 }
 
 /// Outcome status of one call.
@@ -8392,6 +8399,8 @@ mod tests {
                 Operation::TurnOffForAgent,
                 Operation::SkillUsage,
                 Operation::Extras,
+                Operation::Review,
+                Operation::ReviewDue,
             ];
             for operation in all {
                 let expected = match operation {
@@ -8420,6 +8429,8 @@ mod tests {
                     Operation::SkillUsage => "skill_usage",
                     Operation::Extras => "extras",
                     Operation::Invocation => "invocation",
+                    Operation::Review => "review",
+                    Operation::ReviewDue => "review_due",
                 };
                 let value = serde_json::to_value(operation).unwrap();
                 assert_eq!(

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewRequest",
+  "description": "A named skill and its optional review date. No date clears the saved date.",
+  "type": "object",
+  "properties": {
+    "skill": {
+      "description": "Installed skill name.",
+      "type": "string"
+    },
+    "date": {
+      "description": "Calendar date in YYYY-MM-DD form.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "skill"
+  ]
+}
