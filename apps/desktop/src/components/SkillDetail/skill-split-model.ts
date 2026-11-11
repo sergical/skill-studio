@@ -20,7 +20,7 @@ export const SPLIT_HARNESSES: AgentId[] = [
 
 /** Same text as the core's `ops_split::SPLIT_UPDATE_NOTE`, shown before the split runs. */
 export const SPLIT_UPDATE_NOTE =
-  "npx skills update only updates the Universal copy, so these copies no longer get its updates.";
+  "npx skills update only updates the Universal copy. Skill Studio updates unedited copies from the same source. Undo updates from Activity. Copies from another source stay unchanged and keep Update available.";
 
 /** Harnesses that read the scope's Universal folder now - the dialog checks these first. */
 export function splitReaders(group: ScopeGroup): AgentId[] {

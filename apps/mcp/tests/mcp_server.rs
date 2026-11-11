@@ -1280,6 +1280,37 @@ async fn harnesses_stdio_reads_claude_install_method_from_fixture_home_or_report
 }
 
 #[tokio::test]
+async fn split_explains_app_updates_and_the_cli_limit_or_omits_the_update_note() {
+    let (_home_dir, home) = live_home();
+    let (client, _) = connect(&[
+        ("HOME", home.to_str().unwrap()),
+        ("SKILL_STUDIO_HOME", home.to_str().unwrap()),
+        ("SKILL_STUDIO_TELEMETRY", "0"),
+    ])
+    .await;
+    let id = deployment_id_via_mcp(&client, "gamma", "universal").await;
+    let split = call_tool(
+        &client,
+        "split",
+        serde_json::json!({ "deployment_id": id, "harnesses": ["codex"] }),
+    )
+    .await;
+    client.cancel().await.ok();
+    assert_eq!(split["status"], "ok", "{split:?}");
+    let note = split["data"]["update_note"].as_str().unwrap();
+    assert!(
+        note.contains("npx skills update") && note.contains("Universal"),
+        "{note}"
+    );
+    assert!(
+        note.contains("unedited copies from the same source")
+            && note.contains("Undo updates from Activity"),
+        "{note}"
+    );
+    assert!(home.join(".codex/skills/gamma/SKILL.md").exists());
+}
+
+#[tokio::test]
 async fn doctor_stdio_warns_for_external_links_and_errors_for_broken_links_or_reports_a_healthy_scope(
 ) {
     let dir = tempfile::tempdir().unwrap();

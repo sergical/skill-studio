@@ -4404,6 +4404,28 @@ fn restore_chain_ends_at_harness_event(
     Ok(false)
 }
 
+fn restore_chain_is_split_update(
+    store: &dyn crate::ports::HistoryStore,
+    start: &crate::events::EventRecord,
+) -> Result<bool, CoreError> {
+    let mut current = start.clone();
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(current.id.clone()) {
+        if current.kind() != Some(crate::events::EventKind::Restore) {
+            return Ok(current.kind() == Some(crate::events::EventKind::Update)
+                && current.payload["split_copies"] == true);
+        }
+        let Some(id) = current.payload["target_event"].as_str() else {
+            break;
+        };
+        let Some(event) = store.get(&crate::identity::EventId(id.to_string()))? else {
+            break;
+        };
+        current = event;
+    }
+    Ok(false)
+}
+
 fn restore_event_body(
     rt: &Runtime,
     ctx: &OpContext,
@@ -4465,6 +4487,57 @@ fn restore_event_body(
             "restore_capability() reported Yes but the event has no inverse",
         )
     })?;
+    let mut recovered_inverse = inverse.clone();
+    if target.status == crate::events::EventStatus::Interrupted
+        && target.payload["split_copies"] == true
+    {
+        let fs = rt.ports.fs.as_ref();
+        if let Some(backup) = &target.backup_dir {
+            let manifest = session.store.read_manifest(backup)?;
+            for entry in &manifest.entries {
+                let live = crate::events::fingerprint_path(fs, &entry.original)?;
+                if live != entry.fingerprint {
+                    continue;
+                }
+                let fingerprint = live.as_ref().map_or("absent", Fingerprint::bare_hex);
+                if recovered_inverse["path"] == serde_json::json!(entry.original) {
+                    recovered_inverse["post_fingerprint"] = serde_json::json!(fingerprint);
+                }
+                if let Some(rows) = recovered_inverse["secondary_post"].as_array_mut() {
+                    for row in rows {
+                        if row["path"] == serde_json::json!(entry.original) {
+                            row["fingerprint"] = serde_json::json!(fingerprint);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(edits) = recovered_inverse["registry_undo"].as_array_mut() {
+            for edit in edits {
+                let document = ops_install::read_registry_document(
+                    fs,
+                    Path::new(edit["root"].as_str().unwrap_or_default()),
+                )?;
+                let live = &document[edit["key"].as_str().unwrap_or_default()]
+                    [edit["id"].as_str().unwrap_or_default()];
+                if live == &edit["previous"] {
+                    edit["expected"] = live.clone();
+                }
+            }
+        }
+        let edit = &mut recovered_inverse["lock_row_undo"];
+        if !edit.is_null() {
+            let live = crate::lock_file::read_lock_entry_value(
+                fs,
+                &crate::lock_file::lock_file_path(&rt.scope.home.lexical),
+                edit["skill"].as_str().unwrap_or_default(),
+            )?;
+            if live.as_ref() == Some(&edit["previous"]) {
+                edit["expected"] = edit["previous"].clone();
+            }
+        }
+    }
+    let inverse = &recovered_inverse;
     let begin_step = crate::timing::step(clock, "begin_session", step_start);
     let (path, pre, post) =
         crate::events::parse_restore_backup_inverse(inverse).ok_or_else(|| {
@@ -4476,6 +4549,14 @@ fn restore_event_body(
     let step_start = clock.monotonic();
 
     let fs = rt.ports.fs.as_ref();
+    if inverse
+        .get("restore_paths")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        return Err(CoreError::new(ErrorCode::Unsupported,
+            "this interrupted update did not record which copies changed; keep its backups and inspect the copies"));
+    }
     let expected = post.as_deref().unwrap_or("absent");
     let live_fingerprint = crate::events::fingerprint_path(fs, &path)?;
     let live = live_fingerprint
@@ -4580,6 +4661,21 @@ fn restore_event_body(
             }
         }
         crate::ops_install::check_registry_drift(fs, inverse)?;
+        if let Some(edit) = inverse.get("lock_row_undo").filter(|v| !v.is_null()) {
+            let lock = crate::lock_file::lock_file_path(&rt.scope.home.lexical);
+            let live = crate::lock_file::read_lock_entry_value(
+                fs,
+                &lock,
+                edit["skill"].as_str().unwrap_or_default(),
+            )?;
+            if live.as_ref().unwrap_or(&serde_json::Value::Null) != &edit["expected"] {
+                return Err(CoreError::new(
+                    ErrorCode::DriftConflict,
+                    "the updated lock row changed; pass force to restore anyway",
+                )
+                .at(lock));
+            }
+        }
     }
     let mut write_back_plans: Vec<(PathBuf, RestorePlan)> = Vec::new();
     if !write_back.is_empty() {
@@ -4658,6 +4754,10 @@ fn restore_event_body(
         for other in &original_manifest.entries {
             if other.original == path
                 || write_back.contains(&other.original)
+                || inverse
+                    .get("restore_paths")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|paths| !paths.contains(&serde_json::json!(other.original)))
                 || dotagents_paths.contains(&other.original)
             {
                 continue;
@@ -4680,6 +4780,17 @@ fn restore_event_body(
         }
     }
 
+    let retry = if req.force {
+        target
+            .payload
+            .get("restore_retry")
+            .and_then(serde_json::Value::as_str)
+            .map(|id| session.store.get(&crate::identity::EventId(id.to_string())))
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
     for (metadata_path, bytes) in &saved_dotagents.files {
         let plan = bytes
             .as_ref()
@@ -4759,11 +4870,107 @@ fn restore_event_body(
         ),
         &removed_copies,
     );
+    if let Some(edits) = inverse
+        .get("registry_undo")
+        .and_then(serde_json::Value::as_array)
+    {
+        let mut mirror = Vec::new();
+        for edit in edits {
+            let (Some(root), Some(key), Some(id)) = (
+                edit["root"].as_str(),
+                edit["key"].as_str(),
+                edit["id"].as_str(),
+            ) else {
+                continue;
+            };
+            let document = ops_install::read_registry_document(fs, Path::new(root))?;
+            mirror.push(ops_install::guarded_registry_undo(
+                Path::new(root),
+                key,
+                id,
+                document.get(key).and_then(|rows| rows.get(id)),
+                edit.get("previous"),
+            ));
+        }
+        restore_inverse["registry_undo"] = serde_json::json!(mirror);
+    }
     if let Some(mirror) = mirror_lock {
         restore_inverse["lock_row_undo"] = serde_json::json!(mirror);
     }
     if !saved_dotagents.inverse.is_null() {
         restore_inverse["dotagents_saved_entries"] = saved_dotagents.inverse;
+    }
+    let displaced_inverse = restore_inverse.clone();
+    let mut attempt_inverse = inverse.clone();
+    if let Some(edits) = attempt_inverse["registry_undo"].as_array_mut() {
+        for edit in edits {
+            if let Some(snapshot) = displaced_inverse["registry_undo"]
+                .as_array()
+                .and_then(|rows| {
+                    rows.iter().find(|row| {
+                        row["root"] == edit["root"]
+                            && row["key"] == edit["key"]
+                            && row["id"] == edit["id"]
+                    })
+                })
+            {
+                edit["expected"] = snapshot["previous"].clone();
+            }
+        }
+    }
+    if !attempt_inverse["lock_row_undo"].is_null() {
+        attempt_inverse["lock_row_undo"]["expected"] =
+            displaced_inverse["lock_row_undo"]["previous"].clone();
+    }
+    let split_update = restore_chain_is_split_update(&*session.store, &target)?;
+    if target.kind() == Some(crate::events::EventKind::Update) || split_update {
+        let lock = &mut restore_inverse["lock_row_undo"];
+        if split_update && !lock.is_null() && lock["previous"].is_null() {
+            lock["previous"] = inverse["lock_row_undo"]["expected"].clone();
+        }
+        if let Some(edits) = restore_inverse["registry_undo"].as_array_mut() {
+            for edit in edits {
+                if edit["key"] != "copies" {
+                    continue;
+                }
+                if edit["previous"].is_null() {
+                    if let Some(saved) = inverse["registry_undo"].as_array().and_then(|rows| {
+                        rows.iter().find(|row| {
+                            row["root"] == edit["root"]
+                                && row["key"] == edit["key"]
+                                && row["id"] == edit["id"]
+                        })
+                    }) {
+                        edit["previous"] = saved
+                            .get("expected")
+                            .filter(|row| row.is_object())
+                            .unwrap_or(&saved["previous"])
+                            .clone();
+                    }
+                }
+                if let Some(folder) = edit["previous"]["path"].as_str().map(PathBuf::from) {
+                    if let Some(entry) = manifest
+                        .entries
+                        .iter()
+                        .find(|entry| entry.original == folder)
+                    {
+                        let backup = rt
+                            .scope
+                            .history_root
+                            .join(&manifest.backup_dir)
+                            .join(&entry.relative);
+                        edit["previous"]["content_hash"] =
+                            serde_json::json!(skill_content_hash(fs, ctx, &backup)?);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(retry) = &retry {
+        restore_inverse = retry
+            .inverse
+            .clone()
+            .ok_or_else(|| CoreError::new(ErrorCode::Io, "restore retry has no inverse"))?;
     }
     let draft = crate::events::EventDraft {
         kind: crate::events::EventKind::Restore,
@@ -4771,9 +4978,22 @@ fn restore_event_body(
         harness: target.harness.clone(),
         scope: target.scope.clone(),
         project_path: target.project_path.clone(),
-        payload: serde_json::json!({ "target_event": target.id.0, "agent_off": target.payload.get("agent_off") }),
+        payload: serde_json::json!({
+            "target_event": target.id.0,
+            "agent_off": target.payload.get("agent_off"),
+            "displaced_data": {
+                "backup_dir": manifest.backup_dir,
+                "inverse": displaced_inverse,
+            },
+        }),
         inverse: Some(restore_inverse),
-        backup_dir: Some(manifest.backup_dir.clone()),
+        backup_dir: Some(match &retry {
+            Some(retry) => retry
+                .backup_dir
+                .clone()
+                .ok_or_else(|| CoreError::new(ErrorCode::Io, "restore retry has no backup"))?,
+            None => manifest.backup_dir.clone(),
+        }),
     };
     session.store.record(&session.guard, &restore_id, &draft)?;
 
@@ -4800,6 +5020,14 @@ fn restore_event_body(
             ErrorCode::AlreadyReverted,
             "this event was already reverted",
         ));
+    }
+
+    if retry.is_none() {
+        session.store.patch_payload(
+            &session.guard,
+            &target.id,
+            serde_json::json!({ "restore_retry": restore_id.0 }),
+        )?;
     }
 
     let mutation_result = match &plan {
@@ -4989,10 +5217,17 @@ fn restore_event_body(
             unrestored.push(other_path.clone());
         }
     }
-    if let Some(lock) = &lock_undo {
-        if let Err(error) = lock.apply(&session.guard, fs, &rt.scope) {
+    let mut metadata_error = None;
+    if let Some(lock) = crate::lock_file::LockRowUndo::from_inverse(&attempt_inverse)? {
+        if let Err(error) = lock
+            .check(fs, &rt.scope, false)
+            .and_then(|_| lock.apply(&session.guard, fs, &rt.scope))
+        {
             unrestored.push(lock.path.clone());
             copy_errors.push(error.to_string());
+            if error.code == ErrorCode::DriftConflict {
+                metadata_error = Some(error);
+            }
         }
     }
     if !copy_errors.is_empty() {
@@ -5085,14 +5320,14 @@ fn restore_event_body(
         }
     }
 
-    // An install's registry writes (`copies` entries, saved preferences),
-    // put back the same best-effort way as the lock row above.
-    if let Err(error) = crate::ops_install::restore_registry(&session.guard, fs, inverse) {
+    if let Err(error) = crate::ops_install::restore_registry(&session.guard, fs, &attempt_inverse) {
+        unrestored.push(crate::ops_install::registry_path(&rt.scope.home.lexical));
         let _ = session.store.patch_payload(
             &session.guard,
             &restore_id,
             serde_json::json!({ "registry_restore_error": error.message }),
         );
+        metadata_error = Some(error);
     }
 
     if !unrestored.is_empty() {
@@ -5107,6 +5342,9 @@ fn restore_event_body(
             crate::events::EventStatus::Failed,
             None,
         );
+        if let Some(error) = metadata_error {
+            return Err(error);
+        }
         let names: Vec<String> = unrestored.iter().map(|p| p.display().to_string()).collect();
         return Err(CoreError::new(
             ErrorCode::Io,

@@ -946,6 +946,19 @@ pub(crate) fn restore_registry(
             let Some(key) = edit.get("key").and_then(serde_json::Value::as_str) else {
                 continue;
             };
+            if let (Some(id), Some(expected)) = (edit["id"].as_str(), edit.get("expected")) {
+                let live = document
+                    .get(key)
+                    .and_then(|rows| rows.get(id))
+                    .unwrap_or(&serde_json::Value::Null);
+                if live != expected {
+                    return Err(CoreError::new(
+                        ErrorCode::DriftConflict,
+                        "the registry row changed during restore; pass force to retry",
+                    )
+                    .at(registry_path(&root)));
+                }
+            }
             let previous = edit.get("previous").filter(|v| !v.is_null()).cloned();
             match edit.get("id").and_then(serde_json::Value::as_str) {
                 None => match previous {
@@ -957,7 +970,17 @@ pub(crate) fn restore_registry(
                     }
                 },
                 Some(id) => {
-                    if let Some(serde_json::Value::Object(map)) = document.get_mut(key) {
+                    if previous.is_some() && !document.contains_key(key) {
+                        document.insert(key.to_string(), serde_json::json!({}));
+                    }
+                    if let Some(rows) = document.get_mut(key) {
+                        let map = rows.as_object_mut().ok_or_else(|| {
+                            CoreError::new(
+                                ErrorCode::Io,
+                                format!("the {key} registry value must be a JSON object to restore row {id}"),
+                            )
+                            .at(registry_path(&root))
+                        })?;
                         match previous {
                             Some(value) => {
                                 map.insert(id.to_string(), value);

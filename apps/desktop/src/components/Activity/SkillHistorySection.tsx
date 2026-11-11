@@ -117,7 +117,7 @@ function useRestoreEvent(event: SkillEvent, onRestored: () => void) {
       setIsRestoring(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
-      if (!force && shouldOfferForceRestore(event, message)) {
+      if (!force && shouldOfferForceRestore(event, err)) {
         const proceed = await ask(
           `${message}\n\nRestoring anyway will back up the current content first, so it stays restorable.`,
           { title: "Content has changed", kind: "warning" },
