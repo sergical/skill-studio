@@ -1,0 +1,293 @@
+{
+  "status": "provisional: recorded under load",
+  "source_git_sha": "4c89efdb1218131702f5b03534a81834e5b330bd",
+  "recorded_at_utc": "2026-11-10T08:58:34.003048+00:00",
+  "hardware": {
+    "cpu": "Apple M3 Max",
+    "memory_bytes": 38654705664,
+    "macos": "26.7"
+  },
+  "binary_sha256": "c68a3f79fc04bfbaacded70bcc90b7423e718f0dcb9a13020697a03665eacbd2",
+  "fixture": "six native version executables, empty agent config/session roots; new runtime and spawner each sample",
+  "includes_login_shell": false,
+  "cache_identity": "invocation path, resolved target, size, exact mtime",
+  "percentile": "nearest rank",
+  "metrics": [
+    {
+      "metric": "uncached initial",
+      "n": 10,
+      "median_ms": 92.8730835,
+      "p95_ms": 94.978458,
+      "max_ms": 94.978458,
+      "samples": [
+        {
+          "elapsed_ms": 92.618375,
+          "load_average": "{ 8.31 7.37 8.18 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 92.194958,
+          "load_average": "{ 8.31 7.37 8.18 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 87.22275,
+          "load_average": "{ 8.31 7.37 8.18 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 94.735625,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 94.978458,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 88.7715,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 92.064542,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 93.71825,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 93.127792,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 94.7205,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        }
+      ]
+    },
+    {
+      "metric": "uncached repeat",
+      "n": 10,
+      "median_ms": 94.41916700000002,
+      "p95_ms": 106.979875,
+      "max_ms": 106.979875,
+      "samples": [
+        {
+          "elapsed_ms": 90.367083,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 96.671958,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 94.76233400000001,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 106.979875,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 96.78866699999999,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 91.95370799999999,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 94.07600000000001,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 87.0765,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 95.002458,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 90.906292,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        }
+      ]
+    },
+    {
+      "metric": "persistent miss",
+      "n": 10,
+      "median_ms": 95.633021,
+      "p95_ms": 98.467833,
+      "max_ms": 98.467833,
+      "samples": [
+        {
+          "elapsed_ms": 98.033417,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 93.98812500000001,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 96.592291,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 91.003458,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 91.663584,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 94.717833,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 93.987333,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 98.36225,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 98.467833,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 96.548209,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        }
+      ]
+    },
+    {
+      "metric": "persistent hit",
+      "n": 10,
+      "median_ms": 2.6372705,
+      "p95_ms": 3.278708,
+      "max_ms": 3.278708,
+      "samples": [
+        {
+          "elapsed_ms": 2.058208,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 2.015542,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 2.646458,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 2.641875,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 2.966208,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 2.5213330000000003,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 2.982958,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 2.4598329999999997,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 3.278708,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        },
+        {
+          "elapsed_ms": 2.632666,
+          "load_average": "{ 8.05 7.33 8.16 }",
+          "cargo_processes": 10,
+          "rustc_processes": 1
+        }
+      ]
+    }
+  ]
+}
