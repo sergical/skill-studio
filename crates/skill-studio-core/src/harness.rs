@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::identity::AgentId;
-use crate::ports::{NeverCancel, ProcessSpawner, ProcessSpec, ScopeFs, ToolLookup};
+use crate::ports::{CancelToken, NeverCancel, ProcessSpawner, ProcessSpec, ScopeFs, ToolLookup};
 
 /// How sure the catalog is about a fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -1029,6 +1029,9 @@ pub struct HarnessDetection {
     pub state: HarnessState,
     /// Resolved executable path, when found on `PATH`.
     pub executable: Option<PathBuf>,
+    /// False for an executable found only in a fallback directory.
+    #[serde(default)]
+    pub executable_on_path: Option<bool>,
     /// Version, proven by `<bin> --version`.
     pub version: DetectedString,
     /// Install method from vendor metadata, or inferred from the executable path.
@@ -1100,13 +1103,22 @@ pub trait HarnessAdapter: Send + Sync {
 
     /// Runs the shared detection recipe against one set of ports.
     fn detect(&self, ports: &DetectionPorts<'_>) -> HarnessDetection {
+        self.detect_with_cancel(ports, &NeverCancel)
+    }
+
+    /// Detects with the caller's cancellation token, including each version probe.
+    fn detect_with_cancel(
+        &self,
+        ports: &DetectionPorts<'_>,
+        cancel: &dyn CancelToken,
+    ) -> HarnessDetection {
         let id = self.id();
         let executable = ports.tools.and_then(|lookup| {
             self.binary_names()
                 .iter()
                 .find_map(|bin| lookup.find_binary(bin))
         });
-        let version = probe_version(self, executable.as_ref(), ports);
+        let version = probe_version(self, executable.as_ref(), ports, cancel);
         let inferred = || match executable.as_ref() {
             Some(path) => infer_install_method(ports.fs, path),
             None => DetectedString::unknown("no executable on PATH"),
@@ -1136,6 +1148,9 @@ pub trait HarnessAdapter: Send + Sync {
             id,
             display_name: self.display_name().to_string(),
             state,
+            executable_on_path: executable
+                .as_ref()
+                .and_then(|path| ports.tools.and_then(|lookup| lookup.binary_on_path(path))),
             executable,
             version,
             install_method,
@@ -1148,13 +1163,12 @@ pub trait HarnessAdapter: Send + Sync {
 /// Runs `<bin> --version` when both a binary and a spawner exist. Any
 /// missing precondition (no binary, no spawner, a non-zero exit, a spawn error, a
 /// probe that outlives `timeout_ms`) reports `Unknown` with the reason as
-/// evidence rather than guessing. The by-path/size/mtime cache described in
-/// `docs/action-map/harnesses/harness-detection.md` is follow-up work, not
-/// this function.
+/// evidence rather than guessing. The host spawner owns probe caching.
 fn probe_version(
     adapter: &(impl HarnessAdapter + ?Sized),
     executable: Option<&PathBuf>,
     ports: &DetectionPorts<'_>,
+    cancel: &dyn CancelToken,
 ) -> DetectedString {
     let Some(path) = executable else {
         return DetectedString::unknown("no executable on PATH");
@@ -1169,7 +1183,7 @@ fn probe_version(
         env: Vec::new(),
         timeout_ms: 2_000,
     };
-    let output = match spawner.run(&spec, &NeverCancel) {
+    let output = match spawner.run(&spec, cancel) {
         Ok(output) => output,
         Err(err) => {
             let reason = format!(
@@ -1756,7 +1770,7 @@ mod tests {
         };
         let executable = PathBuf::from("/usr/local/bin/claude");
 
-        let version = probe_version(&ClaudeCodeAdapter, Some(&executable), &ports);
+        let version = probe_version(&ClaudeCodeAdapter, Some(&executable), &ports, &NeverCancel);
 
         assert!(
             version.value.is_none(),

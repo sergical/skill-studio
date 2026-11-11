@@ -6,15 +6,12 @@
 // ============================================================================
 
 use std::fmt::Write as _;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{mpsc, OnceLock};
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::skills::skill_fork_registry::{read_fork_registry_or_default, write_fork_registry};
+use crate::skills::skill_fork_registry::read_fork_registry_or_default;
 
 /// One editor the user can pick, as offered to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -190,9 +187,9 @@ fn set_preferred_editor_in(
             Some(v)
         }
     };
-    let mut registry = read_fork_registry_or_default(home);
-    registry.preferred_editor = normalized;
-    write_fork_registry(home, &registry)
+    super::skill_fork_registry::update_fork_registry(home, |registry| {
+        registry.preferred_editor.clone_from(&normalized);
+    })
 }
 
 pub fn installed_editors(home: &Path) -> Vec<EditorOption> {
@@ -219,118 +216,8 @@ pub fn set_preferred_editor(home: &Path, value: Option<String>) -> Result<(), St
 // the Dock doesn't inherit them, so this has to run a shell and ask.
 // ----------------------------------------------------------------------------
 
-const MARKER_START: &str = "__SKILL_STUDIO_ENV_START__";
-const MARKER_END: &str = "__SKILL_STUDIO_ENV_END__";
-const SHELL_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
-
-fn shell_probe_script() -> String {
-    format!(
-        "echo {MARKER_START}; echo \"VISUAL=$VISUAL\"; echo \"EDITOR=$EDITOR\"; echo {MARKER_END}"
-    )
-}
-
-/// Parses `VISUAL=`/`EDITOR=` lines between the marker lines, tolerating any
-/// banner text an interactive login shell prints before or after them.
-/// `VISUAL` wins when both are set; empty values on either side count as unset.
-fn parse_terminal_editor(output: &str) -> Option<String> {
-    let start = output.find(MARKER_START)?;
-    let after_start = &output[start + MARKER_START.len()..];
-    let end = after_start.find(MARKER_END).unwrap_or(after_start.len());
-    let body = &after_start[..end];
-
-    let mut visual = None;
-    let mut editor = None;
-    for line in body.lines() {
-        if let Some(v) = line.strip_prefix("VISUAL=") {
-            if !v.is_empty() {
-                visual = Some(v.to_string());
-            }
-        } else if let Some(e) = line.strip_prefix("EDITOR=") {
-            if !e.is_empty() {
-                editor = Some(e.to_string());
-            }
-        }
-    }
-    visual.or(editor)
-}
-
-/// Runs `command` and returns everything printed on stdout up to and
-/// including the first line containing `end_marker`, or `None` on a spawn
-/// failure, a broken pipe, or `timeout`.
-///
-/// Reads stdout on a helper thread so a login shell's rc files can't hang
-/// this forever: if one of them starts a background process that inherits
-/// stdout (ssh-agent, gpg-agent, a prompt daemon, ...), that process keeps
-/// the pipe's write end open long after the shell itself exits, and a plain
-/// `read_to_string` would then block waiting for an end-of-file that never
-/// comes. Stopping as soon as `end_marker` is seen sidesteps that, and also
-/// avoids blocking on a banner larger than the pipe buffer. The child is
-/// killed and reaped either way; the reader thread is left to finish (or
-/// block) on its own instead of being joined, since joining could still hang
-/// on that same held-open pipe.
-fn run_with_timeout(mut command: Command, end_marker: &str, timeout: Duration) -> Option<String> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut child = skill_studio_host::spawn_retrying_busy(&mut command).ok()?;
-
-    let stdout = child.stdout.take()?;
-    let (tx, rx) = mpsc::channel();
-    let end_marker = end_marker.to_string();
-    std::thread::spawn(move || {
-        let mut reader = BufReader::new(stdout);
-        let mut collected = String::new();
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    let is_end_line = line.contains(&end_marker);
-                    collected.push_str(&line);
-                    if is_end_line {
-                        break;
-                    }
-                }
-            }
-        }
-        let _ = tx.send(collected);
-    });
-
-    let result = rx.recv_timeout(timeout).ok();
-    let _ = child.kill();
-    let _ = child.wait();
-    result
-}
-
-/// The login shell command that prints `$VISUAL`/`$EDITOR`. Both are removed
-/// from the environment it inherits, so only the shell's own startup files
-/// set them: `npm run` exports `EDITOR=vi` when none is set, and a dev build
-/// started through it would otherwise show that fallback as the user's editor.
-fn login_shell_probe(shell: &str) -> Command {
-    let mut command = Command::new(shell);
-    command
-        .env_remove("VISUAL")
-        .env_remove("EDITOR")
-        .arg("-lic")
-        .arg(shell_probe_script());
-    command
-}
-
-/// Runs the login shell once to read `$VISUAL`/`$EDITOR`. stdin is closed so
-/// an interactive shell can't block on a prompt.
-fn read_login_shell_editor() -> Option<String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-    let output = run_with_timeout(login_shell_probe(&shell), MARKER_END, SHELL_PROBE_TIMEOUT)?;
-    parse_terminal_editor(&output)
-}
-
-/// Cached for the process lifetime - the login shell is only worth asking once.
-static TERMINAL_EDITOR: OnceLock<Option<String>> = OnceLock::new();
-
 fn terminal_editor_command() -> Option<String> {
-    TERMINAL_EDITOR.get_or_init(read_login_shell_editor).clone()
+    skill_studio_host::terminal_editor_command()
 }
 
 // ----------------------------------------------------------------------------
@@ -810,30 +697,6 @@ mod tests {
     }
 
     #[test]
-    fn marker_parsing_ignores_banner_noise_and_prefers_visual() {
-        let output =
-            format!("Welcome to zsh!\n{MARKER_START}\nVISUAL=nvim\nEDITOR=vi\n{MARKER_END}\nbye\n");
-        assert_eq!(parse_terminal_editor(&output), Some("nvim".to_string()));
-    }
-
-    #[test]
-    fn marker_parsing_falls_back_to_editor_when_visual_is_empty() {
-        let output = format!("{MARKER_START}\nVISUAL=\nEDITOR=vi\n{MARKER_END}\n");
-        assert_eq!(parse_terminal_editor(&output), Some("vi".to_string()));
-    }
-
-    #[test]
-    fn marker_parsing_returns_none_when_both_are_empty() {
-        let output = format!("{MARKER_START}\nVISUAL=\nEDITOR=\n{MARKER_END}\n");
-        assert_eq!(parse_terminal_editor(&output), None);
-    }
-
-    #[test]
-    fn marker_parsing_returns_none_without_markers() {
-        assert_eq!(parse_terminal_editor("VISUAL=nvim\n"), None);
-    }
-
-    #[test]
     fn command_label_is_the_basename_of_the_first_word() {
         assert_eq!(command_label("nvim"), "nvim");
         assert_eq!(command_label("code --wait"), "code");
@@ -895,53 +758,5 @@ mod tests {
         let (dir, target) = terminal_launch_target(&file);
         assert_eq!(dir, home.path());
         assert_eq!(target, "SKILL.md");
-    }
-
-    #[test]
-    fn login_shell_probe_drops_an_inherited_editor() {
-        let probe = login_shell_probe("/bin/zsh");
-        let removed: Vec<_> = probe
-            .get_envs()
-            .filter(|(_, value)| value.is_none())
-            .map(|(key, _)| key.to_os_string())
-            .collect();
-        assert!(removed.contains(&"VISUAL".into()), "{removed:?}");
-        assert!(removed.contains(&"EDITOR".into()), "{removed:?}");
-    }
-
-    #[test]
-    fn run_with_timeout_stops_at_the_end_marker_even_with_stdout_held_open() {
-        // The trailing `sleep 10 &` simulates an rc file that leaves a
-        // background process (ssh-agent, gpg-agent, ...) attached to the
-        // same stdout pipe: the shell itself exits immediately, but the pipe's
-        // write end stays open, so waiting for end-of-file would hang.
-        let script = format!(
-            "echo {MARKER_START}; echo VISUAL=nvim; echo EDITOR=vi; echo {MARKER_END}; sleep 10 &"
-        );
-        let mut command = Command::new("/bin/sh");
-        command.arg("-c").arg(script);
-        let start = std::time::Instant::now();
-        let output = run_with_timeout(command, MARKER_END, Duration::from_secs(5));
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "{:?}",
-            start.elapsed()
-        );
-        let output = output.expect("markers were printed before the hang");
-        assert_eq!(parse_terminal_editor(&output), Some("nvim".to_string()));
-    }
-
-    #[test]
-    fn run_with_timeout_gives_up_after_the_timeout() {
-        let mut command = Command::new("/bin/sh");
-        command.arg("-c").arg("sleep 10");
-        let start = std::time::Instant::now();
-        let output = run_with_timeout(command, MARKER_END, Duration::from_millis(200));
-        assert!(
-            start.elapsed() < Duration::from_secs(1),
-            "{:?}",
-            start.elapsed()
-        );
-        assert_eq!(output, None);
     }
 }

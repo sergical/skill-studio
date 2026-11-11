@@ -886,6 +886,7 @@ pub struct FailingFs {
     /// `symlink_metadata` once per link, so a test names the one link whose
     /// parent it wants unreadable rather than counting calls.
     fail_symlink_metadata_for: Mutex<Option<PathBuf>>,
+    fail_read_link_for: Mutex<Option<PathBuf>>,
 }
 
 impl FailingFs {
@@ -916,6 +917,7 @@ impl FailingFs {
             fail_read_prefix_for: Mutex::new(None),
             fail_read_when_present: Mutex::new(None),
             fail_symlink_metadata_for: Mutex::new(None),
+            fail_read_link_for: Mutex::new(None),
         }
     }
 
@@ -1099,6 +1101,14 @@ impl FailingFs {
         *self.fail_read_when_present.lock().expect("read fault lock") = Some((path, trigger));
     }
 
+    /// The next read of this link target returns `PermissionDenied`.
+    pub fn fail_read_link_for(&self, path: PathBuf) {
+        *self
+            .fail_read_link_for
+            .lock()
+            .expect("fail_read_link_for lock") = Some(path);
+    }
+
     /// The next `symlink_metadata` call for exactly `path` returns
     /// `PermissionDenied` instead of reaching `inner`; a call for any other
     /// path delegates normally, and once consumed `path` itself succeeds
@@ -1133,6 +1143,18 @@ impl ScopeFs for FailingFs {
         self.inner.symlink_metadata(path)
     }
     fn read_link(&self, path: &Path) -> std::io::Result<PathBuf> {
+        let mut target = self
+            .fail_read_link_for
+            .lock()
+            .expect("fail_read_link_for lock");
+        if target.as_deref() == Some(path) {
+            *target = None;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "FailingFs: injected read_link failure",
+            ));
+        }
+        drop(target);
         self.inner.read_link(path)
     }
     fn ancestor_holds(&self, start: &Path, name: &str) -> std::io::Result<bool> {

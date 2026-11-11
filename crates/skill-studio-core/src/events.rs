@@ -645,15 +645,19 @@ pub(crate) fn with_remove_copies(
     copies: &[(PathBuf, Fingerprint)],
 ) -> serde_json::Value {
     if !copies.is_empty() {
-        let copies: Vec<serde_json::Value> = copies
-            .iter()
-            .map(|(path, fingerprint)| {
-                serde_json::json!({ "path": path, "fingerprint": fingerprint.bare_hex() })
-            })
-            .collect();
-        inverse["remove_copies"] = serde_json::Value::Array(copies);
+        inverse["remove_copies"] = serde_json::Value::Array(copies.iter().map(|(path, fingerprint)| {
+            serde_json::json!({ "path":path, "fingerprint":fingerprint.bare_hex() })
+        }).collect());
     }
     inverse
+}
+
+/// Records created paths even when their post-write content could not be read.
+pub(crate) fn with_created_paths(
+    inverse: serde_json::Value,
+    paths: &[(PathBuf, Result<Option<Fingerprint>, crate::CoreError>)],
+) -> serde_json::Value {
+    with_path_fingerprints(inverse, "remove_copies", paths)
 }
 
 /// Reads back the `"remove_copies"` array [`with_remove_copies`] adds, or an
@@ -733,7 +737,7 @@ pub(crate) fn parse_restore_remove_links(inverse: &serde_json::Value) -> Vec<(Pa
 /// The `secondary_post` value for a path that could not be fingerprinted
 /// (an `Err` entry): it never equals a live fingerprint, so
 /// undo needs `force`.
-const UNREADABLE_FINGERPRINT: &str = "unknown";
+pub(crate) const UNREADABLE_FINGERPRINT: &str = "unknown";
 
 /// Adds a `"secondary_post"` array to a `restore_backup` inverse: every
 /// extra path the same event backed up beside `path` (an update's config,
@@ -741,23 +745,28 @@ const UNREADABLE_FINGERPRINT: &str = "unknown";
 /// the write, `"absent"` for none. Undo compares each against the live path
 /// so an edit made after the event is not overwritten without `force`.
 pub(crate) fn with_secondary_post(
+    inverse: serde_json::Value,
+    entries: &[(PathBuf, Result<Option<Fingerprint>, crate::CoreError>)],
+) -> serde_json::Value {
+    with_path_fingerprints(inverse, "secondary_post", entries)
+}
+
+fn with_path_fingerprints(
     mut inverse: serde_json::Value,
+    key: &str,
     entries: &[(PathBuf, Result<Option<Fingerprint>, crate::CoreError>)],
 ) -> serde_json::Value {
     if !entries.is_empty() {
-        let entries: Vec<serde_json::Value> = entries
-            .iter()
-            .map(|(path, fingerprint)| {
-                serde_json::json!({
-                    "path": path,
-                    "fingerprint": match fingerprint {
-                        Ok(fingerprint) => fingerprint.as_ref().map_or("absent", Fingerprint::bare_hex),
-                        Err(_) => UNREADABLE_FINGERPRINT,
-                    },
-                })
+        let entries = entries.iter().map(|(path, fingerprint)| {
+            serde_json::json!({
+                "path": path,
+                "fingerprint": match fingerprint {
+                    Ok(fingerprint) => fingerprint.as_ref().map_or("absent", Fingerprint::bare_hex),
+                    Err(_) => UNREADABLE_FINGERPRINT,
+                },
             })
-            .collect();
-        inverse["secondary_post"] = serde_json::Value::Array(entries);
+        }).collect();
+        inverse[key] = serde_json::Value::Array(entries);
     }
     inverse
 }

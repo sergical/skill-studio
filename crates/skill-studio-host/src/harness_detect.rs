@@ -1,10 +1,14 @@
 //! [`ProcessSpawner`] over the real OS process, for the `harnesses` op's
 //! `--version` probe and the desktop's `npx`/`git` mutations.
 
+use crate::probe_cache::{ProbeCache, ProbeKey};
 use std::ffi::OsString;
 use std::io::Read;
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -55,20 +59,12 @@ fn retry_when_busy<T>(mut attempt: impl FnMut() -> std::io::Result<T>) -> std::i
     }
 }
 
-/// How long the timeout path waits for a reader thread to see EOF after
-/// killing the child's whole process group, before giving up on it and
-/// returning whatever was collected so far (possibly nothing). Bounded so a
-/// reader that somehow never sees EOF can't turn the very deadline this
-/// spawner exists to enforce into a second, unbounded hang.
+/// Time allowed for EOF after process cleanup before stopping the readers.
 const KILLED_READER_GRACE: Duration = Duration::from_millis(250);
 
 /// Runs a child process with `std::process::Command` and waits for it to
 /// exit, killing it if it outlives `ProcessSpec::timeout_ms`.
 ///
-/// Cancellation via `CancelToken` is not enforced yet: `NeverCancel` is the
-/// only token any caller passes today. Caching the result by the
-/// executable's path, size, and mtime is a named follow-up in
-/// `docs/action-map/harnesses/harness-detection.md`, not this type.
 pub struct RealProcessSpawner {
     /// Directories searched to resolve a bare `ProcessSpec::program` and
     /// prepended to the child's `PATH`, ahead of this process's own. Empty
@@ -81,15 +77,34 @@ pub struct RealProcessSpawner {
     /// can be found.
     search_dirs: Vec<PathBuf>,
     isolated_home: Option<PathBuf>,
+    clock: Arc<dyn skill_studio_core::ports::Clock>,
+    probes: Mutex<ProbeCache>,
+    reader_grace: Duration,
 }
 
 impl RealProcessSpawner {
-    /// Builds the spawner. Stateless: every call spawns fresh.
+    /// Builds the spawner with an in-memory version-probe cache.
     pub fn new() -> Self {
         RealProcessSpawner {
             search_dirs: Vec::new(),
             isolated_home: None,
+            clock: Arc::new(crate::clock::SystemClock::new()),
+            probes: Mutex::new(ProbeCache::default()),
+            reader_grace: KILLED_READER_GRACE,
         }
+    }
+
+    /// Builds a production spawner whose cache is confined to the selected home.
+    pub fn for_home(home: &Path, search_dirs: Vec<PathBuf>) -> Self {
+        Self::with_search_path(search_dirs)
+            .with_probe_cache(home.join(".skill-studio/version-probes.json"))
+    }
+
+    /// Reuses version probes across instances through an app-owned cache file.
+    #[must_use]
+    pub fn with_probe_cache(mut self, path: PathBuf) -> Self {
+        self.probes = Mutex::new(ProbeCache::load(path));
+        self
     }
 
     /// As [`RealProcessSpawner::new`], but resolving a bare `program` name
@@ -101,7 +116,7 @@ impl RealProcessSpawner {
     pub fn with_search_path(search_dirs: Vec<PathBuf>) -> Self {
         RealProcessSpawner {
             search_dirs,
-            isolated_home: None,
+            ..Self::new()
         }
     }
 
@@ -253,26 +268,34 @@ fn broken_node_reason(node: &Path, path: &OsString) -> Option<String> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let mut child = spawn_retrying_busy(&mut command).ok()?;
     let stderr_reader = child.stderr.take().map(spawn_drain::<ChildStderr>);
     let start = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if start.elapsed() < NODE_VERSION_TIMEOUT => {
+    let exited = loop {
+        match child_exited_unreaped(&child) {
+            Ok(true) => break true,
+            Ok(false) if start.elapsed() < NODE_VERSION_TIMEOUT => {
                 std::thread::sleep(POLL_INTERVAL);
             }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
+            _ => break false,
         }
     };
+    let tree_stopped = kill_process_tree(child.id());
+    let _ = child.kill();
+    let status = child.wait();
+    let stderr = join_killed_reader(stderr_reader, KILLED_READER_GRACE);
+    if !exited || !tree_stopped {
+        return None;
+    }
+    let status = status.ok()?;
     if status.success() {
         return None;
     }
-    let stderr = stderr_reader.and_then(|h| h.join().ok())?;
     String::from_utf8_lossy(&stderr)
         .lines()
         .find(|line| line.contains("Library not loaded"))
@@ -285,70 +308,320 @@ impl Default for RealProcessSpawner {
     }
 }
 
-/// Spawns a thread that drains `pipe` to a `Vec<u8>`. Must start before the
+/// A reader with an explicit stop signal. Must start before the
 /// caller polls the child for exit: a child that writes more than the pipe
 /// buffer (about 64 KB) and isn't read blocks on that write forever, so
 /// `try_wait` would never see it exit and the caller would always hit its
 /// deadline instead of its real completion.
-fn spawn_drain<R: Read + Send + 'static>(pipe: R) -> JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let mut pipe = pipe;
-        let mut buf = Vec::new();
-        let _ = pipe.read_to_end(&mut buf);
-        buf
-    })
+struct PipeDrain {
+    stop: Arc<AtomicBool>,
+    handle: JoinHandle<Vec<u8>>,
 }
 
-/// Kills every process in `pid`'s process group (set via `process_group(0)`
-/// at spawn below), not just `pid` itself. `npx` runs the installed package
-/// in a `node` grandchild that inherits the pipe's write end; a lone
-/// `child.kill()` only signals the direct child, leaving that grandchild
-/// running and the pipe held open, so the reader thread's `read_to_end`
-/// would never see EOF. Shells out to the `kill` binary rather than
-/// `libc::kill` so this crate doesn't need unsafe code for it (the same
-/// tradeoff `lease.rs`'s liveness probe makes with `sysinfo`). Uses the
-/// POSIX `-s KILL -- -<pid>` form rather than `-KILL -<pid>`: procps `kill`
-/// (Linux) reads a bare negative pid as an option and rejects it, where
-/// `-- -<pid>` unambiguously marks it as the operand. Returns whether the
-/// group kill itself succeeded; the caller still calls `child.kill()` on
-/// the direct child regardless, so `child.wait()` can't block even if this
-/// returns `false` (missing `kill` binary, a parsing difference, ...).
+impl PipeDrain {
+    fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
+}
+
+fn spawn_drain<R: Read + AsFd + Send + 'static>(mut pipe: R) -> PipeDrain {
+    let stop = Arc::new(AtomicBool::new(false));
+    let cancelled = stop.clone();
+    let handle = std::thread::spawn(move || {
+        use rustix::event::{poll, PollFd, PollFlags, Timespec};
+        let mut output = Vec::new();
+        let mut buffer = [0; 8192];
+        loop {
+            let mut descriptors = [PollFd::new(&pipe, PollFlags::IN)];
+            let timeout = Timespec {
+                tv_sec: 0,
+                tv_nsec: 10_000_000,
+            };
+            match poll(&mut descriptors, Some(&timeout)) {
+                Ok(0) => {
+                    if cancelled.load(Ordering::Acquire) {
+                        break;
+                    }
+                    continue;
+                }
+                Ok(_) => {}
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(_) => break,
+            }
+            match pipe.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => output.extend_from_slice(&buffer[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+            if cancelled.load(Ordering::Acquire) {
+                break;
+            }
+        }
+        output
+    });
+    PipeDrain { stop, handle }
+}
+
+#[cfg(unix)]
+fn signal_process_group(pid: u32, signal: rustix::process::Signal) -> bool {
+    rustix::process::Pid::from_raw(pid.cast_signed())
+        .is_some_and(|pid| rustix::process::kill_process_group(pid, signal).is_ok())
+}
+
 #[cfg(unix)]
 fn kill_process_group(pid: u32) -> bool {
-    let group = format!("-{pid}");
-    std::process::Command::new("kill")
-        .args(["-s", "KILL", "--", &group])
-        .status()
-        .is_ok_and(|status| status.success())
+    signal_process_group(pid, rustix::process::Signal::KILL)
 }
 
-/// Joins `handle` if it finishes within [`KILLED_READER_GRACE`], else
-/// abandons it and returns nothing collected. Only used after the child's
-/// whole process group has already been killed, so the pipe's write end is
-/// expected to close almost immediately - the bound exists for the case
-/// where, for whatever reason, it doesn't.
-fn join_killed_reader(handle: Option<JoinHandle<Vec<u8>>>) -> Vec<u8> {
-    let Some(handle) = handle else {
+#[cfg(unix)]
+fn kill_process_tree(pid: u32) -> bool {
+    kill_process_tree_before_collect(pid, || {})
+}
+
+fn kill_process_tree_before_collect(pid: u32, before_collect: impl FnOnce()) -> bool {
+    let _ = signal_process_group(pid, rustix::process::Signal::STOP);
+    before_collect();
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let Ok(mut system) = System::new() else {
+        let _ = kill_process_group(pid);
+        return false;
+    };
+    let mut descendants = vec![Pid::from_u32(pid)];
+    let mut identities = Vec::new();
+    for _ in 0..8 {
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+        let previous_count = descendants.len();
+        let mut index = 0;
+        while index < descendants.len() {
+            let parent = descendants[index];
+            for process in system.processes().values() {
+                if process.parent() == Some(parent) && !descendants.contains(&process.pid()) {
+                    descendants.push(process.pid());
+                }
+            }
+            index += 1;
+        }
+        for pid in &descendants {
+            if !identities
+                .iter()
+                .any(|entry: &ProcessIdentity| entry.pid == *pid)
+            {
+                if let Some(process) = system.process(*pid) {
+                    identities.push(ProcessIdentity {
+                        pid: *pid,
+                        start: process.start_time(),
+                        parent: process.parent(),
+                    });
+                }
+            }
+        }
+        for identity in identities.iter().skip(1) {
+            if process_in_group(identity.pid, pid) {
+                continue;
+            }
+            signal_snapshot_process_with(
+                identity,
+                &identities,
+                &mut system,
+                rustix::process::Signal::STOP,
+            );
+        }
+        if descendants.len() == previous_count {
+            break;
+        }
+    }
+    for identity in identities.iter().skip(1).rev() {
+        if !process_in_group(identity.pid, pid) {
+            signal_snapshot_process(identity, &identities, &mut system);
+        }
+    }
+    let _ = kill_process_group(pid);
+    for _ in 0..100 {
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+        let mut index = 0;
+        while index < descendants.len() {
+            let parent = descendants[index];
+            for process in system.processes().values() {
+                if process.parent() == Some(parent) && !descendants.contains(&process.pid()) {
+                    descendants.push(process.pid());
+                    identities.push(ProcessIdentity {
+                        pid: process.pid(),
+                        start: process.start_time(),
+                        parent: process.parent(),
+                    });
+                }
+            }
+            index += 1;
+        }
+        for identity in identities.iter().skip(1).rev() {
+            if !process_in_group(identity.pid, pid) {
+                signal_snapshot_process(identity, &identities, &mut system);
+            }
+        }
+        let _ = kill_process_group(pid);
+        if descendants.iter().all(|pid| {
+            system.process(*pid).is_none_or(|process| {
+                matches!(
+                    process.status(),
+                    sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
+                )
+            })
+        }) {
+            return true;
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    false
+}
+
+fn process_in_group(process: sysinfo::Pid, group: u32) -> bool {
+    rustix::process::Pid::from_raw(process.as_u32().cast_signed())
+        .and_then(|pid| rustix::process::getpgid(Some(pid)).ok())
+        .is_some_and(|pid| pid.as_raw_nonzero().get() as u32 == group)
+}
+
+// A descendant can start a new session and retain the write end after a group kill.
+// Stop polling and close our read end before joining in that case.
+fn join_killed_reader(reader: Option<PipeDrain>, grace: Duration) -> Vec<u8> {
+    let Some(reader) = reader else {
         return Vec::new();
     };
-    let deadline = Instant::now() + KILLED_READER_GRACE;
-    while !handle.is_finished() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
+    let deadline = Instant::now() + grace;
+    while !reader.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(POLL_INTERVAL);
     }
-    if handle.is_finished() {
-        handle.join().unwrap_or_default()
-    } else {
-        Vec::new()
+    reader.stop.store(true, Ordering::Release);
+    reader.handle.join().unwrap_or_default()
+}
+
+#[derive(Clone)]
+struct ProcessIdentity {
+    pid: sysinfo::Pid,
+    start: u64,
+    parent: Option<sysinfo::Pid>,
+}
+
+fn signal_snapshot_process(
+    identity: &ProcessIdentity,
+    snapshot: &[ProcessIdentity],
+    system: &mut sysinfo::System,
+) -> bool {
+    signal_snapshot_process_with(identity, snapshot, system, rustix::process::Signal::KILL)
+}
+
+fn signal_snapshot_process_with(
+    identity: &ProcessIdentity,
+    snapshot: &[ProcessIdentity],
+    system: &mut sysinfo::System,
+    signal: rustix::process::Signal,
+) -> bool {
+    #[cfg(target_os = "linux")]
+    let descriptor = {
+        use rustix::process::{pidfd_open, Pid, PidfdFlags};
+        let Some(pid) = Pid::from_raw(identity.pid.as_u32().cast_signed()) else {
+            return false;
+        };
+        let Ok(fd) = pidfd_open(pid, PidfdFlags::empty()) else {
+            return false;
+        };
+        fd
+    };
+    let pids: Vec<_> = snapshot.iter().map(|entry| entry.pid).collect();
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&pids),
+        true,
+        sysinfo::ProcessRefreshKind::nothing().without_tasks(),
+    );
+    if !identity_chain_matches(identity, snapshot, system) {
+        return false;
     }
+    #[cfg(target_os = "linux")]
+    {
+        rustix::process::pidfd_send_signal(&descriptor, signal).is_ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // macOS has no pidfd. Exit and PID reuse can still occur after this check.
+        rustix::process::Pid::from_raw(identity.pid.as_u32().cast_signed())
+            .is_some_and(|pid| rustix::process::kill_process(pid, signal).is_ok())
+    }
+}
+
+fn identity_chain_matches(
+    identity: &ProcessIdentity,
+    snapshot: &[ProcessIdentity],
+    system: &sysinfo::System,
+) -> bool {
+    let mut current = identity;
+    loop {
+        if !system.process(current.pid).is_some_and(|process| {
+            process.start_time() == current.start && process.parent() == current.parent
+        }) {
+            return false;
+        }
+        let Some(parent) = snapshot
+            .iter()
+            .find(|entry| Some(entry.pid) == current.parent)
+        else {
+            return true;
+        };
+        current = parent;
+    }
+}
+
+fn child_exited_unreaped(child: &Child) -> std::io::Result<bool> {
+    use rustix::process::{waitid, Pid, WaitId, WaitIdOptions};
+    // WNOWAIT retains the leader PID and PGID until cleanup has signalled the group.
+    waitid(
+        WaitId::Pid(Pid::from_child(child)),
+        WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+    )
+    .map(|status| status.is_some())
+    .map_err(Into::into)
 }
 
 impl ProcessSpawner for RealProcessSpawner {
     fn run(
         &self,
         spec: &ProcessSpec,
-        _cancel: &dyn CancelToken,
+        cancel: &dyn CancelToken,
     ) -> Result<ProcessOutput, CoreError> {
+        if cancel.is_cancelled() {
+            return Err(CoreError::new(
+                skill_studio_core::ErrorCode::Cancelled,
+                "process cancelled",
+            ));
+        }
         let program = self.resolve_program(&spec.program);
+        let probe_key = if spec.args == ["--version"] && spec.cwd.is_none() && spec.env.is_empty() {
+            let path = if program.is_absolute() {
+                Some(program.clone())
+            } else {
+                std::env::split_paths(&self.effective_path(spec))
+                    .map(|dir| dir.join(&program))
+                    .find(|path| is_executable_file(path))
+            };
+            path.and_then(|path| ProbeKey::read_with_path(&path, self.effective_path(spec)))
+        } else {
+            None
+        };
+        if let Some(output) = probe_key.as_ref().and_then(|key| {
+            self.probes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(key)
+        }) {
+            return Ok(output);
+        }
         let mut command = std::process::Command::new(&program);
         command.args(&spec.args);
         if let Some(cwd) = &spec.cwd {
@@ -374,69 +647,63 @@ impl ProcessSpawner for RealProcessSpawner {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            // Makes the child the leader of its own new process group, so
-            // the timeout path below can kill the whole group - see
-            // `kill_process_group`'s doc comment for why a lone
-            // `child.kill()` isn't enough.
             command.process_group(0);
         }
+        let start = self.clock.monotonic();
         let mut child = spawn_retrying_busy(&mut command)
             .map_err(|e| CoreError::io(Path::new(&spec.program), e))?;
 
         // Drain both pipes concurrently with the poll loop below, not after
         // it: see `spawn_drain`'s doc comment.
-        let stdout_reader: Option<JoinHandle<Vec<u8>>> =
-            child.stdout.take().map(spawn_drain::<ChildStdout>);
-        let stderr_reader: Option<JoinHandle<Vec<u8>>> =
-            child.stderr.take().map(spawn_drain::<ChildStderr>);
+        let stdout_reader: Option<PipeDrain> = child.stdout.take().map(spawn_drain::<ChildStdout>);
+        let stderr_reader: Option<PipeDrain> = child.stderr.take().map(spawn_drain::<ChildStderr>);
 
         let deadline = Duration::from_millis(spec.timeout_ms);
-        let start = Instant::now();
         let exit_status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break Some(status),
-                Ok(None) if start.elapsed() >= deadline => break None,
-                Ok(None) => std::thread::sleep(POLL_INTERVAL),
-                Err(e) => return Err(CoreError::io(Path::new(&spec.program), e)),
+            if cancel.is_cancelled() {
+                break Err(CoreError::new(
+                    skill_studio_core::ErrorCode::Cancelled,
+                    "process cancelled",
+                ));
+            }
+            if self.clock.monotonic().saturating_sub(start) >= deadline {
+                break Ok(None);
+            }
+            match child_exited_unreaped(&child) {
+                Ok(true) => break Ok(Some(())),
+                Ok(false) => std::thread::sleep(POLL_INTERVAL),
+                Err(e) => break Err(CoreError::io(Path::new(&spec.program), e)),
             }
         };
-
-        let Some(status) = exit_status else {
-            // The child outlived its deadline: kill and reap its whole
-            // process group (not just the direct child - see
-            // `kill_process_group`), then report `timed_out` rather than
-            // guess at output the process never finished writing. The
-            // reader-thread joins are bounded (`join_killed_reader`): the
-            // group kill should close every pipe write end almost at once,
-            // but nothing here should be able to block `run` forever.
-            #[cfg(unix)]
-            let _ = kill_process_group(child.id());
-            // Always also kill the direct child: if the group kill above
-            // failed for any reason, this still guarantees `child.wait()`
-            // below can't block for the rest of the deadline-less sleep.
-            let _ = child.kill();
-            let _ = child.wait();
-            let stdout = join_killed_reader(stdout_reader);
-            let stderr = join_killed_reader(stderr_reader);
-            return Ok(self.describe_failed_npx(
-                spec,
-                &program,
-                ProcessOutput {
+        let tree_stopped = kill_process_tree(child.id());
+        let _ = child.kill();
+        let status = child
+            .wait()
+            .map_err(|e| CoreError::io(Path::new(&spec.program), e))?;
+        if !tree_stopped {
+            join_killed_reader(stdout_reader, self.reader_grace);
+            join_killed_reader(stderr_reader, self.reader_grace);
+            return Err(CoreError::new(
+                skill_studio_core::ErrorCode::Io,
+                "probe process tree did not stop",
+            ));
+        }
+        match exit_status {
+            Ok(Some(())) => {}
+            stopped => {
+                let stdout = join_killed_reader(stdout_reader, self.reader_grace);
+                let stderr = join_killed_reader(stderr_reader, self.reader_grace);
+                return stopped.map(|_| ProcessOutput {
                     status: None,
                     stdout: String::from_utf8_lossy(&stdout).into_owned(),
                     stderr: String::from_utf8_lossy(&stderr).into_owned(),
                     timed_out: true,
-                },
-            ));
-        };
-
-        let stdout = stdout_reader
-            .and_then(|h| h.join().ok())
-            .unwrap_or_default();
-        let stderr = stderr_reader
-            .and_then(|h| h.join().ok())
-            .unwrap_or_default();
-        Ok(self.describe_failed_npx(
+                });
+            }
+        }
+        let stdout = join_killed_reader(stdout_reader, self.reader_grace);
+        let stderr = join_killed_reader(stderr_reader, self.reader_grace);
+        let output = self.describe_failed_npx(
             spec,
             &program,
             ProcessOutput {
@@ -445,7 +712,17 @@ impl ProcessSpawner for RealProcessSpawner {
                 stderr: String::from_utf8_lossy(&stderr).into_owned(),
                 timed_out: false,
             },
-        ))
+        );
+        if let Some(key) = probe_key {
+            // A binary replaced during the probe must not populate the old fingerprint.
+            if key.is_current() {
+                self.probes
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .put(key, &output);
+            }
+        }
+        Ok(output)
     }
 }
 
@@ -456,6 +733,539 @@ mod tests {
 
     fn write_script(path: &Path, body: &str) {
         crate::test_scripts::write_fake_executable(path, body);
+    }
+
+    #[test]
+    fn cleanup_stops_group_before_collecting_or_allows_a_synchronized_late_fork() {
+        use rustix::process::{waitid, Pid, WaitId, WaitIdOptions};
+        use std::os::unix::process::CommandExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let ready = tmp.path().join("ready");
+        let release = tmp.path().join("release");
+        let (send, recv) = std::sync::mpsc::channel();
+        let forked = tmp.path().join("forked");
+        let mut child = Command::new("python3")
+            .args([
+                "-c",
+                r"import os, sys, signal
+ready, release, forked = sys.argv[1:]
+open(ready + '.tmp', 'w').close()
+os.rename(ready + '.tmp', ready)
+while not os.path.exists(release): pass
+parent = os.getpid()
+if os.fork() == 0:
+    os.setsid()
+    fd = os.open('/dev/null', os.O_RDWR)
+    os.dup2(fd, 1)
+    os.dup2(fd, 2)
+    open(forked, 'w').close()
+    os.kill(parent, signal.SIGSTOP)
+    while True: pass
+while True: pass
+",
+            ])
+            .arg(&ready)
+            .arg(&release)
+            .arg(&forked)
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let observer = std::thread::spawn(move || {
+            while !ready.exists() {
+                std::thread::yield_now();
+            }
+            send.send(()).unwrap();
+        });
+        recv.recv().unwrap();
+        observer.join().unwrap();
+        let mut stopped = false;
+        let cleaned = kill_process_tree_before_collect(child.id(), || {
+            std::fs::write(release.with_extension("tmp"), b"release").unwrap();
+            std::fs::rename(release.with_extension("tmp"), &release).unwrap();
+            waitid(
+                WaitId::Pid(Pid::from_child(&child)),
+                WaitIdOptions::STOPPED | WaitIdOptions::NOWAIT,
+            )
+            .unwrap();
+            stopped = !forked.exists();
+        });
+        child.wait().unwrap();
+        assert!(stopped, "group was allowed to fork during collection");
+        assert!(cleaned);
+    }
+
+    #[test]
+    fn absolute_shim_uses_each_effective_path_or_reuses_the_previous_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shim = tmp.path().join("shim");
+        write_script(&shim, "exec backend --version");
+        for (name, version) in [("first", "1.2.3"), ("second", "4.5.6")] {
+            let bin = tmp.path().join(name);
+            std::fs::create_dir(&bin).unwrap();
+            write_script(&bin.join("backend"), &format!("echo {version}"));
+        }
+        for (name, version) in [("first", "1.2.3"), ("second", "4.5.6")] {
+            let spawner = RealProcessSpawner::for_home(tmp.path(), vec![tmp.path().join(name)]);
+            let spec = ProcessSpec {
+                program: shim.display().to_string(),
+                args: vec!["--version".into()],
+                cwd: None,
+                env: Vec::new(),
+                timeout_ms: 30_000,
+            };
+            assert_eq!(
+                spawner.run(&spec, &NeverCancel).unwrap().stdout.trim(),
+                version,
+                "shim reused the version from the previous PATH"
+            );
+        }
+    }
+
+    struct ProbeFixture {
+        pid: PathBuf,
+        release: PathBuf,
+    }
+    impl Drop for ProbeFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.release, b"release");
+            if let Ok(pid) = std::fs::read_to_string(&self.pid)
+                .unwrap_or_default()
+                .trim()
+                .parse::<u32>()
+            {
+                let _ = kill_process_tree(pid);
+            }
+        }
+    }
+
+    #[test]
+    fn normal_exit_with_redirected_child_stops_the_group_or_leaves_a_probe_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fixture = ProbeFixture {
+            pid: tmp.path().join("pid"),
+            release: tmp.path().join("release"),
+        };
+        let spec = ProcessSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "sleep 600 >/dev/null 2>&1 & echo $! > \"$1\"; echo 1.2.3".into(),
+                "probe".into(),
+                fixture.pid.display().to_string(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+        };
+        let result = RealProcessSpawner::new().run(&spec, &NeverCancel);
+        let pid = std::fs::read_to_string(&fixture.pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let alive = process_running(pid);
+        drop(fixture);
+        assert_eq!(result.unwrap().stdout.trim(), "1.2.3");
+        assert!(!alive, "redirected child survived normal exit");
+    }
+
+    #[test]
+    fn cleanup_rechecks_snapshot_identity_or_signals_a_reused_pid_or_parent() {
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+        let mut system = System::new().unwrap();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+        let mut child = Command::new("/bin/sleep").arg("600").spawn().unwrap();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+        let process = system.process(Pid::from_u32(child.id())).unwrap();
+        let identity = ProcessIdentity {
+            pid: process.pid(),
+            start: process.start_time(),
+            parent: process.parent(),
+        };
+        let mut reused = identity.clone();
+        reused.start += 1;
+        let signalled_reuse =
+            signal_snapshot_process(&reused, std::slice::from_ref(&reused), &mut system);
+        let survived_reuse = child.try_wait().unwrap().is_none();
+        let mut reparented = identity;
+        reparented.parent = None;
+        let signalled_reparenting =
+            signal_snapshot_process(&reparented, std::slice::from_ref(&reparented), &mut system);
+        let survived_reparenting = child.try_wait().unwrap().is_none();
+        let _ = child.kill();
+        child.wait().unwrap();
+        assert!(
+            !signalled_reuse && survived_reuse,
+            "signalled a PID with a changed start time"
+        );
+        assert!(
+            !signalled_reparenting && survived_reparenting,
+            "signalled a PID with a changed parent chain"
+        );
+    }
+
+    #[test]
+    fn exit_poll_keeps_leader_waitable_or_allows_pgid_reuse_before_cleanup() {
+        let mut child = Command::new("/usr/bin/true").spawn().unwrap();
+        while !child_exited_unreaped(&child).unwrap() {
+            std::thread::yield_now();
+        }
+        let still_waitable = child_exited_unreaped(&child);
+        child.wait().unwrap();
+        assert!(still_waitable.unwrap());
+    }
+
+    #[test]
+    fn cancelling_an_escaping_grandchild_stops_it_or_leaves_the_probe_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fixture = ProbeFixture {
+            pid: tmp.path().join("ready"),
+            release: tmp.path().join("release"),
+        };
+        let script = r"import os, sys, time
+if os.fork() == 0:
+    os.setsid()
+    with open(sys.argv[1] + '.tmp', 'w') as f:
+        f.write(str(os.getpid()))
+    os.rename(sys.argv[1] + '.tmp', sys.argv[1])
+    while not os.path.exists(sys.argv[2]):
+        time.sleep(0.01)
+    os._exit(0)
+while True:
+    time.sleep(1)
+";
+        let spec = ProcessSpec {
+            program: "/usr/bin/python3".into(),
+            args: vec![
+                "-c".into(),
+                script.into(),
+                fixture.pid.display().to_string(),
+                fixture.release.display().to_string(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+        };
+        let spawner = RealProcessSpawner {
+            reader_grace: Duration::ZERO,
+            ..RealProcessSpawner::new()
+        };
+        let result = spawner.run(&spec, &CancelWhenPidReady(fixture.pid.clone()));
+        let pid = std::fs::read_to_string(&fixture.pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let alive = process_running(pid);
+        drop(fixture);
+        assert!(
+            matches!(result, Err(error) if error.code == skill_studio_core::ErrorCode::Cancelled)
+        );
+        assert!(!alive, "escaped descendant survived cancellation");
+    }
+
+    #[test]
+    fn replacing_a_shell_launchers_backend_under_the_same_path_returns_the_new_version_or_reuses_stale_output(
+    ) {
+        let home = tempfile::tempdir().unwrap();
+        let launcher = home.path().join("launcher");
+        let backend = home.path().join("backend");
+        write_script(&launcher, "exec backend --version");
+        let spec = ProcessSpec {
+            program: launcher.display().to_string(),
+            args: vec!["--version".into()],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+        };
+        for version in ["1.2.3", "4.5.6"] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(&backend, format!("#!/bin/sh\necho {version}\n")).unwrap();
+            std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let spawner =
+                RealProcessSpawner::for_home(home.path(), vec![home.path().to_path_buf()]);
+            assert_eq!(
+                spawner.run(&spec, &NeverCancel).unwrap().stdout.trim(),
+                version,
+                "shell launcher reused the replaced backend's version"
+            );
+        }
+    }
+
+    #[test]
+    fn replacing_a_python_launchers_backend_under_the_same_path_returns_the_new_version_or_reuses_stale_output(
+    ) {
+        let home = tempfile::tempdir().unwrap();
+        let launcher = home.path().join("launcher");
+        let backend = home.path().join("backend");
+        std::fs::write(&launcher, "#!/usr/bin/python3\nimport subprocess\nsubprocess.run(['backend', '--version'], check=True)\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let spec = ProcessSpec {
+            program: launcher.display().to_string(),
+            args: vec!["--version".into()],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+        };
+        for version in ["1.2.3", "4.5.6"] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(&backend, format!("#!/bin/sh\necho {version}\n")).unwrap();
+            std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let spawner =
+                RealProcessSpawner::for_home(home.path(), vec![home.path().to_path_buf()]);
+            assert_eq!(
+                spawner.run(&spec, &NeverCancel).unwrap().stdout.trim(),
+                version,
+                "shell launcher reused the replaced backend's version"
+            );
+        }
+    }
+
+    fn write_program(path: &Path) {
+        let source = path.with_extension("c");
+        std::fs::write(
+            &source,
+            r#"#include <stdio.h>
+int main(int argc, char **argv) {
+    char calls[4096];
+    snprintf(calls, sizeof(calls), "%s.calls", argv[0]);
+    FILE *f = fopen(calls, "a");
+    if (!f) return 1;
+    fputs("called\n", f); fclose(f);
+    puts("1.2.3"); return 0;
+}
+"#,
+        )
+        .unwrap();
+        assert!(Command::new("/usr/bin/cc")
+            .arg(&source)
+            .arg("-o")
+            .arg(path)
+            .status()
+            .unwrap()
+            .success());
+    }
+
+    #[test]
+    fn unchanged_version_probe_runs_once_or_repeats_the_process() {
+        let tmp = tempfile::tempdir().unwrap();
+        let program = tmp.path().join("probe");
+        write_program(&program);
+        let spec = ProcessSpec {
+            program: program.display().to_string(),
+            args: vec!["--version".into()],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+        };
+        let spawner = RealProcessSpawner::new();
+        let first = spawner.run(&spec, &NeverCancel).unwrap();
+        let second = spawner.run(&spec, &NeverCancel).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("probe.calls"))
+                .unwrap()
+                .lines()
+                .count(),
+            1,
+            "unchanged version probe ran twice"
+        );
+    }
+
+    #[test]
+    fn version_cache_survives_a_new_spawner_or_probes_again_on_the_next_launch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let program = tmp.path().join("probe");
+        write_program(&program);
+        let spec = ProcessSpec {
+            program: program.display().to_string(),
+            args: vec!["--version".into()],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+        };
+        let cache = tmp.path().join("app-cache/version-probes.json");
+        let first = RealProcessSpawner::new()
+            .with_probe_cache(cache.clone())
+            .run(&spec, &NeverCancel)
+            .unwrap();
+        let second = RealProcessSpawner::new()
+            .with_probe_cache(cache)
+            .run(&spec, &NeverCancel)
+            .unwrap();
+        assert_eq!(first, second);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("probe.calls"))
+                .unwrap()
+                .lines()
+                .count(),
+            1,
+            "new spawner did not reuse the persisted probe"
+        );
+        let ordinary = ProcessSpec {
+            args: Vec::new(),
+            ..spec
+        };
+        let spawner = RealProcessSpawner::new();
+        spawner.run(&ordinary, &NeverCancel).unwrap();
+        spawner.run(&ordinary, &NeverCancel).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("probe.calls"))
+                .unwrap()
+                .lines()
+                .count(),
+            3,
+            "ordinary commands must run every time"
+        );
+    }
+
+    #[test]
+    fn cancelling_detection_reaches_the_version_probe_and_returns_cancelled_or_reports_success() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct Cancellation(Arc<AtomicBool>);
+        impl CancelToken for Cancellation {
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+        struct CancelProbe(Arc<AtomicBool>);
+        impl ProcessSpawner for CancelProbe {
+            fn run(
+                &self,
+                _: &ProcessSpec,
+                cancel: &dyn CancelToken,
+            ) -> Result<ProcessOutput, CoreError> {
+                self.0.store(true, Ordering::SeqCst);
+                assert!(
+                    cancel.is_cancelled(),
+                    "detection replaced its caller's cancellation token"
+                );
+                Err(CoreError::new(
+                    skill_studio_core::ErrorCode::Cancelled,
+                    "cancelled",
+                ))
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        write_script(&bin.join("claude"), "echo 1.2.3");
+        let flag = Arc::new(AtomicBool::new(false));
+        let scope = skill_studio_core::RuntimeScope::fixture(&home);
+        let mut ports = crate::default_ports(
+            tmp.path().join("leases"),
+            Arc::new(skill_studio_core::harness::HarnessCatalog::builtin()),
+        );
+        ports.tools = Some(Arc::new(crate::PathToolLookup::with_search_dirs(vec![bin])));
+        ports.spawner = Some(Arc::new(CancelProbe(flag.clone())));
+        let rt = skill_studio_core::ports::Runtime::new(&scope, ports).unwrap();
+        let context = skill_studio_core::ports::OpContext::with_cancel(
+            skill_studio_core::identity::CorrelationId("cancel".into()),
+            Arc::new(Cancellation(flag)),
+        );
+        let result = skill_studio_core::ops::harnesses(
+            &rt,
+            &context,
+            &skill_studio_core::dto::HarnessesRequest {},
+        );
+        assert!(
+            matches!(result, Err(ref error) if error.code == skill_studio_core::ErrorCode::Cancelled),
+            "{result:?}"
+        );
+    }
+
+    struct CancelWhenPidReady(PathBuf);
+    impl CancelToken for CancelWhenPidReady {
+        fn is_cancelled(&self) -> bool {
+            std::fs::read_to_string(&self.0).is_ok_and(|value| value.trim().parse::<u32>().is_ok())
+        }
+    }
+
+    #[test]
+    fn escaped_child_readiness_waits_for_a_parseable_pid_or_cancels_before_pid_publication() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("ready");
+        let cancel = CancelWhenPidReady(path.clone());
+        std::fs::write(&path, "").unwrap();
+        assert!(!cancel.is_cancelled());
+        std::fs::write(&path, "pending").unwrap();
+        assert!(!cancel.is_cancelled());
+        std::fs::write(&path, "123").unwrap();
+        assert!(cancel.is_cancelled());
+    }
+
+    struct CancelWhenReady(PathBuf);
+    impl CancelToken for CancelWhenReady {
+        fn is_cancelled(&self) -> bool {
+            std::fs::read_to_string(&self.0).is_ok_and(|value| !value.trim().is_empty())
+        }
+    }
+
+    #[test]
+    fn cancel_after_child_readiness_stops_the_probe_or_returns_a_normal_exit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ready = tmp.path().join("ready");
+        let spec = ProcessSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "echo ready > \"$1\"; exec /bin/sleep 2".into(),
+                "probe".into(),
+                ready.display().to_string(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+        };
+        let result = RealProcessSpawner::new().run(&spec, &CancelWhenReady(ready));
+        assert!(
+            matches!(result, Err(ref e) if e.code == skill_studio_core::ErrorCode::Cancelled),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn normal_exit_releases_inherited_pipes_before_the_test_releases_the_descendant_or_hangs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ready = tmp.path().join("ready");
+        let release = tmp.path().join("release");
+        let spec = ProcessSpec {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "(echo ready > \"$1\"; while [ ! -f \"$2\" ]; do /bin/sleep 0.01; done) & while [ ! -f \"$1\" ]; do /bin/sleep 0.01; done; echo parent-done".into(), "probe".into(), ready.display().to_string(), release.display().to_string()],
+            cwd: None, env: Vec::new(), timeout_ms: 30_000,
+        };
+        let (send, recv) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            send.send(
+                RealProcessSpawner {
+                    reader_grace: Duration::ZERO,
+                    ..RealProcessSpawner::new()
+                }
+                .run(&spec, &NeverCancel),
+            )
+        });
+        let result = recv.recv_timeout(Duration::from_secs(30));
+        std::fs::write(release, b"release").unwrap();
+        worker.join().unwrap().ok();
+        let output = result
+            .expect("normal exit waited for the descendant's release")
+            .unwrap();
+        assert_eq!(output.status, Some(0));
+        assert!(!output.timed_out);
+        assert!(output.stdout.contains("parent-done"), "{output:?}");
     }
 
     /// `a_busy_executable_is_retried_until_free_or_the_busy_error_surfaces_after_the_cap`:
@@ -574,29 +1384,23 @@ mod tests {
         assert!(!output.timed_out);
     }
 
-    /// `a_hung_version_probe_times_out_and_is_killed_or_names_the_probe_that_hangs`:
-    /// a real child that records its pid and then `exec`s `sleep 30` - a
-    /// mock spawner can't prove a real OS process gets killed, so this test
-    /// pays for a real spawn - must come back as `timed_out`, and the pid it
-    /// recorded must be gone once `run` returns (`kill -0` fails), which
-    /// proves the child was killed and reaped rather than left running.
-    /// The deadline is generous so the shell has time to write its pid;
-    /// nothing asserts an elapsed-time bound, so a slow CI runner still
-    /// gets a correct verdict.
     #[test]
     fn a_hung_version_probe_times_out_and_is_killed_or_names_the_probe_that_hangs() {
         let tmp = tempfile::tempdir().unwrap();
         let pid_file = tmp.path().join("pid");
-        let spawner = RealProcessSpawner::new();
+        let spawner = RealProcessSpawner {
+            clock: Arc::new(ReadyClock(pid_file.clone())),
+            ..RealProcessSpawner::new()
+        };
         let spec = ProcessSpec {
-            program: "sh".into(),
+            program: "/bin/sh".into(),
             args: vec![
                 "-c".into(),
                 format!("echo $$ > '{}'; exec sleep 30", pid_file.display()),
             ],
             cwd: None,
             env: Vec::new(),
-            timeout_ms: 5_000,
+            timeout_ms: 30_000,
         };
 
         let output = spawner.run(&spec, &NeverCancel).unwrap();
@@ -611,7 +1415,7 @@ mod tests {
             !pid.is_empty(),
             "the child never recorded its pid, so the kill cannot be checked"
         );
-        let still_alive = std::process::Command::new("kill")
+        let still_alive = std::process::Command::new("/bin/kill")
             .args(["-0", pid])
             .status()
             .unwrap()
@@ -717,55 +1521,66 @@ mod tests {
         );
     }
 
-    /// `a_timed_out_childs_grandchild_that_inherited_the_pipe_is_still_killed_or_names_the_orphan_left_running`:
-    /// the child backgrounds a grandchild that inherits the stdout pipe's
-    /// write end and holds it open for 30s, then the child itself blocks
-    /// past a 500ms deadline. A lone `child.kill()` (the direct child only)
-    /// leaves the grandchild running with the pipe open, so the old
-    /// unbounded `JoinHandle::join()` on the reader thread never sees EOF
-    /// and `run` never returns. Fails (red) on that: `run` hangs well past
-    /// the grandchild's own 30s sleep instead of returning near the
-    /// deadline, and the grandchild's pid is still alive afterward.
+    struct ReadyClock(PathBuf);
+    impl skill_studio_core::ports::Clock for ReadyClock {
+        fn now(&self) -> chrono::DateTime<chrono::Utc> {
+            chrono::Utc::now()
+        }
+        fn monotonic(&self) -> Duration {
+            if std::fs::read_to_string(&self.0).is_ok_and(|pid| pid.trim().parse::<u32>().is_ok()) {
+                Duration::from_secs(31)
+            } else {
+                Duration::ZERO
+            }
+        }
+    }
+
+    fn process_running(pid: u32) -> bool {
+        let pid = sysinfo::Pid::from_u32(pid);
+        let mut system = sysinfo::System::new().expect("process inspector");
+        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+        system.process(pid).is_some_and(|p| {
+            !matches!(
+                p.status(),
+                sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
+            )
+        })
+    }
+
     #[test]
     fn a_timed_out_childs_grandchild_that_inherited_the_pipe_is_still_killed_or_names_the_orphan_left_running(
     ) {
         let tmp = tempfile::tempdir().unwrap();
-        let grandchild_pid_file = tmp.path().join("grandchild_pid");
-        let spawner = RealProcessSpawner::new();
-        let spec = ProcessSpec {
-            program: "sh".into(),
-            args: vec![
-                "-c".into(),
-                format!(
-                    "sh -c 'echo $$ > \"{}\"; exec sleep 30' & sleep 30",
-                    grandchild_pid_file.display()
-                ),
-            ],
-            cwd: None,
-            env: Vec::new(),
-            timeout_ms: 5_000,
+        let pid_file = tmp.path().join("grandchild_pid");
+        let release = tmp.path().join("release");
+        let spawner = RealProcessSpawner {
+            clock: Arc::new(ReadyClock(pid_file.clone())),
+            ..RealProcessSpawner::new()
         };
-
-        let output = spawner.run(&spec, &NeverCancel).unwrap();
-
-        assert!(
-            output.timed_out,
-            "a child whose grandchild holds the pipe open must still report timed_out, got {output:?}"
-        );
-        let grandchild_pid = std::fs::read_to_string(&grandchild_pid_file).unwrap_or_default();
-        let grandchild_pid = grandchild_pid.trim();
-        assert!(
-            !grandchild_pid.is_empty(),
-            "the backgrounded grandchild never recorded its pid"
-        );
-        let grandchild_alive = std::process::Command::new("kill")
-            .args(["-0", grandchild_pid])
-            .status()
-            .unwrap()
-            .success();
-        assert!(
-            !grandchild_alive,
-            "the grandchild (pid {grandchild_pid}) survived the timeout - only the direct child was killed"
-        );
+        let spec = ProcessSpec {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), r#"/bin/sh -c 'echo $$ > "$1"; while [ ! -f "$2" ]; do /bin/sleep 0.01; done' grandchild "$1" "$2" & wait"#.into(), "probe".into(), pid_file.display().to_string(), release.display().to_string()],
+            cwd: None, env: Vec::new(), timeout_ms: 30_000,
+        };
+        let fixture = ProbeFixture {
+            pid: pid_file.clone(),
+            release,
+        };
+        let (send, recv) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || send.send(spawner.run(&spec, &NeverCancel)));
+        let result = recv.recv_timeout(Duration::from_secs(30));
+        let pid = std::fs::read_to_string(&pid_file)
+            .unwrap_or_default()
+            .trim()
+            .parse::<u32>();
+        let alive = pid.as_ref().is_ok_and(|pid| process_running(*pid));
+        drop(fixture);
+        worker.join().unwrap().ok();
+        let output = result
+            .expect("logical deadline waited for the test's release")
+            .unwrap();
+        assert!(output.timed_out, "{output:?}");
+        assert!(pid.is_ok(), "grandchild did not signal readiness");
+        assert!(!alive, "the grandchild survived the group kill");
     }
 }

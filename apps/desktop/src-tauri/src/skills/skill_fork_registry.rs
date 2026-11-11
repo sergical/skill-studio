@@ -173,7 +173,7 @@ pub struct CopyDeploymentRecord {
 }
 
 /// `~/.agents/skill-studio.json`'s shape.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForkRegistry {
     #[serde(default = "default_version")]
     pub version: u32,
@@ -376,7 +376,12 @@ pub fn read_fork_registry_or_default(home: &Path) -> ForkRegistry {
 /// Where `FileLease` keeps its advisory lock files for this registry -
 /// `core_runtime::data_root()`'s `leases` subdirectory, the same lease root
 /// the CLI, MCP, and desktop's park/unpark commands already share.
-fn registry_lease_root() -> PathBuf {
+#[cfg(not(test))]
+pub(crate) fn registry_lease_root() -> PathBuf {
+    default_registry_lease_root()
+}
+
+fn default_registry_lease_root() -> PathBuf {
     super::core_runtime::data_root().join("leases")
 }
 
@@ -384,19 +389,88 @@ fn registry_lease_root() -> PathBuf {
 /// bumping `write_version` by one - see
 /// `skill_studio_core::registry::write_registry_document`. Creates
 /// `~/.agents` if it doesn't already exist.
-pub fn write_fork_registry(home: &Path, registry: &ForkRegistry) -> Result<(), String> {
-    // The core's scope normalization canonicalizes `home`, which requires
-    // it to exist already - callers historically relied on this function
-    // creating a never-before-seen home (e.g. a fresh project scope) via
-    // `create_dir_all` on the registry's parent, so do that first here too.
-    std::fs::create_dir_all(home)
-        .map_err(|e| format!("Failed to create {}: {e}", home.display()))?;
+pub fn write_fork_registry(home: &Path, registry: &mut ForkRegistry) -> Result<(), String> {
+    write_fork_registry_with_lease_root(home, registry, &registry_lease_root())
+}
+
+/// Writes a registry using the host's explicit lease directory.
+pub fn write_fork_registry_with_lease_root(
+    home: &Path,
+    registry: &mut ForkRegistry,
+    lease_root: &Path,
+) -> Result<(), String> {
+    write_fork_registry_at_root(home, registry, lease_root).map_err(|error| error.to_string())
+}
+
+fn write_fork_registry_at_root(
+    home: &Path,
+    registry: &mut ForkRegistry,
+    lease_root: &Path,
+) -> Result<(), skill_studio_core::CoreError> {
+    std::fs::create_dir_all(home).map_err(|error| skill_studio_core::CoreError::io(home, error))?;
     let path = fork_registry_path(home);
     let fs = skill_studio_host::RealFs::new();
-    let leases = skill_studio_host::FileLease::new(registry_lease_root());
-    let mut document = registry.clone();
-    skill_studio_core::registry::write_registry_document(&leases, &fs, home, &path, &mut document)
-        .map_err(|e| e.to_string())
+    let leases = skill_studio_host::FileLease::new(lease_root.to_path_buf());
+    skill_studio_core::registry::write_registry_document(&leases, &fs, home, &path, registry)
+}
+
+/// Applies an intended change, retrying one stale snapshot from a fresh read.
+/// The callback can run twice and must only change the supplied registry.
+pub fn update_fork_registry<T>(
+    home: &Path,
+    change: impl FnMut(&mut ForkRegistry) -> T,
+) -> Result<T, String> {
+    update_fork_registry_with_lease_root(home, &registry_lease_root(), change)
+}
+
+/// Applies a registry change using an explicit lease directory.
+pub fn update_fork_registry_with_lease_root<T>(
+    home: &Path,
+    lease_root: &Path,
+    mut change: impl FnMut(&mut ForkRegistry) -> T,
+) -> Result<T, String> {
+    let mut attempt = || -> Result<T, skill_studio_core::CoreError> {
+        let mut registry = read_fork_registry(home).map_err(|message| {
+            skill_studio_core::CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+        })?;
+        let before = registry.clone();
+        let value = change(&mut registry);
+        if registry != before {
+            write_fork_registry_at_root(home, &mut registry, lease_root)?;
+        }
+        Ok(value)
+    };
+    match attempt() {
+        Err(error) if error.code == skill_studio_core::ErrorCode::StaleProposal => {
+            attempt().map_err(|error| error.to_string())
+        }
+        result => result.map_err(|error| error.to_string()),
+    }
+}
+
+/// Restores one owned registry entry while preserving later changes to other entries.
+pub(crate) fn restore_registry_entry<V: Clone + PartialEq>(
+    home: &Path,
+    key: &str,
+    before: Option<&V>,
+    section: fn(&mut ForkRegistry) -> &mut BTreeMap<String, V>,
+    read: impl FnOnce(&Path) -> Result<ForkRegistry, String>,
+    write: impl FnOnce(&Path, &mut ForkRegistry) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut registry = read(home)?;
+    let entries = section(&mut registry);
+    if entries.get(key) == before {
+        return Ok(());
+    }
+    match before {
+        Some(record) => {
+            entries.insert(key.to_string(), record.clone());
+        }
+        None => {
+            entries.remove(key);
+        }
+    }
+    write(home, &mut registry)
 }
 
 /// `write_fork_registry`, for a caller that already holds `home`'s
@@ -408,19 +482,18 @@ pub fn write_fork_registry(home: &Path, registry: &ForkRegistry) -> Result<(), S
 pub fn write_fork_registry_locked(
     guard: &super::write_lease::WriteLeaseGuard,
     home: &Path,
-    registry: &ForkRegistry,
+    registry: &mut ForkRegistry,
 ) -> Result<(), String> {
     std::fs::create_dir_all(home)
         .map_err(|e| format!("Failed to create {}: {e}", home.display()))?;
     let path = fork_registry_path(home);
     let fs = skill_studio_host::RealFs::new();
-    let mut document = registry.clone();
     skill_studio_core::registry::write_registry_document_locked(
         guard.as_exclusive_guard(),
         &fs,
         home,
         &path,
-        &mut document,
+        registry,
     )
     .map_err(|e| e.to_string())
 }
@@ -433,7 +506,7 @@ pub fn write_fork_registry_locked(
 pub fn write_fork_registry_maybe_locked(
     guard: Option<&super::write_lease::WriteLeaseGuard>,
     home: &Path,
-    registry: &ForkRegistry,
+    registry: &mut ForkRegistry,
 ) -> Result<(), String> {
     match guard {
         Some(guard) => write_fork_registry_locked(guard, home, registry),
@@ -442,8 +515,125 @@ pub fn write_fork_registry_maybe_locked(
 }
 
 #[cfg(test)]
+pub(crate) fn registry_lease_root() -> PathBuf {
+    TEST_LEASE_ROOT
+        .with(|root| root.borrow().clone())
+        .unwrap_or_else(default_registry_lease_root)
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static TEST_LEASE_ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) struct RegistryLeaseRootOverride {
+    previous: Option<PathBuf>,
+    thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(test)]
+impl Drop for RegistryLeaseRootOverride {
+    fn drop(&mut self) {
+        TEST_LEASE_ROOT.with(|root| {
+            root.replace(self.previous.take());
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn registry_lease_root_for_test(root: PathBuf) -> RegistryLeaseRootOverride {
+    RegistryLeaseRootOverride {
+        previous: TEST_LEASE_ROOT.with(|slot| slot.replace(Some(root))),
+        thread_bound: std::marker::PhantomData,
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_registry_fixture_uses_its_injected_lease_root_or_points_at_the_real_data_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let expected = temp.path().join("leases");
+        let _root = registry_lease_root_for_test(expected.clone());
+        assert_eq!(registry_lease_root(), expected);
+    }
+
+    #[test]
+    fn a_stale_desktop_registry_update_retries_once_and_keeps_both_changes_or_overwrites_the_other_writer(
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("leases");
+        std::fs::create_dir_all(temp.path().join(".agents")).unwrap();
+        let mut attempts = 0;
+        update_fork_registry_with_lease_root(temp.path(), &root, |registry| {
+            attempts += 1;
+            if attempts == 1 {
+                let mut newer = read_fork_registry(temp.path()).unwrap();
+                newer
+                    .unknown
+                    .insert("other_writer".into(), serde_json::json!(true));
+                write_fork_registry_with_lease_root(temp.path(), &mut newer, &root).unwrap();
+            }
+            registry
+                .unknown
+                .insert("intended_change".into(), serde_json::json!(true));
+        })
+        .expect("the intended change must retry from the newer registry");
+        let committed = read_fork_registry(temp.path()).unwrap();
+        assert_eq!(attempts, 2);
+        for name in ["other_writer", "intended_change"] {
+            assert_eq!(committed.unknown.get(name), Some(&serde_json::json!(true)));
+        }
+        assert_eq!(committed.write_version, attempts);
+    }
+
+    #[test]
+    fn a_registry_update_stale_twice_refuses_after_one_retry_or_overwrites_a_concurrent_writer() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("leases");
+        std::fs::create_dir_all(temp.path().join(".agents")).unwrap();
+        let mut attempts = 0;
+        let result = update_fork_registry_with_lease_root(temp.path(), &root, |registry| {
+            attempts += 1;
+            let mut newer = read_fork_registry(temp.path()).unwrap();
+            newer
+                .unknown
+                .insert("other_writer".into(), serde_json::json!(attempts));
+            write_fork_registry_with_lease_root(temp.path(), &mut newer, &root).unwrap();
+            registry
+                .unknown
+                .insert("intended_change".into(), serde_json::json!(true));
+        });
+        assert!(
+            result.is_err(),
+            "a second stale version must refuse the write"
+        );
+        assert_eq!(attempts, 2, "only one fresh-read retry is allowed");
+        let committed = read_fork_registry(temp.path()).unwrap();
+        assert!(!committed.unknown.contains_key("intended_change"));
+        assert_eq!(committed.write_version, attempts);
+    }
+
+    #[test]
+    fn registry_write_updates_the_callers_version_or_leaves_its_next_write_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = ForkRegistry::default();
+        let initial = registry.write_version;
+        write_fork_registry_with_lease_root(tmp.path(), &mut registry, &tmp.path().join("leases"))
+            .unwrap();
+        assert_eq!(
+            registry.write_version,
+            initial + 1,
+            "the caller must hold the version that reached disk"
+        );
+        assert_eq!(
+            read_fork_registry(tmp.path()).unwrap().write_version,
+            registry.write_version
+        );
+    }
 
     #[test]
     fn missing_file_yields_default_registry() {
@@ -471,7 +661,7 @@ mod tests {
                 base_commit: "a".repeat(40),
             },
         );
-        write_fork_registry(tmp.path(), &reg).unwrap();
+        write_fork_registry(tmp.path(), &mut reg).unwrap();
 
         let reloaded = read_fork_registry(tmp.path()).unwrap();
         assert_eq!(reloaded.forks.len(), 1);
@@ -522,8 +712,8 @@ mod tests {
         )
         .unwrap();
 
-        let reg = read_fork_registry(tmp.path()).unwrap();
-        write_fork_registry(tmp.path(), &reg).unwrap();
+        let mut reg = read_fork_registry(tmp.path()).unwrap();
+        write_fork_registry(tmp.path(), &mut reg).unwrap();
 
         let reloaded = read_fork_registry(tmp.path()).unwrap();
         assert_eq!(
@@ -669,12 +859,12 @@ mod tests {
         )
         .unwrap();
 
-        let reg = read_fork_registry(tmp.path()).unwrap();
+        let mut reg = read_fork_registry(tmp.path()).unwrap();
         assert_eq!(
             reg.unknown.get("a_future_field"),
             Some(&serde_json::json!({"nested": true}))
         );
-        write_fork_registry(tmp.path(), &reg).unwrap();
+        write_fork_registry(tmp.path(), &mut reg).unwrap();
 
         let reloaded = read_fork_registry(tmp.path()).unwrap();
         assert_eq!(
@@ -686,20 +876,20 @@ mod tests {
     #[test]
     fn write_fork_registry_bumps_write_version_by_one_or_names_the_stuck_value() {
         let tmp = tempfile::tempdir().unwrap();
-        let reg = ForkRegistry::default();
+        let mut reg = ForkRegistry::default();
         assert_eq!(
             reg.write_version, 0,
             "a fresh registry starts at write_version 0"
         );
 
-        write_fork_registry(tmp.path(), &reg).unwrap();
-        let after_first = read_fork_registry(tmp.path()).unwrap();
+        write_fork_registry(tmp.path(), &mut reg).unwrap();
+        let mut after_first = read_fork_registry(tmp.path()).unwrap();
         assert_eq!(
             after_first.write_version, 1,
             "write_fork_registry did not bump write_version on its first write"
         );
 
-        write_fork_registry(tmp.path(), &after_first).unwrap();
+        write_fork_registry(tmp.path(), &mut after_first).unwrap();
         let after_second = read_fork_registry(tmp.path()).unwrap();
         assert_eq!(
             after_second.write_version, 2,
@@ -712,7 +902,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut reg = ForkRegistry::default();
         reg.projects.added.push(tmp.path().join("proj"));
-        write_fork_registry(tmp.path(), &reg).unwrap();
+        write_fork_registry(tmp.path(), &mut reg).unwrap();
 
         let reloaded = read_fork_registry(tmp.path()).unwrap();
         assert_eq!(reloaded.projects.added, [tmp.path().join("proj")]);
@@ -721,7 +911,7 @@ mod tests {
     #[test]
     fn an_empty_projects_list_is_not_written() {
         let tmp = tempfile::tempdir().unwrap();
-        write_fork_registry(tmp.path(), &ForkRegistry::default()).unwrap();
+        write_fork_registry(tmp.path(), &mut ForkRegistry::default()).unwrap();
 
         let content =
             std::fs::read_to_string(tmp.path().join(".agents/skill-studio.json")).unwrap();
@@ -733,7 +923,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut reg = ForkRegistry::default();
         reg.discovery.set("codex", false);
-        write_fork_registry(tmp.path(), &reg).unwrap();
+        write_fork_registry(tmp.path(), &mut reg).unwrap();
 
         let content =
             std::fs::read_to_string(tmp.path().join(".agents/skill-studio.json")).unwrap();
@@ -750,7 +940,7 @@ mod tests {
     #[test]
     fn default_discovery_is_not_written() {
         let tmp = tempfile::tempdir().unwrap();
-        write_fork_registry(tmp.path(), &ForkRegistry::default()).unwrap();
+        write_fork_registry(tmp.path(), &mut ForkRegistry::default()).unwrap();
 
         let content =
             std::fs::read_to_string(tmp.path().join(".agents/skill-studio.json")).unwrap();
@@ -777,11 +967,11 @@ mod tests {
     #[test]
     fn a_saved_false_for_telemetry_survives_a_round_trip_or_names_the_dropped_key() {
         let tmp = tempfile::tempdir().unwrap();
-        let reg = ForkRegistry {
+        let mut reg = ForkRegistry {
             telemetry_enabled: false,
             ..ForkRegistry::default()
         };
-        write_fork_registry(tmp.path(), &reg).unwrap();
+        write_fork_registry(tmp.path(), &mut reg).unwrap();
 
         let content =
             std::fs::read_to_string(tmp.path().join(".agents/skill-studio.json")).unwrap();
@@ -812,13 +1002,13 @@ mod tests {
         )
         .unwrap();
 
-        let reg = read_fork_registry(tmp.path()).unwrap();
+        let mut reg = read_fork_registry(tmp.path()).unwrap();
         assert!(
             reg.telemetry_enabled,
             "an rc user's opt-in under the old key must not be lost by the rename"
         );
 
-        write_fork_registry(tmp.path(), &reg).unwrap();
+        write_fork_registry(tmp.path(), &mut reg).unwrap();
         let content =
             std::fs::read_to_string(tmp.path().join(".agents/skill-studio.json")).unwrap();
         assert!(
@@ -841,7 +1031,7 @@ mod tests {
             reg.is_ok(),
             "a file an rc build rewrote after this build must still read, not fail as malformed"
         );
-        let reg = reg.unwrap();
+        let mut reg = reg.unwrap();
         assert!(
             !reg.telemetry_enabled,
             "when both keys exist the new key wins; an OR merge would reopen consent from the old key"
@@ -852,7 +1042,7 @@ mod tests {
             "dropping the old key must not reorder the other unknown keys"
         );
 
-        write_fork_registry(tmp.path(), &reg).unwrap();
+        write_fork_registry(tmp.path(), &mut reg).unwrap();
         let content =
             std::fs::read_to_string(tmp.path().join(".agents/skill-studio.json")).unwrap();
         assert!(
@@ -877,7 +1067,7 @@ mod tests {
     #[test]
     fn no_leftover_temp_files_after_write() {
         let tmp = tempfile::tempdir().unwrap();
-        write_fork_registry(tmp.path(), &ForkRegistry::default()).unwrap();
+        write_fork_registry(tmp.path(), &mut ForkRegistry::default()).unwrap();
         let leftover = std::fs::read_dir(tmp.path().join(".agents"))
             .unwrap()
             .filter_map(std::result::Result::ok)
