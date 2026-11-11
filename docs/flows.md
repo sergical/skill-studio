@@ -100,3 +100,13 @@ binary lookup reports its source; a folder alone does not prove that a CLI
 is installed. See `docs/agent-skill-conventions.md` for agent roots and sources,
 `docs/state-machines.md` for lifecycle transitions, and
 `docs/perf/launch-detection.md` for launch measurements.
+
+### Invariants
+
+Doctor checks that each link resolves inside its root, each registry and
+lockfile entry has a folder, no folder has two states, quarantine stays within
+its retention cap, and the journal has no open plan at rest. Quarantine uses
+`<root>/.skill-studio-quarantine/<id>`.
+
+The app data folder's `schema_version` marker prevents an older app from
+opening a folder written by a newer schema. A folder with no marker is version 0.

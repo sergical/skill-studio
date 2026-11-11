@@ -43,7 +43,7 @@ pub(crate) const QUARANTINE_DIR_NAME: &str = ".skill-studio-quarantine";
 /// tuning it as unmeasured.
 pub const QUARANTINE_RETENTION_CAP: usize = 20;
 
-/// One of the six doctor invariants from `lifecycle-states.md`. Carries
+/// One of the six doctor invariants from `docs/flows.md`. Carries
 /// `Serialize`/`Deserialize`/`JsonSchema` (unlike the rest of this
 /// detect-only module) because `ops::doctor`'s [`crate::dto::DoctorReport`]
 /// crosses the CLI/desktop/MCP boundary and needs to name which invariant a
