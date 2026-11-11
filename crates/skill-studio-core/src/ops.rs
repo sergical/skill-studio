@@ -4490,6 +4490,20 @@ fn restore_event_body(
     // Mirrors of an earlier restore's own work (see `with_write_back`): the
     // links it recreated must still be exactly those links, and the places
     // its removed copies go back to must be empty or hold such a link.
+    let lock_undo = crate::lock_file::LockRowUndo::from_inverse(inverse)?;
+    let mirror_lock = lock_undo
+        .as_ref()
+        .map(|lock| {
+            let current = lock.check(fs, &rt.scope, req.force)?;
+            Ok::<_, CoreError>(crate::lock_file::LockRowUndo {
+                path: lock.path.clone(),
+                skill: lock.skill.clone(),
+                version: lock.version,
+                previous: current,
+                expected: lock.previous.clone(),
+            })
+        })
+        .transpose()?;
     let secondary_post = crate::events::parse_restore_secondary_post(inverse);
     let remove_links = crate::events::parse_restore_remove_links(inverse);
     let write_back = crate::events::parse_restore_write_back(inverse);
@@ -4693,7 +4707,7 @@ fn restore_event_body(
         })
         .cloned()
         .collect();
-    let restore_inverse = crate::events::with_write_back(
+    let mut restore_inverse = crate::events::with_write_back(
         crate::events::restore_backup_inverse_with_links(
             &path,
             restore_pre_fingerprint.as_ref(),
@@ -4702,6 +4716,9 @@ fn restore_event_body(
         ),
         &removed_copies,
     );
+    if let Some(mirror) = mirror_lock {
+        restore_inverse["lock_row_undo"] = serde_json::json!(mirror);
+    }
     let draft = crate::events::EventDraft {
         kind: crate::events::EventKind::Restore,
         skill: target.skill.clone(),
@@ -4920,6 +4937,12 @@ fn restore_event_body(
             };
         if result.is_err() && required {
             unrestored.push(other_path.clone());
+        }
+    }
+    if let Some(lock) = &lock_undo {
+        if let Err(error) = lock.apply(&session.guard, fs, &rt.scope) {
+            unrestored.push(lock.path.clone());
+            copy_errors.push(error.to_string());
         }
     }
     if !copy_errors.is_empty() {

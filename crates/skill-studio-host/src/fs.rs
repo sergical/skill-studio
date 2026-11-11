@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
 use skill_studio_core::ports::{
-    DirEntryFacts, ExclusiveGuard, FileFacts, FileKind, ScopeFs, ScopedPath,
+    DirEntryFacts, ExclusiveGuard, FileFacts, FileKind, OpenedFile, ScopeFs, ScopedPath,
 };
 
 /// A counter mixed into temp file names so concurrent writers on the same
@@ -87,6 +87,15 @@ impl ScopeFs for RealFs {
             });
         }
         Ok(out)
+    }
+
+    fn open_file(&self, path: &Path) -> io::Result<OpenedFile> {
+        let file = fs::File::open(path)?;
+        let len = file.metadata()?.len();
+        Ok(OpenedFile {
+            len,
+            reader: Box::new(file),
+        })
     }
 
     fn read_capped(&self, path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {

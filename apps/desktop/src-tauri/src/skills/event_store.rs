@@ -23,7 +23,6 @@
 // recreating bytes cannot recreate the matching ownership metadata.
 // ============================================================================
 
-use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -32,7 +31,6 @@ use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use skill_studio_core::events::EventStatus as CoreEventStatus;
 
 use super::skill_md_write::{begin_skill_md_write_transaction, SkillMdWriteTransaction};
@@ -1256,48 +1254,7 @@ pub fn fingerprint_path_checked(path: &Path) -> std::io::Result<Option<String>> 
 }
 
 fn hash_entry(path: &Path) -> std::io::Result<String> {
-    let meta = fs::symlink_metadata(path)?;
-    let file_type = meta.file_type();
-    let mut hasher = Sha256::new();
-    if file_type.is_symlink() {
-        let target = fs::read_link(path)?;
-        hasher.update(b"L");
-        hasher.update(target.to_string_lossy().as_bytes());
-    } else if file_type.is_dir() {
-        hasher.update(b"D");
-        let mut entries: Vec<_> = fs::read_dir(path)?.collect::<Result<_, _>>()?;
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for entry in entries {
-            let name_bytes = entry
-                .file_name()
-                .to_string_lossy()
-                .into_owned()
-                .into_bytes();
-            let child_fp = hash_entry(&entry.path())?;
-            hasher.update((name_bytes.len() as u64).to_le_bytes());
-            hasher.update(&name_bytes);
-            hasher.update((child_fp.len() as u64).to_le_bytes());
-            hasher.update(child_fp.as_bytes());
-        }
-    } else {
-        hasher.update(b"F");
-        let bytes = fs::read(path)?;
-        hasher.update((bytes.len() as u64).to_le_bytes());
-        hasher.update(&bytes);
-    }
-    let digest = hasher.finalize();
-    Ok(to_hex(&digest))
-}
-
-/// Lower-case hex, one `write!` per byte into a single pre-sized `String`
-/// rather than collecting a `Vec<String>` of two-char fragments.
-fn to_hex(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut acc, b| {
-            let _ = write!(acc, "{b:02x}");
-            acc
-        })
+    skill_studio_host::hash_entry(path)
 }
 
 /// Copies `src` into `dest`, preserving regular files as bytes, directories

@@ -158,3 +158,71 @@ fn cli_history_and_restore_refuse_unfinished_recovery_or_write_over_an_interrupt
     );
     assert_eq!(cli(home.path(), &["history"])["data"][0]["id"], event.0);
 }
+
+#[test]
+fn cli_history_and_restore_hash_the_whole_large_asset_or_miss_a_tail_edit() {
+    for (drift, failed) in [(false, false), (true, false), (false, true), (true, true)] {
+        let home = tempfile::tempdir().unwrap();
+        let (event, before, mut after) = undo_fixtures::large_asset_update(home.path(), failed);
+        let asset = home.path().join(".agents/skills/alpha/asset.bin");
+        if drift {
+            *after.last_mut().unwrap() = b'c';
+            std::fs::write(&asset, &after).unwrap();
+        }
+        let history = cli(home.path(), &["history"]);
+        assert_eq!(history["data"][0]["id"], event.0);
+        assert_eq!(
+            history["data"][0]["status"],
+            if failed { "failed" } else { "done" }
+        );
+        let result = cli(home.path(), &["restore", "--event-id", &event.0]);
+        if drift {
+            assert_eq!(result["errors"][0]["code"], "drift_conflict", "{result}");
+            assert!(
+                std::fs::read(&asset).unwrap() == after,
+                "refused Restore changed the large asset"
+            );
+        } else {
+            assert_eq!(result["status"], "ok", "{result}");
+            assert!(
+                std::fs::read(&asset).unwrap() == before,
+                "Restore did not recover the complete large asset"
+            );
+        }
+    }
+}
+
+#[test]
+fn cli_update_restore_and_undo_restore_keep_the_owned_lock_row_or_erase_a_later_skill() {
+    for forced in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let (event, trace) = undo_fixtures::recorded_update(home.path());
+        let edited = undo_fixtures::edit_recorded_lock(home.path(), forced);
+        let history = cli(home.path(), &["history"]);
+        assert_eq!(history["data"][0]["id"], event.0);
+        let mut result = cli(home.path(), &["restore", "--event-id", &event.0]);
+        if forced {
+            assert_eq!(result["errors"][0]["code"], "drift_conflict", "{result}");
+            undo_fixtures::assert_recorded_lock(
+                home.path(),
+                &edited["skills"]["trace-skill"],
+                &edited["skills"]["unrelated"],
+            );
+            result = cli(home.path(), &["restore", "--event-id", &event.0, "--force"]);
+        }
+        assert_eq!(result["status"], "ok", "{result}");
+        undo_fixtures::assert_recorded_lock(
+            home.path(),
+            &trace["lock_before"]["skills"]["trace-skill"],
+            &edited["skills"]["unrelated"],
+        );
+        let restored = result["data"]["restore_event_id"].as_str().unwrap();
+        let undone = cli(home.path(), &["restore", "--event-id", restored]);
+        assert_eq!(undone["status"], "ok", "{undone}");
+        undo_fixtures::assert_recorded_lock(
+            home.path(),
+            &edited["skills"]["trace-skill"],
+            &edited["skills"]["unrelated"],
+        );
+    }
+}

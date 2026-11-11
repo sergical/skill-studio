@@ -21,7 +21,7 @@ use skill_studio_core::events::{
     BackupEntry, BackupManifest, EventDraft, EventFilter, EventRecord, EventStatus,
 };
 use skill_studio_core::fsops::{Root, StageFile};
-use skill_studio_core::identity::{sha256_hex, AgentId, EventId, Fingerprint, SkillName};
+use skill_studio_core::identity::{AgentId, EventId, Fingerprint, SkillName};
 use skill_studio_core::ports::{
     ExclusiveGuard, FileKind, HeldRestoreClaim, HistoryAccess, HistoryOpener, HistoryStore, ScopeFs,
 };
@@ -1235,38 +1235,12 @@ pub fn reimport_event_as_legacy(
 /// identical filesystem content. Callers only reach this for a path that
 /// exists; an absent path is handled separately (see `backup_paths`).
 pub fn hash_entry(path: &Path) -> std::io::Result<String> {
-    let meta = fs::symlink_metadata(path)?;
-    let file_type = meta.file_type();
-    if file_type.is_symlink() {
-        let target = fs::read_link(path)?;
-        let mut buf = vec![b'L'];
-        buf.extend_from_slice(target.to_string_lossy().as_bytes());
-        Ok(sha256_hex(&buf))
-    } else if file_type.is_dir() {
-        let mut entries: Vec<_> = fs::read_dir(path)?.collect::<Result<_, _>>()?;
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        let mut buf = vec![b'D'];
-        for entry in entries {
-            let name = entry
-                .file_name()
-                .to_string_lossy()
-                .into_owned()
-                .into_bytes();
-            let child = hash_entry(&entry.path())?;
-            buf.extend_from_slice(&(name.len() as u64).to_le_bytes());
-            buf.extend_from_slice(&name);
-            buf.extend_from_slice(&(child.len() as u64).to_le_bytes());
-            buf.extend_from_slice(child.as_bytes());
-        }
-        Ok(sha256_hex(&buf))
-    } else {
-        let bytes = fs::read(path)?;
-        let mut buf = Vec::with_capacity(bytes.len() + 9);
-        buf.push(b'F');
-        buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-        buf.extend_from_slice(&bytes);
-        Ok(sha256_hex(&buf))
-    }
+    skill_studio_core::events::fingerprint_path(&crate::RealFs::new(), path)
+        .map_err(std::io::Error::other)?
+        .map(|fingerprint| fingerprint.bare_hex().to_owned())
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "backup source is missing")
+        })
 }
 
 /// Copies `src` into `dest`, preserving regular files as bytes, directories
