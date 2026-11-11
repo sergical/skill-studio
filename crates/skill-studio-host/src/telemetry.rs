@@ -21,7 +21,7 @@ mod webview;
 pub use command_span::{
     sampled_at, CommandSpan, TraceParent, Trigger, BACKGROUND_SAMPLE_RATE, USER_SAMPLE_RATE,
 };
-pub use webview::{CodeNames, WebviewItem, WebviewTelemetry, WEBVIEW_ERROR_CAP};
+pub use webview::{WebviewBundle, WebviewItem, WebviewTelemetry, WEBVIEW_ERROR_CAP};
 
 /// Run-time fallback for the compile-time DSN; see [`resolve_dsn`].
 const DSN_ENV_VAR: &str = "SKILL_STUDIO_SENTRY_DSN";

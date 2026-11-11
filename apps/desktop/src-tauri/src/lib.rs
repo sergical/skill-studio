@@ -297,7 +297,7 @@ pub fn run() {
             let webview_telemetry = skill_studio_host::telemetry::WebviewTelemetry::init(
                 env!("CARGO_PKG_VERSION"),
                 consent.clone(),
-                move || skills::telemetry_commands::bundle_code_names(&assets),
+                move || skills::telemetry_commands::read_webview_bundle(&assets),
             );
             app.manage(skills::telemetry_commands::TelemetryState {
                 consent,

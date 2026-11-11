@@ -16,7 +16,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use skill_studio_host::telemetry::{CodeNames, Consent, TelemetryGuard, WebviewTelemetry};
+use skill_studio_host::telemetry::{Consent, TelemetryGuard, WebviewBundle, WebviewTelemetry};
 use tauri::Manager;
 
 /// The Tauri-managed telemetry state: the live consent flag every command
@@ -34,24 +34,14 @@ pub struct TelemetryState {
     pub webview: Option<WebviewTelemetry>,
 }
 
-/// The identifiers in the JavaScript the app ships. A dev build serves the
-/// webview from the dev server and embeds no assets, so its set is empty.
-pub fn bundle_code_names<R: tauri::Runtime>(assets: &tauri::AssetResolver<R>) -> CodeNames {
-    let scripts: Vec<String> = assets
-        .iter()
-        .map(|(path, _)| path.into_owned())
-        .filter(|path| {
-            Path::new(path)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("js"))
-        })
-        .collect();
-    CodeNames::from_sources(
-        scripts
-            .into_iter()
-            .filter_map(|path| assets.get(path))
-            .map(|asset| String::from_utf8_lossy(&asset.bytes).into_owned()),
-    )
+/// Reads the facts the desktop build wrote next to the bundle. A dev build
+/// serves the frontend from Vite and embeds no assets, so it gets an empty
+/// bundle, which drops every name.
+pub fn read_webview_bundle<R: tauri::Runtime>(assets: &tauri::AssetResolver<R>) -> WebviewBundle {
+    assets
+        .get(WebviewBundle::FILE.into())
+        .map(|asset| WebviewBundle::from_json(&asset.bytes))
+        .unwrap_or_default()
 }
 
 /// The saved switch, straight off disk - like `get_discovery_sources`, this

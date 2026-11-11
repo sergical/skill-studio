@@ -2,6 +2,7 @@ import { configDefaults, defineConfig } from "vitest/config";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
+import { webviewBundle } from "./webview-bundle";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -10,7 +11,7 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   // babel() must come after react() so the compiler pass runs on already
   // JSX-transformed output, per @vitejs/plugin-react's documented ordering.
-  plugins: [react(), babel({ presets: [reactCompilerPreset()] }), tailwindcss()],
+  plugins: [react(), babel({ presets: [reactCompilerPreset()] }), tailwindcss(), webviewBundle()],
 
   // The React component stack in a WebView error event (see
   // webview-telemetry.ts) is made of function names; the default Oxc minifier

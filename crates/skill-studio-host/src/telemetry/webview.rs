@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use sentry::{ClientOptions, Envelope, TransportFactory};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use super::{resolve_dsn, Consent, ConsentTransportFactory, SHUTDOWN_FLUSH};
@@ -28,38 +29,43 @@ const MAX_FRAMES: usize = 100;
 const MAX_SPANS: usize = 1000;
 const MAX_COMPONENT_STACK_LINES: usize = 50;
 
-/// The identifiers in the app's own JavaScript bundle. A function, class, or
-/// React component name in a webview report is kept only when it is one of
-/// these, so a skill, user, or path name reaches Sentry only when the
-/// shipped app already holds the same word.
-#[derive(Debug, Default)]
-pub struct CodeNames(HashSet<Box<str>>);
+/// What the desktop build wrote to [`WebviewBundle::FILE`]: the Sentry SDK
+/// version it bundled, and the function, class, and method names its
+/// JavaScript declares. A frame function, error class, or React component
+/// name in a webview report is sent only when it is exactly one of these
+/// names, so a skill, user, or path name cannot reach Sentry in those fields.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebviewBundle {
+    sdk_version: Option<Box<str>>,
+    code_names: HashSet<Box<str>>,
+}
 
-impl CodeNames {
-    /// Collects every identifier in `sources`, the app's JavaScript files.
-    pub fn from_sources(sources: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
-        let mut names = HashSet::new();
-        for source in sources {
-            names.extend(
-                source
-                    .as_ref()
-                    .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '$')))
-                    .filter(|word| {
-                        word.len() <= 64 && word.starts_with(|c: char| !c.is_ascii_digit())
-                    })
-                    .map(Box::from),
-            );
-        }
-        Self(names)
+impl WebviewBundle {
+    /// The file name, at the root of the built frontend.
+    pub const FILE: &'static str = "webview-bundle.json";
+
+    /// An unreadable file gives an empty bundle, which drops every name.
+    pub fn from_json(bytes: &[u8]) -> Self {
+        serde_json::from_slice(bytes).unwrap_or_default()
     }
 
-    /// `name`, or each part of a dotted `Object.render`, is in the bundle.
-    fn contains(&self, name: &str) -> bool {
-        is_identifier(name) && name.split('.').all(|part| self.0.contains(part))
+    fn has(&self, name: &str) -> bool {
+        self.code_names.contains(name)
+    }
+
+    /// `name`, or the method part of a dotted V8 name such as
+    /// `Object.render` when only that part is declared.
+    fn code_name<'a>(&self, name: &'a str) -> Option<&'a str> {
+        if self.has(name) {
+            return Some(name);
+        }
+        let (_, method) = name.rsplit_once('.')?;
+        self.has(method).then_some(method)
     }
 }
 
-type CodeNamesLoader = Box<dyn FnOnce() -> CodeNames + Send>;
+type BundleLoader = Box<dyn FnOnce() -> WebviewBundle + Send>;
 
 /// One envelope item as the webview transport sends it.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -124,18 +130,18 @@ pub struct WebviewTelemetry {
     client: Arc<sentry::Client>,
     consent: Consent,
     errors_sent: AtomicU32,
-    code_names: LazyLock<CodeNames, CodeNamesLoader>,
+    bundle: LazyLock<WebviewBundle, BundleLoader>,
 }
 
 impl WebviewTelemetry {
     /// Builds the client when a webview DSN is available (compile-time
     /// `SKILL_STUDIO_SENTRY_WEBVIEW_DSN` wins, then the same variable at run
-    /// time). Returns `None` when there is no valid DSN. `code_names` runs
+    /// time). Returns `None` when there is no valid DSN. `bundle` runs
     /// once, on the first send, so reading the bundle never delays launch.
     pub fn init(
         app_version: &str,
         consent: Consent,
-        code_names: impl FnOnce() -> CodeNames + Send + 'static,
+        bundle: impl FnOnce() -> WebviewBundle + Send + 'static,
     ) -> Option<Self> {
         let dsn = resolve_dsn(
             option_env!("SKILL_STUDIO_SENTRY_WEBVIEW_DSN"),
@@ -149,7 +155,7 @@ impl WebviewTelemetry {
             app_version,
             consent,
             transport,
-            Box::new(code_names),
+            Box::new(bundle),
         ))
     }
 
@@ -158,7 +164,7 @@ impl WebviewTelemetry {
         app_version: &str,
         consent: Consent,
         transport: Arc<dyn TransportFactory>,
-        code_names: CodeNamesLoader,
+        bundle: BundleLoader,
     ) -> Self {
         let mut options = ClientOptions::default();
         options.dsn = Some(dsn);
@@ -173,7 +179,7 @@ impl WebviewTelemetry {
             client: Arc::new(sentry::Client::with_options(options)),
             consent,
             errors_sent: AtomicU32::new(0),
-            code_names: LazyLock::new(code_names),
+            bundle: LazyLock::new(bundle),
         }
     }
 
@@ -194,7 +200,7 @@ impl WebviewTelemetry {
         let stamp = Stamp {
             release: options.release.as_deref(),
             environment: options.environment.as_deref(),
-            code_names: &self.code_names,
+            bundle: &self.bundle,
         };
         let mut body = Vec::new();
         let mut trace_id = None;
@@ -262,7 +268,7 @@ impl WebviewTelemetry {
 struct Stamp<'a> {
     release: Option<&'a str>,
     environment: Option<&'a str>,
-    code_names: &'a CodeNames,
+    bundle: &'a WebviewBundle,
 }
 
 fn item_trace_id(payload: &Value) -> Option<String> {
@@ -511,26 +517,11 @@ fn boolean(value: Option<&Value>) -> Option<Value> {
     value.filter(|value| value.is_boolean()).cloned()
 }
 
-/// A JS identifier, dotted path of identifiers, or error class name, such
-/// as `TypeError`, `SkillRow`, or `Object.render`.
-fn is_identifier(raw: &str) -> bool {
-    !raw.is_empty()
-        && raw.len() <= 64
-        && raw
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '$' | '.'))
-}
-
-fn code_identifier(value: Option<&Value>, code_names: &CodeNames) -> Option<Value> {
-    let raw = value?.as_str()?;
-    code_names.contains(raw).then(|| raw.into())
-}
-
-/// The SDKs the webview can load. Any other name is dropped.
-const SDK_NAMES: &[&str] = &["sentry.javascript.react", "sentry.javascript.browser"];
+/// The only SDK the webview loads; its version comes from [`WebviewBundle`].
+const SDK_NAME: &str = "sentry.javascript.react";
 
 /// The built-in JavaScript error classes. An app class such as
-/// `ForkPullError` passes as a name from the bundle.
+/// `ForkPullError` passes when the bundle declares it.
 const ERROR_TYPES: &[&str] = &[
     "Error",
     "TypeError",
@@ -568,17 +559,6 @@ const MECHANISM_TYPES: &[&str] = &[
     "auto.function.react.error_handler",
 ];
 
-/// `11.11.0`: digits and dots only, so it cannot carry a name.
-fn sdk_version(value: Option<&Value>) -> Option<Value> {
-    let raw = value?.as_str()?;
-    (raw.len() <= 16
-        && raw.split('.').count() <= 3
-        && raw
-            .split('.')
-            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())))
-    .then(|| raw.into())
-}
-
 /// Keeps only `view.<name>`, the names the webview gives its screens.
 fn view_name(value: Option<&Value>) -> Value {
     value
@@ -605,7 +585,7 @@ fn put(out: &mut Map<String, Value>, key: &str, value: Option<Value>) {
     }
 }
 
-fn stamp_common(out: &mut Map<String, Value>, payload: &Value, stamp: &Stamp<'_>) {
+fn stamp_common(out: &mut Map<String, Value>, stamp: &Stamp<'_>) {
     out.insert("platform".into(), "javascript".into());
     put(out, "release", stamp.release.map(Into::into));
     put(out, "environment", stamp.environment.map(Into::into));
@@ -613,21 +593,14 @@ fn stamp_common(out: &mut Map<String, Value>, payload: &Value, stamp: &Stamp<'_>
     tags.insert("surface".into(), "desktop".into());
     tags.insert("source".into(), "webview".into());
     out.insert("tags".into(), Value::Object(tags));
-    let sdk = payload.get("sdk");
-    let mut sdk_out = Map::new();
+    let mut sdk = Map::new();
+    sdk.insert("name".into(), SDK_NAME.into());
     put(
-        &mut sdk_out,
-        "name",
-        allowed(sdk.and_then(|sdk| sdk.get("name")), SDK_NAMES),
-    );
-    put(
-        &mut sdk_out,
+        &mut sdk,
         "version",
-        sdk_version(sdk.and_then(|sdk| sdk.get("version"))),
+        stamp.bundle.sdk_version.as_deref().map(Into::into),
     );
-    if !sdk_out.is_empty() {
-        out.insert("sdk".into(), Value::Object(sdk_out));
-    }
+    out.insert("sdk".into(), Value::Object(sdk));
 }
 
 fn event_id(payload: &Value) -> Value {
@@ -648,7 +621,7 @@ fn scrub_event(payload: &Value, stamp: &Stamp<'_>) -> Option<Value> {
         .rev()
         .take(MAX_EXCEPTIONS)
         .rev()
-        .map(|exception| scrub_exception(exception, stamp.code_names))
+        .map(|exception| scrub_exception(exception, stamp.bundle))
         .collect();
     if exceptions.is_empty() {
         return None;
@@ -680,21 +653,24 @@ fn scrub_event(payload: &Value, stamp: &Stamp<'_>) -> Option<Value> {
         "react",
         scrub_react_context(
             payload.pointer("/contexts/react/componentStack"),
-            stamp.code_names,
+            stamp.bundle,
         ),
     );
     out.insert("contexts".into(), Value::Object(contexts));
-    stamp_common(&mut out, payload, stamp);
+    stamp_common(&mut out, stamp);
     Some(Value::Object(out))
 }
 
-fn scrub_exception(exception: &Value, code_names: &CodeNames) -> Value {
+fn scrub_exception(exception: &Value, bundle: &WebviewBundle) -> Value {
     let mut out = Map::new();
     out.insert(
         "type".into(),
-        allowed(exception.get("type"), ERROR_TYPES)
-            .or_else(|| code_identifier(exception.get("type"), code_names))
-            .unwrap_or_else(|| "Error".into()),
+        exception
+            .get("type")
+            .and_then(Value::as_str)
+            .filter(|name| ERROR_TYPES.contains(name) || bundle.has(name))
+            .unwrap_or("Error")
+            .into(),
     );
     if let Some(mechanism) = exception.get("mechanism") {
         let mut mechanism_out = Map::new();
@@ -718,19 +694,23 @@ fn scrub_exception(exception: &Value, code_names: &CodeNames) -> Value {
             .rev()
             .take(MAX_FRAMES)
             .rev()
-            .map(|frame| scrub_frame(frame, code_names))
+            .map(|frame| scrub_frame(frame, bundle))
             .collect();
         out.insert("stacktrace".into(), serde_json::json!({ "frames": frames }));
     }
     Value::Object(out)
 }
 
-fn scrub_frame(frame: &Value, code_names: &CodeNames) -> Value {
+fn scrub_frame(frame: &Value, bundle: &WebviewBundle) -> Value {
     let mut out = Map::new();
     put(
         &mut out,
         "function",
-        code_identifier(frame.get("function"), code_names),
+        frame
+            .get("function")
+            .and_then(Value::as_str)
+            .and_then(|name| bundle.code_name(name))
+            .map(Into::into),
     );
     let file = frame
         .get("abs_path")
@@ -770,13 +750,13 @@ fn app_file(raw: &str) -> Option<String> {
 /// Rebuilds React's component stack from component names only. Each line
 /// of React's own stack (`at SkillRow (tauri://localhost/assets/x.js:1:2)`)
 /// becomes `at SkillRow`.
-fn scrub_react_context(component_stack: Option<&Value>, code_names: &CodeNames) -> Option<Value> {
+fn scrub_react_context(component_stack: Option<&Value>, bundle: &WebviewBundle) -> Option<Value> {
     let raw = component_stack?.as_str()?;
     let names: Vec<&str> = raw
         .lines()
         .filter_map(|line| line.trim().strip_prefix("at "))
         .filter_map(|rest| rest.split([' ', '(']).next())
-        .filter(|name| code_names.contains(name))
+        .filter(|name| bundle.has(name))
         .take(MAX_COMPONENT_STACK_LINES)
         .collect();
     if names.is_empty() {
@@ -844,7 +824,7 @@ fn scrub_transaction(payload: &Value, stamp: &Stamp<'_>) -> Option<Value> {
         "measurements",
         scrub_measurements(payload.get("measurements")),
     );
-    stamp_common(&mut out, payload, stamp);
+    stamp_common(&mut out, stamp);
     Some(Value::Object(out))
 }
 
@@ -1005,7 +985,7 @@ mod tests {
         let stamp = Stamp {
             release: None,
             environment: None,
-            code_names: &CodeNames::default(),
+            bundle: &WebviewBundle::default(),
         };
         let payload = serde_json::json!({
             "transaction": "view.secret-skill", "start_timestamp": 1, "timestamp": 2,
@@ -1054,9 +1034,9 @@ mod tests {
         .is_none());
     }
 
-    /// Stands in for the shipped bundle: the names the test events use.
-    const APP_BUNDLE: &str =
-        "function renderRow(){} class ForkPullError extends Error{} const SkillRow=()=>jsx(\"div\")";
+    /// Stands in for the build's `webview-bundle.json`: the names the test
+    /// events use, and the one-letter names a minified bundle declares.
+    const APP_BUNDLE: &str = r#"{"sdkVersion":"11.11.0","codeNames":["ForkPullError","SkillRow","SkillRow.renderRow","a","c","e","i","l","renderRow"]}"#;
 
     const SENTINELS: &[&str] = &[
         "Users",
@@ -1106,7 +1086,7 @@ mod tests {
             "9.9.9",
             consent.clone(),
             Arc::new(FixedTransportFactory(recording.clone())),
-            Box::new(|| CodeNames::from_sources([APP_BUNDLE])),
+            Box::new(|| WebviewBundle::from_json(APP_BUNDLE.as_bytes())),
         );
         (telemetry, recording)
     }
@@ -1240,7 +1220,7 @@ mod tests {
         assert!(frames[1].get("filename").is_none());
         assert_eq!(
             event["contexts"]["react"]["componentStack"],
-            "\n    at SkillRow\n    at div"
+            "\n    at SkillRow"
         );
         assert_eq!(
             event["contexts"]["trace"]["trace_id"],
@@ -1250,36 +1230,44 @@ mod tests {
         assert_eq!(event["release"], "skill-studio@9.9.9");
     }
 
-    /// guards: a skill or user name that uses only identifier characters
-    /// reaching Sentry as an SDK name, SDK version, exception type,
-    /// mechanism type, function name, or React component name. Also guards
-    /// the scrub dropping an app error class or a dotted function name from
-    /// the bundle.
+    /// guards: a skill or user name reaching Sentry as an SDK name, SDK
+    /// version, exception type, mechanism type, function name, or React
+    /// component name, including a dotted name made of declared parts
+    /// (`a.l.i.c.e`) or of words the bundle does not declare
+    /// (`secret.skill`). Also guards the scrub dropping an app error class
+    /// or a dotted function name the bundle declares.
     #[test]
-    fn webview_names_not_in_the_sdk_or_the_app_bundle_are_replaced() {
+    fn webview_names_the_app_bundle_does_not_declare_are_replaced() {
         let consent = Consent::new(true);
         let (telemetry, recording) = webview(&consent);
         let event = serde_json::json!({
             "exception": { "values": [
                 {
-                    "type": "private_skill",
+                    "type": "secret.skill",
                     "mechanism": { "type": "secret_skill", "handled": true },
                     "stacktrace": { "frames": [
                         { "function": "private_skill" },
-                        { "function": "renderRow.private_skill" },
+                        { "function": "secret.skill" },
+                        { "function": "a.l.i.c.e" },
                         { "function": "SkillRow.renderRow" }
                     ] }
                 },
                 { "type": "ForkPullError", "mechanism": { "type": "auto.core.linked_errors" } }
             ] },
-            "contexts": { "react": { "componentStack": "\n    at private_skill\n    at SkillRow" } },
-            "sdk": { "name": "alice", "version": "secret_skill" }
+            "contexts": { "react": { "componentStack": "\n    at secret.skill\n    at a.l.i.c.e\n    at SkillRow" } },
+            "sdk": { "name": "alice", "version": "14165550123" }
         });
 
         telemetry.send(vec![item("event", event)]);
 
         let body = sent(&recording).pop().expect("one envelope was sent");
-        for secret in ["private_skill", "secret_skill", "alice"] {
+        for secret in [
+            "private_skill",
+            "secret",
+            "a.l.i.c.e",
+            "alice",
+            "14165550123",
+        ] {
             assert!(!body.contains(secret), "{secret:?} reached Sentry: {body}");
         }
         let event = &items_of(&body)[0];
@@ -1289,7 +1277,8 @@ mod tests {
         let frames = first["stacktrace"]["frames"].as_array().unwrap();
         assert!(frames[0].get("function").is_none());
         assert!(frames[1].get("function").is_none());
-        assert_eq!(frames[2]["function"], "SkillRow.renderRow");
+        assert_eq!(frames[2]["function"], "e");
+        assert_eq!(frames[3]["function"], "SkillRow.renderRow");
         let second = &event["exception"]["values"][1];
         assert_eq!(second["type"], "ForkPullError");
         assert_eq!(second["mechanism"]["type"], "auto.core.linked_errors");
@@ -1297,7 +1286,10 @@ mod tests {
             event["contexts"]["react"]["componentStack"],
             "\n    at SkillRow"
         );
-        assert!(event.get("sdk").is_none());
+        assert_eq!(
+            event["sdk"],
+            serde_json::json!({ "name": "sentry.javascript.react", "version": "11.11.0" })
+        );
     }
 
     /// guards: a span description, span attribute, or transaction name that
