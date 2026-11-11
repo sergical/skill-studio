@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::dto::{DeploymentDto, Inventory};
 use crate::error::{CoreError, ErrorCode};
+use crate::harness::DisabledBy;
 use crate::identity::{AgentId, RootKind, RootScope};
 use crate::ports::Runtime;
 
@@ -15,7 +16,7 @@ use crate::ports::Runtime;
 pub struct ListingSkillCost {
     /// Model-visible name.
     pub name: String,
-    /// UTF-16 characters, divided by four and rounded up.
+    /// UTF-16 characters (UTF-8 bytes for Codex), divided by four and rounded up.
     pub estimated_tokens_chars_div_4: u64,
 }
 
@@ -28,7 +29,7 @@ pub struct ListingCost {
     pub scope: RootScope,
     /// Number of model-visible skill entries.
     pub listed_skills: usize,
-    /// UTF-16 characters, divided by four and rounded up.
+    /// UTF-16 characters (UTF-8 bytes for Codex), divided by four and rounded up.
     pub estimated_tokens_chars_div_4: u64,
     /// Budget in estimated tokens, or null when not verified.
     pub limit_tokens: Option<u64>,
@@ -294,7 +295,9 @@ pub(crate) fn listing_cost(
                         if &deployment.root.scope != selected_scope
                             || deployment.root.kind == RootKind::Parked
                             || deployment.studio_disabled
-                            || deployment.disabled_by.is_some()
+                            || deployment
+                                .disabled_by
+                                .is_some_and(|by| disables_reader(by, &facts.id))
                             || deployment.disabled_readers.contains(&facts.id)
                             || deployment
                                 .plugin
@@ -340,18 +343,15 @@ pub(crate) fn listing_cost(
                         if harness == AgentId::CODEX && description.trim().is_empty() {
                             continue;
                         }
-                        let mut chars = name.encode_utf16().count()
-                            + description.encode_utf16().count().min(cap)
-                            + 5;
-                        if harness == AgentId::CODEX {
-                            chars += deployment
-                                .path
-                                .join("SKILL.md")
-                                .to_string_lossy()
-                                .encode_utf16()
-                                .count()
-                                + 10;
-                        }
+                        let description: String = description.chars().take(cap).collect();
+                        let chars = if harness == AgentId::CODEX {
+                            name.len()
+                                + description.len()
+                                + deployment.path.join("SKILL.md").to_string_lossy().len()
+                                + 15
+                        } else {
+                            name.encode_utf16().count() + description.encode_utf16().count() + 5
+                        };
                         entries.insert(key, (name, chars as u64));
                     }
                 }
@@ -396,4 +396,15 @@ pub(crate) fn listing_cost(
         }
     }
     Ok(rows)
+}
+
+fn disables_reader(by: DisabledBy, reader: &AgentId) -> bool {
+    let owner = match by {
+        DisabledBy::StudioMoved => return true,
+        DisabledBy::CodexConfig => AgentId::CODEX,
+        DisabledBy::OpencodePermission => AgentId::OPEN_CODE,
+        DisabledBy::ClaudeLinkRemoved | DisabledBy::ClaudeSkillOverrides => AgentId::CLAUDE_CODE,
+        DisabledBy::PiSettings => AgentId::PI,
+    };
+    reader.as_str() == owner
 }

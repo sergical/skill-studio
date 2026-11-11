@@ -306,3 +306,40 @@ fn doctor_uses_trusted_project_codex_budget_instead_of_user_budget_or_untrusted_
         home.join("project/.codex/config.toml").to_str().unwrap()
     );
 }
+
+#[test]
+fn doctor_keeps_a_codex_disabled_skill_in_the_cursor_row_instead_of_hiding_it_from_every_reader() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    skill(home, ".codex/skills/review");
+    write(
+        home,
+        ".codex/config.toml",
+        &format!(
+            "[[skills.config]]\npath = {:?}\nenabled = false\n",
+            home.join(".codex/skills/review/SKILL.md")
+        ),
+    );
+    let data = report(home, "doctor", false);
+    assert_eq!(row(&data, "codex", false)["listed_skills"], 0);
+    assert_eq!(row(&data, "cursor", false)["listed_skills"], 1);
+}
+
+#[test]
+fn doctor_charges_codex_utf8_bytes_instead_of_utf16_units_for_non_ascii_descriptions() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write(
+        home,
+        ".codex/skills/wide/SKILL.md",
+        &format!("---\nname: wide\ndescription: {}\n---\n", "界".repeat(1000)),
+    );
+    write(
+        home,
+        ".codex/config.toml",
+        "[skills]\nmax_context_tokens = 500\n",
+    );
+    let codex = row(&report(home, "doctor", false), "codex", false);
+    assert!(codex["estimated_tokens_chars_div_4"].as_u64().unwrap() >= 750);
+    assert_eq!(codex["warning"], "over_limit");
+}
