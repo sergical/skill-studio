@@ -684,6 +684,27 @@ pub struct ParkRequest {
     pub deployment_id: DeploymentId,
 }
 
+/// Skills to park after all names pass validation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BatchParkRequest {
+    /// Names in the order they will be parked.
+    pub skills: Vec<SkillName>,
+}
+
+/// Results in the requested order. Each item has its own event id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BatchParkOutcome {
+    /// One normal park result per skill.
+    pub items: Vec<ParkOutcome>,
+}
+
+/// Results of turning a batch of parked skills on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BatchUnparkOutcome {
+    /// One normal unpark result per skill, in request order.
+    pub items: Vec<UnparkOutcome>,
+}
+
 /// Request for `park_check`: what to know before a park or a remove.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ParkCheckRequest {

@@ -568,6 +568,22 @@ pub fn print_remove_outcome_table(envelope: &ResultEnvelope<RemoveOutcome>) {
     }
 }
 
+pub fn print_batch_park_outcome_table(
+    envelope: &ResultEnvelope<skill_studio_core::dto::BatchParkOutcome>,
+) {
+    print_errors(envelope);
+    if let Some(outcome) = &envelope.data {
+        for item in &outcome.items {
+            println!(
+                "Parked {}. Event {}. Now in {}.",
+                item.deployment_id.as_str(),
+                item.event_id.0,
+                item.parked_path.display()
+            );
+        }
+    }
+}
+
 /// Prints `park`'s table: the deployment and where its directory now lives.
 pub fn print_park_outcome_table(envelope: &ResultEnvelope<ParkOutcome>) {
     print_errors(envelope);
@@ -595,6 +611,21 @@ pub fn print_split_outcome_table(envelope: &ResultEnvelope<skill_studio_core::dt
         );
     }
     println!("{}", outcome.update_note);
+}
+
+pub fn print_batch_unpark_outcome_table(
+    envelope: &ResultEnvelope<skill_studio_core::dto::BatchUnparkOutcome>,
+) {
+    print_errors(envelope);
+    if let Some(outcome) = &envelope.data {
+        for item in &outcome.items {
+            println!(
+                "Turned on {}. Event {}.",
+                item.deployment_id.as_str(),
+                item.event_id.0
+            );
+        }
+    }
 }
 
 /// Prints `unpark`'s table: the deployment and where its directory now lives.

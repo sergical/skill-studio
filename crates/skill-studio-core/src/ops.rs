@@ -209,6 +209,8 @@ impl Outcome for RestoreOutcome {
         Some(self.restore_event_id.clone())
     }
 }
+impl Outcome for crate::dto::BatchParkOutcome {}
+impl Outcome for crate::dto::BatchUnparkOutcome {}
 impl Outcome for ParkOutcome {
     fn event_id(&self) -> Option<EventId> {
         Some(self.event_id.clone())
@@ -5491,6 +5493,129 @@ pub use crate::ops_update::{update, update_all, update_split_copies};
 /// directory is renamed into `.agents/skills-parked`.
 pub fn park(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOutcome, CoreError> {
     rt.run(Operation::Park, ctx, || park_body(rt, ctx, req))
+}
+
+/// Resolve and validate every name before parking any copy. Runtime failures
+/// during a move can leave earlier items parked; use unpark to turn them on.
+pub fn park_batch(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &crate::dto::BatchParkRequest,
+) -> Result<crate::dto::BatchParkOutcome, CoreError> {
+    let ids = resolve_batch_names(rt, ctx, &req.skills, false)?;
+    let mut items = Vec::new();
+    for deployment_id in ids {
+        let warning = park_git_warning(rt, ctx, &deployment_id);
+        let mut outcome = park(rt, ctx, &ParkRequest { deployment_id })?;
+        outcome.warnings.extend(warning);
+        items.push(outcome);
+    }
+    Ok(crate::dto::BatchParkOutcome { items })
+}
+
+/// Resolve every parked name before turning any copy on.
+pub fn unpark_batch(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &crate::dto::BatchParkRequest,
+) -> Result<crate::dto::BatchUnparkOutcome, CoreError> {
+    let ids = resolve_batch_names(rt, ctx, &req.skills, true)?;
+    let items = ids
+        .into_iter()
+        .map(|deployment_id| unpark(rt, ctx, &UnparkRequest { deployment_id }))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(crate::dto::BatchUnparkOutcome { items })
+}
+
+fn resolve_batch_names(
+    rt: &Runtime,
+    ctx: &OpContext,
+    names: &[SkillName],
+    unpark: bool,
+) -> Result<Vec<DeploymentId>, CoreError> {
+    if names.is_empty() {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "Pass at least one skill name.",
+        ));
+    }
+    let inventory = scan(
+        rt,
+        ctx,
+        &ScanRequest {
+            skills: names.to_vec(),
+            timings: false,
+        },
+    )?;
+    let mut ids = Vec::new();
+    let mut errors = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for name in names {
+        let resolved = (|| {
+            if !seen.insert(name.0.clone()) {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "Name is repeated.",
+                ));
+            }
+            let skill = inventory
+                .skills
+                .iter()
+                .find(|s| s.name == *name)
+                .ok_or_else(|| {
+                    CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "No skill with this name was found.",
+                    )
+                })?;
+            let copies: Vec<_> = skill
+                .deployments
+                .iter()
+                .filter(|d| {
+                    if unpark {
+                        d.root.kind == RootKind::Parked
+                    } else {
+                        refuse_unparkable(d).is_ok()
+                    }
+                })
+                .collect();
+            let deployment = match copies.as_slice() {
+                [] => return Err(CoreError::new(
+                    ErrorCode::Unsupported,
+                    "No copy can be changed. Park needs a real folder; unpark needs a parked copy.",
+                )),
+                [only] => *only,
+                _ => {
+                    return Err(CoreError::new(
+                        ErrorCode::AmbiguousTarget,
+                        "More than one copy can be changed. Pass --id for one copy.",
+                    ))
+                }
+            };
+            if !unpark {
+                if skill
+                    .deployments
+                    .iter()
+                    .any(|copy| copy.parked_origin.as_ref() == Some(&deployment.root))
+                {
+                    return Err(CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "A parked copy from this folder already exists.",
+                    ));
+                }
+                crate::ops_park_dotagents::plan_park(rt, deployment, name)?;
+            }
+            Ok(deployment.id.clone())
+        })();
+        match resolved {
+            Ok(id) => ids.push(id),
+            Err(error) => errors.push(format!("{}: {}", name.0, error.message)),
+        }
+    }
+    if !errors.is_empty() {
+        return Err(CoreError::new(ErrorCode::InvalidRequest, errors.join("\n")));
+    }
+    Ok(ids)
 }
 
 fn park_body(rt: &Runtime, ctx: &OpContext, req: &ParkRequest) -> Result<ParkOutcome, CoreError> {
