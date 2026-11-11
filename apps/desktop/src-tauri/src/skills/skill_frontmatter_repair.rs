@@ -741,7 +741,6 @@ mod tests {
             invocations: Vec::new(),
             heatmap: skill_studio_core::skill_uses::InvocationHeatmap::default(),
             scanned_at: "2024-01-01T00:00:00Z".to_string(),
-            last_test_by_skill: Default::default(),
             update_check: Default::default(),
             opencode_config_kind: None,
             scan_partial: false,

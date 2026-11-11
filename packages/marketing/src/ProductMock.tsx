@@ -15,7 +15,6 @@ import {
   LayoutDashboard,
   MoreHorizontal,
   Moon,
-  PanelRight,
   Plus,
   Puzzle,
   RefreshCw,
@@ -1086,10 +1085,6 @@ function DetailScreen({ detail, onBack }: { detail: DetailState; onBack: () => v
             <button type="button" {...stylex.props(styles.updateButton)}>
               <Download aria-hidden="true" size={14} />
               Update
-            </button>
-            <button type="button" {...stylex.props(styles.secondaryButton)}>
-              <PanelRight aria-hidden="true" size={16} />
-              <span {...stylex.props(styles.assistantLabel)}>Assistant</span>
             </button>
             <button type="button" aria-label="More actions" {...stylex.props(styles.iconButton)}>
               <MoreHorizontal aria-hidden="true" size={16} />
@@ -2414,25 +2409,6 @@ const styles = stylex.create({
     ":active": { transform: "scale(.96)" },
     "@media (max-width: 680px)": { fontSize: 12, paddingInline: 6 },
   },
-  secondaryButton: {
-    alignItems: "center",
-    backgroundColor: "transparent",
-    borderColor: tokens.border,
-    borderRadius: 6,
-    borderStyle: "solid",
-    borderWidth: 1,
-    color: tokens.muted,
-    display: "flex",
-    fontSize: 13,
-    gap: 6,
-    height: 32,
-    paddingInline: 12,
-    ":hover": { backgroundColor: tokens.hover, color: tokens.text },
-    ":active": { transform: "scale(.96)" },
-    "@media (max-width: 680px)": { fontSize: 12, paddingInline: 6 },
-    "@media (max-width: 440px)": { justifyContent: "center", paddingInline: 0, width: 32 },
-  },
-  assistantLabel: { "@media (max-width: 440px)": { display: "none" } },
   iconButton: {
     alignItems: "center",
     backgroundColor: "transparent",

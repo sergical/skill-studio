@@ -1,9 +1,7 @@
 // ============================================================================
 // harness-labels - Shared harness-label data (Claude Code / Codex / OpenCode
-// / pi), consumed by SkillAssistantPanel and SkillHistorySection.
+// / pi), consumed by SkillHistorySection.
 // ============================================================================
-
-import type { HarnessId } from "@skill-studio/lib";
 
 /** Display label for each first-class harness, in the order the control shows them. */
 export const HARNESS_LABELS = [
@@ -11,4 +9,4 @@ export const HARNESS_LABELS = [
   ["codex", "Codex"],
   ["open-code", "OpenCode"],
   ["pi", "pi"],
-] satisfies [HarnessId, string][];
+] satisfies [string, string][];

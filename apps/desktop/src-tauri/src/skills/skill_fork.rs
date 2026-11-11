@@ -2144,7 +2144,6 @@ mod tests {
             &mut skill_studio_host::SkillInvocationIndex::default(),
             skill_refresh::BuildPaths::new(
                 &tmp.path().join("invocations.json"),
-                &app_data,
                 &tmp.path().join("updates.json"),
             ),
             chrono::Utc::now(),
@@ -2167,7 +2166,6 @@ mod tests {
             snapshot,
             skill_refresh::BuildPaths::new(
                 &tmp.path().join("invocations.json"),
-                &app_data,
                 &tmp.path().join("updates.json"),
             ),
         );
