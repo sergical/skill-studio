@@ -342,23 +342,25 @@ inventory covers the global root and each selected project root. It does not
 walk project children, parent directories, plugin caches, managed policy files,
 or config paths named by a value in another config file. It does not expand
 instruction imports, globs, or environment variables. Codex and OpenCode use the
-config roots already resolved by the runtime scope. Other roots use the default
-paths below.
+config roots already resolved by the runtime scope. Live scope uses `CODEX_HOME`
+for Codex and `OPENCODE_CONFIG_DIR` or `XDG_CONFIG_HOME/opencode` for OpenCode,
+with the default paths below when unset. Explicit `--home` and fixture scopes
+keep these roots under the selected home. Other roots use the default paths below.
 
 Checked against upstream docs on 2026-11-11:
 
 | Agent | Hooks | MCP servers | Instruction files |
 | --- | --- | --- | --- |
-| Claude Code | `~/.claude/settings.json`, `settings.local.json`; project `.claude/settings.json`, `settings.local.json`; `hooks.<event>[]` contains handler groups | `~/.claude.json` has `mcpServers` and `projects.<absolute-project-path>.mcpServers`; project `.mcp.json` has `mcpServers` | Global `~/.claude/CLAUDE.md`; project `CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md` |
+| Claude Code | `~/.claude/settings.json`; project `.claude/settings.json`, `settings.local.json`; `hooks.<event>[]` contains handler groups | `~/.claude.json` has `mcpServers` and `projects.<absolute-project-path>.mcpServers`; project `.mcp.json` has `mcpServers` | Global `~/.claude/CLAUDE.md`; project `CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md` |
 | Codex | Global and project `.codex/hooks.json` or inline `[hooks]` in `.codex/config.toml`; event arrays contain handler groups | Global and project `.codex/config.toml`, `[mcp_servers.<name>]` | Global `.codex/AGENTS.md`, `AGENTS.override.md`; project `AGENTS.md`, `AGENTS.override.md` |
-| OpenCode | No declarative hook file in this inventory; plugins can register events in code | Global `~/.config/opencode/opencode.json` or `.jsonc`; project `opencode.json` or `.jsonc`; `mcp.<name>` | Global config directory `AGENTS.md`, fallback `~/.claude/CLAUDE.md`; project `AGENTS.md`, `CLAUDE.md` |
+| OpenCode | No declarative hook file in this inventory; plugins can register events in code | Global `~/.config/opencode/opencode.json` or `.jsonc`; project `opencode.json` or `.jsonc` and `.opencode/opencode.json` or `.jsonc`; `mcp.<name>` | Global config directory `AGENTS.md`, fallback `~/.claude/CLAUDE.md`; project `AGENTS.md`, `CLAUDE.md` |
 | Cursor | Global and project `.cursor/hooks.json`; `hooks.<event>[]` contains handlers | Global and project `.cursor/mcp.json`; `mcpServers` | Project `AGENTS.md` |
 | pi | Events are registered by extensions in code, not a declarative hooks file | `~/.pi/agent/mcp.json`, project `.pi/mcp.json`; `mcpServers` in current pi | Global `~/.pi/agent/AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`; project equivalents; global agent directory and project `.pi/` also have `SYSTEM.md`, `APPEND_SYSTEM.md` |
-| Grok Build | `~/.grok/hooks/*.json`, project `.grok/hooks/*.json`, inline `[hooks]` in `~/.grok/config.toml` | Global and project `.grok/config.toml`, `[mcp_servers.<name>]` | Global `~/.grok/` and project root: `AGENTS.md`, `AGENT.md` |
+| Grok Build | `~/.grok/hooks/*.json`, project `.grok/hooks/*.json`, inline `[hooks]` in `~/.grok/config.toml` | Global and project `.grok/config.toml`, `[mcp_servers.<name>]` | Global `~/.grok/` and project root: `AGENTS.md`, `AGENT.md`, `CLAUDE.md`, `CLAUDE.local.md` |
 
-Grok also has optional Claude and Cursor compatibility sources. Those sources
-are listed under their owning agent in this inventory. It does not duplicate
-them under Grok or evaluate the compatibility switches. Older pi versions did
+Grok also reads Claude and Cursor rule directories for compatibility. Rule
+directories are outside this inventory. Grok instruction filenames in the table
+are listed under Grok at both scopes. Older pi versions did
 not include native MCP support. Case-only filename variants use the same lookup
 on the default macOS filesystem. The inventory uses the usual `.md` spelling.
 
@@ -376,5 +378,6 @@ Sources: [Claude settings](https://code.claude.com/docs/en/settings),
 [pi MCP](https://pi.dev/docs/latest/mcp),
 [pi configuration](https://pi.dev/docs/latest/configuration),
 [Grok settings](https://docs.x.ai/build/settings),
+[Grok project rules](https://docs.x.ai/build/features/project-rules#discovery),
 [Grok MCP](https://docs.x.ai/build/features/mcp-servers),
 [Grok hook source](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md).

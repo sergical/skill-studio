@@ -128,7 +128,7 @@ fn extras_lists_names_and_locations_instead_of_secret_values_with_cli_mcp_parity
     }
     for (path, name) in [
         (".claude/settings.json", "PreToolUse"),
-        (".claude/settings.local.json", "PreToolUse"),
+        ("project/.claude/settings.local.json", "PreToolUse"),
         (".cursor/hooks.json", "PreToolUse"),
         (".grok/hooks/session.json", "PreToolUse"),
         ("project/.grok/hooks/session.json", "PreToolUse"),
@@ -178,4 +178,134 @@ fn extras_reports_each_bad_file_as_unreadable_instead_of_exposing_parser_errors(
     assert!(!serde_json::to_string(&cli)
         .unwrap()
         .contains("SECRET_INVALID_CONFIG"));
+}
+
+#[test]
+fn extras_lists_opencode_hidden_project_servers_instead_of_missing_the_config() {
+    let home = tempfile::tempdir().unwrap();
+    let project = home.path().join("project");
+    for file in ["opencode.json", "opencode.jsonc"] {
+        let path = format!("project/.opencode/{file}");
+        write(
+            home.path(),
+            &path,
+            r#"{"mcp":{"hidden-server":{"url":"PRIVATE_VALUE"}}}"#,
+        );
+    }
+    let report = headless::cli(
+        home.path(),
+        &["extras", "--project", project.to_str().unwrap()],
+    );
+    let rows = report["data"]["entries"].as_array().unwrap();
+    for file in ["opencode.json", "opencode.jsonc"] {
+        assert!(
+            rows.iter().any(|r| r["harness"] == "opencode"
+                && r["name"] == "hidden-server"
+                && r["path"] == project.join(".opencode").join(file).to_str().unwrap()),
+            "missing hidden project config"
+        );
+    }
+    assert!(!report.to_string().contains("PRIVATE_VALUE"));
+}
+
+#[test]
+fn extras_lists_grok_claude_rules_at_both_scopes_instead_of_missing_compatible_names() {
+    let home = tempfile::tempdir().unwrap();
+    for dir in [".grok", "project"] {
+        for file in ["CLAUDE.md", "CLAUDE.local.md"] {
+            write(home.path(), &format!("{dir}/{file}"), "PRIVATE_VALUE");
+        }
+    }
+    let project = home.path().join("project");
+    let report = headless::cli(
+        home.path(),
+        &["extras", "--project", project.to_str().unwrap()],
+    );
+    let rows = report["data"]["entries"].as_array().unwrap();
+    for (dir, scope) in [(".grok", "global"), ("project", "project")] {
+        for file in ["CLAUDE.md", "CLAUDE.local.md"] {
+            assert!(
+                rows.iter().any(|r| r["harness"] == "grok-build"
+                    && r["scope"] == scope
+                    && r["path"] == home.path().join(dir).join(file).to_str().unwrap()),
+                "missing Grok instruction path"
+            );
+        }
+    }
+    assert!(!report.to_string().contains("PRIVATE_VALUE"));
+}
+
+#[test]
+fn extras_lists_claude_local_hooks_only_in_project_scope_instead_of_global_scope() {
+    let home = tempfile::tempdir().unwrap();
+    for dir in [".claude", "project/.claude"] {
+        write(
+            home.path(),
+            &format!("{dir}/settings.local.json"),
+            r#"{"hooks":{"Stop":[{"command":"PRIVATE_VALUE"}]}}"#,
+        );
+    }
+    let project = home.path().join("project");
+    let report = headless::cli(
+        home.path(),
+        &["extras", "--project", project.to_str().unwrap()],
+    );
+    let rows = report["data"]["entries"].as_array().unwrap();
+    assert!(rows
+        .iter()
+        .any(|r| r["harness"] == "claude-code" && r["kind"] == "hook" && r["scope"] == "project"));
+    assert!(!rows
+        .iter()
+        .any(|r| r["harness"] == "claude-code" && r["scope"] == "global"));
+    assert!(!report.to_string().contains("PRIVATE_VALUE"));
+}
+
+#[test]
+fn extras_uses_scanner_config_roots_instead_of_default_codex_and_opencode_paths() {
+    let home = tempfile::tempdir().unwrap();
+    write(
+        home.path(),
+        "custom-codex/config.toml",
+        "[mcp_servers.custom-codex]\ncommand = 'PRIVATE_VALUE'\n",
+    );
+    write(
+        home.path(),
+        "xdg/opencode/opencode.json",
+        r#"{"mcp":{"custom-opencode":{"url":"PRIVATE_VALUE"}}}"#,
+    );
+    write(
+        home.path(),
+        ".codex/config.toml",
+        "[mcp_servers.wrong-root]\n",
+    );
+    write(
+        home.path(),
+        ".config/opencode/opencode.json",
+        r#"{"mcp":{"wrong-root":{}}}"#,
+    );
+    let env = vec![
+        (
+            "CODEX_HOME".into(),
+            home.path().join("custom-codex").to_str().unwrap().into(),
+        ),
+        (
+            "XDG_CONFIG_HOME".into(),
+            home.path().join("xdg").to_str().unwrap().into(),
+        ),
+    ];
+    let report = headless::cli_request(home.path(), &["extras"], &env, false);
+    let rows = report["data"]["entries"].as_array().unwrap();
+    for (harness, name, path) in [
+        ("codex", "custom-codex", "custom-codex/config.toml"),
+        ("opencode", "custom-opencode", "xdg/opencode/opencode.json"),
+    ] {
+        assert!(
+            rows.iter().any(|r| r["harness"] == harness
+                && r["name"] == name
+                && r["path"] == home.path().join(path).to_str().unwrap()),
+            "missing resolved config root"
+        );
+    }
+    assert!(!rows.iter().any(|r| r["name"] == "wrong-root"));
+    assert!(!report.to_string().contains("PRIVATE_VALUE"));
 }

@@ -82,8 +82,9 @@ pub fn extras(rt: &Runtime, ctx: &OpContext, _: &ExtrasRequest) -> Result<Extras
                 };
                 match harness {
                     "claude-code" => {
-                        for file in ["settings.json", "settings.local.json"] {
-                            scan.config(&agent_dir.join(file), "", true);
+                        scan.config(&agent_dir.join("settings.json"), "", true);
+                        if project.is_some() {
+                            scan.config(&agent_dir.join("settings.local.json"), "", true);
                         }
                         if project.is_none() {
                             scan.config(&home.join(".claude.json"), "mcpServers", false);
@@ -100,6 +101,9 @@ pub fn extras(rt: &Runtime, ctx: &OpContext, _: &ExtrasRequest) -> Result<Extras
                         let config_root = if project.is_some() { root } else { &agent_dir };
                         for file in ["opencode.json", "opencode.jsonc"] {
                             scan.config(&config_root.join(file), "mcp", false);
+                            if project.is_some() {
+                                scan.config(&agent_dir.join(file), "mcp", false);
+                            }
                         }
                     }
                     "cursor" => {
@@ -119,7 +123,7 @@ pub fn extras(rt: &Runtime, ctx: &OpContext, _: &ExtrasRequest) -> Result<Extras
                     "opencode" if project.is_none() => &["AGENTS.md"],
                     "opencode" => &["AGENTS.md", "CLAUDE.md"],
                     "pi" => &["AGENTS.override.md", "AGENTS.md", "CLAUDE.md"],
-                    "grok-build" => &["AGENTS.md", "AGENT.md"],
+                    "grok-build" => &["AGENTS.md", "AGENT.md", "CLAUDE.md", "CLAUDE.local.md"],
                     _ => &["AGENTS.md"],
                 };
                 if harness == "cursor" && project.is_none() {
