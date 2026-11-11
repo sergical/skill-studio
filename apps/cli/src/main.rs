@@ -2015,7 +2015,7 @@ fn run_usage(
     let cache = scope.desktop_usage_cache();
     let cli_cache = cache
         .as_ref()
-        .map(|path| path.with_file_name("cli-skill-uses.json"));
+        .map(|path| skill_studio_host::cli_usage_cache_path(path));
     let clock = rt.ports.clock.as_ref();
     let started = std::time::Duration::ZERO;
     let mut steps = vec![skill_studio_core::timing::step(

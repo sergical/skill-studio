@@ -57,8 +57,10 @@ pub fn review(
     req: &ReviewRequest,
 ) -> Result<ReviewOutcome, CoreError> {
     rt.run(Operation::Review, ctx, || {
+        let mut store = load(rt)?;
+        let clears_saved = req.date.is_none() && store.dates.contains_key(&req.skill);
         let inventory = crate::ops::scan_for_usage(rt, ctx)?;
-        if !inventory.skills.iter().any(|s| s.name.0 == req.skill) {
+        if !clears_saved && !inventory.skills.iter().any(|s| s.name.0 == req.skill) {
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
                 format!("skill '{}' does not exist", req.skill),
@@ -79,7 +81,6 @@ pub fn review(
                     })
             })
             .transpose()?;
-        let mut store = load(rt)?;
         if let Some(date) = date {
             store.dates.insert(req.skill.clone(), date);
         } else {

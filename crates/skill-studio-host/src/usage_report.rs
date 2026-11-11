@@ -33,6 +33,11 @@ pub fn desktop_usage_cache_path(data_dir: &Path) -> PathBuf {
     data_dir.join("com.skillstudio.app").join("skill-uses.json")
 }
 
+/// The CLI and MCP cache beside the desktop cache. Only the desktop app writes the desktop cache.
+pub fn cli_usage_cache_path(desktop_cache: &Path) -> PathBuf {
+    desktop_cache.with_file_name("cli-skill-uses.json")
+}
+
 /// One installed skill's uses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkillUsageRow {

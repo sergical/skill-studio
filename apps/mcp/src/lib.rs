@@ -346,7 +346,10 @@ impl SkillStudioServer {
         .await
     }
 
-    #[tool(description = "Set a skill review date in YYYY-MM-DD form.")]
+    #[tool(
+        description = "Set a skill review date in YYYY-MM-DD form. Undo with review_clear.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
     async fn review_set(
         &self,
         Parameters(req): Parameters<skill_studio_core::review::ReviewRequest>,
@@ -363,7 +366,10 @@ impl SkillStudioServer {
         })
         .await
     }
-    #[tool(description = "Clear a skill review date.")]
+    #[tool(
+        description = "Clear a skill review date. Undo with review_set and the old date.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
     async fn review_clear(
         &self,
         Parameters(mut req): Parameters<skill_studio_core::review::ReviewRequest>,
@@ -376,7 +382,8 @@ impl SkillStudioServer {
         .await
     }
     #[tool(
-        description = "List skills past their review date with session counts and usage observations."
+        description = "List skills past their review date with session counts and usage observations.",
+        annotations(read_only_hint = true)
     )]
     async fn review_due(
         &self,

@@ -1126,6 +1126,7 @@ const READ_TOOLS: &[&str] = &[
     "list_events",
     "diagnose_conflict",
     "outdated",
+    "review_due",
 ];
 const WRITE_TOOLS: &[&str] = &[
     "invocation",
@@ -1140,6 +1141,8 @@ const WRITE_TOOLS: &[&str] = &[
     "turn_off_for_agent",
     "split",
     "unpark",
+    "review_set",
+    "review_clear",
 ];
 
 /// Flow: list tools with the default environment.
