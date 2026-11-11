@@ -13,11 +13,13 @@ import {
   rememberedSiteTheme,
   transitionSiteTheme,
 } from "../site-theme";
-import { startSiteSentry } from "../site-sentry";
+import { bufferEarlyErrors, startSiteSentry } from "../site-sentry";
 import "../marketing-site.css";
 import "./docs-prose.css";
 // Imported for its StyleX rules, which the build collects into the shared CSS file.
 import "./docs-page-styles";
+
+const earlyErrors = bufferEarlyErrors();
 
 const COPY_LABEL_RESET_MS = 2000;
 const copyResetTimers = new WeakMap<HTMLElement, number>();
@@ -75,4 +77,4 @@ document.addEventListener("click", (event) => {
   if (themeButton) toggleTheme(themeButton);
 });
 
-void startSiteSentry();
+void startSiteSentry(earlyErrors);

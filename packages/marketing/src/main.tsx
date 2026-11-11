@@ -2,9 +2,10 @@ import { StrictMode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { MarketingSite } from "./MarketingSite";
-import { startSiteSentry } from "./site-sentry";
+import { bufferEarlyErrors, startSiteSentry } from "./site-sentry";
 import "./marketing-site.css";
 
+const earlyErrors = bufferEarlyErrors();
 const root = document.getElementById("root");
 
 if (!root) {
@@ -23,4 +24,4 @@ flushSync(() => {
 });
 delete root.dataset.prerendered;
 
-void startSiteSentry();
+void startSiteSentry(earlyErrors);
