@@ -16,6 +16,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -187,40 +188,120 @@ pub fn outdated(
     let mut dotagents_ledgers: HashMap<Option<PathBuf>, Vec<DotagentsSkill>> = HashMap::new();
     let home_registry = crate::ownership::read_home_registry_result(fs, home);
 
-    // One `tree_shas_at_head` call per distinct repo, however many
-    // skills.sh targets share it - the performance number this unit
-    // measures.
-    let mut tree_cache: HashMap<String, Result<HashMap<String, String>, CoreError>> =
-        HashMap::new();
-
-    let mut results = BTreeMap::new();
-    for target in targets {
-        let record = match target.source_kind {
-            SourceKind::SkillsSh => skills_sh_currency(
-                fs,
-                &target.name,
-                &lock,
-                target.project_path.as_deref(),
-                tree_lookup,
-                &mut tree_cache,
-            ),
-            SourceKind::Dotagents => {
-                let ledger = dotagents_ledgers
-                    .entry(target.project_path.clone())
-                    .or_insert_with(|| {
-                        let dir =
-                            dotagents_ledger::dotagents_dir(home, target.project_path.as_deref());
-                        dotagents_ledger::read_dotagents_ledger(fs, &dir).unwrap_or_default()
-                    });
-                dotagents_currency(&target.name, ledger, commit_lookup)
-            }
-            SourceKind::Plugin => plugin_currency(target, plugin_lookup),
-            SourceKind::Fork => fork_currency(&target.name, &home_registry, commit_lookup),
-            SourceKind::InRepo | SourceKind::Manual => OutdatedRecord::bare(Currency::NotTracked),
-        };
-        results.insert(target.name.clone(), record);
+    let tree_cache = LookupCache::default();
+    let commit_cache = LookupCache::default();
+    let plugin_cache = LookupCache::default();
+    let trees = |repo: &str| {
+        tree_cache.get(repo.to_string(), || {
+            tree_lookup
+                .tree_shas_at_head(repo)
+                .map(Arc::new)
+                .map_err(Arc::new)
+        })
+    };
+    let commits = |repo: &str, path: &str| {
+        commit_cache.get((repo.to_string(), path.to_string()), || {
+            commit_lookup.latest_commit(repo, path).map_err(Arc::new)
+        })
+    };
+    let plugins = |marketplace: &str, plugin: &str| {
+        plugin_cache.get((marketplace.to_string(), plugin.to_string()), || {
+            plugin_lookup
+                .marketplace_version(marketplace, plugin)
+                .map_err(Arc::new)
+        })
+    };
+    for target in targets
+        .iter()
+        .filter(|target| target.source_kind == SourceKind::Dotagents)
+    {
+        dotagents_ledgers
+            .entry(target.project_path.clone())
+            .or_insert_with(|| {
+                let dir = dotagents_ledger::dotagents_dir(home, target.project_path.as_deref());
+                dotagents_ledger::read_dotagents_ledger(fs, &dir).unwrap_or_default()
+            });
     }
-    results
+    let pending = Mutex::new(targets.iter().enumerate());
+    let mut records = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..LOOKUP_POOL_SIZE.min(targets.len()))
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut records = Vec::new();
+                    loop {
+                        let next = pending
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .next();
+                        let Some((index, target)) = next else { break };
+                        let record = match target.source_kind {
+                            SourceKind::SkillsSh => skills_sh_currency(
+                                fs,
+                                &target.name,
+                                &lock,
+                                target.project_path.as_deref(),
+                                &trees,
+                            ),
+                            SourceKind::Dotagents => dotagents_currency(
+                                &target.name,
+                                &dotagents_ledgers[&target.project_path],
+                                &commits,
+                            ),
+                            SourceKind::Plugin => plugin_currency(target, &plugins),
+                            SourceKind::Fork => {
+                                fork_currency(&target.name, &home_registry, &commits)
+                            }
+                            SourceKind::InRepo | SourceKind::Manual => {
+                                OutdatedRecord::bare(Currency::NotTracked)
+                            }
+                        };
+                        records.push((index, target.name.clone(), record));
+                    }
+                    records
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect::<Vec<_>>()
+    });
+    records.sort_unstable_by_key(|(index, _, _)| *index);
+    records
+        .into_iter()
+        .map(|(_, name, record)| (name, record))
+        .collect()
+}
+
+const LOOKUP_POOL_SIZE: usize = 4;
+
+struct LookupCache<K, V> {
+    entries: Mutex<HashMap<K, Arc<OnceLock<V>>>>,
+}
+
+impl<K, V> Default for LookupCache<K, V> {
+    fn default() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl<K: Eq + std::hash::Hash, V: Clone> LookupCache<K, V> {
+    fn get(&self, key: K, lookup: impl FnOnce() -> V) -> V {
+        let entry = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(key)
+            .or_default()
+            .clone();
+        entry.get_or_init(lookup).clone()
+    }
 }
 
 /// Normalizes a repo slug so two spellings of the same source (a
@@ -243,8 +324,7 @@ fn skills_sh_currency(
     name: &str,
     lock: &Result<SkillLockFile, CoreError>,
     project_path: Option<&Path>,
-    tree_lookup: &dyn SourceTreeLookup,
-    tree_cache: &mut HashMap<String, Result<HashMap<String, String>, CoreError>>,
+    tree_lookup: &impl Fn(&str) -> Result<Arc<HashMap<String, String>>, Arc<CoreError>>,
 ) -> OutdatedRecord {
     let Ok(lock) = lock else {
         return OutdatedRecord::bare(Currency::Unknown);
@@ -281,9 +361,7 @@ fn skills_sh_currency(
     };
     let folder_path = skill_path.strip_suffix("/SKILL.md").unwrap_or(skill_path);
 
-    let tree = tree_cache
-        .entry(repo.clone())
-        .or_insert_with(|| tree_lookup.tree_shas_at_head(&repo));
+    let tree = tree_lookup(&repo);
     match tree {
         Ok(shas) => match shas.get(folder_path) {
             Some(sha) if sha == &entry.skill_folder_hash => OutdatedRecord {
@@ -315,7 +393,7 @@ fn skills_sh_currency(
 fn dotagents_currency(
     name: &str,
     ledger: &[DotagentsSkill],
-    commit_lookup: &dyn CommitLookup,
+    commit_lookup: &impl Fn(&str, &str) -> Result<Option<CommitInfo>, Arc<CoreError>>,
 ) -> OutdatedRecord {
     let Some(entry) = ledger.iter().find(|skill| skill.name == name) else {
         return OutdatedRecord::bare(Currency::Unknown);
@@ -327,7 +405,7 @@ fn dotagents_currency(
         return OutdatedRecord::bare(Currency::Unknown);
     };
     let installed_commit = Some(installed.clone());
-    match commit_lookup.latest_commit(repo, &entry.path) {
+    match commit_lookup(repo, &entry.path) {
         Ok(Some(latest)) if &latest.sha == installed => OutdatedRecord {
             currency: Currency::UpToDate,
             installed_commit,
@@ -363,7 +441,7 @@ fn dotagents_currency(
 fn fork_currency(
     name: &str,
     home_registry: &Result<crate::ownership::HomeRegistry, CoreError>,
-    commit_lookup: &dyn CommitLookup,
+    commit_lookup: &impl Fn(&str, &str) -> Result<Option<CommitInfo>, Arc<CoreError>>,
 ) -> OutdatedRecord {
     let home_registry = match home_registry {
         Ok(registry) => registry,
@@ -376,7 +454,7 @@ fn fork_currency(
         return OutdatedRecord::bare(Currency::NotTracked);
     }
     let installed_commit = Some(record.base_commit.clone());
-    match commit_lookup.latest_commit(&record.repo, &record.path) {
+    match commit_lookup(&record.repo, &record.path) {
         Ok(Some(latest)) if latest.sha == record.base_commit => OutdatedRecord {
             currency: Currency::UpToDate,
             installed_commit,
@@ -404,7 +482,7 @@ fn fork_currency(
 
 fn plugin_currency(
     target: &OutdatedTarget,
-    plugin_lookup: &dyn PluginManifestLookup,
+    plugin_lookup: &impl Fn(&str, &str) -> Result<Option<String>, Arc<CoreError>>,
 ) -> OutdatedRecord {
     let Some((marketplace, plugin, installed_version)) = &target.plugin else {
         return OutdatedRecord::bare(Currency::Unknown);
@@ -413,7 +491,7 @@ fn plugin_currency(
         return OutdatedRecord::bare(Currency::Unknown);
     };
     let installed_commit = Some(installed.clone());
-    match plugin_lookup.marketplace_version(marketplace, plugin) {
+    match plugin_lookup(marketplace, plugin) {
         Ok(Some(latest)) if &latest == installed => OutdatedRecord {
             currency: Currency::UpToDate,
             installed_commit,
@@ -476,6 +554,144 @@ mod tests {
         ) -> Result<Option<String>, CoreError> {
             Ok(None)
         }
+    }
+
+    #[test]
+    fn outdated_runs_distinct_lookups_concurrently_instead_of_one_gh_call_at_a_time() {
+        struct ConcurrentPlugins {
+            entered: Mutex<usize>,
+            ready: std::sync::Condvar,
+        }
+        impl PluginManifestLookup for ConcurrentPlugins {
+            fn marketplace_version(
+                &self,
+                _marketplace: &str,
+                _plugin: &str,
+            ) -> Result<Option<String>, CoreError> {
+                let mut entered = self.entered.lock().unwrap();
+                *entered += 1;
+                self.ready.notify_all();
+                let (entered, _) = self
+                    .ready
+                    .wait_timeout_while(entered, std::time::Duration::from_secs(10), |count| {
+                        *count < 2
+                    })
+                    .unwrap();
+                assert!(
+                    *entered >= 2,
+                    "outdated must have at least two distinct lookups in flight"
+                );
+                Ok(Some("new".into()))
+            }
+        }
+        let fs = FixtureBuilder::new().dir("/home/.agents").build_fs();
+        let targets: Vec<_> = ["first", "second"]
+            .into_iter()
+            .map(|name| OutdatedTarget {
+                name: name.into(),
+                source_kind: SourceKind::Plugin,
+                plugin: Some(("market".into(), name.into(), Some("old".into()))),
+                project_path: None,
+            })
+            .collect();
+        let lookup = ConcurrentPlugins {
+            entered: Mutex::new(0),
+            ready: std::sync::Condvar::new(),
+        };
+        let results = outdated(
+            &fs,
+            Path::new("/home"),
+            &targets,
+            &FakeTreeLookup::default(),
+            &NoCommits,
+            &lookup,
+        );
+        assert_eq!(results.len(), 2);
+        assert!(results
+            .values()
+            .all(|record| record.currency == Currency::UpdateAvailable));
+    }
+
+    #[test]
+    fn outdated_reuses_identical_commit_and_plugin_lookups_instead_of_repeating_calls() {
+        #[derive(Default)]
+        struct CountedLookups {
+            commits: Mutex<usize>,
+            plugins: Mutex<usize>,
+        }
+        impl CommitLookup for CountedLookups {
+            fn latest_commit(
+                &self,
+                _repo: &str,
+                _path: &str,
+            ) -> Result<Option<CommitInfo>, CoreError> {
+                *self.commits.lock().unwrap() += 1;
+                Ok(Some(CommitInfo {
+                    sha: "new".into(),
+                    committed_at: None,
+                }))
+            }
+        }
+        impl PluginManifestLookup for CountedLookups {
+            fn marketplace_version(
+                &self,
+                _marketplace: &str,
+                _plugin: &str,
+            ) -> Result<Option<String>, CoreError> {
+                *self.plugins.lock().unwrap() += 1;
+                Ok(Some("new".into()))
+            }
+        }
+        let fs = FixtureBuilder::new()
+            .dir("/home/.agents")
+            .file(
+                "/home/.agents/agents.lock",
+                br#"
+[skills.first]
+source = "owner/repo"
+resolved_path = "skills/shared"
+resolved_commit = "old"
+[skills.second]
+source = "owner/repo"
+resolved_path = "skills/shared"
+resolved_commit = "new"
+"#,
+            )
+            .build_fs();
+        let mut targets: Vec<_> = ["first", "second"]
+            .into_iter()
+            .map(|name| OutdatedTarget {
+                name: name.into(),
+                source_kind: SourceKind::Dotagents,
+                plugin: None,
+                project_path: None,
+            })
+            .collect();
+        targets.extend(
+            [("plugin-old", "old"), ("plugin-new", "new")]
+                .into_iter()
+                .map(|(name, version)| OutdatedTarget {
+                    name: name.into(),
+                    source_kind: SourceKind::Plugin,
+                    plugin: Some(("market".into(), "shared".into(), Some(version.into()))),
+                    project_path: None,
+                }),
+        );
+        let lookup = CountedLookups::default();
+        let results = outdated(
+            &fs,
+            Path::new("/home"),
+            &targets,
+            &FakeTreeLookup::default(),
+            &lookup,
+            &lookup,
+        );
+        assert_eq!(*lookup.commits.lock().unwrap(), 1);
+        assert_eq!(*lookup.plugins.lock().unwrap(), 1);
+        assert_eq!(results["first"].currency, Currency::UpdateAvailable);
+        assert_eq!(results["second"].currency, Currency::UpToDate);
+        assert_eq!(results["plugin-old"].currency, Currency::UpdateAvailable);
+        assert_eq!(results["plugin-new"].currency, Currency::UpToDate);
     }
 
     fn write_skill_lock(fs_builder: FixtureBuilder, name: &str, hash: &str) -> FixtureBuilder {
