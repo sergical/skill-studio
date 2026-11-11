@@ -4,8 +4,7 @@
 //! (`apps/desktop/src-tauri/src/skills/event_store.rs`), so a user
 //! upgrading from the shipped app keeps every existing event restorable.
 
-use std::fs::{self, File};
-use std::io::Write as _;
+use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,7 +20,7 @@ use skill_studio_core::error::{CoreError, ErrorCode};
 use skill_studio_core::events::{
     BackupEntry, BackupManifest, EventDraft, EventFilter, EventRecord, EventStatus,
 };
-use skill_studio_core::fsops::StageFile;
+use skill_studio_core::fsops::{Root, StageFile};
 use skill_studio_core::identity::{sha256_hex, AgentId, EventId, Fingerprint, SkillName};
 use skill_studio_core::ports::{
     ExclusiveGuard, FileKind, HeldRestoreClaim, HistoryAccess, HistoryOpener, HistoryStore, ScopeFs,
@@ -217,7 +216,7 @@ pub struct SqliteHistoryStore {
     /// `backups/<event-id>`) are relative to this.
     root: PathBuf,
     backups_root: PathBuf,
-    retention_fs: Arc<dyn ScopeFs>,
+    fs: Arc<dyn ScopeFs>,
     backup_roots: Vec<PathBuf>,
     _folder_guard: crate::DataFolderGuard,
 }
@@ -235,7 +234,7 @@ impl SqliteHistoryStore {
             conn,
             root: parent.to_path_buf(),
             backups_root: parent.join("backups"),
-            retention_fs: Arc::new(crate::RealFs::new()),
+            fs: Arc::new(crate::RealFs::new()),
             backup_roots: std::iter::once(parent.join("backups"))
                 .chain(legacy_roots.iter().cloned())
                 .collect(),
@@ -277,7 +276,7 @@ impl SqliteHistoryStore {
             conn,
             root: parent.to_path_buf(),
             backups_root: parent.join("backups"),
-            retention_fs: Arc::new(crate::RealFs::new()),
+            fs: Arc::new(crate::RealFs::new()),
             backup_roots: std::iter::once(parent.join("backups"))
                 .chain(legacy_roots.iter().cloned())
                 .collect(),
@@ -390,6 +389,44 @@ impl SqliteHistoryStore {
         Ok(directory)
     }
 
+    fn backup_directory(&self, backup_dir: &str) -> Result<PathBuf, CoreError> {
+        let id = Path::new(backup_dir)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| CoreError::new(ErrorCode::InvalidRequest, "invalid backup folder"))?;
+        let directory = self.managed_backup_dir(&EventId(id.to_owned()), backup_dir)?;
+        let facts = self
+            .fs
+            .symlink_metadata(&directory)
+            .map_err(|error| CoreError::io(&directory, error))?;
+        if facts.kind != FileKind::Dir {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "a backup folder must be a directory",
+            )
+            .at(&directory));
+        }
+        Ok(directory)
+    }
+
+    fn backup_entry_path(&self, backup_dir: &str, relative: &str) -> Result<PathBuf, CoreError> {
+        if relative.is_empty()
+            || Path::new(relative)
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "a backup entry must stay inside its folder",
+            ));
+        }
+        let directory = self.backup_directory(backup_dir)?;
+        let root = Root::open(self.fs.as_ref(), directory)
+            .map_err(|error| CoreError::new(ErrorCode::InvalidRequest, error.to_string()))?;
+        root.confine(Path::new(relative))
+            .map_err(|error| CoreError::new(ErrorCode::InvalidRequest, error.to_string()))
+    }
+
     fn collect_expired_backups(&mut self, guard: &ExclusiveGuard) -> Result<(), CoreError> {
         let pending = {
             let mut statement = self
@@ -414,9 +451,9 @@ impl SqliteHistoryStore {
                 continue;
             }
             let directory = self.managed_backup_dir(&id, &backup_dir)?;
-            remove_backup_tree(self.retention_fs.as_ref(), &directory)?;
+            remove_backup_tree(self.fs.as_ref(), &directory)?;
             if let Some(parent) = directory.parent() {
-                self.retention_fs
+                self.fs
                     .fsops_fsync_dir(parent)
                     .map_err(|error| CoreError::io(parent, error))?;
             }
@@ -588,7 +625,9 @@ impl HistoryStore for SqliteHistoryStore {
         paths: &[PathBuf],
     ) -> Result<BackupManifest, CoreError> {
         let dir = self.backup_dir_for(id);
-        fs::create_dir_all(&dir).map_err(|e| CoreError::io(&dir, e))?;
+        self.managed_backup_dir(id, &format!("backups/{}", id.0))?;
+        ensure_backup_directory(self.fs.as_ref(), &dir)
+            .map_err(|error| CoreError::io(&dir, error))?;
 
         // Every path gets a core `BackupEntry`, present or not: `fingerprint`
         // is `None` exactly when the original was absent at backup time,
@@ -624,7 +663,8 @@ impl HistoryStore for SqliteHistoryStore {
                 .file_name()
                 .map_or_else(|| format!("path-{i}"), |n| n.to_string_lossy().into_owned());
             let relative_path = format!("{i}-{basename}");
-            copy_recursive(path, &dir.join(&relative_path)).map_err(|e| CoreError::io(path, e))?;
+            copy_recursive(self.fs.as_ref(), path, &dir.join(&relative_path))
+                .map_err(|e| CoreError::io(path, e))?;
             let hex = hash_entry(path).map_err(|e| CoreError::io(path, e))?;
             on_disk.entries.insert(
                 key,
@@ -648,20 +688,19 @@ impl HistoryStore for SqliteHistoryStore {
             });
         }
 
-        let json = serde_json::to_vec_pretty(&on_disk).map_err(json_err)?;
         let manifest_path = dir.join("manifest.json");
-        let mut file =
-            File::create(&manifest_path).map_err(|e| CoreError::io(&manifest_path, e))?;
-        file.write_all(&json)
-            .map_err(|e| CoreError::io(&manifest_path, e))?;
-        file.sync_all()
-            .map_err(|e| CoreError::io(&manifest_path, e))?;
-
-        File::open(&dir)
-            .and_then(|directory| directory.sync_all())
+        let bytes = serde_json::to_vec_pretty(&on_disk).map_err(json_err)?;
+        self.fs
+            .fsops_write_new_file(&manifest_path, &bytes)
+            .map_err(|error| CoreError::io(&manifest_path, error))?;
+        self.fs
+            .fsops_fsync_file(&manifest_path)
+            .map_err(|error| CoreError::io(&manifest_path, error))?;
+        self.fs
+            .fsops_fsync_dir(&dir)
             .map_err(|error| CoreError::io(&dir, error))?;
-        File::open(&self.backups_root)
-            .and_then(|directory| directory.sync_all())
+        self.fs
+            .fsops_fsync_dir(&self.backups_root)
             .map_err(|error| CoreError::io(&self.backups_root, error))?;
         if let Some(target) = paths.first() {
             self.conn
@@ -836,7 +875,7 @@ impl HistoryStore for SqliteHistoryStore {
                 transaction.execute("INSERT OR REPLACE INTO expired_backups (event_id,backup_dir,target) VALUES (?1,?2,?3)",params![id.0,managed.to_string_lossy(),target.to_string_lossy()]).map_err(sql_err)?;
             }
             transaction.commit().map_err(sql_err)?;
-            self.retention_fs
+            self.fs
                 .fsops_fsync_dir(&self.root)
                 .map_err(|error| CoreError::io(&self.root, error))?;
         }
@@ -926,7 +965,19 @@ impl HistoryStore for SqliteHistoryStore {
     }
 
     fn read_manifest(&self, backup_dir: &str) -> Result<BackupManifest, CoreError> {
-        let dir = self.root.join(backup_dir);
+        let dir = self.backup_directory(backup_dir)?;
+        let manifest_path = dir.join("manifest.json");
+        let facts = self
+            .fs
+            .symlink_metadata(&manifest_path)
+            .map_err(|error| CoreError::io(&manifest_path, error))?;
+        if facts.kind != FileKind::File {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "a backup manifest must be a regular file",
+            )
+            .at(&manifest_path));
+        }
         let on_disk = read_manifest(&dir)?;
         let entries = on_disk
             .entries
@@ -945,17 +996,25 @@ impl HistoryStore for SqliteHistoryStore {
                 // `relative_path` is empty and never resolves under `dir`,
                 // so it falls through to `false` the same as any other
                 // path `symlink_metadata` cannot see.
-                let is_dir = (!entry.relative_path.is_empty())
-                    && fs::symlink_metadata(dir.join(&entry.relative_path))
-                        .is_ok_and(|m| m.is_dir());
-                BackupEntry {
+                let is_dir = if entry.relative_path.is_empty() {
+                    false
+                } else {
+                    let path = self.backup_entry_path(backup_dir, &entry.relative_path)?;
+                    self.fs
+                        .symlink_metadata(&path)
+                        .map_err(|error| CoreError::io(&path, error))?
+                        .kind
+                        == FileKind::Dir
+                };
+                Ok(BackupEntry {
                     original: PathBuf::from(original),
                     relative: entry.relative_path,
                     fingerprint,
                     is_dir,
-                }
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, CoreError>>()?;
+
         Ok(BackupManifest {
             // The event id is not recoverable from the manifest alone; the
             // caller already has it (it is the id that named `backup_dir`).
@@ -966,8 +1025,21 @@ impl HistoryStore for SqliteHistoryStore {
     }
 
     fn read_backup_bytes(&self, backup_dir: &str, relative: &str) -> Result<Vec<u8>, CoreError> {
-        let path = self.root.join(backup_dir).join(relative);
-        fs::read(&path).map_err(|e| CoreError::io(&path, e))
+        let path = self.backup_entry_path(backup_dir, relative)?;
+        let facts = self
+            .fs
+            .symlink_metadata(&path)
+            .map_err(|error| CoreError::io(&path, error))?;
+        if facts.kind != FileKind::File {
+            return Err(CoreError::new(
+                ErrorCode::Unsupported,
+                "a file backup must be a regular file",
+            )
+            .at(path));
+        }
+        self.fs
+            .read_capped(&path, u64::MAX)
+            .map_err(|error| CoreError::io(&path, error))
     }
 
     fn read_backup_files(
@@ -975,7 +1047,18 @@ impl HistoryStore for SqliteHistoryStore {
         backup_dir: &str,
         relative: &str,
     ) -> Result<Vec<StageFile>, CoreError> {
-        let root = self.root.join(backup_dir).join(relative);
+        let root = self.backup_entry_path(backup_dir, relative)?;
+        let facts = self
+            .fs
+            .symlink_metadata(&root)
+            .map_err(|error| CoreError::io(&root, error))?;
+        if facts.kind != FileKind::Dir {
+            return Err(CoreError::new(
+                ErrorCode::Unsupported,
+                "a directory backup must be a directory",
+            )
+            .at(root));
+        }
         let mut out = Vec::new();
         read_backup_files_into(&root, &root, &mut out)?;
         Ok(out)
@@ -1188,34 +1271,46 @@ pub fn hash_entry(path: &Path) -> std::io::Result<String> {
 
 /// Copies `src` into `dest`, preserving regular files as bytes, directories
 /// recursively, and symlinks as the literal link (never following it).
-fn copy_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
-    let meta = fs::symlink_metadata(src)?;
-    let file_type = meta.file_type();
-    if file_type.is_symlink() {
-        let target = fs::read_link(src)?;
-        create_symlink(&target, dest)?;
-    } else if file_type.is_dir() {
-        fs::create_dir_all(dest)?;
-        for entry in fs::read_dir(src)? {
-            let entry = entry?;
-            copy_recursive(&entry.path(), &dest.join(entry.file_name()))?;
-        }
-    } else {
-        fs::copy(src, dest)?;
+fn ensure_backup_directory(fs: &dyn ScopeFs, path: &Path) -> std::io::Result<()> {
+    match fs.symlink_metadata(path) {
+        Ok(facts) if facts.kind == FileKind::Dir => return Ok(()),
+        Ok(_) => return Err(std::io::Error::other("backup parent is not a directory")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    if let Some(parent) = path.parent() {
+        ensure_backup_directory(fs, parent)?;
+    }
+    fs.fsops_create_dir(path)?;
+    fs.fsops_fsync_dir(path)?;
+    if let Some(parent) = path.parent() {
+        fs.fsops_fsync_dir(parent)?;
     }
     Ok(())
 }
 
-#[cfg(unix)]
-fn create_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(target, link)
-}
-
-#[cfg(not(unix))]
-fn create_symlink(_target: &Path, _link: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::other(
-        "symlinking is only supported on Unix",
-    ))
+fn copy_recursive(fs: &dyn ScopeFs, src: &Path, dest: &Path) -> std::io::Result<()> {
+    let facts = fs.symlink_metadata(src)?;
+    match facts.kind {
+        FileKind::Symlink => fs.fsops_symlink(&fs.read_link(src)?, dest)?,
+        FileKind::Dir => {
+            ensure_backup_directory(fs, dest)?;
+            for entry in fs.read_dir(src)? {
+                copy_recursive(fs, &src.join(&entry.name), &dest.join(&entry.name))?;
+            }
+            fs.fsops_fsync_dir(dest)?;
+        }
+        FileKind::File => {
+            let bytes = fs.read_capped(src, u64::MAX)?;
+            fs.fsops_write_new_file_with_mode(dest, &bytes, facts.mode.unwrap_or(0o644))?;
+            fs.fsops_fsync_file(dest)?;
+        }
+        FileKind::Other => return Err(std::io::Error::other("cannot back up this entry type")),
+    }
+    if let Some(parent) = dest.parent() {
+        fs.fsops_fsync_dir(parent)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1581,7 +1676,7 @@ mod tests {
         let baseline = tempfile::tempdir().unwrap();
         let (mut store, _, guard, _) = retention_crash_fixture(baseline.path());
         let counting = Arc::new(CrashFs::new(Arc::new(crate::RealFs::new()), 0));
-        store.retention_fs = counting.clone();
+        store.fs = counting.clone();
         store
             .retain_backups(&guard, now, BackupRetentionScope::All)
             .unwrap();
@@ -1594,7 +1689,7 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let (mut store, _, guard, target) = retention_crash_fixture(directory.path());
             let user_before = hash_entry(&target).unwrap();
-            store.retention_fs = Arc::new(CrashFs::new(Arc::new(crate::RealFs::new()), cut));
+            store.fs = Arc::new(CrashFs::new(Arc::new(crate::RealFs::new()), cut));
             let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 store.retain_backups(&guard, now, BackupRetentionScope::All)
             }));
@@ -1745,6 +1840,109 @@ mod tests {
             1000
         );
         println!("backup disk bytes: before logical={} allocated={}; recent logical={} allocated={}; aged logical={} allocated={}", before.0,before.1,recent.0,recent.1,aged.0,aged.1);
+    }
+
+    #[test]
+    fn history_backup_reads_refuse_foreign_paths_or_expose_bytes_outside_the_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let scope = scope_for(directory.path());
+        let guard = guard_for(directory.path(), &scope);
+        let mut store =
+            SqliteHistoryStore::open(&directory.path().join("owned/events.sqlite3")).unwrap();
+        let source = directory.path().join("user.txt");
+        fs::write(&source, b"original user bytes").unwrap();
+        let manifest = store
+            .backup_paths(
+                &guard,
+                &EventId("safe".into()),
+                std::slice::from_ref(&source),
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .read_backup_bytes(&manifest.backup_dir, &manifest.entries[0].relative)
+                .unwrap(),
+            fs::read(&source).unwrap()
+        );
+        let foreign = directory.path().join("foreign");
+        fs::create_dir(&foreign).unwrap();
+        fs::write(foreign.join("secret.txt"), b"foreign bytes").unwrap();
+        fs::write(foreign.join("manifest.json"), b"{\"entries\":{}}").unwrap();
+        for backup_dir in ["../foreign", foreign.to_str().unwrap()] {
+            assert!(
+                store.read_manifest(backup_dir).is_err(),
+                "foreign manifest was read: {backup_dir}"
+            );
+            assert!(store.read_backup_bytes(backup_dir, "secret.txt").is_err());
+            assert!(store.read_backup_files(backup_dir, ".").is_err());
+        }
+        std::os::unix::fs::symlink(
+            &foreign,
+            store.backup_dir_for(&EventId("safe".into())).join("escape"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            foreign.join("secret.txt"),
+            store
+                .backup_dir_for(&EventId("safe".into()))
+                .join("leaf-link"),
+        )
+        .unwrap();
+        for relative in [
+            "../../../foreign/secret.txt",
+            "escape/secret.txt",
+            "leaf-link",
+        ] {
+            assert!(
+                store
+                    .read_backup_bytes(&manifest.backup_dir, relative)
+                    .is_err(),
+                "foreign backup bytes were read through {relative}"
+            );
+        }
+        assert!(store
+            .read_backup_files(&manifest.backup_dir, "escape")
+            .is_err());
+        assert_eq!(
+            fs::read(foreign.join("secret.txt")).unwrap(),
+            b"foreign bytes"
+        );
+        let manifest_path = store
+            .backup_dir_for(&EventId("safe".into()))
+            .join("manifest.json");
+        fs::remove_file(&manifest_path).unwrap();
+        std::os::unix::fs::symlink(foreign.join("manifest.json"), &manifest_path).unwrap();
+        assert!(
+            store.read_manifest(&manifest.backup_dir).is_err(),
+            "a manifest symlink exposes a foreign manifest"
+        );
+    }
+
+    #[test]
+    fn history_backup_ids_refuse_traversal_or_create_a_folder_outside_the_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let scope = scope_for(directory.path());
+        let guard = guard_for(directory.path(), &scope);
+        let mut store =
+            SqliteHistoryStore::open(&directory.path().join("owned/events.sqlite3")).unwrap();
+        let source = directory.path().join("user.txt");
+        fs::write(&source, b"keep").unwrap();
+        store
+            .backup_paths(
+                &guard,
+                &EventId("safe".into()),
+                std::slice::from_ref(&source),
+            )
+            .unwrap();
+        assert!(store
+            .backup_paths(
+                &guard,
+                &EventId("../../foreign".into()),
+                std::slice::from_ref(&source)
+            )
+            .is_err());
+        assert!(!directory.path().join("foreign").exists());
+        assert_eq!(fs::read(source).unwrap(), b"keep");
     }
 
     #[test]

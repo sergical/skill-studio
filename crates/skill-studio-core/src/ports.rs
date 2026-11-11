@@ -739,9 +739,8 @@ pub enum PlanStatus {
 }
 
 impl PlanStatus {
-    /// The plan lifecycle's only legal move: a `Pending` plan settles once,
-    /// into any status other than `Pending`. A settled plan never moves
-    /// again, so a late `finish` cannot turn `Reversed` back into `Done`.
+    /// Pending plans may settle. Interrupted recovery may retry and remain
+    /// interrupted or finish reversed/failed. Completed plans never reopen.
     pub fn settle(self, to: PlanStatus) -> Result<PlanStatus, CoreError> {
         match (self, to) {
             (_, PlanStatus::Pending) => Err(CoreError::new(
@@ -749,6 +748,10 @@ impl PlanStatus {
                 "finish must not set Pending",
             )),
             (PlanStatus::Pending, to) => Ok(to),
+            (
+                PlanStatus::Interrupted,
+                PlanStatus::Reversed | PlanStatus::Failed | PlanStatus::Interrupted,
+            ) => Ok(to),
             (from, to) => Err(CoreError::new(
                 ErrorCode::InvalidRequest,
                 format!("a plan already {from:?} cannot become {to:?}"),
@@ -794,6 +797,9 @@ pub enum PlanStep {
         /// does not exist yet (`swap` will create it fresh); reversal then
         /// removes what is at `path` once the exchange has landed.
         quarantined: Option<PathBuf>,
+        /// A quarantine parent this step creates and removes on reversal.
+        #[serde(default)]
+        created_quarantine_dir: Option<PathBuf>,
     },
     /// [`crate::fsops::link`] is about to create or replace a symlink at
     /// `path`. Recorded before the rename that makes it visible.
@@ -807,6 +813,9 @@ pub enum PlanStep {
         /// What `path` pointed at before this step, when it already
         /// existed as a symlink. `None` when nothing was there.
         previous_target: Option<PathBuf>,
+        /// Exact forward and recovery temp name, recorded before creation.
+        #[serde(default)]
+        temporary: Option<PathBuf>,
     },
     /// [`crate::fsops::write_file`] wrote `path`.
     WriteFile {
@@ -818,6 +827,15 @@ pub enum PlanStep {
         /// `None` when the file was newly created; reversal then removes
         /// it.
         backup: Option<PlanBackupEntry>,
+        /// Exact forward and recovery temp name, recorded before creation.
+        #[serde(default)]
+        temporary: Option<PathBuf>,
+        /// Original raw symlink target, when the write replaced a link.
+        #[serde(default)]
+        previous_link: Option<PathBuf>,
+        /// Original permission bits for a replaced regular file.
+        #[serde(default)]
+        previous_mode: Option<u32>,
     },
 }
 
@@ -904,7 +922,7 @@ pub trait Journal: Send {
     ) -> Result<(), CoreError>;
     /// Every plan the journal holds, oldest first. Never filtered.
     fn all(&self) -> Result<Vec<PlanRecord>, CoreError>;
-    /// Rows still [`PlanStatus::Pending`], oldest first.
+    /// Rows awaiting recovery, Pending or Interrupted, oldest first.
     fn pending(&self) -> Result<Vec<PlanRecord>, CoreError>;
     /// Removes one backup's bytes from disk. Never touches the plan row;
     /// used only by [`crate::journal::trim_backups`].
@@ -1458,21 +1476,7 @@ impl MutationSession {
             rt.ports.fs.as_ref(),
             rt.ports.sink.as_ref(),
         )?;
-        // Sweeps `install`'s `Copy` staging journal for a plan an earlier
-        // crash left `Pending`, per `docs/action-map/plan.md`'s Correction
-        // for units 3.5/3.6/3.9: nothing wires a journal into `Ports` yet,
-        // so `begin` - the one seam every mutating op (and, once wired, the
-        // desktop startup pass) already runs through - opens and reconciles
-        // it directly instead. Always rooted under the scope home, not the
-        // op's own target scope: the root is only bookkeeping for the
-        // primitive, not where its writes land, so one root per home lets
-        // every op sweep it regardless of which project it targets.
-        let install_journal_root = crate::ops_install::journal_root(&rt.scope.home.lexical);
-        let install_journal =
-            crate::journal::FsJournal::new(install_journal_root, rt.ports.fs.clone());
-        let reconciliation =
-            crate::journal::reconcile(&install_journal, &guard, rt.ports.fs.as_ref())?;
-        crate::journal::trim_backups(&install_journal, &guard, rt.ports.clock.now())?;
+        let reconciliation = crate::journal::reconcile_scope_journal(rt, &guard)?;
         store.retain_backups(
             &guard,
             rt.ports.clock.now(),

@@ -224,3 +224,39 @@ pub fn expired_backup(home: &Path) -> (EventId, Vec<u8>) {
         std::fs::read(target.join("SKILL.md")).unwrap(),
     )
 }
+
+pub fn cli_binary() -> PathBuf {
+    std::env::var_os("SKILL_STUDIO_TEST_BINARY").map_or_else(
+        || PathBuf::from(env!("CARGO_BIN_EXE_skill-studio")),
+        PathBuf::from,
+    )
+}
+
+pub fn interrupted_plan_before_restore(home: &Path, foreign: &Path) -> EventId {
+    use skill_studio_core::ports::{acquire_exclusive, Journal, PlanRecord, PlanStatus, PlanStep};
+    let event = removed_with_secondary_replacement(home);
+    let rt = runtime(home);
+    let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+    let journal = skill_studio_core::journal::FsJournal::new(
+        home.join(".agents/skill-studio-journal"),
+        rt.ports.fs.clone(),
+    );
+    journal
+        .begin(
+            &guard,
+            &PlanRecord {
+                id: skill_studio_core::identity::PlanId("unrecoverable-fixture".into()),
+                created_at: rt.ports.clock.now(),
+                label: "recovery needs an unavailable root".into(),
+                root: foreign.to_path_buf(),
+                backups: Vec::new(),
+                expired_backups: Vec::new(),
+                steps: vec![PlanStep::Stage {
+                    staged: foreign.join("sentinel"),
+                }],
+                status: PlanStatus::Pending,
+            },
+        )
+        .unwrap();
+    event
+}

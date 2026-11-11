@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::path::Path;
 
 fn cli(home: &Path, arguments: &[&str]) -> Value {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+    let output = std::process::Command::new(undo_fixtures::cli_binary())
         .args(arguments)
         .args(["--home", home.to_str().unwrap(), "--json"])
         .env("HOME", home)
@@ -104,7 +104,7 @@ fn cli_history_and_restore_report_backup_expired_or_offer_a_missing_backup() {
         .unwrap();
     assert_eq!(row["restore"]["restorable"], "backup_expired");
     for arguments in [vec!["history"], vec!["restore", "--event-id", &expired.0]] {
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+        let output = std::process::Command::new(undo_fixtures::cli_binary())
             .args(arguments)
             .args(["--home", home.path().to_str().unwrap()])
             .env("HOME", home.path())
@@ -132,4 +132,29 @@ fn cli_history_and_restore_report_backup_expired_or_offer_a_missing_backup() {
         std::fs::read(home.path().join(".agents/skills/alpha/SKILL.md")).unwrap(),
         live
     );
+}
+
+#[test]
+fn cli_history_and_restore_refuse_unfinished_recovery_or_write_over_an_interrupted_plan() {
+    let home = tempfile::tempdir().unwrap();
+    let foreign = tempfile::tempdir().unwrap();
+    std::fs::write(foreign.path().join("sentinel"), b"foreign bytes stay").unwrap();
+    let event = undo_fixtures::interrupted_plan_before_restore(home.path(), foreign.path());
+    assert_eq!(cli(home.path(), &["history"])["data"][0]["id"], event.0);
+    let result = cli(home.path(), &["restore", "--event-id", &event.0, "--force"]);
+    assert_eq!(result["errors"][0]["code"], "incomplete", "{result}");
+    assert!(
+        result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Recovery"),
+        "{result}"
+    );
+    undo_fixtures::assert_secondary_replacement(home.path());
+    assert!(!home.path().join(".agents/skills/alpha").exists());
+    assert_eq!(
+        std::fs::read(foreign.path().join("sentinel")).unwrap(),
+        b"foreign bytes stay"
+    );
+    assert_eq!(cli(home.path(), &["history"])["data"][0]["id"], event.0);
 }
