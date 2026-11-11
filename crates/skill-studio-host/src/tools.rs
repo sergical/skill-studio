@@ -243,8 +243,7 @@ fn probe_login_shell_path(
     }
 }
 
-/// Fallback directories checked when the login-shell `PATH` probe fails,
-/// per harness-detection.md's "PATH resolution".
+/// Fallback directories checked when the login-shell `PATH` probe fails.
 fn default_fallback_dirs() -> Vec<PathBuf> {
     fallback_dirs(
         std::env::var_os("HOME").map(PathBuf::from).as_deref(),
@@ -304,7 +303,7 @@ fn fallback_dirs(
 }
 
 /// `<nvm_node_versions>/*/bin` for every version directory that exists,
-/// newest first, per harness-detection.md's fallback list: nvm has no single
+/// newest first: nvm has no single
 /// "current" symlink guaranteed to exist, so every installed version's `bin`
 /// is a candidate. Returns nothing when `nvm_node_versions` itself doesn't
 /// exist (no nvm installed).
@@ -351,8 +350,7 @@ fn cached_login_shell_path() -> Vec<PathBuf> {
 /// [`PathToolLookup`], whose process `PATH` already comes from a shell.
 ///
 /// [`LoginShellToolLookup::new`] reads a process-wide environment cache: the shell spawns at most once per launch no matter how many
-/// `Runtime`s (and so `LoginShellToolLookup` instances) the app builds
-/// (`harness-detection.md`: "one shell spawn per app start, cached").
+/// `Runtime`s (and so `LoginShellToolLookup` instances) the app builds.
 /// [`LoginShellToolLookup::with_probe`] bypasses that cache entirely, so a
 /// test that constructs its own fake probe can neither leak into another
 /// test's real probe nor be forced to spawn a real shell.

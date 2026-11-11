@@ -101,7 +101,7 @@ fn doctor_reports_zero_violations_on_a_healthy_fixture_home_or_names_the_false_p
 
 /// Invariant 1: a per-skill Claude Code symlink whose target does not
 /// resolve inside the universal root it names - `scan`'s own
-/// `ports::confine` (`lifecycle-states.md`'s "link confinement") refuses to
+/// `ports::confine` (link confinement) refuses to
 /// walk an out-of-scope target at all, so the observable "does not resolve
 /// inside its root" case `diagnose`'s `BrokenLink` detection surfaces is a
 /// dangling target, the same shape `fix_and_conflicts.rs`'s

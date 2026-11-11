@@ -1,5 +1,4 @@
-//! Currency ("update available") per install method - plan.md unit 3.4,
-//! user-stories.md U4.
+//! Currency ("update available") per install method.
 //!
 //! Five rules, one per [`crate::identity::SourceKind`]: skills.sh compares
 //! the lock file's `skillFolderHash` against the source repo's tree SHA at

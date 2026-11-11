@@ -5873,8 +5873,8 @@ pub(crate) fn park_found_copy(
 /// root).
 ///
 /// This reverses the most recent unreverted `park` event recorded for the
-/// skill (matched by `payload.to` naming this deployment's path), per
-/// `primitives-and-call-stack.md`'s "the reverse, from the journal entry".
+/// skill (matched by `payload.to` naming this deployment's path), from the
+/// journal entry.
 /// A parked directory with no matching `park` row (never parked by this
 /// build, or the row aged out) still unparks: no link is then recreated.
 pub fn unpark(
