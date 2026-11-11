@@ -758,7 +758,7 @@ fn refresh_plugin_versions_selected_with(
     remote_api: &dyn PluginRemote,
     plugin_id: Option<&str>,
 ) {
-    let plugins_dir = home.join(".claude").join("plugins");
+    let plugins_dir = skill_studio_host::agent_path(home, ".claude").join("plugins");
     let installed_ids: Vec<String> =
         std::fs::read_to_string(plugins_dir.join("installed_plugins.json"))
             .map(|installed| {
@@ -976,7 +976,7 @@ pub fn read_plugin_updates(
     home: &Path,
     versions: &PluginVersionCache,
 ) -> BTreeMap<String, Vec<PluginInstallUpdate>> {
-    let plugins_dir = home.join(".claude").join("plugins");
+    let plugins_dir = skill_studio_host::agent_path(home, ".claude").join("plugins");
     let Ok(installed) = std::fs::read_to_string(plugins_dir.join("installed_plugins.json")) else {
         return BTreeMap::new();
     };
@@ -1039,7 +1039,7 @@ pub fn require_plugin_install(
     project_path: Option<&str>,
 ) -> Result<(), String> {
     let installed = std::fs::read_to_string(
-        home.join(".claude")
+        skill_studio_host::agent_path(home, ".claude")
             .join("plugins")
             .join("installed_plugins.json"),
     )

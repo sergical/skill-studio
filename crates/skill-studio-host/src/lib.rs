@@ -55,8 +55,8 @@ pub use data_folder_version::{
     CURRENT_DATA_VERSION,
 };
 pub use discovery::{
-    codex_home, discover_skill_projects, discovery_harnesses, opencode_config_dir,
-    opencode_config_dir_under, HostProjectDiscovery,
+    agent_home, agent_path, codex_home, discover_skill_projects, discovery_harnesses,
+    opencode_config_dir, opencode_config_dir_under, resolve_agent_homes, HostProjectDiscovery,
 };
 pub use fs::RealFs;
 pub use gh_currency::{

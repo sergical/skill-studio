@@ -94,6 +94,9 @@ pub struct RuntimeScope {
     /// `docs/agent-skill-conventions.md`, "`CODEX_HOME` overrides
     /// `~/.codex`").
     pub codex_home: Option<PathBuf>,
+    /// Host-resolved agent directories, keyed by their default home-relative path.
+    #[serde(default)]
+    pub agent_home_roots: std::collections::BTreeMap<String, PathBuf>,
     /// Shared-lease wait budget for read operations, in milliseconds.
     pub read_timeout_ms: u64,
     /// Exclusive-lease wait budget for write operations, in milliseconds.
@@ -115,6 +118,7 @@ impl RuntimeScope {
             data_root: None,
             opencode_config_root: None,
             codex_home: None,
+            agent_home_roots: Default::default(),
             read_timeout_ms: DEFAULT_READ_TIMEOUT_MS,
             write_timeout_ms: DEFAULT_WRITE_TIMEOUT_MS,
         }
@@ -136,6 +140,7 @@ impl RuntimeScope {
             data_root: Some(data_root),
             opencode_config_root: None,
             codex_home: None,
+            agent_home_roots: Default::default(),
             read_timeout_ms: DEFAULT_READ_TIMEOUT_MS,
             write_timeout_ms: DEFAULT_WRITE_TIMEOUT_MS,
         }
@@ -233,6 +238,8 @@ pub struct NormalizedScope {
     /// to exist yet, since a config write is often what first creates it. A
     /// relative or filesystem-root override is ignored for the default.
     pub codex_home: PathBuf,
+    /// Validated agent directories with lexical and canonical paths.
+    pub agent_home_roots: std::collections::BTreeMap<String, PhysicalRoot>,
     /// [`Self::codex_home`] with its deepest existing ancestor canonicalized,
     /// so a root behind a symlink is still contained.
     pub codex_home_canonical: PathBuf,
@@ -331,6 +338,7 @@ impl NormalizedScope {
                 Some((lexical, canonical)) => (Some(lexical), Some(canonical)),
                 None => (None, None),
             };
+        let home_canonical = home.canonical.clone();
         Ok(NormalizedScope {
             id: ScopeId::for_canonical_home(&home.canonical),
             home,
@@ -342,6 +350,15 @@ impl NormalizedScope {
             codex_home,
             opencode_config_root_canonical,
             opencode_config_root,
+            agent_home_roots: raw
+                .agent_home_roots
+                .iter()
+                .filter_map(|(name, root)| {
+                    confined_root(fs, &home_canonical, Some(root)).map(|(lexical, canonical)| {
+                        (name.clone(), PhysicalRoot { lexical, canonical })
+                    })
+                })
+                .collect(),
             raw: raw.clone(),
         })
     }
@@ -366,6 +383,16 @@ impl NormalizedScope {
     /// them. Scan, install, and `split` all resolve global roots here, so
     /// they agree on where a harness reads.
     pub fn global_root_path(&self, relative: &Path) -> PathBuf {
+        for (name, root) in &self.agent_home_roots {
+            if let Ok(rest) = relative.strip_prefix(name) {
+                return root.lexical.join(rest);
+            }
+        }
+        if relative == Path::new(".claude.json") {
+            if let Some(root) = self.agent_home_roots.get(".claude") {
+                return root.lexical.join(".claude.json");
+            }
+        }
         if let Ok(rest) = relative.strip_prefix(".codex") {
             return self.codex_home.join(rest);
         }
@@ -384,6 +411,7 @@ impl NormalizedScope {
     pub fn contains(&self, path: &Path) -> bool {
         std::iter::once(&self.home)
             .chain(self.projects.iter())
+            .chain(self.agent_home_roots.values())
             .any(|root| path.starts_with(&root.canonical) || path.starts_with(&root.lexical))
             || path.starts_with(&self.codex_home)
             || path.starts_with(&self.codex_home_canonical)

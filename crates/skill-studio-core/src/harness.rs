@@ -1031,6 +1031,8 @@ pub struct HarnessReport {
 
 /// Ports one [`HarnessAdapter`] needs to detect its harness on this machine.
 pub struct DetectionPorts<'a> {
+    /// Resolved scope for global agent paths; tests can use home-relative defaults.
+    pub scope: Option<&'a crate::scope::NormalizedScope>,
     /// Filesystem, for config and session presence checks.
     pub fs: &'a dyn ScopeFs,
     /// The scope's home root; every relative path here is under it.
@@ -1039,6 +1041,15 @@ pub struct DetectionPorts<'a> {
     pub tools: Option<&'a dyn ToolLookup>,
     /// Process runner for the `--version` probe; `None` leaves the version unknown.
     pub spawner: Option<&'a dyn ProcessSpawner>,
+}
+
+impl DetectionPorts<'_> {
+    fn global_path(&self, relative: &str) -> PathBuf {
+        self.scope.map_or_else(
+            || self.home.join(relative),
+            |scope| scope.global_root_path(Path::new(relative)),
+        )
+    }
 }
 
 /// One first-class harness's detection recipe.
@@ -1103,17 +1114,18 @@ pub trait HarnessAdapter: Send + Sync {
             None => DetectedString::unknown("no executable on PATH"),
         };
         let install_method = if id.as_str() == AgentId::CLAUDE_CODE {
-            read_claude_install_method(ports.fs, ports.home).unwrap_or_else(inferred)
+            read_claude_install_method(ports.fs, &ports.global_path(".claude.json"))
+                .unwrap_or_else(inferred)
         } else {
             inferred()
         };
         let configured = self
             .config_relative_path()
-            .is_some_and(|rel| ports.fs.symlink_metadata(&ports.home.join(rel)).is_ok());
+            .is_some_and(|rel| ports.fs.symlink_metadata(&ports.global_path(rel)).is_ok());
         let used = self.used_relative_path().is_some_and(|rel| {
             ports
                 .fs
-                .read_dir(&ports.home.join(rel))
+                .read_dir(&ports.global_path(rel))
                 .is_ok_and(|entries| !entries.is_empty())
         });
         let state = match (executable.is_some(), configured, used) {
@@ -1224,9 +1236,8 @@ impl<'de> Deserialize<'de> for ClaudeConfig {
     }
 }
 
-fn read_claude_install_method(fs: &dyn ScopeFs, home: &Path) -> Option<DetectedString> {
-    let path = home.join(".claude.json");
-    let bytes = fs.read_capped(&path, 1024 * 1024).ok()?;
+fn read_claude_install_method(fs: &dyn ScopeFs, path: &Path) -> Option<DetectedString> {
+    let bytes = fs.read_capped(path, 1024 * 1024).ok()?;
     let config: ClaudeConfig = serde_json::from_slice(&bytes).ok()?;
     let method = config.install_method?;
     let method = method.trim();
@@ -1647,6 +1658,7 @@ mod tests {
                 .file("/home/.claude.json", config.as_bytes())
                 .build_fs();
             let ports = DetectionPorts {
+                scope: None,
                 fs: &fs,
                 home,
                 tools: Some(&tools),
@@ -1680,6 +1692,7 @@ mod tests {
             .binaries
             .insert("claude".into(), PathBuf::from("/usr/local/bin/claude"));
         let ports = DetectionPorts {
+            scope: None,
             fs: &fs,
             home: Path::new("/home"),
             tools: Some(&tools),
@@ -1703,6 +1716,7 @@ mod tests {
             PathBuf::from("/usr/local/Cellar/claude/1/bin/claude"),
         );
         let ports = DetectionPorts {
+            scope: None,
             fs: &fs,
             home: Path::new("/home"),
             tools: Some(&tools),
@@ -1741,6 +1755,7 @@ mod tests {
         let fs = FixtureBuilder::default().build_fs();
         let home = PathBuf::from("/home");
         let ports = DetectionPorts {
+            scope: None,
             fs: &fs,
             home: &home,
             tools: None,
@@ -1782,6 +1797,7 @@ mod tests {
             .binaries
             .insert("cursor-agent".to_string(), cursor_agent_path.clone());
         let ports = DetectionPorts {
+            scope: None,
             fs: &fs,
             home: &home,
             tools: Some(&tools),
@@ -1817,6 +1833,7 @@ mod tests {
             .binaries
             .insert("cursor-agent".to_string(), cursor_agent_path.clone());
         let ports = DetectionPorts {
+            scope: None,
             fs: &fs,
             home: &home,
             tools: Some(&tools),
@@ -1841,6 +1858,7 @@ mod tests {
         let home = PathBuf::from("/home");
         let tools = FakeToolLookup::default();
         let ports = DetectionPorts {
+            scope: None,
             fs: &fs,
             home: &home,
             tools: Some(&tools),

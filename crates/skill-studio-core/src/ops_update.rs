@@ -363,10 +363,7 @@ fn update_via_cli(
         program: "npx".to_string(),
         args,
         cwd,
-        env: crate::skills_cli_agents::cli_environment(
-            &rt.scope.home.lexical,
-            &rt.scope.codex_home,
-        ),
+        env: crate::skills_cli_agents::cli_environment(&rt.scope),
         timeout_ms: 120_000,
     };
     let output = spawner.run(&spec, ctx.cancel.as_ref())?;

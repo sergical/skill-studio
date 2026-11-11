@@ -180,8 +180,23 @@ pub fn cli_env_pins(home: &Path, codex_home: &Path) -> Vec<(String, String)> {
 }
 
 /// Pins installer and lock paths to the runtime scope for both skills and dotagents.
-pub(crate) fn cli_environment(home: &Path, codex_home: &Path) -> Vec<(String, String)> {
-    let mut env = cli_env_pins(home, codex_home);
+pub(crate) fn cli_environment(scope: &crate::scope::NormalizedScope) -> Vec<(String, String)> {
+    let home = &scope.home.lexical;
+    let mut env = cli_env_pins(home, &scope.codex_home);
+    for (name, relative) in [
+        ("CLAUDE_CONFIG_DIR", ".claude"),
+        ("PI_CODING_AGENT_DIR", ".pi/agent"),
+        ("GROK_HOME", ".grok"),
+    ] {
+        env.retain(|(key, _)| key != name);
+        env.push((
+            name.into(),
+            scope
+                .global_root_path(Path::new(relative))
+                .display()
+                .to_string(),
+        ));
+    }
     env.extend([
         ("HOME".to_string(), home.display().to_string()),
         (

@@ -810,7 +810,9 @@ fn build_runtime_write_with_project<T: ops::Outcome + serde::Serialize>(
     if runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture {
         ports.discovery = None;
     } else {
-        ports.discovery = Some(Arc::new(skill_studio_host::HostProjectDiscovery::new()));
+        ports.discovery = Some(Arc::new(
+            skill_studio_host::HostProjectDiscovery::for_scope(&runtime_scope),
+        ));
     }
     ports.tools = Some(Arc::new(skill_studio_host::PathToolLookup::new()));
     ports.spawner = Some(Arc::new(scope.process_spawner(&runtime_scope.home_root)));
@@ -836,6 +838,9 @@ fn build_runtime<T: ops::Outcome + serde::Serialize>(
     let (runtime_scope, lease_root) = scope.resolve();
     let catalog = Arc::new(HarnessCatalog::builtin());
     let mut ports = skill_studio_host::default_ports_with_discovery(lease_root, catalog);
+    ports.discovery = Some(Arc::new(
+        skill_studio_host::HostProjectDiscovery::for_scope(&runtime_scope),
+    ));
     ports.history = Arc::new(skill_studio_host::GuardedNoHistoryOpener::new(
         runtime_scope.history_root.clone(),
     ));

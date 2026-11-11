@@ -233,14 +233,15 @@ struct CliAgentBackups {
 }
 
 fn cli_agent_folder_backups(
+    normalized: &crate::scope::NormalizedScope,
     fs: &dyn ScopeFs,
-    home: &Path,
-    codex_home: &Path,
     scope: &RootScope,
     name: &str,
     removed: &Path,
     links: &[PathBuf],
 ) -> Result<CliAgentBackups, CoreError> {
+    let home = &normalized.home.lexical;
+    let codex_home = &normalized.codex_home;
     let removed_real = fs.canonicalize(removed).ok();
     let mut backups = CliAgentBackups::default();
     let mut folder_reals: Vec<PathBuf> = Vec::new();
@@ -250,6 +251,13 @@ fn cli_agent_folder_backups(
         scope,
         &cli_sanitize_name(name),
     ) {
+        // skills CLI 1.7.0 reads `CLAUDE_CONFIG_DIR` and `GROK_HOME`, not `PI_CODING_AGENT_DIR`.
+        let path = match path.strip_prefix(home) {
+            Ok(relative) if matches!(scope, RootScope::Global) && !relative.starts_with(".pi") => {
+                normalized.global_root_path(relative)
+            }
+            _ => path,
+        };
         // Before any fs call: the caller's link loop reads these paths next.
         if links.contains(&path) {
             continue;
@@ -323,10 +331,7 @@ fn remove_via_cli(
         program: "npx".to_string(),
         args,
         cwd,
-        env: crate::skills_cli_agents::cli_environment(
-            &rt.scope.home.lexical,
-            &rt.scope.codex_home,
-        ),
+        env: crate::skills_cli_agents::cli_environment(&rt.scope),
         timeout_ms: 120_000,
     };
     let output = spawner.run(&spec, ctx.cancel.as_ref())?;
@@ -647,9 +652,8 @@ fn remove_body(
         links: cli_links,
     } = if deployment.owner_kind == LifecycleOwnerKind::SkillsSh {
         cli_agent_folder_backups(
+            &rt.scope,
             fs,
-            &rt.scope.home.lexical,
-            &rt.scope.codex_home,
             &deployment.root.scope,
             &skill.name.0,
             &deployment.path,

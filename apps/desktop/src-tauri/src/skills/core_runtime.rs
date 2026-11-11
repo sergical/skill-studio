@@ -122,8 +122,9 @@ pub fn build_runtime_write_at_with_search_dirs(
 ) -> Result<Runtime, String> {
     let history_root = data_root.join("history");
     let codex_home = skill_studio_host::codex_home(home);
-    let mut scope =
-        RuntimeScope::live(home.to_path_buf(), history_root).with_codex_home(codex_home);
+    let mut scope = skill_studio_host::resolve_agent_homes(
+        RuntimeScope::live(home.to_path_buf(), history_root).with_codex_home(codex_home),
+    );
     scope.opencode_config_root = Some(skill_studio_host::opencode_config_dir(home));
     let catalog = Arc::new(HarnessCatalog::builtin());
     scope.data_root = Some(data_root.to_path_buf());
@@ -134,7 +135,9 @@ pub fn build_runtime_write_at_with_search_dirs(
         skill_studio_host::telemetry::Surface::Desktop,
         env!("CARGO_PKG_VERSION"),
     );
-    ports.discovery = Some(Arc::new(skill_studio_host::HostProjectDiscovery::new()));
+    ports.discovery = Some(Arc::new(
+        skill_studio_host::HostProjectDiscovery::for_scope(&scope),
+    ));
     // A packaged `.app` launched from Finder gets `launchd`'s minimal `PATH`
     // (`/usr/bin:/bin:/usr/sbin:/sbin`), which has neither `npx` nor the
     // `node` its `#!/usr/bin/env node` shebang needs. Both ends of that

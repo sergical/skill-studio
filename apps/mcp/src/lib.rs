@@ -198,12 +198,14 @@ fn build_runtime(with_history: bool) -> Result<Runtime, CoreError> {
         skill_studio_host::telemetry::Surface::Mcp,
         env!("CARGO_PKG_VERSION"),
     );
+    ports.discovery = if runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture {
+        None
+    } else {
+        Some(Arc::new(
+            skill_studio_host::HostProjectDiscovery::for_scope(&runtime_scope),
+        ))
+    };
     if with_history {
-        if runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture {
-            ports.discovery = None;
-        } else {
-            ports.discovery = Some(Arc::new(skill_studio_host::HostProjectDiscovery::new()));
-        }
         ports.tools = Some(Arc::new(skill_studio_host::PathToolLookup::new()));
     }
     ports.spawner = Some(Arc::new(scope::process_spawner(&runtime_scope.home_root)));
