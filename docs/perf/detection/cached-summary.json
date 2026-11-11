@@ -1,0 +1,30 @@
+{
+  "samples": 229,
+  "top_five": [
+    {
+      "frame": "__semwait_signal",
+      "samples": 139,
+      "share": 0.6069868995633187
+    },
+    {
+      "frame": "__posix_spawn",
+      "samples": 30,
+      "share": 0.13100436681222707
+    },
+    {
+      "frame": "__rename",
+      "samples": 13,
+      "share": 0.056768558951965066
+    },
+    {
+      "frame": "readlink",
+      "samples": 8,
+      "share": 0.034934497816593885
+    },
+    {
+      "frame": "__open",
+      "samples": 7,
+      "share": 0.03056768558951965
+    }
+  ]
+}
