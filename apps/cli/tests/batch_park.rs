@@ -328,3 +328,47 @@ fn one_ambiguous_name_returns_the_same_code_and_copy_ids_on_cli_and_mcp() {
         assert!(home.path().join(".agents/skills/alpha/SKILL.md").exists());
     }
 }
+
+#[test]
+fn blocked_recorded_link_refuses_batch_unpark_before_restoring_any_copy_on_cli_and_mcp() {
+    for surface in ["park", "mcp"] {
+        let home = tempfile::tempdir().unwrap();
+        for name in ["alpha", "beta"] {
+            skill(home.path(), name);
+        }
+        let link = home.path().join(".claude/skills/beta");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink("../../.agents/skills/beta", &link).unwrap();
+        assert_eq!(
+            park(home.path(), surface, &["alpha", "beta"])["status"],
+            "ok"
+        );
+        assert!(!link.exists());
+        std::fs::write(&link, b"keep this file").unwrap();
+        let result = if surface == "mcp" {
+            mcp(home.path(), "unpark", &json!({"skills": ["alpha", "beta"]}))["result"]
+                ["structuredContent"]
+                .clone()
+        } else {
+            cli(home.path(), &["unpark", "alpha", "beta"])
+        };
+        assert_eq!(result["status"], "error", "{result}");
+        assert!(result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("beta"));
+        for name in ["alpha", "beta"] {
+            assert!(
+                !home.path().join(".agents/skills").join(name).exists(),
+                "{name} restored: {result}"
+            );
+            assert!(home
+                .path()
+                .join(".agents/skills-parked/universal")
+                .join(name)
+                .join("SKILL.md")
+                .exists());
+        }
+        assert_eq!(std::fs::read(&link).unwrap(), b"keep this file");
+    }
+}
