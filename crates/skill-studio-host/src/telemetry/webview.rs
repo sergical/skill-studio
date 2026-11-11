@@ -748,14 +748,20 @@ fn app_file(raw: &str) -> Option<String> {
 }
 
 /// Rebuilds React's component stack from component names only. Each line
-/// of React's own stack (`at SkillRow (tauri://localhost/assets/x.js:1:2)`)
-/// becomes `at SkillRow`.
+/// of React's own stack, in V8 form (`at SkillRow (tauri://localhost/assets/x.js:1:2)`)
+/// or Safari form (`SkillRow@tauri://localhost/assets/x.js:1:2`), becomes
+/// `at SkillRow`.
 fn scrub_react_context(component_stack: Option<&Value>, bundle: &WebviewBundle) -> Option<Value> {
     let raw = component_stack?.as_str()?;
     let names: Vec<&str> = raw
         .lines()
-        .filter_map(|line| line.trim().strip_prefix("at "))
-        .filter_map(|rest| rest.split([' ', '(']).next())
+        .map(str::trim)
+        .filter_map(|line| {
+            line.strip_prefix("at ")
+                .unwrap_or(line)
+                .split([' ', '(', '@'])
+                .next()
+        })
         .filter(|name| bundle.has(name))
         .take(MAX_COMPONENT_STACK_LINES)
         .collect();
@@ -1289,6 +1295,32 @@ mod tests {
         assert_eq!(
             event["sdk"],
             serde_json::json!({ "name": "sentry.javascript.react", "version": "11.11.0" })
+        );
+    }
+
+    /// guards: the macOS app losing its React component context. Safari
+    /// writes component stack lines as `Name@url`, not `at Name (url)`.
+    #[test]
+    fn a_webkit_react_component_stack_keeps_its_declared_names() {
+        let consent = Consent::new(true);
+        let (telemetry, recording) = webview(&consent);
+        let event = serde_json::json!({
+            "exception": { "values": [{ "type": "Error" }] },
+            "contexts": { "react": { "componentStack":
+                "\nSkillRow@tauri://localhost/assets/index-abc.js:1:2\nsecret_skill@tauri://localhost/assets/index-abc.js:3:4"
+            } }
+        });
+
+        telemetry.send(vec![item("event", event)]);
+
+        let body = sent(&recording).pop().expect("one envelope was sent");
+        assert!(
+            !body.contains("secret_skill"),
+            "a skill name reached Sentry: {body}"
+        );
+        assert_eq!(
+            items_of(&body)[0]["contexts"]["react"]["componentStack"],
+            "\n    at SkillRow"
         );
     }
 
