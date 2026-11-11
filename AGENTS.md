@@ -117,12 +117,12 @@ rules are firm:
   `tools/cargo-build-gc.pl` empties whole worktree folders under
   `~/.cargo/build/`, least recently used first, above a 40 GB total, below
   30 GB free disk, or after 3 days. It never empties a folder used in the last
-  hour, a folder whose lock Cargo holds, a folder that a running `cargo` builds
-  into (it runs `cargo metadata` with that process's working directory,
-  `--manifest-path`, and `CARGO_HOME`, because Cargo releases its lock before
-  tests run; when it cannot tell, it empties nothing), or a folder that a
-  process runs from. It holds the folder's locks while it checks and deletes, and keeps the
-  lock files. The cap is an eviction threshold: builds that run at the same
+  hour, a folder whose lock Cargo holds, or a folder that a process runs from.
+  Cargo releases its lock before tests run, so the script checks the process
+  list 20 times over 2 seconds: one check missed a running `cargo test` 24% of
+  the time (gaps between test binaries), two checks in a row never did
+  (measured). It holds the folder's locks while it checks and deletes, and
+  keeps the lock files. The cap is an eviction threshold: builds that run at the same
   time can go over it. Run it every 15 minutes with launchd (macOS):
 
   ```bash
