@@ -44,3 +44,7 @@ proptest = "1"
 name = "scan"
 harness = false
 required-features = ["testing"]
+
+[[example]]
+name = "perf_baseline"
+required-features = ["testing"]

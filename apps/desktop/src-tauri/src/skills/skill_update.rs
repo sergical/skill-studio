@@ -442,7 +442,7 @@ pub async fn check_for_update(app: AppHandle) -> Result<UpdateStatus, String> {
 /// Catch-up read for the Settings card on mount, matching
 /// `get_add_skill_operation`'s pattern - the background loop's own checks
 /// have no other way to reach a component that (re)mounted after they ran.
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri's command extractor requires an owned `State<T>`.
 pub fn get_update_status(state: tauri::State<UpdateEngineState>) -> UpdateStatus {
     state.0.status()

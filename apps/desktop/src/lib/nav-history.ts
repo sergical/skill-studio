@@ -46,8 +46,14 @@ function isSameLocation(
 }
 
 /** Stored entries drop `intent`, so stepping back onto a skill page never reopens its dialog. */
-function toEntry(view: ActiveView): ActiveView {
-  return view.kind === "skill" ? { ...view, intent: undefined } : view;
+function toEntry(view: ActiveView, defaults?: DefaultDeploymentPaths | null): ActiveView {
+  return view.kind === "skill"
+    ? {
+        ...view,
+        deploymentPath: view.deploymentPath ?? defaults?.get(view.name),
+        intent: undefined,
+      }
+    : view;
 }
 
 /** Records a user navigation from `current` to `next`. A move to the same place records nothing;
@@ -60,7 +66,7 @@ export function recordNavigation(
 ): NavHistory {
   if (isSameLocation(current, next, defaults)) return history;
   return {
-    back: [...history.back, toEntry(current)].slice(-NAV_HISTORY_LIMIT),
+    back: [...history.back, toEntry(current, defaults)].slice(-NAV_HISTORY_LIMIT),
     forward: [],
   };
 }
@@ -77,13 +83,18 @@ function step(
   to: ActiveView[],
   current: ActiveView,
   exists: (view: ActiveView) => boolean,
+  defaults?: DefaultDeploymentPaths | null,
 ): { remaining: ActiveView[]; pushed: ActiveView[]; view: ActiveView } | null {
   let remaining = from;
   while (remaining.length > 0) {
     const view = remaining[remaining.length - 1];
     remaining = remaining.slice(0, -1);
     if (exists(view)) {
-      return { remaining, pushed: [...to, toEntry(current)].slice(-NAV_HISTORY_LIMIT), view };
+      return {
+        remaining,
+        pushed: [...to, toEntry(current, defaults)].slice(-NAV_HISTORY_LIMIT),
+        view,
+      };
     }
   }
   return null;
@@ -93,8 +104,9 @@ export function stepBack(
   history: NavHistory,
   current: ActiveView,
   exists: (view: ActiveView) => boolean,
+  defaults?: DefaultDeploymentPaths | null,
 ): NavStep | null {
-  const result = step(history.back, history.forward, current, exists);
+  const result = step(history.back, history.forward, current, exists, defaults);
   if (!result) return null;
   return { history: { back: result.remaining, forward: result.pushed }, view: result.view };
 }
@@ -103,8 +115,9 @@ export function stepForward(
   history: NavHistory,
   current: ActiveView,
   exists: (view: ActiveView) => boolean,
+  defaults?: DefaultDeploymentPaths | null,
 ): NavStep | null {
-  const result = step(history.forward, history.back, current, exists);
+  const result = step(history.forward, history.back, current, exists, defaults);
   if (!result) return null;
   return { history: { back: result.pushed, forward: result.remaining }, view: result.view };
 }

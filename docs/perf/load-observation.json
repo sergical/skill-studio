@@ -1,0 +1,6 @@
+{
+  "observed_at": "2026-11-10T04:12:31.025062+00:00",
+  "load_average": "{ 4.72 12.68 22.05 }",
+  "cargo_processes": 0,
+  "rustc_processes": 0
+}

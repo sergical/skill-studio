@@ -22,7 +22,7 @@ use std::path::PathBuf;
 /// skill-studio-cli` run first.
 pub fn cli_binary_path() -> PathBuf {
     if let Some(binary) = std::env::var_os("SKILL_STUDIO_TEST_BINARY") {
-        return PathBuf::from(binary);
+        return binary.into();
     }
     let profile = if cfg!(debug_assertions) {
         "debug"

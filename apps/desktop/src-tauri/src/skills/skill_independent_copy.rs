@@ -95,7 +95,7 @@ pub fn make_skill_independent_copy(
         store,
         request,
         &|from, to| fs::rename(from, to),
-        &|home, registry| write_fork_registry_locked(guard, home, registry),
+        &|home, registry| write_fork_registry_locked(guard, home, &mut registry.clone()),
         &|_| Ok(()),
     )
 }
@@ -347,7 +347,14 @@ fn run_independent_copy(
             if let Err(error) = finalize {
                 let filesystem_rollback =
                     rename(request.link, staging).and_then(|()| rename(saved_link, request.link));
-                let registry_rollback = write_registry(request.home, &previous_registry);
+                let registry_rollback = super::skill_fork_registry::restore_registry_entry(
+                    request.home,
+                    copy_id,
+                    previous_registry.copies.get(copy_id),
+                    |registry| &mut registry.copies,
+                    read_fork_registry,
+                    |home, registry| write_registry(home, registry),
+                );
                 let _ = store.finish(id, EventStatus::Failed);
                 return match (filesystem_rollback, registry_rollback) {
                     (Ok(()), Ok(())) => Err(format!(
@@ -573,7 +580,7 @@ fn remove_matching_copy_ownership(
         Some(existing) if ownership_matches(existing, data) => {
             let previous = registry.clone();
             registry.copies.remove(&data.copy_deployment_id);
-            write_fork_registry_maybe_locked(guard, home, &registry)?;
+            write_fork_registry_maybe_locked(guard, home, &mut registry)?;
             Ok(Some(previous))
         }
         Some(_) => Err(
@@ -912,7 +919,21 @@ fn crash_or_fail_restore(
         return error;
     }
     let error = match previous_registry {
-        Some(registry) => match write_fork_registry_locked(guard, home, registry) {
+        Some(registry) => match target
+            .payload
+            .get("copy_deployment_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "This history entry has no copy ID".to_string())
+            .and_then(|copy_id| {
+                super::skill_fork_registry::restore_registry_entry(
+                    home,
+                    copy_id,
+                    registry.copies.get(copy_id),
+                    |registry| &mut registry.copies,
+                    read_fork_registry,
+                    |home, registry| write_fork_registry_locked(guard, home, registry),
+                )
+            }) {
             Ok(()) => error,
             Err(rollback_error) => {
                 format!("{error}; additionally failed to restore Copy ownership: {rollback_error}")
@@ -1040,7 +1061,7 @@ fn claim_replaced_copy(
     registry
         .copies
         .insert(data.copy_deployment_id.clone(), record);
-    write_fork_registry_maybe_locked(guard, home, &registry)?;
+    write_fork_registry_maybe_locked(guard, home, &mut registry)?;
     if fs::symlink_metadata(&data.saved_link)
         .is_ok_and(|metadata| metadata.file_type().is_symlink())
         && data
@@ -1420,7 +1441,7 @@ mod tests {
                     fs::rename(from, to)
                 }
             },
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &|_| Ok(()),
         )
         .unwrap_err();
@@ -1548,7 +1569,7 @@ mod tests {
 
         let mut registry = read_fork_registry(&home).unwrap();
         registry.copies.remove(&data.copy_deployment_id);
-        write_fork_registry(&home, &registry).unwrap();
+        write_fork_registry(&home, &mut registry).unwrap();
         mark_pending(&store, &id);
         recover_make(&store, &home, &id).unwrap();
 
@@ -1594,7 +1615,7 @@ mod tests {
             &store,
             request(&home, &link, &source),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &|phase| {
                 if phase == "staged" {
                     fs::remove_file(&link).unwrap();
@@ -1617,7 +1638,7 @@ mod tests {
             &store,
             request(&home, &link, &source),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &crash_at("intent"),
         )
         .unwrap_err();
@@ -1647,7 +1668,7 @@ mod tests {
             &store,
             request(&home, &link, &source),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1680,7 +1701,7 @@ mod tests {
             &store,
             request(&home, &link, &source),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1694,7 +1715,7 @@ mod tests {
             data.copy_deployment_id.clone(),
             data.copy_record.clone().unwrap(),
         );
-        write_fork_registry(&home, &registry).unwrap();
+        write_fork_registry(&home, &mut registry).unwrap();
         event
             .payload
             .as_object_mut()
@@ -1730,7 +1751,7 @@ mod tests {
             &store,
             request(&home, &link, &source),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1746,7 +1767,7 @@ mod tests {
             data.copy_deployment_id.clone(),
             data.copy_record.clone().unwrap(),
         );
-        write_fork_registry(&home, &registry).unwrap();
+        write_fork_registry(&home, &mut registry).unwrap();
 
         let error =
             reconcile_interrupted_independent_copy(&store, &home, &event, None).unwrap_err();
@@ -1776,7 +1797,7 @@ mod tests {
             &store,
             request(&home, &link, &source),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1801,7 +1822,7 @@ mod tests {
             &store,
             request(&home, &link, &source),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1840,7 +1861,7 @@ mod tests {
             &store,
             copy_request,
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &crash_at("converted"),
         )
         .unwrap_err();
@@ -1890,7 +1911,7 @@ mod tests {
             &store,
             copy_request,
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &crash_at("materialize_root_removed"),
         )
         .unwrap_err();
@@ -1936,7 +1957,7 @@ mod tests {
             &store,
             copy_request,
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &crash_at("materialize_root_removed"),
         )
         .unwrap_err();
@@ -1976,7 +1997,7 @@ mod tests {
             &store,
             copy_request,
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &crash_at("materialize_root_removed"),
         )
         .unwrap_err();
@@ -2020,7 +2041,7 @@ mod tests {
             &store,
             request(&home, &link, &source),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &crash_at("replaced"),
         )
         .unwrap_err();
@@ -2048,15 +2069,16 @@ mod tests {
     /// advisory locks don't nest within one process, so that second acquire
     /// reported the caller's own lease as busy, the write was refused, and
     /// the rollback undid the whole copy - "Make independent copy" could
-    /// never succeed as the command actually runs it. Reproducing this needs
-    /// the real `WriteLease::default()` over `home` (not a test-scoped lease
-    /// root), since `write_fork_registry`'s internal lock always uses the
-    /// real `core_runtime::data_root()/leases`.
+    /// never succeed as the command actually runs it. The outer lease and
+    /// registry writer must use the same fixture lease directory.
     #[test]
     fn make_independent_copy_run_the_way_the_command_runs_it_does_not_self_deadlock_on_the_write_lease(
     ) {
         let (temp, store, source, link) = setup();
         let home = temp.path().join("home");
+        let _lease_root = super::super::skill_fork_registry::registry_lease_root_for_test(
+            home.join(".test-leases"),
+        );
         let write_lease = super::super::write_lease::WriteLease::default();
         let guard = write_lease.try_acquire(&home).unwrap();
 
@@ -2092,11 +2114,14 @@ mod tests {
     fn recovering_a_replaced_copy_while_the_startup_lease_is_held_does_not_self_deadlock() {
         let (temp, store, source, link) = setup();
         let home = temp.path().join("home");
+        let _lease_root = super::super::skill_fork_registry::registry_lease_root_for_test(
+            home.join(".test-leases"),
+        );
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &crash_at("replaced"),
         )
         .unwrap_err();
@@ -2104,13 +2129,6 @@ mod tests {
         let event_id = store.list(1, None).unwrap()[0].id.clone();
         store.reconcile_at_startup().unwrap();
 
-        // The exact shape `reconcile_event_store_at_startup` takes: one
-        // lease over `home` held for the whole recovery pass. Must be the
-        // real `WriteLease::default()`, not a test-scoped lease root -
-        // `write_fork_registry`'s own internal lock (what the fix routes
-        // around via `write_fork_registry_locked`) always uses the real
-        // `core_runtime::data_root()/leases`, so only the real lease root
-        // can reproduce the two locks conflicting.
         let write_lease = super::super::write_lease::WriteLease::default();
         let guard = write_lease.try_acquire(&home).unwrap();
         let interrupted = store.interrupted_independent_copy_events().unwrap();
@@ -2137,7 +2155,7 @@ mod tests {
             &store,
             request(&home, &link, &source),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, registry),
+            &|home, registry| write_fork_registry(home, &mut registry.clone()),
             &crash_at("registry"),
         )
         .unwrap_err();
@@ -2329,7 +2347,7 @@ mod tests {
         let mut conflicting = registry.copies.get(&deployment_id).unwrap().clone();
         conflicting.content_hash = "not-the-recorded-copy".to_string();
         registry.copies.insert(deployment_id, conflicting);
-        write_fork_registry(&home, &registry).unwrap();
+        write_fork_registry(&home, &mut registry).unwrap();
 
         mark_pending(&store, &id);
         let error = recover_make(&store, &home, &id).unwrap_err();
@@ -2359,7 +2377,7 @@ mod tests {
             .get_mut(&deployment_id)
             .unwrap()
             .content_hash = "conflict".to_string();
-        write_fork_registry(&home, &registry).unwrap();
+        write_fork_registry(&home, &mut registry).unwrap();
 
         mark_pending(&store, &id);
         assert!(recover_make(&store, &home, &id).is_err());
@@ -2367,7 +2385,7 @@ mod tests {
 
         let mut registry = read_fork_registry(&home).unwrap();
         registry.copies.remove(&deployment_id);
-        write_fork_registry(&home, &registry).unwrap();
+        write_fork_registry(&home, &mut registry).unwrap();
         recover_make(&store, &home, &id).unwrap();
 
         assert_eq!(store.get(&id).unwrap().unwrap().status, "failed");

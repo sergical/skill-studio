@@ -99,17 +99,14 @@ impl ScopeFs for RealFs {
     }
 
     fn read_capped(&self, path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
-        let len = fs::metadata(path)?.len();
-        if len > max_bytes {
+        let (bytes, truncated) = self.read_prefix(path, max_bytes)?;
+        if truncated {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!(
-                    "{} is {len} bytes, over the {max_bytes} byte cap",
-                    path.display()
-                ),
+                format!("{} is over the {max_bytes} byte cap", path.display()),
             ));
         }
-        fs::read(path)
+        Ok(bytes)
     }
 
     fn read_prefix(&self, path: &Path, limit: u64) -> io::Result<(Vec<u8>, bool)> {
@@ -118,7 +115,9 @@ impl ScopeFs for RealFs {
         let mut bytes = Vec::new();
         // Read one byte past the limit so truncation can be told apart from
         // "exactly at the limit" without ever buffering more than that.
-        file.by_ref().take(limit + 1).read_to_end(&mut bytes)?;
+        file.by_ref()
+            .take(limit.saturating_add(1))
+            .read_to_end(&mut bytes)?;
         let truncated = bytes.len() as u64 > limit;
         if truncated {
             bytes.truncate(limit as usize);
@@ -412,6 +411,36 @@ mod tests {
         let path = dir.path().join("big.txt");
         fs::write(&path, vec![0u8; 16]).unwrap();
         let err = RealFs::new().read_capped(&path, 4).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn read_capped_with_no_cap_returns_the_whole_file_or_overflows_to_an_empty_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stamp");
+        fs::write(&path, b"backup bytes").unwrap();
+        let bytes = RealFs::new().read_capped(&path, u64::MAX).unwrap();
+        assert_eq!(bytes, b"backup bytes");
+    }
+
+    #[test]
+    fn read_capped_stops_at_the_cap_when_a_file_grows_after_its_size_check_or_buffers_the_whole_file(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("growing");
+        // A FIFO reports size 0 to metadata and then delivers more bytes, which
+        // is the same order of events as a file that grows after the check.
+        let status = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let writer_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            let _ = fs::write(&writer_path, vec![0u8; 16]);
+        });
+        let err = RealFs::new().read_capped(&path, 4).unwrap_err();
+        writer.join().unwrap();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 

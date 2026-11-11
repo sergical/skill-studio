@@ -28,7 +28,6 @@ import {
   skillRemovalDescription,
   skillUpdateAvailability,
 } from "../../lib/skill-lifecycle-target";
-import type { SkillInstallCompletion } from "./InstallControls";
 import type {
   SkillLifecycleScopeSelection,
   SkillRemovalPreview,
@@ -42,7 +41,6 @@ const ACTION_BUTTON_CLASS =
 
 interface InstalledSkillLifecycleActionsProps {
   skill: SkillWithStatus;
-  onInstallComplete: (result: SkillInstallCompletion) => void;
   /** Refresh only: the plugin update shows its own toast. */
   onUpdateComplete: () => void;
   onRemoveComplete: () => void;
@@ -100,7 +98,6 @@ function useSkillLifecycleMutations(
   skill: SkillWithStatus,
   removalPreview: SkillRemovalPreview | null,
   updateAvailability: SkillUpdateAvailability | null,
-  onInstallComplete: (result: SkillInstallCompletion) => void,
   onUpdateComplete: () => void,
   onRemoveComplete: () => void,
 ) {
@@ -152,12 +149,23 @@ function useSkillLifecycleMutations(
           })
         : guard.requestUpdate(installed, {
             scopeTarget: updateAvailability.target,
-            onFinished: ({ success, error }) =>
-              onInstallComplete(
+            onFinished: ({ success, error, alreadyCurrent }) => {
+              addToast(
                 success
-                  ? { success: true, skillName: skill.name }
-                  : { success: false, error: error ?? "Update failed.", skillName: skill.name },
-              ),
+                  ? {
+                      type: alreadyCurrent ? "info" : "success",
+                      title: alreadyCurrent
+                        ? `${skill.name} is already up to date`
+                        : `Updated ${skill.name}`,
+                    }
+                  : {
+                      type: "error",
+                      title: `Could not update ${skill.name}`,
+                      message: error ?? "Update failed.",
+                    },
+              );
+              if (success) onUpdateComplete();
+            },
           });
     return update
       .catch((error) => {
@@ -229,7 +237,6 @@ function LifecycleScopePicker({
 /** Updates or removes the explicitly selected deployment owner for an installed skill. */
 export function InstalledSkillLifecycleActions({
   skill,
-  onInstallComplete,
   onUpdateComplete,
   onRemoveComplete,
 }: InstalledSkillLifecycleActionsProps) {
@@ -260,7 +267,6 @@ export function InstalledSkillLifecycleActions({
     skill,
     removalPreview,
     updateAvailability,
-    onInstallComplete,
     onUpdateComplete,
     onRemoveComplete,
   );

@@ -1291,7 +1291,7 @@ async fn terminate_process_group(
 /// Signal a run's task to stop and let it produce its own terminating
 /// `Finished` event. Idempotent: a second cancel of the same run, or a
 /// cancel after the run already finished, is a no-op.
-#[tauri::command]
+#[tauri::command(async)]
 // Tauri commands deserialize their arguments fresh per invocation, so
 // `run_id` can't be borrowed from the caller - it must be owned.
 #[allow(clippy::needless_pass_by_value)]

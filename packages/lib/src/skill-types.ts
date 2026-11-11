@@ -14,6 +14,9 @@
 // ============================================================================
 
 export type {
+  BackgroundStatus,
+  BackgroundTaskStatus,
+  BackgroundWorker,
   AgentId,
   SkillDestination,
   AddMethod,
@@ -23,7 +26,6 @@ export type {
   FrontmatterRepairApplyMode,
   FrontmatterRepairKind,
   InvocationConflictChoice,
-  PackImportPreflightResult,
   HarnessId,
   OpencodeConfigKind,
   DisabledBy,
@@ -44,11 +46,9 @@ export type {
   HarnessReport,
   HarnessDetection,
   HarnessesChoice,
-  ImportResult,
   InstallResult,
   InstallPreferences,
   InvocationHeatmap,
-  PackImportRequest,
   PackInfo,
   PackMember,
   PaginatedSkillsResponse,

@@ -43,40 +43,20 @@ pub use skills::*;
 /// thread. A failure opening the store returns `None` rather than aborting
 /// startup; every event command surfaces that as an ordinary `Err`.
 ///
-/// Never called when [`skills::data_folder_status::check_and_migrate`]
-/// (unit 6.3) already refused the folder as newer than this build - `run()`
-/// checks that first, so a version this app doesn't understand is never
-/// opened.
-fn open_event_store(app: &tauri::App) -> Option<skills::event_store::EventStore> {
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| eprintln!("[event_store] could not resolve app data dir: {e}"))
-        .ok()?;
-    open_event_store_at(&app_data, &skills::core_runtime::data_root())
-}
-
-/// [`open_event_store`], but taking `app_data_dir`/`data_root` directly
-/// rather than reading them from a live `tauri::App` - the seam
-/// `tests/undo_activity_history.rs` opens its own `EventStore` through, so
-/// reverting this function to the desktop-only-file bug it fixed
-/// (`EventStore::open(&app_data)`, ignoring the core's shared history
-/// database entirely) turns that test red instead of only the production
-/// code path nothing exercises directly.
+/// Startup calls this only through [`skills::data_folder_status::check_and_open`].
+/// Tests can pass fixture paths without a running Tauri app.
 pub fn open_event_store_at(
     app_data_dir: &Path,
     data_root: &Path,
-) -> Option<skills::event_store::EventStore> {
+) -> Result<skills::event_store::EventStore, String> {
     let db_path = skills::core_runtime::history_db_path(data_root);
-    let store = skills::event_store::EventStore::open_with_db(app_data_dir, &db_path)
-        .map_err(|e| eprintln!("[event_store] failed to open: {e}"))
-        .ok()?;
+    let store = skills::event_store::EventStore::open_with_db(app_data_dir, &db_path)?;
     match store.import_legacy_events() {
         Ok(0) => {}
         Ok(imported) => eprintln!("[event_store] imported {imported} legacy event(s)"),
         Err(e) => eprintln!("[event_store] failed to import legacy events: {e}"),
     }
-    Some(store)
+    Ok(store)
 }
 
 /// Repairs legacy event intents while startup holds every trusted scope
@@ -318,20 +298,20 @@ pub fn run() {
                 guard: std::sync::Mutex::new(telemetry_guard),
             });
 
-            // Unit 6.3: check the data folder's schema_version before
-            // anything else in setup - every branch below either spawns a
-            // background thread or manages state a Tauri command can read,
-            // and any of those could touch `app_data_dir` before a later
-            // check_and_migrate call would have run. Migrates forward in
-            // place when older, and names a blocking message when newer so
-            // `open_event_store` below is skipped rather than opening a
-            // folder this build doesn't understand.
-            let data_folder_message = app
-                .path()
-                .app_data_dir()
-                .ok()
-                .as_deref()
-                .and_then(skills::data_folder_status::check_and_migrate);
+            // The version gate must run before the event-store opener or background writers.
+            let (data_folder_message, event_store) = match app.path().app_data_dir() {
+                Ok(app_data) => skills::data_folder_status::check_and_open_with_fixture(
+                    &app_data,
+                    &skills::core_runtime::data_root(),
+                    std::env::var_os("SKILL_STUDIO_FIXTURE")
+                        .as_deref()
+                        .map(std::path::Path::new),
+                ),
+                Err(error) => (
+                    Some(format!("Could not resolve the data folder: {error}")),
+                    None,
+                ),
+            };
             app.manage(skills::data_folder_status::DataFolderStatusState(
                 std::sync::Mutex::new(data_folder_message.clone()),
             ));
@@ -340,14 +320,6 @@ pub fn run() {
             app.manage(refresh_state);
             app.manage(skills::skill_add_operation::AddSkillOperationState::default());
             app.manage(skills::commands::UpdateAllCancelState::default());
-            app.manage(skills::skill_pack::PackImportTrustState::default());
-            if let Some(home) = dirs::home_dir() {
-                if let Err(error) =
-                    skills::skill_pack::reconcile_pack_import_staging_at_startup(&home)
-                {
-                    eprintln!("[skill_pack] startup staging reconcile failed: {error}");
-                }
-            }
             app.manage(skills::skill_agent_runner::SkillAgentRunnerState::default());
             app.manage(skills::skill_run_target::SkillRunTargetState::default());
             skills::skill_update_check::spawn_update_check_loop(app.handle().clone());
@@ -362,11 +334,6 @@ pub fn run() {
             ));
             skills::skill_update::spawn_update_check_loop(app.handle().clone());
 
-            let event_store = if data_folder_message.is_some() {
-                None
-            } else {
-                open_event_store(app)
-            };
             let recovery_state =
                 skills::event_commands::EventStoreState::with_recovery(event_store, |store| {
                     let home = dirs::home_dir().ok_or("Could not find home directory")?;
@@ -398,6 +365,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            skills::background_work::get_background_status,
             skills::app_version::app_version,
             skills::data_folder_status::data_folder_status,
             // In-app update (unit 6.2)
@@ -465,6 +433,7 @@ pub fn run() {
             skills::event_commands::make_skill_independent_copy,
             skills::event_commands::repair_skill_link,
             // Background refresh / invocation snapshot
+            skills::skill_update_check::check_skill_updates_now,
             skills::skill_refresh::get_skill_snapshot,
             skills::skill_refresh::request_skill_rescan,
             skills::skill_refresh::rescan_skills_now,

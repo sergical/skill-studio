@@ -41,11 +41,14 @@ const SCAN_READ_WAIT: Duration = Duration::from_mins(1);
 /// write command follows (its exclusive lease first, then the rebuild). The
 /// other order lets a rebuild hold `rebuild_lock` while it waits for a lease
 /// that a write holds, while that write waits for `rebuild_lock`.
-pub struct ScanLeaseGuard(Option<Box<dyn skill_studio_core::ports::LeaseHandle>>);
+pub struct ScanLeaseGuard {
+    handle: Option<Box<dyn skill_studio_core::ports::LeaseHandle>>,
+    _folder_guard: skill_studio_host::DataFolderGuard,
+}
 
 impl Drop for ScanLeaseGuard {
     fn drop(&mut self) {
-        if self.0.is_some() {
+        if self.handle.is_some() {
             HELD_ON_THIS_THREAD.with(|held| held.set(held.get().saturating_sub(1)));
         }
     }
@@ -90,7 +93,7 @@ pub struct WriteLease {
 impl Default for WriteLease {
     fn default() -> Self {
         WriteLease {
-            lease: FileLease::new(core_runtime::data_root().join("leases")),
+            lease: FileLease::new(super::skill_fork_registry::registry_lease_root()),
             wait: SCAN_WAIT,
             scan_wait: SCAN_READ_WAIT,
         }
@@ -129,8 +132,17 @@ impl WriteLease {
         home: &Path,
         projects: &[std::path::PathBuf],
     ) -> Result<ScanLeaseGuard, String> {
+        let history = if std::env::var_os("SKILL_STUDIO_FIXTURE").is_some() {
+            home.join(".history")
+        } else {
+            core_runtime::data_root().join("history")
+        };
+        let guard = skill_studio_host::guard_read_data_folder(&history)?;
         if current_thread_holds_home_lease() {
-            return Ok(ScanLeaseGuard(None));
+            return Ok(ScanLeaseGuard {
+                handle: None,
+                _folder_guard: guard,
+            });
         }
         let mut keys: Vec<LeaseKey> = std::iter::once(home)
             .chain(projects.iter().map(std::path::PathBuf::as_path))
@@ -147,7 +159,10 @@ impl WriteLease {
             .acquire(&keys, LeaseMode::Shared, self.scan_wait)
             .map_err(|e| e.message)?;
         HELD_ON_THIS_THREAD.with(|held| held.set(held.get() + 1));
-        Ok(ScanLeaseGuard(Some(handle)))
+        Ok(ScanLeaseGuard {
+            handle: Some(handle),
+            _folder_guard: guard,
+        })
     }
 
     /// Waits for every trusted scope root before startup recovery runs.
@@ -280,14 +295,20 @@ mod tests {
     fn a_command_holding_the_root_lease_can_write_the_fork_registry_or_names_the_self_deadlock() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
+        let _lease_root = super::super::skill_fork_registry::registry_lease_root_for_test(
+            home.join(".test-leases"),
+        );
         std::fs::create_dir_all(&home).unwrap();
 
         let write_lease = WriteLease::default();
         let guard = write_lease.try_acquire(&home).unwrap();
 
-        let registry = super::super::skill_fork_registry::ForkRegistry::default();
-        let result =
-            super::super::skill_fork_registry::write_fork_registry_locked(&guard, &home, &registry);
+        let mut registry = super::super::skill_fork_registry::ForkRegistry::default();
+        let result = super::super::skill_fork_registry::write_fork_registry_locked(
+            &guard,
+            &home,
+            &mut registry,
+        );
         assert!(
             result.is_ok(),
             "writing the fork registry while the caller holds the root's write lease must \
