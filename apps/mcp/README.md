@@ -10,27 +10,19 @@ D13).
 
 ## Tools
 
-One tool per core operation, named `snake_case` from `Operation`. Every
-tool's input schema is the core's own request DTO's `schemars` output,
-unchanged; every tool's output is the same `ResultEnvelope` JSON
-`skill-studio` (the CLI) prints, as `structured_content`, with `is_error`
-set to match `envelope.status == "error"`.
+One tool per core operation. The `#[tool]` methods in `src/lib.rs` are the
+tool list; an MCP client's `tools/list` shows the same names and
+descriptions. `docs/flows.md` maps each tool to its user flow, its CLI
+command and its parity test. Every tool's input schema is the core's own
+request DTO's `schemars` output, unchanged; every tool's output is the same
+`ResultEnvelope` JSON `skill-studio` (the CLI) prints, as
+`structured_content`, with `is_error` set to match
+`envelope.status == "error"`.
 
-| Tool                         | Core op                           | Request DTO            |
-| ---------------------------- | --------------------------------- | ---------------------- |
-| `scan`                       | `ops::scan`                       | `ScanRequest`          |
-| `diagnose`                   | `ops::diagnose`                   | `ScanRequest`          |
-| `capabilities`               | `ops::capabilities`               | `CapabilitiesRequest`  |
-| `preview_frontmatter_repair` | `ops::preview_frontmatter_repair` | `RepairPreviewRequest` |
-| `apply_frontmatter_repair`   | `ops::apply_frontmatter_repair`   | `RepairApplyRequest`   |
-| `list_events`                | `ops::list_events`                | `ListEventsRequest`    |
-| `restore_event`              | `ops::restore_event`              | `RestoreRequest`       |
-
-`apply_frontmatter_repair`, `list_events`, and `restore_event` open a real
-history store and take the exclusive lease the same way `skill-studio
-apply-repair`/`events`/`restore` do; if another process is already holding
-it, the call returns the ordinary `scope_busy` error envelope (bounded
-wait, never an indefinite hang), the same as the CLI.
+Tools that write, or that open the history store (`list_events`,
+`restore_event`), take the same file lease as the CLI and the desktop app.
+If another process holds it, the call returns the ordinary `scope_busy`
+error envelope (bounded wait, never an indefinite hang).
 
 A core error is never a panic and never a bare string: it comes back as
 `structured_content` carrying the envelope's `errors` array, with
@@ -63,6 +55,10 @@ ambient `$XDG_DATA_HOME/skill-studio` (or `~/.local/share/skill-studio`)
 data root — the same rule `apps/cli/src/scope.rs::data_root` uses.
 
 ## Example client configuration
+
+Users run the published server through the CLI package:
+`npx -y skill-studio mcp` (see `packages/npm/skill-studio/README.md` for
+each agent's setup). For a local build, point the client at the binary:
 
 ```json
 {
