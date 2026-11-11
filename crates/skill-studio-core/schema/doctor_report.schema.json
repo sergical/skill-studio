@@ -50,7 +50,7 @@
           "minimum": 0
         },
         "estimated_tokens_chars_div_4": {
-          "description": "UTF-16 characters, divided by four and rounded up.",
+          "description": "UTF-16 characters (UTF-8 bytes for Codex), divided by four and rounded up.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -158,7 +158,7 @@
           "type": "string"
         },
         "estimated_tokens_chars_div_4": {
-          "description": "UTF-16 characters, divided by four and rounded up.",
+          "description": "UTF-16 characters (UTF-8 bytes for Codex), divided by four and rounded up.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
