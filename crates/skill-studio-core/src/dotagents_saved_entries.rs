@@ -424,7 +424,7 @@ pub(crate) fn prepare_saved_entry_restore(
             .checked_add(expected.text.len())
             .ok_or_else(|| conflict(&entry.path))?;
         if text.get(start..end) != Some(expected.text.as_str())
-            || range.as_ref().is_some_and(|owned| owned.end != end)
+            || range.as_ref().is_some_and(|owned| owned.end > end)
             || preceding.is_some_and(|position| position >= start)
             || following.is_some_and(|position| position < end)
         {

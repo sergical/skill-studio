@@ -2919,3 +2919,114 @@ fn dotagents_undo_of_restore_refuses_a_lock_entry_the_user_extended_instead_of_m
     );
     assert_eq!(std::fs::read_to_string(&lock).unwrap(), edited);
 }
+
+#[test]
+fn dotagents_remove_and_restore_cycle_four_times_with_trailing_comments_parent_tables_or_a_later_skill_or_a_normal_undo_is_refused(
+) {
+    struct ReplayDotagentsRemove {
+        home: PathBuf,
+        config: String,
+        lock: String,
+    }
+    impl ProcessSpawner for ReplayDotagentsRemove {
+        fn run(
+            &self,
+            _: &ProcessSpec,
+            _: &dyn CancelToken,
+        ) -> Result<ProcessOutput, skill_studio_core::CoreError> {
+            std::fs::remove_dir_all(self.home.join(".agents/skills/alpha")).unwrap();
+            std::fs::write(self.home.join(".agents/agents.toml"), &self.config).unwrap();
+            std::fs::write(self.home.join(".agents/agents.lock"), &self.lock).unwrap();
+            Ok(ProcessOutput {
+                status: Some(0),
+                stdout: String::new(),
+                stderr: String::new(),
+                timed_out: false,
+            })
+        }
+    }
+    let before_config = include_str!("fixtures/dotagents-remove-3.0.1/before-agents.toml");
+    let before_lock = include_str!("fixtures/dotagents-remove-3.0.1/before-agents.lock");
+    let after_config = include_str!("fixtures/dotagents-remove-3.0.1/after-agents.toml");
+    let after_lock = include_str!("fixtures/dotagents-remove-3.0.1/after-agents.lock");
+    for suffix in [
+        "",
+        "\n\n",
+        "# trailing comment\n",
+        "\n# trailing comment\n\n",
+    ] {
+        for parent in [false, true] {
+            for later in [false, true] {
+                let case = format!("suffix={suffix:?} parent={parent} later={later}");
+                let home = tempfile::tempdir().unwrap();
+                let rt = runtime_with(
+                    home.path(),
+                    Arc::new(RealFs::new()),
+                    Some(Arc::new(ReplayDotagentsRemove {
+                        home: home.path().to_path_buf(),
+                        config: after_config.into(),
+                        lock: after_lock.into(),
+                    })),
+                );
+                let deployment_id =
+                    setup_owner_kind(&rt, home.path(), LifecycleOwnerKind::Dotagents, "alpha");
+                let config = home.path().join(".agents/agents.toml");
+                let lock = home.path().join(".agents/agents.lock");
+                std::fs::write(&config, format!("{before_config}{suffix}")).unwrap();
+                let before_lock = if parent {
+                    before_lock.replace("[skills.alpha]", "[skills]\n\n[skills.alpha]")
+                } else {
+                    before_lock.to_string()
+                };
+                std::fs::write(&lock, format!("{before_lock}{suffix}")).unwrap();
+                let removed = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+                let (later_config, later_lock) = if later {
+                    (
+                        "# beta\n[[skills]]\nname = 'beta'\nsource = 'owner/beta'\n",
+                        "# beta\n[skills.beta]\nsource = 'owner/beta'\n",
+                    )
+                } else {
+                    ("", "")
+                };
+                let after_config = format!("{after_config}{later_config}");
+                let after_lock = format!("{after_lock}{later_lock}");
+                std::fs::write(&config, &after_config).unwrap();
+                std::fs::write(&lock, &after_lock).unwrap();
+                let mut event_id = removed.event_id;
+                for cycle in 0..4 {
+                    let restored = ops::restore_event(
+                        &rt,
+                        &ctx(),
+                        &RestoreRequest {
+                            event_id,
+                            force: false,
+                        },
+                    )
+                    .unwrap_or_else(|error| panic!("{case} cycle={cycle}: {error:?}"));
+                    event_id = restored.restore_event_id;
+                    if cycle % 2 == 1 {
+                        assert_eq!(
+                            std::fs::read_to_string(&config).unwrap(),
+                            after_config,
+                            "{case}"
+                        );
+                        assert_eq!(
+                            std::fs::read_to_string(&lock).unwrap(),
+                            after_lock,
+                            "{case}"
+                        );
+                        assert!(!home.path().join(".agents/skills/alpha").exists(), "{case}");
+                    } else {
+                        assert!(
+                            std::fs::read_to_string(&config).unwrap().contains(&format!(
+                                "source = 'owner/alpha'\nref = 'old-revision'\n\n{suffix}"
+                            )),
+                            "{case}"
+                        );
+                        assert!(home.path().join(".agents/skills/alpha").is_dir(), "{case}");
+                    }
+                }
+            }
+        }
+    }
+}
