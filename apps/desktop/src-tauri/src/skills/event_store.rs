@@ -39,11 +39,34 @@ use super::skill_md_write::{begin_skill_md_write_transaction, SkillMdWriteTransa
 
 /// Opens (creating if absent) the event store DB at `db_path` and ensures
 /// its schema exists.
-pub fn open(db_path: &Path) -> Result<Connection, String> {
-    if let Some(parent) = db_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+pub fn open(db_path: &Path) -> Result<GuardedConnection, String> {
+    let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+    let guard = skill_studio_host::lock_data_folders(&[parent])?;
+    Ok(GuardedConnection {
+        conn: open_locked(db_path)?,
+        _guard: guard,
+    })
+}
+
+pub struct GuardedConnection {
+    conn: Connection,
+    _guard: skill_studio_host::DataFolderGuard,
+}
+
+impl std::ops::Deref for GuardedConnection {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.conn
     }
+}
+
+impl std::ops::DerefMut for GuardedConnection {
+    fn deref_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
+}
+
+fn open_locked(db_path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(db_path)
         .map_err(|e| format!("Failed to open {}: {e}", db_path.display()))?;
     // The desktop's `EventStore` and the core's `SqliteHistoryStore`
@@ -146,7 +169,7 @@ pub fn open(db_path: &Path) -> Result<Connection, String> {
 /// reconciliation now calls `skill_studio_core::journal::reconcile`
 /// against this store directly.
 pub struct EventStore {
-    pub conn: Connection,
+    pub conn: GuardedConnection,
     pub app_data: PathBuf,
     journal: skill_studio_core::journal::FsJournal,
 }
@@ -168,9 +191,12 @@ impl EventStore {
     /// history_db_path`), so Activity and Undo see every core `ops` mutation
     /// alongside the desktop's own.
     pub fn open_with_db(app_data: &Path, db_path: &Path) -> Result<Self, String> {
-        fs::create_dir_all(app_data)
-            .map_err(|e| format!("Failed to create {}: {e}", app_data.display()))?;
-        let conn = open(db_path)?;
+        let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+        let guard = skill_studio_host::lock_data_folders(&[app_data, parent])?;
+        let conn = GuardedConnection {
+            conn: open_locked(db_path)?,
+            _guard: guard,
+        };
         let journal = skill_studio_core::journal::FsJournal::new(
             app_data.join("journal"),
             std::sync::Arc::new(skill_studio_host::RealFs::new()),

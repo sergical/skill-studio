@@ -49,6 +49,35 @@ impl HistoryOpener for NoHistoryOpener {
     }
 }
 
+/// A history-free runtime that still protects its lease folder's data format.
+#[derive(Debug, Clone)]
+pub struct GuardedNoHistoryOpener {
+    folder: PathBuf,
+}
+
+impl GuardedNoHistoryOpener {
+    /// Binds read-lease protection to the history folder.
+    pub fn new(folder: PathBuf) -> Self {
+        Self { folder }
+    }
+}
+
+impl HistoryOpener for GuardedNoHistoryOpener {
+    fn guard_data_folder(&self) -> Result<Box<dyn Send>, CoreError> {
+        crate::data_folder_version::guard_read_data_folder(&self.folder)
+            .map(|guard| Box::new(guard) as Box<dyn Send>)
+            .map_err(|message| CoreError::new(ErrorCode::Io, message))
+    }
+
+    fn open(
+        &self,
+        scope: &NormalizedScope,
+        access: HistoryAccess,
+    ) -> Result<Option<Box<dyn HistoryStore>>, CoreError> {
+        NoHistoryOpener.open(scope, access)
+    }
+}
+
 /// Schema shared with the desktop's `event_store::open`. Kept in sync by
 /// hand; the round-trip test in this module opens a database seeded with
 /// the desktop's own `CREATE TABLE` statements to catch drift.
@@ -104,6 +133,20 @@ impl SqliteHistoryOpener {
 }
 
 impl HistoryOpener for SqliteHistoryOpener {
+    fn guard_read_data_folder(&self) -> Result<Box<dyn Send>, CoreError> {
+        let parent = self.db_path.parent().unwrap_or_else(|| Path::new("."));
+        crate::data_folder_version::guard_read_data_folder(parent)
+            .map(|guard| Box::new(guard) as Box<dyn Send>)
+            .map_err(|message| CoreError::new(ErrorCode::Io, message))
+    }
+
+    fn guard_data_folder(&self) -> Result<Box<dyn Send>, CoreError> {
+        let parent = self.db_path.parent().unwrap_or_else(|| Path::new("."));
+        crate::lock_data_folders(&[parent])
+            .map(|guard| Box::new(guard) as Box<dyn Send>)
+            .map_err(|message| CoreError::new(ErrorCode::Io, message))
+    }
+
     fn open(
         &self,
         _scope: &NormalizedScope,
@@ -111,10 +154,16 @@ impl HistoryOpener for SqliteHistoryOpener {
     ) -> Result<Option<Box<dyn HistoryStore>>, CoreError> {
         match access {
             HistoryAccess::ReadIfExists => {
+                let parent = self.db_path.parent().unwrap_or_else(|| Path::new("."));
+                let folder_guard = crate::data_folder_version::guard_read_data_folder(parent)
+                    .map_err(|message| CoreError::new(ErrorCode::Io, message))?;
                 if !self.db_path.exists() {
                     return Ok(None);
                 }
-                Ok(Some(Box::new(SqliteHistoryStore::open(&self.db_path)?)))
+                Ok(Some(Box::new(SqliteHistoryStore::open_read_only(
+                    &self.db_path,
+                    folder_guard,
+                )?)))
             }
             HistoryAccess::ReadWrite => {
                 Ok(Some(Box::new(SqliteHistoryStore::open(&self.db_path)?)))
@@ -131,12 +180,29 @@ pub struct SqliteHistoryStore {
     /// `backups/<event-id>`) are relative to this.
     root: PathBuf,
     backups_root: PathBuf,
+    _folder_guard: crate::DataFolderGuard,
 }
 
 impl SqliteHistoryStore {
+    fn open_read_only(
+        db_path: &Path,
+        folder_guard: crate::DataFolderGuard,
+    ) -> Result<Self, CoreError> {
+        let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+        let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(sql_err)?;
+        Ok(Self {
+            conn,
+            root: parent.to_path_buf(),
+            backups_root: parent.join("backups"),
+            _folder_guard: folder_guard,
+        })
+    }
+
     fn open(db_path: &Path) -> Result<Self, CoreError> {
         let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent).map_err(|e| CoreError::io(parent, e))?;
+        let folder_guard = crate::lock_data_folders(&[parent])
+            .map_err(|message| CoreError::new(ErrorCode::Io, message))?;
         let conn = Connection::open(db_path).map_err(sql_err)?;
         // The desktop's `EventStore` opens this same file from a second
         // connection (`core_runtime::history_db_path`); WAL lets both read
@@ -160,6 +226,7 @@ impl SqliteHistoryStore {
             conn,
             root: parent.to_path_buf(),
             backups_root: parent.join("backups"),
+            _folder_guard: folder_guard,
         })
     }
 
@@ -762,7 +829,10 @@ pub fn reimport_event_as_legacy(
     imported_id: &str,
     ts: &str,
 ) -> rusqlite::Result<()> {
-    let db = Connection::open(data_dir.join(".history/events.sqlite3"))?;
+    let folder = data_dir.join(".history");
+    let _guard =
+        crate::lock_data_folders(&[&folder]).map_err(rusqlite::Error::InvalidParameterName)?;
+    let db = Connection::open(folder.join("events.sqlite3"))?;
     db.execute(
         "INSERT INTO events
             (id, ts, kind, skill, harness, scope, project_path, payload, inverse, backup_dir, status, reverted_by, restorable)
@@ -852,6 +922,68 @@ mod tests {
     use skill_studio_core::events::EventKind;
     use skill_studio_core::ports::{acquire_exclusive, HistoryOpener};
     use skill_studio_core::scope::RuntimeScope;
+
+    #[test]
+    fn history_connection_keeps_migration_locked_until_drop_or_allows_a_newer_writer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("history");
+        let store = SqliteHistoryStore::open(&folder.join("events.sqlite3")).unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "data_folder_version::tests::competing_process_cannot_lock_during_startup_open_or_migrations_can_race"])
+            .env("SKILL_STUDIO_LOCK_PROBE", &folder).output().unwrap();
+        assert!(
+            child.status.success(),
+            "{}",
+            String::from_utf8_lossy(&child.stdout)
+        );
+        drop(store);
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "data_folder_version::tests::competing_process_cannot_lock_during_startup_open_or_migrations_can_race"])
+            .env("SKILL_STUDIO_LOCK_PROBE", &folder)
+            .env("SKILL_STUDIO_LOCK_AVAILABLE", "1").output().unwrap();
+        assert!(
+            child.status.success(),
+            "{}",
+            String::from_utf8_lossy(&child.stdout)
+        );
+    }
+
+    #[test]
+    fn cli_mutation_migration_refuses_before_lease_or_blocks_other_mutations() {
+        use skill_studio_core::harness::HarnessCatalog;
+        use skill_studio_core::identity::CorrelationId;
+        use skill_studio_core::ports::{MutationSession, OpContext, Runtime};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let history = dir.path().join(".history");
+        fs::create_dir(&history).unwrap();
+        fs::write(history.join("schema_version"), b"1\n").unwrap();
+        let older = SqliteHistoryStore::open(&history.join("events.sqlite3")).unwrap();
+        fs::remove_file(history.join("schema_version")).unwrap();
+        let leases = history.join("leases");
+        let ports = crate::default_ports_with_history(
+            leases.clone(),
+            Arc::new(HarnessCatalog::builtin()),
+            history.join("events.sqlite3"),
+        );
+        let rt = Runtime::new(&RuntimeScope::fixture(dir.path()), ports).unwrap();
+        let ctx = OpContext::uncancellable(CorrelationId("migration-refusal".to_owned()));
+        let Err(error) = MutationSession::begin(&rt, &ctx) else {
+            unreachable!("migration opened while an older desktop held history");
+        };
+        assert!(error
+            .message
+            .contains("Close the other Skill Studio process"));
+        assert!(
+            !leases.exists(),
+            "failed startup created mutation lease files"
+        );
+        drop(older);
+        let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+        drop(guard);
+        crate::lock_data_folders(&[&history]).unwrap();
+    }
 
     fn scope_for(home: &Path) -> NormalizedScope {
         let raw = RuntimeScope::fixture(home);
@@ -1035,6 +1167,39 @@ mod tests {
         let store = opener.open(&scope, HistoryAccess::ReadIfExists).unwrap();
         assert!(store.is_none());
         assert!(!db_path.exists());
+        assert!(!tmp.path().join("history").exists());
+    }
+
+    #[test]
+    fn events_read_preserves_unversioned_schema_or_migrates_history() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scope = scope_for(tmp.path());
+        let folder = tmp.path().join("history");
+        fs::create_dir(&folder).unwrap();
+        let path = folder.join("events.sqlite3");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA_SQL).unwrap();
+        conn.execute_batch("DROP TABLE materialized_disabled; DROP TABLE materialized_roots;")
+            .unwrap();
+        drop(conn);
+        let before = fs::read(&path).unwrap();
+        let store = SqliteHistoryOpener::new(&path)
+            .open(&scope, HistoryAccess::ReadIfExists)
+            .unwrap()
+            .unwrap();
+        assert!(store
+            .list(&EventFilter {
+                skill: None,
+                limit: 10,
+                after: None
+            })
+            .unwrap()
+            .is_empty());
+        assert!(!folder.join("schema_version").exists());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(fs::read_dir(&folder).unwrap().count(), 1);
+        drop(store);
+        assert_eq!(fs::read(&path).unwrap(), before);
     }
 
     #[test]

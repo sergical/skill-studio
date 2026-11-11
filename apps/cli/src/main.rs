@@ -782,6 +782,9 @@ fn build_runtime<T: ops::Outcome + serde::Serialize>(
     let (runtime_scope, lease_root) = scope.resolve();
     let catalog = Arc::new(HarnessCatalog::builtin());
     let mut ports = skill_studio_host::default_ports_with_discovery(lease_root, catalog);
+    ports.history = Arc::new(skill_studio_host::GuardedNoHistoryOpener::new(
+        runtime_scope.history_root.clone(),
+    ));
     ports.telemetry = skill_studio_host::telemetry::port(
         skill_studio_host::telemetry::Surface::Cli,
         env!("CARGO_PKG_VERSION"),
@@ -1525,10 +1528,8 @@ fn run_restore(
     finish(&envelope, json, time, output::print_restore_outcome_table)
 }
 
-/// Reverts the newest event this scope's history still has an inverse for
-/// (`skill_studio_core::dto::RestoreCapability::Yes`), across every skill and
-/// write kind - `list_events` is already newest-first, so the first
-/// restorable row is the last journal entry standing.
+/// Reverses the last user change. Automatic rows and already-reverted rows
+/// do not select an older change over a newer user action without an inverse.
 fn run_undo(scope: &ScopeArgs, force: bool, json: bool, time: bool) -> ExitCode {
     let rt = match build_runtime_write::<skill_studio_core::dto::RestoreOutcome>(
         scope,
@@ -1539,9 +1540,6 @@ fn run_undo(scope: &ScopeArgs, force: bool, json: bool, time: bool) -> ExitCode 
         Err(code) => return code,
     };
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
-    // A page of all non-restorable rows must not read as "nothing to undo":
-    // page through `list_events` with `after` until a restorable row turns
-    // up or a page comes back short of the limit (the end of the history).
     let mut after = None;
     let event_id = loop {
         let list_req = ListEventsRequest {
@@ -1566,9 +1564,15 @@ fn run_undo(scope: &ScopeArgs, force: bool, json: bool, time: bool) -> ExitCode 
         let page_len = events.len();
         let last_id = events.last().map(|event| event.id.clone());
         if let Some(found) = events.into_iter().find(|event| {
-            matches!(
-                event.restore,
-                skill_studio_core::dto::RestoreCapability::Yes
+            use skill_studio_core::dto::RestoreCapability;
+            use skill_studio_core::events::EventKind;
+            !matches!(
+                (EventKind::parse(&event.kind), &event.restore),
+                (_, RestoreCapability::Reverted { .. })
+                    | (
+                        Some(EventKind::QuarantinePrune | EventKind::ReconcileRemoveStaleLink),
+                        _
+                    )
             )
         }) {
             break Some(found.id);
@@ -1581,7 +1585,7 @@ fn run_undo(scope: &ScopeArgs, force: bool, json: bool, time: bool) -> ExitCode 
     let Some(event_id) = event_id else {
         let err = skill_studio_core::CoreError::new(
             skill_studio_core::ErrorCode::InvalidRequest,
-            "nothing to undo: no restorable event in this scope's history",
+            "nothing to undo: no user change in this scope's history",
         );
         let envelope = ResultEnvelope::<skill_studio_core::dto::RestoreOutcome>::from_result(
             Operation::RestoreEvent,
@@ -1651,6 +1655,7 @@ fn resolve_target(
     target: &TargetArgs,
     kind: TargetKind,
 ) -> Result<DeploymentId, skill_studio_core::CoreError> {
+    let _folder_guard = rt.ports.history.guard_read_data_folder()?;
     if let Some(id) = &target.id {
         return DeploymentId::parse(id);
     }

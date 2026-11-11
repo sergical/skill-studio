@@ -14,6 +14,9 @@
 // ============================================================================
 
 export type {
+  BackgroundStatus,
+  BackgroundTaskStatus,
+  BackgroundWorker,
   AgentId,
   SkillDestination,
   AddMethod,

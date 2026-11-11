@@ -2117,7 +2117,8 @@ mod tests {
                 &tmp.path().join("updates.json"),
             ),
             chrono::Utc::now(),
-        );
+        )
+        .unwrap();
         let deployment = snapshot
             .skills
             .iter()

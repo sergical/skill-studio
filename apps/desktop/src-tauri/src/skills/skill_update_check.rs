@@ -23,7 +23,7 @@ use std::time::Duration;
 use chrono::Utc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use super::skill_agent_runner::{is_executable_file, pick_executable_line};
 use super::skill_dto::InstallScope;
@@ -740,12 +740,19 @@ fn is_auth_failure(message: &str) -> bool {
 /// invents a note. After an auth failure or a second timeout the remaining repos are
 /// not asked and also keep their previous records. Repos no longer among
 /// `candidates` are dropped. Keyed by `normalize_repo_key`.
+#[cfg(test)]
 fn find_upstream_ahead(
     candidates: &[ForkCandidate],
     lookup: &dyn ForkLookup,
     previous: &BTreeMap<String, UpstreamAhead>,
 ) -> BTreeMap<String, UpstreamAhead> {
-    find_upstream_ahead_with_pool(candidates, lookup, previous, LOOKUP_POOL_SIZE)
+    find_upstream_ahead_with_pool(
+        candidates,
+        lookup,
+        previous,
+        LOOKUP_POOL_SIZE,
+        &mut Vec::new(),
+    )
 }
 
 /// `find_upstream_ahead` on `pool_size` workers.
@@ -754,6 +761,7 @@ fn find_upstream_ahead_with_pool(
     lookup: &dyn ForkLookup,
     previous: &BTreeMap<String, UpstreamAhead>,
     pool_size: usize,
+    errors: &mut Vec<String>,
 ) -> BTreeMap<String, UpstreamAhead> {
     // key -> (repo as first seen, owner ids of every skill from it)
     let mut groups: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
@@ -811,6 +819,12 @@ fn find_upstream_ahead_with_pool(
     let results = results
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    errors.extend(results.iter().filter_map(|(repo, result)| {
+        result
+            .as_ref()
+            .err()
+            .map(|error| format!("{repo}: {error}"))
+    }));
     let mut found = BTreeMap::new();
     for (key, (_, owner_ids)) in &groups {
         let record = match results.get(key) {
@@ -965,6 +979,7 @@ struct Sources {
     /// lock, ledger, or fork registry file exists but could not be read. Both
     /// lists may miss that root's skills, so its notes must not be pruned.
     failed_roots: Vec<String>,
+    errors: Vec<String>,
 }
 
 impl Sources {
@@ -1038,13 +1053,14 @@ impl Sources {
 /// and plugin skills have no ledger entry, so they're never candidates.
 fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
     let mut failed_roots: Vec<String> = Vec::new();
+    let mut errors = Vec::new();
     // A fork's `base_commit` is the pinned "installed" side of the compare -
     // exactly the shape `CandidateKind::Dotagents` already models - and a
     // fork wins over a same-named ledger entry, same as dotagents wins over
     // skills.sh: it's the more specific, more recently established source.
     let mut registry_failed = false;
     let fork_registry = super::skill_fork_registry::read_fork_registry(home).unwrap_or_else(|e| {
-        eprintln!("skill fork registry: {e}");
+        errors.push(format!("Failed to read update sources: {e}"));
         failed_roots.push("owner:v1/global/".to_string());
         registry_failed = true;
         Default::default()
@@ -1072,6 +1088,12 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
     for ledger in load_ownership_ledgers(home, project_paths) {
         if ledger.lock_failed || ledger.ledger_failed {
             failed_roots.push(owner_id_for(&ledger, ""));
+            errors.push(format!(
+                "Failed to read update sources under {} (skills lock: {}, ownership ledger: {})",
+                ledger.agents_dir.display(),
+                ledger.lock_failed,
+                ledger.ledger_failed,
+            ));
         }
         let owner_id = |name: &str| owner_id_for(&ledger, name);
         let global_fork = ledger.scope == InstallScope::Global;
@@ -1175,6 +1197,7 @@ fn build_sources(home: &Path, project_paths: &[PathBuf]) -> Sources {
         fork_candidates,
         resolved_owners,
         failed_roots,
+        errors,
     }
 }
 
@@ -1306,6 +1329,13 @@ fn check_candidate(
     })
 }
 
+struct UpdateCheckOutcome {
+    store: UpdateCheckStore,
+    persistence_error: Option<String>,
+    fork_errors: Vec<String>,
+    source_errors: Vec<String>,
+}
+
 /// Build owner candidates, optionally filter by owner ID, check them in a
 /// small worker pool, and write the result. A filtered run preserves every
 /// other owner's previous state. `upstream_ahead` replaces the recorded fork
@@ -1319,7 +1349,7 @@ fn run_update_check_impl(
     tree_lookup: &dyn TreeLookup,
     only_owner_ids: Option<&[String]>,
     upstream_ahead: Option<BTreeMap<String, UpstreamAhead>>,
-) -> UpdateCheckStore {
+) -> UpdateCheckOutcome {
     let previous = read_update_check_store(app_data);
     let now = Utc::now().to_rfc3339();
 
@@ -1394,13 +1424,19 @@ fn run_update_check_impl(
     let computed = computed
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let owners = if only_owner_ids.is_some() {
+    let mut owners = if only_owner_ids.is_some() {
         let mut merged = previous.owners.clone();
         merged.extend(computed);
         merged
     } else {
         computed
     };
+
+    for (id, cached) in &previous.owners {
+        if sources.in_failed_root(id) {
+            owners.entry(id.clone()).or_insert_with(|| cached.clone());
+        }
+    }
 
     let upstream_ahead = match upstream_ahead {
         Some(fresh) if gh_status == GhStatus::Ok => fresh,
@@ -1414,10 +1450,13 @@ fn run_update_check_impl(
         upstream_ahead,
         legacy_skills: BTreeMap::new(),
     };
-    if let Err(e) = write_store(app_data, &store) {
-        eprintln!("skill update check: failed to write store: {e}");
+    let persistence_error = write_store(app_data, &store).err();
+    UpdateCheckOutcome {
+        store,
+        persistence_error,
+        fork_errors: Vec::new(),
+        source_errors: sources.errors,
     }
-    store
 }
 
 /// Check every dotagents/skills.sh skill for an upstream update, using
@@ -1429,7 +1468,7 @@ pub fn run_update_check(
     lookup: &dyn CommitLookup,
     tree_lookup: &dyn TreeLookup,
 ) -> UpdateCheckStore {
-    run_update_check_impl(home, &[], app_data, lookup, tree_lookup, None, None)
+    run_update_check_impl(home, &[], app_data, lookup, tree_lookup, None, None).store
 }
 
 /// Check Global and the supplied registered Project Universal owners.
@@ -1451,6 +1490,7 @@ pub fn run_update_check_with_projects(
         None,
         upstream_ahead,
     )
+    .store
 }
 
 /// `run_update_check_with_projects` with the fork lookups done first, so the
@@ -1462,27 +1502,34 @@ fn run_update_check_with_forks(
     lookup: &dyn CommitLookup,
     tree_lookup: &dyn TreeLookup,
     fork_lookup: &dyn ForkLookup,
-) -> UpdateCheckStore {
+) -> UpdateCheckOutcome {
     let previous = read_update_check_store(app_data);
     // A root with an unreadable lock has incomplete candidates, so its owners
     // keep their previous notes while the other roots are looked up normally.
     let sources = build_sources(home, project_paths);
+    let mut fork_errors = Vec::new();
     let upstream_ahead = Some(sources.keep_failed_root_notes(
-        find_upstream_ahead(
+        find_upstream_ahead_with_pool(
             &sources.fork_candidates,
             fork_lookup,
             &previous.upstream_ahead,
+            LOOKUP_POOL_SIZE,
+            &mut fork_errors,
         ),
         &previous.upstream_ahead,
     ));
-    run_update_check_with_projects(
+    let mut outcome = run_update_check_impl(
         home,
         project_paths,
         app_data,
         lookup,
         tree_lookup,
+        None,
         upstream_ahead,
-    )
+    );
+    outcome.fork_errors = fork_errors;
+    outcome.source_errors.extend(sources.errors);
+    outcome
 }
 
 /// Records `gh_status: Missing` and keeps every previously recorded state,
@@ -1491,7 +1538,7 @@ fn write_gh_missing_store(
     home: &Path,
     project_paths: &[PathBuf],
     app_data: &Path,
-) -> UpdateCheckStore {
+) -> UpdateCheckOutcome {
     let previous = read_update_check_store(app_data);
     let sources = build_sources(home, project_paths);
     let upstream_ahead = sources.pruned_notes(&previous.upstream_ahead);
@@ -1503,10 +1550,13 @@ fn write_gh_missing_store(
         upstream_ahead,
         legacy_skills: previous.legacy_skills,
     };
-    if let Err(e) = write_store(app_data, &store) {
-        eprintln!("skill update check: failed to write store: {e}");
+    let persistence_error = write_store(app_data, &store).err();
+    UpdateCheckOutcome {
+        store,
+        persistence_error,
+        fork_errors: Vec::new(),
+        source_errors: sources.errors,
     }
-    store
 }
 
 /// Re-check exact lifecycle owners and preserve every other recorded owner.
@@ -1529,6 +1579,7 @@ pub fn run_update_check_for_owners(
         Some(owner_ids),
         None,
     )
+    .store
 }
 
 /// Resolve `gh`, then run the check for real - the production entry point
@@ -1539,7 +1590,7 @@ fn run_update_check_now(
     home: &Path,
     project_paths: &[PathBuf],
     app_data: &Path,
-) -> UpdateCheckStore {
+) -> UpdateCheckOutcome {
     if let Some(gh_bin) = resolve_gh_binary() {
         let store = run_update_check_with_forks(
             home,
@@ -1566,6 +1617,31 @@ fn run_update_check_now(
         store
     } else {
         write_gh_missing_store(home, project_paths, app_data)
+    }
+}
+
+fn update_check_result(outcome: &UpdateCheckOutcome) -> Result<UpdateCheckSummary, String> {
+    let store = &outcome.store;
+    let mut errors: Vec<String> = store
+        .owners
+        .values()
+        .filter_map(|owner| owner.error.clone())
+        .collect();
+    match &store.gh_status {
+        GhStatus::Failed(error) => errors.push(error.clone()),
+        GhStatus::NotLoggedIn => errors.push("GitHub is not logged in".into()),
+        GhStatus::Missing => errors.push("GitHub CLI is missing".into()),
+        GhStatus::Ok => {}
+    }
+    errors.extend(outcome.persistence_error.iter().cloned());
+    errors.extend(outcome.fork_errors.iter().cloned());
+    errors.extend(outcome.source_errors.iter().cloned());
+    errors.sort();
+    errors.dedup();
+    if errors.is_empty() {
+        Ok(summarize(store))
+    } else {
+        Err(errors.join("; "))
     }
 }
 
@@ -1620,23 +1696,46 @@ pub fn check_now(
     if !crate::skills::data_folder_status::data_folder_writable(app) {
         return Ok(summarize(&read_update_check_store(&app_data)));
     }
-    if !state.try_begin() {
-        return Ok(summarize(&read_update_check_store(&app_data)));
-    }
-    let project_paths: Vec<PathBuf> = refresh_state
-        .snapshot
-        .read()
-        .ok()
-        .and_then(|snapshot| snapshot.as_ref().map(|snapshot| snapshot.projects.clone()))
-        .unwrap_or_default()
-        .into_iter()
-        .map(PathBuf::from)
-        .collect();
-    let store = run_update_check_now(&home, &project_paths, &app_data);
-    state.end();
+    run_claimed_check(
+        state,
+        &app_data,
+        super::background_work::state(),
+        || {
+            let project_paths = refresh_state.update_check_projects(&home)?;
+            let store = run_update_check_now(&home, &project_paths, &app_data);
+            skill_refresh::request_snapshot_rebuild(app);
+            update_check_result(&store)
+        },
+        |status| {
+            let _ = app.emit(super::background_work::BACKGROUND_EVENT, status);
+        },
+    )
+}
 
-    skill_refresh::request_snapshot_rebuild(app);
-    Ok(summarize(&store))
+struct UpdateCheckClaim<'a>(&'a UpdateCheckState);
+
+impl Drop for UpdateCheckClaim<'_> {
+    fn drop(&mut self) {
+        self.0.end();
+    }
+}
+
+fn run_claimed_check(
+    state: &UpdateCheckState,
+    app_data: &Path,
+    background: &super::background_work::BackgroundState,
+    work: impl FnOnce() -> Result<UpdateCheckSummary, String>,
+    publish: impl Fn(&super::background_work::BackgroundStatus),
+) -> Result<UpdateCheckSummary, String> {
+    if !state.try_begin() {
+        return Ok(summarize(&read_update_check_store(app_data)));
+    }
+    let _claim = UpdateCheckClaim(state);
+    background.run(
+        super::background_work::BackgroundWorker::UpdateCheck,
+        work,
+        publish,
+    )
 }
 
 #[tauri::command]
@@ -1818,6 +1917,148 @@ mod tests {
                 "2026-02-01T00:00:00Z".to_string(),
             )))
         }
+    }
+
+    #[test]
+    fn manual_check_publishes_running_failure_and_recovery_or_leaves_stale_worker_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = UpdateCheckState::default();
+        let background = super::super::background_work::BackgroundState::default();
+        let events = Mutex::new(Vec::new());
+        let publish = |status: &super::super::background_work::BackgroundStatus| {
+            events.lock().unwrap().push(status.clone());
+        };
+        let failed = run_claimed_check(
+            &state,
+            tmp.path(),
+            &background,
+            || {
+                assert!(events.lock().unwrap().last().unwrap().tasks[2].running);
+                let count = events.lock().unwrap().len();
+                run_claimed_check(
+                    &state,
+                    tmp.path(),
+                    &background,
+                    || panic!("overlapping check ran"),
+                    publish,
+                )
+                .unwrap();
+                assert_eq!(
+                    events.lock().unwrap().len(),
+                    count,
+                    "skipped check changed worker status"
+                );
+                Err("manual lookup failed".into())
+            },
+            publish,
+        );
+        assert_eq!(failed.unwrap_err(), "manual lookup failed");
+        {
+            let events = events.lock().unwrap();
+            let finished = &events.last().unwrap().tasks[2];
+            assert!(!finished.running);
+            assert_eq!(finished.last_error.as_deref(), Some("manual lookup failed"));
+        }
+        run_claimed_check(
+            &state,
+            tmp.path(),
+            &background,
+            || {
+                assert!(events.lock().unwrap().last().unwrap().tasks[2].running);
+                Ok(summarize(&UpdateCheckStore::default()))
+            },
+            publish,
+        )
+        .unwrap();
+        let events = events.lock().unwrap();
+        let finished = &events.last().unwrap().tasks[2];
+        assert!(!finished.running);
+        assert!(finished.last_error.is_none());
+        assert_eq!(events.len(), 4);
+    }
+
+    #[test]
+    fn manual_check_after_panic_runs_again_or_returns_cached_success_forever() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = UpdateCheckState::default();
+        let background = super::super::background_work::BackgroundState::default();
+        let events = Mutex::new(Vec::new());
+        let publish = |status: &super::super::background_work::BackgroundStatus| {
+            events.lock().unwrap().push(status.clone());
+        };
+        let panic = std::panic::catch_unwind(|| {
+            let _ = run_claimed_check(
+                &state,
+                tmp.path(),
+                &background,
+                || panic!("lookup panicked"),
+                publish,
+            );
+        });
+        assert!(panic.is_err());
+        {
+            let events = events.lock().unwrap();
+            let finished = &events.last().unwrap().tasks[2];
+            assert!(!finished.running);
+            assert_eq!(
+                finished.last_error.as_deref(),
+                Some("background work panicked")
+            );
+        }
+        let ran = AtomicBool::new(false);
+        run_claimed_check(
+            &state,
+            tmp.path(),
+            &background,
+            || {
+                ran.store(true, Ordering::Relaxed);
+                Ok(summarize(&UpdateCheckStore::default()))
+            },
+            publish,
+        )
+        .unwrap();
+        assert!(
+            ran.load(Ordering::Relaxed),
+            "check returned cached success after panic"
+        );
+        assert!(events.lock().unwrap().last().unwrap().tasks[2]
+            .last_error
+            .is_none());
+    }
+
+    #[test]
+    fn update_check_with_unwritable_store_publishes_failure_or_reports_success_without_saving() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let app_data = tmp.path().join("blocked");
+        std::fs::write(&app_data, "not a directory").unwrap();
+        let background = super::super::background_work::BackgroundState::default();
+        let events = Mutex::new(Vec::new());
+        let result = background.run(
+            super::super::background_work::BackgroundWorker::UpdateCheck,
+            || {
+                update_check_result(&run_update_check_impl(
+                    &home,
+                    &[],
+                    &app_data,
+                    &AlwaysErrorLookup,
+                    &UnusedTreeLookup,
+                    None,
+                    None,
+                ))
+            },
+            |status| events.lock().unwrap().push(status.clone()),
+        );
+        assert!(result.is_err());
+        let events = events.lock().unwrap();
+        let finished = &events.last().unwrap().tasks[2];
+        assert!(!finished.running);
+        assert!(finished
+            .last_error
+            .as_ref()
+            .unwrap()
+            .contains("Failed to create"));
     }
 
     struct AlwaysErrorLookup;
@@ -2297,7 +2538,7 @@ resolved_commit = "{commit}"
     }
 
     #[test]
-    fn lookup_error_keeps_previous_commits_and_records_error() {
+    fn offline_update_check_publishes_failure_and_keeps_cached_commits_or_reports_healthy_status() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         let app_data = tmp.path().join("data");
@@ -2333,14 +2574,123 @@ resolved_commit = "{commit}"
         write_store(&app_data, &seeded).unwrap();
 
         let lookup = FakeLookup::with_answers(vec![Err("network unreachable".to_string())]);
-        let store = run_update_check(&home, &app_data, &lookup, &UnusedTreeLookup);
-
+        let background = super::super::background_work::BackgroundState::default();
+        let events = Mutex::new(Vec::new());
+        let result = background.run(
+            super::super::background_work::BackgroundWorker::UpdateCheck,
+            || {
+                update_check_result(&run_update_check_impl(
+                    &home,
+                    &[],
+                    &app_data,
+                    &lookup,
+                    &UnusedTreeLookup,
+                    None,
+                    None,
+                ))
+            },
+            |status| events.lock().unwrap().push(status.clone()),
+        );
+        assert_eq!(result.unwrap_err(), "network unreachable");
+        let events = events.lock().unwrap();
+        let finished = &events.last().unwrap().tasks[2];
+        assert!(!finished.running);
+        assert_eq!(finished.last_error.as_deref(), Some("network unreachable"));
+        let store = read_update_check_store(&app_data);
         let state = store.owners.get("owner:v1/global/find-bugs").unwrap();
         assert_eq!(
             state.latest_commit.as_deref(),
             Some(previous_latest.as_str())
         );
         assert_eq!(state.error.as_deref(), Some("network unreachable"));
+    }
+
+    #[test]
+    fn unreadable_sources_keep_cached_owners_and_report_failure_or_erase_commits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_data = tmp.path().join("data");
+        let commit = "a".repeat(40);
+        write_agents_lock(
+            &home,
+            "find-bugs",
+            "getsentry/find-bugs",
+            "skills/find-bugs",
+            &commit,
+        );
+
+        let previous_latest = "b".repeat(40);
+        let seeded = UpdateCheckStore {
+            version: update_store_version(),
+            checked_at: Some("2026-01-01T00:00:00Z".to_string()),
+            gh_status: GhStatus::Ok,
+            owners: BTreeMap::from([(
+                "owner:v1/global/find-bugs".to_string(),
+                SkillUpdateState {
+                    repo: "getsentry/find-bugs".to_string(),
+                    path: "skills/find-bugs".to_string(),
+                    installed_commit: Some(commit.clone()),
+                    latest_commit: Some(previous_latest.clone()),
+                    latest_commit_at: Some("2026-01-01T00:00:00Z".to_string()),
+                    checked_at: "2026-01-01T00:00:00Z".to_string(),
+                    error: None,
+                },
+            )]),
+            upstream_ahead: BTreeMap::new(),
+            legacy_skills: BTreeMap::new(),
+        };
+        write_store(&app_data, &seeded).unwrap();
+
+        for source in ["skill-studio.json", "agents.lock"] {
+            write_store(&app_data, &seeded).unwrap();
+            let source_path = home.join(".agents").join(source);
+            let original = std::fs::read(&source_path).ok();
+            std::fs::write(&source_path, "malformed").unwrap();
+            let lookup = FakeLookup::default();
+            let background = super::super::background_work::BackgroundState::default();
+            let events = Mutex::new(Vec::new());
+            let result = background.run(
+                super::super::background_work::BackgroundWorker::UpdateCheck,
+                || {
+                    update_check_result(&run_update_check_impl(
+                        &home,
+                        &[],
+                        &app_data,
+                        &lookup,
+                        &UnusedTreeLookup,
+                        None,
+                        None,
+                    ))
+                },
+                |status| events.lock().unwrap().push(status.clone()),
+            );
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("Failed to read update sources"),
+                "{source}"
+            );
+            let store = read_update_check_store(&app_data);
+            let owner = store.owners.get("owner:v1/global/find-bugs").unwrap();
+            assert_eq!(
+                owner.latest_commit.as_deref(),
+                Some(previous_latest.as_str()),
+                "{source}"
+            );
+            let events = events.lock().unwrap();
+            let finished = &events.last().unwrap().tasks[2];
+            assert!(!finished.running);
+            assert!(finished
+                .last_error
+                .as_ref()
+                .unwrap()
+                .contains("Failed to read update sources"));
+            if let Some(original) = original {
+                std::fs::write(&source_path, original).unwrap();
+            } else {
+                std::fs::remove_file(&source_path).unwrap();
+            }
+        }
     }
 
     /// Flow: a skill upgraded since the previous check (its `agents.lock`
@@ -3018,7 +3368,8 @@ resolved_commit = "{commit}"
         ]);
         // One worker asks the repos in order, so the first failure is the
         // only call when the stop works.
-        let found = find_upstream_ahead_with_pool(&candidates, &lookup, &previous, 1);
+        let found =
+            find_upstream_ahead_with_pool(&candidates, &lookup, &previous, 1, &mut Vec::new());
         assert_eq!(found.keys().collect::<Vec<_>>(), vec!["me/a", "me/j"]);
         assert_eq!(
             *lookup.calls.lock().unwrap(),
@@ -3040,7 +3391,8 @@ resolved_commit = "{commit}"
             previous_record("me/c", "c", 4),
             previous_record("me/a", "a", 2),
         ]);
-        let found = find_upstream_ahead_with_pool(&candidates, &lookup, &previous, 1);
+        let found =
+            find_upstream_ahead_with_pool(&candidates, &lookup, &previous, 1, &mut Vec::new());
         assert_eq!(found.keys().collect::<Vec<_>>(), vec!["me/a", "me/c"]);
         assert_eq!(
             *lookup.info_calls.lock().unwrap(),
@@ -3054,7 +3406,13 @@ resolved_commit = "{commit}"
             .failing("me/a", FORK_LOOKUP_TIMED_OUT_MESSAGE)
             .fork("me/b", "them/orig", 3);
         let candidates = [repo_candidate("a", "me/a"), repo_candidate("b", "me/b")];
-        let found = find_upstream_ahead_with_pool(&candidates, &lookup, &BTreeMap::new(), 1);
+        let found = find_upstream_ahead_with_pool(
+            &candidates,
+            &lookup,
+            &BTreeMap::new(),
+            1,
+            &mut Vec::new(),
+        );
         assert_eq!(found.keys().collect::<Vec<_>>(), vec!["me/b"]);
     }
 
@@ -3155,7 +3513,8 @@ resolved_commit = "{commit}"
             &lookup,
             &UnusedTreeLookup,
             &FakeForkLookup::new(),
-        );
+        )
+        .store;
 
         assert_eq!(store.gh_status, GhStatus::NotLoggedIn);
         assert!(store.upstream_ahead.is_empty());
@@ -3173,7 +3532,7 @@ resolved_commit = "{commit}"
         };
         write_store(&app_data, &seeded).unwrap();
 
-        let store = write_gh_missing_store(&home, &[], &app_data);
+        let store = write_gh_missing_store(&home, &[], &app_data).store;
 
         assert_eq!(store.gh_status, GhStatus::Missing);
         assert!(store.upstream_ahead.is_empty());
@@ -3263,7 +3622,7 @@ resolved_commit = "{commit}"
 
         let app_data = tmp.path().join("data");
         write_store(&app_data, &store).unwrap();
-        let written = write_gh_missing_store(&home, &[], &app_data);
+        let written = write_gh_missing_store(&home, &[], &app_data).store;
         assert_eq!(written.upstream_ahead.len(), 1);
 
         let lookups = FakeForkLookup::new();
@@ -3274,7 +3633,8 @@ resolved_commit = "{commit}"
             &FakeLookup::with_answers(vec![]),
             &UnusedTreeLookup,
             &lookups,
-        );
+        )
+        .store;
         assert_eq!(run.upstream_ahead.len(), 1);
         assert!(lookups.info_calls.lock().unwrap().is_empty());
     }
@@ -3309,7 +3669,7 @@ resolved_commit = "{commit}"
 
         let app_data = tmp.path().join("data");
         write_store(&app_data, &store).unwrap();
-        let written = write_gh_missing_store(&home, &[], &app_data);
+        let written = write_gh_missing_store(&home, &[], &app_data).store;
         assert_eq!(
             written.upstream_ahead.keys().collect::<Vec<_>>(),
             vec!["me/lock-only"]
@@ -3334,7 +3694,8 @@ resolved_commit = "{commit}"
             )))]),
             &UnusedTreeLookup,
             &FakeForkLookup::new().fork("me/fork", "them/orig", 0),
-        );
+        )
+        .store;
 
         assert_eq!(
             run.upstream_ahead.keys().collect::<Vec<_>>(),
@@ -3408,7 +3769,8 @@ resolved_commit = "{commit}"
             &FakeLookup::with_answers(vec![]),
             &FakeTreeLookup::with_tree("stale/other", HashMap::new()),
             &FakeForkLookup::new().fork("stale/other", "them/orig", 5),
-        );
+        )
+        .store;
 
         assert_eq!(
             run.upstream_ahead.keys().collect::<Vec<_>>(),
@@ -3450,7 +3812,8 @@ resolved_commit = "{commit}"
             )))]),
             &UnusedTreeLookup,
             &FakeForkLookup::new().fork("stale/other", "them/orig", 5),
-        );
+        )
+        .store;
 
         assert_eq!(
             run.upstream_ahead.keys().collect::<Vec<_>>(),
@@ -3518,7 +3881,8 @@ resolved_commit = "{commit}"
             &FakeLookup::with_answers(vec![]),
             &UnusedTreeLookup,
             &lookups,
-        );
+        )
+        .store;
         assert_eq!(run.upstream_ahead["me/fork"].behind_by, 3);
         assert_eq!(
             run.upstream_ahead["me/proj-fork"].owner_ids,
@@ -3545,7 +3909,7 @@ resolved_commit = "{commit}"
     }
 
     #[test]
-    fn a_stalled_fork_lookup_still_lets_owner_checks_run_and_the_store_persist() {
+    fn a_stalled_fork_lookup_reports_failure_and_persists_owner_checks_or_clears_worker_error() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         let app_data = tmp.path().join("data");
@@ -3560,7 +3924,7 @@ resolved_commit = "{commit}"
             "2026-01-02T00:00:00Z".to_string(),
         )))]);
 
-        let store = run_update_check_with_forks(
+        let outcome = run_update_check_with_forks(
             &home,
             &[],
             &app_data,
@@ -3568,6 +3932,11 @@ resolved_commit = "{commit}"
             &UnusedTreeLookup,
             &FakeForkLookup::new().failing("me/fork", FORK_LOOKUP_TIMED_OUT_MESSAGE),
         );
+
+        assert!(update_check_result(&outcome)
+            .unwrap_err()
+            .contains(FORK_LOOKUP_TIMED_OUT_MESSAGE));
+        let store = outcome.store;
 
         assert_eq!(store.gh_status, GhStatus::Ok);
         assert_eq!(lookup.call_count(), 1);
@@ -3650,7 +4019,8 @@ resolved_commit = "{commit}"
             &FakeLookup::with_answers(vec![Ok(None)]),
             &UnusedTreeLookup,
             &forks,
-        );
+        )
+        .store;
 
         assert_eq!(*forks.checked_at_seen.lock().unwrap(), vec![None]);
         let stored = read_update_check_store(&app_data);
@@ -3678,7 +4048,8 @@ resolved_commit = "{commit}"
             &lookup,
             &UnusedTreeLookup,
             &FakeForkLookup::new().fork("me/fork", "them/orig", 9),
-        );
+        )
+        .store;
 
         assert_eq!(store.gh_status, GhStatus::NotLoggedIn);
         assert_eq!(store.upstream_ahead["me/fork"].behind_by, 4);
@@ -3702,7 +4073,7 @@ resolved_commit = "{commit}"
         };
         write_store(&app_data, &seeded).unwrap();
 
-        let store = write_gh_missing_store(&home, &[], &app_data);
+        let store = write_gh_missing_store(&home, &[], &app_data).store;
 
         assert_eq!(store.gh_status, GhStatus::Missing);
         assert_eq!(store.upstream_ahead, seeded.upstream_ahead);
