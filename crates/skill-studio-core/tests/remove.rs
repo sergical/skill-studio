@@ -23,7 +23,7 @@ use skill_studio_core::dto::{
 };
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::{
-    AgentId, DeploymentId, LifecycleOwnerKind, RootKind, RootScope, SkillName,
+    AgentId, DeploymentId, EventId, LifecycleOwnerKind, RootKind, RootScope, SkillName,
 };
 use skill_studio_core::ops;
 use skill_studio_core::ports::{
@@ -2820,4 +2820,102 @@ fn project_dotagents_remove_undo_restores_the_managed_ignore_entry_or_edits_the_
         std::fs::read_to_string(project.join(".gitignore")).unwrap(),
         "agents.lock\n.agents/.gitignore\n"
     );
+}
+
+fn removed_then_restored_alpha_beside_a_later_beta(
+    label: &str,
+) -> (Runtime, std::path::PathBuf, std::path::PathBuf, EventId) {
+    let home = unique_temp_dir(label);
+    std::fs::create_dir_all(&home).unwrap();
+    let rt = runtime_for(&home);
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::Dotagents, "alpha");
+    let config = home.join(".agents/agents.toml");
+    let lock = home.join(".agents/agents.lock");
+    std::fs::write(
+        &config,
+        "[[skills]]\nname = 'alpha'\nsource = 'owner/alpha'\n\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &lock,
+        "[skills.alpha]\nsource = 'owner/alpha'\nresolved_commit = 'old-revision'\n\n",
+    )
+    .unwrap();
+    let removed = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+    std::fs::write(
+        &config,
+        "[[skills]]\nname = 'beta'\nsource = 'owner/beta'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &lock,
+        "[skills.beta]\nsource = 'owner/beta'\nresolved_commit = 'newer-beta'\n",
+    )
+    .unwrap();
+    let restored = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: removed.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+    (rt, config, lock, restored.restore_event_id)
+}
+
+#[test]
+fn dotagents_undo_of_restore_refuses_a_declaration_the_user_extended_instead_of_moving_the_new_field_to_the_root(
+) {
+    let (rt, config, _lock, restore_event_id) =
+        removed_then_restored_alpha_beside_a_later_beta("dotagents_restore_undo_manifest_field");
+    let restored = std::fs::read_to_string(&config).unwrap();
+    let edited = restored.replacen(
+        "[[skills]]\nname = 'beta'",
+        "ref = 'new-revision'\n[[skills]]\nname = 'beta'",
+        1,
+    );
+    assert_ne!(edited, restored);
+    std::fs::write(&config, &edited).unwrap();
+    let outcome = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: restore_event_id,
+            force: false,
+        },
+    );
+    assert!(
+        outcome.is_err(),
+        "Undo of Restore removed an extended declaration: {outcome:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), edited);
+}
+
+#[test]
+fn dotagents_undo_of_restore_refuses_a_lock_entry_the_user_extended_instead_of_moving_the_new_field_to_the_root(
+) {
+    let (rt, _config, lock, restore_event_id) =
+        removed_then_restored_alpha_beside_a_later_beta("dotagents_restore_undo_lock_field");
+    let restored = std::fs::read_to_string(&lock).unwrap();
+    let edited = restored.replacen(
+        "[skills.beta]",
+        "integrity = 'sha256-new'\n[skills.beta]",
+        1,
+    );
+    assert_ne!(edited, restored);
+    std::fs::write(&lock, &edited).unwrap();
+    let outcome = ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: restore_event_id,
+            force: false,
+        },
+    );
+    assert!(
+        outcome.is_err(),
+        "Undo of Restore removed an extended lock entry: {outcome:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&lock).unwrap(), edited);
 }
