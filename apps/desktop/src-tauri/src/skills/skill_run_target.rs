@@ -171,26 +171,32 @@ fn check_containment(target: &PreparedRunTarget, roots: &RunTargetRoots) -> Resu
 /// stores it under a fresh id.
 #[tauri::command]
 pub async fn prepare_skill_run_target(
+    trace: crate::timing_log::IpcTrace,
     app: AppHandle,
     request: SkillRunTargetRequest,
 ) -> Result<SkillRunTargetInfo, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "prepare_skill_run_target", move || {
-        let state = app.state::<SkillRunTargetState>();
-        let id = next_run_target_id();
-        let prepared = match request.kind {
-            SkillRunTargetKind::Scratch => prepare_scratch(&app, &request, id)?,
-            SkillRunTargetKind::Worktree => prepare_worktree(&app, &request, id)?,
-            SkillRunTargetKind::InPlace => prepare_in_place(&request, id)?,
-        };
-        let info = SkillRunTargetInfo::from(&prepared);
-        state
-            .targets
-            .lock()
-            .map_err(|_| "Could not store run target".to_string())?
-            .insert(prepared.id.clone(), prepared);
-        Ok(info)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "prepare_skill_run_target",
+        move || {
+            let state = app.state::<SkillRunTargetState>();
+            let id = next_run_target_id();
+            let prepared = match request.kind {
+                SkillRunTargetKind::Scratch => prepare_scratch(&app, &request, id)?,
+                SkillRunTargetKind::Worktree => prepare_worktree(&app, &request, id)?,
+                SkillRunTargetKind::InPlace => prepare_in_place(&request, id)?,
+            };
+            let info = SkillRunTargetInfo::from(&prepared);
+            state
+                .targets
+                .lock()
+                .map_err(|_| "Could not store run target".to_string())?
+                .insert(prepared.id.clone(), prepared);
+            Ok(info)
+        },
+    )
     .await
 }
 
@@ -449,21 +455,30 @@ fn prepare_in_place(
 /// already has `open_skill_path` access to, or under the app cache, neither
 /// of which this command needs to widen access to.
 #[tauri::command]
-pub async fn reveal_skill_run_target(app: AppHandle, target_id: String) -> Result<(), String> {
+pub async fn reveal_skill_run_target(
+    trace: crate::timing_log::IpcTrace,
+    app: AppHandle,
+    target_id: String,
+) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "reveal_skill_run_target", move || {
-        let state = app.state::<SkillRunTargetState>();
-        let roots = RunTargetRoots::from_app(&app)?;
-        let target = resolve_target(&state.targets, &roots, &target_id)?;
-        if target.kind != SkillRunTargetKind::Scratch {
-            return Err("Only a scratch target's folder can be revealed this way".to_string());
-        }
-        Command::new("open")
-            .args(["-R", &target.cwd.to_string_lossy()])
-            .output()
-            .map_err(|e| format!("Failed to reveal {}: {e}", target.cwd.display()))?;
-        Ok(())
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "reveal_skill_run_target",
+        move || {
+            let state = app.state::<SkillRunTargetState>();
+            let roots = RunTargetRoots::from_app(&app)?;
+            let target = resolve_target(&state.targets, &roots, &target_id)?;
+            if target.kind != SkillRunTargetKind::Scratch {
+                return Err("Only a scratch target's folder can be revealed this way".to_string());
+            }
+            Command::new("open")
+                .args(["-R", &target.cwd.to_string_lossy()])
+                .output()
+                .map_err(|e| format!("Failed to reveal {}: {e}", target.cwd.display()))?;
+            Ok(())
+        },
+    )
     .await
 }
 
@@ -484,14 +499,23 @@ fn diff_for(cwd: &Path) -> Result<String, String> {
 
 /// The unified diff for a prepared run target, looked up by id.
 #[tauri::command]
-pub async fn skill_run_target_diff(app: AppHandle, target_id: String) -> Result<String, String> {
+pub async fn skill_run_target_diff(
+    trace: crate::timing_log::IpcTrace,
+    app: AppHandle,
+    target_id: String,
+) -> Result<String, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "skill_run_target_diff", move || {
-        let state = app.state::<SkillRunTargetState>();
-        let roots = RunTargetRoots::from_app(&app)?;
-        let target = resolve_target(&state.targets, &roots, &target_id)?;
-        diff_for(&target.cwd)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "skill_run_target_diff",
+        move || {
+            let state = app.state::<SkillRunTargetState>();
+            let roots = RunTargetRoots::from_app(&app)?;
+            let target = resolve_target(&state.targets, &roots, &target_id)?;
+            diff_for(&target.cwd)
+        },
+    )
     .await
 }
 
@@ -613,10 +637,15 @@ fn remove_worktree(target: &PreparedRunTarget) {
 
 /// Applies a prepared Worktree target's diff back onto its project.
 #[tauri::command]
-pub async fn apply_skill_run_target_diff(app: AppHandle, target_id: String) -> Result<(), String> {
+pub async fn apply_skill_run_target_diff(
+    trace: crate::timing_log::IpcTrace,
+    app: AppHandle,
+    target_id: String,
+) -> Result<(), String> {
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(
         &timing_app,
+        trace,
         "apply_skill_run_target_diff",
         move || {
             let state = app.state::<SkillRunTargetState>();
@@ -751,20 +780,29 @@ fn discard_target(target: &PreparedRunTarget) -> Result<(), String> {
 
 /// Discards a prepared run target, looked up by id.
 #[tauri::command]
-pub async fn discard_skill_run_target(app: AppHandle, target_id: String) -> Result<(), String> {
+pub async fn discard_skill_run_target(
+    trace: crate::timing_log::IpcTrace,
+    app: AppHandle,
+    target_id: String,
+) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "discard_skill_run_target", move || {
-        let state = app.state::<SkillRunTargetState>();
-        let roots = RunTargetRoots::from_app(&app)?;
-        let target = resolve_target(&state.targets, &roots, &target_id)?;
-        discard_target(&target)?;
-        state
-            .targets
-            .lock()
-            .map_err(|_| "Could not update run target state".to_string())?
-            .remove(&target_id);
-        Ok(())
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "discard_skill_run_target",
+        move || {
+            let state = app.state::<SkillRunTargetState>();
+            let roots = RunTargetRoots::from_app(&app)?;
+            let target = resolve_target(&state.targets, &roots, &target_id)?;
+            discard_target(&target)?;
+            state
+                .targets
+                .lock()
+                .map_err(|_| "Could not update run target state".to_string())?
+                .remove(&target_id);
+            Ok(())
+        },
+    )
     .await
 }
 

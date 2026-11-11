@@ -88,11 +88,12 @@ pub fn park_with_runtime(
 
 #[tauri::command]
 pub async fn park_skill(
+    trace: crate::timing_log::IpcTrace,
     target: LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<ParkOutcome, String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, "park_skill", move || {
+    crate::timing_log::time_command_blocking(&app, trace, "park_skill", move || {
         let deployment_id = deployment_id_from_target(&target, "Park")?;
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let names = skill_names_for_deployments([&deployment_id]);
@@ -107,10 +108,11 @@ pub async fn park_skill(
 /// Read-only; the confirm uses the answer to warn, and never blocks on it.
 #[tauri::command]
 pub async fn park_check(
+    trace: crate::timing_log::IpcTrace,
     target: LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<ParkCheck, String> {
-    crate::timing_log::time_command_blocking(&app, "park_check", move || {
+    crate::timing_log::time_command_blocking(&app, trace, "park_check", move || {
         let deployment_id = deployment_id_from_target(&target, "Park check")?;
         let rt = super::core_runtime::build_runtime_write()?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
@@ -123,12 +125,13 @@ pub async fn park_check(
 /// copy ("Keep live") or the live one ("Keep parked"). Activity holds the undo.
 #[tauri::command]
 pub async fn discard_skill_copy(
+    trace: crate::timing_log::IpcTrace,
     target: LifecycleTarget,
     keep: LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<DiscardOutcome, String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, "discard_skill_copy", move || {
+    crate::timing_log::time_command_blocking(&app, trace, "discard_skill_copy", move || {
         let deployment_id = deployment_id_from_target(&target, "Delete copy")?;
         let keep_deployment_id = deployment_id_from_target(&keep, "Keep copy")?;
         let names = skill_names_for_deployments([&deployment_id]);
@@ -154,11 +157,12 @@ pub async fn discard_skill_copy(
 /// dotagents" fix: runs `dotagents remove -y` and keeps the parked copy.
 #[tauri::command]
 pub async fn unlist_parked_dotagents(
+    trace: crate::timing_log::IpcTrace,
     target: LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, "unlist_parked_dotagents", move || {
+    crate::timing_log::time_command_blocking(&app, trace, "unlist_parked_dotagents", move || {
         let deployment_id = deployment_id_from_target(&target, "Stop dotagents installing it")?;
         let names = skill_names_for_deployments([&deployment_id]);
         let rt = super::core_runtime::build_runtime_write()?;
@@ -174,11 +178,12 @@ pub async fn unlist_parked_dotagents(
 
 #[tauri::command]
 pub async fn unpark_skill(
+    trace: crate::timing_log::IpcTrace,
     target: LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<UnparkOutcome, String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, "unpark_skill", move || {
+    crate::timing_log::time_command_blocking(&app, trace, "unpark_skill", move || {
         let deployment_id = deployment_id_from_target(&target, "Unpark")?;
         let names = skill_names_for_deployments([&deployment_id]);
         let rt = super::core_runtime::build_runtime_write()?;
@@ -198,11 +203,12 @@ pub async fn unpark_skill(
 /// rebuild then confirms them.
 #[tauri::command]
 pub async fn park_skills(
+    trace: crate::timing_log::IpcTrace,
     targets: Vec<LifecycleTarget>,
     app: tauri::AppHandle,
 ) -> Result<Vec<BulkTargetResult>, String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, "park_skills", move || {
+    crate::timing_log::time_command_blocking(&app, trace, "park_skills", move || {
         let results = run_batch("Park", &targets, |rt, ctx, deployment_id| {
             let result = ops::park(rt, ctx, &ParkRequest { deployment_id });
             let envelope = ResultEnvelope::from_result(Operation::Park, &rt.scope, ctx, result);
@@ -216,11 +222,12 @@ pub async fn park_skills(
 
 #[tauri::command]
 pub async fn unpark_skills(
+    trace: crate::timing_log::IpcTrace,
     targets: Vec<LifecycleTarget>,
     app: tauri::AppHandle,
 ) -> Result<Vec<BulkTargetResult>, String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, "unpark_skills", move || {
+    crate::timing_log::time_command_blocking(&app, trace, "unpark_skills", move || {
         let results = run_batch("Unpark", &targets, |rt, ctx, deployment_id| {
             let result = ops::unpark(rt, ctx, &UnparkRequest { deployment_id });
             let envelope = ResultEnvelope::from_result(Operation::Unpark, &rt.scope, ctx, result);

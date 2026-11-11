@@ -154,8 +154,11 @@ pub(crate) fn record_failure(app: &tauri::AppHandle, worker: BackgroundWorker, m
 }
 
 #[tauri::command]
-pub async fn get_background_status(app: tauri::AppHandle) -> Result<BackgroundStatus, String> {
-    crate::timing_log::time_command_blocking(&app, "get_background_status", || {
+pub async fn get_background_status(
+    trace: crate::timing_log::IpcTrace,
+    app: tauri::AppHandle,
+) -> Result<BackgroundStatus, String> {
+    crate::timing_log::time_command_blocking(&app, trace, "get_background_status", || {
         Ok(state().snapshot())
     })
     .await

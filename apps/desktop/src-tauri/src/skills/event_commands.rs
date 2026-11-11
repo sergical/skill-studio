@@ -201,12 +201,13 @@ pub fn dto_from_row(
 /// Lists events newest-first, for the Activity view's History section.
 #[tauri::command]
 pub async fn list_skill_events(
+    trace: crate::timing_log::IpcTrace,
     limit: Option<usize>,
     skill: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<Vec<SkillEventDto>, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "list_skill_events", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "list_skill_events", move || {
         let event_store = app.state::<EventStoreState>();
         let guard = locked_store(&event_store)?;
         let store = guard.as_ref().ok_or("Event store is unavailable")?;
@@ -391,12 +392,13 @@ pub fn restore_event_with_runtime(
 /// See [`restore_event_with_runtime`] for the dispatch this wraps.
 #[tauri::command]
 pub async fn restore_skill_event(
+    trace: crate::timing_log::IpcTrace,
     event_id: String,
     force: bool,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "restore_skill_event", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "restore_skill_event", move || {
         let event_store = app.state::<EventStoreState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let data_root = super::core_runtime::data_root();
@@ -484,13 +486,14 @@ fn validate_materialize_request(
 /// when the snapshot has no matching whole-dir-link deployment for `harness`.
 #[tauri::command]
 pub async fn materialize_harness_root(
+    trace: crate::timing_log::IpcTrace,
     app: tauri::AppHandle,
     target: LifecycleTarget,
     harness: String,
     root: String,
 ) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "materialize_harness_root", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "materialize_harness_root", move || {
         let refresh_state = app.state::<SkillRefreshState>();
         let event_store = app.state::<EventStoreState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
@@ -532,6 +535,7 @@ pub async fn materialize_harness_root(
 /// Converts a whole harness root and turns off the exact selected deployment as one durable operation.
 #[tauri::command]
 pub async fn materialize_harness_root_then_disable(
+    trace: crate::timing_log::IpcTrace,
     app: tauri::AppHandle,
     target: LifecycleTarget,
     harness: String,
@@ -540,6 +544,7 @@ pub async fn materialize_harness_root_then_disable(
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(
         &timing_app,
+        trace,
         "materialize_harness_root_then_disable",
         move || {
             let refresh_state = app.state::<SkillRefreshState>();
@@ -622,12 +627,14 @@ pub async fn materialize_harness_root_then_disable(
 /// per-skill links and restored if the selected copy cannot be completed.
 #[tauri::command]
 pub async fn make_skill_independent_copy(
+    trace: crate::timing_log::IpcTrace,
     target: LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(
         &timing_app,
+        trace,
         "make_skill_independent_copy",
         move || {
             let refresh_state = app.state::<SkillRefreshState>();
@@ -786,13 +793,14 @@ fn is_unresolved(deployment: &Deployment) -> bool {
 /// used to rm/ln an arbitrary path.
 #[tauri::command]
 pub async fn repair_skill_link(
+    trace: crate::timing_log::IpcTrace,
     path: String,
     action: String,
     target: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "repair_skill_link", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "repair_skill_link", move || {
         let refresh_state = app.state::<SkillRefreshState>();
         let event_store = app.state::<EventStoreState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;

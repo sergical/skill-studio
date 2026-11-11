@@ -695,12 +695,13 @@ pub(crate) fn delete_skill_pack_with(
 
 #[tauri::command]
 pub async fn create_skill_pack(
+    trace: crate::timing_log::IpcTrace,
     name: String,
     members: Vec<PackMemberInput>,
     app: tauri::AppHandle,
 ) -> Result<PackInfo, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "create_skill_pack", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "create_skill_pack", move || {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
         let guard = write_lease.try_acquire(&home)?;
@@ -715,11 +716,12 @@ pub async fn create_skill_pack(
 
 #[tauri::command]
 pub async fn update_skill_pack(
+    trace: crate::timing_log::IpcTrace,
     name: String,
     app: tauri::AppHandle,
 ) -> Result<UpdatePackResult, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "update_skill_pack", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "update_skill_pack", move || {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
         let _guard = write_lease.try_acquire(&home)?;
@@ -734,12 +736,13 @@ pub async fn update_skill_pack(
 
 #[tauri::command]
 pub async fn publish_skill_pack(
+    trace: crate::timing_log::IpcTrace,
     name: String,
     visibility: String,
     app: tauri::AppHandle,
 ) -> Result<PackInfo, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "publish_skill_pack", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "publish_skill_pack", move || {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
         let guard = write_lease.try_acquire(&home)?;
@@ -759,9 +762,13 @@ pub async fn publish_skill_pack(
 }
 
 #[tauri::command]
-pub async fn delete_skill_pack(name: String, app: tauri::AppHandle) -> Result<(), String> {
+pub async fn delete_skill_pack(
+    trace: crate::timing_log::IpcTrace,
+    name: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "delete_skill_pack", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "delete_skill_pack", move || {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
         let guard = write_lease.try_acquire(&home)?;
@@ -773,8 +780,11 @@ pub async fn delete_skill_pack(name: String, app: tauri::AppHandle) -> Result<()
 /// Read-only: the Packs view's list, straight off the registry - not part of
 /// `SkillSnapshot` since packs aren't installed skills.
 #[tauri::command]
-pub async fn list_skill_packs(app: tauri::AppHandle) -> Result<Vec<PackInfo>, String> {
-    crate::timing_log::time_command_blocking(&app, "list_skill_packs", move || {
+pub async fn list_skill_packs(
+    trace: crate::timing_log::IpcTrace,
+    app: tauri::AppHandle,
+) -> Result<Vec<PackInfo>, String> {
+    crate::timing_log::time_command_blocking(&app, trace, "list_skill_packs", move || {
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let registry = skill_fork_registry::read_fork_registry_or_default(&home);
         Ok(registry

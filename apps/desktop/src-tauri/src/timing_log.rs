@@ -14,6 +14,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use skill_studio_core::health::{Outcome, TimingRow};
 use skill_studio_core::timing::StepTiming;
+use skill_studio_host::telemetry::{CommandSpan, TraceParent, Trigger};
+use tauri::ipc::{CommandArg, CommandItem, InvokeError};
 use tauri::{AppHandle, Manager};
 
 use crate::skills::agents::AgentTarget;
@@ -98,23 +100,65 @@ fn first_line_capped(text: &str) -> String {
     first_line.chars().take(120).collect()
 }
 
+/// The `sentry-trace` header the webview sends with `invoke`, so a command
+/// root continues the webview trace. Commands take it as an argument; it is
+/// read from the IPC headers, never from the JSON payload.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IpcTrace(Option<TraceParent>);
+
+impl IpcTrace {
+    pub fn from_header(header: Option<&str>) -> Self {
+        Self(header.and_then(TraceParent::from_sentry_trace))
+    }
+
+    fn start_span(self) -> CommandSpan {
+        CommandSpan::start(Trigger::User, self.0)
+    }
+}
+
+impl<'de, R: tauri::Runtime> CommandArg<'de, R> for IpcTrace {
+    fn from_command(command: CommandItem<'de, R>) -> Result<Self, InvokeError> {
+        let header = command
+            .message
+            .headers()
+            .get("sentry-trace")
+            .and_then(|value| value.to_str().ok());
+        Ok(Self::from_header(header))
+    }
+}
+
+/// Runs `f` on a blocking-pool thread inside the caller's current command
+/// span, so the core ops `f` runs join the command's trace.
+pub fn spawn_blocking_in_span<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> tauri::async_runtime::JoinHandle<T> {
+    let span = CommandSpan::current();
+    tauri::async_runtime::spawn_blocking(move || match span {
+        Some(span) => span.enter(f),
+        None => f(),
+    })
+}
+
 /// Times a synchronous `#[tauri::command]` body and appends one record for
 /// it, whether `f` returns `Ok` or `Err` - a slow error path is exactly the
 /// kind of thing this log exists to surface.
 pub fn time_command<T: CommandOutcome>(
     app: &AppHandle,
+    trace: IpcTrace,
     command: &'static str,
     f: impl FnOnce() -> T,
 ) -> T {
+    let span = trace.start_span();
     let start = std::time::Instant::now();
     if let Some(state) = app.try_state::<crate::skills::event_commands::EventStoreState>() {
         state.recovery_ready().wait();
     }
-    let result = f();
+    let result = span.enter(f);
     let (outcome, error) = result.outcome();
     record_command(
         app,
         command,
+        span,
         start.elapsed().as_millis() as u64,
         &[],
         "main",
@@ -126,11 +170,14 @@ pub fn time_command<T: CommandOutcome>(
 
 /// As [`time_command`], for an async `#[tauri::command]` body: `fut` runs on
 /// Tauri's async runtime, off the main thread, so this records `"worker"`.
+/// The span is entered for each poll, because a poll can land on any worker.
 pub async fn time_command_async<T: CommandOutcome>(
     app: &AppHandle,
+    trace: IpcTrace,
     command: &'static str,
     fut: impl std::future::Future<Output = T>,
 ) -> T {
+    let span = trace.start_span();
     let start = std::time::Instant::now();
     if let Some(state) = app.try_state::<crate::skills::event_commands::EventStoreState>() {
         let ready = state.recovery_ready();
@@ -141,11 +188,14 @@ pub async fn time_command_async<T: CommandOutcome>(
             .await;
         }
     }
-    let result = fut.await;
+    let mut fut = std::pin::pin!(fut);
+    let result =
+        std::future::poll_fn(|cx| span.enter(|| std::future::Future::poll(fut.as_mut(), cx))).await;
     let (outcome, error) = result.outcome();
     record_command(
         app,
         command,
+        span,
         start.elapsed().as_millis() as u64,
         &[],
         "worker",
@@ -165,9 +215,11 @@ pub async fn time_command_async<T: CommandOutcome>(
 /// boundary.
 pub async fn time_command_blocking<T: Send + 'static>(
     app: &AppHandle,
+    trace: IpcTrace,
     command: &'static str,
     f: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
+    let span = trace.start_span();
     let start = std::time::Instant::now();
     let ready = app
         .try_state::<crate::skills::event_commands::EventStoreState>()
@@ -175,7 +227,7 @@ pub async fn time_command_blocking<T: Send + 'static>(
     let result = join_result_to_err(
         command,
         tauri::async_runtime::spawn_blocking(move || {
-            run_after_startup_recovery(ready.as_deref(), f)
+            span.enter(|| run_after_startup_recovery(ready.as_deref(), f))
         })
         .await,
     );
@@ -183,6 +235,7 @@ pub async fn time_command_blocking<T: Send + 'static>(
     record_command(
         app,
         command,
+        span,
         start.elapsed().as_millis() as u64,
         &[],
         "worker",
@@ -228,9 +281,11 @@ pub(crate) fn join_result_to_err<T>(
 /// `check_and_migrate` already refused to open must never receive a stray
 /// write from a command the frontend fired before the blocking screen
 /// painted.
+#[allow(clippy::too_many_arguments)]
 pub fn record_command(
     app: &AppHandle,
     command: &'static str,
+    span: CommandSpan,
     elapsed_ms: u64,
     steps: &[StepTiming],
     thread: &str,
@@ -243,6 +298,7 @@ pub fn record_command(
     skill_studio_host::telemetry::record_command(
         skill_studio_host::telemetry::Surface::Desktop,
         command,
+        span,
         elapsed_ms,
         outcome == "ok",
     );
@@ -455,6 +511,32 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::BufRead;
+
+    /// Flow: an async command reads its `sentry-trace` header, then hands
+    /// core work to a blocking-pool task. Expectation: the task sees the
+    /// command root, and the root carries the header's trace id. Catches: a
+    /// nested `spawn_blocking` that drops the span, so its ops start a new
+    /// trace instead of joining the command.
+    #[test]
+    fn a_nested_blocking_task_runs_inside_the_command_root_from_the_header() {
+        let header = "4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-1";
+        let span = IpcTrace::from_header(Some(header)).start_span();
+        assert_eq!(
+            span.trace_id.to_string(),
+            "4bf92f3577b34da6a3ce929d0e0e4736"
+        );
+
+        let seen = tauri::async_runtime::block_on(async {
+            span.enter(|| spawn_blocking_in_span(CommandSpan::current))
+                .await
+                .expect("blocking task joins")
+        });
+        assert_eq!(seen, Some(span));
+        assert_eq!(
+            IpcTrace::from_header(None).start_span().parent_span_id,
+            None
+        );
+    }
 
     fn read_lines(path: &Path) -> Vec<serde_json::Value> {
         let file = File::open(path).unwrap();

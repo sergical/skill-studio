@@ -92,12 +92,13 @@ fn skill_dir(root: &Path, skill_name: &str) -> PathBuf {
 /// history down to `MAX_RUNS_PER_SKILL`.
 #[tauri::command]
 pub async fn record_skill_run(
+    trace: crate::timing_log::IpcTrace,
     app: AppHandle,
     record: SkillRunRecord,
     events: Vec<SkillAgentEvent>,
 ) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "record_skill_run", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "record_skill_run", move || {
         let root = runs_root(&app)?;
         record_run_at(&root, &record, &events)
     })
@@ -214,11 +215,12 @@ fn trim_run_history(
 /// Every run recorded for `skill_name`, newest first, without transcripts.
 #[tauri::command]
 pub async fn list_skill_runs(
+    trace: crate::timing_log::IpcTrace,
     app: AppHandle,
     skill_name: String,
 ) -> Result<Vec<SkillRunRecord>, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "list_skill_runs", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "list_skill_runs", move || {
         let root = runs_root(&app)?;
         list_runs_at(&root, &skill_name)
     })
@@ -251,15 +253,21 @@ fn list_runs_at(root: &Path, skill_name: &str) -> Result<Vec<SkillRunRecord>, St
 /// is a UUID, so a single directory scan first locates its skill folder).
 #[tauri::command]
 pub async fn read_skill_run_events(
+    trace: crate::timing_log::IpcTrace,
     app: AppHandle,
     skill_name: String,
     id: String,
 ) -> Result<Vec<SkillAgentEvent>, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "read_skill_run_events", move || {
-        let root = runs_root(&app)?;
-        read_events_at(&root, &skill_name, &id)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "read_skill_run_events",
+        move || {
+            let root = runs_root(&app)?;
+            read_events_at(&root, &skill_name, &id)
+        },
+    )
     .await
 }
 

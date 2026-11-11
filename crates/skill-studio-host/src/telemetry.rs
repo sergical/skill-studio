@@ -18,6 +18,11 @@ use skill_studio_core::ops::Operation;
 use skill_studio_core::ports::{NestedOp, NoopTelemetry, OpOutcome, OpRecord, Telemetry};
 use skill_studio_core::timing::StepTiming;
 
+mod command_span;
+pub use command_span::{
+    sampled_at, CommandSpan, TraceParent, Trigger, BACKGROUND_SAMPLE_RATE, USER_SAMPLE_RATE,
+};
+
 /// Run-time fallback for the compile-time DSN; see [`resolve_dsn`].
 const DSN_ENV_VAR: &str = "SKILL_STUDIO_SENTRY_DSN";
 
@@ -561,9 +566,15 @@ impl Telemetry for SentryTelemetry {
         let elapsed = Duration::from_millis(record.timing.elapsed_ms);
         let timestamp = SystemTime::now();
         let start_timestamp = timestamp - elapsed;
+        let command = CommandSpan::current();
+        if command.is_some_and(|command| !command.sampled) {
+            return;
+        }
         let op = format!("skill.{}", operation_name(record.operation));
         let root_span_id = sentry::protocol::SpanId::default();
-        let trace_id = sentry::protocol::TraceId::default();
+        let trace_id = command.map_or_else(sentry::protocol::TraceId::default, |command| {
+            command.trace_id
+        });
 
         let mut spans = step_spans(
             &record.timing.steps,
@@ -629,6 +640,7 @@ impl Telemetry for SentryTelemetry {
             Context::Trace(Box::new(TraceContext {
                 trace_id,
                 span_id: root_span_id,
+                parent_span_id: command.map(|command| command.span_id),
                 op: Some(op.clone()),
                 status: Some(outcome_status(ok)),
                 ..Default::default()
@@ -672,11 +684,21 @@ pub fn port(surface: Surface, app_version: &str) -> Arc<dyn Telemetry> {
     }
 }
 
-/// One transaction per desktop Tauri command, parallel to [`SentryTelemetry::record`]
-/// but without spans: `command`'s error text is free text a `CommandOutcome`
-/// can carry a path in, so only `ok`/`error` and the command name itself are
+/// One transaction per desktop Tauri command or background refresh step,
+/// sent as `span`. The core op transactions recorded inside `span` are its
+/// children. `command`'s error text is free text a `CommandOutcome` can
+/// carry a path in, so only `ok`/`error` and the command name itself are
 /// ever tagged - never the error text.
-pub fn record_command(surface: Surface, command: &'static str, elapsed_ms: u64, ok: bool) {
+pub fn record_command(
+    surface: Surface,
+    command: &'static str,
+    span: CommandSpan,
+    elapsed_ms: u64,
+    ok: bool,
+) {
+    if !span.sampled {
+        return;
+    }
     let Some(client) = Hub::current().client() else {
         return;
     };
@@ -690,6 +712,9 @@ pub fn record_command(surface: Surface, command: &'static str, elapsed_ms: u64, 
     contexts.insert(
         "trace".to_string(),
         Context::Trace(Box::new(TraceContext {
+            trace_id: span.trace_id,
+            span_id: span.span_id,
+            parent_span_id: span.parent_span_id,
             op: Some("command".to_string()),
             status: Some(outcome_status(ok)),
             ..Default::default()
@@ -2117,6 +2142,81 @@ mod tests {
             message_from_location(None),
             "panicked at an unknown location",
             "a panic with no location must still produce a fixed message"
+        );
+    }
+
+    fn trace_context(transaction: &Transaction<'static>) -> TraceContext {
+        let Some(Context::Trace(trace)) = transaction.contexts.get("trace") else {
+            unreachable!("every transaction this module builds carries a trace context");
+        };
+        (**trace).clone()
+    }
+
+    /// Flow: the webview invokes a command that runs a core op. Expectation:
+    /// the webview trace id is the command root's trace id and the op
+    /// transaction's trace id, the root's parent is the webview span, and
+    /// the op's parent is the root. Catches: an op or a root that starts
+    /// its own trace, which splits one click into unrelated traces.
+    #[test]
+    fn a_webview_command_and_its_op_share_one_trace_with_the_op_under_the_root() {
+        let webview =
+            TraceParent::from_sentry_trace("4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-1")
+                .expect("well-formed header");
+        let span = CommandSpan::start(Trigger::User, Some(webview));
+        let envelopes = sentry::test::with_captured_envelopes(|| {
+            span.enter(|| telemetry().record(three_step_record("scan")));
+            record_command(Surface::Desktop, "install_skill", span, 80, true);
+        });
+        assert_eq!(envelopes.len(), 2, "one op transaction, one command root");
+        let op = transaction_from(&envelopes[0]);
+        let root = transaction_from(&envelopes[1]);
+        assert_eq!(op.name.as_deref(), Some("skill.scan"));
+        assert_eq!(root.name.as_deref(), Some("command.install_skill"));
+
+        let op_trace = trace_context(&op);
+        let root_trace = trace_context(&root);
+        assert_eq!(root_trace.trace_id, webview.trace_id);
+        assert_eq!(op_trace.trace_id, webview.trace_id);
+        assert_eq!(root_trace.parent_span_id, Some(webview.span_id));
+        assert_eq!(root_trace.span_id, span.span_id);
+        assert_eq!(op_trace.parent_span_id, Some(root_trace.span_id));
+        assert!(
+            op.spans
+                .iter()
+                .all(|step| step.trace_id == webview.trace_id),
+            "every step span stays in the same trace"
+        );
+    }
+
+    /// Flow: a background refresh step whose trace id falls outside the
+    /// sample. Expectation: neither the root nor the ops under it are sent.
+    /// Catches: a sampler applied to the root only, which leaves orphan op
+    /// transactions with a parent that never arrives.
+    #[test]
+    fn an_unsampled_root_sends_neither_itself_nor_its_ops() {
+        let span = CommandSpan {
+            sampled: false,
+            ..CommandSpan::start(Trigger::Background, None)
+        };
+        let envelopes = sentry::test::with_captured_envelopes(|| {
+            span.enter(|| telemetry().record(three_step_record("scan")));
+            record_command(Surface::Desktop, "snapshot_refresh.full", span, 80, true);
+        });
+        assert!(envelopes.is_empty(), "got {} envelopes", envelopes.len());
+    }
+
+    /// Flow: the CLI or MCP server runs an op with no command root.
+    /// Expectation: the op is still sent, as the root of a new trace.
+    /// Catches: a span check that drops every op outside the desktop.
+    #[test]
+    fn an_op_outside_any_command_span_starts_its_own_trace() {
+        let envelopes = sentry::test::with_captured_envelopes(|| {
+            telemetry().record(three_step_record("scan"));
+        });
+        assert_eq!(envelopes.len(), 1);
+        assert_eq!(
+            trace_context(&transaction_from(&envelopes[0])).parent_span_id,
+            None
         );
     }
 }

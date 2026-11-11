@@ -344,6 +344,7 @@ fn preview_from_cached_snapshot(
 
 #[tauri::command]
 pub async fn preview_skill_frontmatter_repair(
+    trace: crate::timing_log::IpcTrace,
     target: LifecycleTarget,
     kind: Option<FrontmatterRepairKind>,
     choice: Option<InvocationConflictChoice>,
@@ -352,6 +353,7 @@ pub async fn preview_skill_frontmatter_repair(
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(
         &timing_app,
+        trace,
         "preview_skill_frontmatter_repair",
         move || {
             preview_from_cached_snapshot(
@@ -501,12 +503,14 @@ fn reconcile_interrupted_frontmatter_repair_with(
 
 #[tauri::command]
 pub async fn apply_skill_frontmatter_repair(
+    trace: crate::timing_log::IpcTrace,
     request: ApplyFrontmatterRepairRequest,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let timing_app = app.clone();
     crate::timing_log::time_command_blocking(
         &timing_app,
+        trace,
         "apply_skill_frontmatter_repair",
         move || {
             let refresh_state = app.state::<SkillRefreshState>();
