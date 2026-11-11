@@ -71,7 +71,7 @@ jobs:
 
   build:
     needs: [check-version, check-on-main]
-    runs-on: macos-14
+    runs-on: macos-15
     # tauri-action creates the GitHub release as a draft and `gh release
     # upload` attaches the .dSYM archive to it; the default GITHUB_TOKEN is
     # read-only. Publication happens later, in the `publish` job.
