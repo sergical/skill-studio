@@ -29,9 +29,7 @@ use skill_studio_lib::skills::skill_fork::PullResult;
 use skill_studio_lib::skills::skill_fork_registry::{ForkRecord, PackMember};
 use skill_studio_lib::skills::skill_frontmatter_repair::FrontmatterRepairPreview;
 use skill_studio_lib::skills::skill_invocation::InvocationTarget;
-use skill_studio_lib::skills::skill_pack::{
-    ImportResult, PackImportPreflightResult, PackImportRequest, PackInfo, UpdatePackResult,
-};
+use skill_studio_lib::skills::skill_pack::{PackInfo, UpdatePackResult};
 use skill_studio_lib::skills::skill_project_folders::{ProjectFolder, ProjectFolderSource};
 use skill_studio_lib::skills::skill_refresh::{DiscoverySourceSetting, SkillSnapshot};
 
@@ -39,6 +37,7 @@ use skill_studio_lib::skills::skill_refresh::{DiscoverySourceSetting, SkillSnaps
 #[allow(dead_code)]
 struct WireTypes {
     skill_snapshot: SkillSnapshot,
+    background_status: skill_studio_lib::skills::background_work::BackgroundStatus,
     agent_target: AgentTarget,
     add_method_defaults: AddMethodDefaults,
     paginated_skills_response: PaginatedSkillsResponse,
@@ -58,11 +57,8 @@ struct WireTypes {
     invocation_heatmap: InvocationHeatmap,
     pack_info: PackInfo,
     update_pack_result: UpdatePackResult,
-    import_result: ImportResult,
-    pack_import_preflight_result: PackImportPreflightResult,
     skill_event: SkillEventDto,
     pack_member: PackMember,
-    pack_import_request: PackImportRequest,
     skill_invocation: SkillInvocation,
     skill_trigger: SkillTrigger,
     lifecycle_target: LifecycleTarget,

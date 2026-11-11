@@ -32,6 +32,7 @@ export type HarnessId = "claude-code" | "codex" | "open-code" | "pi";
  * to hand-edit a `.jsonc` file rather than silently showing no disables.
  */
 export type OpencodeConfigKind = "json" | "jsonc";
+export type BackgroundWorker = "scan" | "invocations" | "update_check";
 /**
  * Agent target identifier
  */
@@ -107,19 +108,6 @@ export type FrontmatterRepairKind =
  */
 export type InvocationConflictChoice = "user-only" | "model-only";
 export type FrontmatterRepairApplyMode = "apply-fix" | "fix-installed-copy" | "fork-and-fix";
-/**
- * Pack import either completes immediately or pauses for explicit trust.
- */
-export type PackImportPreflightResult =
-  | {
-      status: "imported";
-      result: ImportResult;
-    }
-  | {
-      status: "needs-trust";
-      identities: string[];
-      confirmation_token: string;
-    };
 /**
  * How a skill use started.
  */
@@ -718,6 +706,17 @@ export interface UpstreamAhead {
    */
   owner_ids: string[];
 }
+export interface BackgroundStatus {
+  revision: number;
+  tasks: BackgroundTaskStatus[];
+}
+export interface BackgroundTaskStatus {
+  worker: BackgroundWorker;
+  running: boolean;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  last_error: string | null;
+}
 /**
  * Agent target with paths resolved
  */
@@ -1014,16 +1013,6 @@ export interface UpdatePackResult {
   pack: PackInfo;
 }
 /**
- * Result of `import_skill_pack`: which names came from the repo's own
- * `skills/` tree (`--all`) versus a `[[skills]]` row pointing elsewhere,
- * and any per-row failures (a partial import still reports what worked).
- */
-export interface ImportResult {
-  bundled: string[];
-  referenced: string[];
-  errors: string[];
-}
-/**
  * One row of the event log, projected for the Activity view's History
  * section - see `event_store::EventRow` and `event_commands::list_skill_events`.
  */
@@ -1064,18 +1053,6 @@ export interface SkillEventDto {
 export interface PackMember {
   name: string;
   path: string;
-}
-/**
- * The complete pack import request. Trust confirmation must repeat this
- * value so a token cannot authorize a changed target or source.
- */
-export interface PackImportRequest {
-  source: string;
-  agents: AgentId[];
-  method: string;
-  destination: SkillDestination;
-  scope: InstallScope;
-  project_path: string | null;
 }
 /**
  * One recorded skill use from a harness's own session history.
@@ -1285,7 +1262,7 @@ export interface Evidence {
   confidence: "verified-from-docs" | "inferred" | "unknown";
 }
 /**
- * Install method, inferred from the resolved executable path.
+ * Install method from vendor metadata, or inferred from the executable path.
  */
 export interface DetectedString1 {
   /**
