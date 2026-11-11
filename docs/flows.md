@@ -138,6 +138,11 @@ opening a folder written by a newer schema. A folder with no marker is version 0
 
 Agent home overrides use the existing scan, extras, park and unpark flows. The CLI commands are `skill-studio scan`, `skill-studio extras`, `skill-studio park moved` and `skill-studio unpark moved`; the MCP tools are `scan`, `extras`, `park` and `unpark`. `apps/cli/tests/agent_home_env.rs` covers each variable with `claude_env_scan_and_extras_use_moved_home_instead_of_default`, `pi_env_scan_and_extras_use_moved_home_instead_of_default` and `grok_env_scan_and_extras_use_moved_home_instead_of_default`.
 
+Batch unpark checks every recorded link path before moving a skill. The CLI
+command is `skill-studio unpark alpha beta`; the MCP tool is `unpark` with
+`skills`. `apps/cli/tests/batch_park.rs::blocked_recorded_link_refuses_batch_unpark_before_restoring_any_copy_on_cli_and_mcp`
+checks that a blocked link keeps both skills parked on CLI and MCP.
+
 Native disable switches use the existing scan and doctor flows. CLI commands are
 `skill-studio scan --json` and `skill-studio doctor --project <path> --json`; MCP
 tools are `scan` and `doctor`. CLI/MCP-only listing checks in
@@ -145,3 +150,5 @@ tools are `scan` and `doctor`. CLI/MCP-only listing checks in
 `doctor_and_scan_apply_codex_name_rules_in_order_instead_of_counting_disabled_skills`
 and `doctor_merges_project_plugin_switches_instead_of_using_global_enablement`.
 Both compare the doctor listing with MCP.
+`doctor_matches_spaced_names_and_inline_codex_rules_like_codex_instead_of_counting_disabled_skills`
+checks spaced names and inline `config = [...]` rules.

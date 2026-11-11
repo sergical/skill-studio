@@ -277,9 +277,11 @@ pub fn invocation(
                     .as_ref()
                     .and_then(|f| f.metadata.as_ref())
                     .and_then(|m| m.get("opencode/autoinvoke"))
-                    .and_then(|v| {
-                        v.as_bool()
-                            .or_else(|| v.as_i64().filter(|n| matches!(n, 0 | 1)).map(|n| n == 1))
+                    .and_then(|v| match v {
+                        crate::yaml::Value::Bool(b) => Some(*b),
+                        crate::yaml::Value::U64(n @ (0 | 1)) => Some(*n == 1),
+                        crate::yaml::Value::I64(n @ (0 | 1)) => Some(*n == 1),
+                        _ => None,
                     })
                     .map_or(manual, |auto| !auto);
                 let bytes = match rt.ports.fs.read_capped(
@@ -290,13 +292,18 @@ pub fn invocation(
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
                     Err(e) => return Err(CoreError::io(&d.path, e)),
                 };
-                let codex: serde_yaml::Value = serde_yaml::from_slice(&bytes).map_err(|e| {
-                    CoreError::new(ErrorCode::InvalidRequest, e.to_string()).at(&d.path)
-                })?;
+                let text = String::from_utf8_lossy(&bytes);
+                let codex: serde_json::Value = if text.trim().is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    crate::yaml::from_str(&text).map_err(|e| {
+                        CoreError::new(ErrorCode::InvalidRequest, e.to_string()).at(&d.path)
+                    })?
+                };
                 let codex_manual = codex
                     .get("policy")
                     .and_then(|p| p.get("allow_implicit_invocation"))
-                    .and_then(serde_yaml::Value::as_bool)
+                    .and_then(serde_json::Value::as_bool)
                     == Some(false);
                 // Compare the two skill-owned controls even for a single copy.
                 modes.extend([manual, codex_manual]);

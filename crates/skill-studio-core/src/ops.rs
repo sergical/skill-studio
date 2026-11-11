@@ -6267,6 +6267,17 @@ fn unpark_destination(
         )
         .at(&restored_dir));
     }
+    if let Some(row) = park_row {
+        for link in park_row_links(&row.payload) {
+            if fs.symlink_metadata(&link).is_ok() {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "A path already exists where this skill's link must be restored.",
+                )
+                .at(&link));
+            }
+        }
+    }
     Ok(restored_dir)
 }
 

@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
+use skill_studio_core::yaml;
+
 use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use notify_debouncer_mini::new_debouncer;
 use notify_debouncer_mini::notify::{RecommendedWatcher, RecursiveMode};
@@ -1799,11 +1801,16 @@ impl<'a> BuildPaths<'a> {
 /// scanner needs to fail a rebuild over.
 fn read_codex_allow_implicit_invocation(skill_dir: &Path) -> Option<bool> {
     let content = std::fs::read_to_string(skill_dir.join("agents").join("openai.yaml")).ok()?;
-    let value: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
-    value
-        .get("policy")?
-        .get("allow_implicit_invocation")?
-        .as_bool()
+    #[derive(serde::Deserialize)]
+    struct Sidecar {
+        policy: Policy,
+    }
+    #[derive(serde::Deserialize)]
+    struct Policy {
+        allow_implicit_invocation: Option<bool>,
+    }
+    let value: Sidecar = yaml::from_str(&content).ok()?;
+    value.policy.allow_implicit_invocation
 }
 
 /// Every owner id any deployment in `skills` carries - the one definition of
