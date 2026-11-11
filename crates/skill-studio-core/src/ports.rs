@@ -456,6 +456,10 @@ pub trait ProjectDiscovery: Send + Sync {
 pub trait ToolLookup: Send + Sync {
     /// Absolute path of `name`, or `None` when it is not on `PATH`.
     fn find_binary(&self, name: &str) -> Option<PathBuf>;
+    /// Whether the resolved invocation path belongs to the probed PATH. Unknown for custom ports.
+    fn binary_on_path(&self, _path: &Path) -> Option<bool> {
+        None
+    }
 }
 
 /// Wall clock and monotonic time.
