@@ -173,46 +173,54 @@ fn restore_moved_deployment_for(
 /// and restore to `restore_moved_deployment_for`.
 #[tauri::command]
 pub async fn restore_moved_deployment(
+    trace: crate::timing_log::IpcTrace,
     target: LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "restore_moved_deployment", move || {
-        let refresh_state = app.state::<SkillRefreshState>();
-        let deployment_id = target
-            .deployment_id
-            .clone()
-            .ok_or("Restoring a moved copy needs one copy id")?;
-        let resolved = super::skill_lifecycle::resolve_fresh_lifecycle_target(
-            &app,
-            &refresh_state,
-            &target,
-            "Restore moved deployment",
-        )?;
-        let deployment = resolved.deployment;
-        let (new_path, new_id) = restore_moved_deployment_for(&deployment, &deployment_id)?;
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "restore_moved_deployment",
+        move || {
+            let refresh_state = app.state::<SkillRefreshState>();
+            let deployment_id = target
+                .deployment_id
+                .clone()
+                .ok_or("Restoring a moved copy needs one copy id")?;
+            let resolved = super::skill_lifecycle::resolve_fresh_lifecycle_target(
+                &app,
+                &refresh_state,
+                &target,
+                "Restore moved deployment",
+            )?;
+            let deployment = resolved.deployment;
+            let (new_path, new_id) = restore_moved_deployment_for(&deployment, &deployment_id)?;
 
-        // Surgical: patch the moved deployment's path and disabled state right
-        // away, the background loop's full
-        // rebuild (skills_dirty) reconciles the rest moments later.
-        if let Err(e) = skill_refresh::patch_snapshot_and_emit(&app, &refresh_state, |snapshot| {
-            let Some(deployment) = snapshot
-                .skills
-                .iter_mut()
-                .flat_map(|skill| skill.deployments.iter_mut())
-                .find(|deployment| deployment.id == deployment_id)
-            else {
-                return;
-            };
-            deployment.path = new_path.to_string_lossy().to_string();
-            deployment.id = new_id;
-            deployment.disabled = false;
-            deployment.disabled_by = None;
-        }) {
-            eprintln!("[restore_moved_deployment] snapshot patch failed: {e}");
-        }
-        Ok(())
-    })
+            // Surgical: patch the moved deployment's path and disabled state right
+            // away, the background loop's full
+            // rebuild (skills_dirty) reconciles the rest moments later.
+            if let Err(e) =
+                skill_refresh::patch_snapshot_and_emit(&app, &refresh_state, |snapshot| {
+                    let Some(deployment) = snapshot
+                        .skills
+                        .iter_mut()
+                        .flat_map(|skill| skill.deployments.iter_mut())
+                        .find(|deployment| deployment.id == deployment_id)
+                    else {
+                        return;
+                    };
+                    deployment.path = new_path.to_string_lossy().to_string();
+                    deployment.id = new_id;
+                    deployment.disabled = false;
+                    deployment.disabled_by = None;
+                })
+            {
+                eprintln!("[restore_moved_deployment] snapshot patch failed: {e}");
+            }
+            Ok(())
+        },
+    )
     .await
 }
 

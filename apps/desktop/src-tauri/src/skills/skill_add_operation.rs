@@ -721,7 +721,7 @@ fn finish_operation(
 }
 
 fn spawn_operation(app: AppHandle, state: AddSkillOperationState, operation_id: String) {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::timing_log::spawn_blocking_in_span(move || {
         let run = || match skill_install::resolve_fetch_and_lookup(&app) {
             Ok((fetch, lookup)) => run_operation_body(
                 Some(&app),
@@ -752,13 +752,14 @@ fn spawn_operation(app: AppHandle, state: AddSkillOperationState, operation_id: 
 /// any `npx`, network, or large filesystem work.
 #[tauri::command(async)]
 pub fn start_add_skill_operation(
+    trace: crate::timing_log::IpcTrace,
     operation_id: String,
     request: AddSkillRequest,
     app: AppHandle,
     state: tauri::State<AddSkillOperationState>,
 ) -> Result<AddSkillOperationEvent, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command(&timing_app, "start_add_skill_operation", move || {
+    crate::timing_log::time_command(&timing_app, trace, "start_add_skill_operation", move || {
         let queued = state.begin(
             operation_id.clone(),
             AddSkillOperationKind::Single(request),
@@ -773,22 +774,28 @@ pub fn start_add_skill_operation(
 /// Start a batch Add Skill operation. Returns the queued event immediately.
 #[tauri::command(async)]
 pub fn start_add_skills_operation(
+    trace: crate::timing_log::IpcTrace,
     operation_id: String,
     request: AddSkillsRequest,
     app: AppHandle,
     state: tauri::State<AddSkillOperationState>,
 ) -> Result<AddSkillOperationEvent, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command(&timing_app, "start_add_skills_operation", move || {
-        let queued = state.begin(
-            operation_id.clone(),
-            AddSkillOperationKind::Batch(request),
-            None,
-        )?;
-        emit_status(Some(&app), &queued);
-        spawn_operation(app.clone(), state.inner().clone(), operation_id);
-        Ok(queued)
-    })
+    crate::timing_log::time_command(
+        &timing_app,
+        trace,
+        "start_add_skills_operation",
+        move || {
+            let queued = state.begin(
+                operation_id.clone(),
+                AddSkillOperationKind::Batch(request),
+                None,
+            )?;
+            emit_status(Some(&app), &queued);
+            spawn_operation(app.clone(), state.inner().clone(), operation_id);
+            Ok(queued)
+        },
+    )
 }
 
 /// Catch-up read for a listener that subscribed after start, or remounted.
@@ -797,11 +804,12 @@ pub fn start_add_skills_operation(
 // can't be borrowed from the caller - it must be owned.
 #[allow(clippy::needless_pass_by_value)]
 pub fn get_add_skill_operation(
+    trace: crate::timing_log::IpcTrace,
     operation_id: String,
     state: tauri::State<AddSkillOperationState>,
     app: tauri::AppHandle,
 ) -> Result<AddSkillOperationEvent, String> {
-    crate::timing_log::time_command(&app, "get_add_skill_operation", move || {
+    crate::timing_log::time_command(&app, trace, "get_add_skill_operation", move || {
         state.snapshot(&operation_id)
     })
 }
@@ -810,16 +818,22 @@ pub fn get_add_skill_operation(
 /// completed or failed rather than cancelled.
 #[tauri::command(async)]
 pub fn cancel_add_skill_operation(
+    trace: crate::timing_log::IpcTrace,
     operation_id: String,
     app: AppHandle,
     state: tauri::State<AddSkillOperationState>,
 ) -> Result<AddSkillOperationEvent, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command(&timing_app, "cancel_add_skill_operation", move || {
-        let event = state.request_cancel(&operation_id)?;
-        emit_status(Some(&app), &event);
-        Ok(event)
-    })
+    crate::timing_log::time_command(
+        &timing_app,
+        trace,
+        "cancel_add_skill_operation",
+        move || {
+            let event = state.request_cancel(&operation_id)?;
+            emit_status(Some(&app), &event);
+            Ok(event)
+        },
+    )
 }
 
 /// Record trust for this operation's repository identity, then retry the
@@ -939,29 +953,35 @@ fn confirm_add_skill_trust_with(
 
 #[tauri::command]
 pub async fn confirm_add_skill_trust(
+    trace: crate::timing_log::IpcTrace,
     operation_id: String,
     retry_operation_id: String,
     identity: String,
     app: AppHandle,
 ) -> Result<AddSkillOperationEvent, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "confirm_add_skill_trust", move || {
-        let state = app.state::<AddSkillOperationState>();
-        let write_lease = super::write_lease::WriteLease::default();
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        let (parent_event, queued) = confirm_add_skill_trust_with(
-            &home,
-            &operation_id,
-            &retry_operation_id,
-            &identity,
-            state.inner(),
-            &write_lease,
-        )?;
-        emit_status(Some(&app), &parent_event);
-        emit_status(Some(&app), &queued);
-        spawn_operation(app.clone(), state.inner().clone(), retry_operation_id);
-        Ok(queued)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "confirm_add_skill_trust",
+        move || {
+            let state = app.state::<AddSkillOperationState>();
+            let write_lease = super::write_lease::WriteLease::default();
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            let (parent_event, queued) = confirm_add_skill_trust_with(
+                &home,
+                &operation_id,
+                &retry_operation_id,
+                &identity,
+                state.inner(),
+                &write_lease,
+            )?;
+            emit_status(Some(&app), &parent_event);
+            emit_status(Some(&app), &queued);
+            spawn_operation(app.clone(), state.inner().clone(), retry_operation_id);
+            Ok(queued)
+        },
+    )
     .await
 }
 

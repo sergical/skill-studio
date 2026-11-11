@@ -435,34 +435,40 @@ fn apply_invocation_targets(
 /// per-file call queued behind whatever rebuild the previous write triggered.
 #[tauri::command]
 pub async fn set_skills_invocation(
+    trace: crate::timing_log::IpcTrace,
     targets: Vec<InvocationTarget>,
     policy: InvocationPolicy,
     app: tauri::AppHandle,
 ) -> Result<Vec<BulkTargetResult>, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "set_skills_invocation", move || {
-        let refresh_state = app.state::<SkillRefreshState>();
-        let start = std::time::Instant::now();
-        let first_path = targets.first().map_or("", |target| target.path.as_str());
-        let snapshot = read_snapshot(&refresh_state, first_path)?;
-        let mut reconcile_ms = 0;
-        let results = apply_invocation_targets(&snapshot, &targets, policy, |names| {
-            let reconcile_start = std::time::Instant::now();
-            let outcome =
-                skill_refresh::reconcile_skill_names_and_emit(&app, &refresh_state, names, &[]);
-            reconcile_ms = reconcile_start.elapsed().as_millis();
-            if outcome.is_err() {
-                refresh_state.mark_skills_dirty();
-            }
-            outcome
-        });
-        eprintln!(
-            "skill refresh: batch invocation {} targets in {} ms (reconcile {reconcile_ms} ms)",
-            targets.len(),
-            start.elapsed().as_millis()
-        );
-        Ok(results)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "set_skills_invocation",
+        move || {
+            let refresh_state = app.state::<SkillRefreshState>();
+            let start = std::time::Instant::now();
+            let first_path = targets.first().map_or("", |target| target.path.as_str());
+            let snapshot = read_snapshot(&refresh_state, first_path)?;
+            let mut reconcile_ms = 0;
+            let results = apply_invocation_targets(&snapshot, &targets, policy, |names| {
+                let reconcile_start = std::time::Instant::now();
+                let outcome =
+                    skill_refresh::reconcile_skill_names_and_emit(&app, &refresh_state, names, &[]);
+                reconcile_ms = reconcile_start.elapsed().as_millis();
+                if outcome.is_err() {
+                    refresh_state.mark_skills_dirty();
+                }
+                outcome
+            });
+            eprintln!(
+                "skill refresh: batch invocation {} targets in {} ms (reconcile {reconcile_ms} ms)",
+                targets.len(),
+                start.elapsed().as_millis()
+            );
+            Ok(results)
+        },
+    )
     .await
 }
 

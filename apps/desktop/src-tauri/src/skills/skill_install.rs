@@ -589,7 +589,7 @@ pub(crate) async fn add_skill_with_runtime(
     request: AddSkillRequest,
     github: GithubTools,
 ) -> Result<AddSkillResult, String> {
-    let joined = tauri::async_runtime::spawn_blocking(move || {
+    let joined = crate::timing_log::spawn_blocking_in_span(move || {
         let rt = build_runtime()?;
         let (fetch, lookup) = github;
         match install_one(&rt, &request, fetch.as_ref(), lookup.as_ref(), None)? {
@@ -656,12 +656,14 @@ impl UpstreamFetch for Unavailable {
 
 #[tauri::command]
 pub async fn add_skill(
+    trace: crate::timing_log::IpcTrace,
     request: AddSkillRequest,
     app: tauri::AppHandle,
 ) -> Result<AddSkillResult, String> {
     let github = resolve_fetch_and_lookup(&app)?;
     crate::timing_log::time_command_async(
         &app,
+        trace,
         "add_skill",
         add_skill_with_runtime(super::core_runtime::build_runtime_write, request, github),
     )

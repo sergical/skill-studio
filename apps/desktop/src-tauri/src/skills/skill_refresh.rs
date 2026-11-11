@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use skill_studio_core::discovery_sources::DiscoverySources;
 use skill_studio_core::skill_uses::{InvocationHeatmap, SkillInvocationStats, SkillUseFilter};
 use skill_studio_core::tracked_projects::{self, TrackedProjects};
+use skill_studio_host::telemetry::{CommandSpan, Trigger};
 use skill_studio_host::{SkillInvocationIndex, SkillUseRefreshReport};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -288,11 +289,12 @@ fn spawn_refresh_initialization(
 /// Instant read of the current snapshot from managed state.
 #[tauri::command]
 pub async fn get_skill_snapshot(
+    trace: crate::timing_log::IpcTrace,
     state: tauri::State<'_, SkillRefreshState>,
     app: tauri::AppHandle,
 ) -> Result<Option<SkillSnapshot>, String> {
     let snapshot = state.snapshot.clone();
-    crate::timing_log::time_command_blocking(&app, "get_skill_snapshot", move || {
+    crate::timing_log::time_command_blocking(&app, trace, "get_skill_snapshot", move || {
         snapshot
             .read()
             .map(|guard| guard.clone())
@@ -303,12 +305,20 @@ pub async fn get_skill_snapshot(
 
 /// Wait for a rebuild so the caller receives any failure.
 #[tauri::command]
-pub async fn request_skill_rescan(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn request_skill_rescan(
+    trace: crate::timing_log::IpcTrace,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "request_skill_rescan", move || {
-        let state = app.state::<SkillRefreshState>();
-        rebuild_snapshot_now(&app, &state).map(|_| ())
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "request_skill_rescan",
+        move || {
+            let state = app.state::<SkillRefreshState>();
+            rebuild_snapshot_now(&app, &state).map(|_| ())
+        },
+    )
     .await
 }
 
@@ -319,9 +329,12 @@ pub async fn request_skill_rescan(app: tauri::AppHandle) -> Result<(), String> {
 /// scan start after the caller's write; other listeners get the snapshot
 /// through `SNAPSHOT_EVENT` as usual.
 #[tauri::command(async)]
-pub async fn rescan_skills_now(app: tauri::AppHandle) -> Result<SkillSnapshot, String> {
+pub async fn rescan_skills_now(
+    trace: crate::timing_log::IpcTrace,
+    app: tauri::AppHandle,
+) -> Result<SkillSnapshot, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "rescan_skills_now", move || {
+    crate::timing_log::time_command_blocking(&timing_app, trace, "rescan_skills_now", move || {
         let state = app.state::<SkillRefreshState>();
         rebuild_snapshot_now(&app, &state)
     })
@@ -390,12 +403,20 @@ fn update_registry_section<T: Clone + PartialEq>(
 /// `read_fork_registry` directly rather than going through
 /// `update_registry_section`.
 #[tauri::command]
-pub async fn get_tracked_projects(app: tauri::AppHandle) -> Result<TrackedProjects, String> {
+pub async fn get_tracked_projects(
+    trace: crate::timing_log::IpcTrace,
+    app: tauri::AppHandle,
+) -> Result<TrackedProjects, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "get_tracked_projects", move || {
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        Ok(super::skill_fork_registry::read_fork_registry(&home)?.projects)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "get_tracked_projects",
+        move || {
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            Ok(super::skill_fork_registry::read_fork_registry(&home)?.projects)
+        },
+    )
     .await
 }
 
@@ -424,25 +445,31 @@ fn validate_projects_to_save(
 /// thread when they changed.
 #[tauri::command]
 pub async fn register_skill_projects(
+    trace: crate::timing_log::IpcTrace,
     paths: Vec<String>,
     app: tauri::AppHandle,
 ) -> Result<TrackedProjects, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "register_skill_projects", move || {
-        let state = app.state::<SkillRefreshState>();
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        let valid = drop_home_directory_from_batch(paths, &home);
-        let to_save = validate_projects_to_save(&skill_studio_host::RealFs, &home, valid)?;
-        let (projects, changed) = update_registry_section(
-            &home,
-            |registry| &mut registry.projects,
-            |tracked| tracked.track(to_save.clone()),
-        )?;
-        if changed {
-            state.mark_skills_dirty();
-        }
-        Ok(projects)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "register_skill_projects",
+        move || {
+            let state = app.state::<SkillRefreshState>();
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            let valid = drop_home_directory_from_batch(paths, &home);
+            let to_save = validate_projects_to_save(&skill_studio_host::RealFs, &home, valid)?;
+            let (projects, changed) = update_registry_section(
+                &home,
+                |registry| &mut registry.projects,
+                |tracked| tracked.track(to_save.clone()),
+            )?;
+            if changed {
+                state.mark_skills_dirty();
+            }
+            Ok(projects)
+        },
+    )
     .await
 }
 
@@ -451,23 +478,29 @@ pub async fn register_skill_projects(
 /// a full rebuild follows on the background thread when they changed.
 #[tauri::command]
 pub async fn unregister_skill_project(
+    trace: crate::timing_log::IpcTrace,
     path: String,
     app: tauri::AppHandle,
 ) -> Result<TrackedProjects, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "unregister_skill_project", move || {
-        let state = app.state::<SkillRefreshState>();
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        let (projects, changed) = update_registry_section(
-            &home,
-            |registry| &mut registry.projects,
-            |tracked| tracked.untrack(Path::new(&path)),
-        )?;
-        if changed {
-            state.mark_skills_dirty();
-        }
-        Ok(projects)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "unregister_skill_project",
+        move || {
+            let state = app.state::<SkillRefreshState>();
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            let (projects, changed) = update_registry_section(
+                &home,
+                |registry| &mut registry.projects,
+                |tracked| tracked.untrack(Path::new(&path)),
+            )?;
+            if changed {
+                state.mark_skills_dirty();
+            }
+            Ok(projects)
+        },
+    )
     .await
 }
 
@@ -477,23 +510,29 @@ pub async fn unregister_skill_project(
 /// rebuild follows on the background thread when they changed.
 #[tauri::command]
 pub async fn remove_skill_project(
+    trace: crate::timing_log::IpcTrace,
     path: String,
     app: tauri::AppHandle,
 ) -> Result<TrackedProjects, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "remove_skill_project", move || {
-        let state = app.state::<SkillRefreshState>();
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        let (projects, changed) = update_registry_section(
-            &home,
-            |registry| &mut registry.projects,
-            |tracked| tracked.forget(Path::new(&path)),
-        )?;
-        if changed {
-            state.mark_skills_dirty();
-        }
-        Ok(projects)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "remove_skill_project",
+        move || {
+            let state = app.state::<SkillRefreshState>();
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            let (projects, changed) = update_registry_section(
+                &home,
+                |registry| &mut registry.projects,
+                |tracked| tracked.forget(Path::new(&path)),
+            )?;
+            if changed {
+                state.mark_skills_dirty();
+            }
+            Ok(projects)
+        },
+    )
     .await
 }
 
@@ -504,30 +543,36 @@ pub async fn remove_skill_project(
 /// changed.
 #[tauri::command]
 pub async fn import_tracked_projects(
+    trace: crate::timing_log::IpcTrace,
     added: Vec<String>,
     excluded: Vec<String>,
     app: tauri::AppHandle,
 ) -> Result<TrackedProjects, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "import_tracked_projects", move || {
-        let state = app.state::<SkillRefreshState>();
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        let added = drop_home_directory_from_batch(added, &home);
-        let (projects, changed) = update_registry_section(
-            &home,
-            |registry| &mut registry.projects,
-            |tracked| {
-                tracked.track(added.iter().map(|path| PathBuf::from(path.as_str())));
-                for path in &excluded {
-                    tracked.untrack(Path::new(path));
-                }
-            },
-        )?;
-        if changed {
-            state.mark_skills_dirty();
-        }
-        Ok(projects)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "import_tracked_projects",
+        move || {
+            let state = app.state::<SkillRefreshState>();
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            let added = drop_home_directory_from_batch(added, &home);
+            let (projects, changed) = update_registry_section(
+                &home,
+                |registry| &mut registry.projects,
+                |tracked| {
+                    tracked.track(added.iter().map(|path| PathBuf::from(path.as_str())));
+                    for path in &excluded {
+                        tracked.untrack(Path::new(path));
+                    }
+                },
+            )?;
+            if changed {
+                state.mark_skills_dirty();
+            }
+            Ok(projects)
+        },
+    )
     .await
 }
 
@@ -557,15 +602,21 @@ fn discovery_source_settings(sources: &DiscoverySources) -> Vec<DiscoverySourceS
 /// directly rather than going through `update_registry_section`.
 #[tauri::command]
 pub async fn get_discovery_sources(
+    trace: crate::timing_log::IpcTrace,
     app: tauri::AppHandle,
 ) -> Result<Vec<DiscoverySourceSetting>, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "get_discovery_sources", move || {
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        Ok(discovery_source_settings(
-            &super::skill_fork_registry::read_fork_registry(&home)?.discovery,
-        ))
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "get_discovery_sources",
+        move || {
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            Ok(discovery_source_settings(
+                &super::skill_fork_registry::read_fork_registry(&home)?.discovery,
+            ))
+        },
+    )
     .await
 }
 
@@ -594,20 +645,26 @@ fn set_discovery_source_at(
 /// the folders only that harness's history named.
 #[tauri::command(async)]
 pub async fn set_discovery_source(
+    trace: crate::timing_log::IpcTrace,
     harness: String,
     enabled: bool,
     app: tauri::AppHandle,
 ) -> Result<Vec<DiscoverySourceSetting>, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "set_discovery_source", move || {
-        let state = app.state::<SkillRefreshState>();
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        let (settings, changed) = set_discovery_source_at(&home, &harness, enabled)?;
-        if changed {
-            state.mark_skills_dirty();
-        }
-        Ok(settings)
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "set_discovery_source",
+        move || {
+            let state = app.state::<SkillRefreshState>();
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            let (settings, changed) = set_discovery_source_at(&home, &harness, enabled)?;
+            if changed {
+                state.mark_skills_dirty();
+            }
+            Ok(settings)
+        },
+    )
     .await
 }
 
@@ -1349,15 +1406,19 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
     // needs a schedule of its own (`issue-3.9a-followup-a.md` item 3).
     // Routed through `first_scan_then_sweep` so a test can pin both the
     // order and the thread without re-implementing this loop's scaffold.
-    first_scan_then_sweep(
-        &mut || {
-            if let Err(e) = rebuild_snapshot_now(&app, &state) {
-                eprintln!("skill refresh: initial rebuild failed: {e}");
-            }
-            reconcile_watchers_from_snapshot(&home, &state, &mut debouncer, &mut watched);
-        },
-        super::core_runtime::build_runtime_write,
-    );
+    let _: Result<(), String> = in_background_span("snapshot_refresh.startup", || {
+        first_scan_then_sweep(
+            &mut || {
+                let result = rebuild_snapshot_now(&app, &state);
+                if let Err(e) = &result {
+                    eprintln!("skill refresh: initial rebuild failed: {e}");
+                }
+                reconcile_watchers_from_snapshot(&home, &state, &mut debouncer, &mut watched);
+                result.map(|_| ())
+            },
+            super::core_runtime::build_runtime_write,
+        )
+    });
     run_startup_doctor_pass(&app);
 
     let mut last_invocations_rebuild = Instant::now();
@@ -1396,7 +1457,9 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
                     // Files changed inside existing skill folders: re-read
                     // just those skills instead of rescanning every root.
                     let names = plan.targeted_skills;
-                    if let Err(e) = reconcile_watched_skill_names_and_emit(&app, &state, names) {
+                    if let Err(e) = in_background_span("snapshot_refresh.targeted", || {
+                        reconcile_watched_skill_names_and_emit(&app, &state, names)
+                    }) {
                         eprintln!("skill refresh: targeted refresh failed: {e}");
                         state.mark_skills_dirty();
                     }
@@ -1428,7 +1491,9 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
                 // mid-rebuild sets them again rather than being lost.
                 state.skills_dirty.store(false, Ordering::SeqCst);
                 state.invocations_dirty.store(false, Ordering::SeqCst);
-                match rebuild_snapshot_now(&app, &state) {
+                match in_background_span("snapshot_refresh.full", || {
+                    rebuild_snapshot_now(&app, &state)
+                }) {
                     Ok(_) => {
                         reconcile_watchers_from_snapshot(
                             &home,
@@ -1450,7 +1515,10 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
             }
             RefreshStep::InvocationsOnly => {
                 state.invocations_dirty.store(false, Ordering::SeqCst);
-                rebuild_invocations_only(&app, &state).is_err_and(|e| {
+                in_background_span("snapshot_refresh.invocations", || {
+                    rebuild_invocations_only(&app, &state)
+                })
+                .is_err_and(|e| {
                     eprintln!("skill refresh: invocations-only rebuild failed: {e}");
                     state.invocations_dirty.store(true, Ordering::SeqCst);
                     true
@@ -1459,7 +1527,10 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
             // Nothing on disk changed, but the wall clock crossed an hour
             // boundary: the rolling invocation windows need recomputing even
             // though `skills`/`projects` don't.
-            RefreshStep::HourlyWindows => rebuild_invocations_only(&app, &state).is_err_and(|e| {
+            RefreshStep::HourlyWindows => in_background_span("snapshot_refresh.hourly", || {
+                rebuild_invocations_only(&app, &state)
+            })
+            .is_err_and(|e| {
                 eprintln!("skill refresh: hourly rebuild failed: {e}");
                 true
             }),
@@ -1467,6 +1538,32 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
         last_invocations_rebuild = Instant::now();
         retry_not_before = failed.then(|| last_invocations_rebuild + FAILED_REBUILD_RETRY);
     }
+}
+
+/// Runs one refresh step as a sampled background root, so the core ops it
+/// runs join that root's trace and share its sampling decision.
+fn in_background_span<T, E>(
+    name: &'static str,
+    step: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    in_background_span_with_span(name, CommandSpan::start(Trigger::Background, None), step)
+}
+
+fn in_background_span_with_span<T, E>(
+    name: &'static str,
+    span: CommandSpan,
+    step: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    let start = Instant::now();
+    let result = span.enter(step);
+    skill_studio_host::telemetry::record_command(
+        skill_studio_host::telemetry::Surface::Desktop,
+        name,
+        span,
+        start.elapsed().as_millis() as u64,
+        result.is_ok(),
+    );
+    result
 }
 
 /// The inputs one refresh-loop tick reads before it picks a [`RefreshStep`].
@@ -1512,7 +1609,7 @@ fn next_refresh_step(tick: RefreshTick) -> RefreshStep {
 
 /// Runs `run_refresh_loop`'s first-iteration sequence - the initial
 /// snapshot rebuild, then the startup quarantine sweep, in that order, both
-/// on whichever thread the caller runs on. `rebuild` (`&mut dyn FnMut()` -
+/// on whichever thread the caller runs on. `rebuild` (`&mut dyn FnMut() -> Result<(), String>` -
 /// the production call site also reconciles the filesystem watcher, which
 /// needs `&mut` access to its own locals) is the only injected
 /// seam: it stands in for `rebuild_snapshot_now`, which needs a real Tauri
@@ -1526,11 +1623,12 @@ fn next_refresh_step(tick: RefreshTick) -> RefreshStep {
 /// that mutation. Only `build_runtime` - the sweep's own seam, already used
 /// without a real `AppHandle` - is passed through.
 fn first_scan_then_sweep(
-    rebuild: &mut dyn FnMut(),
+    rebuild: &mut dyn FnMut() -> Result<(), String>,
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
-) {
-    rebuild();
-    run_startup_quarantine_sweep(build_runtime);
+) -> Result<(), String> {
+    let rebuild_result = rebuild();
+    let sweep_result = run_startup_quarantine_sweep(build_runtime);
+    rebuild_result.and(sweep_result)
 }
 
 /// The startup quarantine sweep unit 3.9b's `run_refresh_loop` runs once,
@@ -1544,27 +1642,29 @@ fn first_scan_then_sweep(
 /// project here as well is a follow-up, not part of the happy path.
 fn run_startup_quarantine_sweep(
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
-) {
+) -> Result<(), String> {
     let rt = match build_runtime() {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("skill refresh: startup quarantine sweep could not build a runtime: {e}");
-            return;
+            return Err(e);
         }
     };
     let ctx = skill_studio_core::ports::OpContext::uncancellable(
         skill_studio_core::identity::CorrelationId(ulid::Ulid::generate().to_string()),
     );
-    if let Err(e) = skill_studio_core::ops::sweep_quarantine(
+    skill_studio_core::ops::sweep_quarantine(
         &rt,
         &ctx,
         &skill_studio_core::identity::RootScope::Global,
-    ) {
+    )
+    .map_err(|e| {
         eprintln!(
             "skill refresh: startup quarantine sweep failed: {}",
             e.message
         );
-    }
+        e.message
+    })
 }
 
 /// Unit 5.3: one doctor pass over every lifecycle invariant, run once after
@@ -1580,36 +1680,41 @@ fn run_startup_quarantine_sweep(
 /// every other step in this loop, not retried.
 fn run_startup_doctor_pass(app: &AppHandle) {
     let app_for_result = app.clone();
-    run_startup_doctor_pass_with(
-        super::core_runtime::build_runtime_write,
-        |result, elapsed| {
-            let (outcome, error) = match &result {
-                Ok(_) => ("ok", None),
-                Err(e) => ("error", Some(e.clone())),
-            };
-            crate::timing_log::record_command(
-                &app_for_result,
-                "doctor",
-                elapsed.as_millis() as u64,
-                &[],
-                "worker",
-                outcome,
-                error,
-            );
-            match result {
-                Ok(report) => {
-                    if let Err(e) = app_for_result.emit(super::skill_doctor::DOCTOR_EVENT, &report)
-                    {
-                        eprintln!(
-                            "skill refresh: failed to emit {}: {e}",
-                            super::skill_doctor::DOCTOR_EVENT
-                        );
+    let span = CommandSpan::start(Trigger::Background, None);
+    span.enter(|| {
+        run_startup_doctor_pass_with(
+            super::core_runtime::build_runtime_write,
+            |result, elapsed| {
+                let (outcome, error) = match &result {
+                    Ok(_) => ("ok", None),
+                    Err(e) => ("error", Some(e.clone())),
+                };
+                crate::timing_log::record_command(
+                    &app_for_result,
+                    "doctor",
+                    span,
+                    elapsed.as_millis() as u64,
+                    &[],
+                    "worker",
+                    outcome,
+                    error,
+                );
+                match result {
+                    Ok(report) => {
+                        if let Err(e) =
+                            app_for_result.emit(super::skill_doctor::DOCTOR_EVENT, &report)
+                        {
+                            eprintln!(
+                                "skill refresh: failed to emit {}: {e}",
+                                super::skill_doctor::DOCTOR_EVENT
+                            );
+                        }
                     }
+                    Err(e) => eprintln!("skill refresh: startup doctor pass failed: {e}"),
                 }
-                Err(e) => eprintln!("skill refresh: startup doctor pass failed: {e}"),
-            }
-        },
-    );
+            },
+        );
+    });
 }
 
 /// The startup doctor sweep's body, split from [`run_startup_doctor_pass`] so
@@ -6305,6 +6410,40 @@ resolved_commit = "old"
         );
     }
 
+    #[test]
+    fn startup_rebuild_failure_emits_error_root_and_still_runs_sweep() {
+        let mut swept = false;
+        let envelopes = sentry::test::with_captured_envelopes(|| {
+            let result = in_background_span_with_span(
+                "snapshot_refresh.startup",
+                CommandSpan::start(Trigger::User, None),
+                || {
+                    first_scan_then_sweep(&mut || Err("rebuild failed".into()), || {
+                        swept = true;
+                        Err("runtime unavailable".into())
+                    })
+                },
+            );
+            assert_eq!(result, Err("rebuild failed".into()));
+        });
+        assert!(swept);
+        let transaction = envelopes
+            .iter()
+            .flat_map(|e| e.items())
+            .find_map(|item| {
+                if let sentry::protocol::EnvelopeItem::Transaction(transaction) = item {
+                    Some(transaction)
+                } else {
+                    None
+                }
+            })
+            .expect("startup must emit its root transaction");
+        assert_eq!(
+            transaction.tags.get("outcome").map(String::as_str),
+            Some("error")
+        );
+    }
+
     /// `startup_prune_runs_after_the_first_scan_off_the_ui_thread_or_names_the_missing_run`:
     /// calls `first_scan_then_sweep` - the exact function `run_refresh_loop`'s
     /// first iteration calls - with a test-owned `rebuild` closure but the
@@ -6342,12 +6481,13 @@ resolved_commit = "old"
         let build_runtime_log = StdArc::clone(&log);
 
         let handle = std::thread::spawn(move || {
-            first_scan_then_sweep(
+            let _ = first_scan_then_sweep(
                 &mut || {
                     scan_log
                         .lock()
                         .unwrap()
                         .push(("scan", std::thread::current().id()));
+                    Ok(())
                 },
                 move || {
                     // `build_runtime` is reached after lease cleanup and

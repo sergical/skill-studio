@@ -143,19 +143,25 @@ fn add_method_defaults(home: &Path, project: Option<&Path>, path_var: &str) -> A
 /// pick its Method and Harnesses defaults.
 #[tauri::command]
 pub async fn get_add_method_defaults(
+    trace: crate::timing_log::IpcTrace,
     app: tauri::AppHandle,
     project_path: Option<String>,
 ) -> Result<AddMethodDefaults, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, "get_add_method_defaults", move || {
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        let path_var = std::env::var("PATH").unwrap_or_default();
-        Ok(add_method_defaults(
-            &home,
-            project_path.as_deref().map(Path::new),
-            &path_var,
-        ))
-    })
+    crate::timing_log::time_command_blocking(
+        &timing_app,
+        trace,
+        "get_add_method_defaults",
+        move || {
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            let path_var = std::env::var("PATH").unwrap_or_default();
+            Ok(add_method_defaults(
+                &home,
+                project_path.as_deref().map(Path::new),
+                &path_var,
+            ))
+        },
+    )
     .await
 }
 

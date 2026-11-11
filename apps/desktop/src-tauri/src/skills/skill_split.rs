@@ -28,12 +28,13 @@ fn parse_harnesses(harnesses: &[String]) -> Result<Vec<AgentId>, String> {
 
 #[tauri::command]
 pub async fn split_skill(
+    trace: crate::timing_log::IpcTrace,
     target: LifecycleTarget,
     harnesses: Vec<String>,
     app: tauri::AppHandle,
 ) -> Result<SplitOutcome, String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, "split_skill", move || {
+    crate::timing_log::time_command_blocking(&app, trace, "split_skill", move || {
         let raw = target
             .deployment_id
             .as_deref()
@@ -64,12 +65,13 @@ pub async fn split_skill(
 /// dialog shows `CODEX_HOME` and the `OpenCode` config root as they are.
 #[tauri::command]
 pub async fn split_skill_targets(
+    trace: crate::timing_log::IpcTrace,
     skill_name: String,
     project_path: Option<String>,
     harnesses: Vec<String>,
     app: tauri::AppHandle,
 ) -> Result<Vec<SplitCopy>, String> {
-    crate::timing_log::time_command_blocking(&app, "split_skill_targets", move || {
+    crate::timing_log::time_command_blocking(&app, trace, "split_skill_targets", move || {
         let harnesses = parse_harnesses(&harnesses)?;
         let rt = super::core_runtime::build_runtime_write()?;
         let scope = match project_path {
@@ -108,12 +110,13 @@ fn agent_off_request(target: &LifecycleTarget, agent: &str) -> Result<AgentOffRe
 /// `agent`'s copy: one journal event, one undo.
 #[tauri::command]
 pub async fn turn_off_for_agent(
+    trace: crate::timing_log::IpcTrace,
     target: LifecycleTarget,
     agent: String,
     app: tauri::AppHandle,
 ) -> Result<AgentOffOutcome, String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, "turn_off_for_agent", move || {
+    crate::timing_log::time_command_blocking(&app, trace, "turn_off_for_agent", move || {
         let request = agent_off_request(&target, &agent)?;
         let names = skill_names_for_deployments([&request.deployment_id]);
         let rt = super::core_runtime::build_runtime_write()?;
@@ -132,11 +135,12 @@ pub async fn turn_off_for_agent(
 /// refuse, and the git warning. Writes nothing.
 #[tauri::command]
 pub async fn turn_off_check(
+    trace: crate::timing_log::IpcTrace,
     target: LifecycleTarget,
     agent: String,
     app: tauri::AppHandle,
 ) -> Result<AgentOffCheck, String> {
-    crate::timing_log::time_command_blocking(&app, "turn_off_check", move || {
+    crate::timing_log::time_command_blocking(&app, trace, "turn_off_check", move || {
         let request = agent_off_request(&target, &agent)?;
         let rt = super::core_runtime::build_runtime_write()?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
