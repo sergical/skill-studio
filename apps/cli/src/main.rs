@@ -28,6 +28,7 @@ use skill_studio_core::dto::{
     RepairApplyMode, RepairApplyRequest, RepairPreviewRequest, RestoreRequest, ScanRequest,
     UnparkRequest, UpdateRequest,
 };
+use skill_studio_core::frontmatter::InvocationPolicy;
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::health::{self, Outcome, TimingRow};
 use skill_studio_core::identity::{
@@ -92,6 +93,18 @@ struct Cli {
 // follow.
 #[derive(Subcommand)]
 enum Command {
+    /// Check invocation across copies, or set every copy of a skill.
+    Invocation {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        skill: Option<String>,
+        #[arg(long, conflicts_with = "auto", requires = "skill")]
+        manual: bool,
+        #[arg(long, requires = "skill")]
+        auto: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// List every skill installed for your agents.
     Scan {
         #[command(flatten)]
@@ -627,6 +640,25 @@ fn main() -> ExitCode {
         } => run_install_preferences(&scope, project_path, json, time),
         Command::Conflicts { scope, json } => run_diagnose_conflict(&scope, json, time),
         Command::Extras { scope, json } => run_extras(&scope, json, time),
+        Command::Invocation {
+            scope,
+            skill,
+            manual,
+            auto,
+            json,
+        } => run_invocation(
+            &scope,
+            skill,
+            if manual {
+                Some(InvocationPolicy::UserOnly)
+            } else if auto {
+                Some(InvocationPolicy::Both)
+            } else {
+                None
+            },
+            json,
+            time,
+        ),
         Command::Doctor { scope, json } => run_doctor(&scope, json, time),
         Command::TurnOff {
             scope,
@@ -2180,4 +2212,31 @@ fn run_extras(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
     );
     let envelope = ResultEnvelope::from_result(Operation::Extras, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_extras_table)
+}
+
+fn run_invocation(
+    scope: &ScopeArgs,
+    skill: Option<String>,
+    policy: Option<InvocationPolicy>,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    use skill_studio_core::ops_invocation::{invocation, InvocationReport, InvocationRequest};
+    let rt = match if policy.is_some() {
+        build_runtime_write::<InvocationReport>(scope, Operation::Invocation, json)
+    } else {
+        build_runtime::<InvocationReport>(scope, Operation::Invocation, json)
+    } {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let req = InvocationRequest {
+        skill: skill.map(SkillName),
+        policy,
+        deployment_id: None,
+    };
+    let result = invocation(&rt, &ctx, &req);
+    let envelope = ResultEnvelope::from_result(Operation::Invocation, &rt.scope, &ctx, result);
+    finish(&envelope, json, time, output::print_invocation_table)
 }

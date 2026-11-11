@@ -754,6 +754,12 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         ("doctor_request", || {
             schemars::schema_for!(skill_studio_core::dto::DoctorRequest)
         }),
+        ("invocation_request", || {
+            schemars::schema_for!(skill_studio_core::ops_invocation::InvocationRequest)
+        }),
+        ("invocation_report", || {
+            schemars::schema_for!(skill_studio_core::ops_invocation::InvocationReport)
+        }),
         ("doctor_report", || schemars::schema_for!(DoctorReport)),
         ("park_request", || {
             schemars::schema_for!(skill_studio_core::dto::ParkRequest)
@@ -816,6 +822,29 @@ pub fn print_extras_table(envelope: &ResultEnvelope<skill_studio_core::extras::E
                 row.path.display(),
                 row.status
             );
+        }
+    }
+}
+
+pub fn print_invocation_table(
+    envelope: &ResultEnvelope<skill_studio_core::ops_invocation::InvocationReport>,
+) {
+    print_errors(envelope);
+    if let Some(report) = &envelope.data {
+        for skill in &report.skills {
+            for d in &skill.deployments {
+                println!(
+                    "{} {} {:?}{} {}",
+                    skill.skill.0.as_str(),
+                    d.harness.as_str(),
+                    d.mode,
+                    if skill.mismatch { " MISMATCH" } else { "" },
+                    d.path.display()
+                );
+            }
+        }
+        for id in &report.event_ids {
+            println!("Undo: skill-studio restore --event-id {}", id.0);
         }
     }
 }

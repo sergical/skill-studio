@@ -1078,6 +1078,7 @@ const READ_TOOLS: &[&str] = &[
     "outdated",
 ];
 const WRITE_TOOLS: &[&str] = &[
+    "invocation",
     "apply_frontmatter_repair",
     "restore_event",
     "fix",

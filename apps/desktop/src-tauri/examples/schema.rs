@@ -37,6 +37,8 @@ use skill_studio_lib::skills::skill_refresh::{DiscoverySourceSetting, SkillSnaps
 struct WireTypes {
     extras_report: skill_studio_core::extras::ExtrasReport,
     extras_request: skill_studio_core::extras::ExtrasRequest,
+    invocation_request: skill_studio_core::ops_invocation::InvocationRequest,
+    invocation_report: skill_studio_core::ops_invocation::InvocationReport,
     skill_snapshot: SkillSnapshot,
     background_status: skill_studio_lib::skills::background_work::BackgroundStatus,
     agent_target: AgentTarget,

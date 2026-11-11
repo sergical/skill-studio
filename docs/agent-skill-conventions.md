@@ -50,14 +50,14 @@ description matches the task. Grok Build's model-side control is not verified
 yet (see the "unknown" cell below). [Skill uses](#skill-uses) lists
 how each harness records a typed command and a model call.
 
-| Agent       | Explicit invocation | Restrict model auto-invoke                                                                     | Agent setting that hides a skill (Skill Studio reads it)                         |
-| ----------- | ------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Claude Code | `/name [args]`      | frontmatter `disable-model-invocation: true` (user only); `user-invocable: false` (model only) | `~/.claude/settings.json` → `skillOverrides: {"<name>": "off"}`                  |
-| Codex       | `$name`, `/skills`  | sidecar `agents/openai.yaml` → `policy.allow_implicit_invocation: false`                       | `~/.codex/config.toml` → `[[skills.config]] path = "…/SKILL.md" enabled = false` |
-| OpenCode    | `/name`             | `permission.skill` in `opencode.json`: per-name pattern `allow` / `deny` / `ask`               | same: `"name": "deny"` (wildcards allowed, e.g. `internal-*`)                    |
-| pi          | `/skill:name`       | frontmatter `disable-model-invocation: true`                                                   | none                                                                             |
-| Cursor      | `/name`             | frontmatter `disable-model-invocation: true`                                                   | none                                                                             |
-| Grok Build  | `/name`             | unknown                                                                                        | none                                                                             |
+| Agent       | Explicit invocation | Restrict model auto-invoke                                                                                       | Agent setting that hides a skill (Skill Studio reads it)                         |
+| ----------- | ------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Claude Code | `/name [args]`      | frontmatter `disable-model-invocation: true` (user only); `user-invocable: false` (model only)                   | `~/.claude/settings.json` → `skillOverrides: {"<name>": "off"}`                  |
+| Codex       | `$name`, `/skills`  | sidecar `agents/openai.yaml` → `policy.allow_implicit_invocation: false`                                         | `~/.codex/config.toml` → `[[skills.config]] path = "…/SKILL.md" enabled = false` |
+| OpenCode    | `/name`             | `disable-model-invocation: true`; `metadata["opencode/autoinvoke"]` overrides it (boolean or number 1/0, v2.2.6) | `permission.skill` in `opencode.json`: `"name": "deny"` (wildcards allowed)      |
+| pi          | `/skill:name`       | frontmatter `disable-model-invocation: true`                                                                     | none                                                                             |
+| Cursor      | `/name`             | frontmatter `disable-model-invocation: true`                                                                     | none                                                                             |
+| Grok Build  | `/name`             | unknown                                                                                                          | none                                                                             |
 
 Sources: https://code.claude.com/docs/en/skills · https://developers.openai.com/codex/skills ·
 https://opencode.ai/docs/skills/ · https://opencode.ai/v2/docs/skills/ · https://pi.dev/docs/latest/skills ·
@@ -66,6 +66,14 @@ https://cursor.com/docs/skills · https://docs.x.ai/build/features/skills-plugin
 Frontmatter-based controls (`disable-model-invocation`, `user-invocable`) edit the
 Universal SKILL.md, so they apply to every agent that reads that folder or a symlink
 to it. Config-based controls for Codex and OpenCode apply to one harness.
+
+`skill-studio invocation [skill]` checks both skill-owned controls and reports
+manual, auto, or unsupported for each harness and copy. `--manual` or `--auto`
+writes the controls to all editable copies of the named skill. OpenCode v2.2.6
+uses `metadata["opencode/autoinvoke"]` when set, otherwise it uses
+`disable-model-invocation`, otherwise model invocation is allowed. Manual mode
+sets the frontmatter flag and changes an existing auto-invoke override to false.
+Grok Build reports unsupported. The setter does not change harness config files.
 
 ### Other Claude Code frontmatter fields
 
@@ -349,14 +357,14 @@ keep these roots under the selected home. Other roots use the default paths belo
 
 Checked against upstream docs on 2026-11-11:
 
-| Agent | Hooks | MCP servers | Instruction files |
-| --- | --- | --- | --- |
-| Claude Code | `~/.claude/settings.json`; project `.claude/settings.json`, `settings.local.json`; `hooks.<event>[]` contains handler groups | `~/.claude.json` has `mcpServers` and `projects.<absolute-project-path>.mcpServers`; project `.mcp.json` has `mcpServers` | Global `~/.claude/CLAUDE.md`; project `CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md` |
-| Codex | Global and project `.codex/hooks.json` or inline `[hooks]` in `.codex/config.toml`; event arrays contain handler groups | Global and project `.codex/config.toml`, `[mcp_servers.<name>]` | Global `.codex/AGENTS.md`, `AGENTS.override.md`; project `AGENTS.md`, `AGENTS.override.md` |
-| OpenCode | No declarative hook file in this inventory; plugins can register events in code | Global `~/.config/opencode/opencode.json` or `.jsonc`; project `opencode.json` or `.jsonc` and `.opencode/opencode.json` or `.jsonc`; `mcp.<name>` | Global config directory `AGENTS.md`, fallback `~/.claude/CLAUDE.md`; project `AGENTS.md`, `CLAUDE.md` |
-| Cursor | Global and project `.cursor/hooks.json`; `hooks.<event>[]` contains handlers | Global and project `.cursor/mcp.json`; `mcpServers` | Project `AGENTS.md` |
-| pi | Events are registered by extensions in code, not a declarative hooks file | `~/.pi/agent/mcp.json`, project `.pi/mcp.json`; `mcpServers` in current pi | Global `~/.pi/agent/AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`; project equivalents; global agent directory and project `.pi/` also have `SYSTEM.md`, `APPEND_SYSTEM.md` |
-| Grok Build | `~/.grok/hooks/*.json`, project `.grok/hooks/*.json`, inline `[hooks]` in `~/.grok/config.toml` | Global and project `.grok/config.toml`, `[mcp_servers.<name>]` | Global `~/.grok/` and project root: `AGENTS.md`, `AGENT.md`, `CLAUDE.md`, `CLAUDE.local.md` |
+| Agent       | Hooks                                                                                                                        | MCP servers                                                                                                                                                                          | Instruction files                                                                                                                                                           |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code | `~/.claude/settings.json`; project `.claude/settings.json`, `settings.local.json`; `hooks.<event>[]` contains handler groups | `~/.claude.json` has `mcpServers` and `projects.<absolute-project-path>.mcpServers`; project `.mcp.json` has `mcpServers`                                                            | Global `~/.claude/CLAUDE.md`; project `CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md`                                                                                   |
+| Codex       | Global and project `.codex/hooks.json` or inline `[hooks]` in `.codex/config.toml`; event arrays contain handler groups      | Global and project `.codex/config.toml`, `[mcp_servers.<name>]`                                                                                                                      | Global `.codex/AGENTS.md`, `AGENTS.override.md`; project `AGENTS.md`, `AGENTS.override.md`                                                                                  |
+| OpenCode    | No declarative hook file in this inventory; plugins can register events in code                                              | Global `~/.config/opencode/opencode.json` or `.jsonc`; project `opencode.json` or `.jsonc` and `.opencode/opencode.json` or `.jsonc`; `mcp.<name>` (V1) or `mcp.servers.<name>` (V2) | Global config directory `AGENTS.md`, fallback `~/.claude/CLAUDE.md`; project `AGENTS.md`, `CLAUDE.md`                                                                       |
+| Cursor      | Global and project `.cursor/hooks.json`; `hooks.<event>[]` contains handlers                                                 | Global and project `.cursor/mcp.json`; `mcpServers`                                                                                                                                  | Project `AGENTS.md`                                                                                                                                                         |
+| pi          | Events are registered by extensions in code, not a declarative hooks file                                                    | `~/.pi/agent/mcp.json`, project `.pi/mcp.json`; `mcpServers` in current pi                                                                                                           | Global `~/.pi/agent/AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`; project equivalents; global agent directory and project `.pi/` also have `SYSTEM.md`, `APPEND_SYSTEM.md` |
+| Grok Build  | `~/.grok/hooks/*.json`, project `.grok/hooks/*.json`, inline `[hooks]` in `~/.grok/config.toml`                              | Global and project `.grok/config.toml`, `[mcp_servers.<name>]`                                                                                                                       | Global `~/.grok/` and project root: `AGENTS.md`, `AGENT.md`, `CLAUDE.md`, `CLAUDE.local.md`                                                                                 |
 
 Grok also reads Claude and Cursor rule directories for compatibility. Rule
 directories are outside this inventory. Grok instruction filenames in the table
