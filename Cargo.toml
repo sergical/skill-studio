@@ -63,6 +63,13 @@ debug = false
 [profile.dev]
 debug = "line-tables-only"
 
+# On macOS, any debug info keeps every codegen unit's .o file beside each
+# linked binary; with ~60 test binaries per worktree that was 56 GB of the
+# shared target/. Assertion failures still print file:line, which comes from
+# the panic location, not debug info.
+[profile.test]
+debug = false
+
 # The release workflow uploads a .dSYM per target next to each DMG. Cargo's
 # default release profile carries no debug info, so dsymutil would emit an
 # empty bundle; line tables are enough to symbolicate crash reports and add

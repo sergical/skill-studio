@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  loadLaunchChoice,
   buildFirstRunSave,
   continueIsBlocked,
   FIRST_RUN_TELEMETRY_DEFAULT,
@@ -81,4 +82,62 @@ describe("buildFirstRunSave", () => {
       saved_at: "2026-01-01T00:00:00.000Z",
     });
   });
+});
+
+it("returning launch detects in the background and opens before probes finish or blocks startup", async () => {
+  let finish: ((report: { harnesses: [] }) => void) | undefined;
+  const detect = vi.fn(
+    () =>
+      new Promise<{ harnesses: [] }>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const onGate = vi.fn();
+  const onReport = vi.fn();
+  const choice = {
+    kept: ["claude-code"],
+    search_project_folders: true,
+    saved_at: "2026-01-01T00:00:00Z",
+  };
+  const onChoice = vi.fn();
+  await loadLaunchChoice({
+    readChoice: async () => choice,
+    detect,
+    onChoice,
+    onGate,
+    onReport,
+    onError: vi.fn(),
+  });
+  expect(onGate).toHaveBeenCalledWith(false);
+  expect(detect).toHaveBeenCalledOnce();
+  expect(onReport).not.toHaveBeenCalled();
+  expect(onChoice).toHaveBeenCalledWith(choice);
+  finish?.({ harnesses: [] });
+  await Promise.resolve();
+  expect(onReport).toHaveBeenCalledWith({ harnesses: [] });
+  expect(choice.kept).toEqual(["claude-code"]);
+});
+
+it("an unreadable launch choice still detects and opens with every new agent off or leaves a permanent spinner", async () => {
+  const onGate = vi.fn();
+  const onChoice = vi.fn();
+  const onReport = vi.fn();
+  const onError = vi.fn();
+  const detect = vi.fn(async () => ({ harnesses: [] }));
+  await loadLaunchChoice({
+    readChoice: async () => {
+      throw new Error("saved choice is unreadable");
+    },
+    detect,
+    onGate,
+    onChoice,
+    onReport,
+    onError,
+  });
+  expect(onGate).toHaveBeenCalledWith(false);
+  expect(onChoice).toHaveBeenCalledWith(null);
+  expect(detect).toHaveBeenCalledOnce();
+  expect(onError).toHaveBeenCalledWith("saved choice is unreadable");
+  await Promise.resolve();
+  expect(onReport).toHaveBeenCalledWith({ harnesses: [] });
 });

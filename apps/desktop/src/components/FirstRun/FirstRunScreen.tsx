@@ -90,7 +90,8 @@ function FirstRunScreenBody({ onComplete }: FirstRunScreenProps) {
             {rows != null && (
               <ul className="divide-y divide-border rounded-md border border-border">
                 {rows.map((row) => {
-                  const secondary = secondaryText(row.state);
+                  const secondary =
+                    row.executable_on_path === false ? "Not on PATH" : secondaryText(row.state);
                   const secondaryId = secondary != null ? `${row.id}-secondary` : undefined;
                   return (
                     <li key={row.id} className="flex items-center justify-between gap-3 px-4 py-3">

@@ -1,0 +1,200 @@
+{
+  "status": "provisional: recorded under load",
+  "source_git_sha": "14da9726f33a354bc036415047a808a4098fa585",
+  "dirty": false,
+  "recorded_at_utc": "2026-11-10T10:44:54.599717+00:00",
+  "hardware": {
+    "cpu": "Apple M3 Max",
+    "memory_bytes": 38654705664,
+    "macos": "26.7"
+  },
+  "binary_sha256": {
+    "desktop": "fc17bc762d4411c48c23ff15f1147d5613c29dc88d7d45c20066f494bda0e7cd",
+    "version_fixture": "c68a3f79fc04bfbaacded70bcc90b7423e718f0dcb9a13020697a03665eacbd2",
+    "fixture_generator": "6c5b07bd7becd03997dea5ccc5277ca66e5554b0397f5fc8efaaff87c6037bc2"
+  },
+  "cache_state": "fresh native process, Tauri runtime and login shell each sample; warm executable trust and OS caches",
+  "percentile": "nearest rank",
+  "phases": {
+    "cache_miss": {
+      "samples": [
+        {
+          "load_average": "{ 13.15 10.96 9.80 }",
+          "cargo_processes": 11,
+          "rustc_processes": 5,
+          "detection_ms": 120.13312499999999,
+          "native_round_trip_ms": 131.562167
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 116.605,
+          "native_round_trip_ms": 126.889
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 211.042,
+          "native_round_trip_ms": 221.729542
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 185.592334,
+          "native_round_trip_ms": 200.705459
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 212.161125,
+          "native_round_trip_ms": 223.664417
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 120.759041,
+          "native_round_trip_ms": 130.744084
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 113.048833,
+          "native_round_trip_ms": 122.879084
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 159.990583,
+          "native_round_trip_ms": 169.917958
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 214.534291,
+          "native_round_trip_ms": 224.462667
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 153.586583,
+          "native_round_trip_ms": 163.67425
+        }
+      ],
+      "detection_ms": {
+        "n": 10,
+        "median": 156.788583,
+        "p95": 214.534291,
+        "max": 214.534291
+      },
+      "native_round_trip_ms": {
+        "n": 10,
+        "median": 166.796104,
+        "p95": 224.462667,
+        "max": 224.462667
+      }
+    },
+    "cache_hit": {
+      "samples": [
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 30.135125,
+          "native_round_trip_ms": 41.582125
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 24.873209,
+          "native_round_trip_ms": 34.940709
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 22.435917,
+          "native_round_trip_ms": 33.67175
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 23.240458,
+          "native_round_trip_ms": 33.93225
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 26.65325,
+          "native_round_trip_ms": 45.408333
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 24.286458,
+          "native_round_trip_ms": 37.060583
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 26.860166,
+          "native_round_trip_ms": 38.530208
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 26.646208,
+          "native_round_trip_ms": 37.617834
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 23.938208,
+          "native_round_trip_ms": 37.358
+        },
+        {
+          "load_average": "{ 12.74 10.91 9.79 }",
+          "cargo_processes": 11,
+          "rustc_processes": 1,
+          "detection_ms": 33.749375,
+          "native_round_trip_ms": 44.888625
+        }
+      ],
+      "detection_ms": {
+        "n": 10,
+        "median": 25.759708500000002,
+        "p95": 33.749375,
+        "max": 33.749375
+      },
+      "native_round_trip_ms": {
+        "n": 10,
+        "median": 37.487916999999996,
+        "p95": 45.408333,
+        "max": 45.408333
+      }
+    }
+  },
+  "fixture": {
+    "skills": 378,
+    "global_skills": 239,
+    "plugin_caches": ["claude", "codex"],
+    "broken_skill_files": 3,
+    "seed": 1,
+    "agents": 6
+  }
+}

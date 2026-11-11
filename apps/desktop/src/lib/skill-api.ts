@@ -276,6 +276,10 @@ export async function getHarnessesChoice(): Promise<HarnessesChoice | null> {
   return callCommand("get_harnesses_choice");
 }
 
+export async function setHarnessEnabled(id: string, enabled: boolean): Promise<HarnessesChoice> {
+  return callCommand("set_harness_enabled", { id, enabled });
+}
+
 /**
  * Saves the first-run screen's choice so the next launch skips it, along
  * with the same screen's telemetry switch.
