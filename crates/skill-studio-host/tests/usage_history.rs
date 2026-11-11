@@ -97,14 +97,13 @@ fn usage_claude_history_preserves_sessions_and_each_trigger() {
         serde_json::json!({"type":"assistant","sessionId":"s2","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"gamma"}}]}}),
         serde_json::json!({"type":"assistant","sessionId":"s3","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/u/.agents/skills/gamma/SKILL.md"}}]}}),
     ];
-    let text: String = records
-        .into_iter()
-        .map(|mut v| {
-            v["timestamp"] = "2026-09-29T12:00:00Z".into();
-            v["cwd"] = "/work".into();
-            format!("{v}\n")
-        })
-        .collect();
+    let mut text = String::new();
+    for mut record in records {
+        record["timestamp"] = "2026-09-29T12:00:00Z".into();
+        record["cwd"] = "/work".into();
+        text.push_str(&record.to_string());
+        text.push('\n');
+    }
     fs::write(path.join("s.jsonl"), format!("{text}{{bad json\n")).unwrap();
     let data = report(dir.path());
     assert_eq!(data["rows"][0]["sessions"], 3, "{data}");

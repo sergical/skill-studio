@@ -1190,13 +1190,13 @@ impl SkillInvocationIndex {
                 source.watch.iter().map(|watch| (watch.dir)(home)).collect()
             };
             for path in roots {
-                let reason = if !sources.is_enabled(source.harness) {
+                let reason = if sources.is_enabled(source.harness) {
+                    fs::read_dir(&path).err().map(|e| e.to_string())
+                } else {
                     Some(format!(
                         "{} history disabled in discovery settings",
                         source.harness
                     ))
-                } else {
-                    fs::read_dir(&path).err().map(|e| e.to_string())
                 };
                 if let Some(reason) = reason {
                     out.push(UsageObservation { path, reason });
@@ -1510,7 +1510,7 @@ impl SkillInvocationIndex {
                 }
                 match std::str::from_utf8(&line) {
                     Ok(text) if serde_json::from_str::<serde_json::Value>(text).is_ok() => {
-                        entry.uses.extend(parse(&file, text, &mut entry.context))
+                        entry.uses.extend(parse(&file, text, &mut entry.context));
                     }
                     _ => entry.skipped_lines += 1,
                 }
