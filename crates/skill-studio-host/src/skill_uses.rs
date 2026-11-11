@@ -31,11 +31,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use skill_studio_core::discovery_sources::DiscoverySources;
 use skill_studio_core::identity::AgentId;
-use skill_studio_core::skill_uses::parse_claude_code_uses;
+use skill_studio_core::skill_uses::parse_claude_code_uses_checked;
 use skill_studio_core::skill_uses::{
-    parse_codex_uses, parse_cursor_uses, parse_grok_uses, parse_pi_uses, skill_heatmap,
-    skill_stats, InvocationHeatmap, SkillInvocation, SkillInvocationStats, SkillUseFilter,
-    TranscriptContext,
+    parse_codex_uses_checked, parse_cursor_uses_checked, parse_grok_uses_checked,
+    parse_pi_uses_checked, skill_heatmap, skill_stats, InvocationHeatmap, SkillInvocation,
+    SkillInvocationStats, SkillUseFilter, TranscriptContext,
 };
 
 use crate::discovery::{cursor_workspace_folders, grok_session_cwd, MAX_GROK_SESSION_DIRS};
@@ -82,7 +82,7 @@ fn default_run_budget() -> u64 {
 /// the end of the last fully-parsed line, so an append-only transcript can be
 /// resumed from where the previous refresh left off instead of reparsed from
 /// scratch.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct IndexedTranscript {
     size: u64,
     modified: SystemTime,
@@ -109,6 +109,12 @@ struct IndexedTranscript {
     /// session or project path.
     #[serde(default)]
     context: TranscriptContext,
+    #[serde(default)]
+    observations: Vec<UsageObservation>,
+    #[serde(default)]
+    compressed_complete: bool,
+    #[serde(default)]
+    skipped_lines: u64,
 }
 
 /// How many bytes of a transcript's already-parsed tail are kept for
@@ -161,7 +167,7 @@ fn database_stamp(path: &Path) -> DatabaseStamp {
 
 /// A database's cached parse result, keyed by [`DatabaseStamp`] so a refresh
 /// can tell whether it needs to be re-queried.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct IndexedDatabase {
     stamp: DatabaseStamp,
     /// Highest `time_updated` seen per table (`session_message`, `part`), so
@@ -172,9 +178,20 @@ struct IndexedDatabase {
     rows: BTreeMap<String, Vec<SkillInvocation>>,
 }
 
+/// History that was unavailable or skipped. A path may identify a root or a file.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct UsageObservation {
+    /// Root or transcript that could not be fully read.
+    pub path: PathBuf,
+    /// Why history was unavailable.
+    pub reason: String,
+}
+
 /// Outcome of one `SkillInvocationIndex::refresh` call.
 #[derive(Debug, Clone, Default)]
 pub struct SkillUseRefreshReport {
+    /// Read or listing failures during this pass.
+    pub observations: Vec<UsageObservation>,
     /// Number of transcript files re-parsed (in full or in part) this call.
     pub files_reparsed: usize,
     /// Number of cached files or databases removed because they no longer
@@ -209,7 +226,8 @@ enum UseReader {
     /// offset.
     Transcripts {
         list: fn(&Path) -> SourceListing,
-        parse: fn(&TranscriptFile, &str, &mut TranscriptContext) -> Vec<SkillInvocation>,
+        parse:
+            fn(&TranscriptFile, &str, &mut TranscriptContext, &mut usize) -> Vec<SkillInvocation>,
     },
     /// `SQLite` databases, re-queried from a `time_updated` watermark.
     Databases {
@@ -299,8 +317,12 @@ fn is_regular_file(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
 }
 
+fn is_zstd(path: &Path) -> bool {
+    path.to_str().is_some_and(|p| p.ends_with(".jsonl.zst"))
+}
+
 fn is_jsonl(path: &Path) -> bool {
-    path.extension().is_some_and(|ext| ext == "jsonl") && is_regular_file(path)
+    (path.extension().is_some_and(|ext| ext == "jsonl") || is_zstd(path)) && is_regular_file(path)
 }
 
 fn claude_code_root(home: &Path) -> PathBuf {
@@ -383,7 +405,7 @@ fn list_claude_code_transcripts(home: &Path) -> SourceListing {
     }
 }
 
-/// Adapts [`parse_claude_code_uses`] to the [`UseReader::Transcripts`]
+/// Adapts [`parse_claude_code_uses_checked`] to the [`UseReader::Transcripts`]
 /// `parse` signature. Claude Code repeats its session id and cwd on every
 /// record, so unlike Codex it needs no [`TranscriptContext`], and it never
 /// needs the file itself.
@@ -391,18 +413,20 @@ fn parse_claude_code_uses_with_context(
     _file: &TranscriptFile,
     text: &str,
     _context: &mut TranscriptContext,
+    invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
-    parse_claude_code_uses(text)
+    parse_claude_code_uses_checked(text, invalid)
 }
 
-/// Adapts [`parse_codex_uses`] to the [`UseReader::Transcripts`] `parse`
+/// Adapts [`parse_codex_uses_checked`] to the [`UseReader::Transcripts`] `parse`
 /// signature; Codex never needs the file itself.
 fn parse_codex_uses_with_file(
     _file: &TranscriptFile,
     text: &str,
     context: &mut TranscriptContext,
+    invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
-    parse_codex_uses(text, context)
+    parse_codex_uses_checked(text, context, invalid)
 }
 
 fn opencode_root(home: &Path) -> PathBuf {
@@ -412,25 +436,25 @@ fn opencode_root(home: &Path) -> PathBuf {
 /// Codex's live rollouts under the default `<home>/.codex`; also used
 /// (stripped of its `.codex/` prefix) as the sub-path under an overridden
 /// [`codex_root`].
+#[cfg(test)]
 const CODEX_SESSIONS_DIR: &str = ".codex/sessions";
 /// Rollouts Codex has moved aside (still readable, never appended to again),
 /// under the default `<home>/.codex`; see [`CODEX_SESSIONS_DIR`].
+#[cfg(test)]
 const CODEX_ARCHIVED_SESSIONS_DIR: &str = ".codex/archived_sessions";
 
 /// Codex's own directory: `$CODEX_HOME`, or `<home>/.codex` when unset (see
-/// [`crate::discovery::codex_home`]). [`SourceWatch`] entries still watch
-/// the default `.codex/sessions` and `.codex/archived_sessions` under
-/// `home` - watching a `CODEX_HOME` override too is a follow-up.
+/// [`crate::discovery::codex_home`]). Watch paths use the same resolved root.
 fn codex_root(home: &Path) -> PathBuf {
     crate::discovery::codex_home(home)
 }
 
 fn codex_sessions_watch_dir(home: &Path) -> PathBuf {
-    home.join(CODEX_SESSIONS_DIR)
+    codex_root(home).join("sessions")
 }
 
 fn codex_archived_sessions_watch_dir(home: &Path) -> PathBuf {
-    home.join(CODEX_ARCHIVED_SESSIONS_DIR)
+    codex_root(home).join("archived_sessions")
 }
 
 /// How many directory levels [`list_codex_rollouts`] descends below each of
@@ -542,14 +566,15 @@ fn list_pi_sessions(home: &Path) -> SourceListing {
     }
 }
 
-/// Adapts [`parse_pi_uses`] to the [`UseReader::Transcripts`] `parse`
+/// Adapts [`parse_pi_uses_checked`] to the [`UseReader::Transcripts`] `parse`
 /// signature; pi never needs the file itself.
 fn parse_pi_uses_with_file(
     _file: &TranscriptFile,
     text: &str,
     context: &mut TranscriptContext,
+    invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
-    parse_pi_uses(text, context)
+    parse_pi_uses_checked(text, context, invalid)
 }
 
 /// Cursor keeps one directory per opened project here, each holding its own
@@ -665,7 +690,7 @@ fn cursor_project_path(home: &Path, project_dir_name: &str) -> Option<String> {
     Some(first.to_string_lossy().into_owned())
 }
 
-/// Adapts [`parse_cursor_uses`] to the [`UseReader::Transcripts`] `parse`
+/// Adapts [`parse_cursor_uses_checked`] to the [`UseReader::Transcripts`] `parse`
 /// signature. Cursor transcript lines carry no session id, project path, or
 /// timestamp of their own (see the core module doc), so the first call for
 /// a file fills the context from `file.path`/`file.home` before parsing;
@@ -675,13 +700,14 @@ fn parse_cursor_uses_with_file(
     file: &TranscriptFile,
     text: &str,
     context: &mut TranscriptContext,
+    invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
     if context.session.is_none() {
         context.session = cursor_session_from_path(file.path);
         context.project_path = cursor_project_dir_from_path(file.home, file.path)
             .and_then(|name| cursor_project_path(file.home, &name));
     }
-    parse_cursor_uses(text, context, file.modified)
+    parse_cursor_uses_checked(text, context, file.modified, invalid)
 }
 
 /// Grok Build keeps one directory per working folder here, each holding one
@@ -805,7 +831,7 @@ fn grok_forked_at(session_dir: &Path) -> Option<DateTime<Utc>> {
         .map(|at| at.with_timezone(&Utc))
 }
 
-/// Adapts [`parse_grok_uses`] to the [`UseReader::Transcripts`] `parse`
+/// Adapts [`parse_grok_uses_checked`] to the [`UseReader::Transcripts`] `parse`
 /// signature. Grok Build's `updates.jsonl` lines carry no session id or
 /// project path of their own, so the first call for a file fills the context
 /// from the file's path (the session directory name, and its parent decoded
@@ -816,6 +842,7 @@ fn parse_grok_uses_with_file(
     file: &TranscriptFile,
     text: &str,
     context: &mut TranscriptContext,
+    invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
     if context.session.is_none() {
         let session_dir = file.path.parent();
@@ -829,7 +856,7 @@ fn parse_grok_uses_with_file(
             .map(|cwd| cwd.to_string_lossy().into_owned());
         context.forked_at = session_dir.and_then(grok_forked_at);
     }
-    parse_grok_uses(text, context, file.modified)
+    parse_grok_uses_checked(text, context, file.modified, invalid)
 }
 
 /// Every harness this index reads uses from, in the order they're processed.
@@ -1052,8 +1079,10 @@ pub fn is_skill_use_change_with_databases(home: &Path, path: &Path, databases: &
 /// file or database so unchanged sources are never re-read. `file_budget`/
 /// `run_budget` are not persisted (see `with_budgets` for the test-only
 /// override).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SkillInvocationIndex {
+    #[serde(default)]
+    reader_version: u32,
     files: BTreeMap<PathBuf, IndexedTranscript>,
     #[serde(default)]
     databases: BTreeMap<PathBuf, IndexedDatabase>,
@@ -1066,6 +1095,7 @@ pub struct SkillInvocationIndex {
 impl Default for SkillInvocationIndex {
     fn default() -> Self {
         Self {
+            reader_version: 3,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: MAX_FILE_BYTES,
@@ -1081,6 +1111,7 @@ impl SkillInvocationIndex {
     #[cfg(test)]
     fn with_budgets(file_bytes: u64, run_bytes: u64) -> Self {
         Self {
+            reader_version: 3,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: file_bytes,
@@ -1159,6 +1190,50 @@ impl SkillInvocationIndex {
         fs::rename(&tmp_path, cache_path).map_err(|e| e.to_string())
     }
 
+    /// Reports missing, disabled, or unreadable roots and cached file diagnostics.
+    pub fn observations(&self, home: &Path, sources: &DiscoverySources) -> Vec<UsageObservation> {
+        let mut out = Vec::new();
+        for source in SOURCES {
+            let roots = if source.watch.is_empty() {
+                opencode_watch_dirs(home, &opencode_databases(home))
+            } else {
+                source.watch.iter().map(|watch| (watch.dir)(home)).collect()
+            };
+            for path in roots {
+                let reason = match fs::read_dir(&path) {
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                    Err(error) => Some(error.to_string()),
+                    Ok(_) if sources.is_enabled(source.harness) => None,
+                    Ok(_)
+                        if match &source.reader {
+                            UseReader::Transcripts { list, .. } => {
+                                !list(home).files.iter().any(|file| file.starts_with(&path))
+                            }
+                            UseReader::Databases { list, .. } => !list(home)
+                                .iter()
+                                .any(|file| file.starts_with(&path) && file.is_file()),
+                        } =>
+                    {
+                        None
+                    }
+                    Ok(_) => Some(format!(
+                        "{} history disabled in discovery settings",
+                        source.harness
+                    )),
+                };
+                if let Some(reason) = reason {
+                    out.push(UsageObservation { path, reason });
+                }
+            }
+        }
+        out.extend(
+            self.files
+                .values()
+                .flat_map(|entry| entry.observations.clone()),
+        );
+        out
+    }
+
     /// Re-reads every enabled source in `SOURCES` that changed since the
     /// last refresh - transcript files by size/mtime, databases by
     /// [`DatabaseStamp`] - and drops cached entries that no longer exist. A
@@ -1167,6 +1242,11 @@ impl SkillInvocationIndex {
     /// cached entries. Never panics: unreadable dirs/files/databases are
     /// skipped.
     pub fn refresh(&mut self, home: &Path, sources: &DiscoverySources) -> SkillUseRefreshReport {
+        if self.reader_version != 3 {
+            self.files.clear();
+            self.databases.clear();
+            self.reader_version = 3;
+        }
         let mut report = SkillUseRefreshReport::default();
         let mut run_budget = self.run_budget;
 
@@ -1194,6 +1274,20 @@ impl SkillInvocationIndex {
         report
     }
 
+    /// Reads all changed history for callers that do not run on the UI thread.
+    pub(crate) fn refresh_all(
+        &mut self,
+        home: &Path,
+        sources: &DiscoverySources,
+    ) -> SkillUseRefreshReport {
+        let budgets = (self.file_budget, self.run_budget);
+        self.file_budget = u64::MAX;
+        self.run_budget = u64::MAX;
+        let report = self.refresh(home, sources);
+        (self.file_budget, self.run_budget) = budgets;
+        report
+    }
+
     /// One [`UseReader::Transcripts`] source's share of `refresh`: lists its
     /// files, re-parses the ones that changed (resuming from their cached
     /// byte offset), and drops cached files under this source's root that
@@ -1203,7 +1297,12 @@ impl SkillInvocationIndex {
         home: &Path,
         source: &UseSource,
         list: fn(&Path) -> SourceListing,
-        parse: fn(&TranscriptFile, &str, &mut TranscriptContext) -> Vec<SkillInvocation>,
+        parse: fn(
+            &TranscriptFile,
+            &str,
+            &mut TranscriptContext,
+            &mut usize,
+        ) -> Vec<SkillInvocation>,
         run_budget: &mut u64,
         report: &mut SkillUseRefreshReport,
     ) {
@@ -1211,18 +1310,38 @@ impl SkillInvocationIndex {
         let listing = list(home);
         if listing.incomplete {
             report.incomplete = true;
+            report.observations.push(UsageObservation {
+                path: owned_root.clone(),
+                reason: "Could not list all history directories".into(),
+            });
         }
         let listed_dirs = listing.listed_dirs;
         let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
 
         for path in listing.files {
             seen.insert(path.clone());
+            let log_root = source
+                .watch
+                .iter()
+                .map(|watch| (watch.dir)(home))
+                .find(|root| path.starts_with(root))
+                .unwrap_or_else(|| owned_root.clone());
 
             let Ok(meta) = fs::metadata(&path) else {
                 continue;
             };
             let size = meta.len();
             let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+
+            if is_zstd(&path) {
+                let file = TranscriptFile {
+                    home,
+                    path: &path,
+                    modified: DateTime::<Utc>::from(modified),
+                };
+                self.refresh_compressed(&file, &log_root, &meta, parse, run_budget, report);
+                continue;
+            }
 
             let (start_offset, mut uses, skip_to_newline, mut context) = match self.files.get(&path)
             {
@@ -1265,19 +1384,35 @@ impl SkillInvocationIndex {
 
             if *run_budget == 0 {
                 report.incomplete = true;
+                report.observations.push(UsageObservation {
+                    path: log_root.clone(),
+                    reason: "History read byte budget reached".into(),
+                });
                 continue;
             }
 
             let file_budget = self.file_budget.min(*run_budget);
-            let Some((text, consumed, skipping_line)) = read_transcript_from_offset(
+            let budget_before = *run_budget;
+            let Some((text, consumed, skipping_line, gaps)) = read_transcript_from_offset(
                 &path,
                 start_offset,
                 file_budget,
                 run_budget,
                 skip_to_newline,
             ) else {
+                report.observations.push(UsageObservation {
+                    path: path.clone(),
+                    reason: "Could not read transcript".into(),
+                });
                 continue;
             };
+            let mut observations = self
+                .files
+                .get(&path)
+                .filter(|_| start_offset > 0)
+                .map(|e| e.observations.clone())
+                .unwrap_or_default();
+            let mut invalid = 0;
             let parsed_bytes = start_offset + consumed;
             let modified_utc = meta
                 .modified()
@@ -1287,9 +1422,19 @@ impl SkillInvocationIndex {
                 path: &path,
                 modified: modified_utc,
             };
-            uses.extend(parse(&file, &text, &mut context));
-            if parsed_bytes < size {
+            uses.extend(parse(&file, &text, &mut context, &mut invalid));
+            if invalid > 0 || gaps > 0 {
+                observations.push(UsageObservation {
+                    path: path.clone(),
+                    reason: format!("Skipped {invalid} unparseable lines; {gaps} oversized or invalid UTF-8 lines"),
+                });
+            }
+            if parsed_bytes < size && budget_before.saturating_sub(*run_budget) == file_budget {
                 report.incomplete = true;
+                report.observations.push(UsageObservation {
+                    path: log_root.clone(),
+                    reason: "Transcript read stopped before end of file".into(),
+                });
             }
 
             report.files_reparsed += 1;
@@ -1305,6 +1450,9 @@ impl SkillInvocationIndex {
                     skipping_line,
                     tail_sample,
                     context,
+                    observations,
+                    compressed_complete: false,
+                    skipped_lines: 0,
                 },
             );
         }
@@ -1332,6 +1480,105 @@ impl SkillInvocationIndex {
             )
         });
         report.files_dropped += before - self.files.len();
+    }
+
+    fn refresh_compressed(
+        &mut self,
+        transcript: &TranscriptFile,
+        root: &Path,
+        meta: &fs::Metadata,
+        parse: fn(
+            &TranscriptFile,
+            &str,
+            &mut TranscriptContext,
+            &mut usize,
+        ) -> Vec<SkillInvocation>,
+        run_budget: &mut u64,
+        report: &mut SkillUseRefreshReport,
+    ) {
+        let path = transcript.path;
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let previous = self
+            .files
+            .get(path)
+            .filter(|e| e.size == meta.len() && e.modified == modified);
+        if previous.is_some_and(|e| e.compressed_complete) {
+            return;
+        }
+        if *run_budget == 0 {
+            report.incomplete = true;
+            report.observations.push(UsageObservation {
+                path: root.to_path_buf(),
+                reason: "History read byte budget reached".into(),
+            });
+            return;
+        }
+        let mut entry = previous.cloned().unwrap_or(IndexedTranscript {
+            size: meta.len(),
+            modified,
+            parsed_bytes: 0,
+            uses: Vec::new(),
+            skipping_line: false,
+            tail_sample: Vec::new(),
+            context: TranscriptContext::default(),
+            observations: Vec::new(),
+            compressed_complete: false,
+            skipped_lines: 0,
+        });
+        let result = (|| -> io::Result<()> {
+            let file = fs::File::open(path)?;
+            let mut decoder = zstd::stream::read::Decoder::new(file)?;
+            // Zstd has no byte seek. Replay to the decoded offset without buffering it.
+            let skipped = io::copy(
+                &mut decoder.by_ref().take(entry.parsed_bytes),
+                &mut io::sink(),
+            )?;
+            if skipped != entry.parsed_bytes {
+                return Err(io::Error::other(
+                    "Compressed transcript changed while reading",
+                ));
+            }
+            let mut reader = BufReader::new(decoder);
+            let budget = self.file_budget.min(*run_budget);
+            let budget_before = *run_budget;
+            let (text, consumed, skipping, gaps) =
+                read_transcript_lines(&mut reader, budget, run_budget, entry.skipping_line)?;
+            let mut invalid = 0;
+            entry
+                .uses
+                .extend(parse(transcript, &text, &mut entry.context, &mut invalid));
+            entry.parsed_bytes += consumed;
+            entry.skipping_line = skipping;
+            entry.skipped_lines += gaps + invalid as u64;
+            report.bytes_read += consumed;
+            entry.compressed_complete = budget_before.saturating_sub(*run_budget) < budget;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            report.observations.push(UsageObservation {
+                path: path.to_path_buf(),
+                reason: format!("Could not decode compressed transcript: {e}"),
+            });
+            return;
+        }
+        if entry.skipped_lines > 0 {
+            entry.observations = vec![UsageObservation {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "Skipped {} unparseable or oversized lines",
+                    entry.skipped_lines
+                ),
+            }];
+        }
+        report.files_reparsed += 1;
+        if !entry.compressed_complete {
+            report.incomplete = true;
+            report.observations.push(UsageObservation {
+                path: root.to_path_buf(),
+                reason: "Compressed transcript read stopped at the byte budget".into(),
+            });
+        }
+        self.files.insert(path.to_path_buf(), entry);
     }
 
     /// One [`UseReader::Databases`] source's share of `refresh`: lists its
@@ -1365,6 +1612,11 @@ impl SkillInvocationIndex {
                 entry.stamp = stamp;
                 self.databases.insert(path, entry);
                 report.databases_read += 1;
+            } else {
+                report.observations.push(UsageObservation {
+                    path,
+                    reason: "Could not read history database".into(),
+                });
             }
             // A failed read leaves the old cached stamp in place, so the
             // next refresh retries it on its own - `report.incomplete`
@@ -1452,154 +1704,104 @@ fn read_tail_sample(path: &Path, offset: u64) -> Vec<u8> {
     }
 }
 
-/// Read `path` starting at byte `start_offset`, line by line, bounded per
-/// line and by `file_budget`/`run_budget`. Returns the concatenated text of
-/// every *complete, `\n`-terminated* line read, the number of bytes consumed
-/// for those complete lines, and whether the read ended mid-drain of a line
-/// too big to fit this pass's budget (see below). An ordinary (in-budget)
-/// final line at true EOF with no trailing `\n` is never committed - it may
-/// still be being written - so the next refresh re-reads it from the same
-/// offset (and it will be parseable once complete). A line that overruns
-/// `MAX_LINE_BYTES`, or that alone can't fit `file_budget`, is drained and
-/// skipped rather than buffered or parsed - including an oversized line
-/// still unterminated at EOF: since an oversized line is unparseable even
-/// once complete, re-reading it would only loop on the same bytes forever,
-/// so it is committed (drained) and `skip_to_newline` resumes an in-progress
-/// drain left over from a previous, budget-truncated pass, so a persistently
-/// oversized line still makes progress instead of being re-read from
-/// scratch (and truncated at the same point) forever.
-/// `None` when the file can't be opened or seeked to; an empty read (nothing
-/// to do) still returns `Some(("", 0, false))`.
+/// Read complete records. Leave an unfinished tail at its previous offset.
 fn read_transcript_from_offset(
     path: &Path,
     start_offset: u64,
     file_budget: u64,
     run_budget: &mut u64,
     skip_to_newline: bool,
-) -> Option<(String, u64, bool)> {
+) -> Option<(String, u64, bool, u64)> {
     let mut file = fs::File::open(path).ok()?;
     file.seek(SeekFrom::Start(start_offset)).ok()?;
-    let mut reader = BufReader::new(file);
+    read_transcript_lines(
+        &mut BufReader::new(file),
+        file_budget,
+        run_budget,
+        skip_to_newline,
+    )
+    .ok()
+}
+
+fn could_hold_skill_use(bytes: &[u8]) -> bool {
+    [
+        "SKILL.md",
+        "<skill",
+        "\"Skill\"",
+        "<command-name>",
+        "session_meta",
+        "\"session\"",
+        "\"skills\"",
+        "user_message_chunk",
+        "tool_call",
+    ]
+    .iter()
+    .any(|marker| memchr::memmem::find(bytes, marker.as_bytes()).is_some())
+}
+
+fn read_transcript_lines(
+    reader: &mut impl BufRead,
+    budget: u64,
+    run_budget: &mut u64,
+    mut skipping: bool,
+) -> io::Result<(String, u64, bool, u64)> {
+    const SKILL_LINE_CAP: usize = 32 * 1024 * 1024;
     let mut text = String::new();
-    let mut consumed: u64 = 0;
-    let mut remaining = file_budget;
-    let mut skipping = skip_to_newline;
-
-    if skipping {
+    let mut consumed = 0;
+    let mut gaps = 0;
+    while consumed < budget {
+        let mut line = Vec::new();
+        let mut length = 0;
+        let mut marker = false;
+        let mut tail = Vec::new();
         loop {
-            if remaining == 0 {
-                // Still mid-drain: resume from here next pass.
-                return Some((text, consumed, true));
-            }
-            let chunk_cap = (MAX_LINE_BYTES as u64 + 1).min(remaining);
-            let mut chunk: Vec<u8> = Vec::new();
-            let read = reader
+            let mut chunk = Vec::new();
+            let n = reader
                 .by_ref()
-                .take(chunk_cap)
-                .read_until(b'\n', &mut chunk);
-            let n = match read {
-                Ok(0) => {
-                    skipping = false; // true EOF: nothing left to drain
-                    break;
-                }
-                Ok(n) => n as u64,
-                Err(_) => {
-                    skipping = false;
-                    break;
-                }
-            };
-            remaining = remaining.saturating_sub(n);
-            *run_budget = run_budget.saturating_sub(n);
-            consumed += n;
-            if chunk.last() == Some(&b'\n') {
-                skipping = false;
-                break;
+                .take((MAX_LINE_BYTES as u64).min(budget - consumed))
+                .read_until(b'\n', &mut chunk)?;
+            if n == 0 {
+                return Ok((text, consumed - length, skipping, gaps));
             }
-        }
-    }
-
-    'lines: loop {
-        if remaining == 0 {
-            break;
-        }
-        let mut line_buf: Vec<u8> = Vec::new();
-        let mut line_bytes: u64 = 0;
-        let mut terminated = false;
-
-        // Inner loop only exits via one of the `break`s below (a line is
-        // complete at a `\n`, at true EOF, or on a read error) or via
-        // `break 'lines` (budget exhausted mid-line, handled there).
-        loop {
-            if remaining == 0 {
-                if line_bytes > MAX_LINE_BYTES as u64 || line_bytes >= file_budget {
-                    // Too big to buffer, or too big to ever fit one pass's
-                    // budget: commit the bytes already drained and resume
-                    // draining (not re-reading from scratch) next pass.
-                    skipping = true;
-                } else {
-                    // An ordinary line cut short by the budget: don't count
-                    // it as consumed, so the next pass re-reads it whole.
-                    consumed -= line_bytes;
-                }
-                break 'lines;
+            consumed += n as u64;
+            length += n as u64;
+            *run_budget = run_budget.saturating_sub(n as u64);
+            if length > SKILL_LINE_CAP as u64 {
+                tail.extend_from_slice(&chunk);
+                marker |= could_hold_skill_use(&tail);
+                tail = tail[tail.len().saturating_sub(32)..].to_vec();
             }
-            // Cap each chunk at the line limit (+1, to distinguish "found
-            // the newline right at the cap" from "no newline within the
-            // cap") so a pathologically long line is never buffered in full
-            // in one read; a still-unterminated line loops for another chunk.
-            let chunk_cap = (MAX_LINE_BYTES as u64 + 1).min(remaining);
-            let mut chunk: Vec<u8> = Vec::new();
-            let read = reader
-                .by_ref()
-                .take(chunk_cap)
-                .read_until(b'\n', &mut chunk);
-            let n = match read {
-                Ok(0) | Err(_) => break, // true EOF, or a read error treated the same way
-                Ok(n) => n as u64,
-            };
-            remaining = remaining.saturating_sub(n);
-            *run_budget = run_budget.saturating_sub(n);
-            consumed += n;
-            line_bytes += n;
-            if line_buf.len() as u64 <= MAX_LINE_BYTES as u64 {
-                line_buf.extend_from_slice(&chunk);
+            if line.len() <= SKILL_LINE_CAP {
+                line.extend_from_slice(&chunk);
             }
             if chunk.last() == Some(&b'\n') {
-                terminated = true;
                 break;
             }
-        }
-
-        if line_bytes == 0 {
-            break; // nothing left to read
-        }
-
-        if !terminated {
-            // Final line at true EOF with no trailing `\n`. An ordinary
-            // (in-budget) line isn't committed so the next refresh re-reads
-            // it from this same offset once it's complete - and it *will* be
-            // parseable then. An oversized line, however, is never parsed
-            // even once complete (it's drained-and-skipped below), so
-            // reverting it would only re-read the same unparseable bytes
-            // forever and keep `incomplete` wedged. Mirror the budget branch:
-            // commit the drained bytes and resume draining next pass.
-            if line_bytes > MAX_LINE_BYTES as u64 {
-                skipping = true;
-            } else {
-                consumed -= line_bytes;
+            if consumed == budget {
+                if length >= budget || length > SKILL_LINE_CAP as u64 {
+                    return Ok((text, consumed, true, gaps + 1));
+                }
+                return Ok((text, consumed - length, false, gaps));
             }
-            break;
         }
-
-        let oversized = line_buf.len() as u64 > MAX_LINE_BYTES as u64;
-        if !oversized {
-            if let Ok(line) = std::str::from_utf8(&line_buf) {
-                text.push_str(line);
-            }
+        if skipping {
+            skipping = false;
+            continue;
+        }
+        marker |= length > MAX_LINE_BYTES as u64 && could_hold_skill_use(&line);
+        if length > MAX_LINE_BYTES as u64 && !marker {
+            continue;
+        }
+        if length > SKILL_LINE_CAP as u64 {
+            gaps += 1;
+            continue;
+        }
+        match std::str::from_utf8(&line) {
+            Ok(line) => text.push_str(line),
+            Err(_) => gaps += 1,
         }
     }
-
-    Some((text, consumed, skipping))
+    Ok((text, consumed, skipping, gaps))
 }
 
 #[cfg(test)]
@@ -1609,6 +1811,19 @@ mod tests {
     use skill_studio_core::skill_uses::SkillTrigger;
     use std::collections::BTreeSet as StdBTreeSet;
     use std::time::Duration;
+
+    #[test]
+    fn usage_disabled_empty_root_stays_complete_instead_of_inventing_a_gap() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".codex/sessions");
+        fs::create_dir_all(&root).unwrap();
+        let mut sources = DiscoverySources::default();
+        sources.set("codex", false);
+        let index = SkillInvocationIndex::default();
+        assert!(index.observations(home.path(), &sources).is_empty());
+        fs::write(root.join("session.jsonl"), "{}\n").unwrap();
+        assert_eq!(index.observations(home.path(), &sources).len(), 1);
+    }
 
     fn skill_line(skill: &str, timestamp: &str, cwd: &str) -> String {
         format!(
@@ -2044,7 +2259,7 @@ mod tests {
     }
 
     #[test]
-    fn oversized_unterminated_final_line_does_not_stall() {
+    fn oversized_unterminated_tail_waits_for_the_next_append() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         let session_dir = home.join(CLAUDE_PROJECTS_ROOT).join("-my-project");
@@ -2059,17 +2274,14 @@ mod tests {
         let first = index.refresh(home, &sources);
         assert!(!first.incomplete);
         let entry = index.files.get(&path).unwrap();
-        assert_eq!(entry.parsed_bytes as usize, content.len());
-        assert!(entry.skipping_line);
+        assert_eq!(entry.parsed_bytes, 0);
+        assert!(!entry.skipping_line);
         assert!(stats(&index, &known_skills, &sources).is_empty());
 
         let second = index.refresh(home, &sources);
-        assert_eq!(second.files_reparsed, 0);
+        assert_eq!(second.files_reparsed, 1);
         assert!(!second.incomplete);
-        assert_eq!(
-            index.files.get(&path).unwrap().parsed_bytes as usize,
-            content.len()
-        );
+        assert_eq!(index.files.get(&path).unwrap().parsed_bytes, 0);
         assert!(stats(&index, &known_skills, &sources).is_empty());
     }
 

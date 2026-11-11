@@ -164,6 +164,13 @@ export type FixApplied = {
    */
   event_id: string;
 };
+/**
+ * Absolute path of a tracked project directory.
+ *
+ * Invariant: the path is canonical inside a [`crate::scope::NormalizedScope`].
+ * Wire values are the lexical path the caller gave.
+ */
+export type ProjectRef = string;
 
 /**
  * Flat list of declarations. Trust and enable settings are not evaluated.
@@ -1499,22 +1506,92 @@ export interface ParkOutcome {
   warnings?: string[];
 }
 /**
- * Result of `park_check`.
+ * Skills to park after all names pass validation.
  */
-export interface ParkCheck {
+export interface BatchParkRequest {
   /**
-   * True when the copy sits in a git work tree and git lists a file under
-   * it, so moving or removing it shows as deleted files in that repo.
-   * False when git is missing, the folder is not in a repo, or git does
-   * not track it (untracked or ignored). `None` when the check could not
-   * run: on macOS without the command line tools, `git` is a stub that
-   * opens an install dialog, so it is not run.
+   * Names in the order they will be parked.
    */
-  git_tracked: boolean | null;
+  skills: SkillName[];
+}
+/**
+ * Results in the requested order. Each item has its own event id.
+ */
+export interface BatchParkOutcome {
   /**
-   * The project the copy belongs to, when it is a project copy.
+   * One normal park result per skill.
    */
-  project: string | null;
+  items: ParkOutcome[];
+  /**
+   * Item that failed after validation, when a runtime error stopped the batch.
+   */
+  failure: BatchFailure | null;
+  /**
+   * Items skipped after the failure.
+   */
+  not_tried: SkillName[];
+}
+/**
+ * The failed item and its error. Earlier items keep their normal results.
+ */
+export interface BatchFailure {
+  /**
+   * Lexical skill name: the directory name that holds `SKILL.md`.
+   *
+   * Invariant: two deployments with the same `SkillName` are the same skill,
+   * even when their bytes differ. A symlink alias with another name is another
+   * skill.
+   */
+  skill: string;
+  error: ErrorEntry;
+}
+/**
+ * Reason the item failed.
+ */
+export interface ErrorEntry {
+  /**
+   * Stable code.
+   */
+  code:
+    | "invalid_request"
+    | "invalid_scope"
+    | "ambiguous_target"
+    | "unsupported"
+    | "backup_expired"
+    | "execution_failed"
+    | "io"
+    | "scope_busy"
+    | "stale_proposal"
+    | "drift_conflict"
+    | "ownership_changed"
+    | "already_reverted"
+    | "incomplete"
+    | "cancelled";
+  /**
+   * Human-readable message.
+   */
+  message: string;
+  /**
+   * Display path relative to the scope home, when there is one.
+   */
+  path: string | null;
+}
+/**
+ * Results of turning a batch of parked skills on.
+ */
+export interface BatchUnparkOutcome {
+  /**
+   * One normal unpark result per skill, in request order.
+   */
+  items: UnparkOutcome[];
+  /**
+   * Item that failed after validation, when a runtime error stopped the batch.
+   */
+  failure: BatchFailure | null;
+  /**
+   * Items skipped after the failure.
+   */
+  not_tried: SkillName[];
 }
 /**
  * Result of `unpark`.
@@ -1537,6 +1614,24 @@ export interface UnparkOutcome {
    * Where the directory now lives: the folder it was parked from.
    */
   restored_path: string;
+}
+/**
+ * Result of `park_check`.
+ */
+export interface ParkCheck {
+  /**
+   * True when the copy sits in a git work tree and git lists a file under
+   * it, so moving or removing it shows as deleted files in that repo.
+   * False when git is missing, the folder is not in a repo, or git does
+   * not track it (untracked or ignored). `None` when the check could not
+   * run: on macOS without the command line tools, `git` is a stub that
+   * opens an install dialog, so it is not run.
+   */
+  git_tracked: boolean | null;
+  /**
+   * The project the copy belongs to, when it is a project copy.
+   */
+  project: string | null;
 }
 /**
  * Result of `split`.
@@ -1795,6 +1890,10 @@ export interface UpdateAllItem {
  */
 export interface DoctorReport {
   /**
+   * Estimated skill listing cost per harness and session scope.
+   */
+  listing_cost: ListingCost[];
+  /**
    * Every violation found; empty means a healthy scope.
    */
   violations: DoctorViolation[];
@@ -1805,6 +1904,75 @@ export interface DoctorReport {
    * so this does not add them in.
    */
   checked: number;
+}
+/**
+ * Listing cost for one harness in one session scope.
+ */
+export interface ListingCost {
+  /**
+   * Kebab-case harness identifier, for example `claude-code` or `open-code`.
+   *
+   * Invariant: the string is the serde wire name used by the desktop app
+   * today. `open-code` is canonical; `opencode` is only a CLI binary name and
+   * is never stored in an `AgentId`.
+   */
+  harness: string;
+  /**
+   * Project sessions include global skills. Identity rules depend on the harness.
+   */
+  scope:
+    | {
+        scope: "global";
+      }
+    | {
+        scope: "project";
+        project: ProjectRef;
+      };
+  /**
+   * Number of model-visible skill entries.
+   */
+  listed_skills: number;
+  /**
+   * UTF-16 characters (UTF-8 bytes for Codex), divided by four and rounded up.
+   */
+  estimated_tokens_chars_div_4: number;
+  /**
+   * Budget in estimated tokens, or null when not verified.
+   */
+  limit_tokens: number | null;
+  /**
+   * Setting file path, default, or reason the limit is unknown.
+   */
+  limit_source: string;
+  /**
+   * Context size used for a fractional budget.
+   */
+  context_window_tokens: number | null;
+  /**
+   * Whether a verified fallback was used instead of a session context size.
+   */
+  uses_default_context_window: boolean;
+  /**
+   * `over_limit` or `near_limit` at 80 percent, otherwise null.
+   */
+  warning: string | null;
+  /**
+   * The five largest entries, with names as a stable tie break.
+   */
+  top_skills: ListingSkillCost[];
+}
+/**
+ * One skill's contribution to the listing.
+ */
+export interface ListingSkillCost {
+  /**
+   * Model-visible name.
+   */
+  name: string;
+  /**
+   * UTF-16 characters (UTF-8 bytes for Codex), divided by four and rounded up.
+   */
+  estimated_tokens_chars_div_4: number;
 }
 /**
  * One violation of a [`crate::doctor::DoctorInvariant`] found by `doctor`,

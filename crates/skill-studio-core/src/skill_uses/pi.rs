@@ -66,16 +66,23 @@ fn tool_call_arguments(value: &serde_json::Value) -> Option<serde_json::Value> {
 /// first time it's seen. Never panics: a malformed line, or one missing a
 /// `timestamp`, is skipped rather than failing the whole file.
 pub fn parse_pi_uses(text: &str, context: &mut TranscriptContext) -> Vec<SkillInvocation> {
+    parse_pi_uses_checked(text, context, &mut 0)
+}
+
+/// Parses history and counts corrupt JSON records without parsing a record twice.
+pub fn parse_pi_uses_checked(
+    text: &str,
+    context: &mut TranscriptContext,
+    invalid: &mut usize,
+) -> Vec<SkillInvocation> {
     let mut out = Vec::new();
 
     for line in text.lines() {
-        if !line.contains(SESSION_MARKER)
-            && !line.contains(SKILL_BLOCK_MARKER)
-            && !line.contains(SKILL_MD_MARKER)
-        {
-            continue;
-        }
-        let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+        let Some(record) = super::checked_history_line(
+            line,
+            &[SESSION_MARKER, SKILL_BLOCK_MARKER, SKILL_MD_MARKER],
+            invalid,
+        ) else {
             continue;
         };
         let record_type = record.get("type").and_then(|v| v.as_str());
@@ -99,13 +106,8 @@ pub fn parse_pi_uses(text: &str, context: &mut TranscriptContext) -> Vec<SkillIn
             continue;
         }
 
-        let Some(timestamp) = record.get("timestamp").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Ok(at) = DateTime::parse_from_rfc3339(timestamp) else {
-            continue;
-        };
-        let at = at.with_timezone(&Utc);
+        let before = out.len();
+        let at = DateTime::<Utc>::UNIX_EPOCH;
 
         let Some(message) = record.get("message") else {
             continue;
@@ -169,6 +171,7 @@ pub fn parse_pi_uses(text: &str, context: &mut TranscriptContext) -> Vec<SkillIn
             }
             _ => {}
         }
+        super::validate_invocation_timestamp(&mut out, before, &record, invalid);
     }
 
     out

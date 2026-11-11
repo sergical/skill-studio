@@ -255,13 +255,13 @@ fn cwd_from_transcript(path: &Path, limits: &mut TranscriptScanLimits) -> Option
         if !trimmed.contains("\"cwd\"") {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        #[derive(serde::Deserialize)]
+        struct TranscriptCwd {
+            cwd: Option<PathBuf>,
+        }
+        let Ok(TranscriptCwd { cwd: Some(path) }) = serde_json::from_str(trimmed) else {
             continue;
         };
-        let Some(cwd) = value.get("cwd").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let path = PathBuf::from(cwd);
         if path.is_absolute() {
             return Some(path);
         }

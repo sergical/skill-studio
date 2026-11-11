@@ -143,6 +143,9 @@ enum Command {
     },
     /// Show which skills your agents used, and which they never used.
     Usage {
+        /// Keep uses from this agent id only.
+        #[arg(long, value_name = "AGENT")]
+        harness: Option<String>,
         #[command(flatten)]
         scope: ScopeArgs,
         /// How many days back to count uses.
@@ -157,7 +160,7 @@ enum Command {
         #[command(flatten)]
         scope: ScopeArgs,
         #[command(flatten)]
-        target: TargetArgs,
+        target: BatchTargets,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -184,7 +187,7 @@ enum Command {
         #[command(flatten)]
         scope: ScopeArgs,
         #[command(flatten)]
-        target: TargetArgs,
+        target: BatchTargets,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -194,7 +197,7 @@ enum Command {
         #[command(flatten)]
         scope: ScopeArgs,
         #[command(flatten)]
-        target: TargetArgs,
+        target: BatchTargets,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -204,7 +207,7 @@ enum Command {
         #[command(flatten)]
         scope: ScopeArgs,
         #[command(flatten)]
-        target: TargetArgs,
+        target: BatchTargets,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -362,11 +365,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Run every lifecycle invariant in `docs/flows.md`
-    /// over the whole scope; writes nothing. Exit code 0 with an empty
-    /// violation list on a healthy home, 1 when any violation is found
-    /// (the same "found something" code `scan`/`diagnose`/`fix` use).
-    #[command(hide = true)]
+    /// Check skill state and model listing budgets. This writes nothing.
     Doctor {
         #[command(flatten)]
         scope: ScopeArgs,
@@ -513,6 +512,16 @@ struct TargetArgs {
     id: Option<String>,
 }
 
+#[derive(clap::Args)]
+struct BatchTargets {
+    /// Names of the skills to change.
+    #[arg(required_unless_present = "id", conflicts_with = "id")]
+    skills: Vec<String>,
+    /// Id of one copy, as printed by scan.
+    #[arg(long, alias = "deployment-id")]
+    id: Option<String>,
+}
+
 fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some("--perf-build-id") {
         println!(
@@ -598,7 +607,12 @@ fn main() -> ExitCode {
             json,
         } => run_restore(&scope, event_id, force, json, time),
         Command::Undo { scope, force, json } => run_undo(&scope, force, json, time),
-        Command::Usage { scope, days, json } => run_usage(&scope, days, json, time),
+        Command::Usage {
+            scope,
+            days,
+            json,
+            harness,
+        } => run_usage(&scope, days, json, time, harness),
         Command::Mcp => unreachable!("handled before telemetry starts"),
         Command::Add {
             scope,
@@ -691,7 +705,7 @@ fn main() -> ExitCode {
             scope,
             target,
             json,
-        } => run_park(&scope, &target, json, time),
+        } => run_park_targets(&scope, &target, json, time),
         Command::Split {
             scope,
             deployment_id,
@@ -707,7 +721,7 @@ fn main() -> ExitCode {
             scope,
             target,
             json,
-        } => run_unpark(&scope, &target, json, time),
+        } => run_unpark_targets(&scope, &target, json, time),
         Command::Outdated {
             scope,
             skills,
@@ -1781,6 +1795,50 @@ fn run_remove(scope: &ScopeArgs, target: &TargetArgs, json: bool, time: bool) ->
     finish(&envelope, json, time, output::print_remove_outcome_table)
 }
 
+fn run_park_targets(scope: &ScopeArgs, target: &BatchTargets, json: bool, time: bool) -> ExitCode {
+    if target.skills.len() <= 1 {
+        return run_park(
+            scope,
+            &TargetArgs {
+                skill: target.skills.first().cloned(),
+                id: target.id.clone(),
+            },
+            json,
+            time,
+        );
+    }
+    let rt = match build_runtime_write::<skill_studio_core::dto::BatchParkOutcome>(
+        scope,
+        Operation::Park,
+        json,
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = ops::park_batch(
+        &rt,
+        &ctx,
+        &skill_studio_core::dto::BatchParkRequest {
+            skills: target.skills.iter().cloned().map(SkillName).collect(),
+        },
+    );
+    if let Ok(outcome) = &result {
+        for item in &outcome.items {
+            for warning in &item.warnings {
+                eprintln!("warning: {warning}");
+            }
+        }
+    }
+    let envelope = ResultEnvelope::from_result(Operation::Park, &rt.scope, &ctx, result);
+    finish(
+        &envelope,
+        json,
+        time,
+        output::print_batch_park_outcome_table,
+    )
+}
+
 /// Moves one real copy to the parked root, via `ops::park`.
 fn run_park(scope: &ScopeArgs, target: &TargetArgs, json: bool, time: bool) -> ExitCode {
     let rt = match build_runtime_write::<skill_studio_core::dto::ParkOutcome>(
@@ -1838,6 +1896,48 @@ fn run_split(
     finish(&envelope, json, time, output::print_split_outcome_table)
 }
 
+fn run_unpark_targets(
+    scope: &ScopeArgs,
+    target: &BatchTargets,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    if target.skills.len() <= 1 {
+        return run_unpark(
+            scope,
+            &TargetArgs {
+                skill: target.skills.first().cloned(),
+                id: target.id.clone(),
+            },
+            json,
+            time,
+        );
+    }
+    let rt = match build_runtime_write::<skill_studio_core::dto::BatchUnparkOutcome>(
+        scope,
+        Operation::Unpark,
+        json,
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = ops::unpark_batch(
+        &rt,
+        &ctx,
+        &skill_studio_core::dto::BatchParkRequest {
+            skills: target.skills.iter().cloned().map(SkillName).collect(),
+        },
+    );
+    let envelope = ResultEnvelope::from_result(Operation::Unpark, &rt.scope, &ctx, result);
+    finish(
+        &envelope,
+        json,
+        time,
+        output::print_batch_unpark_outcome_table,
+    )
+}
+
 /// Moves a parked deployment back to the universal root, via `ops::unpark`.
 fn run_unpark(scope: &ScopeArgs, target: &TargetArgs, json: bool, time: bool) -> ExitCode {
     let rt = match build_runtime_write::<skill_studio_core::dto::UnparkOutcome>(
@@ -1858,7 +1958,13 @@ fn run_unpark(scope: &ScopeArgs, target: &TargetArgs, json: bool, time: bool) ->
 /// Counts each skill's uses over the last `days` days, via
 /// [`skill_studio_host::usage_report`]. Reads the desktop app's use cache
 /// only for the real home, and never writes it.
-fn run_usage(scope: &ScopeArgs, days: u32, json: bool, time: bool) -> ExitCode {
+fn run_usage(
+    scope: &ScopeArgs,
+    days: u32,
+    json: bool,
+    time: bool,
+    harness: Option<String>,
+) -> ExitCode {
     let rt =
         match build_runtime::<skill_studio_host::UsageReport>(scope, Operation::SkillUsage, json) {
             Ok(rt) => rt,
@@ -1866,14 +1972,70 @@ fn run_usage(scope: &ScopeArgs, days: u32, json: bool, time: bool) -> ExitCode {
         };
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let cache = scope.desktop_usage_cache();
-    let result = ops::scan(&rt, &ctx, &ScanRequest::default()).map(|inventory| {
-        skill_studio_host::usage_report(
+    let cli_cache = cache
+        .as_ref()
+        .map(|path| path.with_file_name("cli-skill-uses.json"));
+    let clock = rt.ports.clock.as_ref();
+    let started = std::time::Duration::ZERO;
+    let mut steps = vec![skill_studio_core::timing::step(
+        clock,
+        "scope_resolution",
+        started,
+    )];
+    let scan_start = clock.monotonic();
+    let result = ops::scan_for_usage(&rt, &ctx).map(|inventory| {
+        steps.push(skill_studio_core::timing::step(
+            clock,
+            "installed_scan",
+            scan_start,
+        ));
+        let step_start = clock.monotonic();
+        let mut usage = skill_studio_host::SkillUsage::load_read_only(
+            cli_cache
+                .as_deref()
+                .filter(|path| path.exists())
+                .or(cache.as_deref()),
+        );
+        steps.push(skill_studio_core::timing::step(
+            clock,
+            "usage_cache_load",
+            step_start,
+        ));
+        let step_start = clock.monotonic();
+        let report = usage.report_filtered(
             &rt.scope.home.canonical,
             &inventory,
             days,
-            cache.as_deref(),
-        )
+            chrono::Utc::now(),
+            &skill_studio_host::UsageFilter {
+                harness,
+                projects: scope.project_paths().to_vec(),
+            },
+        );
+        steps.push(skill_studio_core::timing::step(
+            clock,
+            "history_refresh_and_tally",
+            step_start,
+        ));
+        let step_start = clock.monotonic();
+        if let Some(path) = cli_cache {
+            if let Err(error) = usage.save_cache(&path) {
+                eprintln!("Could not save usage cache: {error}");
+            }
+        }
+        steps.push(skill_studio_core::timing::step(
+            clock,
+            "usage_cache_save",
+            step_start,
+        ));
+        report
     });
+    ctx.record_timing(skill_studio_core::timing::op_timing(
+        clock,
+        "skill_usage",
+        started,
+        steps,
+    ));
     let envelope = ResultEnvelope::from_result(Operation::SkillUsage, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_usage_table)
 }

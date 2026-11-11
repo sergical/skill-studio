@@ -49,6 +49,7 @@ pub mod identity;
 pub mod install_targets;
 pub mod invocation;
 pub mod journal;
+pub mod listing_cost;
 pub mod lock_file;
 pub mod opencode_config;
 pub mod ops;

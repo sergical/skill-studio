@@ -537,6 +537,9 @@ fn doctor_error_severity() -> Severity {
 /// command's own rollback logic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DoctorReport {
+    /// Estimated skill listing cost per harness and session scope.
+    #[serde(default)]
+    pub listing_cost: Vec<crate::listing_cost::ListingCost>,
     /// Every violation found; empty means a healthy scope.
     pub violations: Vec<DoctorViolation>,
     /// Skills the pass examined for invariants 1-4 (link, registry,
@@ -680,6 +683,44 @@ pub struct ParkRequest {
     /// The copy to park: the Universal folder or an agent's own folder, at
     /// global or project scope. Never a link or a plugin copy.
     pub deployment_id: DeploymentId,
+}
+
+/// Skills to park after all names pass validation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BatchParkRequest {
+    /// Names in the order they will be parked.
+    pub skills: Vec<SkillName>,
+}
+
+/// Results in the requested order. Each item has its own event id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BatchParkOutcome {
+    /// One normal park result per skill.
+    pub items: Vec<ParkOutcome>,
+    /// Item that failed after validation, when a runtime error stopped the batch.
+    pub failure: Option<BatchFailure>,
+    /// Items skipped after the failure.
+    pub not_tried: Vec<SkillName>,
+}
+
+/// Results of turning a batch of parked skills on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BatchUnparkOutcome {
+    /// One normal unpark result per skill, in request order.
+    pub items: Vec<UnparkOutcome>,
+    /// Item that failed after validation, when a runtime error stopped the batch.
+    pub failure: Option<BatchFailure>,
+    /// Items skipped after the failure.
+    pub not_tried: Vec<SkillName>,
+}
+
+/// The failed item and its error. Earlier items keep their normal results.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BatchFailure {
+    /// Name of the failed item.
+    pub skill: SkillName,
+    /// Reason the item failed.
+    pub error: crate::error::ErrorEntry,
 }
 
 /// Request for `park_check`: what to know before a park or a remove.

@@ -110,6 +110,33 @@ fn exercise(flow: &str, surface: Surface) {
         Fixture::md("gamma", "Original")
     );
     match flow {
+        "Usage history" => {
+            for root in [
+                ".claude/projects/work",
+                ".codex/sessions",
+                ".codex/archived_sessions",
+                ".local/share/opencode",
+                ".pi/agent/sessions",
+                ".cursor/projects",
+                ".grok/sessions",
+            ] {
+                std::fs::create_dir_all(f.home.path().join(root)).unwrap();
+            }
+            std::fs::write(f.home.path().join(".claude/projects/work/session.jsonl"),
+                "{\"type\":\"assistant\",\"timestamp\":\"2026-09-29T12:00:00Z\",\"sessionId\":\"usage-session\",\"cwd\":\"/work\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Skill\",\"input\":{\"skill\":\"gamma\"}}]}}\n").unwrap();
+            std::fs::write(
+                f.home.path().join(".codex/sessions/irrelevant.jsonl"),
+                format!("{{\"output\":\"{}\"}}\n{{\"active\":", "x".repeat(300_000)),
+            )
+            .unwrap();
+            let report = f.call(&["usage"], "skill_usage", "skill_usage", &json!({}));
+            let row = &report["data"]["rows"][0];
+            assert_eq!(row["skill"], "gamma", "{report}");
+            assert_eq!(row["total_uses"], 1, "{report}");
+            assert_eq!(row["sessions"], 1, "{report}");
+            assert_eq!(row["triggers"]["agent"], 1, "{report}");
+            assert_eq!(report["data"]["observations"], json!([]), "{report}");
+        }
         "Install" => {
             assert_eq!(installed["data"]["skill"], "gamma");
         }
@@ -344,7 +371,10 @@ macro_rules! executable_coverage {
     };
 }
 
+// Usage history must preserve a session and its trigger on both surfaces.
+// Failure means a headless adapter loses evidence from the shared report.
 executable_coverage! {
+    "Usage history" => (cli_usage_history_counts_sessions_or_names_the_missing_evidence, mcp_usage_history_counts_sessions_or_names_the_missing_evidence),
     "Invocation policy" => (cli_invocation_manual_sets_both_keys_or_names_the_auto_copy, mcp_invocation_manual_sets_both_keys_or_names_the_auto_copy),
     "Invocation check" => (cli_invocation_check_reports_mismatch_or_names_the_missing_policy, mcp_invocation_check_reports_mismatch_or_names_the_missing_policy),
     "First launch harness detect" => (cli_harness_detection_reports_codex_or_names_the_missing_agent, mcp_harness_detection_reports_codex_or_names_the_missing_agent),
