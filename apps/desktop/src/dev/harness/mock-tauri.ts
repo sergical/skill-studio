@@ -318,6 +318,8 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
       switch (command) {
         case "check_skill_updates_now":
           return currentSnapshot.update_check;
+        case "get_background_status":
+          return { revision: 0, tasks: [] };
         case "get_skill_snapshot":
           return currentSnapshot;
         case "get_installed_skills":

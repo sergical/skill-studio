@@ -1,3 +1,4 @@
+pub mod background_work;
 // ============================================================================
 // Skills Module
 // Skills.sh integration for skill discovery, installation, and management

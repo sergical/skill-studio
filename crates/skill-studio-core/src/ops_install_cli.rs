@@ -19,7 +19,7 @@ use crate::ports::{FileKind, OpContext, ProcessSpec, Runtime};
 fn cli_package(method: InstallMethod) -> Option<&'static str> {
     match method {
         InstallMethod::Dotagents => Some("@sentry/dotagents"),
-        InstallMethod::SkillsSh => Some("skills"),
+        InstallMethod::SkillsSh => Some(crate::skills_cli_agents::SKILLS_CLI_PACKAGE),
         InstallMethod::Copy => None,
     }
 }
@@ -46,7 +46,7 @@ fn cli_args_and_cwd(
     match method {
         InstallMethod::SkillsSh => {
             let mut args = vec![
-                "skills".to_string(),
+                crate::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string(),
                 "add".to_string(),
                 source.to_string(),
                 "--yes".to_string(),
@@ -278,7 +278,7 @@ mod tests {
                 &none,
                 InstallLinkMode::Link,
                 vec![
-                    "skills",
+                    "skills@1.7.0",
                     "add",
                     "src",
                     "--yes",
@@ -297,7 +297,7 @@ mod tests {
                 &claude_code,
                 InstallLinkMode::Link,
                 vec![
-                    "skills",
+                    "skills@1.7.0",
                     "add",
                     "src",
                     "--yes",
@@ -318,7 +318,7 @@ mod tests {
                 &none,
                 InstallLinkMode::Link,
                 vec![
-                    "skills",
+                    "skills@1.7.0",
                     "add",
                     "src",
                     "--yes",
@@ -336,7 +336,7 @@ mod tests {
                 &claude_code,
                 InstallLinkMode::Link,
                 vec![
-                    "skills",
+                    "skills@1.7.0",
                     "add",
                     "src",
                     "--yes",
@@ -356,7 +356,7 @@ mod tests {
                 &every_harness,
                 InstallLinkMode::Link,
                 vec![
-                    "skills",
+                    "skills@1.7.0",
                     "add",
                     "src",
                     "--yes",
@@ -385,7 +385,7 @@ mod tests {
                 &claude_code,
                 InstallLinkMode::Copy,
                 vec![
-                    "skills",
+                    "skills@1.7.0",
                     "add",
                     "src",
                     "--yes",

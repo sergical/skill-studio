@@ -23,12 +23,7 @@
 #![deny(missing_docs)]
 // `deny`, not `forbid`, so `fs::macos_exchange` can locally `#[allow(unsafe_code)]`
 // for `renamex_np` (atomic path exchange, no safe `std` wrapper - see its
-// module doc for what the `unsafe` block promises), and so the XDG/env-
-// override tests for OpenCode discovery can locally `#[allow(unsafe_code)]`
-// around the process-global env var mutation (`std::env::set_var` needs
-// `unsafe` on this toolchain) needed to cover the real `std::env::var_os`
-// call sites - there is no other seam to test them through without
-// threading an env-lookup port through every adapter for one test.
+// module doc for what the `unsafe` block promises).
 #![deny(unsafe_code)]
 
 mod builder;
@@ -55,8 +50,10 @@ mod usage_report;
 pub use builder::{default_ports, default_ports_with_discovery, default_ports_with_history};
 pub use clock::SystemClock;
 pub use data_folder_version::{
-    check_compatible, migrate, newer_data_folder_message, read_version, Fs as DataFolderFs,
-    MigrationError, NewerDataFolder, RealFs as RealDataFolderFs, CURRENT_DATA_VERSION,
+    check_compatible, guard_read_data_folder, lock_data_folders, migrate,
+    newer_data_folder_message, read_version, with_data_folder, with_data_folders, DataFolderGuard,
+    Fs as DataFolderFs, MigrationError, NewerDataFolder, RealFs as RealDataFolderFs,
+    CURRENT_DATA_VERSION,
 };
 pub use discovery::{
     codex_home, discover_skill_projects, discovery_harnesses, opencode_config_dir,
@@ -65,7 +62,10 @@ pub use discovery::{
 pub use fs::RealFs;
 pub use gh_currency::{GhCommitLookup, GhPluginManifestLookup, GhSourceTreeLookup};
 pub use harness_detect::{spawn_retrying_busy, RealProcessSpawner};
-pub use history::{hash_entry, reimport_event_as_legacy, NoHistoryOpener, SqliteHistoryOpener};
+pub use history::{
+    hash_entry, reimport_event_as_legacy, GuardedNoHistoryOpener, NoHistoryOpener,
+    SqliteHistoryOpener,
+};
 pub use ids::UlidIds;
 pub use lease::FileLease;
 pub use opencode_db::opencode_databases;

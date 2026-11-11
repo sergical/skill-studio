@@ -46,7 +46,7 @@ use crate::ops_install;
 use crate::ownership;
 use crate::ports::{
     acquire_shared, Clock, DirEntryFacts, ExclusiveGuard, FileKind, HistoryAccess, OpContext,
-    PlanStatus, ProcessSpec, Runtime, ScopeFs, ScopedReads,
+    PlanStatus, ProcessSpec, Runtime, ScopeFs, ScopedPath, ScopedReads,
 };
 use crate::scope::{EffectiveScope, NormalizedScope};
 use crate::SCHEMA_VERSION;
@@ -399,6 +399,7 @@ pub fn scan(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Inventor
 
 fn scan_body(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Inventory, CoreError> {
     ctx.checkpoint()?;
+    let _folder_guard = rt.ports.history.guard_read_data_folder()?;
     let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
     scan_inner(rt, ctx, req)
 }
@@ -3861,6 +3862,7 @@ fn preview_frontmatter_repair_body(
     ctx.checkpoint()?;
     let clock = rt.ports.clock.as_ref();
     let op_start = clock.monotonic();
+    let _folder_guard = rt.ports.history.guard_read_data_folder()?;
     let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
     let step_start = clock.monotonic();
     let inventory = scan_inner(
@@ -4209,19 +4211,47 @@ fn list_events_body(
     Ok(dtos)
 }
 
-/// What a restore will do to the live file, decided before the claim on
-/// `reverted_by` so the claim is only taken once nothing else can fail.
+enum BackupContent {
+    File(Vec<u8>),
+    Dir(Vec<fsops::StageFile>),
+}
+
 enum RestorePlan {
-    /// The original event's backup recorded the path as absent.
     RemoveIfPresent,
-    /// The bytes to write back, read from the original event's backup.
-    Write(Vec<u8>),
-    /// A directory's files to write back, read from the original event's
-    /// backup, paths relative to the directory itself. Applied through
-    /// [`fsops::stage_files`]/[`fsops::swap`] (see [`restore_event`]'s
-    /// mutation step) rather than [`ScopeFs::write_atomic`], which only ever
-    /// writes one file.
-    WriteDir(Vec<fsops::StageFile>),
+    Restore(BackupContent),
+}
+
+fn read_backup_content(
+    store: &dyn crate::ports::HistoryStore,
+    backup_dir: &str,
+    entry: &crate::events::BackupEntry,
+) -> Result<BackupContent, CoreError> {
+    if entry.is_dir {
+        store
+            .read_backup_files(backup_dir, &entry.relative)
+            .map(BackupContent::Dir)
+    } else {
+        store
+            .read_backup_bytes(backup_dir, &entry.relative)
+            .map(BackupContent::File)
+    }
+}
+
+fn apply_backup_content(
+    rt: &Runtime,
+    guard: &ExclusiveGuard,
+    path: &Path,
+    scoped: &ScopedPath,
+    content: &BackupContent,
+) -> Result<(), CoreError> {
+    match content {
+        BackupContent::File(bytes) => rt
+            .ports
+            .fs
+            .write_atomic(guard, scoped, bytes)
+            .map_err(|error| CoreError::io(path, error)),
+        BackupContent::Dir(files) => restore_write_dir(rt, guard, path, files),
+    }
 }
 
 /// Puts back a link an op took down, with the target text `read_link`
@@ -4247,7 +4277,7 @@ pub(crate) fn recreate_link(
     .map_err(|e| CoreError::io(link_path, e))
 }
 
-/// [`RestorePlan::WriteDir`]'s mutation step: stages `files` beside `path`
+/// A directory backup's mutation step: stages `files` beside `path`
 /// under its own journal root (the same lease/journal primitives
 /// `ops::update`'s own `Copy` method uses) and swaps the staged folder into
 /// `path`, which - since a folder already sits there - quarantines the
@@ -4379,10 +4409,12 @@ fn restore_event_body(
             ))
         }
         crate::dto::RestoreCapability::NoInverse | crate::dto::RestoreCapability::UnknownKind => {
-            return Err(CoreError::new(
-                ErrorCode::Unsupported,
-                "this event cannot be restored",
-            ))
+            let message = match target.kind() {
+                Some(crate::events::EventKind::Park) => "This change parked the skill. Use unpark to turn it on.",
+                Some(crate::events::EventKind::Unpark) => "This change turned the skill on. Use park to turn it off.",
+                _ => "this event cannot be restored",
+            };
+            return Err(CoreError::new(ErrorCode::Unsupported, message))
         }
         crate::dto::RestoreCapability::NotCompleted { status } => {
             return Err(CoreError::new(
@@ -4439,7 +4471,11 @@ fn restore_event_body(
         let live = live
             .as_ref()
             .map_or("absent", super::identity::Fingerprint::bare_hex);
-        if live != "absent" && live != expected && !req.force {
+        if live != "absent"
+            && live != expected
+            && expected != crate::events::UNREADABLE_FINGERPRINT
+            && !req.force
+        {
             return Err(CoreError::new(
                 ErrorCode::DriftConflict,
                 "a split copy changed since this event; pass force to restore anyway",
@@ -4514,19 +4550,11 @@ fn restore_event_body(
                     )
                     .at(copy)
                 })?;
-            let copy_plan = if entry.is_dir {
-                RestorePlan::WriteDir(
-                    session
-                        .store
-                        .read_backup_files(backup_dir, &entry.relative)?,
-                )
-            } else {
-                RestorePlan::Write(
-                    session
-                        .store
-                        .read_backup_bytes(backup_dir, &entry.relative)?,
-                )
-            };
+            let copy_plan = RestorePlan::Restore(read_backup_content(
+                session.store.as_ref(),
+                backup_dir,
+                entry,
+            )?);
             write_back_plans.push((copy.clone(), copy_plan));
         }
     }
@@ -4543,97 +4571,62 @@ fn restore_event_body(
         })
         .collect();
 
-    // Every manifest entry besides `path` itself - e.g. `remove`'s own
-    // registry.json backup, next to its deployment tree - restores
-    // best-effort alongside the primary path below, keyed by its own
-    // original location rather than folded into `plan`: `path`'s restore is
-    // the one drift-checked and claimed against above. A secondary entry
-    // whose current state cannot be read fails the restore closed, before
-    // anything is written, because the restore backs it up first; one that
-    // cannot be written back later does not fail it.
+    let original_manifest = target
+        .backup_dir
+        .as_deref()
+        .map(|backup_dir| session.store.read_manifest(backup_dir))
+        .transpose()?;
     let mut extra_plans: Vec<(PathBuf, RestorePlan)> = Vec::new();
-    let plan = match &pre {
-        None => {
-            // The original event's backup recorded the path as absent:
-            // restoring means removing whatever is there now, if anything.
-            RestorePlan::RemoveIfPresent
-        }
-        Some(_pre_fingerprint) => {
-            let backup_dir = target.backup_dir.as_deref().ok_or_else(|| {
+    let plan = if pre.is_none() {
+        RestorePlan::RemoveIfPresent
+    } else {
+        let backup_dir = target.backup_dir.as_deref().ok_or_else(|| {
+            CoreError::new(
+                ErrorCode::Io,
+                "a restore_backup inverse implies a backup_dir",
+            )
+            .at(&path)
+        })?;
+        let entry = original_manifest
+            .as_ref()
+            .and_then(|manifest| manifest.entries.iter().find(|entry| entry.original == path))
+            .ok_or_else(|| {
                 CoreError::new(
                     ErrorCode::Io,
-                    "a restore_backup inverse implies a backup_dir",
+                    "the original event's manifest has no entry for this path",
                 )
                 .at(&path)
             })?;
-            let original_manifest = session.store.read_manifest(backup_dir)?;
-            let entry = original_manifest
-                .entries
-                .iter()
-                .find(|e| e.original == path)
-                .ok_or_else(|| {
-                    CoreError::new(
-                        ErrorCode::Io,
-                        "the original event's manifest has no entry for this path",
-                    )
-                    .at(&path)
-                })?;
-            // Read from the backup entry itself (see `BackupEntry::is_dir`'s
-            // own doc), not the live path's current type: after a `remove`
-            // the live path is absent, which would otherwise always look
-            // like "not a directory" and send a directory's restore through
-            // the single-file `Write` branch below.
-            let plan = if entry.is_dir {
-                let files = session
-                    .store
-                    .read_backup_files(backup_dir, &entry.relative)?;
-                RestorePlan::WriteDir(files)
-            } else {
-                let bytes = session
-                    .store
-                    .read_backup_bytes(backup_dir, &entry.relative)?;
-                RestorePlan::Write(bytes)
-            };
-            for other in &original_manifest.entries {
-                // A write-back path is written once, by `write_back_plans`.
-                if other.original == path || write_back.contains(&other.original) {
-                    continue;
-                }
-                // A secondary path the event recorded as absent before and
-                // after its write is taken back out only when the event
-                // vouched for it with a `secondary_post` row; any other
-                // absent entry stays skipped, as before that field existed.
-                if other.fingerprint.is_none() {
-                    if secondary_post.iter().any(|(p, _)| p == &other.original) {
-                        extra_plans.push((other.original.clone(), RestorePlan::RemoveIfPresent));
-                    }
-                    continue;
-                }
-                let other_plan = if other.is_dir {
-                    session
-                        .store
-                        .read_backup_files(backup_dir, &other.relative)
-                        .map(RestorePlan::WriteDir)
-                } else {
-                    session
-                        .store
-                        .read_backup_bytes(backup_dir, &other.relative)
-                        .map(RestorePlan::Write)
-                };
-                // Only a path the event vouched for with a `secondary_post` row fails the
-                // restore: Undo would otherwise report success and leave that folder lost.
-                // Other unreadable extras stay skipped, as before that field existed.
-                match other_plan {
-                    Ok(other_plan) => extra_plans.push((other.original.clone(), other_plan)),
-                    Err(e) if secondary_post.iter().any(|(p, _)| p == &other.original) => {
-                        return Err(e)
-                    }
-                    Err(_) => {}
-                }
-            }
-            plan
-        }
+        RestorePlan::Restore(read_backup_content(
+            session.store.as_ref(),
+            backup_dir,
+            entry,
+        )?)
     };
+    if let (Some(original_manifest), Some(backup_dir)) =
+        (&original_manifest, target.backup_dir.as_deref())
+    {
+        for other in &original_manifest.entries {
+            if other.original == path || write_back.contains(&other.original) {
+                continue;
+            }
+            if other.fingerprint.is_none() {
+                if secondary_post.iter().any(|(p, _)| p == &other.original) {
+                    extra_plans.push((other.original.clone(), RestorePlan::RemoveIfPresent));
+                }
+                continue;
+            }
+            let other_plan = read_backup_content(session.store.as_ref(), backup_dir, other)
+                .map(RestorePlan::Restore);
+            match other_plan {
+                Ok(plan) => extra_plans.push((other.original.clone(), plan)),
+                Err(error) if secondary_post.iter().any(|(p, _)| p == &other.original) => {
+                    return Err(error)
+                }
+                Err(_) => {}
+            }
+        }
+    }
 
     let restore_id = rt.ports.ids.next_event_id();
     // Backs up the file's current bytes under the restore event's own id
@@ -4764,15 +4757,13 @@ fn restore_event_body(
                 .map_err(|e| CoreError::io(&path, e)),
             Err(_) => Ok(()),
         },
-        RestorePlan::Write(bytes) => fs
-            .write_atomic(&session.guard, &scoped, bytes)
-            .map_err(|e| CoreError::io(&path, e)),
-        RestorePlan::WriteDir(files) => restore_write_dir(rt, &session.guard, &path, files),
+        RestorePlan::Restore(content) => {
+            apply_backup_content(rt, &session.guard, &path, &scoped, content)
+        }
     };
     if let Err(err) = mutation_result {
-        // The claim was already made durable, but nothing actually moved:
-        // release it so the target event stays revertible on retry, and
-        // report the original I/O error, not any failure of the release.
+        // A failed write can have moved files. Keep the backup and release
+        // the claim so the user can retry with force.
         let _ = session
             .store
             .release_revert(&session.guard, &target.id, &restore_id);
@@ -4805,12 +4796,10 @@ fn restore_event_body(
             .parent()
             .map_or(Ok(()), |root| ensure_dir_all(rt, &session, fs, root));
         let written = written.and_then(|()| match copy_plan {
-            RestorePlan::Write(bytes) => {
+            RestorePlan::Restore(content) => {
                 let scoped = crate::ports::confine(&rt.scope, fs, copy)?;
-                fs.write_atomic(&session.guard, &scoped, bytes)
-                    .map_err(|error| CoreError::io(copy, error))
+                apply_backup_content(rt, &session.guard, copy, &scoped, content)
             }
-            RestorePlan::WriteDir(files) => restore_write_dir(rt, &session.guard, copy, files),
             RestorePlan::RemoveIfPresent => {
                 unreachable!("write_back plans only contain backed-up paths")
             }
@@ -4889,7 +4878,7 @@ fn restore_event_body(
         let required = secondary_post.iter().any(|(p, _)| p == other_path)
             && !matches!(other_plan, RestorePlan::RemoveIfPresent);
         // Removing takes down the path itself, never what a link there points at.
-        if matches!(other_plan, RestorePlan::RemoveIfPresent) {
+        let RestorePlan::Restore(content) = other_plan else {
             if let Ok(facts) = fs.symlink_metadata(other_path) {
                 match crate::ports::confine(&rt.scope, fs, other_path) {
                     Ok(_) if facts.kind == FileKind::Dir => {
@@ -4902,7 +4891,7 @@ fn restore_event_body(
                 }
             }
             continue;
-        }
+        };
         // A link there is replaced, not written through: its target was not
         // backed up.
         if fs
@@ -4922,15 +4911,9 @@ fn restore_event_body(
         let result: Result<(), CoreError> =
             match crate::ports::confine_write_through(&rt.scope, fs, other_path) {
                 Err(e) => Err(e),
-                Ok(other_scoped) => match other_plan {
-                    RestorePlan::RemoveIfPresent => Ok(()),
-                    RestorePlan::Write(bytes) => fs
-                        .write_atomic(&session.guard, &other_scoped, bytes)
-                        .map_err(|e| CoreError::io(other_path, e)),
-                    RestorePlan::WriteDir(files) => {
-                        restore_write_dir(rt, &session.guard, other_path, files)
-                    }
-                },
+                Ok(other_scoped) => {
+                    apply_backup_content(rt, &session.guard, other_path, &other_scoped, content)
+                }
             };
         if result.is_err() && required {
             unrestored.push(other_path.clone());
@@ -6077,6 +6060,7 @@ pub fn park_git_warning(
     ctx: &OpContext,
     deployment_id: &DeploymentId,
 ) -> Option<String> {
+    let _folder_guard = rt.ports.history.guard_read_data_folder().ok()?;
     let check = park_check(
         rt,
         ctx,
