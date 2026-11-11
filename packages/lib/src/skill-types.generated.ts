@@ -166,6 +166,56 @@ export type FixApplied = {
 };
 
 /**
+ * Flat list of declarations. Trust and enable settings are not evaluated.
+ */
+export interface ExtrasReport {
+  /**
+   * Declarations in stable harness, scope, path, kind, and name order.
+   */
+  entries: ExtraEntry[];
+}
+/**
+ * One declaration, or one file that could not be read.
+ */
+export interface ExtraEntry {
+  /**
+   * Agent wire name.
+   */
+  harness: string;
+  /**
+   * `global` or `project`.
+   */
+  scope: string;
+  /**
+   * Project root for a project declaration.
+   */
+  project: string | null;
+  /**
+   * `hook`, `mcp_server`, `instruction`, or `config` for an unreadable file.
+   */
+  kind: string;
+  /**
+   * Event, server, or instruction filename. Absent on unreadable files.
+   */
+  name: string | null;
+  /**
+   * File that declares this item.
+   */
+  path: string;
+  /**
+   * Handler count for hooks. One for other declarations, zero for unreadable files.
+   */
+  count: number;
+  /**
+   * `found` or `unreadable`. Parser errors are never exposed.
+   */
+  status: string;
+}
+/**
+ * Empty input. The runtime scope selects the home and projects.
+ */
+export interface ExtrasRequest {}
+/**
  * Check a scope or set invocation for one skill.
  */
 export interface InvocationRequest {

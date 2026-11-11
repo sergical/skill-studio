@@ -127,6 +127,8 @@ pub enum Operation {
     /// it: the host crate's `usage_report` reads agent session history,
     /// which the core never touches.
     SkillUsage,
+    /// Names and paths of non-skill agent configuration.
+    Extras,
     /// Check or set skill invocation across harnesses.
     Invocation,
 }
@@ -191,6 +193,7 @@ impl Outcome for Diagnosis {
     }
 }
 
+impl Outcome for crate::extras::ExtrasReport {}
 impl Outcome for Capabilities {}
 impl Outcome for HarnessReport {}
 impl Outcome for FrontmatterRepairPreview {}
@@ -5478,6 +5481,7 @@ fn find_independent_links<'a>(
         .collect()
 }
 
+pub use crate::extras::extras;
 pub use crate::ops_discard::discard;
 pub use crate::ops_doctor::doctor;
 pub use crate::ops_install::{install, install_preferences};
@@ -7950,6 +7954,7 @@ mod tests {
                 Operation::Split,
                 Operation::TurnOffForAgent,
                 Operation::SkillUsage,
+                Operation::Extras,
             ];
             for operation in all {
                 let expected = match operation {
@@ -7976,6 +7981,7 @@ mod tests {
                     Operation::Split => "split",
                     Operation::TurnOffForAgent => "turn_off_for_agent",
                     Operation::SkillUsage => "skill_usage",
+                    Operation::Extras => "extras",
                     Operation::Invocation => "invocation",
                 };
                 let value = serde_json::to_value(operation).unwrap();
