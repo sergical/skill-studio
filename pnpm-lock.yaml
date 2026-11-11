@@ -440,8 +440,8 @@ importers:
         specifier: ^4.0.542
         version: 4.0.542(lightningcss@1.33.0)(postcss@8.5.32)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(supports-color@10.2.2)(typescript@7.0.2)
       '@sentry/vite-plugin':
-        specifier: 11.10.0
-        version: 11.10.0(webpack@5.105.0(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.32))
+        specifier: 11.11.0
+        version: 11.11.0(webpack@5.105.0(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.32))
       '@stylexjs/unplugin':
         specifier: 0.19.1
         version: 0.19.1(supports-color@10.2.2)(unplugin@2.3.11)
@@ -2788,8 +2788,8 @@ packages:
     resolution: {integrity: sha512-UEq04DIcfCVUMF+T0rH9nLTEjVlymmZC8D/7JELJyZkpxMCtnf8iq3aPJ3DXICDCjSo7CuuOI9OIZ32KmmsyPA==}
     engines: {node: '>=20.19.0 <22.0.0 || >=22.12.0 <23.0.0 || >=23.2.0'}
 
-  '@sentry/bundler-plugins@11.10.0':
-    resolution: {integrity: sha512-+ngJ485rIYll5uOhWSvSO+Vx4S24MGe5KcLKlUZghr+BXK+ib32uBOZNG294wGyeauLTDvdjncLEYwiaBnP/5w==}
+  '@sentry/bundler-plugins@11.11.0':
+    resolution: {integrity: sha512-et1v8V74ARNOSQ+k4VG7PRiNJl2APGAzlRCiUt42izw8yD+X+E4oCe7wwHjohmv3zufvD1VntHDptSC0/9ChQw==}
     engines: {node: '>=20.19.0 <22.0.0 || >=22.12.0 <23.0.0 || >=23.2.0'}
     peerDependencies:
       rollup: '>=3.2.0'
@@ -2819,10 +2819,6 @@ packages:
     resolution: {integrity: sha512-fO9PLmHdVURcSPUpWCItWAtgKiMwGdJHbovoSEyLplX5sxs2ugvI4CBPTrkkgqhObnZOD0CnWBKDzSVQYBKEyQ==}
     engines: {node: '>=14'}
 
-  '@sentry/conventions@0.29.0':
-    resolution: {integrity: sha512-kYq9/HJ/l6MYP/srIc20dy1W4mWyJfCF0OWFF+RhBGZwyr/wCmtabRFKyw7kqM+DTwZXQOjSTSZUcJhDowcInQ==}
-    engines: {node: '>=14'}
-
   '@sentry/conventions@0.30.0':
     resolution: {integrity: sha512-WTumd5A2iFmHTRubi6mc6gLHU8LswPQqoNaZu6T1cxiTUmy3WdEw0i8FAnVbcgxTlsumX5oh63/b4B9lY5wAPQ==}
     engines: {node: '>=14'}
@@ -2830,10 +2826,6 @@ packages:
   '@sentry/core@10.76.0':
     resolution: {integrity: sha512-H9irBNXHdkgvl86EKlQrPTGYyzvI8GUZ8eoWLay9IuqqZC6pWesf0nH7z/glxKBo7BEw3PIG+unQByHugBnsCg==}
     engines: {node: '>=18'}
-
-  '@sentry/core@11.10.0':
-    resolution: {integrity: sha512-l/OtTo1v+TQgZtHG2Q5N4IX+gFdAE1tZ27K/P21UCzJglWk54TPEm+d9T2lulPqMK06kZcLwDgRAhE2GO4YS5w==}
-    engines: {node: '>=20.19.0 <22.0.0 || >=22.12.0 <23.0.0 || >=23.2.0'}
 
   '@sentry/core@11.11.0':
     resolution: {integrity: sha512-PRrcEdPrTYuHcbDa6DhJZR9Qg2d+2gjKVXiv2QeiTgxvhvXDxYiaVSXH0lldKTR099Er5TAEChiX7aEu4yNlUw==}
@@ -2908,8 +2900,8 @@ packages:
     resolution: {integrity: sha512-t1lx9Zw+zhRre0ko+F3CsucG2BqB/7KOZmG1W+Wv/fSvYSnT06vg7WhIvmvH+df7BSFO+cFGBpkxwQWGq3zj+w==}
     engines: {node: '>=20.19.0 <22.0.0 || >=22.12.0 <23.0.0 || >=23.2.0'}
 
-  '@sentry/vite-plugin@11.10.0':
-    resolution: {integrity: sha512-1eUQmGMk7nPwGS6PN3nuzM8+U0mzP0zaPjmO3ua4IX6gd7HFpefkxriFgO9yGOhCBMSWkIkVzxl7hUrRTCIIfw==}
+  '@sentry/vite-plugin@11.11.0':
+    resolution: {integrity: sha512-2mTYahcev74yoQJ8qENMdBS6aQ3QzFn3vWL0d7SxdQP9nDko9qwK65GjFMtmgF6+spMW5JdjJOt/dvgh3CSJIw==}
     engines: {node: '>=20.19.0 <22.0.0 || >=22.12.0 <23.0.0 || >=23.2.0'}
 
   '@shaderfrog/glsl-parser@7.0.1':
@@ -4101,8 +4093,8 @@ packages:
   glob-to-regexp@0.4.1:
     resolution: {integrity: sha512-lkX1HJXwyMcprw/5YUZc2s7DrpAiHB21/V+E1rHUrVNokkvB6bqMzT0VfV6/86ZNabt1k14YOIaT7nDvOX3Iiw==}
 
-  glob@13.0.7:
-    resolution: {integrity: sha512-wfsFgXQ8A3SEI9XGf7Nl3Y9l7ffSrGh7SUCT7vU/2CzYPep9kjxAn1S40F9OPKxAMGCVl7HtNlJhrCJUeUq83g==}
+  glob@14.0.4:
+    resolution: {integrity: sha512-mMiwNKoJZ4HAIRVJxotO6LsNRReA30gQwP9E2/p94tfLv+jygCNpKDjhhSL6OLY6LE371EZm5EAf7RpYuUqlsw==}
     engines: {node: 18 || 20 || >=22}
 
   graceful-fs@4.2.11:
@@ -4786,8 +4778,8 @@ packages:
     resolution: {integrity: sha512-ojmeN0qd+y0jszEtoY48r0Peq5dwMEkIlCOu6Q5f41lfkswXuKtYrhgoTpLnyIcHm24Uhqx+5Tqm2InSwLhE6Q==}
     engines: {node: '>=8'}
 
-  path-scurry@2.0.2:
-    resolution: {integrity: sha512-3O/iVVsJAPsOnpwWIeD+d6z/7PmqApyQePUtCndjatj/9I5LylHvt5qluFaBT3I5h3r1ejfR056c+FCv+NnNXg==}
+  path-scurry@3.0.0:
+    resolution: {integrity: sha512-1pTbQqH1wIwMi/eleQ5leFTTCkzFsPcgXNjwOA8YGGW/W4/kHT3dssE7Z6NH+zuqNLOzOB0uaD61yl7cAcVhgg==}
     engines: {node: 18 || 20 || >=22}
 
   path-to-regexp@6.3.0:
@@ -7373,11 +7365,11 @@ snapshots:
       '@sentry/replay': 11.11.0
       '@sentry/replay-canvas': 11.11.0
 
-  '@sentry/bundler-plugins@11.10.0(webpack@5.105.0(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.32))':
+  '@sentry/bundler-plugins@11.11.0(webpack@5.105.0(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.32))':
     dependencies:
-      '@sentry/core': 11.10.0
+      '@sentry/core': 11.11.0
       dotenv: 17.4.2
-      glob: 13.0.7
+      glob: 14.0.4
       magic-string: 1.4.3
       oxc-parser: 0.152.0
       sentry: 0.45.0
@@ -7399,17 +7391,11 @@ snapshots:
 
   '@sentry/conventions@0.16.0': {}
 
-  '@sentry/conventions@0.29.0': {}
-
   '@sentry/conventions@0.30.0': {}
 
   '@sentry/core@10.76.0':
     dependencies:
       '@sentry/conventions': 0.16.0
-
-  '@sentry/core@11.10.0':
-    dependencies:
-      '@sentry/conventions': 0.29.0
 
   '@sentry/core@11.11.0':
     dependencies:
@@ -7489,9 +7475,9 @@ snapshots:
       '@sentry/conventions': 0.30.0
       '@sentry/core': 11.11.0
 
-  '@sentry/vite-plugin@11.10.0(webpack@5.105.0(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.32))':
+  '@sentry/vite-plugin@11.11.0(webpack@5.105.0(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.32))':
     dependencies:
-      '@sentry/bundler-plugins': 11.10.0(webpack@5.105.0(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.32))
+      '@sentry/bundler-plugins': 11.11.0(webpack@5.105.0(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.32))
     transitivePeerDependencies:
       - rollup
       - webpack
@@ -8713,11 +8699,11 @@ snapshots:
 
   glob-to-regexp@0.4.1: {}
 
-  glob@13.0.7:
+  glob@14.0.4:
     dependencies:
       minimatch: 11.0.5
       minipass: 7.1.3
-      path-scurry: 2.0.2
+      path-scurry: 3.0.0
 
   graceful-fs@4.2.11: {}
 
@@ -9698,7 +9684,7 @@ snapshots:
 
   path-key@3.1.1: {}
 
-  path-scurry@2.0.2:
+  path-scurry@3.0.0:
     dependencies:
       lru-cache: 11.5.3
       minipass: 7.1.3
