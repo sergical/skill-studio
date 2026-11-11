@@ -37,6 +37,7 @@ mod history;
 mod ids;
 mod lease;
 mod opencode_db;
+mod probe_cache;
 mod sink;
 mod skill_uses;
 #[cfg(feature = "telemetry")]

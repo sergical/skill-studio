@@ -49,7 +49,7 @@ impl ScopeArgs {
     }
 
     pub fn process_spawner(&self, home: &Path) -> skill_studio_host::RealProcessSpawner {
-        let spawner = skill_studio_host::RealProcessSpawner::new();
+        let spawner = skill_studio_host::RealProcessSpawner::for_home(home, Vec::new());
         if self.fixture.is_some() || self.home.is_some() {
             spawner.with_isolated_home(home.to_path_buf())
         } else {
