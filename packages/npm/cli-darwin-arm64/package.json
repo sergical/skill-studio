@@ -1,6 +1,6 @@
 {
   "name": "@skill-studio/cli-darwin-arm64",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The skill-studio command for macOS on Apple silicon.",
   "license": "MIT",
   "repository": {

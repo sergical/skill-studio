@@ -21,7 +21,7 @@ use super::gh_cli::run_gh;
 use super::skill_update_check;
 
 const GITHUB_API: &str = "https://api.github.com";
-const USER_AGENT: &str = "AgentStudio/0.1.0";
+const USER_AGENT: &str = concat!("SkillStudio/", env!("CARGO_PKG_VERSION"));
 
 /// Matches the background install-count lookup's eight-second deadline.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);

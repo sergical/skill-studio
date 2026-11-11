@@ -1,6 +1,6 @@
 [package]
 name = "skill-studio-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Adapter-free core for Skill Studio: scope, identity, harness facts, ports, operations, and DTOs"
 license = "MIT"

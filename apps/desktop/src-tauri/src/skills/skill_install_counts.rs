@@ -110,7 +110,10 @@ impl InstallsApi for SkillsShInstallsApi {
     async fn is_public_repo(&self, source: &str) -> Result<Visibility, String> {
         let response = reqwest::Client::new()
             .get(format!("https://api.github.com/repos/{source}"))
-            .header(reqwest::header::USER_AGENT, "AgentStudio/0.1.0")
+            .header(
+                reqwest::header::USER_AGENT,
+                concat!("SkillStudio/", env!("CARGO_PKG_VERSION")),
+            )
             .header(reqwest::header::ACCEPT, "application/vnd.github+json")
             .send()
             .await
