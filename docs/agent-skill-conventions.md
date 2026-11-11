@@ -211,13 +211,13 @@ recorded values before counting. CLI `--project` can repeat to include several
 paths. An empty selection includes all history. Records with no project path
 do not match a project filter. Existing file-read deduplication still applies.
 
-`observations` names missing, disabled, unreadable, or skipped log roots and
-files, with a reason. Invalid JSON and oversized lines are reported. Any
-observation makes the report partial, including a harness that has no history
-root on this machine. The CLI prints the observations in its footer and exits
-with status 4 for a partial report. Partial counts can still help, but an unused
-skill may have uses in the missing history. No cache file is written by CLI or
-MCP. The desktop wire DTOs and their schemas do not change.
+`observations` names disabled, unreadable, corrupt, or skipped history. Missing
+roots mean no history and do not make the report partial. Existing history
+that could not be read makes the report partial; CLI exits with status 4.
+CLI and MCP read all changed history in one pass without byte deferral.
+They read the desktop cache but never write it. CLI saves its own
+`cli-skill-uses.json` beside that cache with an atomic rename. MCP keeps its
+index in memory.
 
 ## Update check
 

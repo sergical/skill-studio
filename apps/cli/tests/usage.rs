@@ -72,7 +72,7 @@ fn usage_json_lists_unused_skills_first_with_counts_per_agent() {
     let output = run(&home, &["--json"]);
     assert_eq!(
         output.status.code(),
-        Some(4),
+        Some(0),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -114,9 +114,9 @@ fn usage_text_ends_with_a_summary_for_the_window() {
 }
 
 /// Flow: CLI usage selects a harness and project from two recorded projects.
-/// Expect only matching uses and a footer with missing roots. Failure: filters are ignored.
+/// Expect only matching uses and a complete report. Failure: filters are ignored.
 #[test]
-fn usage_filters_history_by_harness_and_project_and_names_missing_roots() {
+fn usage_filters_history_by_harness_and_project() {
     let (_dir, home) = home();
     let project = home.join("work");
     std::fs::create_dir_all(&project).unwrap();
@@ -163,7 +163,7 @@ fn usage_filters_history_by_harness_and_project_and_names_missing_roots() {
     let output = run(&home, &[]);
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(
-        text.contains("Partial report") && text.contains("archived_sessions"),
+        !text.contains("Partial report") && output.status.success(),
         "{text}"
     );
 }

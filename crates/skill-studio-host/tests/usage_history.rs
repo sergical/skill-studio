@@ -144,3 +144,53 @@ fn usage_unreadable_root_names_the_root_and_marks_partial() {
         "{data}"
     );
 }
+
+#[test]
+fn usage_without_history_is_complete() {
+    let dir = fixture();
+    let data = report(dir.path());
+    assert_eq!(data["partial"], false, "{data}");
+    assert_eq!(data["rows"][0]["total_uses"], 0);
+}
+
+#[test]
+fn usage_reads_large_history_in_one_report_without_a_cache() {
+    let dir = fixture();
+    let root = dir.path().join(".codex/sessions");
+    fs::create_dir_all(&root).unwrap();
+    for n in 0..64 {
+        fs::write(
+            root.join(format!("{n}.jsonl.zst")),
+            include_bytes!("fixtures/usage-large.jsonl.zst"),
+        )
+        .unwrap();
+    }
+    let data = report(dir.path());
+    assert_eq!(data["rows"][0]["total_uses"], 64, "{data}");
+    assert_eq!(data["partial"], false, "{data}");
+}
+
+#[test]
+fn usage_cache_round_trip_preserves_complete_history() {
+    let dir = fixture();
+    let root = dir.path().join(".codex/sessions");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("a.jsonl.zst"),
+        include_bytes!("fixtures/usage.jsonl.zst"),
+    )
+    .unwrap();
+    let mut usage = SkillUsage::default();
+    let inventory = scan(dir.path());
+    let now = chrono::Utc::now();
+    let first = usage.report(dir.path(), &inventory, 45, now);
+    let cache = dir.path().join("data/cli-skill-uses.json");
+    usage.save_cache(&cache).unwrap();
+    let bytes = fs::read(&cache).unwrap();
+    let second = SkillUsage::load_read_only(Some(&cache)).report(dir.path(), &inventory, 45, now);
+    assert_eq!(first, second);
+    assert!(!second.partial);
+    assert_eq!(second.rows[0].total_uses, 1);
+    assert_eq!(fs::read(&cache).unwrap(), bytes);
+    assert_eq!(fs::read_dir(cache.parent().unwrap()).unwrap().count(), 1);
+}

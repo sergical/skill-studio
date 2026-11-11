@@ -1190,13 +1190,14 @@ impl SkillInvocationIndex {
                 source.watch.iter().map(|watch| (watch.dir)(home)).collect()
             };
             for path in roots {
-                let reason = if sources.is_enabled(source.harness) {
-                    fs::read_dir(&path).err().map(|e| e.to_string())
-                } else {
-                    Some(format!(
+                let reason = match fs::read_dir(&path) {
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                    Err(error) => Some(error.to_string()),
+                    Ok(_) if sources.is_enabled(source.harness) => None,
+                    Ok(_) => Some(format!(
                         "{} history disabled in discovery settings",
                         source.harness
-                    ))
+                    )),
                 };
                 if let Some(reason) = reason {
                     out.push(UsageObservation { path, reason });
@@ -1243,6 +1244,20 @@ impl SkillInvocationIndex {
             }
         }
 
+        report
+    }
+
+    /// Reads all changed history for callers that do not run on the UI thread.
+    pub(crate) fn refresh_all(
+        &mut self,
+        home: &Path,
+        sources: &DiscoverySources,
+    ) -> SkillUseRefreshReport {
+        let budgets = (self.file_budget, self.run_budget);
+        self.file_budget = u64::MAX;
+        self.run_budget = u64::MAX;
+        let report = self.refresh(home, sources);
+        (self.file_budget, self.run_budget) = budgets;
         report
     }
 

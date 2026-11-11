@@ -1088,7 +1088,7 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
         "{filtered}"
     );
 
-    assert_eq!(envelope["status"], "partial", "{envelope:?}");
+    assert_eq!(envelope["status"], "ok", "{envelope:?}");
     assert_eq!(envelope["operation"], "skill_usage", "{envelope:?}");
     let data = &envelope["data"];
     assert_eq!(data["days"], 30, "{data:?}");
@@ -1108,7 +1108,7 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
     assert_eq!(gamma["sessions"], 1, "{gamma}");
     assert_eq!(gamma["triggers"]["agent"], 1, "{gamma}");
     assert!(
-        !data["observations"].as_array().unwrap().is_empty(),
+        data["observations"].as_array().unwrap().is_empty(),
         "{data}"
     );
 }

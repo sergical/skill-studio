@@ -5,7 +5,8 @@
 //! The desktop app owns the use cache (`skill-uses.json` in its app data
 //! folder). This module only ever reads it: it seeds an in-memory
 //! [`SkillInvocationIndex`] from the cache so a refresh re-reads only what
-//! changed since the app last ran, and never saves the result back.
+//! changed since the app last ran, and never saves the result back. The CLI
+//! can save a separate caller-owned cache after it finishes the read.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -23,12 +24,6 @@ use crate::skill_uses::SkillInvocationIndex;
 
 /// The window `usage` and `skill_usage` use when the caller names none.
 pub const DEFAULT_USAGE_DAYS: u32 = 30;
-
-/// A refresh reads at most a fixed byte budget. A first run with no desktop
-/// cache can need more than one pass to read a large history; this caps the
-/// passes so one report stays bounded, and a history still unread after
-/// them makes the report partial.
-const MAX_REFRESH_PASSES: usize = 8;
 
 /// The desktop app's use cache under the platform data folder (`dirs::data_dir()`,
 /// `~/Library/Application Support` on macOS): Tauri's `app_data_dir()` for
@@ -112,6 +107,20 @@ impl SkillUsage {
         }
     }
 
+    /// Atomically saves a caller-owned cache. The desktop cache must not be used here.
+    pub fn save_cache(&self, path: &Path) -> Result<(), String> {
+        let temporary = path.with_extension(format!("{}.tmp", ulid::Ulid::generate()));
+        let result = self
+            .index
+            .save(&temporary)
+            .and_then(|()| std::fs::rename(&temporary, path).map_err(|error| error.to_string()));
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+            let _ = std::fs::remove_file(temporary.with_extension("tmp.tmp"));
+        }
+        result
+    }
+
     /// Refreshes the index from `home`'s agent session history, in memory
     /// only, and counts uses of every skill in `inventory` that is not
     /// parked over the `days` days before `now`.
@@ -135,13 +144,7 @@ impl SkillUsage {
         selection: &UsageFilter,
     ) -> UsageReport {
         let sources = DiscoverySources::read(&RealFs::new(), home);
-        let mut refresh = self.index.refresh(home, &sources);
-        for _ in 1..MAX_REFRESH_PASSES {
-            if !refresh.incomplete || refresh.bytes_read == 0 {
-                break;
-            }
-            refresh = self.index.refresh(home, &sources);
-        }
+        let refresh = self.index.refresh_all(home, &sources);
 
         let mut observations = self.index.observations(home, &sources);
         observations.extend(refresh.observations);
@@ -404,10 +407,7 @@ mod tests {
         let report = SkillUsage::default().report(&fixture.home, &inventory, 30, now());
 
         assert_eq!(report.days, 30);
-        assert!(
-            report.partial,
-            "missing harness roots must be reported: {report:?}"
-        );
+        assert!(!report.partial, "absent history is complete: {report:?}");
         let names: Vec<&str> = report.rows.iter().map(|r| r.skill.as_str()).collect();
         assert_eq!(names, ["idle", "gamma"], "{report:?}");
         assert_eq!(report.unused, ["idle"]);

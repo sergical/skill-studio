@@ -1840,8 +1840,17 @@ fn run_usage(
         };
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let cache = scope.desktop_usage_cache();
+    let cli_cache = cache
+        .as_ref()
+        .map(|path| path.with_file_name("cli-skill-uses.json"));
     let result = ops::scan(&rt, &ctx, &ScanRequest::default()).map(|inventory| {
-        skill_studio_host::SkillUsage::load_read_only(cache.as_deref()).report_filtered(
+        let mut usage = skill_studio_host::SkillUsage::load_read_only(
+            cli_cache
+                .as_deref()
+                .filter(|path| path.exists())
+                .or(cache.as_deref()),
+        );
+        let report = usage.report_filtered(
             &rt.scope.home.canonical,
             &inventory,
             days,
@@ -1850,7 +1859,13 @@ fn run_usage(
                 harness,
                 projects: scope.project_paths().to_vec(),
             },
-        )
+        );
+        if let Some(path) = cli_cache {
+            if let Err(error) = usage.save_cache(&path) {
+                eprintln!("Could not save usage cache: {error}");
+            }
+        }
+        report
     });
     let envelope = ResultEnvelope::from_result(Operation::SkillUsage, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_usage_table)
