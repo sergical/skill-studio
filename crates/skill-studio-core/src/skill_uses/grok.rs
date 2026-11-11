@@ -108,6 +108,7 @@ fn push_tool_call_uses(
     context: &TranscriptContext,
     update: &Value,
     at: DateTime<Utc>,
+    invalid: &mut usize,
 ) {
     let meta = tool_meta(update);
     let meta_kind = meta.and_then(|m| m.get("kind")).and_then(Value::as_str);
@@ -136,6 +137,8 @@ fn push_tool_call_uses(
                 SkillTrigger::Agent,
                 at,
             );
+        } else {
+            *invalid += 1;
         }
         return;
     }
@@ -199,13 +202,22 @@ pub fn parse_grok_uses(
     context: &mut TranscriptContext,
     fallback_at: DateTime<Utc>,
 ) -> Vec<SkillInvocation> {
+    parse_grok_uses_checked(text, context, fallback_at, &mut 0)
+}
+
+/// Parses history and counts corrupt JSON records without parsing a record twice.
+pub fn parse_grok_uses_checked(
+    text: &str,
+    context: &mut TranscriptContext,
+    fallback_at: DateTime<Utc>,
+    invalid: &mut usize,
+) -> Vec<SkillInvocation> {
     let mut out = Vec::new();
 
     for line in text.lines() {
-        if !line.contains(USER_MESSAGE_MARKER) && !line.contains(TOOL_CALL_MARKER) {
-            continue;
-        }
-        let Ok(record) = serde_json::from_str::<Value>(line) else {
+        let Some(record) =
+            super::checked_history_line(line, &[USER_MESSAGE_MARKER, TOOL_CALL_MARKER], invalid)
+        else {
             continue;
         };
 
@@ -235,14 +247,24 @@ pub fn parse_grok_uses(
         match update.get("sessionUpdate").and_then(Value::as_str) {
             Some("user_message_chunk") => push_user_uses(&mut out, context, update, at),
             Some("tool_call" | "tool_call_update") => {
-                let Some(tool_call_id) = update.get("toolCallId").and_then(Value::as_str) else {
+                let Some(tool_call_id) = update
+                    .get("toolCallId")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                else {
+                    let before = out.len();
+                    push_tool_call_uses(&mut out, context, update, at, invalid);
+                    if out.len() > before {
+                        out.truncate(before);
+                        *invalid += 1;
+                    }
                     continue;
                 };
                 if context.counted_calls.contains(tool_call_id) {
                     continue;
                 }
                 let before = out.len();
-                push_tool_call_uses(&mut out, context, update, at);
+                push_tool_call_uses(&mut out, context, update, at, invalid);
                 if out.len() > before {
                     context.counted_calls.insert(tool_call_id.to_string());
                 }

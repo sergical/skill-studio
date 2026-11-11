@@ -46,6 +46,8 @@ default_trait_access = "allow"
 items_after_statements = "allow"
 
 [dependencies]
+memchr = "2"
+zstd = { version = "0.13", default-features = false }
 rustix = { version = "1.1.6", features = ["event", "process", "fs"] }
 skill-studio-core = { path = "../skill-studio-core" }
 # Lease takeover's liveness probe (see lease.rs). `sysinfo`, not `libc`'s

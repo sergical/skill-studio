@@ -448,6 +448,16 @@ pub fn scan(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Inventor
     rt.run(Operation::Scan, ctx, || scan_body(rt, ctx, req))
 }
 
+/// Reads every installed-skill root for a CLI or MCP usage report.
+pub fn scan_for_usage(rt: &Runtime, ctx: &OpContext) -> Result<Inventory, CoreError> {
+    rt.run(Operation::SkillUsage, ctx, || {
+        ctx.checkpoint()?;
+        let _folder_guard = rt.ports.history.guard_read_data_folder()?;
+        let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
+        scan_inner_with_budget(rt, ctx, &ScanRequest::default(), Duration::MAX)
+    })
+}
+
 fn scan_body(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Inventory, CoreError> {
     ctx.checkpoint()?;
     let _folder_guard = rt.ports.history.guard_read_data_folder()?;
@@ -466,10 +476,18 @@ pub(crate) fn scan_inner(
     ctx: &OpContext,
     req: &ScanRequest,
 ) -> Result<Inventory, CoreError> {
+    scan_inner_with_budget(rt, ctx, req, rt.scope.raw.read_timeout())
+}
+
+fn scan_inner_with_budget(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &ScanRequest,
+    budget: Duration,
+) -> Result<Inventory, CoreError> {
     let start = rt.ports.clock.monotonic();
     let clock = rt.ports.clock.as_ref();
     let mut op_steps = Vec::new();
-    let budget = rt.scope.raw.read_timeout();
     let fs = rt.ports.fs.as_ref();
     let home = &rt.scope.home.lexical;
 

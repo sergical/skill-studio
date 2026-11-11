@@ -138,6 +138,10 @@ impl Default for SkillStudioServer {
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SkillUsageRequest {
+    /// Keep uses from this harness id only.
+    pub harness: Option<String>,
+    /// Keep uses with this recorded project path only.
+    pub project: Option<std::path::PathBuf>,
     /// How many days back to count uses. Default 30.
     pub days: Option<u32>,
 }
@@ -351,16 +355,20 @@ impl SkillStudioServer {
     ) -> CallToolResult {
         let days = req.days.unwrap_or(skill_studio_host::DEFAULT_USAGE_DAYS);
         run_op(Operation::SkillUsage, false, &context, |rt, ctx| {
-            let inventory = ops::scan(rt, ctx, &ScanRequest::default())?;
+            let inventory = ops::scan_for_usage(rt, ctx)?;
             let mut usage = self.usage.lock().unwrap_or_else(PoisonError::into_inner);
             let usage = usage.get_or_insert_with(|| {
                 SkillUsage::load_read_only(scope::desktop_usage_cache().as_deref())
             });
-            Ok(usage.report(
+            Ok(usage.report_filtered(
                 &rt.scope.home.canonical,
                 &inventory,
                 days,
                 chrono::Utc::now(),
+                &skill_studio_host::UsageFilter {
+                    harness: req.harness.clone(),
+                    projects: req.project.clone().into_iter().collect(),
+                },
             ))
         })
         .await

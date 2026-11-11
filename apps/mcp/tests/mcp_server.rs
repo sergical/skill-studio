@@ -1031,6 +1031,7 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
                 "type": "assistant",
                 "timestamp": yesterday,
                 "cwd": "/work",
+                "sessionId": "mcp-session",
                 "message": {"content": [{
                     "type": "tool_use",
                     "name": "Skill",
@@ -1043,7 +1044,49 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
 
     let (client, _) = connect(&[("SKILL_STUDIO_HOME", home.to_str().unwrap())]).await;
     let envelope = call_tool(&client, "skill_usage", serde_json::json!({})).await;
+    let filtered = call_tool(
+        &client,
+        "skill_usage",
+        serde_json::json!({"harness":"codex", "project":"/other"}),
+    )
+    .await;
+    let project_filtered = call_tool(
+        &client,
+        "skill_usage",
+        serde_json::json!({"project":"/other"}),
+    )
+    .await;
+    let matched = call_tool(
+        &client,
+        "skill_usage",
+        serde_json::json!({"harness":"claude-code", "project":"/work"}),
+    )
+    .await;
     client.cancel().await.ok();
+    assert!(
+        project_filtered["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["total_uses"] == 0),
+        "{project_filtered}"
+    );
+    assert!(
+        matched["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["skill"] == "gamma" && r["total_uses"] == 1),
+        "{matched}"
+    );
+    assert!(
+        filtered["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["total_uses"] == 0),
+        "{filtered}"
+    );
 
     assert_eq!(envelope["status"], "ok", "{envelope:?}");
     assert_eq!(envelope["operation"], "skill_usage", "{envelope:?}");
@@ -1062,6 +1105,12 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
         .unwrap_or_else(|| panic!("gamma has no row: {data:?}"));
     assert_eq!(gamma["recent_uses"], 1, "{gamma:?}");
     assert_eq!(gamma["agents"]["claude-code"], 1, "{gamma:?}");
+    assert_eq!(gamma["sessions"], 1, "{gamma}");
+    assert_eq!(gamma["triggers"]["agent"], 1, "{gamma}");
+    assert!(
+        data["observations"].as_array().unwrap().is_empty(),
+        "{data}"
+    );
 }
 
 /// The tools an agent sees by default, read-only ones first. A change to
