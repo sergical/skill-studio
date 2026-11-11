@@ -40,7 +40,7 @@
           }
         },
         "default_install_destinations": {
-          "description": "Roots an install picker may offer as a destination: the universal\nroot, plus a harness's own root only when the catalog has it\nverified from the vendor's own documentation ([`Confidence::VerifiedFromDocs`]).\nAn [`RootRole::Own`] root the catalog only infers (Codex's\n`.codex/skills`: `docs/action-map/harnesses/codex.md`, \"Resolved by\nthe docs on 2026-09-16\") is excluded - installing there would be a\nguess about where Codex actually looks.",
+          "description": "Roots an install picker may offer as a destination: the universal\nroot, plus a harness's own root only when the catalog has it\nverified from the vendor's own documentation ([`Confidence::VerifiedFromDocs`]).\nAn [`RootRole::Own`] root the catalog only infers (Codex's\n`.codex/skills`: `docs/agent-skill-conventions.md`, \"Resolved by\nthe docs on 2026-09-16\") is excluded - installing there would be a\nguess about where Codex actually looks.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/RootSpec"

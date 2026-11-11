@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InvocationReport",
+  "description": "Scope invocation report and undo event ids.",
+  "type": "object",
+  "properties": {
+    "skills": {
+      "description": "Checked skills.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SkillInvocationReport"
+      }
+    },
+    "event_ids": {
+      "description": "Changes that can be undone through `restore_event`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EventId"
+      }
+    }
+  },
+  "required": [
+    "skills",
+    "event_ids"
+  ],
+  "$defs": {
+    "SkillInvocationReport": {
+      "description": "Invocation agreement across a skill's copies.",
+      "type": "object",
+      "properties": {
+        "skill": {
+          "description": "Installed skill name.",
+          "$ref": "#/$defs/SkillName"
+        },
+        "deployments": {
+          "description": "Per-harness modes.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InvocationDeployment"
+          }
+        },
+        "mismatch": {
+          "description": "Skill-owned controls or copies disagree.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "skill",
+        "deployments",
+        "mismatch"
+      ]
+    },
+    "SkillName": {
+      "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
+      "type": "string"
+    },
+    "InvocationDeployment": {
+      "description": "One harness reading an installed copy.",
+      "type": "object",
+      "properties": {
+        "deployment_id": {
+          "description": "Installed copy identity.",
+          "$ref": "#/$defs/DeploymentId"
+        },
+        "harness": {
+          "description": "Harness that reads this copy.",
+          "$ref": "#/$defs/AgentIdentity"
+        },
+        "path": {
+          "description": "Copy directory.",
+          "type": "string"
+        },
+        "mode": {
+          "description": "Mode this harness reads.",
+          "$ref": "#/$defs/InvocationMode"
+        }
+      },
+      "required": [
+        "deployment_id",
+        "harness",
+        "path",
+        "mode"
+      ]
+    },
+    "DeploymentId": {
+      "description": "Opaque deployment id.\n\nInvariant: the string starts with `dep:v1/`. Its internal layout is a core\ndetail; adapters and the UI compare it as a string and never split it.",
+      "type": "string"
+    },
+    "AgentIdentity": {
+      "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+      "type": "string"
+    },
+    "InvocationMode": {
+      "description": "Effective model invocation support for one harness.",
+      "oneOf": [
+        {
+          "description": "Only explicit invocation.",
+          "type": "string",
+          "const": "manual"
+        },
+        {
+          "description": "Model invocation is allowed.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "No verified skill-owned control.",
+          "type": "string",
+          "const": "unsupported"
+        }
+      ]
+    },
+    "EventId": {
+      "description": "History event id (ULID string).\n\nInvariant: lexical order equals creation order inside one store.",
+      "type": "string"
+    }
+  }
+}

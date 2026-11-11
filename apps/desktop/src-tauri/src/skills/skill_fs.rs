@@ -1,9 +1,8 @@
 // ============================================================================
 // Skills Module - skill_fs
 // One shared directory-copy routine, reused everywhere a skill's files need
-// to become a second, independent copy: `skill_fork`'s fork/pull snapshots,
-// `skill_add`'s "Copy" method, and `skill_pack`'s bundling of manual/fork
-// skills into a pack directory.
+// to become a second, independent copy: `skill_fork`'s fork/pull snapshots
+// and `skill_add`'s "Copy" method.
 // ============================================================================
 
 use std::fs;

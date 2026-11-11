@@ -1,6 +1,6 @@
 //! `ops::remove`: takes one mutable deployment off disk, for all four owner
 //! kinds `LifecycleOwnerKind::is_mutable` allows (`Copy`, `Fork`,
-//! `Dotagents`, `SkillsSh`) - `docs/action-map/primitives-and-call-stack.md`'s
+//! `Dotagents`, `SkillsSh`) - `docs/flows.md`'s
 //! Remove row.
 //!
 //! `Copy`/`Fork` hold their own bytes, so this op renames the deployment's
@@ -12,8 +12,7 @@
 //! `fsops::swap`'s own doc comment). `Dotagents`/`SkillsSh` call
 //! `npx ... remove <name>` through the process-spawner port and let the CLI
 //! delete its own files, matching `ops_install`'s `Dotagents`/`SkillsSh`
-//! path and the desktop's current behavior (`docs/action-map/remove-and-
-//! update.md`'s current-state table: neither variant quarantines today).
+//! path and the desktop's current behavior (see `docs/flows.md` for operation guarantees).
 //!
 //! Every branch records its journal row - with an archival `backup_paths`
 //! copy of the deployment's tree - before the first write, matching

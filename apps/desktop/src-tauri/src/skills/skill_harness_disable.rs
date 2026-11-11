@@ -169,7 +169,7 @@ fn restore_moved_deployment_for(
 /// side (`disable_deployment_at`) is gone; `issue-4.4-followup-a.md` tracks
 /// a one-shot migration that retires `.skill-studio-disabled/` entirely,
 /// after which this command goes too. See
-/// `docs/action-map/enable-and-links.md`. Delegates the synchronous checks
+/// `docs/flows.md`. Delegates the synchronous checks
 /// and restore to `restore_moved_deployment_for`.
 #[tauri::command]
 pub async fn restore_moved_deployment(

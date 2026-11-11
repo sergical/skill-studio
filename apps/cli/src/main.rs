@@ -28,6 +28,7 @@ use skill_studio_core::dto::{
     RepairApplyMode, RepairApplyRequest, RepairPreviewRequest, RestoreRequest, ScanRequest,
     UnparkRequest, UpdateRequest,
 };
+use skill_studio_core::frontmatter::InvocationPolicy;
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::health::{self, Outcome, TimingRow};
 use skill_studio_core::identity::{
@@ -92,6 +93,18 @@ struct Cli {
 // follow.
 #[derive(Subcommand)]
 enum Command {
+    /// Check invocation across copies, or set every copy of a skill.
+    Invocation {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        skill: Option<String>,
+        #[arg(long, conflicts_with = "auto", requires = "skill")]
+        manual: bool,
+        #[arg(long, requires = "skill")]
+        auto: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// List every skill installed for your agents.
     Scan {
         #[command(flatten)]
@@ -342,7 +355,7 @@ enum Command {
     },
     /// Start the MCP server so an agent can tidy your skills.
     Mcp,
-    /// Run every lifecycle invariant in `docs/action-map/lifecycle-states.md`
+    /// Run every lifecycle invariant in `docs/flows.md`
     /// over the whole scope; writes nothing. Exit code 0 with an empty
     /// violation list on a healthy home, 1 when any violation is found
     /// (the same "found something" code `scan`/`diagnose`/`fix` use).
@@ -629,6 +642,25 @@ fn main() -> ExitCode {
             json,
         } => run_install_preferences(&scope, project_path, json, time),
         Command::Conflicts { scope, json } => run_diagnose_conflict(&scope, json, time),
+        Command::Invocation {
+            scope,
+            skill,
+            manual,
+            auto,
+            json,
+        } => run_invocation(
+            &scope,
+            skill,
+            if manual {
+                Some(InvocationPolicy::UserOnly)
+            } else if auto {
+                Some(InvocationPolicy::Both)
+            } else {
+                None
+            },
+            json,
+            time,
+        ),
         Command::Doctor { scope, json } => run_doctor(&scope, json, time),
         Command::TurnOff {
             scope,
@@ -1934,52 +1966,7 @@ fn run_usage(scope: &ScopeArgs, days: u32, json: bool, time: bool) -> ExitCode {
     finish(&envelope, json, time, output::print_usage_table)
 }
 
-/// A [`skill_studio_core::skill_update_check::SourceTreeLookup`],
-/// [`skill_studio_core::skill_update_check::CommitLookup`], and
-/// [`skill_studio_core::skill_update_check::PluginManifestLookup`] all in
-/// one: when `gh` is not on `PATH`, every lookup a currency check makes
-/// fails, which `ops::outdated` already turns into `Currency::Unknown` per
-/// skill rather than a hard error - matching the desktop's own fallback for
-/// an unresolved `gh` binary.
-struct NoGhLookup;
-
-impl skill_studio_core::skill_update_check::SourceTreeLookup for NoGhLookup {
-    fn tree_shas_at_head(
-        &self,
-        _repo: &str,
-    ) -> Result<std::collections::HashMap<String, String>, skill_studio_core::CoreError> {
-        Err(skill_studio_core::CoreError::new(
-            skill_studio_core::ErrorCode::Unsupported,
-            "gh is not on PATH",
-        ))
-    }
-}
-
-impl skill_studio_core::skill_update_check::CommitLookup for NoGhLookup {
-    fn latest_commit(
-        &self,
-        _repo: &str,
-        _path: &str,
-    ) -> Result<
-        Option<skill_studio_core::skill_update_check::CommitInfo>,
-        skill_studio_core::CoreError,
-    > {
-        Err(skill_studio_core::CoreError::new(
-            skill_studio_core::ErrorCode::Unsupported,
-            "gh is not on PATH",
-        ))
-    }
-}
-
-impl skill_studio_core::skill_update_check::PluginManifestLookup for NoGhLookup {
-    fn marketplace_version(
-        &self,
-        _marketplace: &str,
-        _plugin: &str,
-    ) -> Result<Option<String>, skill_studio_core::CoreError> {
-        Ok(None)
-    }
-}
+use skill_studio_host::NoGhLookup;
 
 /// Reports per-skill currency, via `ops::outdated`. Resolves `gh` off
 /// `rt.ports.tools` the same way other CLI surfaces resolve external
@@ -2294,4 +2281,31 @@ fn run_turn_off(
             );
         }
     })
+}
+
+fn run_invocation(
+    scope: &ScopeArgs,
+    skill: Option<String>,
+    policy: Option<InvocationPolicy>,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    use skill_studio_core::ops_invocation::{invocation, InvocationReport, InvocationRequest};
+    let rt = match if policy.is_some() {
+        build_runtime_write::<InvocationReport>(scope, Operation::Invocation, json)
+    } else {
+        build_runtime::<InvocationReport>(scope, Operation::Invocation, json)
+    } {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let req = InvocationRequest {
+        skill: skill.map(SkillName),
+        policy,
+        deployment_id: None,
+    };
+    let result = invocation(&rt, &ctx, &req);
+    let envelope = ResultEnvelope::from_result(Operation::Invocation, &rt.scope, &ctx, result);
+    finish(&envelope, json, time, output::print_invocation_table)
 }

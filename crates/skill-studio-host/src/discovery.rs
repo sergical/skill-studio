@@ -26,7 +26,7 @@ use crate::opencode_db::{open_opencode_database, opencode_data_dir, opencode_dat
 
 /// Codex's own directory: `$CODEX_HOME` when set to a non-empty value, else
 /// `<home>/.codex`. This is the one place allowed to read `CODEX_HOME` - the
-/// core crate never does (`docs/action-map/harnesses/codex.md`, "Resolved by
+/// core crate never does (`docs/agent-skill-conventions.md`, "Resolved by
 /// the docs on 2026-09-16": "`CODEX_HOME` overrides `~/.codex` for config,
 /// sessions, and the `SQLite` state; every Codex path in the app must honour
 /// it").
@@ -591,7 +591,7 @@ fn discover_skill_projects_from(home: &Path, sources: &DiscoverySources) -> Vec<
         }
         let discovered = read_history(home);
         // pi walks project roots recursively to the git root
-        // (docs/action-map/harnesses/pi.md), so a nested `.pi/skills`
+        // (docs/agent-skill-conventions.md), so a nested `.pi/skills`
         // several levels below a pi transcript's own `cwd` is still a
         // project root, not just the `cwd` itself. Scoped to pi's own
         // history only: another harness's sentinel value (e.g. OpenCode's

@@ -156,7 +156,7 @@ jobs:
         # dead end). So every Apple signing and notarization secret must be
         # set or the job stops before anything is published. The four
         # v0.1.0-rc.* releases were published before this gate existed and
-        # are unsigned (docs/action-map/release-readiness.md, step 1).
+        # are unsigned.
         run: |
           set -euo pipefail
           missing=""
@@ -167,7 +167,7 @@ jobs:
           done
           if [ -n "$missing" ]; then
             echo "::error::Apple code signing secrets are unset ($missing) - refusing to build a release that would be unsigned and unnotarized."
-            echo "Set the missing repository secrets, then re-run the release (docs/action-map/release-readiness.md, step 1)."
+            echo "Set the missing repository secrets, then re-run the release."
             exit 1
           fi
           delimiter="$(openssl rand -hex 16)"
@@ -515,30 +515,3 @@ jobs:
             fi
             npm publish "./$dir" --access public --provenance "${dist_tag[@]}"
           done
-
-  # Unit 6.3: prints the rollback rehearsal checklist once per release
-  # (not once per `build` matrix leg) so the release author has one place
-  # to record it. This is a summary, not a gate - nothing here blocks the
-  # release or waits on wall-clock time; the release author fills in the
-  # result by hand, after actually running the steps against a machine
-  # that ran the previous tag, and copies this section into the release
-  # notes (`docs/action-map/release-readiness.md` carries the same steps).
-  rehearsal-summary:
-    needs: publish
-    runs-on: ubuntu-latest
-    steps:
-      - name: Print the n-1 over n rollback rehearsal checklist
-        run: |
-          {
-            echo "## Rollback rehearsal (n-1 over n)"
-            echo
-            echo "Run by hand on a Mac that already ran the previous tag, before announcing this release:"
-            echo
-            echo "- [ ] Install the previous tag's signed DMG and launch it at least once."
-            echo "- [ ] Install this tag's signed DMG over it (same Applications path)."
-            echo "- [ ] Launch, confirm the app opens to the normal skill list, not the newer-data-folder message."
-            echo "- [ ] Note the app data folder's \`schema_version\` before and after (\`~/Library/Application Support/<bundle id>/schema_version\`)."
-            echo "- [ ] Reinstall the previous tag's DMG over this one (the rollback), launch, and record what the user sees."
-            echo
-            echo "Result: (fill in)"
-          } >> "$GITHUB_STEP_SUMMARY"

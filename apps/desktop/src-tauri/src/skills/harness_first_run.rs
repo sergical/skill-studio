@@ -25,7 +25,7 @@ pub struct HarnessesChoice {
     /// Whether the user opted in to searching harness history (Codex
     /// `config.toml` trust rows, Claude Code transcripts, ...) for project
     /// folders, mirroring the per-harness discovery switch in
-    /// `docs/action-map/settings-and-projects.md`.
+    /// `docs/flows.md`.
     pub search_project_folders: bool,
     /// RFC 3339 timestamp of the save, for a support report; not read by any
     /// decision in the app.

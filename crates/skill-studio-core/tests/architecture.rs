@@ -166,7 +166,7 @@ fn workspace_lints_deny_unwrap_expect_panic_todo_unimplemented_dbg_print_in_core
 }
 
 /// `cargo machete` and `cargo deny check` are the two supply-chain checks
-/// plan.md section 7 asks for; both must run in CI with zero findings.
+/// the workspace uses; both must run in CI with zero findings.
 /// A findings failure surfaces the offending crate directly in that job's
 /// output, so this test only pins that the steps exist and that `deny.toml`
 /// (the policy `cargo deny check` reads) is in place - dropping either from

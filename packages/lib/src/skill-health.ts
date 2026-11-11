@@ -482,18 +482,3 @@ export function collectDashboardIssues(skills: InstalledSkill[]): HealthIssue[] 
     return orderDiff !== 0 ? orderDiff : a.skill.name.localeCompare(b.skill.name);
   });
 }
-
-/** `issues` bucketed by kind, in `HEALTH_ISSUE_KIND_ORDER`, omitting zero counts. */
-export function groupIssuesByKind(
-  issues: HealthIssue[],
-): { kind: HealthIssueKind; count: number }[] {
-  const counts = new Map<HealthIssueKind, number>();
-  for (const issue of issues) {
-    counts.set(issue.kind, (counts.get(issue.kind) ?? 0) + 1);
-  }
-
-  return HEALTH_ISSUE_KIND_ORDER.filter((kind) => (counts.get(kind) ?? 0) > 0).map((kind) => ({
-    kind,
-    count: counts.get(kind) ?? 0,
-  }));
-}

@@ -306,49 +306,7 @@ fn scope_error_envelope<T: Outcome>(
     }
 }
 
-/// A [`skill_studio_core::skill_update_check::SourceTreeLookup`],
-/// [`skill_studio_core::skill_update_check::CommitLookup`], and
-/// [`skill_studio_core::skill_update_check::PluginManifestLookup`] all in
-/// one: when `gh` is not on `PATH`, every lookup a currency check makes
-/// fails, which `ops::outdated` already turns into `Currency::Unknown` per
-/// skill rather than a hard error. Matches `apps/cli/src/main.rs`'s
-/// `NoGhLookup`.
-struct NoGhLookup;
-
-impl skill_studio_core::skill_update_check::SourceTreeLookup for NoGhLookup {
-    fn tree_shas_at_head(
-        &self,
-        _repo: &str,
-    ) -> Result<std::collections::HashMap<String, String>, CoreError> {
-        Err(CoreError::new(
-            skill_studio_core::ErrorCode::Unsupported,
-            "gh is not on PATH",
-        ))
-    }
-}
-
-impl skill_studio_core::skill_update_check::CommitLookup for NoGhLookup {
-    fn latest_commit(
-        &self,
-        _repo: &str,
-        _path: &str,
-    ) -> Result<Option<skill_studio_core::skill_update_check::CommitInfo>, CoreError> {
-        Err(CoreError::new(
-            skill_studio_core::ErrorCode::Unsupported,
-            "gh is not on PATH",
-        ))
-    }
-}
-
-impl skill_studio_core::skill_update_check::PluginManifestLookup for NoGhLookup {
-    fn marketplace_version(
-        &self,
-        _marketplace: &str,
-        _plugin: &str,
-    ) -> Result<Option<String>, CoreError> {
-        Ok(None)
-    }
-}
+use skill_studio_host::NoGhLookup;
 
 #[tool_router]
 impl SkillStudioServer {
@@ -546,6 +504,24 @@ impl SkillStudioServer {
         run_op(Operation::Doctor, false, &context, |rt, ctx| {
             ops::doctor(rt, ctx, &req)
         })
+        .await
+    }
+
+    #[tool(
+        description = "Check invocation per harness. Supply skill and policy (user-only or both) to set all copies. Undo with the returned event_ids.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn invocation(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::ops_invocation::InvocationRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(
+            Operation::Invocation,
+            req.policy.is_some(),
+            &context,
+            |rt, ctx| skill_studio_core::ops_invocation::invocation(rt, ctx, &req),
+        )
         .await
     }
 

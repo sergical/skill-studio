@@ -4,7 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 //! Real-disk integration test for `ops::scan`'s partial-root behaviour
-//! (`docs/action-map/reads-and-snapshot.md`, "Desired state"; unit 3.3's
+//! (`docs/flows.md`, "Desired state"; unit 3.3's
 //! crash test). Like `park_and_unpark.rs`, this uses `skill-studio-host`'s
 //! real adapter, wrapped in [`FailingFs`] to fail exactly one root's
 //! `read_dir`.
