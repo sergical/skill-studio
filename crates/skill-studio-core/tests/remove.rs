@@ -158,10 +158,12 @@ impl ProcessSpawner for FakeNpxSpawner {
                     .iter()
                     .find(|(k, _)| k == "VIBE_HOME")
                     .map_or_else(|| cwd.join(".vibe"), |(_, v)| PathBuf::from(v));
+                // skills CLI 1.7.0 ignores `PI_CODING_AGENT_DIR` and always clears `~/.pi/agent/skills`.
                 let mut targets: Vec<PathBuf> = [
                     ".cursor/skills",
                     ".deepagents/agent/skills",
                     ".gemini/skills",
+                    ".pi/agent/skills",
                 ]
                 .iter()
                 .map(|folder| cwd.join(folder).join(&name))
@@ -250,9 +252,18 @@ fn runtime_with_clock(
     spawner: Option<Arc<dyn ProcessSpawner>>,
     clock: Arc<FakeClock>,
 ) -> Runtime {
+    runtime_with_scope(&RuntimeScope::fixture(home), fs, spawner, clock)
+}
+
+fn runtime_with_scope(
+    scope: &RuntimeScope,
+    fs: Arc<dyn skill_studio_core::ports::ScopeFs>,
+    spawner: Option<Arc<dyn ProcessSpawner>>,
+    clock: Arc<FakeClock>,
+) -> Runtime {
+    let home = scope.home_root.clone();
     let history_root = home.join(".history");
     let db_path = history_root.join("events.sqlite3");
-    let scope = RuntimeScope::fixture(home);
     let ports = Ports {
         fs,
         clock,
@@ -267,7 +278,7 @@ fn runtime_with_clock(
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
     };
-    Runtime::new(&scope, ports).unwrap()
+    Runtime::new(scope, ports).unwrap()
 }
 
 fn runtime_for(home: &std::path::Path) -> Runtime {
@@ -2043,6 +2054,51 @@ fn undo_after_global_skills_sh_remove_restores_every_agent_folder_the_cli_cleare
         Some(elsewhere.as_path()),
         "gemini link"
     );
+}
+
+/// Flow: pi's home is moved with `PI_CODING_AGENT_DIR`, and an old real folder `x` is still in
+/// the default `~/.pi/agent/skills`. The user removes a global skills.sh install of `x`; the CLI
+/// ignores the variable and clears the default folder. The user then undoes the remove.
+/// Expectation: Undo restores the default pi folder byte for byte.
+/// A failure here means the backup looked in the moved home while the CLI deleted elsewhere.
+#[test]
+fn undo_after_remove_restores_the_default_pi_folder_the_cli_cleared_despite_a_moved_pi_home() {
+    let home = unique_temp_dir("remove_undo_moved_pi_home");
+    std::fs::create_dir_all(home.join("moved-pi/skills")).unwrap();
+    let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
+    spawner.clear_cli_agent_folders();
+    let mut scope = RuntimeScope::fixture(&home);
+    scope
+        .agent_home_roots
+        .insert(".pi/agent".into(), home.join("moved-pi"));
+    let rt = runtime_with_scope(
+        &scope,
+        Arc::new(RealFs::new()),
+        Some(spawner.clone() as Arc<dyn ProcessSpawner>),
+        Arc::new(FakeClock::at(0)),
+    );
+    let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
+    let pi_default = home.join(".pi/agent/skills/x");
+    write_skill_md(&pi_default);
+    std::fs::write(pi_default.join("own.txt"), "my own pi notes\n").unwrap();
+    let before = folder_bytes(&pi_default);
+
+    let outcome = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
+    assert!(
+        !pi_default.exists(),
+        "the fake CLI clears the default pi folder"
+    );
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: outcome.event_id,
+            force: false,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(folder_bytes(&pi_default), before, "default pi folder");
 }
 
 /// Flow: a global skills.sh install of `x` and a real folder `x` in `~/.cursor/skills`. The user

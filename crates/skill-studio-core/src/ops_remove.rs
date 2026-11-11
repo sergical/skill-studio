@@ -251,13 +251,12 @@ fn cli_agent_folder_backups(
         scope,
         &cli_sanitize_name(name),
     ) {
-        let path = if matches!(scope, RootScope::Global) {
-            path.strip_prefix(home).map_or_else(
-                |_| path.clone(),
-                |relative| normalized.global_root_path(relative),
-            )
-        } else {
-            path
+        // skills CLI 1.7.0 reads `CLAUDE_CONFIG_DIR` and `GROK_HOME`, not `PI_CODING_AGENT_DIR`.
+        let path = match path.strip_prefix(home) {
+            Ok(relative) if matches!(scope, RootScope::Global) && !relative.starts_with(".pi") => {
+                normalized.global_root_path(relative)
+            }
+            _ => path,
         };
         // Before any fs call: the caller's link loop reads these paths next.
         if links.contains(&path) {
