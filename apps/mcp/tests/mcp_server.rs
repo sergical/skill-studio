@@ -548,7 +548,7 @@ async fn watch_and_a_fresh_mcp_scan_agree_after_a_cli_mutation() {
     .unwrap();
     let apply = run_cli(&[
         "apply-repair",
-        "--fixture",
+        "--home",
         home.to_str().unwrap(),
         "--preview-json",
         preview_path.to_str().unwrap(),
@@ -1217,7 +1217,7 @@ async fn every_input_schema_is_self_contained_with_a_properties_object() {
     let tools = client.list_all_tools().await.expect("list tools");
     client.cancel().await.ok();
 
-    for dev_tool in ["capabilities", "harnesses", "doctor", "sweep_quarantine"] {
+    for &dev_tool in skill_studio_mcp::DEV_TOOLS {
         assert!(
             tools.iter().any(|t| t.name == dev_tool),
             "{dev_tool} missing with dev tools on"
@@ -1754,7 +1754,7 @@ async fn review_cli_mcp_json_matches_for_set_due_clear_and_unknown_or_one_adapte
     let home_str = home.path().to_str().unwrap();
     let (client, _) = connect(&[
         ("HOME", home_str),
-        ("SKILL_STUDIO_FIXTURE", home_str),
+        ("SKILL_STUDIO_HOME", home_str),
         ("SKILL_STUDIO_TELEMETRY", "0"),
     ])
     .await;
@@ -1786,7 +1786,7 @@ async fn review_cli_mcp_json_matches_for_set_due_clear_and_unknown_or_one_adapte
         )
         .arg("review")
         .args(args)
-        .args(["--fixture", home_str, "--json"])
+        .args(["--home", home_str, "--json"])
         .env("HOME", home_str)
         .env("SKILL_STUDIO_TELEMETRY", "0")
         .output()
@@ -1795,4 +1795,33 @@ async fn review_cli_mcp_json_matches_for_set_due_clear_and_unknown_or_one_adapte
         assert_eq!(normalize(mcp), normalize(cli), "{tool}");
     }
     client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn fixture_scope_refuses_write_without_tree_changes() {
+    let home = materialized_fixture("basic");
+    let before = complete_folder_tree(&home);
+    let (client, _) = connect(&[("SKILL_STUDIO_FIXTURE", home.to_str().unwrap())]).await;
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("park").with_arguments(
+                serde_json::json!({"skills": ["gamma"]})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(true));
+    let envelope: serde_json::Value =
+        serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(envelope["errors"][0]["code"], "invalid_scope");
+    assert!(envelope["errors"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("read-only"));
+    client.cancel().await.unwrap();
+    assert_eq!(complete_folder_tree(&home), before);
+    std::fs::remove_dir_all(home).unwrap();
 }

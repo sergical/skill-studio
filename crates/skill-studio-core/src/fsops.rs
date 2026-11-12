@@ -2,8 +2,7 @@
 //! folder - [`Root`], [`stage`], [`swap`], [`link`], and [`write_file`].
 //! See `docs/flows.md` for operation guarantees and flow tests.
 //!
-//! Nothing in [`crate::ops`] calls these yet; adoption starts in a later
-//! unit. Every primitive is written against the `fsops_*` methods on
+//! Every primitive is written against the `fsops_*` methods on
 //! [`crate::ports::ScopeFs`], so this module never touches the real
 //! filesystem - `skill_studio_host::fs::RealFs` and
 //! `crate::testing::FixtureFs` are the two implementations, real disk and
@@ -590,7 +589,9 @@ pub fn read_stamp(fs: &dyn ScopeFs, path: &Path) -> Result<ReadStamp, FsOpsError
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(ReadStamp::Absent),
         Err(error) => return Err(FsOpsError::io(path, error)),
     }
-    let bytes = fs.read_capped(path, u64::MAX).fs_err(path)?;
+    let bytes = fs
+        .read_capped(path, crate::journal::MAX_BACKUP_BYTES)
+        .fs_err(path)?;
     Ok(ReadStamp::Present(sha256(&bytes)))
 }
 
@@ -625,7 +626,10 @@ pub fn write_file(
         Err(error) => return Err(FsOpsError::io(&target, error)),
     };
     let previous = if facts.is_some() {
-        Some(root.fs.read_capped(&target, u64::MAX).fs_err(&target)?)
+        Some(root.fs.read_capped(&target, crate::journal::MAX_BACKUP_BYTES).map_err(|error| {
+            FsOpsError::io(&target, std::io::Error::new(error.kind(),
+                format!("Could not back up target within the 64 MiB limit; write refused before changing the target: {error}")))
+        })?)
     } else {
         None
     };

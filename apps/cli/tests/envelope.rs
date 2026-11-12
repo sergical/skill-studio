@@ -563,7 +563,7 @@ fn a_write_command_under_a_held_lease_exits_3_instead_of_blocking() {
 
     let run = run(&[
         "restore",
-        "--fixture",
+        "--home",
         home.to_str().unwrap(),
         "--event-id",
         "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -1022,7 +1022,7 @@ fn add_with_project_path_alone_installs_under_that_project_or_names_the_scope_er
 
     let run = run(&[
         "add",
-        "--fixture",
+        "--home",
         home.to_str().unwrap(),
         "--method",
         "copy",
@@ -1058,7 +1058,7 @@ fn add_skills_sh_without_a_name_returns_invalid_request_naming_the_flag() {
     let home = materialized_fixture("empty_home");
     let run = run(&[
         "add",
-        "--fixture",
+        "--home",
         home.to_str().unwrap(),
         "--method",
         "skills-sh",
@@ -1094,7 +1094,7 @@ fn add_with_an_unknown_harness_returns_invalid_request_naming_the_value() {
 
     let run = run(&[
         "add",
-        "--fixture",
+        "--home",
         home.to_str().unwrap(),
         "--method",
         "copy",
@@ -1148,7 +1148,7 @@ fn add_copy_with_a_symlinked_file_copies_it_as_a_file_or_names_the_missing_path(
 
     let run = run(&[
         "add",
-        "--fixture",
+        "--home",
         home.to_str().unwrap(),
         "--method",
         "copy",
@@ -1336,17 +1336,22 @@ fn cli_park_refuses_newer_history_without_tree_changes_or_writes_mutation_lease(
         );
         assert_ne!(result.status, 0);
         let message = result.json.to_string();
-        assert!(
-            message.contains(&format!("folder is version {newer}")),
-            "{message}"
-        );
-        assert!(
-            message.contains(&format!(
-                "up to version {}",
-                skill_studio_host::CURRENT_DATA_VERSION
-            )),
-            "{message}"
-        );
+        if fixture {
+            assert_eq!(result.json["errors"][0]["code"], "invalid_scope");
+            assert!(message.contains("read-only"), "{message}");
+        } else {
+            assert!(
+                message.contains(&format!("folder is version {newer}")),
+                "{message}"
+            );
+            assert!(
+                message.contains(&format!(
+                    "up to version {}",
+                    skill_studio_host::CURRENT_DATA_VERSION
+                )),
+                "{message}"
+            );
+        }
         assert_eq!(before, snapshot());
         assert_eq!(std::fs::read_dir(&history).unwrap().count(), 2);
     }
@@ -1412,4 +1417,25 @@ fn cli_events_refuse_newer_history_without_sqlite_or_return_empty_success() {
         "{message}"
     );
     assert_eq!(before, complete_folder_tree(home.path()));
+}
+
+#[test]
+fn fixture_scope_refuses_write_without_tree_changes() {
+    let home = materialized_fixture("basic");
+    let before = complete_folder_tree(&home);
+    let result = run(&[
+        "park",
+        "gamma",
+        "--fixture",
+        home.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(result.status, 2);
+    assert_eq!(result.json["errors"][0]["code"], "invalid_scope");
+    assert!(result.json["errors"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("read-only"));
+    assert_eq!(complete_folder_tree(&home), before);
+    std::fs::remove_dir_all(home).unwrap();
 }

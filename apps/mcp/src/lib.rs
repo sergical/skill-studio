@@ -94,9 +94,9 @@ use skill_studio_core::CoreError;
 use skill_studio_host::SkillUsage;
 
 /// Tools left out of `tools/list` unless `SKILL_STUDIO_MCP_DEV_TOOLS=1`:
-/// each tool's description costs the client context on every turn, and an
+/// Each tool's description costs the client context on every turn, and an
 /// agent tidying skills never needs these.
-const DEV_TOOLS: &[&str] = &[
+pub const DEV_TOOLS: &[&str] = &[
     "capabilities",
     "harnesses",
     "sweep_quarantine",
@@ -180,8 +180,17 @@ pub fn run_stdio() -> anyhow::Result<()> {
 /// Builds the `Runtime` with a history version guard before read leases.
 /// Discovery is enabled outside fixture mode. Matches
 /// `apps/cli/src/main.rs::build_runtime`.
-fn build_runtime(with_history: bool) -> Result<Runtime, CoreError> {
+fn build_runtime(operation: Operation, with_history: bool) -> Result<Runtime, CoreError> {
     let (runtime_scope, lease_root) = scope::resolve();
+    if with_history
+        && !matches!(operation, Operation::ListEvents | Operation::Outdated)
+        && runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture
+    {
+        return Err(CoreError::new(
+            skill_studio_core::ErrorCode::InvalidScope,
+            "Fixture scope is read-only; writes are refused.",
+        ));
+    }
     let catalog = Arc::new(HarnessCatalog::builtin());
     let mut ports = if with_history {
         let db_path = runtime_scope.history_root.join("events.sqlite3");
@@ -229,7 +238,7 @@ pub fn run_op_envelope<T: Outcome + serde::Serialize>(
     call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
 ) -> ResultEnvelope<T> {
     let correlation_id = CorrelationId(ulid::Ulid::generate().to_string());
-    match build_runtime(with_history) {
+    match build_runtime(operation, with_history) {
         Ok(rt) => {
             let ctx = OpContext::uncancellable(correlation_id);
             let result = call(&rt, &ctx);

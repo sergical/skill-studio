@@ -6,7 +6,7 @@ fn run(home: &Path, args: &[&str]) -> serde_json::Value {
     let out = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
         .arg("review")
         .args(args)
-        .args(["--fixture", home.to_str().unwrap(), "--json"])
+        .args(["--home", home.to_str().unwrap(), "--json"])
         .env("HOME", home)
         .env("SKILL_STUDIO_TELEMETRY", "0")
         .output()
