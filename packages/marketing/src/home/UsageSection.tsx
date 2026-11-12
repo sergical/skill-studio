@@ -14,7 +14,7 @@ import { useCopyFlash } from "./useCopyFlash";
 import { AGENT_SETUP_PROMPT } from "@skill-studio/lib/agent-setup";
 
 type Mode = "app" | "cli" | "mcp";
-type Tone = "plain" | "muted" | "warn" | "user" | "tool" | "accent";
+type Tone = "plain" | "muted" | "error" | "warn" | "user" | "tool" | "accent";
 interface Line {
   text: string;
   tone?: Tone;
@@ -56,7 +56,7 @@ const scripts = {
   cli: [
     { text: "$ npx skill-studio@latest diagnose", typed: true, pause: 380 },
     { text: "Issues:", tone: "muted" },
-    { text: "  [error] broken link, pdf-tools: the folder it points at is gone", tone: "warn" },
+    { text: "  [error] broken link, pdf-tools: the folder it points at is gone", tone: "error" },
     { text: "  [warning] header can be fixed, motion: name is missing", tone: "warn" },
     { text: "  [warning] copies differ, writing-skills: 2 copies", tone: "warn", pause: 520 },
     { text: "$ npx skill-studio@latest usage", typed: true, pause: 380 },
@@ -580,6 +580,7 @@ const styles = stylex.create({
   linePrefix: { whiteSpace: "pre" },
   plain: { color: "oklch(0.93 0.01 290)" },
   muted: { color: "oklch(0.68 0.02 290)" },
+  error: { color: "oklch(0.704 0.191 22.216)" },
   warn: { color: "oklch(0.82 0.13 75)" },
   user: { color: "oklch(0.97 0 0)", fontWeight: 600 },
   tool: { color: "oklch(0.78 0.12 293)" },

@@ -445,7 +445,7 @@ const styles = stylex.create({
       "background-color 150ms ease-out, border-color 150ms ease-out, transform 150ms ease-out",
     ":hover": { backgroundColor: siteTokens.surface, borderColor: siteTokens.muted },
     ":active": { transform: "scale(.96)" },
-    "@media (max-width: 600px)": { minHeight: 48 },
+    "@media (max-width: 600px)": { minHeight: 48, width: "100%" },
   },
   agentProof: {
     alignItems: "center",
