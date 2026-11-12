@@ -273,7 +273,10 @@ function FolderList({
 export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
   const addToast = useAppStore((state) => state.addToast);
   const { addProject, addTypedPath, stopTracking, removeProject } = useProjectFolderActions();
-  const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<{
+    path: string;
+    discovered: boolean;
+  } | null>(null);
   const [folders, setFolders] = useState<ProjectFolder[] | null>(null);
   const [sources, setSources] = useState<DiscoverySourceSetting[] | null>(null);
   const [foldersOpen, setFoldersOpen] = useState(false);
@@ -439,8 +442,8 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
         skillCounts={skillCounts}
         open={foldersOpen}
         onOpenChange={setFoldersOpen}
-        onStopTracking={handleStopTracking}
-        onRemove={setPendingRemoval}
+        onStopTracking={(path) => setPendingRemoval({ path, discovered: true })}
+        onRemove={(path) => setPendingRemoval({ path, discovered: false })}
         addFormOpen={addFormOpen}
         onAddTypedPath={handleAddTypedPath}
         onCloseAddForm={closeAddForm}
@@ -454,21 +457,25 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove project folder?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {pendingRemoval?.discovered ? "Stop tracking project?" : "Remove project folder?"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Remove {pendingRemoval} from your added folders? This does not delete the folder or
-              its skills.
+              {pendingRemoval?.discovered
+                ? `Stop tracking ${pendingRemoval.path}? Its skills stay on disk.`
+                : `Remove ${pendingRemoval?.path} from your added folders? This does not delete the folder or its skills.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                if (pendingRemoval) void handleRemove(pendingRemoval);
+                if (pendingRemoval?.discovered) void handleStopTracking(pendingRemoval.path);
+                else if (pendingRemoval) void handleRemove(pendingRemoval.path);
                 setPendingRemoval(null);
               }}
             >
-              Remove
+              {pendingRemoval?.discovered ? "Stop tracking" : "Remove"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

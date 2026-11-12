@@ -62,3 +62,32 @@ it("removes an added folder only after confirmation and leaves it tracked on can
   await waitFor(() => expect(removals).toBe(1));
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
 });
+
+it("stops tracking a discovered folder only after confirmation and keeps it tracked on cancel", async () => {
+  let stops = 0;
+  mockIPC((command) => {
+    if (command === "list_project_folders")
+      return stops
+        ? []
+        : [{ path: "/project", source: "discovered", missing: false, matches: null }];
+    if (command === "get_discovery_sources") return [];
+    if (command === "unregister_skill_project") {
+      stops++;
+      return [];
+    }
+    return null;
+  });
+  const user = userEvent.setup();
+  render(<ProjectFoldersCard snapshot={undefined} />);
+  await user.click(await screen.findByRole("button", { name: /1 folder/ }));
+  await user.click(await screen.findByRole("button", { name: "Stop tracking /project" }));
+  const dialog = await screen.findByRole("alertdialog");
+  expect(within(dialog).getByText(/skills stay on disk/)).toBeTruthy();
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(stops).toBe(0);
+  await user.click(screen.getByRole("button", { name: "Stop tracking /project" }));
+  await user.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Stop tracking" }),
+  );
+  await waitFor(() => expect(stops).toBe(1));
+});
