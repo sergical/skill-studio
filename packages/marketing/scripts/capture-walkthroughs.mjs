@@ -34,6 +34,23 @@ function open(scene, theme, width = 1040) {
   browser("open", `${capturePage}?scene=${scene}&theme=${theme}`);
   browser("set", "viewport", String(width), "1000");
   browser("wait", "--fn", "window.__captureReady === true");
+  passFirstRun();
+}
+
+// The harness mock has no saved agent choice, so the app opens on its first-run screen.
+function passFirstRun() {
+  evaluate(`(async () => {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const button = [...document.querySelectorAll("button")].find((item) => item.textContent?.trim() === "Continue");
+      if (button && !button.disabled) {
+        button.click();
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return;
+      }
+      if (!button && attempt >= 10) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  })()`);
 }
 
 function settle() {
@@ -93,13 +110,6 @@ function captureInstall(theme, width, suffix = "") {
   browser("wait", "--text", "frontend-design");
   clickExact("Project", "document.querySelector('[role=\"dialog\"]')");
   capture(`install-${theme}-project${suffix}`);
-  evaluate(`document.querySelector('[role="dialog"] [data-slot="checkbox"]').click()`);
-  browser(
-    "wait",
-    "--fn",
-    `document.querySelector('[role="dialog"] [data-slot="checkbox"]')?.getAttribute("aria-checked") === "true"`,
-  );
-  capture(`install-${theme}-trial${suffix}`);
   clickExact("Add skill", "document.querySelector('[role=\"dialog\"]')");
   browser("wait", "--text", "frontend-design");
   capture(`install-${theme}-installed${suffix}`);

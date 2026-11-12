@@ -283,7 +283,7 @@ const TAB_STEPS = new Map([
 ]);
 
 export function UsageSection() {
-  const [mode, setMode] = useState<Mode>("cli");
+  const [mode, setMode] = useState<Mode>("app");
   const [runId, setRunId] = useState(0);
   // Lives outside the per-run app view so screen readers already know the region when
   // its text arrives.

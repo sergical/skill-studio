@@ -159,7 +159,13 @@ function MascotChips({ tidy, layout }: { tidy: boolean; layout: TidyLayout | nul
           tidy && !kept && styles.chipParked,
         )}
       >
-        <span {...stylex.props(styles.dot, resolved ? styles.ok : styles[chip.state])} />
+        <span
+          {...stylex.props(
+            styles.dot,
+            resolved ? styles.ok : styles[chip.state],
+            tidy && chip.state === "ok" && styles.dotUnchanged,
+          )}
+        />
         {chip.name}
         <span {...stylex.props(styles.chipState)}>{resolved ?? stateLabel[chip.state]}</span>
       </span>
@@ -303,9 +309,10 @@ const styles = stylex.create({
     borderRadius: 999,
     flexShrink: 0,
     height: 7,
-    transition: "background-color 300ms ease-out 500ms",
+    transition: "background-color 300ms ease-out 500ms, opacity 300ms ease-out 500ms",
     width: 7,
   },
+  dotUnchanged: { opacity: 0 },
   ok: { backgroundColor: "oklch(0.75 0.17 150)" },
   outdated: { backgroundColor: "oklch(0.72 0.15 240)" },
   broken: { backgroundColor: "oklch(0.66 0.21 25)" },

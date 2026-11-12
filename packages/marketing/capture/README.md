@@ -9,7 +9,7 @@ npm run remotion:capture -w @skill-studio/marketing
 npm run remotion:render -w @skill-studio/marketing
 ```
 
-The capture command requires `agent-browser`. Set `SKILL_STUDIO_CAPTURE_URL` to use another capture page URL. It records real controls at 1040×1000 and 800×1000. Remotion uses separate camera paths for desktop and phone playback.
+The capture command requires `agent-browser`. Set `SKILL_STUDIO_CAPTURE_URL` to use another capture page URL. The desktop Vite server keeps port 1420, so when the `.localhost` URL returns 502, use `http://localhost:1420/@fs<repo>/packages/marketing/capture/index.html`. The mock has no saved agent choice, so the script clicks Continue on the first-run screen. It records real controls at 1040×1000 and 800×1000. Remotion uses separate camera paths for desktop and phone playback.
 
 After an app UI change, capture again and check the actions, states, and camera crops before rendering. `capture/public/remotion/current` contains source frames and is used only by Remotion. `public/walkthrough/current` contains the delivered MP4s and posters.
 
