@@ -228,8 +228,8 @@ function MapStory({ format, theme }: StoryProps) {
               { frame: 390, centerX: 575, centerY: 545, cropWidth: 440 },
             ]
           : [
-              { frame: 0, centerX: 640, centerY: 265, cropWidth: 900 },
-              { frame: 24, centerX: 640, centerY: 265, cropWidth: 900 },
+              { frame: 0, centerX: 640, centerY: 237, cropWidth: 800 },
+              { frame: 24, centerX: 640, centerY: 237, cropWidth: 800 },
               { frame: 64, centerX: 640, centerY: 420, cropWidth: 800 },
               { frame: 119, centerX: 640, centerY: 420, cropWidth: 800 },
               { frame: 160, centerX: 640, centerY: 600, cropWidth: 800 },
@@ -245,18 +245,18 @@ function MapStory({ format, theme }: StoryProps) {
         {
           from: 91,
           startX: 540,
-          startY: mobile ? 640 : 600,
+          startY: mobile ? 700 : 680,
           to: 115,
           x: 299,
-          y: mobile ? 572 : 534,
+          y: 600,
         },
         {
           from: 234,
           startX: mobile ? 570 : 780,
           startY: 330,
           to: 259,
-          x: mobile ? 693 : 943,
-          y: mobile ? 231 : 193,
+          x: mobile ? 688 : 636,
+          y: 258,
         },
       ]}
     />
@@ -276,25 +276,25 @@ function RepairStory({ format, theme }: StoryProps) {
       camera={
         mobile
           ? [
-              { frame: 0, centerX: 520, centerY: 685, cropWidth: 520 },
-              { frame: 35, centerX: 520, centerY: 685, cropWidth: 520 },
-              { frame: 62, centerX: 520, centerY: 650, cropWidth: 500 },
-              { frame: 105, centerX: 520, centerY: 650, cropWidth: 500 },
-              { frame: 135, centerX: 520, centerY: 750, cropWidth: 500 },
-              { frame: 154, centerX: 520, centerY: 750, cropWidth: 500 },
+              { frame: 0, centerX: 520, centerY: 520, cropWidth: 520 },
+              { frame: 35, centerX: 520, centerY: 520, cropWidth: 520 },
+              { frame: 62, centerX: 520, centerY: 690, cropWidth: 500 },
+              { frame: 105, centerX: 520, centerY: 690, cropWidth: 500 },
+              { frame: 135, centerX: 520, centerY: 760, cropWidth: 500 },
+              { frame: 154, centerX: 520, centerY: 760, cropWidth: 500 },
               { frame: 155, centerX: 520, centerY: 495, cropWidth: 520 },
             ]
           : [
-              { frame: 0, centerX: 640, centerY: 665, cropWidth: 800 },
-              { frame: 35, centerX: 640, centerY: 665, cropWidth: 800 },
-              { frame: 62, centerX: 640, centerY: 610, cropWidth: 740 },
-              { frame: 105, centerX: 640, centerY: 610, cropWidth: 740 },
-              { frame: 135, centerX: 640, centerY: 710, cropWidth: 740 },
-              { frame: 154, centerX: 640, centerY: 710, cropWidth: 740 },
+              { frame: 0, centerX: 640, centerY: 520, cropWidth: 800 },
+              { frame: 35, centerX: 640, centerY: 520, cropWidth: 800 },
+              { frame: 62, centerX: 640, centerY: 700, cropWidth: 740 },
+              { frame: 105, centerX: 640, centerY: 700, cropWidth: 740 },
+              { frame: 135, centerX: 640, centerY: 790, cropWidth: 740 },
+              { frame: 154, centerX: 640, centerY: 790, cropWidth: 740 },
               { frame: 155, centerX: 640, centerY: 485, cropWidth: 800 },
             ]
       }
-      pointers={[{ from: 121, startX: 475, startY: 790, to: 150, x: 326, y: mobile ? 864 : 846 }]}
+      pointers={[{ from: 121, startX: 475, startY: 820, to: 150, x: 316, y: mobile ? 894 : 930 }]}
     />
   );
 }
@@ -308,34 +308,30 @@ function InstallStory({ format, theme }: StoryProps) {
       theme={theme}
       assets={[
         { frame: 0, name: `install-${theme}-project` },
-        { frame: 110, name: `install-${theme}-trial` },
         { frame: 195, name: `install-${theme}-installed` },
       ]}
       camera={
         mobile
           ? [
-              { frame: 0, centerX: sheetX, centerY: 300, cropWidth: 420 },
-              { frame: 30, centerX: sheetX, centerY: 300, cropWidth: 420 },
-              { frame: 70, centerX: sheetX, centerY: 630, cropWidth: 420 },
-              { frame: 145, centerX: sheetX, centerY: 630, cropWidth: 420 },
-              { frame: 175, centerX: sheetX, centerY: 800, cropWidth: 420 },
-              { frame: 194, centerX: sheetX, centerY: 800, cropWidth: 420 },
+              { frame: 0, centerX: sheetX, centerY: 230, cropWidth: 420 },
+              { frame: 30, centerX: sheetX, centerY: 230, cropWidth: 420 },
+              { frame: 70, centerX: sheetX, centerY: 580, cropWidth: 420 },
+              { frame: 145, centerX: sheetX, centerY: 580, cropWidth: 420 },
+              { frame: 175, centerX: sheetX, centerY: 790, cropWidth: 420 },
+              { frame: 194, centerX: sheetX, centerY: 790, cropWidth: 420 },
               { frame: 195, centerX: 520, centerY: 250, cropWidth: 520 },
             ]
           : [
-              { frame: 0, centerX: 690, centerY: 300, cropWidth: 700 },
-              { frame: 30, centerX: 690, centerY: 300, cropWidth: 700 },
-              { frame: 70, centerX: 710, centerY: 635, cropWidth: 660 },
-              { frame: 145, centerX: 710, centerY: 635, cropWidth: 660 },
-              { frame: 175, centerX: 710, centerY: 820, cropWidth: 660 },
-              { frame: 194, centerX: 710, centerY: 820, cropWidth: 660 },
+              { frame: 0, centerX: 690, centerY: 260, cropWidth: 700 },
+              { frame: 30, centerX: 690, centerY: 260, cropWidth: 700 },
+              { frame: 70, centerX: 710, centerY: 560, cropWidth: 660 },
+              { frame: 145, centerX: 710, centerY: 560, cropWidth: 660 },
+              { frame: 175, centerX: 710, centerY: 815, cropWidth: 660 },
+              { frame: 194, centerX: 710, centerY: 815, cropWidth: 660 },
               { frame: 195, centerX: 640, centerY: 245, cropWidth: 800 },
             ]
       }
-      pointers={[
-        { from: 80, startX: sheetX - 60, startY: 595, to: 105, x: sheetX - 181, y: 659 },
-        { from: 160, startX: sheetX - 20, startY: 875, to: 190, x: sheetX + 147, y: 968 },
-      ]}
+      pointers={[{ from: 160, startX: sheetX - 20, startY: 875, to: 190, x: sheetX + 145, y: 962 }]}
     />
   );
 }
@@ -354,25 +350,25 @@ function ActivityStory({ format, theme }: StoryProps) {
         mobile
           ? [
               { frame: 0, centerX: 520, centerY: 280, cropWidth: 560 },
-              { frame: 52, centerX: 520, centerY: 310, cropWidth: 520 },
-              { frame: 150, centerX: 520, centerY: 310, cropWidth: 520 },
-              { frame: 190, centerX: 520, centerY: 475, cropWidth: 520 },
+              { frame: 52, centerX: 520, centerY: 640, cropWidth: 520 },
+              { frame: 150, centerX: 520, centerY: 640, cropWidth: 520 },
+              { frame: 190, centerX: 520, centerY: 740, cropWidth: 520 },
             ]
           : [
               { frame: 0, centerX: 640, centerY: 235, cropWidth: 800 },
-              { frame: 52, centerX: 640, centerY: 320, cropWidth: 800 },
-              { frame: 150, centerX: 640, centerY: 320, cropWidth: 800 },
-              { frame: 190, centerX: 640, centerY: 445, cropWidth: 800 },
+              { frame: 52, centerX: 640, centerY: 660, cropWidth: 800 },
+              { frame: 150, centerX: 640, centerY: 660, cropWidth: 800 },
+              { frame: 190, centerX: 640, centerY: 775, cropWidth: 800 },
             ]
       }
       pointers={[
         {
           from: 66,
           startX: mobile ? 600 : 800,
-          startY: 400,
+          startY: 700,
           to: 95,
-          x: mobile ? 666 : 906,
-          y: mobile ? 250 : 282,
+          x: mobile ? 665 : 905,
+          y: 848,
         },
       ]}
     />
