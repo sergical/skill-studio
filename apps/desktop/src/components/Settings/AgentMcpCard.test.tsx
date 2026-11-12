@@ -77,3 +77,32 @@ it("Connect adds Codex and Re-add replaces the Claude Code entry through connect
     host.remove();
   }
 });
+
+it("a failed re-add shows the agent error and the row the config now holds, or names the stale Added row", async () => {
+  const connected = new Set(["claude-code"]);
+  mockIPC((command) => {
+    if (command === "get_mcp_connections") return [...connected];
+    if (command === "connect_mcp") {
+      connected.delete("claude-code");
+      throw new Error("`claude mcp add` failed: disk full");
+    }
+    throw new Error(`unexpected command: ${command}`);
+  });
+  useAppStore.getState().setHarnessDetection({
+    report: { harnesses: [row("claude-code", "Claude Code")] },
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AgentMcpCard />));
+    await act(async () => host.querySelector("button")?.click());
+
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("disk full");
+    expect(host.textContent).not.toContain("Added");
+    expect(host.querySelector("button")?.textContent).toBe("Connect");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});

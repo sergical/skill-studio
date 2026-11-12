@@ -26,8 +26,14 @@ fn spec(program: &str, args: &[&str], timeout_ms: u64) -> ProcessSpec {
     }
 }
 
-/// The download, remove and add commands, in run order.
-fn connect_commands(harness: &str) -> Option<[ProcessSpec; 3]> {
+struct ConnectCommands {
+    download: ProcessSpec,
+    /// `claude mcp add` refuses a name that exists; `codex mcp add` overwrites it.
+    remove_existing: Option<ProcessSpec>,
+    add: ProcessSpec,
+}
+
+fn connect_commands(harness: &str) -> Option<ConnectCommands> {
     let (program, scope, transport): (&str, &[&str], &[&str]) = match harness {
         "claude-code" => ("claude", &["--scope", "user"], &["--transport", "stdio"]),
         "codex" => ("codex", &[], &[]),
@@ -45,15 +51,15 @@ fn connect_commands(harness: &str) -> Option<[ProcessSpec; 3]> {
         .chain([SERVER_NAME, "--"])
         .chain(SERVER_COMMAND)
         .collect();
-    Some([
-        spec(
+    Some(ConnectCommands {
+        download: spec(
             "npx",
             &["-y", SERVER_NAME, "--version"],
             DOWNLOAD_TIMEOUT_MS,
         ),
-        spec(program, &remove, ADD_TIMEOUT_MS),
-        spec(program, &add, ADD_TIMEOUT_MS),
-    ])
+        remove_existing: (program == "claude").then(|| spec(program, &remove, ADD_TIMEOUT_MS)),
+        add: spec(program, &add, ADD_TIMEOUT_MS),
+    })
 }
 
 fn run(spawner: &dyn ProcessSpawner, spec: &ProcessSpec) -> Result<(), String> {
@@ -96,17 +102,19 @@ pub fn connected_agents(rt: &Runtime) -> Result<Vec<String>, String> {
 /// Adds the server, or replaces an existing `skill-studio` entry (for example
 /// one that points to a removed binary) with the published one.
 pub fn connect_agent(rt: &Runtime, harness: &str) -> Result<(), String> {
-    let [download, remove, add] = connect_commands(harness)
+    let commands = connect_commands(harness)
         .ok_or_else(|| format!("Skill Studio cannot add its MCP server to {harness}."))?;
     let spawner = rt
         .ports
         .spawner
         .as_deref()
         .ok_or("This build cannot run agent commands.")?;
-    run(spawner, &download)?;
-    // A missing entry makes `mcp remove` fail; `mcp add` reports any real problem.
-    let _ = run(spawner, &remove);
-    run(spawner, &add)
+    run(spawner, &commands.download)?;
+    if let Some(remove) = &commands.remove_existing {
+        // A missing entry makes `mcp remove` fail; `mcp add` reports any real problem.
+        let _ = run(spawner, remove);
+    }
+    run(spawner, &commands.add)
 }
 
 #[tauri::command]
@@ -147,9 +155,10 @@ mod tests {
     impl ProcessSpawner for RecordingSpawner {
         fn run(&self, spec: &ProcessSpec, _: &dyn CancelToken) -> Result<ProcessOutput, CoreError> {
             self.calls.lock().unwrap().push(spec.clone());
+            let command = format!("{} {}", spec.program, spec.args.join(" "));
             let failure = self
                 .failing
-                .filter(|(program, _)| *program == spec.program)
+                .filter(|(prefix, _)| command.starts_with(prefix))
                 .map(|(_, stderr)| stderr);
             Ok(ProcessOutput {
                 status: Some(i32::from(failure.is_some())),
@@ -236,14 +245,30 @@ mod tests {
     #[test]
     fn a_failed_codex_mcp_add_returns_its_stderr_instead_of_success() {
         let home = tempfile::tempdir().unwrap();
-        let recorder = spawner(Some(("codex", "config.toml is not writable")));
+        let recorder = spawner(Some(("codex mcp add", "config.toml is not writable")));
 
         let err = connect_agent(&runtime(home.path(), recorder.clone()), "codex").unwrap_err();
 
         assert!(err.contains("config.toml is not writable"), "{err}");
         assert_eq!(
+            recorder.commands(),
+            vec![
+                "npx -y skill-studio --version",
+                "codex mcp add skill-studio -- npx -y skill-studio mcp",
+            ]
+        );
+    }
+
+    #[test]
+    fn re_adding_claude_code_without_an_entry_ignores_the_failed_remove_and_still_adds() {
+        let home = tempfile::tempdir().unwrap();
+        let recorder = spawner(Some(("claude mcp remove", "No MCP server found")));
+
+        connect_agent(&runtime(home.path(), recorder.clone()), "claude-code").unwrap();
+
+        assert_eq!(
             recorder.commands().last().unwrap(),
-            "codex mcp add skill-studio -- npx -y skill-studio mcp"
+            "claude mcp add --scope user --transport stdio skill-studio -- npx -y skill-studio mcp"
         );
     }
 

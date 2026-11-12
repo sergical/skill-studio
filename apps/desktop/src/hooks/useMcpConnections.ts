@@ -29,17 +29,27 @@ export function useMcpConnections(): McpConnections {
     };
   }, []);
 
-  const connect = async (agent: string) => {
+  const connect = (agent: string) => {
     setPending(agent);
     setError(null);
-    try {
-      await connectMcp(agent);
-      setConnected(new Set(await getMcpConnections()));
-    } catch (cause) {
-      setError(invokeErrorMessage(cause));
-    } finally {
-      setPending(null);
-    }
+    return (
+      connectMcp(agent)
+        .then(() => null, invokeErrorMessage)
+        // Reload after a failure too: a Claude Code re-add can remove the old entry before its add fails.
+        .then((failure) =>
+          getMcpConnections().then(
+            (agents) => {
+              setConnected(new Set(agents));
+              return failure;
+            },
+            (cause) => failure ?? invokeErrorMessage(cause),
+          ),
+        )
+        .then((message) => {
+          setError(message);
+          setPending(null);
+        })
+    );
   };
 
   return { connected, pending, error, connect };
