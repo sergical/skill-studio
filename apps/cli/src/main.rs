@@ -852,7 +852,17 @@ fn build_runtime_write_with_project<T: ops::Outcome + serde::Serialize>(
     }
     ports.tools = Some(Arc::new(skill_studio_host::PathToolLookup::new()));
     ports.spawner = Some(Arc::new(scope.process_spawner(&runtime_scope.home_root)));
-    Runtime::new(&runtime_scope, ports).map_err(|err| {
+    let runtime = if runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture
+        && !matches!(operation, Operation::ListEvents | Operation::Outdated)
+    {
+        Err(skill_studio_core::CoreError::new(
+            skill_studio_core::ErrorCode::InvalidScope,
+            "Fixture scope is read-only; writes are refused.",
+        ))
+    } else {
+        Runtime::new(&runtime_scope, ports)
+    };
+    runtime.map_err(|err| {
         let envelope: ResultEnvelope<T> = error_envelope(operation, err, &runtime_scope);
         let code = exit_code(envelope.exit_status());
         if json {

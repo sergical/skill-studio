@@ -2671,11 +2671,14 @@ fn is_dir_following_links(fs: &dyn ScopeFs, path: &Path) -> bool {
     }
 }
 
-/// A skill "ships specs" (the getsentry/skillet pattern) when it has a
-/// `spec.md` file or an `evals/` subdirectory alongside `SKILL.md`.
-fn has_spec(fs: &dyn ScopeFs, skill_dir: &Path) -> bool {
-    exists_following_links(fs, &skill_dir.join("spec.md"))
-        || is_dir_following_links(fs, &skill_dir.join("evals"))
+/// Skillet uses an exact-case `spec.md` file alongside `SKILL.md`.
+fn has_spec(fs: &dyn ScopeFs, skill_dir: &Path, entries: &[DirEntryFacts]) -> bool {
+    entries.iter().any(|entry| {
+        entry.name == "spec.md"
+            && matches!(entry.kind, FileKind::File | FileKind::Symlink)
+            && exists_following_links(fs, &skill_dir.join(&entry.name))
+            && !is_dir_following_links(fs, &skill_dir.join(&entry.name))
+    })
 }
 
 /// A regular or symlinked-to-a-file entry found while walking a skill folder
@@ -2695,6 +2698,7 @@ struct HashableFile {
 /// mtime.
 #[derive(Default)]
 struct FactsWalk {
+    has_spec: bool,
     hashable: Vec<HashableFile>,
     total_bytes: u64,
     file_count: u32,
@@ -2754,6 +2758,9 @@ fn walk_folder_for_facts(
     let Ok(mut entries) = fs.read_dir(dir) else {
         return Ok(());
     };
+    if dir == root {
+        walk.has_spec = has_spec(fs, root, &entries);
+    }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     for entry in entries {
         ctx.checkpoint()?;
@@ -2993,7 +3000,7 @@ fn compute_content_facts(
     let tok = tokenizer();
     Ok(ContentFacts {
         frontmatter_fields: frontmatter::frontmatter_fields(&content),
-        has_spec: has_spec(fs, skill_dir),
+        has_spec: walk.has_spec,
         folder_bytes: walk.total_bytes,
         file_count: walk.file_count,
         skill_md_tokens: count_tokens(&content, tok),
@@ -6810,26 +6817,33 @@ pub fn park_check(
 
 /// The warning an adapter shows before it parks `deployment_id`: git tracks
 /// the copy, so the move shows as deleted files in the repository. `None`
-/// when git does not track it or the check cannot run; the park reports its
-/// own refusals, and a warning never blocks it.
+/// when git does not track it. A failed check returns a warning and never blocks park.
 pub fn park_git_warning(
     rt: &Runtime,
     ctx: &OpContext,
     deployment_id: &DeploymentId,
 ) -> Option<String> {
-    let _folder_guard = rt.ports.history.guard_read_data_folder().ok()?;
-    let check = park_check(
-        rt,
-        ctx,
-        &ParkCheckRequest {
-            deployment_id: deployment_id.clone(),
+    let check = (|| {
+        let _folder_guard = rt.ports.history.guard_read_data_folder()?;
+        park_check(
+            rt,
+            ctx,
+            &ParkCheckRequest {
+                deployment_id: deployment_id.clone(),
+            },
+        )
+    })();
+    match check {
+        Err(error) => Some(format!("Could not check whether git tracks this skill folder: {error}")),
+        Ok(check) => match check.git_tracked {
+            Some(true) => Some(
+                "git tracks this skill folder, so the move shows as deleted files in the repository"
+                    .to_string(),
+            ),
+            Some(false) => None,
+            None => Some("Could not check whether git tracks this skill folder.".to_string()),
         },
-    )
-    .ok()?;
-    check.git_tracked.unwrap_or(false).then(|| {
-        "git tracks this skill folder, so the move shows as deleted files in the repository"
-            .to_string()
-    })
+    }
 }
 
 /// Whether `folder` is in a git work tree and `git ls-files` lists a file
@@ -6867,17 +6881,24 @@ fn git_tracks_folder(rt: &Runtime, ctx: &OpContext, folder: &Path) -> Option<boo
             name.to_string_lossy().into_owned(),
         ],
         cwd: Some(parent.to_path_buf()),
-        env: vec![(
-            "HOME".to_string(),
-            rt.scope.home.lexical.display().to_string(),
-        )],
+        env: vec![
+            (
+                "HOME".to_string(),
+                rt.scope.home.lexical.display().to_string(),
+            ),
+            ("LC_ALL".to_string(), "C".to_string()),
+        ],
         timeout_ms: 10_000,
     };
-    Some(
-        spawner
-            .run(&spec, ctx.cancel.as_ref())
-            .is_ok_and(|output| output.status == Some(0) && !output.stdout.trim().is_empty()),
-    )
+    let output = spawner.run(&spec, ctx.cancel.as_ref()).ok()?;
+    if output.timed_out {
+        return None;
+    }
+    match output.status {
+        Some(0) => Some(!output.stdout.trim().is_empty()),
+        Some(_) if output.stderr.contains("not a git repository") => Some(false),
+        _ => None,
+    }
 }
 
 /// Payload key on a failed `park` row whose rollback could not move the copy
@@ -8765,5 +8786,42 @@ mod tests {
                 "the panicked run's nested op must not be attributed to the next run"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod skillet_detection_tests {
+    use super::*;
+    use crate::testing::FixtureBuilder;
+
+    #[test]
+    fn skillet_spec_requires_exact_lowercase_file_name() {
+        for (name, expected) in [("spec.md", true), ("SPEC.md", false), ("Spec.md", false)] {
+            let fs = FixtureBuilder::new()
+                .dir("/skill")
+                .file(&format!("/skill/{name}"), b"spec")
+                .build_fs();
+            assert_eq!(
+                has_spec(
+                    &fs,
+                    Path::new("/skill"),
+                    &fs.read_dir(Path::new("/skill")).unwrap()
+                ),
+                expected,
+                "{name}"
+            );
+        }
+        let fs = FixtureBuilder::new().dir("/skill/evals").build_fs();
+        assert!(!has_spec(
+            &fs,
+            Path::new("/skill"),
+            &fs.read_dir(Path::new("/skill")).unwrap()
+        ));
+        let fs = FixtureBuilder::new().dir("/skill/spec.md").build_fs();
+        assert!(!has_spec(
+            &fs,
+            Path::new("/skill"),
+            &fs.read_dir(Path::new("/skill")).unwrap()
+        ));
     }
 }

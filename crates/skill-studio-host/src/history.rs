@@ -22,6 +22,7 @@ use skill_studio_core::events::{
 };
 use skill_studio_core::fsops::{Root, StageFile};
 use skill_studio_core::identity::{AgentId, EventId, Fingerprint, SkillName};
+use skill_studio_core::journal::MAX_BACKUP_BYTES;
 use skill_studio_core::ports::{
     ExclusiveGuard, FileKind, HeldRestoreClaim, HistoryAccess, HistoryOpener, HistoryStore, ScopeFs,
 };
@@ -715,6 +716,18 @@ impl HistoryStore for SqliteHistoryStore {
         id: &EventId,
         paths: &[PathBuf],
     ) -> Result<BackupManifest, CoreError> {
+        let mut total: u64 = 0;
+        for path in paths {
+            total = total.saturating_add(
+                backup_size(self.fs.as_ref(), path).map_err(|e| CoreError::io(path, e))?,
+            );
+        }
+        if total > MAX_BACKUP_BYTES {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "Backup exceeds the 64 MiB limit; write refused before changing the target.",
+            ));
+        }
         let dir = self.backup_dir_for(id);
         self.managed_backup_dir(id, &format!("backups/{}", id.0))?;
         ensure_backup_directory(self.fs.as_ref(), &dir)
@@ -1354,6 +1367,35 @@ fn ensure_backup_directory(fs: &dyn ScopeFs, path: &Path) -> std::io::Result<()>
     Ok(())
 }
 
+fn backup_size(fs: &dyn ScopeFs, path: &Path) -> std::io::Result<u64> {
+    let facts = match fs.symlink_metadata(path) {
+        Ok(facts) => facts,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(0)
+        }
+        Err(error) => return Err(error),
+    };
+    match facts.kind {
+        FileKind::File => Ok(facts.len),
+        FileKind::Dir => {
+            let mut total: u64 = 0;
+            for entry in fs.read_dir(path)? {
+                total = total.saturating_add(backup_size(fs, &path.join(&entry.name))?);
+                if total > MAX_BACKUP_BYTES {
+                    break;
+                }
+            }
+            Ok(total)
+        }
+        FileKind::Symlink | FileKind::Other => Ok(0),
+    }
+}
+
 fn copy_recursive(fs: &dyn ScopeFs, src: &Path, dest: &Path) -> std::io::Result<()> {
     let facts = fs.symlink_metadata(src)?;
     match facts.kind {
@@ -1366,7 +1408,7 @@ fn copy_recursive(fs: &dyn ScopeFs, src: &Path, dest: &Path) -> std::io::Result<
             fs.fsops_fsync_dir(dest)?;
         }
         FileKind::File => {
-            let bytes = fs.read_capped(src, u64::MAX)?;
+            let bytes = fs.read_capped(src, MAX_BACKUP_BYTES)?;
             fs.fsops_write_new_file_with_mode(dest, &bytes, facts.mode.unwrap_or(0o644))?;
             fs.fsops_fsync_file(dest)?;
         }
@@ -2785,6 +2827,33 @@ mod tests {
         assert!(
             !absent_entry.is_dir,
             "an absent path has no relative copy on disk and must never read as a directory"
+        );
+    }
+
+    #[test]
+    fn backup_over_the_size_cap_is_refused_before_any_copy_or_fills_the_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scope = scope_for(tmp.path());
+        let guard = guard_for(tmp.path(), &scope);
+        let db_path = tmp.path().join("history").join("events.sqlite3");
+        let mut store = SqliteHistoryStore::open(&db_path).unwrap();
+
+        let skill = tmp.path().join("skills").join("big");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), b"small").unwrap();
+        fs::File::create(skill.join("blob.bin"))
+            .unwrap()
+            .set_len(MAX_BACKUP_BYTES + 1)
+            .unwrap();
+
+        let id = EventId::from_ulid(ulid::Ulid::generate());
+        let error = store
+            .backup_paths(&guard, &id, std::slice::from_ref(&skill))
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert!(
+            !store.backup_dir_for(&id).exists(),
+            "a refused backup must not leave a partial copy behind"
         );
     }
 

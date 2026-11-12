@@ -42,15 +42,8 @@ use crate::ports::{
 /// file; a journal file this large is corrupt, not merely large.
 const MAX_JOURNAL_JSON_BYTES: u64 = 16 * 1024 * 1024;
 
-/// Caps how many bytes [`FsJournal::read_backup`] will read back for one
-/// `write_file` backup. `fsops::write_file` reads the pre-write bytes it
-/// hands to [`Journal::write_backup`] with `u64::MAX` - a user's file is
-/// not a journal-corruption signal the way an oversized plan/manifest JSON
-/// file is - so readback matches that instead of reusing
-/// `MAX_JOURNAL_JSON_BYTES`: a backup larger than that cap must still be
-/// restorable, not leave the plan `Interrupted` with the post-write bytes
-/// stuck in place.
-const MAX_BACKUP_BYTES: u64 = u64::MAX;
+/// Maximum bytes in one backup, matching the deployment folder byte cap.
+pub const MAX_BACKUP_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A [`Journal`] implementation built only on [`ScopeFs`], so both the core's
 /// own tests and a host adapter can use it directly.
@@ -392,6 +385,12 @@ impl Journal for FsJournal {
         relative: &str,
         bytes: &[u8],
     ) -> Result<(), CoreError> {
+        if bytes.len() as u64 > MAX_BACKUP_BYTES {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "Backup exceeds the 64 MiB limit; write refused before changing the target.",
+            ));
+        }
         let path = self.checked_backup_path(id, relative)?;
         self.write_bytes(&path, bytes)
             .map_err(|e| CoreError::io(path, e))
@@ -2803,10 +2802,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn oversized_backup_refuses_write_without_changing_target() {
+        let big = vec![b'A'; (MAX_BACKUP_BYTES + 1) as usize];
+        let fixture = FixtureBuilder::new()
+            .dir("/journal")
+            .dir("/root")
+            .file("/root/file.txt", &big)
+            .build_fs();
+        let root = Root::open(&fixture, PathBuf::from("/root")).unwrap();
+        let journal = journal_over(Arc::new(fixture.clone()));
+        let lease = FakeLease::default();
+        let g = guard(&lease);
+        let plan = PlanWriter::begin(
+            &journal,
+            &g,
+            PlanId("01PLANBACKUPCAP0000000001".into()),
+            Utc::now(),
+            "oversized backup",
+            PathBuf::from("/root"),
+            Vec::new(),
+        )
+        .unwrap();
+        let before = tree_snapshot(&fixture, Path::new("/root"));
+        let error = journal
+            .write_backup(
+                &g,
+                &PlanId("01PLANBACKUPCAP0000000001".into()),
+                "oversized",
+                &big,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert!(error.message.contains("64 MiB"));
+        let error = fsops::write_file(
+            &root,
+            &plan,
+            Path::new("file.txt"),
+            b"new",
+            &fsops::ReadStamp::Absent,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("64 MiB"), "{error}");
+        assert_eq!(tree_snapshot(&fixture, Path::new("/root")), before);
+    }
+
     /// Given an existing file one byte larger than `MAX_JOURNAL_JSON_BYTES`
     /// (the cap `read_backup` used to reuse from plan/manifest JSON
-    /// readback), when `write_file` backs it up (with no cap, matching how
-    /// it read the pre-write bytes) and then crashes before `finish`, then
+    /// readback), when `write_file` backs it up within the 64 MiB cap and then crashes before `finish`, then
     /// startup reconciliation still reads that backup back and restores it
     /// byte-for-byte; on failure the panic names the cap that blocked it
     /// (the post-write bytes left in place, plan `Interrupted`).

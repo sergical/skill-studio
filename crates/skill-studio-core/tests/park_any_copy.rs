@@ -1476,3 +1476,97 @@ fn parked_scan_keeps_the_project_owner_type_but_reports_the_current_git_location
     );
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn park_git_check_failure_is_a_warning() {
+    let home = unique_temp_dir("park-git-warning");
+    std::fs::create_dir_all(&home).unwrap();
+    let rt = runtime(&home, &[]);
+    let id =
+        skill_studio_core::identity::DeploymentId::parse("dep:v1/g/-/universal/-/missing").unwrap();
+    let warning = ops::park_git_warning(&rt, &ctx(), &id).unwrap();
+    assert!(
+        warning.contains("Could not check whether git tracks"),
+        "{warning}"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn failed_git_probe_is_reported_in_park_result_warnings() {
+    use skill_studio_core::testing::FakeProcessSpawner;
+    let home = unique_temp_dir("park-probe-warning");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let rt = runtime_with(
+        &home,
+        &[],
+        Arc::new(RealFs::new()),
+        Arc::new(FakeProcessSpawner::default()),
+    );
+    let context = ctx();
+    let result = ops::park_batch(
+        &rt,
+        &context,
+        &skill_studio_core::dto::BatchParkRequest {
+            skills: vec![SkillName("foo".into())],
+        },
+    )
+    .unwrap();
+    let envelope =
+        ops::ResultEnvelope::from_result(ops::Operation::Park, &rt.scope, &context, Ok(result));
+    let value = serde_json::to_value(envelope).unwrap();
+    assert_eq!(value["status"], "ok", "{value}");
+    assert!(
+        value["data"]["items"][0]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("Could not check whether git tracks")),
+        "{value}"
+    );
+
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn git_exit_128_outside_not_a_repository_is_a_park_warning_not_silence() {
+    use skill_studio_core::testing::FakeProcessSpawner;
+    let home = unique_temp_dir("park-git-128");
+    let live = home.join(".codex/skills/foo");
+    write_skill(&live, "foo");
+    let mut spawner = FakeProcessSpawner::default();
+    spawner
+        .outputs
+        .insert("xcode-select".into(), ("/Library/Developer".into(), 0));
+    spawner.outputs.insert("git".into(), (String::new(), 128));
+    let rt = runtime_with(&home, &[], Arc::new(RealFs::new()), Arc::new(spawner));
+    let context = ctx();
+    let result = ops::park_batch(
+        &rt,
+        &context,
+        &skill_studio_core::dto::BatchParkRequest {
+            skills: vec![SkillName("foo".into())],
+        },
+    )
+    .unwrap();
+    let envelope =
+        ops::ResultEnvelope::from_result(ops::Operation::Park, &rt.scope, &context, Ok(result));
+    let value = serde_json::to_value(envelope).unwrap();
+    assert_eq!(value["status"], "ok", "{value}");
+    assert!(
+        value["data"]["items"][0]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("Could not check whether git tracks")),
+        "{value}"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
