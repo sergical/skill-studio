@@ -1,0 +1,108 @@
+// @vitest-environment happy-dom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, expect, it } from "vitest";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { z } from "zod";
+import { useAppStore } from "../../store/appStore";
+import { AgentMcpCard } from "./AgentMcpCard";
+
+Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+afterEach(() => {
+  clearMocks();
+  useAppStore
+    .getState()
+    .setHarnessDetection({ report: null, choice: null, error: null, saving: false });
+});
+
+const evidence = { source: "fixture", confidence: "unknown" as const };
+const row = (id: "codex" | "claude-code" | "cursor", name: string) => ({
+  id,
+  display_name: name,
+  state: "installed" as const,
+  executable: "/fixture/bin/agent",
+  executable_on_path: true,
+  version: { value: "1", evidence },
+  install_method: { value: null, evidence },
+  configured: true,
+  used: false,
+});
+
+it("Connect adds Codex and Re-add replaces the Claude Code entry through connect_mcp, or names the stale row", async () => {
+  const connected = new Set(["claude-code"]);
+  const connectCalls: unknown[] = [];
+  mockIPC((command, payload) => {
+    if (command === "get_mcp_connections") return [...connected];
+    if (command === "connect_mcp") {
+      const { harness } = z.object({ harness: z.string() }).parse(payload);
+      connectCalls.push(harness);
+      connected.add(harness);
+      return;
+    }
+    throw new Error(`unexpected command: ${command}`);
+  });
+  useAppStore.getState().setHarnessDetection({
+    report: {
+      harnesses: [
+        row("claude-code", "Claude Code"),
+        row("codex", "Codex"),
+        row("cursor", "Cursor"),
+      ],
+    },
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AgentMcpCard />));
+    const text = () => host.textContent ?? "";
+    expect(text()).toContain("Claude CodeAdded");
+    expect(text()).not.toContain("Cursor");
+    const labels = () => Array.from(host.querySelectorAll("button"), (b) => b.textContent);
+    const button = (label: string) =>
+      Array.from(host.querySelectorAll("button")).find((b) => b.textContent === label);
+    expect(labels()).toEqual(["Re-add", "Connect"]);
+
+    await act(async () => button("Connect")?.click());
+
+    expect(connectCalls).toEqual(["codex"]);
+    expect(text()).toContain("CodexAdded");
+    expect(labels()).toEqual(["Re-add", "Re-add"]);
+
+    await act(async () => button("Re-add")?.click());
+
+    expect(connectCalls).toEqual(["codex", "claude-code"]);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("a failed re-add shows the agent error and the row the config now holds, or names the stale Added row", async () => {
+  const connected = new Set(["claude-code"]);
+  mockIPC((command) => {
+    if (command === "get_mcp_connections") return [...connected];
+    if (command === "connect_mcp") {
+      connected.delete("claude-code");
+      throw new Error("`claude mcp add` failed: disk full");
+    }
+    throw new Error(`unexpected command: ${command}`);
+  });
+  useAppStore.getState().setHarnessDetection({
+    report: { harnesses: [row("claude-code", "Claude Code")] },
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AgentMcpCard />));
+    await act(async () => host.querySelector("button")?.click());
+
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("disk full");
+    expect(host.textContent).not.toContain("Added");
+    expect(host.querySelector("button")?.textContent).toBe("Connect");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});

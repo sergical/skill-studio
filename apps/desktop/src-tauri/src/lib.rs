@@ -456,6 +456,9 @@ pub fn run() {
             skills::harness_first_run::get_harnesses_choice,
             skills::harness_first_run::save_harnesses_choice,
             skills::harness_first_run::set_harness_enabled,
+            // MCP server setup in agent configs
+            skills::skill_mcp_connect::get_mcp_connections,
+            skills::skill_mcp_connect::connect_mcp,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -287,6 +287,16 @@ export async function setHarnessEnabled(id: string, enabled: boolean): Promise<H
   return callCommand("set_harness_enabled", { id, enabled });
 }
 
+/** Agent ids whose user-level config already declares the Skill Studio MCP server. */
+export async function getMcpConnections(): Promise<string[]> {
+  return callCommand("get_mcp_connections");
+}
+
+/** Runs the agent's own `mcp add` command for the Skill Studio MCP server. */
+export async function connectMcp(harness: string): Promise<void> {
+  await callCommand("connect_mcp", { harness });
+}
+
 /**
  * Saves the first-run screen's choice so the next launch skips it, along
  * with the same screen's telemetry switch.

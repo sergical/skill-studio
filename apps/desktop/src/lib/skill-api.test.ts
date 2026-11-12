@@ -81,6 +81,8 @@ const EXPECTED_WRAPPER_COMMANDS = {
     command: "get_harnesses_choice",
   },
   setHarnessEnabled: { kind: "command", command: "set_harness_enabled" },
+  getMcpConnections: { kind: "command", command: "get_mcp_connections" },
+  connectMcp: { kind: "command", command: "connect_mcp" },
   saveHarnessesChoice: {
     kind: "command",
     command: "save_harnesses_choice",

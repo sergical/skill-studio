@@ -6,6 +6,7 @@
 
 import type { SkillSnapshot } from "@skill-studio/lib";
 import { PageShell } from "../Shell/PageShell";
+import { AgentMcpCard } from "./AgentMcpCard";
 import { AppVersionCard } from "./AppVersionCard";
 import { DetectedAgentsCard } from "./DetectedAgentsCard";
 import { EditorCard } from "./EditorCard";
@@ -20,6 +21,7 @@ export function SettingsView({ snapshot }: SettingsViewProps) {
   return (
     <PageShell title="Settings" width="narrow">
       <DetectedAgentsCard />
+      <AgentMcpCard />
       <EditorCard />
       <ProjectFoldersCard snapshot={snapshot} />
       <AppVersionCard />

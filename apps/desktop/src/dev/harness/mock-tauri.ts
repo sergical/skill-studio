@@ -116,6 +116,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
   // Mirrors `preferred_editor` in `~/.agents/skill-studio.json` - an app name, a `.app` path,
   // or "$EDITOR", or `null` for the system default. See `skill_editor::EditorChoices`.
   let editorPreference: string | null = null;
+  const mcpConnections = new Set<string>();
   const KNOWN_EDITOR_APPS: EditorOption[] = [
     { app_name: "Cursor", label: "Cursor" },
     { app_name: "Visual Studio Code", label: "Visual Studio Code" },
@@ -399,6 +400,11 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         case "set_harness_enabled":
           return { kept: [], search_project_folders: true, saved_at: new Date().toISOString() };
         case "save_harnesses_choice":
+          return undefined;
+        case "get_mcp_connections":
+          return [...mcpConnections];
+        case "connect_mcp":
+          mcpConnections.add(z.string().parse(payload.harness));
           return undefined;
         case "open_skill_path":
         case "unfork_skill":
