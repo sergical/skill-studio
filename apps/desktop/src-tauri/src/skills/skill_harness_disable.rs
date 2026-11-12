@@ -172,7 +172,7 @@ fn restore_moved_deployment_for(
             &EventDraft {
                 kind: EventKind::MoveAsideRestore,
                 skill: SkillName(parsed.name.clone()),
-                harness: None,
+                harness: fresh.harness.clone(),
                 scope: Some(parsed.scope.clone()),
                 project_path: parsed.project_path.as_ref().map(PathBuf::from),
                 payload: serde_json::json!({
@@ -407,6 +407,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].kind, EventKind::MoveAsideRestore.as_str());
         assert_eq!(rows[0].status, EventStatus::Done);
+        assert_eq!(rows[0].harness.as_ref().map(|h| h.as_str()), Some("cursor"));
         assert_eq!(rows[0].payload["from"], serde_json::json!(path));
         assert_eq!(rows[0].payload["to"], serde_json::json!(restored));
     }
