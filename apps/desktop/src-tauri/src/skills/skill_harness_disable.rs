@@ -16,6 +16,10 @@ use std::path::{Path, PathBuf};
 
 use tauri::Manager;
 
+use skill_studio_core::events::{EventDraft, EventKind, EventStatus};
+use skill_studio_core::identity::{CorrelationId, DeploymentId, SkillName};
+use skill_studio_core::ports::{MutationSession, OpContext, Runtime};
+
 use super::skill_dto::{Deployment, DisabledBy, LifecycleTarget};
 use super::skill_ownership::LifecycleOwnerKind;
 use super::skill_refresh::{self, SkillRefreshState};
@@ -134,6 +138,7 @@ fn refuse_registry_copy_restore(deployment: &Deployment) -> Result<(), String> {
 /// no `tauri::AppHandle` - the async command only adds the snapshot patch,
 /// which does need one.
 fn restore_moved_deployment_for(
+    rt: &Runtime,
     deployment: &Deployment,
     deployment_id: &str,
 ) -> Result<(PathBuf, String), String> {
@@ -144,10 +149,58 @@ fn restore_moved_deployment_for(
         ));
     }
     refuse_registry_copy_restore(deployment)?;
-    let path_buf = PathBuf::from(&deployment.path);
-    let new_path = restore_deployment_at(&path_buf)?;
     let parsed = super::skill_deployment::parse_deployment_id(deployment_id)
         .ok_or_else(|| format!("Not a copy id: {deployment_id}"))?;
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let mut session = MutationSession::begin_for(rt, &ctx, &[SkillName(parsed.name.clone())])
+        .map_err(|e| e.message)?;
+    let id = DeploymentId::parse(deployment_id).map_err(|e| e.message)?;
+    let fresh = session.resolve_exact(&id).map_err(|e| e.message)?;
+    if fresh.path != Path::new(&deployment.path)
+        || fresh.disabled_by != Some(skill_studio_core::harness::DisabledBy::StudioMoved)
+        || fresh.owner_kind == skill_studio_core::identity::LifecycleOwnerKind::Copy
+    {
+        return Err("The moved copy changed; refresh and try again".to_string());
+    }
+    let path_buf = PathBuf::from(&deployment.path);
+    let event_id = rt.ports.ids.next_event_id();
+    session
+        .store
+        .record(
+            &session.guard,
+            &event_id,
+            &EventDraft {
+                kind: EventKind::MoveAsideRestore,
+                skill: SkillName(parsed.name.clone()),
+                harness: None,
+                scope: Some(parsed.scope.clone()),
+                project_path: parsed.project_path.as_ref().map(PathBuf::from),
+                payload: serde_json::json!({
+                    "deployment_id": deployment_id,
+                    "from": path_buf,
+                    "to": path_buf.parent().and_then(Path::parent)
+                        .and_then(|root| path_buf.file_name().map(|name| root.join(name))),
+                }),
+                inverse: None,
+                backup_dir: None,
+            },
+        )
+        .map_err(|e| e.message)?;
+    let new_path = match restore_deployment_at(&path_buf) {
+        Ok(path) => path,
+        Err(error) => {
+            session
+                .store
+                .finish(&session.guard, &event_id, EventStatus::Failed, None)
+                .map_err(|e| e.message)?;
+            return Err(error);
+        }
+    };
+    session
+        .store
+        .finish(&session.guard, &event_id, EventStatus::Done, None)
+        .map_err(|e| e.message)?;
+    session.finish(rt, &ctx);
     let new_id = super::skill_deployment::deployment_id(
         &parsed.name,
         &parsed.scope,
@@ -195,7 +248,9 @@ pub async fn restore_moved_deployment(
                 "Restore moved deployment",
             )?;
             let deployment = resolved.deployment;
-            let (new_path, new_id) = restore_moved_deployment_for(&deployment, &deployment_id)?;
+            let rt = super::core_runtime::build_runtime_write()?;
+            let (new_path, new_id) =
+                restore_moved_deployment_for(&rt, &deployment, &deployment_id)?;
 
             // Surgical: patch the moved deployment's path and disabled state right
             // away, the background loop's full
@@ -265,10 +320,95 @@ mod tests {
             path: "/home/.claude/skills/find-bugs".to_string(),
             ..Default::default()
         };
-        let err = restore_moved_deployment_for(&copy, "dep:v1/project/claude-code/find-bugs")
+        let tmp = tempfile::tempdir().unwrap();
+        let rt = super::super::core_runtime::build_runtime_write_at_with_search_dirs(
+            tmp.path(),
+            &tmp.path().join("data"),
+            vec![],
+        )
+        .unwrap();
+        let err = restore_moved_deployment_for(&rt, &copy, "dep:v1/project/claude-code/find-bugs")
             .unwrap_err();
         assert!(err.contains("/home/.claude/skills/find-bugs"), "{err}");
         assert!(err.contains("fork registry"), "{err}");
+    }
+
+    #[test]
+    fn restore_moved_deployment_takes_shared_lease_and_records_one_event() {
+        use skill_studio_core::events::EventFilter;
+        use skill_studio_core::ports::{acquire_exclusive, HistoryAccess};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let data = home.join("data");
+        let path = home
+            .join(".cursor/skills")
+            .join(STUDIO_DISABLED_DIR_NAME)
+            .join("legacy-folder");
+        write_skill(&path, "find-bugs");
+        let mut rt = super::super::core_runtime::build_runtime_write_at_with_search_dirs(
+            home,
+            &data,
+            vec![],
+        )
+        .unwrap();
+        rt.scope.raw.write_timeout_ms = 0;
+        let ctx = OpContext::uncancellable(CorrelationId("restore-test".into()));
+        let inventory = skill_studio_core::ops::scan(&rt, &ctx, &Default::default()).unwrap();
+        let found = inventory
+            .skills
+            .iter()
+            .flat_map(|s| &s.deployments)
+            .find(|d| d.path == path)
+            .unwrap();
+        let deployment = Deployment {
+            path: path.to_string_lossy().into_owned(),
+            disabled_by: Some(DisabledBy::StudioMoved),
+            owner_kind: LifecycleOwnerKind::Manual,
+            ..Default::default()
+        };
+        let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
+        let error = restore_moved_deployment_for(&rt, &deployment, found.id.as_str()).unwrap_err();
+        assert!(error.contains("another process holds the lease"), "{error}");
+        assert!(path.join("SKILL.md").is_file());
+        let store = rt
+            .ports
+            .history
+            .open(&rt.scope, HistoryAccess::ReadWrite)
+            .unwrap()
+            .unwrap();
+        assert!(store
+            .list(&EventFilter {
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap()
+            .is_empty());
+        drop(store);
+        drop(guard);
+
+        let (restored, _) =
+            restore_moved_deployment_for(&rt, &deployment, found.id.as_str()).unwrap();
+        assert_eq!(restored, home.join(".cursor/skills/legacy-folder"));
+        assert!(restored.join("SKILL.md").is_file());
+        assert!(!path.exists());
+        let store = rt
+            .ports
+            .history
+            .open(&rt.scope, HistoryAccess::ReadIfExists)
+            .unwrap()
+            .unwrap();
+        let rows = store
+            .list(&EventFilter {
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, EventKind::MoveAsideRestore.as_str());
+        assert_eq!(rows[0].status, EventStatus::Done);
+        assert_eq!(rows[0].payload["from"], serde_json::json!(path));
+        assert_eq!(rows[0].payload["to"], serde_json::json!(restored));
     }
 
     #[test]
