@@ -2,7 +2,7 @@
 // Skill Studio - Worker tests
 // Runs the deployed Worker export and records what its Sentry transport posts
 // to the ingest URL, so a test reads exactly what would reach Sentry: request
-// spans must arrive, and no caller detail (search text, IP, user agent,
+// traces stay off, and no caller detail (search text, IP, user agent,
 // cookie, timezone, trace headers, body sizes, made-up methods) or the
 // skills.sh key may be in them.
 // ============================================================================
@@ -101,10 +101,10 @@ afterAll(() => {
 });
 
 describe("Worker tracing", () => {
-  it("sends the search request as a span named by its path, so traces reach Sentry", async () => {
+  it("does not send request spans when tracing is off", async () => {
     const payload = await callWorker();
 
-    expect(payload).toContain("GET /api/v1/skills/search");
+    expect(payload).toBe("");
   });
 
   it("keeps the caller's search text, IP, user agent, cookie and timezone out of every span", async () => {
@@ -125,7 +125,7 @@ describe("Worker tracing", () => {
     }
   });
 
-  it("starts a new trace and drops caller baggage when the request carries sentry-trace and baggage", async () => {
+  it("does not accept caller sampling or baggage when tracing is off", async () => {
     const payload = await callWorker({
       headers: {
         "sentry-trace": `${CALLER_TRACE_ID}-c0ffee00c0ffee00-1`,
@@ -133,7 +133,7 @@ describe("Worker tracing", () => {
       },
     });
 
-    expect(payload).toContain("GET /api/v1/skills/search");
+    expect(payload).toBe("");
     expect(payload).not.toContain(CALLER_TRACE_ID);
     expect(payload).not.toContain(SEARCH_TEXT);
   });
@@ -141,15 +141,15 @@ describe("Worker tracing", () => {
   it("keeps the request and response Content-Length values out of every span", async () => {
     const payload = await callWorker({ headers: { "content-length": "0" } });
 
-    expect(payload).toContain("GET /api/v1/skills/search");
+    expect(payload).toBe("");
     expect(payload).not.toContain("http.request.body.size");
     expect(payload).not.toContain("http.response.body.size");
   });
 
-  it("names a made-up method as OTHER, so callers cannot open new span groups", async () => {
+  it("does not send spans for a made-up method", async () => {
     const payload = await callWorker({ method: CALLER_METHOD, path: "/api/v1/skills" });
 
-    expect(payload).toContain("OTHER /api/v1/skills");
+    expect(payload).toBe("");
     expect(payload).not.toContain(CALLER_METHOD);
   });
 

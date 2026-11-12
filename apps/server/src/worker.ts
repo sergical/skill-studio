@@ -85,7 +85,7 @@ const handler = {
 /** Without `SENTRY_DSN` the SDK still initializes on every request but has no
  * transport, so it captures locally and sends nothing.
  *
- * Every request is traced; the proxy serves about a thousand requests a month.
+ * Tracing stays off; error reporting remains enabled.
  * SDK v11 streams spans, so `beforeSendTransaction` never runs. `dataCollection`
  * keeps the search text, client IP, cookies, headers and bodies off spans and
  * events at the source, and `beforeSendSpan` drops the two request details it
@@ -95,7 +95,7 @@ function sentryOptionsFor(env: Env): CloudflareOptions {
   return {
     dsn: env.SENTRY_DSN,
     environment: "production",
-    tracesSampleRate: 1,
+    tracesSampleRate: 0,
     dataCollection: {
       userInfo: false,
       cookies: false,

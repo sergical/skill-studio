@@ -11,6 +11,14 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { AlertTriangle, Asterisk, ChevronDown, FolderOpen, Plus } from "lucide-react";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
   Button,
   buttonVariants,
   Collapsible,
@@ -265,6 +273,10 @@ function FolderList({
 export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
   const addToast = useAppStore((state) => state.addToast);
   const { addProject, addTypedPath, stopTracking, removeProject } = useProjectFolderActions();
+  const [pendingRemoval, setPendingRemoval] = useState<{
+    path: string;
+    discovered: boolean;
+  } | null>(null);
   const [folders, setFolders] = useState<ProjectFolder[] | null>(null);
   const [sources, setSources] = useState<DiscoverySourceSetting[] | null>(null);
   const [foldersOpen, setFoldersOpen] = useState(false);
@@ -430,13 +442,44 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
         skillCounts={skillCounts}
         open={foldersOpen}
         onOpenChange={setFoldersOpen}
-        onStopTracking={handleStopTracking}
-        onRemove={handleRemove}
+        onStopTracking={(path) => setPendingRemoval({ path, discovered: true })}
+        onRemove={(path) => setPendingRemoval({ path, discovered: false })}
         addFormOpen={addFormOpen}
         onAddTypedPath={handleAddTypedPath}
         onCloseAddForm={closeAddForm}
         triggerRef={foldersTriggerRef}
       />
+      <AlertDialog
+        open={pendingRemoval !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoval(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingRemoval?.discovered ? "Stop tracking project?" : "Remove project folder?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingRemoval?.discovered
+                ? `Stop tracking ${pendingRemoval.path}? Its skills stay on disk.`
+                : `Remove ${pendingRemoval?.path} from your added folders? This does not delete the folder or its skills.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingRemoval?.discovered) void handleStopTracking(pendingRemoval.path);
+                else if (pendingRemoval) void handleRemove(pendingRemoval.path);
+                setPendingRemoval(null);
+              }}
+            >
+              {pendingRemoval?.discovered ? "Stop tracking" : "Remove"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </SettingsCard>
   );
 }
