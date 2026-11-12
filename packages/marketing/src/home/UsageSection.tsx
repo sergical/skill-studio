@@ -289,6 +289,7 @@ export function UsageSection() {
   // its text arrives.
   const [status, setStatus] = useState("");
   const replayRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const active = modes.find((m) => m.id === mode)!;
 
   const pick = (next: Mode) => {
@@ -296,6 +297,22 @@ export function UsageSection() {
     setRunId((r) => r + 1);
     setStatus("");
   };
+
+  // The first run waits until the panel is on screen, so the demo plays where it can be seen.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        observer.disconnect();
+        setRunId((r) => (r === 0 ? 1 : r));
+      },
+      { threshold: 0.5 },
+    );
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, []);
 
   const onTabKey = (event: KeyboardEvent) => {
     const step = TAB_STEPS.get(event.key);
@@ -341,6 +358,7 @@ export function UsageSection() {
         </div>
 
         <div
+          ref={panelRef}
           id="use-panel"
           role="tabpanel"
           aria-labelledby={`use-tab-${mode}`}
