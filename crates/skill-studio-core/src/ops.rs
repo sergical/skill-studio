@@ -6881,17 +6881,24 @@ fn git_tracks_folder(rt: &Runtime, ctx: &OpContext, folder: &Path) -> Option<boo
             name.to_string_lossy().into_owned(),
         ],
         cwd: Some(parent.to_path_buf()),
-        env: vec![(
-            "HOME".to_string(),
-            rt.scope.home.lexical.display().to_string(),
-        )],
+        env: vec![
+            (
+                "HOME".to_string(),
+                rt.scope.home.lexical.display().to_string(),
+            ),
+            ("LC_ALL".to_string(), "C".to_string()),
+        ],
         timeout_ms: 10_000,
     };
     let output = spawner.run(&spec, ctx.cancel.as_ref()).ok()?;
-    if output.timed_out || output.status.is_none() {
+    if output.timed_out {
         return None;
     }
-    Some(output.status == Some(0) && !output.stdout.trim().is_empty())
+    match output.status {
+        Some(0) => Some(!output.stdout.trim().is_empty()),
+        Some(_) if output.stderr.contains("not a git repository") => Some(false),
+        _ => None,
+    }
 }
 
 /// Payload key on a failed `park` row whose rollback could not move the copy

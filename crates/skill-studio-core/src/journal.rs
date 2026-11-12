@@ -42,8 +42,8 @@ use crate::ports::{
 /// file; a journal file this large is corrupt, not merely large.
 const MAX_JOURNAL_JSON_BYTES: u64 = 16 * 1024 * 1024;
 
-/// Maximum bytes in one file backup, matching the deployment folder byte cap.
-pub(crate) const MAX_BACKUP_BYTES: u64 = 64 * 1024 * 1024;
+/// Maximum bytes in one backup, matching the deployment folder byte cap.
+pub const MAX_BACKUP_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A [`Journal`] implementation built only on [`ScopeFs`], so both the core's
 /// own tests and a host adapter can use it directly.
