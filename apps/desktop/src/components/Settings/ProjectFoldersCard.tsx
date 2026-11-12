@@ -11,6 +11,14 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { AlertTriangle, Asterisk, ChevronDown, FolderOpen, Plus } from "lucide-react";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
   Button,
   buttonVariants,
   Collapsible,
@@ -265,6 +273,7 @@ function FolderList({
 export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
   const addToast = useAppStore((state) => state.addToast);
   const { addProject, addTypedPath, stopTracking, removeProject } = useProjectFolderActions();
+  const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
   const [folders, setFolders] = useState<ProjectFolder[] | null>(null);
   const [sources, setSources] = useState<DiscoverySourceSetting[] | null>(null);
   const [foldersOpen, setFoldersOpen] = useState(false);
@@ -431,12 +440,39 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
         open={foldersOpen}
         onOpenChange={setFoldersOpen}
         onStopTracking={handleStopTracking}
-        onRemove={handleRemove}
+        onRemove={setPendingRemoval}
         addFormOpen={addFormOpen}
         onAddTypedPath={handleAddTypedPath}
         onCloseAddForm={closeAddForm}
         triggerRef={foldersTriggerRef}
       />
+      <AlertDialog
+        open={pendingRemoval !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoval(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove project folder?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Remove {pendingRemoval} from your added folders? This does not delete the folder or
+              its skills.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingRemoval) void handleRemove(pendingRemoval);
+                setPendingRemoval(null);
+              }}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </SettingsCard>
   );
 }

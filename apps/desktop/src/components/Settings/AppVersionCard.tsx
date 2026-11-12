@@ -81,9 +81,13 @@ export function AppVersionCard() {
 
   useEffect(() => {
     let cancelled = false;
-    getUpdateStatus().then((result) => {
-      if (!cancelled) setUpdateStatus(result);
-    });
+    getUpdateStatus()
+      .then((result) => {
+        if (!cancelled) setUpdateStatus(result);
+      })
+      .catch((err) => {
+        if (!cancelled) setUpdateStatus({ status: "error", message: invokeErrorMessage(err) });
+      });
     const unlisten = onUpdateStatus((status) => {
       if (!cancelled) setUpdateStatus(status);
     });
@@ -94,13 +98,17 @@ export function AppVersionCard() {
   }, []);
 
   const handleCheckForUpdate = () => {
-    checkForUpdate().catch((err) => {
-      addToast({
-        type: "error",
-        title: "Couldn't check for updates",
-        message: invokeErrorMessage(err),
+    setUpdateStatus({ status: "checking" });
+    checkForUpdate()
+      .then(setUpdateStatus)
+      .catch((err) => {
+        setUpdateStatus({ status: "error", message: invokeErrorMessage(err) });
+        addToast({
+          type: "error",
+          title: "Couldn't check for updates",
+          message: invokeErrorMessage(err),
+        });
       });
-    });
   };
 
   const handleRestartToUpdate = () => {

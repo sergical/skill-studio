@@ -88,11 +88,18 @@ export function SkillStoreInstallFlow({
         setDetected(defaults.installed_harnesses);
         setClaudeReadsUniversal(defaults.claude_reads_shared_folder);
       })
-      .catch(() => {});
+      .catch((err) => {
+        if (cancelled) return;
+        addToast({
+          type: "error",
+          title: "Couldn't load install defaults",
+          message: invokeErrorMessage(err),
+        });
+      });
     return () => {
       cancelled = true;
     };
-  }, [defaultsProject]);
+  }, [defaultsProject, addToast]);
 
   useEffect(() => {
     return () => {

@@ -26,6 +26,7 @@ export function SkillMarkdown({ content, className }: SkillMarkdownProps) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          img: ({ alt }) => <span>{alt || "Image omitted"}</span>,
           h1: ({ children }) => (
             <h1
               className={`${PROSE} mt-[1.2em] mb-2 text-heading-lg font-semibold text-text-primary first:mt-0`}

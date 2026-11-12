@@ -29,3 +29,21 @@ describe("SkillMarkdown links", () => {
     expect(html).toContain('target="_blank"');
   });
 });
+
+it.each([
+  "![Remote badge](https://example.com/tracker.png)",
+  "![Remote badge](http://example.com/tracker.png)",
+  "![Remote badge](//example.com/tracker.png)",
+  "![Remote badge][badge]\n\n[badge]: https://example.com/tracker.png",
+  "![Remote badge](./badge.png)",
+])("renders image alt text without an image request: %s", (markdown) => {
+  const html = render(markdown);
+  expect(html).toContain("Remote badge");
+  expect(html).not.toContain("<img");
+  expect(html).not.toContain("src=");
+  expect(html).not.toContain('rel="preload"');
+});
+
+it("labels images without alt text", () => {
+  expect(render("![](https://example.com/tracker.png)")).toContain("Image omitted");
+});

@@ -3,6 +3,7 @@
 // effective visibility (own folder, via the shared root, or none)
 // ============================================================================
 
+import { Button } from "@skill-studio/ui";
 import { AGENT_MATRIX_LABELS, agentMatrix } from "@skill-studio/lib";
 import type { AgentMatrixCell } from "@skill-studio/lib";
 import type { InstalledSkill } from "@skill-studio/lib";
@@ -107,20 +108,16 @@ export function SkillCoverageMatrix({
         </thead>
         <tbody>
           {rows.map(({ skill, shared, cells }) => (
-            <tr
-              key={skill.name}
-              className="group cursor-pointer"
-              tabIndex={0}
-              role="button"
-              onClick={() => onSelectSkill(skill.name, deploymentPathForSkill?.(skill))}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onSelectSkill(skill.name, deploymentPathForSkill?.(skill));
-                }
-              }}
-            >
-              <td className={`${CELL_CLASS} text-left text-text-primary`}>{skill.name}</td>
+            <tr key={skill.name} className="group">
+              <td className={`${CELL_CLASS} text-left text-text-primary`}>
+                <Button
+                  variant="ghost"
+                  className="w-full justify-start"
+                  onClick={() => onSelectSkill(skill.name, deploymentPathForSkill?.(skill))}
+                >
+                  {skill.name}
+                </Button>
+              </td>
               <td className={`${CELL_CLASS} text-center`} title={cellTitle(shared)}>
                 <CoverageMarker cell={shared} />
               </td>
