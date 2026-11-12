@@ -407,7 +407,13 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].kind, EventKind::MoveAsideRestore.as_str());
         assert_eq!(rows[0].status, EventStatus::Done);
-        assert_eq!(rows[0].harness.as_ref().map(|h| h.as_str()), Some("cursor"));
+        assert_eq!(
+            rows[0]
+                .harness
+                .as_ref()
+                .map(skill_studio_core::identity::AgentId::as_str),
+            Some("cursor")
+        );
         assert_eq!(rows[0].payload["from"], serde_json::json!(path));
         assert_eq!(rows[0].payload["to"], serde_json::json!(restored));
     }
