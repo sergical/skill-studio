@@ -1,7 +1,8 @@
 // ============================================================================
 // AgentMcpCard - adds the Skill Studio MCP server to Claude Code or Codex.
 // The agent's own `mcp add` command writes its config; this card only runs
-// it and reads back which agents have the server.
+// it and reads back which agents have the server. Re-add replaces an
+// existing entry, for example one that points to a removed binary.
 // ============================================================================
 
 import { Check, Plug } from "lucide-react";
@@ -29,27 +30,31 @@ export function AgentMcpCard() {
       description="Add the Skill Studio MCP server so your agent can check, fix and park skills. The agent's own mcp add command writes its config."
     >
       {error && <p role="alert">{error}</p>}
-      {rows.map((row) => (
-        <div key={row.id} className="flex items-center gap-2 text-body">
-          <span className="flex-1">{row.display_name}</span>
-          {connected?.has(row.id) ? (
-            <span className="flex items-center gap-1 text-small text-text-tertiary">
-              <Check size={14} />
-              Added
-            </span>
-          ) : row.executable_on_path === false ? (
-            <span className="text-small text-text-tertiary">Not on PATH</span>
-          ) : (
-            <Button
-              variant="secondary"
-              disabled={connected === null || pending !== null}
-              onClick={() => void connect(row.id)}
-            >
-              {pending === row.id ? "Connecting…" : "Connect"}
-            </Button>
-          )}
-        </div>
-      ))}
+      {rows.map((row) => {
+        const added = connected?.has(row.id) ?? false;
+        return (
+          <div key={row.id} className="flex items-center gap-2 text-body">
+            <span className="flex-1">{row.display_name}</span>
+            {added && (
+              <span className="flex items-center gap-1 text-small text-text-tertiary">
+                <Check size={14} />
+                Added
+              </span>
+            )}
+            {row.executable_on_path === false ? (
+              <span className="text-small text-text-tertiary">Not on PATH</span>
+            ) : (
+              <Button
+                variant={added ? "ghost" : "secondary"}
+                disabled={connected === null || pending !== null}
+                onClick={() => void connect(row.id)}
+              >
+                {pending === row.id ? "Connecting…" : added ? "Re-add" : "Connect"}
+              </Button>
+            )}
+          </div>
+        );
+      })}
       <p className="m-0 text-small text-text-tertiary">
         For other agents, add <code>npx -y skill-studio mcp</code> as a stdio MCP server.
       </p>

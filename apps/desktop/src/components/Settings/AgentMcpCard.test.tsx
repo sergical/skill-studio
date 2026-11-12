@@ -28,7 +28,7 @@ const row = (id: "codex" | "claude-code" | "cursor", name: string) => ({
   used: false,
 });
 
-it("connecting Codex runs connect_mcp for codex and shows Added, or names the stale row", async () => {
+it("Connect adds Codex and Re-add replaces the Claude Code entry through connect_mcp, or names the stale row", async () => {
   const connected = new Set(["claude-code"]);
   const connectCalls: unknown[] = [];
   mockIPC((command, payload) => {
@@ -58,14 +58,20 @@ it("connecting Codex runs connect_mcp for codex and shows Added, or names the st
     const text = () => host.textContent ?? "";
     expect(text()).toContain("Claude CodeAdded");
     expect(text()).not.toContain("Cursor");
-    const buttons = Array.from(host.querySelectorAll("button"));
-    expect(buttons.map((b) => b.textContent)).toEqual(["Connect"]);
+    const labels = () => Array.from(host.querySelectorAll("button"), (b) => b.textContent);
+    const button = (label: string) =>
+      Array.from(host.querySelectorAll("button")).find((b) => b.textContent === label);
+    expect(labels()).toEqual(["Re-add", "Connect"]);
 
-    await act(async () => buttons[0].click());
+    await act(async () => button("Connect")?.click());
 
     expect(connectCalls).toEqual(["codex"]);
     expect(text()).toContain("CodexAdded");
-    expect(host.querySelector("button")).toBeNull();
+    expect(labels()).toEqual(["Re-add", "Re-add"]);
+
+    await act(async () => button("Re-add")?.click());
+
+    expect(connectCalls).toEqual(["codex", "claude-code"]);
   } finally {
     await act(async () => root.unmount());
     host.remove();
