@@ -23,6 +23,8 @@ test("pressing ⌘K on Home focuses the palette input and arrow keys move the pa
 test("pressing ⌘K while a Home row has focus moves focus into the palette, and Escape returns it to that row", async ({
   page,
 }) => {
+  // The second row, so a ⌘K that leaks into the grid as "k" (up) would move focus off it.
+  await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   const row = page.locator('[role="row"]:focus');
   await expect(row).toHaveCount(1);

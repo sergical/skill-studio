@@ -5,12 +5,25 @@ test.beforeEach(async ({ page }) => {
   await openApp(page);
 });
 
-test("Check now on the Updates tile runs a check and shows when it ran, with no error", async ({
+test("Check now on the Updates tile runs a check and changes the caption from never checked to checked", async ({
   page,
 }) => {
+  await page.evaluate(() => {
+    const harness = window.__harness;
+    if (!harness) throw new Error("dev harness missing");
+    const snapshot = harness.snapshot();
+    return harness.publish({
+      ...snapshot,
+      update_check: { ...snapshot.update_check, checked_at: null },
+    });
+  });
+  const tile = page.getByRole("button", { name: /^Updates/ }).first();
+  await expect(tile).toContainText("Not checked yet");
+
   await page.getByRole("button", { name: "Check now" }).click();
 
-  await expect(page.getByRole("button", { name: /^Updates/ }).first()).toContainText("Checked");
+  await expect(tile).toContainText("Checked");
+  await expect(tile).not.toContainText("Not checked yet");
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
@@ -35,8 +48,30 @@ test("a left-behind skill offers one Resolve menu, opened from the keyboard, who
   await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
 });
 
-test("Compare on a warning row is a visible button that does not need hover", async ({ page }) => {
-  const row = page.getByRole("row").filter({ hasText: "Copies differ" }).first();
+test("every Home row action, including Compare and Resolve, shows its whole label inside the action column", async ({
+  page,
+}) => {
+  await reinstallParkedSkill(page);
+  await expect(page.getByRole("button", { name: "Resolve" })).toBeVisible();
 
-  await expect(row.getByRole("button", { name: "Compare" })).toBeVisible();
+  const actions = await page
+    .locator('[role="row"] > [role="gridcell"]:last-child button')
+    .evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const cell = button.closest('[role="gridcell"]')!.getBoundingClientRect();
+        const box = button.getBoundingClientRect();
+        return {
+          label: button.textContent?.trim() ?? "",
+          fits:
+            box.left >= cell.left - 0.5 &&
+            box.right <= cell.right + 0.5 &&
+            button.scrollWidth <= button.clientWidth,
+        };
+      }),
+    );
+
+  expect(actions.map((action) => action.label)).toEqual(
+    expect.arrayContaining(["Compare", "Resolve"]),
+  );
+  expect(actions.filter((action) => !action.fits).map((action) => action.label)).toEqual([]);
 });
