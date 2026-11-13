@@ -204,7 +204,7 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
       restoreFocusRef.current =
         document.activeElement instanceof HTMLElement ? document.activeElement : null;
     } else {
-      restoreFocusRef.current?.focus();
+      restoreFocusRef.current?.focus({ preventScroll: true });
       restoreFocusRef.current = null;
     }
   }, [open]);

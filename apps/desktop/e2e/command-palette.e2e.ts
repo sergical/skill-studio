@@ -48,3 +48,24 @@ test("typing a view name and pressing Enter in the palette opens that view and c
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
 });
+
+test("closing the palette with Escape keeps the page scroll where it was, even when the focused row is out of view", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1100, height: 480 });
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("End");
+  const scroller = page
+    .locator(".overflow-y-scroll")
+    .filter({ has: page.locator('[role="row"]:focus') });
+  await scroller.evaluate((el) => el.scrollTo({ top: 0 }));
+  await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBe(0);
+
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(paletteInput(page)).toBeFocused();
+  await page.keyboard.press("Escape");
+
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator('[role="row"]:focus')).toHaveCount(1);
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
+});
