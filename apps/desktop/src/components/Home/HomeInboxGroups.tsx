@@ -34,7 +34,6 @@ import { SkillLocationCell } from "../SkillList/SkillLocationCell";
 import { RichTooltipScope } from "../ui/RichTooltip";
 import {
   homeRowState,
-  issueActionLabel,
   issueDeploymentPath,
   issueKey,
   MAX_ROWS_PER_GROUP,
@@ -44,7 +43,7 @@ import {
   updateAllTitle,
 } from "./home-inbox-data";
 import { HomeLeftBehindActions } from "./HomeLeftBehindActions";
-import { rowClickOpensSkill } from "./home-row-click";
+import { ROW_ACTION_CLASS, rowClickOpensSkill } from "./home-row-click";
 import type { GroupId, HomeFilter, HomeGroups, HomeRowPlan } from "./home-inbox-data";
 
 /** Home's row's glyph hit box - the same size Skills uses, so the two lists line up. */
@@ -53,10 +52,6 @@ const HOME_GLYPH_SIZE = 14;
 
 /** Text link style shared by every "Show all"/"Show everything"/"Learn more" affordance on Home. */
 const LINK_CLASS = "h-auto gap-1 p-0 text-small";
-
-/** One inbox row's trailing text-button action. */
-const ROW_ACTION_CLASS =
-  "h-9 max-w-full justify-end truncate p-0 text-right text-small text-text-tertiary hover:bg-transparent hover:text-accent";
 
 /** The roving-cursor wiring every group's rows share, passed down from `HomeView`'s single
  * `useHomeRowCursor` call. */
@@ -103,7 +98,7 @@ function HomeRow({
         // to the parent element.
         if (rowClickOpensSkill(e.currentTarget, e.target as Element)) onOpen();
       }}
-      className={`${ROW_CLASS} grid-cols-[var(--glyph-hit)_minmax(0,1fr)_160px_148px_minmax(0,1fr)_88px] gap-x-3 px-3 hover:bg-bg-secondary focus-visible:outline-2 focus-visible:outline-accent -outline-offset-2`}
+      className={`${ROW_CLASS} grid-cols-[var(--glyph-hit)_minmax(0,1fr)_160px_148px_minmax(0,1fr)_104px] gap-x-3 px-3 hover:bg-bg-secondary focus-visible:outline-2 focus-visible:outline-accent -outline-offset-2`}
       style={
         // SAFETY: `--glyph-hit` is a custom property, not a known CSSProperties key; React
         // passes it through to the style attribute as-is.
@@ -226,17 +221,15 @@ function ParkButton({ skill }: { skill: InstalledSkill }) {
   );
 }
 
-/** The Warnings group's per-row action - "Compare" for a duplicate, the Convert dialog opener for a linked root, else the generic Open. */
+/** The Warnings group's per-row action - "Compare" for a duplicate, the Convert dialog opener for a linked root, else none: a click on the row opens the skill. */
 function WarningRowAction({
   issue,
   onCompare,
   onConvertLinkedRoot,
-  onOpen,
 }: {
   issue: HealthIssue;
   onCompare: () => void;
   onConvertLinkedRoot: (harness: string, harnessLabel: string, root: string) => void;
-  onOpen: () => void;
 }) {
   if (issue.kind === "duplicate") {
     return (
@@ -254,15 +247,11 @@ function WarningRowAction({
         className={ROW_ACTION_CLASS}
         onClick={() => onConvertLinkedRoot(harness, harnessLabel, root)}
       >
-        {issueActionLabel(issue.kind)}
+        Convert links
       </Button>
     );
   }
-  return (
-    <Button variant="ghost" className={ROW_ACTION_CLASS} onClick={onOpen}>
-      {issueActionLabel(issue.kind)}
-    </Button>
-  );
+  return null;
 }
 
 /** Home's "Broken" group: one row per broken-symlink/parked-but-reinstalled/spec-violation issue. */
@@ -307,15 +296,7 @@ function BrokenGroup({
                 action={
                   issue.kind === "parked-but-reinstalled" && issue.live && issue.parked ? (
                     <HomeLeftBehindActions issue={issue} live={issue.live} parked={issue.parked} />
-                  ) : (
-                    <Button
-                      variant="ghost"
-                      className={ROW_ACTION_CLASS}
-                      onClick={() => onSelectSkill(issue.skill.name, issueDeploymentPath(issue))}
-                    >
-                      {issueActionLabel(issue.kind)}
-                    </Button>
-                  )
+                  ) : null
                 }
               />
             );
@@ -384,7 +365,6 @@ function WarningsGroup({
                     onConvertLinkedRoot={(harness, harnessLabel, root) =>
                       onConvertLinkedRoot(issue.skill, harness, harnessLabel, root)
                     }
-                    onOpen={() => onSelectSkill(issue.skill.name, issueDeploymentPath(issue))}
                   />
                 }
               />
@@ -452,19 +432,7 @@ function UnusedGroup({
                     )}
                   </span>
                 }
-                action={
-                  modelInvocable && skillCanPark(skill) ? (
-                    <ParkButton skill={skill} />
-                  ) : (
-                    <Button
-                      variant="ghost"
-                      className={ROW_ACTION_CLASS}
-                      onClick={() => onSelectSkill(skill.name)}
-                    >
-                      Open
-                    </Button>
-                  )
-                }
+                action={modelInvocable && skillCanPark(skill) ? <ParkButton skill={skill} /> : null}
               />
             );
           })}

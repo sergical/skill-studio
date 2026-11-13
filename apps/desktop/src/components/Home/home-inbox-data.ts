@@ -17,7 +17,6 @@ import {
 } from "@skill-studio/lib";
 import type {
   HealthIssue,
-  HealthIssueKind,
   InstalledSkill,
   ForkRecord,
   LifecycleTarget,
@@ -97,23 +96,6 @@ export function issueDeploymentPath(issue: HealthIssue): string | undefined {
   if (issue.kind === "spec-warning")
     return deploymentWithSpecViolations(issue.skill, "warning")?.path;
   return undefined;
-}
-
-/** The row-level action label for one health issue kind - see NeedsAttentionCard's former mapping. */
-export function issueActionLabel(kind: HealthIssueKind): string {
-  switch (kind) {
-    case "broken-symlink":
-      return "Fix link";
-    case "duplicate":
-      return "Compare";
-    case "linked-root":
-      return "Convert to per-skill links";
-    case "parked-but-reinstalled":
-    case "spec-violation":
-    case "spec-warning":
-    case "lock-only":
-      return "Open";
-  }
 }
 
 interface UpdateAllTally {
