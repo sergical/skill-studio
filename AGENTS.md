@@ -402,6 +402,14 @@ Enabled in `apps/desktop/tsconfig.json`:
 
 - Rust: `cargo test` in `apps/desktop/src-tauri`, tests live in colocated `#[cfg(test)]` modules
 - Frontend: Vitest is configured; run `pnpm run test`
+- End to end: `pnpm --filter skill-studio run test:e2e` runs the whole app on
+  the dev harness (`src/dev/harness`) in WebKit (the Tauri engine on macOS)
+  and Chromium, with real key presses and clicks. Specs live in
+  `apps/desktop/e2e/*.e2e.ts`. A change to keyboard shortcuts, focus, menus,
+  dialogs, or any behavior that crosses components adds or updates a spec
+  there, and the spec must fail without the change. Component tests that set
+  the store directly do not prove these flows: a window key handler in
+  another component broke ⌘K while they all passed.
 
 ## Before you implement an issue
 

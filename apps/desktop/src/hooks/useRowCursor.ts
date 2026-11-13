@@ -312,7 +312,7 @@ export function useRowCursorWindowEntry(active: boolean, focusCursor: () => void
   useEffect(() => {
     if (!active) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (!WINDOW_ENTRY_KEYS.has(e.key)) return;
+      if (!WINDOW_ENTRY_KEYS.has(e.key) || e.metaKey || e.ctrlKey || e.altKey) return;
       if (isEditable(e.target)) return;
       const activeEl = document.activeElement;
       if (activeEl instanceof HTMLElement && activeEl.closest('[role="row"]')) return;

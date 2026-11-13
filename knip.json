@@ -14,7 +14,7 @@
       "project": ["tools/oxlint/anti-slop/**/*.ts", "*.ts"]
     },
     "apps/desktop": {
-      "project": ["src/**/*.{ts,tsx}"],
+      "project": ["src/**/*.{ts,tsx}", "e2e/**/*.ts"],
       "ignoreDependencies": ["tailwindcss"]
     },
     "apps/server": {

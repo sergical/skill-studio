@@ -43,3 +43,7 @@ lerna-debug.log*
 # Derived from the committed performance trace.
 /docs/perf/real-shaped-profile.folded.txt
 /docs/perf/real-shaped-flamegraph.svg
+
+# Playwright e2e output
+apps/desktop/test-results/
+apps/desktop/playwright-report/
