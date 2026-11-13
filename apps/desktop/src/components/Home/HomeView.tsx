@@ -202,9 +202,13 @@ function HomeStatTiles({
             </Button>
           </TooltipControl>
         </span>
-        {updateCheck.checkError && (
+        {updateCheck.checkError ? (
           <span role="alert" className="sr-only">
             {updateCheck.checkError}
+          </span>
+        ) : (
+          <span role="status" className="sr-only">
+            {updateCheck.caption}
           </span>
         )}
       </div>

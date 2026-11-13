@@ -85,7 +85,7 @@ it.each([
   },
 );
 
-it("Check now settles every success and failure transition or keeps an old result after a retry", async () => {
+it("Check now settles and announces every success and failure transition or keeps an old result after a retry", async () => {
   const snapshot = {
     ...buildHarnessSnapshot(),
     skills: [],
@@ -107,6 +107,11 @@ it("Check now settles every success and failure transition or keeps an old resul
     if (succeeds) {
       await waitFor(() => expect(updatesTile().textContent).toMatch(/Checked /));
       expect(screen.queryByRole("alert")).toBeNull();
+      expect(
+        screen
+          .getAllByRole("status")
+          .some((region) => (region.textContent ?? "").startsWith("Checked ")),
+      ).toBe(true);
     } else {
       expect((await screen.findByRole("alert")).textContent).toBe("Check failed");
       expect(within(updatesTile()).getByText("Check failed")).toBeTruthy();
