@@ -33,7 +33,10 @@ export function useMcpConnections(): McpConnections {
     // Cursor writes its entry after its own install dialog, and a user can add
     // the server from a terminal, so read again when the window comes back.
     const onFocus = () =>
-      void getMcpConnections().then((agents) => setConnected(new Set(agents)), () => undefined);
+      void getMcpConnections().then(
+        (agents) => setConnected(new Set(agents)),
+        () => undefined,
+      );
     window.addEventListener("focus", onFocus);
     return () => {
       cancelled = true;
