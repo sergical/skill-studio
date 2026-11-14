@@ -68,6 +68,12 @@ export function useGuardedSkillUpdate() {
   const [pending, setPending] = useState<PendingUpdate | null>(null);
   const [resolvingSkills, setResolvingSkills] = useState<ReadonlySet<string>>(new Set());
   const updating = useRef(new Set<string>());
+  /** `pullLatest`'s callers waiting to hear how their update ended, by skill name. */
+  const settlers = useRef(new Map<string, (ok: boolean) => void>());
+  const settle = (name: string, ok: boolean) => {
+    settlers.current.get(name)?.(ok);
+    settlers.current.delete(name);
+  };
 
   const overwriteFor =
     (skill: InstalledSkill, { scopeTarget, onFinished, skipPlugins }: UpdateRequestOptions) =>
@@ -132,6 +138,7 @@ export function useGuardedSkillUpdate() {
         title,
         message: error instanceof Error ? error.message : "Unknown error",
       });
+      settle(update.skill.name, false);
     }
     updating.current.delete(update.skill.name);
     setResolvingSkills((names) => {
@@ -181,7 +188,10 @@ export function useGuardedSkillUpdate() {
       canFork={pending !== null && canForkPending(pending)}
       onFork={() => void forkAndUpdate()}
       onOverwrite={() => void overwrite()}
-      onCancel={() => setPending(null)}
+      onCancel={() => {
+        if (pending) settle(pending.skill.name, false);
+        setPending(null);
+      }}
     />
   );
 
@@ -189,22 +199,34 @@ export function useGuardedSkillUpdate() {
    * Reports the outcome as a toast and never throws, so a row menu can fire and forget. A second
    * pull of the same skill while one runs, here or from the dialog, is dropped: the menu closes at
    * once, so a user who sees nothing happen picks it again, and two `npx skills update` runs on one
-   * folder race. */
-  const pullLatest = async (skill: InstalledSkill) => {
-    if (updating.current.has(skill.name)) return;
+   * folder race. `onSettled` hears once how it ended - also after the dialog, with `false` when
+   * the user cancels it, and at once with `false` when the pull is dropped. */
+  const pullLatest = async (skill: InstalledSkill, onSettled?: (ok: boolean) => void) => {
+    if (updating.current.has(skill.name) || settlers.current.has(skill.name)) {
+      onSettled?.(false);
+      return;
+    }
     updating.current.add(skill.name);
+    if (onSettled) settlers.current.set(skill.name, onSettled);
     try {
       if (skill.source_kind === "fork") {
         // The fork's pull and its plugin installs are separate updates: a failed pull must not
         // hold the plugins back, and a fork whose only update is a plugin has nothing to pull.
+        let failed = false;
         await pullForkAndUpdatePlugins(
           skill,
           () => pullForkUpstream(lifecycleTargetForPark(skill)),
-          addToast,
+          (toast) => {
+            if (toast.type === "error") failed = true;
+            addToast(toast);
+          },
           updatePluginInstall,
         );
+        settle(skill.name, !failed);
       } else {
-        await requestUpdate(skill);
+        await requestUpdate(skill, {
+          onFinished: ({ success }) => settle(skill.name, success),
+        });
       }
     } catch (error) {
       // An `if`, not a conditional expression: the React Compiler can't compile a value block
@@ -212,6 +234,7 @@ export function useGuardedSkillUpdate() {
       let message = "Unknown error";
       if (error instanceof Error) message = error.message;
       addToast({ type: "error", title: "Update failed", message });
+      settle(skill.name, false);
     }
     updating.current.delete(skill.name);
   };
@@ -220,8 +243,6 @@ export function useGuardedSkillUpdate() {
     requestUpdate,
     pullLatest,
     isResolving: resolvingSkills.size > 0,
-    /** The skills whose confirmed update is running, which `pullLatest` has already returned from. */
-    resolvingSkills,
     dialog,
   };
 }

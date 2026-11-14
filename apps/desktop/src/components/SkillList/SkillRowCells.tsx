@@ -8,7 +8,6 @@ import {
   CircleAlert,
   CircleArrowDown,
   CirclePause,
-  Loader2,
   OctagonAlert,
   Sparkles,
   TriangleAlert,
@@ -133,30 +132,12 @@ interface SlotCellProps {
   checked: boolean;
   /** Whether any row on the page is checked: a row with no state then shows its checkbox. */
   hasSelection: boolean;
-  /** What the row is doing now ("Parking…"), or undefined when idle. */
-  busyLabel?: string;
   onCheckedChange: CheckboxChange;
 }
 
 /** The row's first cell: the state icon at rest, the selection checkbox in the same place on
- * hover, focus, or once checked. A busy row shows a spinner instead. */
-export function SlotCell({
-  skill,
-  state,
-  checked,
-  hasSelection,
-  busyLabel,
-  onCheckedChange,
-}: SlotCellProps) {
-  if (busyLabel) {
-    return (
-      <Loader2
-        size={14}
-        className="animate-spin text-text-tertiary motion-reduce:animate-none"
-        aria-label={busyLabel}
-      />
-    );
-  }
+ * hover, focus, or once checked. */
+export function SlotCell({ skill, state, checked, hasSelection, onCheckedChange }: SlotCellProps) {
   const checkboxShown = checked || (hasSelection && state === null);
   return (
     <span className="relative inline-flex size-3.5 items-center justify-center">

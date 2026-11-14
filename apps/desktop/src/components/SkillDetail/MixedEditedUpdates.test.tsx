@@ -76,7 +76,8 @@ function HomeUpdate() {
   return (
     <>
       <HomeInboxGrid
-        groups={{ ...computeHomeGroups(undefined), updates, allClear: false }}
+        groups={{ ...computeHomeGroups(undefined), updates }}
+        live={{ ...computeHomeGroups(undefined), updates }}
         starts={{ broken: 0, warn: 0, upd: 0, unused: 2, rec: 2 }}
         filter={null}
         onClearFilter={noop}
@@ -88,16 +89,17 @@ function HomeUpdate() {
         onShowAllUpdates={noop}
         onShowAllUnused={noop}
         onShowAllRecent={noop}
-        openSkill={noop}
         onConvertLinkedRoot={noop}
         containerRef={noop}
         onGridKeyDown={noop}
+        followRow={noop}
         wiring={{
           rowRef: () => noop,
           tabIndexFor: () => 0,
           isChecked: () => false,
           hasSelection: false,
           onToggle: noop,
+          act: noop,
         }}
       />
       <Toaster />

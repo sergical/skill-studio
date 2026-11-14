@@ -94,8 +94,8 @@ export function TurnOffForAgentDialog({
               <Button onClick={() => onOffEverywhere(request)}>Off everywhere</Button>
             )
           ) : (
-            <Button onClick={handleTurnOff} disabled={isRunning || view === null}>
-              {isRunning ? "Turning off…" : `Turn off for ${agentLabel}`}
+            <Button onClick={handleTurnOff} busy={isRunning} disabled={view === null}>
+              Turn off for {agentLabel}
             </Button>
           )}
         </DialogFooter>

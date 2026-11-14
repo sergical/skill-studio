@@ -112,9 +112,10 @@ export function RemoveDeploymentsDialog({
           <AlertDialogAction
             variant="destructive"
             onClick={handleRemove}
-            disabled={isRemoving || isChecking || !removalAvailability.available}
+            busy={isRemoving || isChecking}
+            disabled={!removalAvailability.available}
           >
-            {isRemoving ? "Removing…" : isChecking ? "Checking git…" : `Remove from ${scopeLabel}`}
+            Remove from {scopeLabel}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

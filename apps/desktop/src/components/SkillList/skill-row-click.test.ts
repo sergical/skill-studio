@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rowClickOpensSkill } from "./home-row-click";
+import { rowClickOpensSkill } from "./skill-row-click";
 
 /** A fake element: `inRow` says whether the row's DOM holds it, `control` whether it sits inside a button. */
 function target(inRow: boolean, control: boolean) {

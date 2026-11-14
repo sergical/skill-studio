@@ -1,19 +1,18 @@
 // ============================================================================
 // HomeInboxGroups - Home's five inbox groups (Broken, Warnings, Updates, Not
 // used in 30 days, Recently used): the shared row layout, each group's
-// header and rows, and the per-row fixes (Resolve, Compare, Convert, Park,
-// Update). Rows share their cells and selection with the Skills page.
+// header and rows, and Update all. Rows share their cells, fix button and
+// selection with the Skills page; an acted-on row keeps its slot.
 // ============================================================================
 
 import { useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
-import { Button, Collapsible, CollapsiblePanel, Progress } from "@skill-studio/ui";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, SyntheticEvent } from "react";
+import { Button, Collapsible, CollapsiblePanel, cn } from "@skill-studio/ui";
 import { formatRelativeTime, shortSha } from "@skill-studio/lib";
 import type { HealthIssue, InstalledSkill, RecentlyUsedSkill } from "@skill-studio/lib";
-import { parkSkill, skillLocalEdits } from "../../lib/skill-api";
+import { skillLocalEdits } from "../../lib/skill-api";
 import {
   conflictedSkillsNote,
-  lifecycleTargetForPark,
   skillCanPark,
   partitionForkableSkills,
   skillsWithLocalEdits,
@@ -24,7 +23,6 @@ import {
   stopHomeUpdateAll,
   useActiveUpdateAll,
 } from "../../hooks/skillBatchUpdates";
-import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
 import { UpdateOverwritesEditsDialog } from "../SkillDetail/UpdateOverwritesEditsDialog";
 import { GroupHead } from "../SkillList/GroupHead";
 import { DEFAULT_HARNESS_LIST, whereFacts } from "../SkillList/skill-row-state";
@@ -32,6 +30,7 @@ import type { RowState } from "../SkillList/skill-row-state";
 import { HarnessStack } from "../SkillList/HarnessStack";
 import { NoteCell, SkillNameCell, SlotCell } from "../SkillList/SkillRowCells";
 import { FIX_CLASS, ROW_CLASS, SKILL_ROW_GRID } from "../SkillList/skill-row-format";
+import { RowFixButton } from "../SkillList/RowFixButton";
 import { SkillLocationCell } from "../SkillList/SkillLocationCell";
 import { RichTooltipScope } from "../ui/RichTooltip";
 import {
@@ -44,9 +43,8 @@ import {
   updateAllFailureMessage,
   updateAllTitle,
 } from "./home-inbox-data";
-import { HomeLeftBehindActions } from "./HomeLeftBehindActions";
-import { rowClickOpensSkill } from "./home-row-click";
-import type { GroupId, HomeFilter, HomeGroups, HomeRowPlan } from "./home-inbox-data";
+import { rowClickOpensSkill } from "../SkillList/skill-row-click";
+import type { GroupId, HomeFilter, HomeInboxLists, HomeRowPlan } from "./home-inbox-data";
 
 /** Text link style shared by every "Show all"/"Show everything"/"Learn more" affordance on Home. */
 const LINK_CLASS = "h-auto gap-1 p-0 text-small";
@@ -60,6 +58,8 @@ export interface HomeRowWiring {
   /** Whether any skill on the page is checked. */
   hasSelection: boolean;
   onToggle: (skill: InstalledSkill) => void;
+  /** Runs a row's fix - the same dispatch the Skills page and the selection bar use. */
+  act: (label: string, skill: InstalledSkill) => void;
 }
 
 /**
@@ -74,7 +74,9 @@ function HomeRow({
   skill,
   state,
   detail,
-  action,
+  fix,
+  busy,
+  custom,
   onOpen,
   rowIndex,
 }: {
@@ -83,7 +85,12 @@ function HomeRow({
   skill: InstalledSkill;
   state: RowState | null;
   detail: ReactNode;
-  action: ReactNode;
+  /** The fix's verb, run through `wiring.act`; `null` for none. */
+  fix: string | null;
+  /** See `RowFixButton`'s `busy`. */
+  busy?: boolean;
+  /** A fix with its own control, shown in place of the fix button. */
+  custom?: ReactNode;
   onOpen: () => void;
   rowIndex: number;
 }) {
@@ -124,7 +131,9 @@ function HomeRow({
         <NoteCell skill={skill} note={detail} />
       </div>
       <div role="gridcell" className="flex min-w-0 justify-end">
-        {action}
+        <RowFixButton skill={skill} label={fix} onAct={wiring.act} busy={busy}>
+          {custom}
+        </RowFixButton>
       </div>
     </div>
   );
@@ -149,113 +158,26 @@ function ShowAllLink({
   );
 }
 
-/** "Update" for one Updates row - see `useGuardedSkillUpdate`'s `pullLatest`. */
-function PullLatestButton({ skill, isBusy = false }: { skill: InstalledSkill; isBusy?: boolean }) {
-  const [isPulling, setIsPulling] = useState(false);
-  const guard = useGuardedSkillUpdate();
-
-  const handlePull = async () => {
-    setIsPulling(true);
-    await guard.pullLatest(skill);
-    setIsPulling(false);
-  };
-
-  const pullBusy = isPulling || guard.isResolving || isBusy;
-
-  return (
-    <>
-      <Button
-        variant="ghost"
-        className={FIX_CLASS}
-        onClick={handlePull}
-        disabled={pullBusy}
-        aria-label={pullBusy ? "Updating…" : undefined}
-      >
-        {pullBusy ? (
-          <span className="inline-block size-3 animate-spin motion-reduce:animate-none rounded-full border-2 border-current border-t-transparent" />
-        ) : (
-          "Update"
-        )}
-      </Button>
-      {guard.dialog}
-    </>
-  );
-}
-
-/** "Park" for one unused, model-invocable row - the one-click fix that stops it costing prompt tokens. */
-function ParkButton({ skill }: { skill: InstalledSkill }) {
-  const [isParking, setIsParking] = useState(false);
-  const addToast = useAppStore((state) => state.addToast);
-
-  const handlePark = async () => {
-    setIsParking(true);
-    try {
-      await parkSkill(lifecycleTargetForPark(skill));
-      addToast({ type: "success", title: `Parked ${skill.name}` });
-      setIsParking(false);
-    } catch (err) {
-      addToast({
-        type: "error",
-        title: "Couldn't park skill",
-        message: err instanceof Error ? err.message : "Unknown error",
-      });
-      setIsParking(false);
-    }
-  };
-
+/** "Convert" for a linked-root warning: opens the dialog that turns the linked folder into copies. */
+function ConvertButton({ onConvert }: { onConvert: () => void }) {
   return (
     <Button
       variant="ghost"
       className={FIX_CLASS}
-      onClick={handlePark}
-      disabled={isParking}
-      aria-label={isParking ? "Parking…" : undefined}
+      onClick={(e) => {
+        e.stopPropagation();
+        onConvert();
+      }}
     >
-      {isParking ? (
-        <span className="inline-block size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
-      ) : (
-        "Park"
-      )}
+      Convert
     </Button>
   );
-}
-
-/** The Warnings group's per-row action - "Compare" for a duplicate, the Convert dialog opener for a linked root, else none: a click on the row opens the skill. */
-function WarningRowAction({
-  issue,
-  onCompare,
-  onConvertLinkedRoot,
-}: {
-  issue: HealthIssue;
-  onCompare: () => void;
-  onConvertLinkedRoot: (harness: string, harnessLabel: string, root: string) => void;
-}) {
-  if (issue.kind === "duplicate") {
-    return (
-      <Button variant="ghost" className={FIX_CLASS} onClick={onCompare}>
-        Compare
-      </Button>
-    );
-  }
-  if (issue.kind === "linked-root" && issue.harness && issue.root) {
-    const { harness, root } = issue;
-    const harnessLabel = issue.harnessLabel ?? harness;
-    return (
-      <Button
-        variant="ghost"
-        className={FIX_CLASS}
-        onClick={() => onConvertLinkedRoot(harness, harnessLabel, root)}
-      >
-        Convert
-      </Button>
-    );
-  }
-  return null;
 }
 
 /** Home's "Broken" group: one row per broken-symlink/parked-but-reinstalled/spec-violation issue. */
 function BrokenGroup({
   broken,
+  count,
   start,
   isExpanded,
   onToggle,
@@ -264,7 +186,9 @@ function BrokenGroup({
   wiring,
 }: {
   wiring: HomeRowWiring;
-  broken: HealthIssue[];
+  broken: readonly HealthIssue[];
+  /** The live count, which a held row does not add to. */
+  count: number;
   start: number;
   isExpanded: boolean;
   onToggle: () => void;
@@ -275,28 +199,25 @@ function BrokenGroup({
     <Collapsible data-group="broken" role="rowgroup" open={isExpanded} onOpenChange={onToggle}>
       <div role="row">
         <div role="gridcell">
-          <GroupHead label="Broken" count={broken.length} groupId="broken" />
+          <GroupHead label="Broken" count={count} groupId="broken" />
         </div>
       </div>
       <CollapsiblePanel>
         <div className="flex flex-col">
           {broken.slice(0, MAX_ROWS_PER_GROUP).map((issue, i) => {
             const key = issueKey("broken", issue);
+            const state = homeRowState("broken", issue.skill, issue);
             return (
               <HomeRow
                 key={key}
                 skill={issue.skill}
-                state={homeRowState("broken", issue.skill, issue)}
+                state={state}
                 rowIndex={rowAt(start, i)}
                 rowKey={key}
                 wiring={wiring}
                 onOpen={() => onSelectSkill(issue.skill.name, issueDeploymentPath(issue))}
                 detail={<span>{issue.detail}</span>}
-                action={
-                  issue.kind === "parked-but-reinstalled" && issue.live && issue.parked ? (
-                    <HomeLeftBehindActions issue={issue} live={issue.live} parked={issue.parked} />
-                  ) : null
-                }
+                fix={state?.action ?? null}
               />
             );
           })}
@@ -312,23 +233,23 @@ function BrokenGroup({
 /** Home's "Warnings" group: one row per duplicate/linked-root/lock-only issue. */
 function WarningsGroup({
   warnings,
+  count,
   start,
   isExpanded,
   onToggle,
   onSelectSkill,
   onShowAll,
-  openSkill,
   onConvertLinkedRoot,
   wiring,
 }: {
   wiring: HomeRowWiring;
-  warnings: HealthIssue[];
+  warnings: readonly HealthIssue[];
+  count: number;
   start: number;
   isExpanded: boolean;
   onToggle: () => void;
   onSelectSkill: (name: string, deploymentPath?: string) => void;
   onShowAll: () => void;
-  openSkill: (name: string, deploymentPath: string | undefined, intent: "compare") => void;
   onConvertLinkedRoot: (
     skill: InstalledSkill,
     harness: string,
@@ -340,31 +261,41 @@ function WarningsGroup({
     <Collapsible data-group="warn" role="rowgroup" open={isExpanded} onOpenChange={onToggle}>
       <div role="row">
         <div role="gridcell">
-          <GroupHead label="Warnings" count={warnings.length} groupId="warn" />
+          <GroupHead label="Warnings" count={count} groupId="warn" />
         </div>
       </div>
       <CollapsiblePanel>
         <div className="flex flex-col">
           {warnings.slice(0, MAX_ROWS_PER_GROUP).map((issue, i) => {
             const key = issueKey("warn", issue);
+            const state = homeRowState("warn", issue.skill, issue);
+            const { harness, root } = issue;
             return (
               <HomeRow
                 key={key}
                 skill={issue.skill}
-                state={homeRowState("warn", issue.skill, issue)}
+                state={state}
                 rowIndex={rowAt(start, i)}
                 rowKey={key}
                 wiring={wiring}
                 onOpen={() => onSelectSkill(issue.skill.name, issueDeploymentPath(issue))}
                 detail={<span>{issue.detail}</span>}
-                action={
-                  <WarningRowAction
-                    issue={issue}
-                    onCompare={() => openSkill(issue.skill.name, undefined, "compare")}
-                    onConvertLinkedRoot={(harness, harnessLabel, root) =>
-                      onConvertLinkedRoot(issue.skill, harness, harnessLabel, root)
-                    }
-                  />
+                fix={state?.action ?? null}
+                custom={
+                  issue.kind === "linked-root" &&
+                  harness &&
+                  root && (
+                    <ConvertButton
+                      onConvert={() =>
+                        onConvertLinkedRoot(
+                          issue.skill,
+                          harness,
+                          issue.harnessLabel ?? harness,
+                          root,
+                        )
+                      }
+                    />
+                  )
                 }
               />
             );
@@ -381,6 +312,7 @@ function WarningsGroup({
 /** Home's "Not used in the last 30 days" group: one row per idle skill, with a one-click Park. */
 function UnusedGroup({
   unused,
+  count,
   start,
   isExpanded,
   onToggle,
@@ -389,7 +321,8 @@ function UnusedGroup({
   wiring,
 }: {
   wiring: HomeRowWiring;
-  unused: InstalledSkill[];
+  unused: readonly InstalledSkill[];
+  count: number;
   start: number;
   isExpanded: boolean;
   onToggle: () => void;
@@ -400,7 +333,7 @@ function UnusedGroup({
     <Collapsible data-group="unused" role="rowgroup" open={isExpanded} onOpenChange={onToggle}>
       <div role="row">
         <div role="gridcell">
-          <GroupHead label="Not used in the last 30 days" count={unused.length} groupId="unused" />
+          <GroupHead label="Not used in the last 30 days" count={count} groupId="unused" />
         </div>
       </div>
       <CollapsiblePanel>
@@ -431,7 +364,7 @@ function UnusedGroup({
                     )}
                   </span>
                 }
-                action={modelInvocable && skillCanPark(skill) ? <ParkButton skill={skill} /> : null}
+                fix={modelInvocable && skillCanPark(skill) ? "Park" : null}
               />
             );
           })}
@@ -455,7 +388,7 @@ function RecentGroup({
   wiring,
 }: {
   wiring: HomeRowWiring;
-  recent: RecentlyUsedSkill[];
+  recent: readonly RecentlyUsedSkill[];
   start: number;
   isExpanded: boolean;
   onToggle: () => void;
@@ -488,7 +421,7 @@ function RecentGroup({
                     uses
                   </span>
                 }
-                action={null}
+                fix={null}
               />
             );
           })}
@@ -499,9 +432,14 @@ function RecentGroup({
   );
 }
 
-/** Home's "Updates" group: one row per skill with a newer commit, "Update all" in the header. */
+/**
+ * Home's "Updates" group: one row per skill with a newer commit, "Update all" in the header. While
+ * Update all runs, its rows stay put: the one being updated spins, the rest wait, and each done
+ * row says "Updated" until the list is laid out again.
+ */
 function UpdatesGroup({
   updates,
+  liveUpdates,
   isExpanded,
   onToggle,
   onSelectSkill,
@@ -510,7 +448,10 @@ function UpdatesGroup({
   wiring,
 }: {
   wiring: HomeRowWiring;
-  updates: InstalledSkill[];
+  /** The rows shown, held rows included. */
+  updates: readonly InstalledSkill[];
+  /** The skills that still have an update; what the count says and what Update all runs on. */
+  liveUpdates: readonly InstalledSkill[];
   isExpanded: boolean;
   onToggle: () => void;
   onSelectSkill: (name: string) => void;
@@ -524,19 +465,28 @@ function UpdatesGroup({
   const activeBatch = useActiveUpdateAll();
   const progress = activeBatch?.progress ?? null;
   const isStopping = activeBatch?.isStopping ?? false;
-  const isUpdatingAll = activeBatch !== null || isCheckingEdits;
 
   const runUpdateAll = async (
     forkNames?: ReadonlySet<string>,
     skippedNames: ReadonlySet<string> = new Set(),
   ) => {
+    const { holdSkills, settleSkills, releaseSkills } = useAppStore.getState();
+    // A row already updating on its own stays with that act.
+    const names = holdSkills(
+      liveUpdates.flatMap((skill) => (skippedNames.has(skill.name) ? [] : [skill.name])),
+    );
+    const held = new Set(names);
+    const batch = liveUpdates.filter((skill) => held.has(skill.name));
     // `updateAllOutdatedSkills` catches every `pullFork`/`updateAllOwners`
     // rejection itself and folds it into `failures`, so this never throws.
-    const tally = await startHomeUpdateAll(
-      updates.filter((skill) => !skippedNames.has(skill.name)),
-      forkNames,
-    );
-    if (!tally) return;
+    const tally = await startHomeUpdateAll(batch, forkNames);
+    if (!tally) {
+      releaseSkills(names);
+      return;
+    }
+    const updated = new Set(tally.updated);
+    settleSkills(tally.updated, "Updated");
+    releaseSkills(names.filter((name) => !updated.has(name)));
     const { failures } = tally;
     const conflictNote = conflictedSkillsNote(tally.conflicted ?? []);
     addToast({
@@ -568,7 +518,7 @@ function UpdatesGroup({
   const handleUpdateAll = async () => {
     setIsCheckingEdits(true);
     // `skillsWithLocalEdits` treats a failed check as "no edits", so it never rejects.
-    const edited = await skillsWithLocalEdits(updates, skillLocalEdits);
+    const edited = await skillsWithLocalEdits([...liveUpdates], skillLocalEdits);
     setIsCheckingEdits(false);
     if (edited.length > 0) {
       setEditedSkills(edited);
@@ -588,53 +538,42 @@ function UpdatesGroup({
         <div role="gridcell">
           <GroupHead
             label="Updates"
-            count={updates.length}
+            count={liveUpdates.length}
             groupId="upd"
             extra={
               updates.length > 1 && (
                 <Button
                   variant="link"
                   className="h-auto p-0 text-small disabled:text-text-quaternary"
+                  busy={isCheckingEdits || isStopping ? true : undefined}
+                  disabled={!activeBatch && liveUpdates.length === 0}
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleUpdateAll();
+                    void (activeBatch ? handleStop() : handleUpdateAll());
                   }}
-                  disabled={isUpdatingAll}
-                  title={activeBatch ? "Update all is already running." : undefined}
                 >
-                  {progress
-                    ? progress.total > 0
-                      ? `Updating ${progress.done} of ${progress.total}…`
-                      : "Updating…"
-                    : isCheckingEdits
-                      ? "Updating…"
-                      : "Update all"}
+                  {/* Both labels share one cell, so the header keeps one width whichever shows. */}
+                  <span className="grid">
+                    <span
+                      className={cn("col-start-1 row-start-1", activeBatch && "invisible")}
+                      aria-hidden={activeBatch ? true : undefined}
+                    >
+                      Update all
+                    </span>
+                    <span
+                      className={cn("col-start-1 row-start-1", !activeBatch && "invisible")}
+                      aria-hidden={activeBatch ? undefined : true}
+                    >
+                      Stop
+                    </span>
+                  </span>
                 </Button>
               )
             }
           />
-          {progress && (
-            <div className="flex flex-col gap-1 px-3 pb-2">
-              <Progress
-                value={progress.total > 0 ? (progress.done / progress.total) * 100 : 0}
-                aria-label={
-                  progress.total > 0 ? `Updating ${progress.done} of ${progress.total}` : "Updating"
-                }
-              />
-              <p className="text-small text-text-secondary">
-                Updating {progress.current ?? "skills"}
-                {progress.total > 0 && ` · ${progress.done} of ${progress.total}`}
-              </p>
-              <Button
-                variant="link"
-                className="h-auto self-start p-0 text-small"
-                onClick={handleStop}
-                disabled={isStopping}
-              >
-                {isStopping ? "Stopping…" : "Cancel"}
-              </Button>
-            </div>
-          )}
+          <div role="status" className="sr-only">
+            {progress && progress.total > 0 ? `Updating ${progress.done} of ${progress.total}` : ""}
+          </div>
         </div>
       </div>
       <CollapsiblePanel>
@@ -664,14 +603,13 @@ function UpdatesGroup({
                     )}
                   </>
                 }
-                action={
-                  <PullLatestButton skill={skill} isBusy={progress?.current === skill.name} />
-                }
+                fix="Update"
+                busy={progress ? progress.current === skill.name : undefined}
               />
             );
           })}
           {updates.length > MAX_ROWS_PER_GROUP && (
-            <ShowAllLink count={updates.length} label="Show all" onClick={onShowAll} />
+            <ShowAllLink count={liveUpdates.length} label="Show all" onClick={onShowAll} />
           )}
         </div>
       </CollapsiblePanel>
@@ -704,6 +642,7 @@ function UpdatesGroup({
  */
 export function HomeInboxGrid({
   groups,
+  live,
   starts,
   filter,
   onClearFilter,
@@ -715,14 +654,17 @@ export function HomeInboxGrid({
   onShowAllUpdates,
   onShowAllUnused,
   onShowAllRecent,
-  openSkill,
   onConvertLinkedRoot,
   containerRef,
   onGridKeyDown,
+  followRow,
   wiring,
 }: {
   wiring: HomeRowWiring;
-  groups: HomeGroups;
+  /** The rows shown: acted-on rows held where they were. */
+  groups: HomeInboxLists;
+  /** The current lists, for the counts and for Update all. */
+  live: HomeInboxLists;
   starts: HomeRowPlan["starts"];
   filter: HomeFilter | null;
   onClearFilter: () => void;
@@ -734,7 +676,6 @@ export function HomeInboxGrid({
   onShowAllUpdates: () => void;
   onShowAllUnused: () => void;
   onShowAllRecent: () => void;
-  openSkill: (name: string, deploymentPath: string | undefined, intent: "compare") => void;
   onConvertLinkedRoot: (
     skill: InstalledSkill,
     harness: string,
@@ -743,8 +684,10 @@ export function HomeInboxGrid({
   ) => void;
   containerRef: (el: HTMLDivElement | null) => void;
   onGridKeyDown: (e: ReactKeyboardEvent) => void;
+  followRow: (e: SyntheticEvent) => void;
 }) {
-  const { broken, warnings, updates, unused, recent, allClear } = groups;
+  const { broken, warnings, updates, unused, recent } = groups;
+  const allClear = broken.length === 0 && warnings.length === 0 && updates.length === 0;
 
   return (
     <RichTooltipScope>
@@ -754,6 +697,8 @@ export function HomeInboxGrid({
         role="grid"
         aria-label="Home"
         onKeyDown={onGridKeyDown}
+        onPointerDown={followRow}
+        onFocus={followRow}
       >
         {filter && (
           <div className="flex h-9 items-center gap-2.5 px-3 text-small text-text-tertiary">
@@ -773,6 +718,7 @@ export function HomeInboxGrid({
         {broken.length > 0 && isGroupVisible("broken") && (
           <BrokenGroup
             broken={broken}
+            count={live.broken.length}
             start={starts.broken}
             isExpanded={isGroupExpanded("broken")}
             onToggle={() => toggleGroup("broken")}
@@ -785,12 +731,12 @@ export function HomeInboxGrid({
         {warnings.length > 0 && isGroupVisible("warn") && (
           <WarningsGroup
             warnings={warnings}
+            count={live.warnings.length}
             start={starts.warn}
             isExpanded={isGroupExpanded("warn")}
             onToggle={() => toggleGroup("warn")}
             onSelectSkill={onSelectSkill}
             onShowAll={onShowAllIssues}
-            openSkill={openSkill}
             onConvertLinkedRoot={onConvertLinkedRoot}
             wiring={wiring}
           />
@@ -799,6 +745,7 @@ export function HomeInboxGrid({
         {updates.length > 0 && isGroupVisible("upd") && (
           <UpdatesGroup
             updates={updates}
+            liveUpdates={live.updates}
             isExpanded={isGroupExpanded("upd")}
             onToggle={() => toggleGroup("upd")}
             onSelectSkill={onSelectSkill}
@@ -811,6 +758,7 @@ export function HomeInboxGrid({
         {unused.length > 0 && isGroupVisible("unused") && (
           <UnusedGroup
             unused={unused}
+            count={live.unused.length}
             start={starts.unused}
             isExpanded={isGroupExpanded("unused")}
             onToggle={() => toggleGroup("unused")}

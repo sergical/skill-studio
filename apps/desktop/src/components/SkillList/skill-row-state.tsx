@@ -73,14 +73,17 @@ export function rowState(skill: InstalledSkill): RowState | null {
   }
 
   const rollup = skillRollup(skill, buildScopeGroups(skill));
-  const [first, second] = rollup.tip.split("\n");
+  const [head, second] = rollup.tip.split("\n");
+  // The tooltip's first line introduces a list ("1 broken link inside:"); the row shows it as a phrase.
+  const first = head.replace(/( inside)?:$/, "");
   if (rollup.level === "error") {
     return {
       kind: "rollup",
       level: "error",
       label: first,
       detail: second ?? null,
-      action: "Fix link",
+      // Every error fix lives on the skill's page, which the row click already opens.
+      action: null,
     };
   }
   if (rollup.level === "warning") {
@@ -131,8 +134,21 @@ export function issueRowState(issue: HealthIssue): RowState {
     level: HEALTH_ISSUE_SEVERITY[issue.kind],
     label: ISSUE_ROW_LABEL[issue.kind],
     detail: null,
-    action: null,
+    action: issueAction(issue.kind),
   };
+}
+
+/** The same fix a Skills row names for this condition: only a fix that does more than the row
+ * click. A linked root and a left-behind copy have their own controls on Home. */
+function issueAction(kind: HealthIssueKind): string | null {
+  switch (kind) {
+    case "spec-violation":
+      return "Fix";
+    case "duplicate":
+      return "Compare";
+    default:
+      return null;
+  }
 }
 
 type DiskLocationKind = "global" | "project";

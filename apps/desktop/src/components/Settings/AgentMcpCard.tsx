@@ -85,18 +85,11 @@ export function AgentMcpCard() {
                       variant="outline"
                       size="sm"
                       className="min-w-24"
+                      busy={pending === row.id}
                       disabled={connected === null || pending !== null}
                       onClick={() => void connect(row.id)}
                     >
-                      {pending === row.id
-                        ? opensApp
-                          ? "Opening…"
-                          : "Connecting…"
-                        : added
-                          ? "Reconnect"
-                          : opensApp
-                            ? "Add to Cursor"
-                            : "Connect"}
+                      {added ? "Reconnect" : opensApp ? "Add to Cursor" : "Connect"}
                     </Button>
                   )
                 }

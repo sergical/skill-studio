@@ -8,6 +8,7 @@ import { deployment, skill } from "../../dev/harness/skill-fixture";
 import { SkillStore } from "./SkillStore";
 import { HomeView } from "../Home/HomeView";
 import { buildHarnessSnapshot } from "../../dev/harness/skill-fixture";
+import { useAppStore } from "../../store/appStore";
 
 const owner = "owner:v1/global/sample";
 const fixture = skill({
@@ -36,6 +37,8 @@ afterEach(() => {
   cleanup();
   clearMocks();
   toast.dismiss();
+  // Each test renders a fresh Home; the store outlives it, so drop the last test's "Updated".
+  useAppStore.getState().clearRowActs();
 });
 function ipc(afterHash: string) {
   const ids: unknown[] = [];

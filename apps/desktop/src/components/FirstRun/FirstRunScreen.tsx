@@ -149,10 +149,11 @@ function FirstRunScreenBody({ onComplete }: FirstRunScreenProps) {
 
             <Button
               onClick={onContinue}
+              busy={saving}
               disabled={continueIsBlocked({ rows, error, saving })}
               className="w-full"
             >
-              {saving ? "Saving…" : "Continue"}
+              Continue
             </Button>
           </div>
         </div>

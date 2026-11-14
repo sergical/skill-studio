@@ -1,25 +1,23 @@
 // ============================================================================
-// HomeLeftBehindActions - the "Resolve" menu on a "parked copy left behind"
-// row in Needs attention: "Keep live" and "Keep parked". Each opens the same
+// ResolveLeftBehindMenu - the "Resolve" menu on any row of a skill with a
+// parked copy left behind: "Keep live" and "Keep parked". Each opens the same
 // confirm the Locations card uses, so nothing is deleted on one click.
 // ============================================================================
 
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
-import type { HealthIssue } from "@skill-studio/lib";
+import type { LeftBehindPair } from "@skill-studio/lib";
 import { LeftBehindDialog } from "../SkillDetail/LeftBehindDialog";
 import type { LeftBehindChoice } from "../SkillDetail/LeftBehindDialog";
 import { MenuControl, MenuItem } from "../ui/MenuControl";
-import { FIX_CLASS } from "../SkillList/skill-row-format";
+import { FIX_CLASS } from "./skill-row-format";
 
-export function HomeLeftBehindActions({
-  issue,
-  live,
-  parked,
+export function ResolveLeftBehindMenu({
+  skillName,
+  pair,
 }: {
-  issue: HealthIssue;
-  live: NonNullable<HealthIssue["live"]>;
-  parked: NonNullable<HealthIssue["parked"]>;
+  skillName: string;
+  pair: LeftBehindPair;
 }) {
   const [choice, setChoice] = useState<LeftBehindChoice | null>(null);
   return (
@@ -39,9 +37,9 @@ export function HomeLeftBehindActions({
       </MenuControl>
       {choice && (
         <LeftBehindDialog
-          skillName={issue.skill.name}
+          skillName={skillName}
           choice={choice}
-          pair={{ live, parked }}
+          pair={pair}
           onClose={() => setChoice(null)}
         />
       )}

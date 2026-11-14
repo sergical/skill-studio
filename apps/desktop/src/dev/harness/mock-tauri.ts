@@ -313,8 +313,11 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
   }
 
   mockWindows("main");
+  // `?latency=<ms>` holds every answer that long, so busy states show as they do with real disk work.
+  const latency = Number(new URLSearchParams(location.search).get("latency") ?? 0);
   mockIPC(
     async (command, rawPayload) => {
+      if (latency > 0) await new Promise((resolve) => setTimeout(resolve, latency));
       const payload = isObjectInvokeArgs(rawPayload) ? rawPayload : {};
       switch (command) {
         case "check_skill_updates_now":

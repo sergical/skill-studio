@@ -66,6 +66,29 @@ test("X on a focused Home row selects its skill and shows the selection bar with
   await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
 });
 
+test("X after a click on a row's own button selects that row, not the first row", async ({
+  page,
+}) => {
+  await openSkillsPage(page);
+  const grid = page.getByRole("grid", { name: "Skills" });
+  const first = grid.locator(SKILL_ROW).first();
+  const row = grid
+    .locator(SKILL_ROW)
+    .filter({ has: page.getByRole("button", { name: "Update", exact: true }) })
+    .last();
+  const name = (await row.locator('[role="gridcell"]:nth-child(2) span.truncate').textContent())!;
+  const button = page
+    .getByRole("checkbox", { name: `Select ${name}` })
+    .locator("xpath=ancestor::*[@role='row']")
+    .getByRole("button", { name: "Update", exact: true });
+
+  await button.click();
+  await page.keyboard.press("x");
+
+  await expect(page.getByRole("checkbox", { name: `Select ${name}` })).toBeChecked();
+  await expect(first).toHaveAttribute("aria-selected", "false");
+});
+
 test("clicking the checkbox in a Home row's slot selects the skill and stays on Home", async ({
   page,
 }) => {

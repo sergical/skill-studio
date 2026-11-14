@@ -7,11 +7,12 @@
 
 import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { cva, type VariantProps } from "class-variance-authority";
+import { Loader2 } from "lucide-react";
 
 import { cn } from "../lib/cn";
 
 const buttonVariants = cva(
-  "group/button inline-flex shrink-0 items-center justify-center rounded-sm border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow] outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "group/button relative inline-flex shrink-0 items-center justify-center rounded-sm border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow] outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 aria-busy:disabled:opacity-100 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
@@ -46,18 +47,47 @@ const buttonVariants = cva(
   },
 );
 
+/**
+ * `busy` keeps the label in layout (transparent, still named) and overlays a spinner, so the button never
+ * changes width while its action runs. It also keeps keyboard focus on the button.
+ */
 function Button({
   className,
   variant = "default",
   size = "default",
+  busy,
+  disabled,
+  children,
   ...props
-}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants> & { busy?: boolean }) {
   return (
     <ButtonPrimitive
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
+      disabled={disabled || busy}
+      focusableWhenDisabled={busy || undefined}
+      aria-busy={busy || undefined}
       {...props}
-    />
+    >
+      {busy === undefined ? (
+        children
+      ) : (
+        <>
+          <span
+            data-slot="button-label"
+            className="inline-flex items-center justify-center gap-[inherit] group-aria-busy/button:opacity-0"
+          >
+            {children}
+          </span>
+          <span
+            aria-hidden
+            className="absolute inset-0 hidden items-center justify-center group-aria-busy/button:flex"
+          >
+            <Loader2 className="animate-spin motion-reduce:animate-none" />
+          </span>
+        </>
+      )}
+    </ButtonPrimitive>
   );
 }
 

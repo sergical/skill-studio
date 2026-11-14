@@ -5,12 +5,14 @@
 // ============================================================================
 
 import type { CSSProperties } from "react";
-import { Button } from "@skill-studio/ui";
 import type { InstalledSkill } from "@skill-studio/lib";
+import { useAppStore } from "../../store/appStore";
 import { HarnessStack } from "./HarnessStack";
+import { RowFixButton } from "./RowFixButton";
 import { NoteCell, SkillNameCell, SlotCell } from "./SkillRowCells";
-import { FIX_CLASS, ROW_CLASS, SKILL_ROW_GRID, selectedRowClass } from "./skill-row-format";
+import { ROW_CLASS, SKILL_ROW_GRID, selectedRowClass } from "./skill-row-format";
 import { SkillLocationCell } from "./SkillLocationCell";
+import { rowClickOpensSkill } from "./skill-row-click";
 import { DEFAULT_HARNESS_LIST, whereFacts } from "./skill-row-state";
 import type { RowState } from "./skill-row-state";
 
@@ -29,9 +31,7 @@ interface SkillListRowProps {
   tabIndex: number;
   rowRef: (el: HTMLDivElement | null) => void;
   onOpen: () => void;
-  /** What the row is doing now ("Parking…"), or undefined when idle. */
-  busyLabel?: string;
-  onAct: (label: string) => void;
+  onAct: (label: string, skill: InstalledSkill) => void;
   onCheckedChange: (shiftKey: boolean) => void;
 }
 
@@ -46,19 +46,18 @@ export function SkillListRow({
   tabIndex,
   rowRef,
   onOpen,
-  busyLabel,
   onAct,
   onCheckedChange,
 }: SkillListRowProps) {
   const note = state ? [state.label, state.detail].filter(Boolean).join(" · ") : undefined;
-  const fix = state?.action;
+  const busy = useAppStore((s) => s.rowActs.get(skill.name) === null);
   return (
     <div
       ref={rowRef}
       role="row"
       aria-rowindex={index + 1}
       aria-selected={checked}
-      aria-busy={busyLabel !== undefined}
+      aria-busy={busy}
       tabIndex={tabIndex}
       style={style}
       // `scroll-mt-7` (28px, `HEADER_HEIGHT`) keeps a row scrolled to by `scrollIntoView` from
@@ -66,7 +65,11 @@ export function SkillListRow({
       className={`${ROW_CLASS} ${SKILL_ROW_GRID} scroll-mt-7 hover:bg-bg-secondary focus-visible:outline-2 focus-visible:outline-accent -outline-offset-2 ${selectedRowClass(
         isOpenSkill,
       )} ${skill.parked ? "text-text-tertiary" : ""}`}
-      onClick={onOpen}
+      onClick={(e) => {
+        // SAFETY: a click's target is always an Element; browsers retarget clicks on text
+        // to the parent element.
+        if (rowClickOpensSkill(e.currentTarget, e.target as Element)) onOpen();
+      }}
     >
       <div role="gridcell" className="flex items-center justify-center">
         <SlotCell
@@ -74,7 +77,6 @@ export function SkillListRow({
           state={state}
           checked={checked}
           hasSelection={hasSelection}
-          busyLabel={busyLabel}
           onCheckedChange={(_checked, eventDetails) => {
             // SAFETY: the underlying event is a pointer or keyboard event, both of which carry `shiftKey`.
             const shiftKey = (eventDetails.event as MouseEvent | KeyboardEvent).shiftKey;
@@ -95,19 +97,7 @@ export function SkillListRow({
         <NoteCell skill={skill} note={note} />
       </div>
       <div role="gridcell" className="flex min-w-0 justify-end">
-        {fix && (
-          <Button
-            variant="ghost"
-            className={FIX_CLASS}
-            disabled={busyLabel !== undefined}
-            onClick={(e) => {
-              e.stopPropagation();
-              onAct(fix);
-            }}
-          >
-            {fix}
-          </Button>
-        )}
+        <RowFixButton skill={skill} label={state?.action ?? null} onAct={onAct} />
       </div>
     </div>
   );

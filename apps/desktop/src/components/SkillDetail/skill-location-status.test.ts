@@ -190,7 +190,7 @@ describe("buildScopeGroups", () => {
     const project = groups.find((g) => !g.isGlobal)!;
     const row = project.rows.find((r) => r.harness === "codex");
     expect(row?.level).toBe("warning");
-    expect(row?.conditions[0].what).toBe("This copy differs from the Universal folder.");
+    expect(row?.conditions[0].what).toBe("This copy differs from the Universal folder in Global.");
   });
 
   it("treats a whole-root link as a plain link row with no agent switch", () => {

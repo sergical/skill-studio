@@ -44,9 +44,9 @@ export function SkillPageHeaderActions({ actions }: SkillPageHeaderActionsProps)
         <Button
           className={HEADER_CONTROL_CLASS}
           onClick={actions.primaryAction.run}
-          disabled={actions.primaryAction.busy}
+          busy={actions.primaryAction.busy}
         >
-          {actions.primaryAction.busy ? "Working…" : actions.primaryAction.label}
+          {actions.primaryAction.label}
         </Button>
       )}
       {actions.forkAction && (

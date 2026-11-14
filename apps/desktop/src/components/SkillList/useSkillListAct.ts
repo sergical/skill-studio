@@ -1,14 +1,14 @@
 // ============================================================================
 // useSkillListAct - Row fix dispatch for Home and Skills: Park/Unpark, Fix,
 // and Update act on the deployment target `HomeView` uses, Compare opens the
-// skill's compare dialog, and every other fix (Fix link, Convert, Keep) opens
-// the skill's own detail, since those flows live there. Fix now covers the repairable spec
+// skill's compare dialog, and any other label opens the skill's own detail,
+// since those flows live there. Fix now covers the repairable spec
 // violations too (invalid YAML frontmatter); any issue `fix_skill` leaves
 // unrepaired falls through to the detail page, which has its own card for
-// a link issue and shows the raw message otherwise.
+// a link issue and shows the raw message otherwise. A fix that does work holds
+// its row in place and leaves the past tense there ("Updated"); see `rowActs`.
 // ============================================================================
 
-import { useState } from "react";
 import { useAppStore } from "../../store/appStore";
 import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
 import { fixSkill, openConflictPaths, parkSkill, unparkSkill } from "../../lib/skill-api";
@@ -33,13 +33,13 @@ const defaultFixSkillDeps: FixSkillDeps = { fixSkill, openConflictPaths };
  * frontmatter repair that failed to apply) lands on the same page so the
  * user can edit the file directly instead of getting a dead-end toast. A
  * conflict opens the editor rather than writing anything, so it gets its
- * own message. */
+ * own message. Resolves `true` only when a repair was written. */
 export async function reportFixOutcome(
   skill: InstalledSkill,
   addToast: (toast: Omit<Toast, "id">) => string,
   openDetail: () => void,
   deps: FixSkillDeps = defaultFixSkillDeps,
-): Promise<void> {
+): Promise<boolean> {
   const outcome = await deps.fixSkill(skill.name);
   if (outcome.conflicts.length > 0) {
     const first = outcome.conflicts[0];
@@ -49,37 +49,109 @@ export async function reportFixOutcome(
       title: `${skill.name} has a conflict`,
       message: `${first.message} Opened both copies in your editor.`,
     });
-    return;
+    return false;
   }
   if (outcome.applied.length > 0) {
     addToast({ type: "success", title: `Fixed ${skill.name}` });
-    return;
+    return true;
   }
   if (outcome.unrepaired.length > 0) {
     openDetail();
-    return;
+    return false;
   }
   addToast({
     type: "error",
     title: `Couldn't fix ${skill.name}`,
     message: "Nothing to repair.",
   });
+  return false;
 }
 
-/** The row's pending text for each fix that does work; other verbs only open the skill. */
-function busyLabelFor(label: string): string | null {
+/** The past tense a row shows once its fix is done; `null` for a verb that only opens the skill. */
+export function pastTenseOf(label: string): string | null {
   switch (label) {
     case "Park":
-      return "Parking…";
+      return "Parked";
     case "Unpark":
-      return "Unparking…";
+      return "Unparked";
     case "Fix":
-      return "Fixing…";
+      return "Fixed";
     case "Update":
-      return "Updating…";
+      return "Updated";
     default:
       return null;
   }
+}
+
+/**
+ * Runs `task` with the skill's row held where it is: busy while it runs, then the past tense
+ * on success, or back to normal on failure. A second act on a row that is already running is
+ * dropped.
+ */
+export async function actInPlace(
+  names: readonly string[],
+  pastTense: string,
+  task: () => Promise<boolean>,
+): Promise<boolean> {
+  const store = useAppStore.getState();
+  const held = store.holdSkills(names);
+  if (held.length < names.length) {
+    store.releaseSkills(held);
+    return false;
+  }
+  const ok = await task().catch(() => false);
+  if (ok) store.settleSkills(names, pastTense);
+  else store.releaseSkills(names);
+  return ok;
+}
+
+type ParkVerb = "Park" | "Unpark";
+
+/** Parks or unparks one skill and toasts the result, with an Undo that runs the reverse. */
+async function parkWithUndo(
+  verb: ParkVerb,
+  skill: InstalledSkill,
+  addToast: (toast: Omit<Toast, "id">) => string,
+): Promise<boolean> {
+  const target = lifecycleTargetForPark(skill);
+  const run = (v: ParkVerb) => (v === "Park" ? parkSkill(target) : unparkSkill(target));
+  const reverse: ParkVerb = verb === "Park" ? "Unpark" : "Park";
+  try {
+    await run(verb);
+  } catch (err) {
+    addToast({
+      type: "error",
+      title: verb === "Park" ? "Couldn't park skill" : "Couldn't unpark skill",
+      message: err instanceof Error ? err.message : "Unknown error",
+    });
+    return false;
+  }
+  addToast({
+    type: "success",
+    title: `${pastTenseOf(verb)} ${skill.name}`,
+    action: {
+      label: "Undo",
+      onClick: () => {
+        void actInPlace([skill.name], pastTenseOf(reverse) ?? reverse, async () => {
+          try {
+            await run(reverse);
+          } catch (err) {
+            addToast({
+              type: "error",
+              title: `Couldn't undo for ${skill.name}`,
+              message: err instanceof Error ? err.message : "Unknown error",
+            });
+            return false;
+          }
+          return true;
+        }).then((ok) => {
+          // Undone, the skill is back where it was, so its row has nothing left to say.
+          if (ok) useAppStore.getState().releaseSkills([skill.name]);
+        });
+      },
+    },
+  });
+  return true;
 }
 
 export function useSkillListAct(
@@ -89,34 +161,24 @@ export function useSkillListAct(
   const addToast = useAppStore((state) => state.addToast);
   const openSkill = useAppStore((state) => state.openSkill);
   const guard = useGuardedSkillUpdate();
-  // Skill name -> what its row is doing now. The row shows a spinner until the action ends.
-  const [busy, setBusy] = useState<ReadonlyMap<string, string>>(new Map());
 
-  function handleAct(label: string, skill: InstalledSkill): Promise<void> {
-    const busyLabel = busyLabelFor(label);
-    if (busyLabel === null) return runAct(label, skill);
-    setBusy((current) => new Map(current).set(skill.name, busyLabel));
-    return runAct(label, skill).finally(() =>
-      setBusy((current) => {
-        const next = new Map(current);
-        next.delete(skill.name);
-        return next;
-      }),
-    );
-  }
-
-  async function runAct(label: string, skill: InstalledSkill) {
-    if (label === "Update") {
-      await guard.pullLatest(skill);
+  async function handleAct(label: string, skill: InstalledSkill): Promise<void> {
+    const past = pastTenseOf(label);
+    if (past === null) {
+      if (label === "Compare") openSkill(skill.name, deploymentPathForSkill?.(skill), "compare");
+      else onSelectSkill(skill.name, deploymentPathForSkill?.(skill));
       return;
     }
-    if (label === "Compare") {
-      openSkill(skill.name, deploymentPathForSkill?.(skill), "compare");
-      return;
+    await actInPlace([skill.name], past, () => runAct(label, skill));
+  }
+
+  async function runAct(label: string, skill: InstalledSkill): Promise<boolean> {
+    if (label === "Update") {
+      return new Promise<boolean>((settle) => void guard.pullLatest(skill, settle));
     }
     if (label === "Fix") {
       try {
-        await reportFixOutcome(skill, addToast, () =>
+        return await reportFixOutcome(skill, addToast, () =>
           onSelectSkill(skill.name, deploymentPathForSkill?.(skill)),
         );
       } catch (err) {
@@ -125,34 +187,11 @@ export function useSkillListAct(
           title: `Couldn't fix ${skill.name}`,
           message: err instanceof Error ? err.message : "Unknown error",
         });
+        return false;
       }
-      return;
     }
-    if (label !== "Park" && label !== "Unpark") {
-      onSelectSkill(skill.name, deploymentPathForSkill?.(skill));
-      return;
-    }
-    // Hoisted out of the try/catch below - the compiler can't optimize a conditional expression
-    // computed inside a try/catch statement.
-    const successTitle = label === "Park" ? `Parked ${skill.name}` : `Unparked ${skill.name}`;
-    const failureTitle = label === "Park" ? "Couldn't park skill" : "Couldn't unpark skill";
-    try {
-      if (label === "Park") await parkSkill(lifecycleTargetForPark(skill));
-      else await unparkSkill(lifecycleTargetForPark(skill));
-      addToast({ type: "success", title: successTitle });
-    } catch (err) {
-      addToast({
-        type: "error",
-        title: failureTitle,
-        message: err instanceof Error ? err.message : "Unknown error",
-      });
-    }
+    return parkWithUndo(label === "Park" ? "Park" : "Unpark", skill, addToast);
   }
 
-  return {
-    handleAct,
-    pendingLabelFor: (skill: InstalledSkill) =>
-      busy.get(skill.name) ?? (guard.resolvingSkills.has(skill.name) ? "Updating…" : undefined),
-    dialog: guard.dialog,
-  };
+  return { handleAct, dialog: guard.dialog };
 }

@@ -11,6 +11,7 @@ import {
 } from "@tanstack/react-virtual";
 import type { InstalledSkill, SkillInvocationStats } from "@skill-studio/lib";
 import { groupSkillRows } from "../../lib/skill-list-model";
+import { useHeldLayout } from "../../lib/held-layout";
 import type { SortMode } from "../../lib/skill-list-sort";
 import { useRowCursor, useRowCursorWindowEntry } from "../../hooks/useRowCursor";
 import { RichTooltipScope } from "../ui/RichTooltip";
@@ -30,6 +31,8 @@ const GROUP_LABEL = {
   healthy: "Healthy",
   parked: "Parked",
 };
+
+const skillName = (skill: InstalledSkill) => skill.name;
 
 /** Fixed row/header sizes for the virtualizer - `GroupHead`'s `h-7` and `ROW_CLASS`'s `h-8`, both
  * border-box so their border doesn't add to these. No `measureElement`: every row and header is
@@ -77,7 +80,7 @@ function useSkillListVirtualizer(
  * container. Pulled out of the component so its loop doesn't count against its control-flow
  * complexity. */
 function buildListItems(
-  buckets: Record<RowGroup, InstalledSkill[]>,
+  buckets: Readonly<Record<RowGroup, readonly InstalledSkill[]>>,
   collapsedGroups: Set<RowGroup>,
 ): ListItems {
   const items: ListItem[] = [];
@@ -129,6 +132,12 @@ interface SkillListTableProps {
   onClearFilters?: () => void;
   /** Opens the add-skill sheet, for the "You haven't added a skill yet" empty state. */
   onAddSkill?: () => void;
+  /** Changes when the caller's filter changes: the list then lays out fresh, dropping the rows
+   * an action held in place. */
+  resetKey?: string;
+  /** Finds a skill outside `skills`, so a row an action took out of the caller's filter (an update
+   * under "Update available") stays in its slot with fresh data until the filter changes. */
+  latestSkill?: (name: string) => InstalledSkill | undefined;
 }
 
 /**
@@ -148,6 +157,8 @@ export function SkillListTable({
   hasAnySkills: hasAnySkillsProp,
   onClearFilters,
   onAddSkill,
+  resetKey = "",
+  latestSkill,
 }: SkillListTableProps) {
   const selectedSkillName = selectedSkillNameProp ?? null;
   const initialCursorSkillName = initialCursorSkillNameProp ?? null;
@@ -162,7 +173,16 @@ export function SkillListTable({
    * stays put when the copy the row opens changes with a rescan. */
   const rowPath = (skill: InstalledSkill): string | undefined => skill.deployments[0]?.path;
 
-  const { buckets, statesBySkill, rows } = groupSkillRows(skills, sort, stats);
+  const grouped = groupSkillRows(skills, sort, stats);
+  const { statesBySkill } = grouped;
+  const buckets = useHeldLayout(
+    grouped.buckets,
+    skillName,
+    skillName,
+    `${sort}\n${resetKey}`,
+    latestSkill,
+  );
+  const rows = GROUP_ORDER.flatMap((group) => buckets[group]);
   /** Row keys `useRowCursor` navigates, in rendered order - a collapsed group's rows drop out. */
   const visibleKeys = GROUP_ORDER.flatMap((group) =>
     collapsedGroups.has(group) ? [] : buckets[group].map((skill) => skill.name),
@@ -170,11 +190,10 @@ export function SkillListTable({
 
   const { selectedPaths, selectSkills, clearSkillSelection, handleRowCheckboxClick } =
     useSkillListSelection(rows, rowPath);
-  const {
-    handleAct,
-    pendingLabelFor,
-    dialog: updateDialog,
-  } = useSkillListAct(onSelectSkill, deploymentPathForSkill);
+  const { handleAct, dialog: updateDialog } = useSkillListAct(
+    onSelectSkill,
+    deploymentPathForSkill,
+  );
   const { scrollElement, scrollMargin, setGridElement } = useSkillListScrollMargin();
 
   /** The flat item list the virtualizer measures, and each group's offset/size in that same
@@ -216,51 +235,59 @@ export function SkillListTable({
   // Destructured (rather than kept as one `cursor` object) so each JSX use below is a plain
   // identifier, not a member access - oxlint's `react(refs)` check otherwise treats every property
   // read off a custom hook's return value as a potential ref read during render.
-  const { rowRef, containerRef, tabIndexFor, onGridKeyDown, focusCursor, statusText, cursorKey } =
-    useRowCursor({
-      keys: visibleKeys,
-      // The row a just-closed skill page was opened from, so Escape back out of it returns
-      // focus there instead of resetting the cursor to the first row.
-      initialKey: initialCursorSkillName,
-      active,
-      scrollToKey: (key) => {
-        const index = items.findIndex((item) => item.kind === "row" && item.skill.name === key);
-        if (index !== -1) virtualizer.scrollToIndex(index, { align: "auto" });
-      },
-      onOpen: (key) => {
-        const skill = rows.find((s) => s.name === key);
-        if (skill) onSelectSkill(skill.name, deploymentPathForSkill?.(skill));
-      },
-      onToggle: (key) => {
-        const index = rows.findIndex((s) => s.name === key);
-        if (index !== -1) handleRowCheckboxClick(index, false);
-      },
-      onExtend: (key) => {
-        const skill = rows.find((s) => s.name === key);
-        const path = skill && rowPath(skill);
-        if (!path) return;
-        const next = new Set(selectedPaths);
-        next.add(path);
-        selectSkills([...next]);
-      },
-      onEscape: () => {
-        if (selectedPaths.size > 0) clearSkillSelection();
-      },
-      onCollapseGroup: (groupId) =>
-        setCollapsedGroups((prev) =>
-          // SAFETY: `groupId` only ever comes from this file's own `data-group` attributes, which
-          // are always one of the three `RowGroup` values.
-          new Set(prev).add(groupId as RowGroup),
-        ),
-      onExpandGroup: (groupId) =>
-        setCollapsedGroups((prev) => {
-          const next = new Set(prev);
-          // SAFETY: `groupId` only ever comes from this file's own `data-group` attributes, which
-          // are always one of the three `RowGroup` values.
-          next.delete(groupId as RowGroup);
-          return next;
-        }),
-    });
+  const {
+    rowRef,
+    containerRef,
+    tabIndexFor,
+    onGridKeyDown,
+    followRow,
+    focusCursor,
+    statusText,
+    cursorKey,
+  } = useRowCursor({
+    keys: visibleKeys,
+    // The row a just-closed skill page was opened from, so Escape back out of it returns
+    // focus there instead of resetting the cursor to the first row.
+    initialKey: initialCursorSkillName,
+    active,
+    scrollToKey: (key) => {
+      const index = items.findIndex((item) => item.kind === "row" && item.skill.name === key);
+      if (index !== -1) virtualizer.scrollToIndex(index, { align: "auto" });
+    },
+    onOpen: (key) => {
+      const skill = rows.find((s) => s.name === key);
+      if (skill) onSelectSkill(skill.name, deploymentPathForSkill?.(skill));
+    },
+    onToggle: (key) => {
+      const index = rows.findIndex((s) => s.name === key);
+      if (index !== -1) handleRowCheckboxClick(index, false);
+    },
+    onExtend: (key) => {
+      const skill = rows.find((s) => s.name === key);
+      const path = skill && rowPath(skill);
+      if (!path) return;
+      const next = new Set(selectedPaths);
+      next.add(path);
+      selectSkills([...next]);
+    },
+    onEscape: () => {
+      if (selectedPaths.size > 0) clearSkillSelection();
+    },
+    onCollapseGroup: (groupId) =>
+      setCollapsedGroups((prev) =>
+        // SAFETY: `groupId` only ever comes from this file's own `data-group` attributes, which
+        // are always one of the three `RowGroup` values.
+        new Set(prev).add(groupId as RowGroup),
+      ),
+    onExpandGroup: (groupId) =>
+      setCollapsedGroups((prev) => {
+        const next = new Set(prev);
+        // SAFETY: `groupId` only ever comes from this file's own `data-group` attributes, which
+        // are always one of the three `RowGroup` values.
+        next.delete(groupId as RowGroup);
+        return next;
+      }),
+  });
   useRowCursorWindowEntry(active, focusCursor);
 
   // Mirrors `cursorKey` into a ref for the virtualizer's `rangeExtractor` above - a plain callback
@@ -310,7 +337,6 @@ export function SkillListTable({
         tabIndex={tabIndexFor(skill.name)}
         rowRef={rowRef(skill.name)}
         onOpen={() => onSelectSkill(skill.name, deploymentPathForSkill?.(skill))}
-        busyLabel={pendingLabelFor(skill)}
         onAct={(label) => void handleAct(label, skill)}
         onCheckedChange={(shiftKey) => handleRowCheckboxClick(index, shiftKey)}
       />
@@ -333,6 +359,8 @@ export function SkillListTable({
             aria-label="Skills"
             aria-rowcount={rows.length}
             onKeyDown={onGridKeyDown}
+            onPointerDown={followRow}
+            onFocus={followRow}
           >
             {GROUP_ORDER.map((group) => {
               const groupSkills = buckets[group];
@@ -344,7 +372,7 @@ export function SkillListTable({
                   key={group}
                   group={group}
                   label={GROUP_LABEL[group]}
-                  count={groupSkills.length}
+                  count={grouped.buckets[group].length}
                   open={open}
                   start={groupStart}
                   height={groupHeight}

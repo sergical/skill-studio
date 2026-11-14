@@ -8,7 +8,7 @@
 // ============================================================================
 
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, SyntheticEvent } from "react";
 
 interface UseRowCursorOptions {
   /** Visible row keys, in rendered order - skips rows inside collapsed groups. */
@@ -44,6 +44,8 @@ export interface RowCursor {
   containerRef: (el: HTMLDivElement | null) => void;
   tabIndexFor: (key: string) => 0 | -1;
   onGridKeyDown: (e: ReactKeyboardEvent) => void;
+  /** For the grid's `onPointerDown` and `onFocus`: the cursor follows the row clicked or focused. */
+  followRow: (e: SyntheticEvent) => void;
   /** Focuses the current cursor row (or the first row) - the window-level entry point calls this. */
   focusCursor: () => void;
   /** "12 of 80" - the visually-hidden `role="status"` text, debounced to the last move. */
@@ -179,6 +181,16 @@ export function useRowCursor({
     scrollAndFocus(effectiveCursorKey ?? keys[0]);
   }
 
+  /** Moves the cursor to the row the pointer or focus went into (its checkbox, its fix button),
+   * so the next X, j or k starts from that row and not from where the keys last left it. */
+  function followRow(e: SyntheticEvent) {
+    const target = e.target;
+    if (!(target instanceof Node)) return;
+    const key = [...rowsRef.current].find(([, el]) => el.contains(target))?.[0];
+    if (key !== undefined && key !== effectiveCursorKey && keys.includes(key))
+      setCursor({ key, index: keys.indexOf(key) });
+  }
+
   function onGridKeyDown(e: ReactKeyboardEvent) {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
@@ -276,6 +288,7 @@ export function useRowCursor({
     },
     tabIndexFor: (key) => (key === effectiveCursorKey ? 0 : -1),
     onGridKeyDown,
+    followRow,
     focusCursor,
     statusText,
   };

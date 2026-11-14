@@ -12,6 +12,7 @@ import {
   describeSpecViolations,
   deploymentLabelFromAgentId,
   deploymentLinkKind,
+  driftReference,
   driftingCopies,
   findLeftBehindPairs,
   homeRelativePath,
@@ -38,6 +39,8 @@ export type StatusLevel = "error" | "warning" | "off";
 interface RollupResult {
   level: StatusLevel | null;
   tip: string;
+  /** Status word of the condition that set `level`, e.g. "Broken link". */
+  status: string | null;
 }
 
 const RANK = { error: 3, warning: 2, off: 1 } satisfies Record<StatusLevel, number>;
@@ -438,26 +441,36 @@ function leftBehindCondition(pair: LeftBehindPair): Condition {
 }
 
 interface GroupContext {
-  anyShared: boolean;
-  otherScopeLabel: string | undefined;
+  scopeKey: string;
+  driftReference: Deployment | null;
   driftSet: Set<Deployment>;
 }
 
+/** The copy a drifted copy differs from, named from the drifted copy's own scope block. */
+function driftReferenceName(reference: Deployment | null, ctx: GroupContext): string {
+  if (!reference) return "the other copies";
+  const sameScope = scopeKeyOf(reference) === ctx.scopeKey;
+  const where = sameScope ? "" : ` in ${scopeLabelOf(scopeKeyOf(reference))}`;
+  return reference.agent === "shared"
+    ? `the Universal folder${where}`
+    : `the ${harnessLabelFromAgent(reference.agent)} copy${where}`;
+}
+
 function driftCondition(deployment: Deployment, ctx: GroupContext): Condition {
-  const what = ctx.anyShared
-    ? "This copy differs from the Universal folder."
-    : `This copy differs from the copy in ${ctx.otherScopeLabel ?? "another scope"}.`;
+  const reference = ctx.driftReference;
+  const what = `This copy differs from ${driftReferenceName(reference, ctx)}.`;
   const label = harnessLabelFromAgent(deployment.agent);
   return {
     level: "warning",
     status: "Differs",
-    phrase: "differs",
-    plural: "differ",
+    phrase: "copy differs",
+    plural: "copies differ",
     what,
     fix: "Compare copies to see the changes.",
     menu: [
       {
-        label: ctx.anyShared ? "Compare with the Universal folder…" : "Compare copies…",
+        label:
+          reference?.agent === "shared" ? "Compare with the Universal folder…" : "Compare copies…",
         action: { kind: "compare" },
       },
       { label: "Reveal in Finder", action: { kind: "reveal", path: deployment.path, label } },
@@ -515,11 +528,12 @@ function deploymentConditions(deployment: Deployment, ctx: GroupContext): Condit
   return out.sort((a, b) => RANK[b.level] - RANK[a.level]);
 }
 
-function sharedConditions(shared: Deployment): Condition[] {
+function sharedConditions(shared: Deployment, ctx: GroupContext): Condition[] {
   const out: Condition[] = [];
   const violations = shared.spec_violations ?? [];
   const spec = specCondition(violations, shared.path);
   if (spec) out.push(spec);
+  if (ctx.driftSet.has(shared)) out.push(driftCondition(shared, ctx));
   return out.sort((a, b) => RANK[b.level] - RANK[a.level]);
 }
 
@@ -605,16 +619,11 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
     const isGlobal = key === "";
     const sharedDeployment =
       deployments.find((d) => deploymentLinkKind(d) === "shared-root") ?? null;
-    const otherKey = keys.find((k) => k !== key);
-    const ctx: GroupContext = {
-      anyShared: summary.truth != null,
-      otherScopeLabel: otherKey !== undefined ? scopeLabelOf(otherKey) : undefined,
-      driftSet,
-    };
+    const ctx: GroupContext = { scopeKey: key, driftReference: driftReference(summary), driftSet };
 
     const shared: LocationRow | null = sharedDeployment
       ? (() => {
-          const conditions = sharedConditions(sharedDeployment);
+          const conditions = sharedConditions(sharedDeployment, ctx);
           return {
             kind: "shared",
             harness: "shared",
@@ -818,7 +827,7 @@ function counted(sorted: LabeledCondition[]): string {
 function rollup(entries: LabeledCondition[], allOff: boolean): RollupResult {
   const sorted = [...entries].sort((a, b) => RANK[b.condition.level] - RANK[a.condition.level]);
   const active = sorted.filter((e) => e.condition.level !== "off");
-  if (!active.length && !allOff) return { level: null, tip: "" };
+  if (!active.length && !allOff) return { level: null, tip: "", status: null };
   const level = active.length ? active[0].condition.level : "off";
   const head = sorted.find((e) => e.condition.headline);
   const lines: string[] = [];
@@ -828,7 +837,11 @@ function rollup(entries: LabeledCondition[], allOff: boolean): RollupResult {
     if (e === head) continue;
     lines.push(e.label ? `${e.label}: ${e.condition.what}` : e.condition.what);
   }
-  return { level, tip: lines.filter(Boolean).join("\n") };
+  return {
+    level,
+    tip: lines.filter(Boolean).join("\n"),
+    status: active[0]?.condition.status ?? null,
+  };
 }
 
 /** The whole card's rollup, for the skill-page header/sidebar dot. Lock-only (no deployments at all) short-circuits to its own fixed condition. */
@@ -837,6 +850,7 @@ export function skillRollup(skill: InstalledSkill, groups: ScopeGroup[]): Rollup
     return {
       level: "warning",
       tip: "Listed in the lock file, but no folder was found.\nInstall again or remove the entry.",
+      status: null,
     };
   }
   const entries: LabeledCondition[] = groups.flatMap((g) => {
