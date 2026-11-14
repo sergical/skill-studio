@@ -56,6 +56,11 @@ class AnswerContractsTest(unittest.TestCase):
                  patch.object(contracts, "mcp_call", return_value=b'{"content":[{"type":"text","text":"{\\\"skills\\\":[]}"}]}'), \
                  contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(contracts.run(args, score, {"usage": ("q1",)}, root), 1)
+                args.update_baseline = True
+                self.assertEqual(contracts.run(args, score, {"usage": ("q1",)}, root), 1)
+                args.update_baseline = False
+                # Saving the baseline during a regression must not turn the next check green.
+                self.assertEqual(contracts.run(args, score, {"usage": ("q1",)}, root), 1)
 
     def test_extractors_use_returned_fields(self):
         home = Path("/fixture/home")
@@ -67,6 +72,10 @@ class AnswerContractsTest(unittest.TestCase):
         self.assertEqual(contracts.extract("q1", scan, home), 1)
         for question in ("u1", "u2", "s1", "s2"):
             self.assertIsNone(contracts.extract(question, scan, home))
+        stale = {"skills": [{"name": "invented", "source": fixture.UPDATED_PACK, "deployments": [
+            {"path": str(home / ".agents/skills/invented"), "harness": "shared", "copy_status": "same"},
+            {"path": str(home / ".codex/skills/invented"), "harness": "codex", "copy_status": "stale"}]}]}
+        self.assertEqual(contracts.extract("u2", stale, home), [{"skill": "invented", "agent": "codex"}])
         truth = {"q1": 1, "q2": 1, "q3": [{"skill": "invented", "uses": 8}], "q4": 0}
         self.assertTrue(score("usage", {"q3": contracts.extract("q3", data, home)[:1]}, truth)["q3"])
 
