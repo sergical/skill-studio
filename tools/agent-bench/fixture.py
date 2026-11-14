@@ -232,15 +232,15 @@ def openai_yaml(name: str, implicit: bool) -> str:
     )
 
 
-def write_library(home: Path, rng: random.Random) -> None:
+def write_library(home: Path, rng: random.Random, library=LIBRARY, manual=MANUAL_IN_CLAUDE, implicit=CODEX_IMPLICIT) -> None:
     lib = home / ".agents" / "skills"
-    for name in LIBRARY:
+    for name in library:
         folder = lib / name
         folder.mkdir(parents=True)
-        (folder / "SKILL.md").write_text(skill_md(name, name in MANUAL_IN_CLAUDE, rng))
-        if name in CODEX_IMPLICIT:
+        (folder / "SKILL.md").write_text(skill_md(name, name in manual, rng))
+        if name in implicit:
             (folder / "agents").mkdir()
-            (folder / "agents" / "openai.yaml").write_text(openai_yaml(name, CODEX_IMPLICIT[name]))
+            (folder / "agents" / "openai.yaml").write_text(openai_yaml(name, implicit[name]))
         if rng.random() < 0.3:
             (folder / "references").mkdir()
             (folder / "references" / "examples.md").write_text(f"# Examples for {name}\n")
@@ -259,7 +259,7 @@ def write_library(home: Path, rng: random.Random) -> None:
     # Claude Code does not read ~/.agents/skills; `npx skills` links each skill in.
     claude_skills = home / ".claude" / "skills"
     claude_skills.mkdir(parents=True)
-    for name in LIBRARY:
+    for name in library:
         (claude_skills / name).symlink_to(Path("..", "..", ".agents", "skills", name))
     # Claude Code only skills, outside the shared library.
     for name, manual in (("local-scratch", False), ("claude-only-review", True)):
@@ -709,22 +709,22 @@ def write_opencode(home: Path, sessions: list[Session], clock: Clock, rng: rando
 # ----------------------------------------------------------------------------
 
 
-def ground_truth(uses: list[Use], now: datetime) -> dict:
+def ground_truth(uses: list[Use], now: datetime, library=LIBRARY, manual=MANUAL_IN_CLAUDE, implicit=CODEX_IMPLICIT) -> dict:
     counts: dict[str, int] = {}
     harnesses: dict[str, set[str]] = {}
     for u in uses:
-        if u.counted and u.skill in LIBRARY and u.offset < WINDOW_DAYS:
+        if u.counted and u.skill in library and u.offset < WINDOW_DAYS:
             counts[u.skill] = counts.get(u.skill, 0) + 1
             harnesses.setdefault(u.skill, set()).add(u.harness)
     ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     assert ranked[4][1] > ranked[5][1], "top 5 must not tie with the 6th"
-    manual_auto = sorted(n for n in MANUAL_IN_CLAUDE if CODEX_IMPLICIT.get(n, True))
+    manual_auto = sorted(n for n in manual if implicit.get(n, True))
     start = (now - timedelta(days=WINDOW_DAYS)).date()
     return {
         "fixture_version": FIXTURE_VERSION,
         "today": now.date().isoformat(),
         "window_start": start.isoformat(),
-        "q1": len(LIBRARY),
+        "q1": len(library),
         "q2": len(counts),
         "q3": [{"skill": k, "uses": v, "agents": sorted(harnesses[k])} for k, v in ranked[:5]],
         "q4": len(manual_auto),
@@ -793,8 +793,60 @@ def make_read_only(home: Path) -> None:
             p.chmod(p.stat().st_mode & ~0o222)
 
 
-def build(out: Path, now: datetime, task: str = "usage") -> dict:
-    rng = random.Random(SEED)
+def scale_plan(size: int, seed: int):
+    if size < 36:
+        raise ValueError("size must be at least 36")
+    rng = random.Random(seed)
+    library = [*LIBRARY, *(f"workshop-{i:04d}" for i in range(36, size))]
+    manual = MANUAL_IN_CLAUDE | {n for i, n in enumerate(library[36:]) if i % 4 == 0}
+    implicit = {**CODEX_IMPLICIT, **{n: False for i, n in enumerate(library[36:]) if i % 8 == 0}}
+    uses = plan_uses(rng)
+    for i, name in enumerate(library[36:]):
+        for offset in [*range(i % 5), 46 + i % 135]:
+            harness = pick(rng, HARNESS_WEIGHTS)
+            uses.append(Use(name, harness, pick(rng, TRIGGERS[harness]), offset))
+    sessions = group_sessions(rng, uses)
+    mark_extras(sessions, rng)
+    # Repeat the original traps without changing the published small fixture.
+    for _ in range((size - 36) // 36):
+        batch = group_sessions(rng, plan_uses(rng))
+        mark_extras(batch, rng)
+        sessions.extend(batch)
+    return rng, library, manual, implicit, sessions
+
+
+def scale_overlay(home: Path, task: str, library: list[str], truth: dict) -> None:
+    lock_path = home / ".agents/.skill-lock.json"
+    lock = json.loads(lock_path.read_text())
+    repos = list(PACKS)
+    for i, name in enumerate(library[36:]):
+        if i % 4 == 3:
+            if task == "share":
+                truth["s2"].append(name)
+            continue
+        repo = repos[i % 3]
+        lock["skills"][name] = {**lock["skills"][PACKS[repo][0]], "skillPath": f"skills/{name}/SKILL.md"}
+        if task == "share":
+            truth["s1"][repo] += 1
+        lib = home / ".agents/skills" / name
+        if repo == UPDATED_PACK:
+            if task == "update":
+                truth["u1"] += 1
+            copy = home / ".codex/skills" / name
+            copy.mkdir(parents=True)
+            text = (lib / "SKILL.md").read_text()
+            (copy / "SKILL.md").write_text(text)
+            (lib / "SKILL.md").write_text(new_version(text))
+            if task == "update":
+                truth["u2"].append({"skill": name, "agent": "codex"})
+        else:
+            link = home / ".pi/agent/skills" / name
+            link.symlink_to(Path("../../../.agents/skills") / name)
+    lock_path.write_text(json.dumps(lock, indent=2) + "\n")
+
+
+def build(out: Path, now: datetime, task: str = "usage", size: int = 36, seed: int = SEED) -> dict:
+    rng = random.Random(seed)
     home = out / "home"
     if out.exists():
         for root, dirs, files in os.walk(out):
@@ -810,22 +862,41 @@ def build(out: Path, now: datetime, task: str = "usage") -> dict:
     uses = plan_uses(rng)
     sessions = group_sessions(rng, uses)
     mark_extras(sessions, rng)
-    write_library(home, rng)
+    library, manual, implicit = LIBRARY, MANUAL_IN_CLAUDE, CODEX_IMPLICIT
+    if size != 36:
+        rng, library, manual, implicit, sessions = scale_plan(size, seed)
+    write_library(home, rng, library, manual, implicit)
+    for i in range((size - 36) // 36):
+        folder = home / ".agents/skills" / f"notes-{i:04d}"
+        folder.mkdir()
+        (folder / "ideas.md").write_text("Ideas for next month.\n")
     write_claude(home, [s for s in sessions if s.harness == "claude"], clock, rng)
     write_codex(home, [s for s in sessions if s.harness == "codex"], clock, rng)
     write_pi(home, [s for s in sessions if s.harness == "pi"], clock, rng)
     mtimes = write_cursor(home, [s for s in sessions if s.harness == "cursor"], clock, rng)
     write_opencode(home, [s for s in sessions if s.harness == "opencode"], clock, rng)
     all_uses = [u for s in sessions for u in s.uses]
-    truth = ground_truth(all_uses, now)
+    truth = ground_truth(all_uses, now, library, manual, implicit)
     truth["sessions"] = {h: sum(1 for s in sessions if s.harness == h) for h, _ in HARNESS_WEIGHTS}
     truth["traps"] = sorted({f"{s.harness}:{e}" for s in sessions for e in s.extras})
     truth["task"] = task
     if task != "usage":
         truth |= write_overlay(home, task, now)
+        if size != 36:
+            scale_overlay(home, task, library, truth)
+            link = home / ".pi/agent/skills/commit-message"
+            link.unlink()
+            link.symlink_to("../../../.agents/skills/commit-message")
     (home / SKILL_STUDIO_STATE).mkdir()
     for path, t in mtimes:
         os.utime(path, (t.timestamp(), t.timestamp()))
+    if size != 36:
+        cursor_paths = {p for p, _ in mtimes}
+        for root, dirs, files in os.walk(home, topdown=False):
+            for name in dirs + files:
+                path = Path(root) / name
+                if path not in cursor_paths:
+                    os.utime(path, (now.timestamp(), now.timestamp()), follow_symlinks=False)
     make_read_only(home)
     truth["fixture_hash"] = fixture_hash(home)
     return truth
@@ -835,10 +906,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--task", choices=TASKS, default="usage")
-    parser.add_argument("--now", help="ISO time to treat as now (default: the real time)")
+    parser.add_argument("--size", type=int, default=36)
+    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--now", help="ISO clock (default: real time at size 36; 2026-11-14 noon UTC otherwise)")
     args = parser.parse_args()
-    now = datetime.fromisoformat(args.now.replace("Z", "+00:00")) if args.now else datetime.now(timezone.utc)
-    truth = build(args.out.resolve(), now, args.task)
+    now = datetime.fromisoformat(args.now.replace("Z", "+00:00")) if args.now else datetime(2026, 11, 14, 12, tzinfo=timezone.utc) if args.size != 36 else datetime.now(timezone.utc)
+    truth = build(args.out.resolve(), now, args.task, args.size, args.seed)
     keys = {"usage": ("q1", "q2", "q3", "q4"), "update": ("pack", "u1", "u2"), "share": ("s1", "s2")}[args.task]
     print(json.dumps({k: truth[k] for k in ("today", *keys, "sessions")}, indent=1))
 

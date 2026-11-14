@@ -465,7 +465,17 @@ def main() -> None:
     report.add_argument("--partial", action="store_true", help="write the report even if some runs have no scored result")
     for p in (run, report):
         p.add_argument("--out", type=Path, default=RAW)
+    contract = sub.add_parser("contract", help="check one-call answers without a model")
+    contract.add_argument("--size", type=int, action="append")
+    contract.add_argument("--seed", type=int, default=fixture.SEED)
+    contract.add_argument("--check", action="store_true")
+    contract.add_argument("--update-baseline", action="store_true")
+    contract.add_argument("--json-out", type=Path, default=RESULTS / "contracts.json")
     args = parser.parse_args()
+    if args.cmd == "contract":
+        import answer_contracts
+
+        raise SystemExit(answer_contracts.run(args, score, QUESTIONS, REPO))
     if args.cmd == "run":
         args.skill_studio = args.skill_studio.resolve()
         if not args.skill_studio.exists():
