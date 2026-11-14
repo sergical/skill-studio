@@ -14,5 +14,6 @@ describe("productMockDetailBackLabel", () => {
     expect(productMockDetailBackLabel("home")).toBe("Home");
     expect(productMockDetailBackLabel("skills")).toBe("Skills");
     expect(productMockDetailBackLabel("activity")).toBe("Activity");
+    expect(productMockDetailBackLabel("parked")).toBe("Parked");
   });
 });
