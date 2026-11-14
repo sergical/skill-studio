@@ -67,7 +67,7 @@ interface ProductMockProps {
 type Harness = AgentId | "universal";
 type SkillLocation = "Global" | "agent-studio";
 type RowState = "broken" | "warning" | "update" | "parked";
-type FixLabel = "Fix" | "Compare" | "Update" | "Unpark";
+type FixLabel = "Fix" | "Compare" | "Update" | "Park" | "Unpark";
 type Scope = "All" | "Global" | "Project";
 type ActivityWindow = "24h" | "7d" | "14d" | "30d";
 type InvocationPolicy = "Both" | "User only" | "Model only";
@@ -86,6 +86,8 @@ interface SkillRow {
   note?: string;
   fix?: FixLabel;
   method?: InstallMethod;
+  installed?: string;
+  recentUse?: { where: string; when: string; uses: number };
   promptTokens: number;
   fullTokens: string;
 }
@@ -232,6 +234,7 @@ const skills: readonly SkillRow[] = [
     locations: ["Global"],
     harnesses: ["universal", "claude"],
     claudeLink: "linked",
+    installed: "3 months ago",
     promptTokens: 12,
     fullTokens: "2.7k",
   },
@@ -242,6 +245,7 @@ const skills: readonly SkillRow[] = [
     locations: ["Global"],
     harnesses: ["universal", "claude", "codex"],
     claudeLink: "linked",
+    recentUse: { where: "agent-studio", when: "3d ago", uses: 14 },
     promptTokens: 18,
     fullTokens: "1.5k",
   },
@@ -252,6 +256,7 @@ const skills: readonly SkillRow[] = [
     locations: ["Global"],
     harnesses: ["universal", "claude", "codex", "opencode", "pi", "cursor"],
     claudeLink: "linked",
+    recentUse: { where: "Global", when: "1d ago", uses: 14 },
     promptTokens: 11,
     fullTokens: "1.5k",
   },
@@ -261,6 +266,7 @@ const skills: readonly SkillRow[] = [
     source: "sergical/skills",
     locations: ["agent-studio"],
     harnesses: ["claude"],
+    installed: "5 weeks ago",
     promptTokens: 7,
     fullTokens: "792",
   },
@@ -271,6 +277,7 @@ const skills: readonly SkillRow[] = [
     locations: ["agent-studio"],
     harnesses: ["universal", "claude"],
     claudeLink: "linked",
+    installed: "2 months ago",
     promptTokens: 10,
     fullTokens: "2.7k",
   },
@@ -281,6 +288,7 @@ const skills: readonly SkillRow[] = [
     locations: ["Global"],
     harnesses: ["universal", "claude", "codex"],
     claudeLink: "linked",
+    recentUse: { where: "Global", when: "12h ago", uses: 11 },
     promptTokens: 9,
     fullTokens: "1.2k",
   },
@@ -342,13 +350,20 @@ function skillNamed(name: string): SkillRow {
   );
 }
 
-const UPDATE_TOTAL = 22;
-
 const homeGroups = [
   { state: "broken", label: "Broken", total: 5 },
   { state: "warning", label: "Warnings", total: 34 },
-  { state: "update", label: "Updates", total: UPDATE_TOTAL },
+  { state: "update", label: "Updates", total: 22 },
 ] satisfies ReadonlyArray<{ state: Exclude<HomeFilter, null>; label: string; total: number }>;
+
+const UNUSED_TOTAL = 76;
+
+const isUnused = (skill: SkillRow) => Boolean(skill.installed) && !skill.state;
+
+/** A group shows more skills than the mock has rows, so the count drops by the rows handled. */
+function remainingCount(total: number, sampleBefore: number, sampleNow: number) {
+  return sampleNow === 0 ? 0 : total - (sampleBefore - sampleNow);
+}
 
 const pluginGroups = [
   {
@@ -704,6 +719,7 @@ function SkillGroup({
   defaultOpen = true,
   onOpenSkill,
   onFix,
+  children,
 }: {
   label: string;
   count: number;
@@ -712,6 +728,7 @@ function SkillGroup({
   defaultOpen?: boolean;
   onOpenSkill: (skill: SkillRow) => void;
   onFix: (skill: SkillRow) => void;
+  children?: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
@@ -732,31 +749,52 @@ function SkillGroup({
             onFix={() => onFix(skill)}
           />
         ))}
+      {open && children}
     </section>
   );
 }
 
 function HomeScreen({
   rows,
-  updateTotal,
   onOpenSkill,
   onFix,
   onUpdateAll,
+  onShowActivity,
 }: {
   rows: readonly SkillRow[];
-  updateTotal: number;
   onOpenSkill: (skill: SkillRow) => void;
   onFix: (skill: SkillRow) => void;
   onUpdateAll: () => void;
+  onShowActivity: () => void;
 }) {
   const [filter, setFilter] = useState<HomeFilter>(null);
   const toggleFilter = (next: Exclude<HomeFilter, null>) =>
     setFilter((current) => (current === next ? null : next));
-  const groups = homeGroups.map((group) => ({
-    ...group,
-    total: group.state === "update" ? updateTotal : group.total,
-    rows: rows.filter((skill) => skill.state === group.state),
+  const groups = homeGroups.map((group) => {
+    const groupRows = rows.filter((skill) => skill.state === group.state);
+    const sampleBefore = skills.filter((skill) => skill.state === group.state).length;
+    return {
+      ...group,
+      total: remainingCount(group.total, sampleBefore, groupRows.length),
+      rows: groupRows,
+    };
+  });
+  const unused = rows.filter(isUnused).map((skill): SkillRow => ({
+    ...skill,
+    note: `${skill.locations[0]} · installed ${skill.installed} · description in every prompt`,
+    fix: "Park",
   }));
+  const unusedTotal = remainingCount(UNUSED_TOTAL, skills.filter(isUnused).length, unused.length);
+  const recent = rows.flatMap((skill): SkillRow[] =>
+    skill.recentUse && !skill.state
+      ? [
+          {
+            ...skill,
+            note: `${skill.recentUse.where} · ${skill.recentUse.when} · ${skill.recentUse.uses} uses`,
+          },
+        ]
+      : [],
+  );
   return (
     <>
       <PageHeader title="Home" />
@@ -822,15 +860,34 @@ function HomeScreen({
                   onFix={onFix}
                 />
               ))}
-            {filter === null && (
+            {filter === null && unused.length > 0 && (
               <SkillGroup
                 label="Not used in the last 30 days"
-                count={76}
-                rows={skills.filter((skill) => !skill.state).slice(0, 4)}
+                count={unusedTotal}
+                rows={unused}
                 defaultOpen={false}
                 onOpenSkill={onOpenSkill}
                 onFix={onFix}
               />
+            )}
+            {filter === null && recent.length > 0 && (
+              <SkillGroup
+                label="Recently used"
+                count={recent.length}
+                rows={recent}
+                onOpenSkill={onOpenSkill}
+                onFix={onFix}
+              >
+                <div {...stylex.props(styles.groupFoot)}>
+                  <button
+                    type="button"
+                    onClick={onShowActivity}
+                    {...stylex.props(styles.groupAction)}
+                  >
+                    See all activity
+                  </button>
+                </div>
+              </SkillGroup>
             )}
           </div>
         </section>
@@ -1287,11 +1344,11 @@ function ActivityScreen({ onOpenSkill }: { onOpenSkill: (skill: SkillRow) => voi
 function ParkedScreen({
   parked,
   onOpenSkill,
-  onUnpark,
+  onFix,
 }: {
   parked: readonly SkillRow[];
   onOpenSkill: (skill: SkillRow) => void;
-  onUnpark: (skill: SkillRow) => void;
+  onFix: (skill: SkillRow) => void;
 }) {
   return (
     <>
@@ -1304,7 +1361,7 @@ function ParkedScreen({
                 key={skill.name}
                 skill={skill}
                 onOpen={() => onOpenSkill(skill)}
-                onFix={() => onUnpark(skill)}
+                onFix={() => onFix(skill)}
               />
             ))}
             {parked.length === 0 && <p {...stylex.props(styles.empty)}>Nothing is parked.</p>}
@@ -1498,7 +1555,7 @@ function AddSkillSheet({
                     checked={checked}
                     disabled={covered}
                     onChange={() => togglePick(destination.id)}
-                    {...stylex.props(styles.checkboxInput)}
+                    {...stylex.props(stylex.defaultMarker(), styles.checkboxInput)}
                   />
                   <span
                     aria-hidden="true"
@@ -1894,11 +1951,18 @@ const UPDATABLE_NAMES = skills
   .filter((skill) => skill.state === "update")
   .map((skill) => skill.name);
 
-const markUpdated = (skill: SkillRow): SkillRow => ({
+const clearState = (skill: SkillRow): SkillRow => ({
   ...skill,
   state: undefined,
   note: undefined,
   fix: undefined,
+});
+
+const park = (skill: SkillRow): SkillRow => ({
+  ...skill,
+  state: "parked",
+  note: "Parked just now",
+  fix: "Unpark",
 });
 
 export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
@@ -1906,19 +1970,16 @@ export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
   const [compareSkill, setCompareSkill] = useState<string | null>(null);
-  const [parked, setParked] = useState<readonly SkillRow[]>(initialParked);
-  const [updatedNames, setUpdatedNames] = useState<readonly string[]>([]);
-  const rows = skills.map((skill) =>
-    updatedNames.includes(skill.name) ? markUpdated(skill) : skill,
-  );
-  const [updateTotal, setUpdateTotal] = useState(UPDATE_TOTAL);
-  const updateSkills = (names: readonly string[]) => {
-    const fresh = names.filter((name) => !updatedNames.includes(name));
-    setUpdatedNames([...updatedNames, ...fresh]);
-    setUpdateTotal((total) => total - fresh.length);
+  const [library, setLibrary] = useState<readonly SkillRow[]>(() => [...skills, ...initialParked]);
+  const rows = library.filter((skill) => skill.state !== "parked");
+  const parked = library.filter((skill) => skill.state === "parked");
+  const changeSkills = (names: readonly string[], change: (skill: SkillRow) => SkillRow) => {
+    setLibrary((current) =>
+      current.map((skill) => (names.includes(skill.name) ? change(skill) : skill)),
+    );
     setDetail((current) =>
       current && names.includes(current.skill.name)
-        ? { ...current, skill: markUpdated(current.skill) }
+        ? { ...current, skill: change(current.skill) }
         : current,
     );
   };
@@ -1935,7 +1996,9 @@ export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
   };
   const fixSkill = (skill: SkillRow) => {
     if (skill.fix === "Compare") setCompareSkill(skill.name);
-    else if (skill.fix === "Update") updateSkills([skill.name]);
+    else if (skill.fix === "Update" || skill.fix === "Unpark")
+      changeSkills([skill.name], clearState);
+    else if (skill.fix === "Park") changeSkills([skill.name], park);
     else openSkill(skill);
   };
   return (
@@ -1965,18 +2028,15 @@ export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
             <DetailScreen
               detail={detail}
               onBack={() => setDetail(null)}
-              onUpdate={() => updateSkills([detail.skill.name])}
+              onUpdate={() => changeSkills([detail.skill.name], clearState)}
             />
           ) : activeView === "home" ? (
             <HomeScreen
               rows={rows}
-              updateTotal={updateTotal}
               onOpenSkill={openSkill}
               onFix={fixSkill}
-              onUpdateAll={() => {
-                updateSkills(UPDATABLE_NAMES);
-                setUpdateTotal(0);
-              }}
+              onUpdateAll={() => changeSkills(UPDATABLE_NAMES, clearState)}
+              onShowActivity={() => navigate("activity")}
             />
           ) : activeView === "skills" ? (
             <SkillsScreen rows={rows} onOpenSkill={openSkill} onFix={fixSkill} />
@@ -1985,13 +2045,7 @@ export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
           ) : activeView === "activity" ? (
             <ActivityScreen onOpenSkill={openSkill} />
           ) : (
-            <ParkedScreen
-              parked={parked}
-              onOpenSkill={openSkill}
-              onUnpark={(skill) =>
-                setParked((current) => current.filter((item) => item.name !== skill.name))
-              }
-            />
+            <ParkedScreen parked={parked} onOpenSkill={openSkill} onFix={fixSkill} />
           )}
         </main>
       </div>
@@ -2525,6 +2579,13 @@ const styles = stylex.create({
   },
   groupChevronClosed: { transform: "rotate(-90deg)" },
   groupCount: { color: tokens.faint, fontVariantNumeric: "tabular-nums", fontWeight: 400 },
+  groupFoot: {
+    alignItems: "center",
+    display: "flex",
+    height: 36,
+    paddingInline: 12,
+    [MOBILE]: { paddingInline: 8 },
+  },
   groupAction: {
     backgroundColor: "transparent",
     borderWidth: 0,
@@ -2902,6 +2963,11 @@ const styles = stylex.create({
     gridRow: 1,
     height: 16,
     justifyContent: "center",
+    outline: {
+      default: "none",
+      [stylex.when.siblingBefore(":focus-visible")]: `2px solid ${tokens.accent}`,
+    },
+    outlineOffset: 2,
     pointerEvents: "none",
     width: 16,
   },
