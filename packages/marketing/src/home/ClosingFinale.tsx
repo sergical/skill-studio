@@ -20,7 +20,7 @@ const WORDMARK_CROP = 0.28;
 const DITHER_SPEED = 0.35;
 
 // Same colours as the desktop app's welcome screen (apps/desktop FirstRunScreen).
-const DITHER_COLORS = {
+export const DITHER_COLORS = {
   dark: { back: "#150b2e", front: "#5a45c4" },
   light: { back: "#e4dcff", front: "#5a45c4" },
 } as const;

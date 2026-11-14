@@ -138,28 +138,55 @@ function useScript(lines: ReadonlyArray<Line>, runId: number) {
 // under its own first word instead of back to the left edge.
 const LINE_PREFIX = /^\s*(?:[●⎿›$] |\[\w+\] )?/;
 
+function ScriptLine({ line, text, typing }: { line: Line; text: string; typing: boolean }) {
+  const indent = LINE_PREFIX.exec(line.text)?.[0].length ?? 0;
+  return (
+    <div {...stylex.props(styles.line, styles[line.tone ?? "plain"])}>
+      <span {...stylex.props(styles.linePrefix)}>{text.slice(0, indent)}</span>
+      <span>
+        {text.slice(indent)}
+        {typing && <span {...stylex.props(styles.caret)} />}
+      </span>
+    </div>
+  );
+}
+
 function ScriptView({ lines, runId }: { lines: ReadonlyArray<Line>; runId: number }) {
   const { shown, chars } = useScript(lines, runId);
   return (
-    <pre {...stylex.props(styles.screen)}>
+    <pre {...stylex.props(styles.screen, styles.stackLayer)}>
       {lines.slice(0, shown).map((line, i) => {
         const current = i === shown - 1;
-        const text = current && line.typed ? line.text.slice(0, chars) : line.text;
-        const typing = current && line.typed && chars < line.text.length;
-        const indent = LINE_PREFIX.exec(line.text)?.[0].length ?? 0;
         return (
-          <div key={i} {...stylex.props(styles.line, styles[line.tone ?? "plain"])}>
-            <span {...stylex.props(styles.linePrefix)}>{text.slice(0, indent)}</span>
-            <span>
-              {text.slice(indent)}
-              {typing && <span {...stylex.props(styles.caret)} />}
-            </span>
-          </div>
+          <ScriptLine
+            key={i}
+            line={line}
+            text={current && line.typed ? line.text.slice(0, chars) : line.text}
+            typing={current && !!line.typed && chars < line.text.length}
+          />
         );
       })}
       {shown >= lines.length && <span {...stylex.props(styles.caret, styles.caretIdle)} />}
     </pre>
   );
+}
+
+// Every finished script, invisible in the same grid cell as the visible view, sets the
+// window height: wrapped lines never clip, and the window keeps one height while a
+// script types and when the tab changes.
+function ScreenSizer() {
+  return Object.values(scripts).map((lines, s) => (
+    <pre
+      key={s}
+      aria-hidden="true"
+      {...stylex.props(styles.screen, styles.stackLayer, styles.stackHidden)}
+    >
+      {lines.map((line, i) => (
+        <ScriptLine key={i} line={line} text={line.text} typing={false} />
+      ))}
+      <span {...stylex.props(styles.caret)} />
+    </pre>
+  ));
 }
 
 const appRows = [
@@ -203,7 +230,7 @@ function AppView({ runId, announce, undoFocusRef }: AppViewProps) {
   }, [runId]);
 
   return (
-    <div {...stylex.props(styles.app)}>
+    <div {...stylex.props(styles.stackLayer, styles.app)}>
       <div {...stylex.props(styles.appHead)}>
         <span>Not used in 30 days</span>
         <span {...stylex.props(styles.appCount)}>{unusedCount - parked} to review</span>
@@ -364,36 +391,51 @@ export function UsageSection() {
                 Replay
               </button>
             </div>
-            {mode === "app" ? (
-              <AppView
-                key={`app-${runId}`}
-                runId={runId}
-                announce={setStatus}
-                undoFocusRef={replayRef}
-              />
-            ) : (
-              <ScriptView key={mode} lines={scripts[mode]} runId={runId} />
-            )}
+            <div {...stylex.props(styles.stack)}>
+              <ScreenSizer />
+              {mode === "app" ? (
+                <AppView
+                  key={`app-${runId}`}
+                  runId={runId}
+                  announce={setStatus}
+                  undoFocusRef={replayRef}
+                />
+              ) : (
+                <ScriptView key={mode} lines={scripts[mode]} runId={runId} />
+              )}
+            </div>
           </div>
           <p role="status" {...stylex.props(styles.visuallyHidden)}>
             {status}
           </p>
 
-          <div {...stylex.props(styles.footer)}>
-            {mode === "app" ? (
-              <a href={DOWNLOAD_URL} {...stylex.props(homeSectionStyles.textLink)}>
-                Download for macOS
-                <span aria-hidden="true">→</span>
-              </a>
-            ) : (
-              <>
-                <CopyCommand key={mode} text={commands[mode].text} />
-                <a href={commands[mode].docs} {...stylex.props(homeSectionStyles.textLink)}>
-                  {mode === "cli" ? "CLI docs" : "MCP docs"}
-                  <span aria-hidden="true">→</span>
-                </a>
-              </>
-            )}
+          {/* Every footer shares one grid cell, so the tallest sets the height for all tabs. */}
+          <div {...stylex.props(styles.stack)}>
+            {modes.map(({ id }) => (
+              <div
+                key={id}
+                {...stylex.props(
+                  styles.footer,
+                  styles.stackLayer,
+                  id !== mode && styles.stackHidden,
+                )}
+              >
+                {id === "app" ? (
+                  <a href={DOWNLOAD_URL} {...stylex.props(homeSectionStyles.textLink)}>
+                    Download for macOS
+                    <span aria-hidden="true">→</span>
+                  </a>
+                ) : (
+                  <>
+                    <CopyCommand text={commands[id].text} />
+                    <a href={commands[id].docs} {...stylex.props(homeSectionStyles.textLink)}>
+                      {id === "cli" ? "CLI docs" : "MCP docs"}
+                      <span aria-hidden="true">→</span>
+                    </a>
+                  </>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -507,22 +549,24 @@ const styles = stylex.create({
   screen: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: 13,
-    height: 340,
     lineHeight: 1.75,
     margin: 0,
-    overflowX: "auto",
+    minHeight: 340,
     padding: "16px 20px",
     "@media (max-width: 600px)": {
       fontSize: 11.5,
-      height: 320,
       lineHeight: 1.55,
+      minHeight: 320,
       padding: "12px 14px",
     },
   },
+  stack: { display: "grid" },
+  stackLayer: { gridArea: "1 / 1", minWidth: 0 },
+  stackHidden: { visibility: "hidden" },
   line: {
     display: "grid",
     gridTemplateColumns: "auto minmax(0, 1fr)",
-    whiteSpace: { default: "pre", "@media (max-width: 600px)": "pre-wrap" },
+    whiteSpace: "pre-wrap",
     "@media (max-width: 600px)": { paddingBottom: 3 },
   },
   // pre-wrap lets a run of spaces hang at the end of a line with no width, so an
@@ -552,10 +596,9 @@ const styles = stylex.create({
   app: {
     backgroundColor: siteTokens.surface,
     color: siteTokens.text,
-    height: 340,
+    minHeight: { default: 340, "@media (max-width: 600px)": 320 },
     padding: "14px 16px",
     position: "relative",
-    "@media (max-width: 600px)": { height: 320 },
   },
   appHead: {
     alignItems: "center",
@@ -641,7 +684,13 @@ const styles = stylex.create({
     ":focus-visible": { outline: "2px solid currentColor", outlineOffset: 2 },
     ":active": { transform: "scale(.96)" },
   },
-  footer: { alignItems: "center", display: "flex", flexWrap: "wrap", gap: 16 },
+  footer: {
+    alignContent: "start",
+    alignItems: "center",
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 16,
+  },
   command: {
     alignItems: "center",
     backgroundColor: siteTokens.surface,

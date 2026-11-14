@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Download,
   Folder,
+  FolderPlus,
   LayoutDashboard,
   MoreHorizontal,
   Moon,
@@ -35,9 +36,13 @@ export interface ThemeToggleOrigin {
   y: number;
 }
 
+/** What the sidebar's main button does: open the Add skill drawer, or scan a folder. */
+export type ProductMockSidebarAction = "add-skill" | "scan-folder";
+
 interface ProductMockProps {
   theme: SiteTheme;
   onToggleTheme: (origin: ThemeToggleOrigin) => void;
+  sidebarAction?: ProductMockSidebarAction;
   initialView?: ProductMockRootView;
   initialSkillName?: string;
   initialInstall?: boolean;
@@ -219,6 +224,10 @@ const navItems: ReadonlyArray<{
   { id: "activity", label: "Activity", Icon: Activity },
 ];
 
+const spin = stylex.keyframes({ to: { transform: "rotate(360deg)" } });
+
+const SCAN_DURATION_MS = 1400;
+
 const viewEnter = stylex.keyframes({
   from: { opacity: 0.35, transform: "translateX(7px)" },
   to: { opacity: 1, transform: "translateX(0)" },
@@ -263,33 +272,81 @@ function WindowBar({
   );
 }
 
+function ScanFolderButton() {
+  const [scanning, setScanning] = useState(false);
+  useEffect(() => {
+    if (!scanning) return;
+    const timer = window.setTimeout(() => setScanning(false), SCAN_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [scanning]);
+  return (
+    <button
+      type="button"
+      aria-busy={scanning}
+      onClick={() => setScanning(true)}
+      {...stylex.props(styles.scanFolder)}
+    >
+      {scanning ? (
+        <RefreshCw aria-hidden="true" size={15} {...stylex.props(styles.spinning)} />
+      ) : (
+        <FolderPlus aria-hidden="true" size={15} />
+      )}
+      {scanning ? "Scanning ~/src/acme-web…" : "Scan a folder"}
+    </button>
+  );
+}
+
 function Sidebar({
   activeView,
   onNavigate,
   onAddSkill,
+  action,
   theme,
   onToggleTheme,
 }: {
   activeView: ProductMockRootView;
   onNavigate: (view: ProductMockRootView) => void;
   onAddSkill: () => void;
+  action: ProductMockSidebarAction;
   theme: SiteTheme;
   onToggleTheme: (origin: ThemeToggleOrigin) => void;
 }) {
+  const search = (
+    <label {...stylex.props(styles.sidebarSearch, action === "scan-folder" && styles.searchGrow)}>
+      <Search aria-hidden="true" size={15} />
+      <input
+        aria-label="Search all skills"
+        placeholder="Search skills…"
+        {...stylex.props(styles.input)}
+      />
+    </label>
+  );
   return (
     <aside {...stylex.props(styles.sidebar)}>
-      <label {...stylex.props(styles.sidebarSearch)}>
-        <Search aria-hidden="true" size={15} />
-        <input
-          aria-label="Search all skills"
-          placeholder="Search skills…"
-          {...stylex.props(styles.input)}
-        />
-      </label>
-      <button type="button" onClick={onAddSkill} {...stylex.props(styles.addSkill)}>
-        <Plus aria-hidden="true" size={15} />
-        Add skill
-      </button>
+      {action === "add-skill" ? (
+        <>
+          {search}
+          <button type="button" onClick={onAddSkill} {...stylex.props(styles.addSkill)}>
+            <Plus aria-hidden="true" size={15} />
+            Add skill
+          </button>
+        </>
+      ) : (
+        <>
+          <div {...stylex.props(styles.searchRow)}>
+            {search}
+            <button
+              type="button"
+              aria-label="Add skill"
+              onClick={onAddSkill}
+              {...stylex.props(styles.searchSideButton)}
+            >
+              <Plus aria-hidden="true" size={15} />
+            </button>
+          </div>
+          <ScanFolderButton />
+        </>
+      )}
       <nav {...stylex.props(styles.productNav)} aria-label="Product navigation">
         {navItems.map(({ id, label, Icon, count }) => (
           <button
@@ -297,7 +354,11 @@ function Sidebar({
             type="button"
             aria-current={activeView === id ? "page" : undefined}
             onClick={() => onNavigate(id)}
-            {...stylex.props(styles.navItem, activeView === id && styles.navItemActive)}
+            {...stylex.props(
+              styles.navItem,
+              activeView === id &&
+                (action === "add-skill" ? styles.navItemActive : styles.navItemActiveNeutral),
+            )}
           >
             <Icon aria-hidden="true" size={15} />
             <span>{label}</span>
@@ -1227,6 +1288,7 @@ export function ProductMock({
   initialSkillName,
   initialInstall = false,
   variant = "hero",
+  sidebarAction = "add-skill",
 }: ProductMockProps) {
   const initialSkill = skills.find((skill) => skill.name === initialSkillName);
   const [activeView, setActiveView] = useState<ProductMockRootView>(initialView);
@@ -1266,6 +1328,7 @@ export function ProductMock({
             setInstallOpen(true);
             setDetail(null);
           }}
+          action={sidebarAction}
           theme={theme}
           onToggleTheme={onToggleTheme}
         />
@@ -1309,6 +1372,8 @@ const tableColumns = "minmax(0,1.2fr) minmax(0,1.8fr) 140px 48px 64px";
 // container queries. Both rows of long labels need about 360 px of lane width.
 const LANE_ROW_STACKED = "@container (max-width: 559px)";
 const LANE_LONG_LABELS = "@container (min-width: 380px)";
+// The inbox sits beside the sidebar from 681 px up, so the viewport says little about its width.
+const INBOX_NARROW = "@container (max-width: 559px)";
 
 const styles = stylex.create({
   window: {
@@ -1548,6 +1613,58 @@ const styles = stylex.create({
     ":active": { transform: "scale(.96)" },
     "@media (max-width: 680px)": { display: "none" },
   },
+  searchRow: {
+    display: "flex",
+    gap: 6,
+    "@media (max-width: 680px)": { display: "none" },
+  },
+  searchGrow: { flex: 1, minWidth: 0 },
+  searchSideButton: {
+    alignItems: "center",
+    backgroundColor: tokens.background,
+    borderColor: tokens.border,
+    borderRadius: 4,
+    borderStyle: "solid",
+    borderWidth: 1,
+    color: tokens.muted,
+    display: "flex",
+    flexShrink: 0,
+    height: 32,
+    justifyContent: "center",
+    padding: 0,
+    transition: "color 150ms ease-out, border-color 150ms ease-out, transform 150ms ease-out",
+    width: 32,
+    ":hover": { borderColor: tokens.faint, color: tokens.text },
+    ":active": { transform: "scale(.94)" },
+  },
+  // A fixed deep violet, so white text keeps its contrast in both themes.
+  scanFolder: {
+    alignItems: "center",
+    backgroundColor: { default: "oklch(0.5 0.2 293)", ":hover": "oklch(0.45 0.2 293)" },
+    borderRadius: 4,
+    borderWidth: 0,
+    color: "oklch(1 0 0)",
+    display: "flex",
+    fontSize: 13,
+    fontWeight: 560,
+    gap: 6,
+    height: 30,
+    justifyContent: "center",
+    marginBlock: "8px 10px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    transition: "background-color 150ms ease-out, transform 150ms ease-out",
+    whiteSpace: "nowrap",
+    ":active": { transform: "scale(.96)" },
+    "@media (max-width: 680px)": { display: "none" },
+  },
+  spinning: {
+    animationDuration: "900ms",
+    animationIterationCount: "infinite",
+    animationName: spin,
+    animationTimingFunction: "linear",
+    flexShrink: 0,
+  },
   productNav: {
     display: "flex",
     flexDirection: "column",
@@ -1587,6 +1704,7 @@ const styles = stylex.create({
     "@media (max-width: 680px)": { display: "none" },
   },
   navItemActive: { backgroundColor: tokens.accentSoft, color: tokens.text },
+  navItemActiveNeutral: { backgroundColor: tokens.raised, color: tokens.text },
   sidebarFooter: {
     alignItems: "center",
     borderTopColor: tokens.subtleBorder,
@@ -2012,6 +2130,7 @@ const styles = stylex.create({
   summaryMetrics: { display: "grid", gridTemplateColumns: "repeat(4,1fr)" },
   metric: { color: tokens.muted, display: "flex", flexDirection: "column", fontSize: 11, gap: 2 },
   inbox: {
+    containerType: "inline-size",
     display: "flex",
     flexDirection: "column",
     marginTop: 24,
@@ -2043,7 +2162,11 @@ const styles = stylex.create({
     color: tokens.text,
     display: "grid",
     gap: 12,
-    gridTemplateColumns: "6px minmax(0,260px) minmax(0,1fr) auto",
+    gridTemplateColumns: {
+      default: "6px minmax(0,260px) minmax(0,1fr) auto",
+      "@media (max-width: 680px)": "6px minmax(0,1fr) auto",
+      [INBOX_NARROW]: "6px minmax(0,1fr) auto",
+    },
     height: 36,
     padding: "0 12px 0 16px",
     textAlign: "left",
@@ -2051,9 +2174,6 @@ const styles = stylex.create({
     width: "100%",
     ":hover": { backgroundColor: tokens.raised },
     ":active": { transform: "scale(.99)" },
-    "@media (max-width: 680px)": {
-      gridTemplateColumns: "6px minmax(0,1fr) auto",
-    },
   },
   inboxCopy: {
     display: "contents",
@@ -2065,7 +2185,7 @@ const styles = stylex.create({
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
-    "@media (max-width: 680px)": { display: "none" },
+    display: { default: null, "@media (max-width: 680px)": "none", [INBOX_NARROW]: "none" },
   },
   rowAction: { color: tokens.faint, fontSize: 12, minWidth: 64, textAlign: "right" },
   statusDot: { borderRadius: "50%", height: 6, width: 6 },

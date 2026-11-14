@@ -12,7 +12,7 @@ export function LogoLockup({ href, compact = false }: LogoLockupProps) {
   return (
     <a href={href} {...stylex.props(stylex.defaultMarker(), brandStyles.lockup)}>
       <img
-        src="/skill-studio-logo.png"
+        src="/skill-studio-logo-128.webp"
         alt=""
         width={compact ? 32 : 38}
         height={compact ? 32 : 38}

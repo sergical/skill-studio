@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import * as stylex from "@stylexjs/stylex";
 import { Maximize2, Pause, Play, X } from "lucide-react";
 
@@ -23,6 +23,7 @@ export function WalkthroughVideo({ index, theme, animate, compact }: Walkthrough
   const desktopSource = `/walkthrough/current/${chapter.id}-${theme}-desktop.mp4`;
   const source = `/walkthrough/current/${chapter.id}-${theme}-${compact ? "mobile" : "desktop"}.mp4`;
   const poster = source.replace(/\.mp4$/, ".jpg");
+  const hydrated = useHydrated();
 
   useEffect(() => {
     const element = video.current;
@@ -81,7 +82,7 @@ export function WalkthroughVideo({ index, theme, animate, compact }: Walkthrough
         <video
           ref={video}
           src={source}
-          poster={poster}
+          poster={hydrated ? poster : undefined}
           preload="none"
           muted
           loop
@@ -161,5 +162,17 @@ export function WalkthroughVideo({ index, theme, animate, compact }: Walkthrough
         </dialog>
       )}
     </div>
+  );
+}
+
+const subscribeNever = () => () => {};
+
+// The prerendered page cannot know the viewport or theme, so a poster in its HTML is often
+// the wrong one and would download next to the right one.
+function useHydrated() {
+  return useSyncExternalStore(
+    subscribeNever,
+    () => true,
+    () => false,
   );
 }
