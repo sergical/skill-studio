@@ -75,8 +75,8 @@ function useSideContent(deployment: Deployment | undefined): SideState {
 
 /**
  * Two `SelectControl`s pick the deployments to compare; the body renders
- * their SKILL.md as a read-only diff (or "These copies are the same." when
- * the content is identical), or the read error and path when either side
+ * their SKILL.md as a read-only diff (or a note when SKILL.md is identical:
+ * the whole folder is the same, or another file differs), or the read error and path when either side
  * fails to load.
  */
 export function SkillCompareDialog({ skill, onClose }: SkillCompareDialogProps) {
@@ -136,7 +136,11 @@ export function SkillCompareDialog({ skill, onClose }: SkillCompareDialogProps) 
         </div>
 
         <div className="skill-compare-dialog-body flex-1 overflow-auto px-5 py-4">
-          <SkillCompareBody leftState={leftState} rightState={rightState} />
+          <SkillCompareBody
+            leftState={leftState}
+            rightState={rightState}
+            sameFolder={left?.content_hash === right?.content_hash}
+          />
         </div>
       </DialogContent>
     </Dialog>
@@ -146,9 +150,12 @@ export function SkillCompareDialog({ skill, onClose }: SkillCompareDialogProps) 
 function SkillCompareBody({
   leftState,
   rightState,
+  sameFolder,
 }: {
   leftState: SideState;
   rightState: SideState;
+  /** Both folders hash the same, so no file differs - not only SKILL.md. */
+  sameFolder: boolean;
 }) {
   const resolvedTheme = useAppStore((state) => state.resolvedTheme);
   if (leftState.status === "error") {
@@ -172,7 +179,13 @@ function SkillCompareBody({
     return <p className="m-0 text-body text-error">This copy is no longer on disk.</p>;
   }
   if (leftState.content === rightState.content) {
-    return <p className="m-0 text-body text-text-tertiary">These copies are the same.</p>;
+    return (
+      <p className="m-0 text-body text-text-tertiary">
+        {sameFolder
+          ? "These copies are the same."
+          : "SKILL.md is the same in both copies. Another file in the folder differs."}
+      </p>
+    );
   }
   const diff = unifiedSkillMdDiff(leftState.content, rightState.content);
   return (

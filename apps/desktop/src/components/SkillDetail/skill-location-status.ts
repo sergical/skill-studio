@@ -273,33 +273,40 @@ function harnessId(agent: string): AgentId | null {
 }
 
 /** "Missing description", "Missing name", etc, folded into the fixed sentence shapes from status-spec.md §5. */
-function specCondition(violations: string[], path: string): Condition | null {
+function specCondition(violations: string[], deployment: Deployment): Condition | null {
   const relevant = violations.filter((v) => specViolationSeverity(v) !== "note");
   if (relevant.length === 0) return null;
   const blocking = relevant.some(isBlockingSpecViolation);
   const sentence = describeSpecViolations(relevant);
-  const editAndReveal: MenuEntry[] = [
-    { label: "Edit SKILL.md", action: { kind: "edit-skill-md", path } },
-    { label: "Reveal in Finder", action: { kind: "reveal", path, label: "the copy" } },
-  ];
+  const { path } = deployment;
+  const reveal: MenuEntry = {
+    label: "Reveal in Finder",
+    action: { kind: "reveal", path, label: "the copy" },
+  };
+  const menu: MenuEntry[] = deployment.plugin
+    ? [reveal]
+    : [{ label: "Edit SKILL.md", action: { kind: "edit-skill-md", path } }, reveal];
+  const fix = deployment.plugin
+    ? `Managed by ${deployment.plugin.name}. Ask the plugin author to fix it.`
+    : "Edit SKILL.md.";
   return blocking
     ? {
         level: "error",
-        status: "Skipped by some agents",
+        status: "Spec violation",
         phrase: "skipped by some agents",
         plural: "skipped by some agents",
         what: `SKILL.md: ${sentence}`,
-        fix: "Edit SKILL.md.",
-        menu: editAndReveal,
+        fix,
+        menu,
       }
     : {
         level: "warning",
-        status: "To check",
+        status: "Spec warning",
         phrase: "to check",
         plural: "to check",
         what: `SKILL.md: ${sentence} The skill still loads.`,
-        fix: "Edit SKILL.md.",
-        menu: [editAndReveal[0]],
+        fix,
+        menu: [menu[0]],
       };
 }
 
@@ -428,7 +435,7 @@ function parkedStillInDotagentsCondition(deployment: Deployment): Condition {
 function leftBehindCondition(pair: LeftBehindPair): Condition {
   return {
     level: "error",
-    status: "Left behind",
+    status: "Parked copy left behind",
     phrase: "parked copy left behind",
     plural: "parked copies left behind",
     what: "A live copy came back where this copy was parked.",
@@ -462,7 +469,7 @@ function driftCondition(deployment: Deployment, ctx: GroupContext): Condition {
   const label = harnessLabelFromAgent(deployment.agent);
   return {
     level: "warning",
-    status: "Differs",
+    status: "Copies differ",
     phrase: "copy differs",
     plural: "copies differ",
     what,
@@ -516,7 +523,7 @@ function deploymentConditions(deployment: Deployment, ctx: GroupContext): Condit
   }
 
   const violations = deployment.spec_violations ?? [];
-  const spec = specCondition(violations, deployment.path);
+  const spec = specCondition(violations, deployment);
   if (spec) out.push(spec);
 
   if (ctx.driftSet.has(deployment)) out.push(driftCondition(deployment, ctx));
@@ -531,7 +538,7 @@ function deploymentConditions(deployment: Deployment, ctx: GroupContext): Condit
 function sharedConditions(shared: Deployment, ctx: GroupContext): Condition[] {
   const out: Condition[] = [];
   const violations = shared.spec_violations ?? [];
-  const spec = specCondition(violations, shared.path);
+  const spec = specCondition(violations, shared);
   if (spec) out.push(spec);
   if (ctx.driftSet.has(shared)) out.push(driftCondition(shared, ctx));
   return out.sort((a, b) => RANK[b.level] - RANK[a.level]);
@@ -874,7 +881,9 @@ export const INVOCATION_POLICY_OPTIONS: { value: InvocationPolicy; label: string
 
 /** True when any row across `groups` has drifted from its scope's canonical copy - `SkillLocationsCard`'s title link and the properties rail's Location warning glyph both key off this. */
 export function scopeGroupsHaveDrift(groups: ScopeGroup[]): boolean {
-  return groups.some((g) => g.rows.some((r) => r.conditions.some((c) => c.status === "Differs")));
+  return groups.some((g) =>
+    g.rows.some((r) => r.conditions.some((c) => c.status === "Copies differ")),
+  );
 }
 
 /** The card title's one right-aligned action link, precedence per status-spec.md §2: compare > install-again. Update stays in the page header: here it read as updating the locations. Turning a parked copy on is its own row's "Turn on". */

@@ -26,7 +26,7 @@ pub struct EditorOption {
 /// Everything the Settings "Open in editor" card shows in one round trip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditorChoices {
-    /// Label of the Automatic row: "Cursor (first found)", or "System
+    /// Label of the Automatic row: "Automatic (Cursor)", or "System
     /// default" when no known editor is installed.
     pub automatic_label: String,
     /// Known editors found in the Applications folders, then the saved app
@@ -232,7 +232,7 @@ fn editor_choices_from(
     let installed = installed_editors_in(dirs);
 
     let automatic_label = match installed.first() {
-        Some(first) => format!("{} (first found)", first.label),
+        Some(first) => format!("Automatic ({})", first.label),
         None => "System default".to_string(),
     };
 
@@ -607,7 +607,7 @@ mod tests {
         let home = tempfile::tempdir().expect("temp home");
         let dirs = fake_applications(home.path(), &["Cursor"]);
         let choices = editor_choices_from(&dirs, None, None);
-        assert_eq!(choices.automatic_label, "Cursor (first found)");
+        assert_eq!(choices.automatic_label, "Automatic (Cursor)");
     }
 
     #[test]

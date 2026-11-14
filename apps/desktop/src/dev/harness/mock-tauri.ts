@@ -133,7 +133,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
       apps.push({ app_name: editorPreference, label: fileName.replace(/\.app$/, "") });
     }
     return {
-      automatic_label: "Cursor (first found)",
+      automatic_label: "Automatic (Cursor)",
       apps,
       terminal: { app_name: "$EDITOR", label: "nvim" },
       selected: editorPreference,
@@ -392,7 +392,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           return {
             harnesses: DISCOVERY_HARNESSES.map((id) => ({
               id,
-              display_name: id,
+              display_name: deploymentLabelFromAgentId(id),
               state: discoverySources.get(id) ? "configured" : "not_found",
               executable: null,
               executable_on_path: null,

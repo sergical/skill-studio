@@ -1,6 +1,6 @@
 // ============================================================================
 // SkillPropertiesRail - The skill page's right-hand properties: Location,
-// Harnesses, Source, Lifecycle, Tokens, Installed/Modified. Invocation lives
+// Agents, Source, Lifecycle, Tokens, Installed, Modified. Invocation lives
 // on the Locations card only, next to the files it sets. Every derived fact
 // reuses the Locations card's own helpers (`buildScopeGroups`, the source
 // ledger model) so the rail and the card never disagree about the same skill.
@@ -56,9 +56,8 @@ export function SkillPropertiesRail({ skill }: SkillPropertiesRailProps) {
   const hasDrift = scopeGroupsHaveDrift(groups);
 
   const reach = whereFacts(skill, DEFAULT_HARNESS_LIST);
-  const harnessCount =
-    reach.harnesses.filter((h) => h.reached).length + (reach.universal.present ? 1 : 0);
   const harnessEntries = railHarnessEntries(skill, groups);
+  const harnessCount = harnessEntries.length;
 
   return (
     <aside aria-label="Properties" className="sticky top-5 flex min-w-0 flex-col gap-1 self-start">
@@ -109,10 +108,9 @@ export function SkillPropertiesRail({ skill }: SkillPropertiesRailProps) {
         </PropertyRow>
 
         <PropertyRow label="Source">
-          <div className="flex flex-col gap-0.5 py-1">
-            <span className="truncate font-mono text-text-primary">{ledger.source}</span>
-            <span className="text-caption text-text-tertiary">{ledger.lifecycleOwner}</span>
-          </div>
+          <span className="block truncate py-1 font-mono" title={ledger.source}>
+            {ledger.source}
+          </span>
         </PropertyRow>
 
         <PropertyRow label="Lifecycle">
@@ -129,13 +127,14 @@ export function SkillPropertiesRail({ skill }: SkillPropertiesRailProps) {
         </PropertyRow>
 
         <PropertyRow label="Installed">
-          <span className="py-1">
-            {ledger.installed}
-            {ledger.lastModified && (
-              <span className="text-text-tertiary"> · Modified {ledger.lastModified}</span>
-            )}
-          </span>
+          <span className="py-1">{ledger.installed}</span>
         </PropertyRow>
+
+        {ledger.lastModified && (
+          <PropertyRow label="Modified">
+            <span className="py-1">{ledger.lastModified}</span>
+          </PropertyRow>
+        )}
       </dl>
     </aside>
   );

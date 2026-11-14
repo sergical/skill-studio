@@ -125,14 +125,16 @@ export function EditorCard() {
             {rowsFor(choices).map(({ value, option }) => (
               <label
                 key={value}
-                className="flex h-9 cursor-pointer items-center gap-2 rounded-sm px-2 text-left text-body text-text-secondary transition-colors hover:bg-bg-hover has-data-checked:text-text-primary"
+                className="flex h-9 cursor-pointer items-center gap-2 rounded-sm px-2 text-left text-body text-text-secondary transition-colors hover:bg-bg-hover has-focus-visible:outline-2 has-focus-visible:outline-accent has-data-checked:text-text-primary"
               >
                 <span className="flex size-4 items-center justify-center text-accent">
                   {(choices.selected ?? SYSTEM_VALUE) === value && (
                     <Check size={14} aria-hidden="true" />
                   )}
                 </span>
-                <RadioGroupItem value={value} className="sr-only" />
+                <span className="sr-only">
+                  <RadioGroupItem value={value} />
+                </span>
                 {option.label}
                 {choices.terminal && value === choices.terminal.app_name && (
                   <span className="ml-auto text-small text-text-tertiary">

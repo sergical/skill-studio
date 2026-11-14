@@ -295,8 +295,8 @@ export function Sidebar({ snapshot, emittedSnapshotRevision, requestRescan }: Si
   const requestSkillSearchFocus = useAppStore((state) => state.requestSkillSearchFocus);
 
   const own = ownSkillsView(snapshot?.skills ?? []);
-  const skillsCount = own.length;
   const parkedCount = own.filter((s) => s.parked).length;
+  const skillsCount = own.length - parkedCount;
   const pluginCount = pluginSkillsView(snapshot?.skills ?? []).length;
   // Parked is a sub-section of the skills list, so the Skills row is only
   // "current" when that partition isn't selected. Plugin skills are their
