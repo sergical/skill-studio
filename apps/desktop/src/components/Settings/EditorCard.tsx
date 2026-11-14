@@ -106,7 +106,7 @@ export function EditorCard() {
 
   return (
     <SettingsCard
-      icon={<SquarePen size={15} className="text-text-tertiary" />}
+      icon={SquarePen}
       title="Open in editor"
       description="The app a skill folder opens in from the Locations card."
     >

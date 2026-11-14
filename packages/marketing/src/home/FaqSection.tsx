@@ -41,7 +41,7 @@ const questions: ReadonlyArray<{ question: string; answer: ReactNode }> = [
   {
     question: "Can I turn a skill off for one agent only?",
     answer:
-      "Not yet. Park moves the skill's copy out of the folder that agents read, so a skill in the shared folder goes off for every agent that reads it. Turning it off for one agent only is coming.",
+      "Yes. Park turns a skill off for every agent. To turn it off for one agent only, Skill Studio first splits a shared skill into one copy for each agent, then parks the copy of that agent. It shows what changes before it does anything, and you can undo it.",
   },
   {
     question: "Does it send my data anywhere?",

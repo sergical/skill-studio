@@ -1,6 +1,7 @@
 import * as stylex from "@stylexjs/stylex";
 import { Dithering } from "@paper-design/shaders-react";
-import { BookOpen, Download } from "lucide-react";
+import { Check, Copy, Download } from "lucide-react";
+import { AGENT_SETUP_PROMPT } from "@skill-studio/lib/agent-setup";
 
 import { AgentIcon, type AgentId } from "../AgentIcon";
 import { ProductMock, type ThemeToggleOrigin } from "../ProductMock";
@@ -16,9 +17,9 @@ import { homeSectionStyles } from "../home/HomeSection.stylex";
 import { FirstScanSteps } from "../home/FirstScanSteps";
 import { SkillThrow } from "../home/SkillThrow";
 import { UsageSection } from "../home/UsageSection";
+import { useCopyFlash } from "../home/useCopyFlash";
 import {
   CLI_DOCS_URL,
-  DOCS_URL,
   DOWNLOAD_INTEL_URL,
   DOWNLOAD_URL,
   MCP_DOCS_URL,
@@ -138,6 +139,23 @@ function TopDither({ theme }: { theme: SiteTheme }) {
   );
 }
 
+// Copies the prompt that has the visitor's own agent add the MCP server and check their skills.
+function CopyAgentPromptButton() {
+  const { copied, copy } = useCopyFlash();
+  return (
+    <button
+      type="button"
+      onClick={() => copy(AGENT_SETUP_PROMPT)}
+      {...stylex.props(styles.sourceLink)}
+    >
+      {copied ? <Check aria-hidden="true" size={18} /> : <Copy aria-hidden="true" size={18} />}
+      <span aria-live="polite">
+        {copied ? "Copied. Paste it into your agent" : "Copy agent prompt"}
+      </span>
+    </button>
+  );
+}
+
 export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
   return (
     <div id="top" {...stylex.props(siteLayout.page, theme === "light" && lightSiteTheme)}>
@@ -155,10 +173,7 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
               </p>
               <div {...stylex.props(styles.actions)}>
                 <DownloadButton theme={theme} />
-                <a href={DOCS_URL} {...stylex.props(styles.sourceLink)}>
-                  <BookOpen aria-hidden="true" size={18} />
-                  <span>Read the docs</span>
-                </a>
+                <CopyAgentPromptButton />
               </div>
               <TrustLine />
             </div>
@@ -405,6 +420,9 @@ const styles = stylex.create({
   },
   sourceLink: {
     alignItems: "center",
+    backgroundColor: "transparent",
+    cursor: "pointer",
+    fontFamily: "inherit",
     borderColor: siteTokens.border,
     borderRadius: 10,
     borderStyle: "solid",

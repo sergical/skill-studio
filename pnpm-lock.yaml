@@ -398,6 +398,9 @@ importers:
       '@sentry/browser':
         specifier: 11.11.0
         version: 11.11.0
+      '@skill-studio/lib':
+        specifier: workspace:*
+        version: link:../lib
       '@stylexjs/stylex':
         specifier: 0.19.1
         version: 0.19.1

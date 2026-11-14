@@ -10,6 +10,8 @@ import { AppWindow, Check, Copy, Plug, RotateCcw, Terminal, type LucideIcon } fr
 import { siteTokens } from "../SiteTheme.stylex";
 import { CLI_DOCS_URL, DOWNLOAD_URL, MCP_DOCS_URL } from "../site-links";
 import { homeSectionStyles } from "./HomeSection.stylex";
+import { useCopyFlash } from "./useCopyFlash";
+import { AGENT_SETUP_PROMPT } from "@skill-studio/lib/agent-setup";
 
 type Mode = "app" | "cli" | "mcp";
 type Tone = "plain" | "muted" | "warn" | "user" | "tool" | "accent";
@@ -52,12 +54,12 @@ const modes: ReadonlyArray<{
 
 const scripts = {
   cli: [
-    { text: "$ npx skill-studio diagnose", typed: true, pause: 380 },
+    { text: "$ npx skill-studio@latest diagnose", typed: true, pause: 380 },
     { text: "Issues:", tone: "muted" },
     { text: "  [error] broken link, pdf-tools: the folder it points at is gone", tone: "warn" },
     { text: "  [warning] header can be fixed, motion: name is missing", tone: "warn" },
     { text: "  [warning] copies differ, writing-skills: 2 copies", tone: "warn", pause: 520 },
-    { text: "$ npx skill-studio usage", typed: true, pause: 380 },
+    { text: "$ npx skill-studio@latest usage", typed: true, pause: 380 },
     { text: "Not used in the last 30 days:", tone: "muted" },
     { text: "  release-notes      last used never" },
     { text: "  deploy-preview     last used never" },
@@ -81,10 +83,25 @@ const scripts = {
   ],
 } satisfies Record<Exclude<Mode, "app">, ReadonlyArray<Line>>;
 
+// The MCP tab copies the setup prompt, not one agent's command: the visitor's own agent
+// picks its line, adds the server and runs a first check.
 const commands = {
-  cli: { text: "npx skill-studio diagnose", docs: CLI_DOCS_URL },
-  mcp: { text: "claude mcp add skill-studio -- npx -y skill-studio mcp", docs: MCP_DOCS_URL },
-} satisfies Record<Exclude<Mode, "app">, { text: string; docs: string }>;
+  cli: {
+    text: "npx skill-studio@latest diagnose",
+    copy: "npx skill-studio@latest diagnose",
+    label: "Copy command",
+    docs: CLI_DOCS_URL,
+  },
+  mcp: {
+    text: "Paste into your agent: “Set up Skill Studio for me…”",
+    copy: AGENT_SETUP_PROMPT,
+    label: "Copy setup prompt",
+    docs: MCP_DOCS_URL,
+  },
+} satisfies Record<
+  Exclude<Mode, "app">,
+  { text: string; copy: string; label: string; docs: string }
+>;
 
 function prefersReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -274,26 +291,15 @@ function AppView({ runId, announce, undoFocusRef }: AppViewProps) {
   );
 }
 
-function CopyCommand({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef(0);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+function CopyCommand({ text, copy, label }: { text: string; copy: string; label: string }) {
+  const { copied, copy: copyText } = useCopyFlash();
   return (
     <div {...stylex.props(styles.command)}>
       <code {...stylex.props(homeSectionStyles.code, styles.commandText)}>{text}</code>
       <button
         type="button"
-        aria-label={copied ? "Copied" : "Copy command"}
-        onClick={() => {
-          void navigator.clipboard?.writeText(text).then(
-            () => {
-              setCopied(true);
-              window.clearTimeout(timer.current);
-              timer.current = window.setTimeout(() => setCopied(false), 1500);
-            },
-            () => setCopied(false),
-          );
-        }}
+        aria-label={copied ? "Copied" : label}
+        onClick={() => copyText(copy)}
         {...stylex.props(styles.copyButton)}
       >
         {copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
@@ -427,7 +433,7 @@ export function UsageSection() {
                   </a>
                 ) : (
                   <>
-                    <CopyCommand text={commands[id].text} />
+                    <CopyCommand {...commands[id]} />
                     <a href={commands[id].docs} {...stylex.props(homeSectionStyles.textLink)}>
                       {id === "cli" ? "CLI docs" : "MCP docs"}
                       <span aria-hidden="true">→</span>
