@@ -31,11 +31,20 @@ fn skill(home: &Path, folder: &str, name: &str, body: &str) {
     .unwrap();
 }
 
+fn set_old(file: &Path) {
+    std::fs::File::options()
+        .write(true)
+        .open(file)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + Duration::from_secs(BEFORE_UPDATE))
+        .unwrap();
+}
+
 fn scan(request: &ScanRequest) -> Inventory {
     let dir = unique_temp_dir("scan-copy-status");
     std::fs::create_dir_all(&dir).unwrap();
     let home = dir.canonicalize().unwrap();
-    for name in ["linked", "copied", "old", "edited"] {
+    for name in ["linked", "copied", "old", "edited", "huge"] {
         skill(&home, ".agents/skills", name, "Version 2.");
     }
     std::fs::create_dir_all(home.join(".claude/skills")).unwrap();
@@ -46,12 +55,16 @@ fn scan(request: &ScanRequest) -> Inventory {
     .unwrap();
     skill(&home, ".codex/skills", "copied", "Version 2.");
     skill(&home, ".codex/skills", "old", "Version 1.");
-    std::fs::File::options()
-        .write(true)
-        .open(home.join(".codex/skills/old/SKILL.md"))
-        .unwrap()
-        .set_modified(UNIX_EPOCH + Duration::from_secs(BEFORE_UPDATE))
-        .unwrap();
+    set_old(&home.join(".codex/skills/old/SKILL.md"));
+    // More files than the scan reads: their times are unknown, so the copy
+    // cannot be called stale even though every file read is old.
+    skill(&home, ".codex/skills", "huge", "Version 1.");
+    set_old(&home.join(".codex/skills/huge/SKILL.md"));
+    for index in 0..2_000 {
+        let file = home.join(format!(".codex/skills/huge/notes-{index:04}.md"));
+        std::fs::write(&file, "old").unwrap();
+        set_old(&file);
+    }
     skill(
         &home,
         ".cursor/skills",
@@ -63,7 +76,7 @@ fn scan(request: &ScanRequest) -> Inventory {
         SystemTime::now() > UNIX_EPOCH + Duration::from_secs(BEFORE_UPDATE + 86_400),
         "the edited copy must be newer than the lock entry"
     );
-    let entries: Vec<String> = ["linked", "copied", "old", "edited"]
+    let entries: Vec<String> = ["linked", "copied", "old", "edited", "huge"]
         .iter()
         .map(|name| {
             format!(
@@ -122,6 +135,11 @@ fn scan_names_each_agent_copy_against_the_library_or_hides_an_old_copy() {
             (
                 "edited".into(),
                 agent(AgentId::CURSOR),
+                Some(CopyStatus::Differs)
+            ),
+            (
+                "huge".into(),
+                agent(AgentId::CODEX),
                 Some(CopyStatus::Differs)
             ),
             (

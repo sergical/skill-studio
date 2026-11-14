@@ -727,7 +727,7 @@ fn scan_inner_with_budget(
     let skills: Vec<InstalledSkillDto> = skills
         .into_values()
         .filter_map(|mut skill| {
-            set_copy_status(fs, home, &scope_ledgers, &mut skill);
+            set_copy_status(home, &scope_ledgers, &resolved_paths, &mut skill);
             if req.root.is_some() {
                 skill
                     .deployments
@@ -810,28 +810,26 @@ fn library_dir(home: &Path, scope: &RootScope) -> PathBuf {
 }
 
 /// Compares each agent copy of `skill` with the library copy in its scope.
-/// A differing copy is stale when all of its files are older than the
-/// skill's last install or update in that scope's lock file.
+/// A differing copy is stale when all of its files were read and are older
+/// than the skill's last install or update in that scope's lock file.
 fn set_copy_status(
-    fs: &dyn ScopeFs,
     home: &Path,
     scope_ledgers: &HashMap<RootScope, ownership::ScopeLedgers>,
+    resolved_paths: &HashMap<DeploymentId, PathBuf>,
     skill: &mut InstalledSkillDto,
 ) {
-    let libraries: HashMap<RootScope, (PathBuf, String)> = skill
+    let libraries: HashMap<RootScope, (&PathBuf, String)> = skill
         .deployments
         .iter()
         .filter(|deployment| {
             deployment.path.parent() == Some(library_dir(home, &deployment.root.scope).as_path())
         })
-        .map(|deployment| {
-            let real = fs
-                .canonicalize(&deployment.path)
-                .unwrap_or_else(|_| deployment.path.clone());
-            (
+        .filter_map(|deployment| {
+            let real = resolved_paths.get(&deployment.id)?;
+            Some((
                 deployment.root.scope.clone(),
                 (real, deployment.content_hash.clone()),
-            )
+            ))
         })
         .collect();
     for deployment in &mut skill.deployments {
@@ -849,24 +847,20 @@ fn set_copy_status(
             .get(&deployment.root.scope)
             .and_then(|ledger| ledger.lock.skills.get(&skill.name.0))
             .and_then(|entry| DateTime::parse_from_rfc3339(&entry.updated_at).ok());
-        deployment.copy_status = Some(
-            if fs
-                .canonicalize(&deployment.path)
-                .is_ok_and(|real| &real == library)
-            {
-                CopyStatus::Link
-            } else if &deployment.content_hash == library_hash {
-                CopyStatus::Same
-            } else if deployment
+        deployment.copy_status = Some(if resolved_paths.get(&deployment.id) == Some(*library) {
+            CopyStatus::Link
+        } else if &deployment.content_hash == library_hash {
+            CopyStatus::Same
+        } else if !deployment.folder_truncated
+            && deployment
                 .modified_at
                 .zip(updated_at)
                 .is_some_and(|(modified, updated)| modified < updated)
-            {
-                CopyStatus::Stale
-            } else {
-                CopyStatus::Differs
-            },
-        );
+        {
+            CopyStatus::Stale
+        } else {
+            CopyStatus::Differs
+        });
     }
 }
 
