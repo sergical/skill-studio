@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use serde::Serialize;
+use skill_studio_core::answers::{InvocationMismatches, ScanSummary};
 use skill_studio_core::doctor::DoctorInvariant;
 use skill_studio_core::dto::{
     CommandHealth, ConflictReport, Diagnosis, DoctorReport, EventDto, FixApplied, FixSkillOutcome,
@@ -12,6 +13,7 @@ use skill_studio_core::dto::{
     UnparkOutcome, UpdateAllOutcome, UpdateOutcome,
 };
 use skill_studio_core::harness::{Capabilities, HarnessReport};
+use skill_studio_core::identity::AgentId;
 use skill_studio_core::ops::ResultEnvelope;
 use skill_studio_core::skill_update_check::{Currency, OutdatedRecord};
 use skill_studio_host::{SkillUsageRow, UsageReport};
@@ -112,6 +114,65 @@ pub fn print_scan_table(envelope: &ResultEnvelope<Inventory>) {
     print_errors(envelope);
     if let Some(inventory) = &envelope.data {
         print_inventory(inventory);
+    }
+}
+
+/// Prints `scan --short`: one line per skill, no paths.
+pub fn print_scan_summary(envelope: &ResultEnvelope<ScanSummary>) {
+    print_errors(envelope);
+    let Some(summary) = &envelope.data else {
+        return;
+    };
+    if summary.skills.is_empty() {
+        println!("No skills found.");
+    }
+    for skill in &summary.skills {
+        let mut places: Vec<String> = Vec::new();
+        if skill.library {
+            places.push("library".into());
+        }
+        places.extend(
+            skill
+                .agents
+                .iter()
+                .map(|agent| match skill.copies.get(agent) {
+                    Some(status) => format!("{agent} ({})", status.as_str()),
+                    None => agent.to_string(),
+                }),
+        );
+        if skill.parked {
+            places.push("parked".into());
+        }
+        println!("{}  [{}]  {}", skill.name, skill.source, places.join(", "));
+    }
+    if summary.partial {
+        println!("note: a folder could not be read, so a skill may be missing.");
+    }
+}
+
+/// Prints `invocation --mismatches`: one line per skill with each agent's mode.
+pub fn print_invocation_mismatches(envelope: &ResultEnvelope<InvocationMismatches>) {
+    print_errors(envelope);
+    let Some(report) = &envelope.data else {
+        return;
+    };
+    if report.skills.is_empty() {
+        println!("All agents read each skill in the same mode.");
+    }
+    for skill in &report.skills {
+        let names = |agents: &std::collections::BTreeSet<AgentId>| {
+            agents
+                .iter()
+                .map(AgentId::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        println!(
+            "{}  manual: {}  auto: {}",
+            skill.skill,
+            names(&skill.manual),
+            names(&skill.auto)
+        );
     }
 }
 

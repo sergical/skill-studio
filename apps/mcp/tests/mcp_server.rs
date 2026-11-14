@@ -1127,6 +1127,8 @@ const READ_TOOLS: &[&str] = &[
     "diagnose_conflict",
     "outdated",
     "review_due",
+    "scan_summary",
+    "invocation_mismatches",
 ];
 const WRITE_TOOLS: &[&str] = &[
     "invocation",

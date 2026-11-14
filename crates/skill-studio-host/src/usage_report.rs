@@ -64,10 +64,17 @@ pub struct UsageReport {
     pub observations: Vec<crate::skill_uses::UsageObservation>,
     /// The window, in days, that `recent_uses` and `unused` cover.
     pub days: u32,
+    /// Start of the window, RFC 3339, when the caller gave one instead of `days`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    /// End of the window (not included), RFC 3339, when the caller gave one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
     /// Skills not used in the window first, by name; then the rest, most
     /// used first.
     pub rows: Vec<SkillUsageRow>,
     /// Names of the skills with no use in the window, in `rows` order.
+    /// Empty when the caller asked for the top rows only.
     pub unused: Vec<String>,
     /// Set when some session history could not be read, so a skill in
     /// `unused` may still have uses that were not counted, or when the scan
@@ -101,6 +108,22 @@ pub struct UsageFilter {
     pub harness: Option<String>,
     /// Exact recorded project paths, or all projects when empty.
     pub projects: Vec<PathBuf>,
+    /// Start of the window. Replaces `days` before the end when set.
+    pub since: Option<DateTime<Utc>>,
+    /// End of the window, not included. Absent counts up to now and later.
+    pub until: Option<DateTime<Utc>>,
+    /// Keep only this many rows, most used first, and no unused skills.
+    pub top: Option<usize>,
+}
+
+/// Reads a window bound: `YYYY-MM-DD` (start of that day, UTC) or RFC 3339.
+pub fn parse_usage_time(text: &str) -> Result<DateTime<Utc>, String> {
+    if let Ok(day) = chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d") {
+        return Ok(day.and_time(chrono::NaiveTime::MIN).and_utc());
+    }
+    DateTime::parse_from_rfc3339(text)
+        .map(|at| at.with_timezone(&Utc))
+        .map_err(|_| format!("`{text}` is not a date (YYYY-MM-DD) or an RFC 3339 time"))
 }
 
 impl SkillUsage {
@@ -200,7 +223,10 @@ impl SkillUsage {
             known_skills: installed,
             sources: &sources,
         };
-        let cutoff = now - chrono::Duration::days(i64::from(days));
+        let end = selection.until.unwrap_or(now);
+        let cutoff = selection
+            .since
+            .unwrap_or_else(|| end - chrono::Duration::days(i64::from(days)));
         let mut by_skill: BTreeMap<&str, Tally> = installed
             .iter()
             .map(|name| (name.as_str(), Tally::default()))
@@ -224,7 +250,7 @@ impl SkillUsage {
             if tally.last_used.is_none_or(|last| use_.at > last) {
                 tally.last_used = Some(use_.at);
             }
-            if use_.at < cutoff {
+            if use_.at < cutoff || selection.until.is_some_and(|until| use_.at >= until) {
                 continue;
             }
             tally.recent += 1;
@@ -268,14 +294,21 @@ impl SkillUsage {
                 .cmp(&(b.recent_uses > 0))
                 .then(b.recent_uses.cmp(&a.recent_uses))
         });
-        let unused = rows
+        let mut unused: Vec<String> = rows
             .iter()
             .filter(|row| row.recent_uses == 0)
             .map(|row| row.skill.clone())
             .collect();
+        if let Some(top) = selection.top {
+            unused.clear();
+            rows.retain(|row| row.recent_uses > 0);
+            rows.truncate(top);
+        }
 
         UsageReport {
             days,
+            since: selection.since.map(|at| at.to_rfc3339()),
+            until: selection.until.map(|at| at.to_rfc3339()),
             rows,
             unused,
             partial: !observations.is_empty(),
@@ -483,6 +516,94 @@ mod tests {
         assert_eq!(row(&report, "gamma").recent_uses, 2);
         assert_eq!(row(&report, "idle").recent_uses, 1);
         assert_eq!(report.rows[0].skill, "gamma");
+    }
+
+    /// Flow: report the window from 50 to 10 days ago (`since`, `until`).
+    /// Expectation: only `idle`'s 45-day-old use counts; `gamma`'s uses 3
+    /// and 60 days ago fall outside, and the report echoes both bounds.
+    /// Failure means an agent asking about a past month gets uses from
+    /// outside it.
+    #[test]
+    fn a_since_until_window_counts_only_uses_inside_it() {
+        let fixture = fixture();
+        let inventory = scan(&fixture.home);
+        let since = now() - chrono::Duration::days(50);
+        let until = now() - chrono::Duration::days(10);
+        let filter = UsageFilter {
+            since: Some(since),
+            until: Some(until),
+            ..UsageFilter::default()
+        };
+
+        let report =
+            SkillUsage::default().report_filtered(&fixture.home, &inventory, 30, now(), &filter);
+
+        assert_eq!(row(&report, "idle").recent_uses, 1, "{report:?}");
+        assert_eq!(row(&report, "gamma").recent_uses, 0, "{report:?}");
+        assert_eq!(report.unused, ["gamma"]);
+        assert_eq!(report.since, Some(since.to_rfc3339()));
+        assert_eq!(report.until, Some(until.to_rfc3339()));
+    }
+
+    /// Flow: report the 30 days before a date 50 days ago (`until` only).
+    /// Expectation: the window is days 80 to 50 back, so only `gamma`'s
+    /// 60-day-old use counts, not `idle`'s 45-day-old one.
+    /// Failure means `until` alone still counts back from now.
+    #[test]
+    fn an_until_without_since_counts_the_days_before_it() {
+        let fixture = fixture();
+        let inventory = scan(&fixture.home);
+        let filter = UsageFilter {
+            until: Some(now() - chrono::Duration::days(50)),
+            ..UsageFilter::default()
+        };
+
+        let report =
+            SkillUsage::default().report_filtered(&fixture.home, &inventory, 30, now(), &filter);
+
+        assert_eq!(row(&report, "gamma").recent_uses, 1, "{report:?}");
+        assert_eq!(row(&report, "idle").recent_uses, 0, "{report:?}");
+    }
+
+    /// Flow: report a 90-day window with `top` 1.
+    /// Expectation: one row, `gamma` (2 uses), and no unused names.
+    /// Failure means "my most used skill" still returns every installed
+    /// skill.
+    #[test]
+    fn top_keeps_only_the_most_used_rows() {
+        let fixture = fixture();
+        let inventory = scan(&fixture.home);
+        let filter = UsageFilter {
+            top: Some(1),
+            ..UsageFilter::default()
+        };
+
+        let report =
+            SkillUsage::default().report_filtered(&fixture.home, &inventory, 90, now(), &filter);
+
+        let names: Vec<&str> = report.rows.iter().map(|r| r.skill.as_str()).collect();
+        assert_eq!(names, ["gamma"]);
+        assert!(report.unused.is_empty());
+    }
+
+    /// Flow: parse the window bounds a user types.
+    /// Expectation: a bare date is the start of that day in UTC, an RFC 3339
+    /// time keeps its instant, and other text is refused.
+    /// Failure means `--since 2026-09-01` starts at the wrong time or bad
+    /// input counts from the start of history.
+    #[test]
+    fn usage_times_parse_a_date_or_an_rfc3339_time() {
+        assert_eq!(
+            parse_usage_time("2026-09-01").unwrap().to_rfc3339(),
+            "2026-09-01T00:00:00+00:00"
+        );
+        assert_eq!(
+            parse_usage_time("2026-09-01T10:00:00+02:00")
+                .unwrap()
+                .to_rfc3339(),
+            "2026-09-01T08:00:00+00:00"
+        );
+        assert!(parse_usage_time("last week").is_err());
     }
 
     /// Flow: seed from a desktop cache file, then report; separately, seed

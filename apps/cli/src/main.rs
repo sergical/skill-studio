@@ -22,6 +22,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
+use skill_studio_core::answers;
 use skill_studio_core::dto::{
     CapabilitiesRequest, CopyStatus, HarnessesRequest, InstallFile, InstallLinkMode, InstallMethod,
     InstallPreferencesRequest, InstallRequest, Inventory, ListEventsRequest, ParkRequest,
@@ -74,11 +75,28 @@ impl From<AddMethod> for InstallMethod {
     }
 }
 
+const QUESTIONS: &str = "\
+Common questions:
+  Which skills do I have, and which agents read them?
+      skill-studio scan --short
+  Which copies of a pack did not get the last update?
+      skill-studio scan --short --source <owner/repo> --copy-status stale
+  Which skills did I use most in a month?
+      skill-studio usage --since 2026-10-01 --until 2026-11-01 --top 10
+  Which skills did I not use in the last 30 days?
+      skill-studio usage
+  Which skills do agents read in different modes?
+      skill-studio invocation --mismatches
+  What is broken?
+      skill-studio diagnose
+Add --json for one JSON document.";
+
 #[derive(Parser)]
 #[command(
     name = "skill-studio",
     about = "Tidy up your agent skills: find broken, duplicate and unused skills, and clear them out safely, with undo.",
-    version = VERSION
+    version = VERSION,
+    after_help = QUESTIONS
 )]
 struct Cli {
     /// Print how long each step took, to stderr.
@@ -102,6 +120,9 @@ enum Command {
         manual: bool,
         #[arg(long, requires = "skill")]
         auto: bool,
+        /// Only list skills that agents read in different modes.
+        #[arg(long, conflicts_with_all = ["skill", "manual", "auto"])]
+        mismatches: bool,
         #[arg(long)]
         json: bool,
     },
@@ -125,6 +146,9 @@ enum Command {
         /// Include per-phase timings.
         #[arg(long, hide = true)]
         timings: bool,
+        /// One row per skill: its agents, library copy and copy status. No paths.
+        #[arg(long)]
+        short: bool,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -166,6 +190,15 @@ enum Command {
         /// How many days back to count uses.
         #[arg(long, default_value_t = skill_studio_host::DEFAULT_USAGE_DAYS)]
         days: u32,
+        /// Count uses from this date (YYYY-MM-DD or RFC 3339) instead of --days.
+        #[arg(long, value_parser = skill_studio_host::parse_usage_time)]
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        /// Count uses before this date (YYYY-MM-DD or RFC 3339).
+        #[arg(long, value_parser = skill_studio_host::parse_usage_time)]
+        until: Option<chrono::DateTime<chrono::Utc>>,
+        /// Show only the N most used skills.
+        #[arg(long, value_name = "N")]
+        top: Option<usize>,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -614,18 +647,18 @@ fn main() -> ExitCode {
             scope,
             skills,
             timings,
+            short,
             json,
         } => run_scan(
             &scope,
-            skills,
-            ScanRequest {
+            &ScanRequest {
                 source,
                 root: root.map(|_| skill_studio_core::dto::ScanRoot::Library),
                 copy_status,
-                ..Default::default()
+                skills: skills.into_iter().map(SkillName).collect(),
+                timings,
             },
-            timings,
-            json,
+            ScanOutput { short, json },
             time,
         ),
         Command::Diagnose {
@@ -671,9 +704,21 @@ fn main() -> ExitCode {
         Command::Usage {
             scope,
             days,
+            since,
+            until,
+            top,
             json,
             harness,
-        } => run_usage(&scope, days, json, time, harness),
+        } => {
+            let filter = skill_studio_host::UsageFilter {
+                harness,
+                projects: scope.project_paths().to_vec(),
+                since,
+                until,
+                top,
+            };
+            run_usage(&scope, days, json, time, &filter)
+        }
         Command::Mcp => unreachable!("handled before telemetry starts"),
         Command::Add {
             scope,
@@ -717,9 +762,16 @@ fn main() -> ExitCode {
         Command::Extras { scope, json } => run_extras(&scope, json, time),
         Command::Invocation {
             scope,
+            mismatches: true,
+            json,
+            ..
+        } => run_invocation_mismatches(&scope, json, time),
+        Command::Invocation {
+            scope,
             skill,
             manual,
             auto,
+            mismatches: false,
             json,
         } => run_invocation(
             &scope,
@@ -987,35 +1039,42 @@ fn parse_copy_status(value: &str) -> Result<CopyStatus, String> {
         .ok_or_else(|| "expected link, same, differs or stale".into())
 }
 
-fn run_scan(
-    scope: &ScopeArgs,
-    skills: Vec<String>,
-    filters: ScanRequest,
-    timings: bool,
+#[derive(Clone, Copy)]
+struct ScanOutput {
+    short: bool,
     json: bool,
-    time: bool,
-) -> ExitCode {
-    let rt = match build_runtime::<skill_studio_core::dto::Inventory>(scope, Operation::Scan, json)
-    {
+}
+
+fn run_scan(scope: &ScopeArgs, req: &ScanRequest, out: ScanOutput, time: bool) -> ExitCode {
+    let rt = match build_runtime::<skill_studio_core::dto::Inventory>(
+        scope,
+        Operation::Scan,
+        out.json,
+    ) {
         Ok(rt) => rt,
         Err(code) => return code,
     };
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
-    let req = ScanRequest {
-        skills: skills.into_iter().map(SkillName).collect(),
-        timings,
-        ..filters
-    };
-    let result = ops::scan(&rt, &ctx, &req);
+    let result = ops::scan(&rt, &ctx, req);
+    if out.short {
+        let summary = result.map(|inventory| answers::summarize_scan(&inventory));
+        let envelope = ResultEnvelope::from_result(Operation::Scan, &rt.scope, &ctx, summary);
+        if out.json {
+            output::print_json(&envelope);
+        } else {
+            output::print_scan_summary(&envelope);
+        }
+        print_timing(time, envelope.timings.as_ref());
+        return exit_code(envelope.exit_status());
+    }
     let envelope = ResultEnvelope::from_result(Operation::Scan, &rt.scope, &ctx, result);
-    let code = exit_code(envelope.exit_status());
-    if json {
+    if out.json {
         output::print_json(&envelope);
     } else {
         output::print_scan_table(&envelope);
     }
     print_timing(time, envelope.timings.as_ref());
-    code
+    exit_code(envelope.exit_status())
 }
 
 fn run_diagnose(
@@ -2050,7 +2109,7 @@ fn run_usage(
     days: u32,
     json: bool,
     time: bool,
-    harness: Option<String>,
+    filter: &skill_studio_host::UsageFilter,
 ) -> ExitCode {
     let rt =
         match build_runtime::<skill_studio_host::UsageReport>(scope, Operation::SkillUsage, json) {
@@ -2094,10 +2153,7 @@ fn run_usage(
             &inventory,
             days,
             chrono::Utc::now(),
-            &skill_studio_host::UsageFilter {
-                harness,
-                projects: scope.project_paths().to_vec(),
-            },
+            filter,
         );
         steps.push(skill_studio_core::timing::step(
             clock,
@@ -2489,6 +2545,20 @@ fn run_invocation(
     let result = invocation(&rt, &ctx, &req);
     let envelope = ResultEnvelope::from_result(Operation::Invocation, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_invocation_table)
+}
+
+fn run_invocation_mismatches(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
+    use skill_studio_core::ops_invocation::{invocation, InvocationRequest};
+    let rt =
+        match build_runtime::<answers::InvocationMismatches>(scope, Operation::Invocation, json) {
+            Ok(rt) => rt,
+            Err(code) => return code,
+        };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = invocation(&rt, &ctx, &InvocationRequest::default())
+        .map(|report| answers::invocation_mismatches(&report));
+    let envelope = ResultEnvelope::from_result(Operation::Invocation, &rt.scope, &ctx, result);
+    finish(&envelope, json, time, output::print_invocation_mismatches)
 }
 
 fn run_review(action: ReviewCommand, time: bool) -> ExitCode {

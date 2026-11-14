@@ -79,6 +79,7 @@ use rmcp::service::RequestContext;
 use rmcp::transport::stdio;
 use rmcp::{schemars, tool, tool_handler, tool_router, RoleServer, ServerHandler, ServiceExt};
 use serde::Deserialize;
+use skill_studio_core::answers;
 use skill_studio_core::dto::{
     CapabilitiesRequest, DiagnoseConflictRequest, DoctorRequest, FixSkillRequest, HarnessesRequest,
     InstallPreferencesRequest, InstallRequest, ListEventsRequest, ParkRequest, RemoveRequest,
@@ -144,6 +145,12 @@ pub struct SkillUsageRequest {
     pub project: Option<std::path::PathBuf>,
     /// How many days back to count uses. Default 30.
     pub days: Option<u32>,
+    /// Count uses from this date (YYYY-MM-DD or RFC 3339) instead of `days`.
+    pub since: Option<String>,
+    /// Count uses before this date (YYYY-MM-DD or RFC 3339).
+    pub until: Option<String>,
+    /// Keep only the N most used skills.
+    pub top: Option<usize>,
 }
 
 /// Runs the MCP server over stdin and stdout until the client disconnects,
@@ -341,6 +348,33 @@ impl SkillStudioServer {
     }
 
     #[tool(
+        description = "One row per skill: its agents, library copy and copy status, with no paths or ids. Takes the scan filters. Use it to answer questions; use scan when you need ids.",
+        annotations(read_only_hint = true)
+    )]
+    async fn scan_summary(
+        &self,
+        Parameters(req): Parameters<ScanRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(Operation::Scan, false, &context, |rt, ctx| {
+            ops::scan(rt, ctx, &req).map(|inventory| answers::summarize_scan(&inventory))
+        })
+        .await
+    }
+
+    #[tool(
+        description = "List only the skills with one copy read as manual and another as automatic, and the agents on each side.",
+        annotations(read_only_hint = true)
+    )]
+    async fn invocation_mismatches(&self, context: RequestContext<RoleServer>) -> CallToolResult {
+        run_op(Operation::Invocation, false, &context, |rt, ctx| {
+            skill_studio_core::ops_invocation::invocation(rt, ctx, &Default::default())
+                .map(|report| answers::invocation_mismatches(&report))
+        })
+        .await
+    }
+
+    #[tool(
         description = "Find broken, duplicate, invalid, parked and turned-off skills. Use it to choose what to fix or clear out.",
         annotations(read_only_hint = true)
     )]
@@ -416,6 +450,21 @@ impl SkillStudioServer {
     ) -> CallToolResult {
         let days = req.days.unwrap_or(skill_studio_host::DEFAULT_USAGE_DAYS);
         run_op(Operation::SkillUsage, false, &context, |rt, ctx| {
+            let bound = |text: &Option<String>| {
+                text.as_deref()
+                    .map(skill_studio_host::parse_usage_time)
+                    .transpose()
+                    .map_err(|message| {
+                        CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+                    })
+            };
+            let filter = skill_studio_host::UsageFilter {
+                harness: req.harness.clone(),
+                projects: req.project.clone().into_iter().collect(),
+                since: bound(&req.since)?,
+                until: bound(&req.until)?,
+                top: req.top,
+            };
             let inventory = ops::scan_for_usage(rt, ctx)?;
             let mut usage = self.usage.lock().unwrap_or_else(PoisonError::into_inner);
             let usage = usage.get_or_insert_with(|| {
@@ -426,10 +475,7 @@ impl SkillStudioServer {
                 &inventory,
                 days,
                 chrono::Utc::now(),
-                &skill_studio_host::UsageFilter {
-                    harness: req.harness.clone(),
-                    projects: req.project.clone().into_iter().collect(),
-                },
+                &filter,
             ))
         })
         .await

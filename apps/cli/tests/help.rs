@@ -124,3 +124,46 @@ fn help_text_uses_no_internal_words() {
         );
     }
 }
+
+/// Flow: run each example command under "Common questions" in the top-level
+/// help on an empty home.
+/// Expectation: each one parses and exits 0.
+/// A failure means the help points users and agents at a command that does
+/// not run.
+#[test]
+fn every_common_question_example_runs() {
+    let text = help(&[]);
+    let examples: Vec<&str> = text
+        .lines()
+        .skip_while(|line| !line.starts_with("Common questions:"))
+        .filter_map(|line| line.trim().strip_prefix("skill-studio "))
+        .collect();
+    assert!(examples.len() >= 5, "no examples in the help:\n{text}");
+    let home = tempfile::tempdir().unwrap();
+    for example in examples {
+        let args: Vec<&str> = example
+            .split_whitespace()
+            .map(|arg| {
+                if arg == "<owner/repo>" {
+                    "acme/pack"
+                } else {
+                    arg
+                }
+            })
+            .collect();
+        let output = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+            .args(&args)
+            .arg("--home")
+            .arg(home.path())
+            .arg("--json")
+            .env("HOME", home.path())
+            .env("SKILL_STUDIO_TELEMETRY", "0")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "`skill-studio {example}` failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
