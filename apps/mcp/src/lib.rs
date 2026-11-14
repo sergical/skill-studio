@@ -465,6 +465,9 @@ impl SkillStudioServer {
                 until: bound(&req.until)?,
                 top: req.top,
             };
+            filter.check_window(chrono::Utc::now()).map_err(|message| {
+                CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+            })?;
             let inventory = ops::scan_for_usage(rt, ctx)?;
             let mut usage = self.usage.lock().unwrap_or_else(PoisonError::into_inner);
             let usage = usage.get_or_insert_with(|| {

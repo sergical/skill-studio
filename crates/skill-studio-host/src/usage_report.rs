@@ -47,11 +47,13 @@ pub struct SkillUsageRow {
     pub triggers: BTreeMap<String, u32>,
     /// The skill's name.
     pub skill: String,
-    /// Uses in the last `days` days of the report.
+    /// Uses inside the report window: `since`..`until`, or the last `days`.
     pub recent_uses: u32,
-    /// Uses across all the session history that was read.
+    /// Uses across all the session history that was read, outside the
+    /// window too.
     pub total_uses: u32,
-    /// The most recent use, RFC 3339, or `None` when never used.
+    /// The most recent use at any time, outside the window too, RFC 3339,
+    /// or `None` when never used.
     pub last_used: Option<String>,
     /// Uses in the last `days` days, by agent id.
     pub agents: BTreeMap<String, u32>,
@@ -114,6 +116,22 @@ pub struct UsageFilter {
     pub until: Option<DateTime<Utc>>,
     /// Keep only this many rows, most used first, and no unused skills.
     pub top: Option<usize>,
+}
+
+impl UsageFilter {
+    /// Rejects a window that holds no time: `since` at or after `until`, or
+    /// after `now` when there is no `until`. Such a window would report
+    /// every skill as unused.
+    pub fn check_window(&self, now: DateTime<Utc>) -> Result<(), String> {
+        match self.since {
+            Some(since) if since >= self.until.unwrap_or(now) => Err(format!(
+                "the usage window is empty: since {} is not before {}",
+                since.to_rfc3339(),
+                self.until.unwrap_or(now).to_rfc3339()
+            )),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Reads a window bound: `YYYY-MM-DD` (start of that day, UTC) or RFC 3339.
@@ -586,6 +604,29 @@ mod tests {
         assert!(report.unused.is_empty());
     }
 
+    /// A window that holds no time is refused; a real one passes.
+    /// Failure means an empty window reports every skill as unused.
+    #[test]
+    fn an_empty_window_is_refused() {
+        let now = parse_usage_time("2026-11-14").unwrap();
+        let at = |text| Some(parse_usage_time(text).unwrap());
+        let window = |since, until| UsageFilter {
+            since,
+            until,
+            ..UsageFilter::default()
+        };
+        assert!(window(at("2026-11-01"), at("2026-10-01"))
+            .check_window(now)
+            .is_err());
+        assert!(window(at("2026-10-01"), at("2026-10-01"))
+            .check_window(now)
+            .is_err());
+        assert!(window(at("2026-11-15"), None).check_window(now).is_err());
+        assert!(window(at("2026-10-01"), at("2026-11-01"))
+            .check_window(now)
+            .is_ok());
+        assert!(window(None, at("2026-10-01")).check_window(now).is_ok());
+    }
     /// Flow: parse the window bounds a user types.
     /// Expectation: a bare date is the start of that day in UTC, an RFC 3339
     /// time keeps its instant, and other text is refused.

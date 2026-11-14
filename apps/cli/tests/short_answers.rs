@@ -196,3 +196,33 @@ fn usage_window_and_top_match_on_the_cli_and_mcp() {
     assert_eq!(rows[0]["skill"], "often");
     assert_eq!(rows[0]["recent_uses"], 2);
 }
+
+/// Flow: `usage` and the MCP `skill_usage` tool with `since` after `until`,
+/// and with `since` in the future.
+/// Expectation: both refuse with `invalid_request` and no rows.
+/// Failure means an empty window reports every skill as unused.
+#[test]
+fn an_empty_usage_window_is_refused_on_the_cli_and_mcp() {
+    let home = tempfile::tempdir().unwrap();
+    write_skill(&home.path().join(".claude/skills"), "often", "Body.");
+
+    for (since, until) in [("2026-11-01", Some("2026-10-01")), ("2999-01-01", None)] {
+        let mut args = vec!["usage", "--since", since];
+        let mut params = json!({"since": since});
+        if let Some(until) = until {
+            args.extend(["--until", until]);
+            params["until"] = json!(until);
+        }
+        let cli = headless::cli(home.path(), &args);
+        let mcp = headless::mcp(home.path(), "skill_usage", &params);
+        let mcp = &mcp["result"]["structuredContent"];
+
+        for (surface, envelope) in [("cli", &cli), ("mcp", mcp)] {
+            assert_eq!(
+                envelope["errors"][0]["code"], "invalid_request",
+                "{surface} {since}..{until:?}: {envelope}"
+            );
+            assert!(envelope["data"].is_null(), "{surface}: {envelope}");
+        }
+    }
+}

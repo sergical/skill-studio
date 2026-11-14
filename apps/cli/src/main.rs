@@ -2129,50 +2129,56 @@ fn run_usage(
         started,
     )];
     let scan_start = clock.monotonic();
-    let result = ops::scan_for_usage(&rt, &ctx).map(|inventory| {
-        steps.push(skill_studio_core::timing::step(
-            clock,
-            "installed_scan",
-            scan_start,
-        ));
-        let step_start = clock.monotonic();
-        let mut usage = skill_studio_host::SkillUsage::load_read_only(
-            cli_cache
-                .as_deref()
-                .filter(|path| path.exists())
-                .or(cache.as_deref()),
-        );
-        steps.push(skill_studio_core::timing::step(
-            clock,
-            "usage_cache_load",
-            step_start,
-        ));
-        let step_start = clock.monotonic();
-        let report = usage.report_filtered(
-            &rt.scope.home.canonical,
-            &inventory,
-            days,
-            chrono::Utc::now(),
-            filter,
-        );
-        steps.push(skill_studio_core::timing::step(
-            clock,
-            "history_refresh_and_tally",
-            step_start,
-        ));
-        let step_start = clock.monotonic();
-        if let Some(path) = cli_cache {
-            if let Err(error) = usage.save_cache(&path) {
-                eprintln!("Could not save usage cache: {error}");
+    let result = filter
+        .check_window(chrono::Utc::now())
+        .map_err(|message| {
+            skill_studio_core::CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+        })
+        .and_then(|()| ops::scan_for_usage(&rt, &ctx))
+        .map(|inventory| {
+            steps.push(skill_studio_core::timing::step(
+                clock,
+                "installed_scan",
+                scan_start,
+            ));
+            let step_start = clock.monotonic();
+            let mut usage = skill_studio_host::SkillUsage::load_read_only(
+                cli_cache
+                    .as_deref()
+                    .filter(|path| path.exists())
+                    .or(cache.as_deref()),
+            );
+            steps.push(skill_studio_core::timing::step(
+                clock,
+                "usage_cache_load",
+                step_start,
+            ));
+            let step_start = clock.monotonic();
+            let report = usage.report_filtered(
+                &rt.scope.home.canonical,
+                &inventory,
+                days,
+                chrono::Utc::now(),
+                filter,
+            );
+            steps.push(skill_studio_core::timing::step(
+                clock,
+                "history_refresh_and_tally",
+                step_start,
+            ));
+            let step_start = clock.monotonic();
+            if let Some(path) = cli_cache {
+                if let Err(error) = usage.save_cache(&path) {
+                    eprintln!("Could not save usage cache: {error}");
+                }
             }
-        }
-        steps.push(skill_studio_core::timing::step(
-            clock,
-            "usage_cache_save",
-            step_start,
-        ));
-        report
-    });
+            steps.push(skill_studio_core::timing::step(
+                clock,
+                "usage_cache_save",
+                step_start,
+            ));
+            report
+        });
     ctx.record_timing(skill_studio_core::timing::op_timing(
         clock,
         "skill_usage",
