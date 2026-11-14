@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { Deployment, InstalledSkill } from "@skill-studio/lib";
-import { fixesFor, rowGroup, rowState } from "./skill-row-state";
+import { rowGroup, rowState } from "./skill-row-state";
 
 function fixtureDeployment(overrides: Partial<Deployment> = {}): Deployment {
   return {
@@ -73,7 +73,6 @@ describe("rowState", () => {
     expect(state?.kind).toBe("violation");
     expect(state?.level).toBe("error");
     expect(state?.action).toBe("Fix");
-    expect(fixesFor(state!)).toEqual(["Fix"]);
   });
 
   it("keeps a notes-only skill Healthy, or a harmless length note would crowd Needs attention", () => {

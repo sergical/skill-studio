@@ -1,8 +1,8 @@
 // ============================================================================
 // useRowCursor - Roving-tabIndex keyboard navigation for the Skills and Home
 // grids: j/k and arrow keys move the cursor row, Enter opens it, Space/x
-// toggles it, Shift+Up/Down extends the selection, `.`/Shift+F10 opens the
-// row's ⋯ menu, and ArrowLeft/ArrowRight collapse or expand its group.
+// toggles it, Shift+Up/Down extends the selection, and ArrowLeft/ArrowRight
+// collapse or expand its group.
 // `useRowCursorWindowEntry` is the window-level counterpart: j/k/arrows focus
 // the cursor row from anywhere in the active view.
 // ============================================================================
@@ -15,7 +15,6 @@ interface UseRowCursorOptions {
   keys: string[];
   onOpen: (key: string) => void;
   onToggle?: (key: string) => void;
-  onMenu?: (key: string, rowEl: HTMLElement) => void;
   /** Shift+ArrowUp/Down: called with the row the cursor moved onto, to extend the selection. */
   onExtend?: (key: string) => void;
   /** Escape: clears the selection, mirroring the list's own Cancel/Escape behaviour. */
@@ -47,8 +46,6 @@ export interface RowCursor {
   onGridKeyDown: (e: ReactKeyboardEvent) => void;
   /** Focuses the current cursor row (or the first row) - the window-level entry point calls this. */
   focusCursor: () => void;
-  /** Focuses one row by key - e.g. refocusing the row once its own menu (opened by mouse or `.`) closes. */
-  focusRow: (key: string) => void;
   /** "12 of 80" - the visually-hidden `role="status"` text, debounced to the last move. */
   statusText: string;
 }
@@ -74,7 +71,6 @@ export function useRowCursor({
   keys,
   onOpen,
   onToggle,
-  onMenu,
   onExtend,
   onEscape,
   onCollapseGroup,
@@ -183,12 +179,6 @@ export function useRowCursor({
     scrollAndFocus(effectiveCursorKey ?? keys[0]);
   }
 
-  /** Public: focuses one row without touching the announced status or extending the selection -
-   * e.g. refocusing the row once its own menu (opened by mouse or `.`) closes. */
-  function focusRow(key: string) {
-    moveTo(key, false);
-  }
-
   function onGridKeyDown(e: ReactKeyboardEvent) {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
@@ -246,18 +236,6 @@ export function useRowCursor({
           onToggle(cursorKey);
         }
         break;
-      case ".":
-        if (onMenu) {
-          e.preventDefault();
-          onMenu(cursorKey, target.closest('[role="row"]') ?? target);
-        }
-        break;
-      case "F10":
-        if (e.shiftKey && onMenu) {
-          e.preventDefault();
-          onMenu(cursorKey, target.closest('[role="row"]') ?? target);
-        }
-        break;
       case "ArrowLeft": {
         const rowEl = rowsRef.current.get(cursorKey);
         const groupId = rowEl ? groupIdFor(rowEl) : null;
@@ -299,7 +277,6 @@ export function useRowCursor({
     tabIndexFor: (key) => (key === effectiveCursorKey ? 0 : -1),
     onGridKeyDown,
     focusCursor,
-    focusRow,
     statusText,
   };
 }

@@ -1,13 +1,14 @@
 // ============================================================================
 // HomeInboxGroups - Home's five inbox groups (Broken, Warnings, Updates, Not
 // used in 30 days, Recently used): the shared row layout, each group's
-// header and rows, and the per-row actions (Fix, Compare, Park, Pull latest).
+// header and rows, and the per-row fixes (Resolve, Compare, Convert, Park,
+// Update). Rows share their cells and selection with the Skills page.
 // ============================================================================
 
 import { useState } from "react";
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { Button, Collapsible, CollapsiblePanel, Progress } from "@skill-studio/ui";
-import { formatRelativeTime, formatTokens, shortSha } from "@skill-studio/lib";
+import { formatRelativeTime, shortSha } from "@skill-studio/lib";
 import type { HealthIssue, InstalledSkill, RecentlyUsedSkill } from "@skill-studio/lib";
 import { parkSkill, skillLocalEdits } from "../../lib/skill-api";
 import {
@@ -29,7 +30,8 @@ import { GroupHead } from "../SkillList/GroupHead";
 import { DEFAULT_HARNESS_LIST, whereFacts } from "../SkillList/skill-row-state";
 import type { RowState } from "../SkillList/skill-row-state";
 import { HarnessStack } from "../SkillList/HarnessStack";
-import { ROW_CLASS, RowGlyph, SkillNameCell } from "../SkillList/SkillRowCells";
+import { NoteCell, SkillNameCell, SlotCell } from "../SkillList/SkillRowCells";
+import { FIX_CLASS, ROW_CLASS, SKILL_ROW_GRID } from "../SkillList/skill-row-format";
 import { SkillLocationCell } from "../SkillList/SkillLocationCell";
 import { RichTooltipScope } from "../ui/RichTooltip";
 import {
@@ -43,72 +45,71 @@ import {
   updateAllTitle,
 } from "./home-inbox-data";
 import { HomeLeftBehindActions } from "./HomeLeftBehindActions";
-import { ROW_ACTION_CLASS, rowClickOpensSkill } from "./home-row-click";
+import { rowClickOpensSkill } from "./home-row-click";
 import type { GroupId, HomeFilter, HomeGroups, HomeRowPlan } from "./home-inbox-data";
-
-/** Home's row's glyph hit box - the same size Skills uses, so the two lists line up. */
-const HOME_GLYPH_HIT = 28;
-const HOME_GLYPH_SIZE = 14;
 
 /** Text link style shared by every "Show all"/"Show everything"/"Learn more" affordance on Home. */
 const LINK_CLASS = "h-auto gap-1 p-0 text-small";
 
-/** The roving-cursor wiring every group's rows share, passed down from `HomeView`'s single
- * `useHomeRowCursor` call. */
-interface RowCursorProps {
+/** What every group's rows share, built once by `HomeView`: the roving cursor and the per-skill
+ * selection the Skills page uses too. */
+export interface HomeRowWiring {
   rowRef: (key: string) => (el: HTMLDivElement | null) => void;
   tabIndexFor: (key: string) => 0 | -1;
+  isChecked: (skill: InstalledSkill) => boolean;
+  /** Whether any skill on the page is checked. */
+  hasSelection: boolean;
+  onToggle: (skill: InstalledSkill) => void;
 }
 
 /**
- * One row of any inbox group - the Stack row Skills uses, with the tokens
- * column replaced by the group's own detail text and action node. The
- * glyph comes from the caller's `state`, not the skill's own worst
- * condition, so a Broken/Warnings row always matches the group it sits in;
- * a plain "recently used" row passes `null` and shows no glyph.
+ * One row of any inbox group - the same cells, grid, and slot as a Skills row. The note is the
+ * group's own detail text and the last cell is the group's fix. The state comes from the
+ * caller, not the skill's own worst condition, so a Broken/Warnings row always matches the
+ * group it sits in.
  */
 function HomeRow({
+  rowKey,
+  wiring,
   skill,
   state,
   detail,
   action,
   onOpen,
   rowIndex,
-  rowRef,
-  tabIndex,
 }: {
+  rowKey: string;
+  wiring: HomeRowWiring;
   skill: InstalledSkill;
   state: RowState | null;
   detail: ReactNode;
   action: ReactNode;
   onOpen: () => void;
   rowIndex: number;
-  /** Registers the row with `useRowCursor` so movement can focus and scroll it. */
-  rowRef: (el: HTMLDivElement | null) => void;
-  tabIndex: 0 | -1;
 }) {
+  const checked = wiring.isChecked(skill);
   return (
     <div
-      ref={rowRef}
+      ref={wiring.rowRef(rowKey)}
       role="row"
       aria-rowindex={rowIndex}
-      tabIndex={tabIndex}
+      aria-selected={checked}
+      tabIndex={wiring.tabIndexFor(rowKey)}
       onClick={(e) => {
         // SAFETY: a click's target is always an Element; browsers retarget clicks on text
         // to the parent element.
         if (rowClickOpensSkill(e.currentTarget, e.target as Element)) onOpen();
       }}
-      className={`${ROW_CLASS} grid-cols-[var(--glyph-hit)_minmax(0,1fr)_160px_148px_minmax(0,1fr)_104px] gap-x-3 px-3 hover:bg-bg-secondary focus-visible:outline-2 focus-visible:outline-accent -outline-offset-2`}
-      style={
-        // SAFETY: `--glyph-hit` is a custom property, not a known CSSProperties key; React
-        // passes it through to the style attribute as-is.
-        { "--glyph-hit": `${HOME_GLYPH_HIT}px` } as CSSProperties
-      }
+      className={`${ROW_CLASS} ${SKILL_ROW_GRID} hover:bg-bg-secondary focus-visible:outline-2 focus-visible:outline-accent -outline-offset-2`}
     >
-      {/* Not `contents`: `RowGlyph` renders nothing when the skill has no state, and a `contents`
-          wrapper around no children drops out of the grid, shifting every column after it. */}
       <div role="gridcell" className="flex items-center justify-center">
-        <RowGlyph state={state} size={HOME_GLYPH_SIZE} />
+        <SlotCell
+          skill={skill}
+          state={state}
+          checked={checked}
+          hasSelection={wiring.hasSelection}
+          onCheckedChange={() => wiring.onToggle(skill)}
+        />
       </div>
       <div role="gridcell" className="contents">
         <SkillNameCell skill={skill} />
@@ -120,11 +121,9 @@ function HomeRow({
         <HarnessStack skill={skill} harnessList={DEFAULT_HARNESS_LIST} />
       </div>
       <div role="gridcell" className="contents">
-        <span className="select-text truncate text-small text-text-tertiary">{detail}</span>
+        <NoteCell skill={skill} note={detail} />
       </div>
-      {/* Not `contents`: a fixed-width, right-aligned box so the action column's size never
-          depends on its own content - that's what let the row's `1fr` columns drift per group. */}
-      <div role="gridcell" className="flex min-w-0 items-center justify-end overflow-hidden">
+      <div role="gridcell" className="flex min-w-0 justify-end">
         {action}
       </div>
     </div>
@@ -150,7 +149,7 @@ function ShowAllLink({
   );
 }
 
-/** "Pull latest" for one Updates row - see `useGuardedSkillUpdate`'s `pullLatest`. */
+/** "Update" for one Updates row - see `useGuardedSkillUpdate`'s `pullLatest`. */
 function PullLatestButton({ skill, isBusy = false }: { skill: InstalledSkill; isBusy?: boolean }) {
   const [isPulling, setIsPulling] = useState(false);
   const guard = useGuardedSkillUpdate();
@@ -167,15 +166,15 @@ function PullLatestButton({ skill, isBusy = false }: { skill: InstalledSkill; is
     <>
       <Button
         variant="ghost"
-        className={ROW_ACTION_CLASS}
+        className={FIX_CLASS}
         onClick={handlePull}
         disabled={pullBusy}
-        aria-label={pullBusy ? "Pulling latest…" : undefined}
+        aria-label={pullBusy ? "Updating…" : undefined}
       >
         {pullBusy ? (
           <span className="inline-block size-3 animate-spin motion-reduce:animate-none rounded-full border-2 border-current border-t-transparent" />
         ) : (
-          "Pull latest"
+          "Update"
         )}
       </Button>
       {guard.dialog}
@@ -207,7 +206,7 @@ function ParkButton({ skill }: { skill: InstalledSkill }) {
   return (
     <Button
       variant="ghost"
-      className={ROW_ACTION_CLASS}
+      className={FIX_CLASS}
       onClick={handlePark}
       disabled={isParking}
       aria-label={isParking ? "Parking…" : undefined}
@@ -233,7 +232,7 @@ function WarningRowAction({
 }) {
   if (issue.kind === "duplicate") {
     return (
-      <Button variant="ghost" className={ROW_ACTION_CLASS} onClick={onCompare}>
+      <Button variant="ghost" className={FIX_CLASS} onClick={onCompare}>
         Compare
       </Button>
     );
@@ -244,10 +243,10 @@ function WarningRowAction({
     return (
       <Button
         variant="ghost"
-        className={ROW_ACTION_CLASS}
+        className={FIX_CLASS}
         onClick={() => onConvertLinkedRoot(harness, harnessLabel, root)}
       >
-        Convert links
+        Convert
       </Button>
     );
   }
@@ -262,9 +261,9 @@ function BrokenGroup({
   onToggle,
   onSelectSkill,
   onShowAll,
-  rowRef,
-  tabIndexFor,
-}: RowCursorProps & {
+  wiring,
+}: {
+  wiring: HomeRowWiring;
   broken: HealthIssue[];
   start: number;
   isExpanded: boolean;
@@ -289,8 +288,8 @@ function BrokenGroup({
                 skill={issue.skill}
                 state={homeRowState("broken", issue.skill, issue)}
                 rowIndex={rowAt(start, i)}
-                rowRef={rowRef(key)}
-                tabIndex={tabIndexFor(key)}
+                rowKey={key}
+                wiring={wiring}
                 onOpen={() => onSelectSkill(issue.skill.name, issueDeploymentPath(issue))}
                 detail={<span>{issue.detail}</span>}
                 action={
@@ -320,9 +319,9 @@ function WarningsGroup({
   onShowAll,
   openSkill,
   onConvertLinkedRoot,
-  rowRef,
-  tabIndexFor,
-}: RowCursorProps & {
+  wiring,
+}: {
+  wiring: HomeRowWiring;
   warnings: HealthIssue[];
   start: number;
   isExpanded: boolean;
@@ -354,8 +353,8 @@ function WarningsGroup({
                 skill={issue.skill}
                 state={homeRowState("warn", issue.skill, issue)}
                 rowIndex={rowAt(start, i)}
-                rowRef={rowRef(key)}
-                tabIndex={tabIndexFor(key)}
+                rowKey={key}
+                wiring={wiring}
                 onOpen={() => onSelectSkill(issue.skill.name, issueDeploymentPath(issue))}
                 detail={<span>{issue.detail}</span>}
                 action={
@@ -387,9 +386,9 @@ function UnusedGroup({
   onToggle,
   onSelectSkill,
   onShowAll,
-  rowRef,
-  tabIndexFor,
-}: RowCursorProps & {
+  wiring,
+}: {
+  wiring: HomeRowWiring;
   unused: InstalledSkill[];
   start: number;
   isExpanded: boolean;
@@ -419,8 +418,8 @@ function UnusedGroup({
                 skill={skill}
                 state={homeRowState("unused", skill, null)}
                 rowIndex={rowAt(start, i)}
-                rowRef={rowRef(key)}
-                tabIndex={tabIndexFor(key)}
+                rowKey={key}
+                wiring={wiring}
                 onOpen={() => onSelectSkill(skill.name)}
                 detail={
                   <span>
@@ -453,9 +452,9 @@ function RecentGroup({
   onToggle,
   onSelectSkill,
   onShowAll,
-  rowRef,
-  tabIndexFor,
-}: RowCursorProps & {
+  wiring,
+}: {
+  wiring: HomeRowWiring;
   recent: RecentlyUsedSkill[];
   start: number;
   isExpanded: boolean;
@@ -480,19 +479,16 @@ function RecentGroup({
                 skill={skill}
                 state={homeRowState("rec", skill, null)}
                 rowIndex={rowAt(start, i)}
-                rowRef={rowRef(key)}
-                tabIndex={tabIndexFor(key)}
+                rowKey={key}
+                wiring={wiring}
                 onOpen={() => onSelectSkill(skill.name)}
                 detail={
-                  <span>
-                    {projectLabel ?? "Global"} · {formatRelativeTime(lastUsed)}
+                  <span className="tabular-nums">
+                    {projectLabel ?? "Global"} · {formatRelativeTime(lastUsed)} · {usesIn30Days}{" "}
+                    uses
                   </span>
                 }
-                action={
-                  <span className="w-full truncate text-right text-small tabular-nums text-text-tertiary">
-                    {usesIn30Days} uses
-                  </span>
-                }
+                action={null}
               />
             );
           })}
@@ -511,9 +507,9 @@ function UpdatesGroup({
   onSelectSkill,
   onShowAll,
   start,
-  rowRef,
-  tabIndexFor,
-}: RowCursorProps & {
+  wiring,
+}: {
+  wiring: HomeRowWiring;
   updates: InstalledSkill[];
   isExpanded: boolean;
   onToggle: () => void;
@@ -651,8 +647,8 @@ function UpdatesGroup({
                 skill={skill}
                 state={homeRowState("upd", skill, null)}
                 rowIndex={rowAt(start, i)}
-                rowRef={rowRef(key)}
-                tabIndex={tabIndexFor(key)}
+                rowKey={key}
+                wiring={wiring}
                 onOpen={() => onSelectSkill(skill.name)}
                 detail={
                   <>
@@ -665,10 +661,7 @@ function UpdatesGroup({
                       <span className="text-caption whitespace-nowrap text-text-tertiary">
                         Update available
                       </span>
-                    )}{" "}
-                    <span className="font-mono text-caption whitespace-nowrap text-text-tertiary">
-                      {formatTokens(skill.description_tokens)} tokens
-                    </span>
+                    )}
                   </>
                 }
                 action={
@@ -726,9 +719,9 @@ export function HomeInboxGrid({
   onConvertLinkedRoot,
   containerRef,
   onGridKeyDown,
-  rowRef,
-  tabIndexFor,
-}: RowCursorProps & {
+  wiring,
+}: {
+  wiring: HomeRowWiring;
   groups: HomeGroups;
   starts: HomeRowPlan["starts"];
   filter: HomeFilter | null;
@@ -785,8 +778,7 @@ export function HomeInboxGrid({
             onToggle={() => toggleGroup("broken")}
             onSelectSkill={onSelectSkill}
             onShowAll={onShowAllIssues}
-            rowRef={rowRef}
-            tabIndexFor={tabIndexFor}
+            wiring={wiring}
           />
         )}
 
@@ -800,8 +792,7 @@ export function HomeInboxGrid({
             onShowAll={onShowAllIssues}
             openSkill={openSkill}
             onConvertLinkedRoot={onConvertLinkedRoot}
-            rowRef={rowRef}
-            tabIndexFor={tabIndexFor}
+            wiring={wiring}
           />
         )}
 
@@ -813,8 +804,7 @@ export function HomeInboxGrid({
             onSelectSkill={onSelectSkill}
             onShowAll={onShowAllUpdates}
             start={starts.upd}
-            rowRef={rowRef}
-            tabIndexFor={tabIndexFor}
+            wiring={wiring}
           />
         )}
 
@@ -826,8 +816,7 @@ export function HomeInboxGrid({
             onToggle={() => toggleGroup("unused")}
             onSelectSkill={onSelectSkill}
             onShowAll={onShowAllUnused}
-            rowRef={rowRef}
-            tabIndexFor={tabIndexFor}
+            wiring={wiring}
           />
         )}
 
@@ -839,8 +828,7 @@ export function HomeInboxGrid({
             onToggle={() => toggleGroup("rec")}
             onSelectSkill={onSelectSkill}
             onShowAll={onShowAllRecent}
-            rowRef={rowRef}
-            tabIndexFor={tabIndexFor}
+            wiring={wiring}
           />
         )}
       </div>

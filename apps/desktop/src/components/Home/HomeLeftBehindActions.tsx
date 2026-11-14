@@ -10,7 +10,7 @@ import type { HealthIssue } from "@skill-studio/lib";
 import { LeftBehindDialog } from "../SkillDetail/LeftBehindDialog";
 import type { LeftBehindChoice } from "../SkillDetail/LeftBehindDialog";
 import { MenuControl, MenuItem } from "../ui/MenuControl";
-import { ROW_ACTION_CLASS } from "./home-row-click";
+import { FIX_CLASS } from "../SkillList/skill-row-format";
 
 export function HomeLeftBehindActions({
   issue,
@@ -26,7 +26,7 @@ export function HomeLeftBehindActions({
     <>
       <MenuControl
         align="end"
-        triggerClassName={ROW_ACTION_CLASS}
+        triggerClassName={FIX_CLASS}
         trigger={
           <>
             Resolve

@@ -23,9 +23,8 @@ import {
 const DEFAULT_ITEM_CLASS =
   "flex h-(--control-height) cursor-pointer items-center gap-2 rounded-sm px-2.5 text-body text-text-secondary data-highlighted:bg-bg-hover data-highlighted:text-text-primary data-disabled:cursor-not-allowed data-disabled:text-text-quaternary data-[variant=destructive]:text-error data-[variant=destructive]:data-highlighted:bg-error-soft data-[variant=destructive]:data-highlighted:text-error";
 
-/** The popup shell's default look, exported for callers (e.g. `SkillRowMenuScope`) that build a
- * `DropdownMenuContent` directly instead of going through `MenuControl`. */
-export const DEFAULT_POPUP_CLASS =
+/** The popup shell's default look. */
+const DEFAULT_POPUP_CLASS =
   "z-(--z-dropdown) w-auto min-w-(--anchor-width) rounded-md border border-border bg-bg-secondary p-1 shadow-md ring-0";
 
 export function MenuItem({ className, ...props }: ComponentProps<typeof DropdownMenuItem>) {

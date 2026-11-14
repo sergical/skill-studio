@@ -123,7 +123,7 @@ it("Home single-skill Update reports an unchanged owner as current or discards t
       <Toaster />
     </>,
   );
-  await user.click(screen.getByRole("button", { name: "Pull latest" }));
+  await user.click(screen.getByRole("button", { name: "Update" }));
   expect(await screen.findByText("sample is already up to date")).toBeTruthy();
   expect(screen.queryByText("Updated sample")).toBeNull();
 });
@@ -169,7 +169,7 @@ it("Home reports a managed owner and plugin already current together or loses on
       <Toaster />
     </>,
   );
-  await user.click(screen.getByRole("button", { name: "Pull latest" }));
+  await user.click(screen.getByRole("button", { name: "Update" }));
   expect(await screen.findByText("sample is already up to date")).toBeTruthy();
   expect(commands.filter((command) => command === "update_skill")).toHaveLength(1);
   expect(commands.filter((command) => command === "update_plugin")).toHaveLength(1);

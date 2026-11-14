@@ -4,7 +4,6 @@
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import {
   defaultRangeExtractor,
   observeElementRect as observeDefaultElementRect,
@@ -15,7 +14,6 @@ import { groupSkillRows } from "../../lib/skill-list-model";
 import type { SortMode } from "../../lib/skill-list-sort";
 import { useRowCursor, useRowCursorWindowEntry } from "../../hooks/useRowCursor";
 import { RichTooltipScope } from "../ui/RichTooltip";
-import { SkillRowMenuScope } from "./SkillRowMenu";
 import { SkillListEmptyState } from "./SkillListEmptyState";
 import { SkillListGroup } from "./SkillListGroup";
 import { SkillListRow } from "./SkillListRow";
@@ -24,10 +22,6 @@ import { useSkillListAct } from "./useSkillListAct";
 import { useSkillListScrollMargin } from "./useSkillListScrollMargin";
 import { useSkillListSelection } from "./useSkillListSelection";
 import type { RowGroup } from "./skill-row-state";
-
-/** The row's leading-glyph hit box, and the icon it holds - fixed sizes. */
-const GLYPH_HIT = 28;
-const GLYPH_SIZE = 14;
 
 /** The three state groups, in display order, and their header labels. */
 const GROUP_ORDER: RowGroup[] = ["attention", "healthy", "parked"];
@@ -139,11 +133,8 @@ interface SkillListTableProps {
 
 /**
  * A grid of skill rows split into three sticky-headed state groups (Needs
- * attention, Healthy, Parked): the state glyph, name, disk location, harness
- * stack, and token pair. Checking a row's checkbox selects it - no separate
- * selection mode - and the action bar (Create pack, Cancel) shows once
- * anything is checked. Pack creation is deferred (unit 4.3), so the bar's
- * Create pack button never renders.
+ * attention, Healthy, Parked). Checking a row's slot selects it - no separate
+ * selection mode - and the selection bar shows once anything is checked.
  */
 export function SkillListTable({
   skills,
@@ -225,63 +216,51 @@ export function SkillListTable({
   // Destructured (rather than kept as one `cursor` object) so each JSX use below is a plain
   // identifier, not a member access - oxlint's `react(refs)` check otherwise treats every property
   // read off a custom hook's return value as a potential ref read during render.
-  const {
-    rowRef,
-    containerRef,
-    tabIndexFor,
-    onGridKeyDown,
-    focusCursor,
-    focusRow,
-    statusText,
-    cursorKey,
-  } = useRowCursor({
-    keys: visibleKeys,
-    // The row a just-closed skill page was opened from, so Escape back out of it returns
-    // focus there instead of resetting the cursor to the first row.
-    initialKey: initialCursorSkillName,
-    active,
-    scrollToKey: (key) => {
-      const index = items.findIndex((item) => item.kind === "row" && item.skill.name === key);
-      if (index !== -1) virtualizer.scrollToIndex(index, { align: "auto" });
-    },
-    onOpen: (key) => {
-      const skill = rows.find((s) => s.name === key);
-      if (skill) onSelectSkill(skill.name, deploymentPathForSkill?.(skill));
-    },
-    onToggle: (key) => {
-      const index = rows.findIndex((s) => s.name === key);
-      if (index !== -1) handleRowCheckboxClick(index, false);
-    },
-    onExtend: (key) => {
-      const skill = rows.find((s) => s.name === key);
-      const path = skill && rowPath(skill);
-      if (!path) return;
-      const next = new Set(selectedPaths);
-      next.add(path);
-      selectSkills([...next]);
-    },
-    onMenu: (_key, rowEl) => {
-      const triggers = rowEl.querySelectorAll<HTMLElement>('[data-slot="dropdown-menu-trigger"]');
-      triggers[triggers.length - 1]?.click();
-    },
-    onEscape: () => {
-      if (selectedPaths.size > 0) clearSkillSelection();
-    },
-    onCollapseGroup: (groupId) =>
-      setCollapsedGroups((prev) =>
-        // SAFETY: `groupId` only ever comes from this file's own `data-group` attributes, which
-        // are always one of the three `RowGroup` values.
-        new Set(prev).add(groupId as RowGroup),
-      ),
-    onExpandGroup: (groupId) =>
-      setCollapsedGroups((prev) => {
-        const next = new Set(prev);
-        // SAFETY: `groupId` only ever comes from this file's own `data-group` attributes, which
-        // are always one of the three `RowGroup` values.
-        next.delete(groupId as RowGroup);
-        return next;
-      }),
-  });
+  const { rowRef, containerRef, tabIndexFor, onGridKeyDown, focusCursor, statusText, cursorKey } =
+    useRowCursor({
+      keys: visibleKeys,
+      // The row a just-closed skill page was opened from, so Escape back out of it returns
+      // focus there instead of resetting the cursor to the first row.
+      initialKey: initialCursorSkillName,
+      active,
+      scrollToKey: (key) => {
+        const index = items.findIndex((item) => item.kind === "row" && item.skill.name === key);
+        if (index !== -1) virtualizer.scrollToIndex(index, { align: "auto" });
+      },
+      onOpen: (key) => {
+        const skill = rows.find((s) => s.name === key);
+        if (skill) onSelectSkill(skill.name, deploymentPathForSkill?.(skill));
+      },
+      onToggle: (key) => {
+        const index = rows.findIndex((s) => s.name === key);
+        if (index !== -1) handleRowCheckboxClick(index, false);
+      },
+      onExtend: (key) => {
+        const skill = rows.find((s) => s.name === key);
+        const path = skill && rowPath(skill);
+        if (!path) return;
+        const next = new Set(selectedPaths);
+        next.add(path);
+        selectSkills([...next]);
+      },
+      onEscape: () => {
+        if (selectedPaths.size > 0) clearSkillSelection();
+      },
+      onCollapseGroup: (groupId) =>
+        setCollapsedGroups((prev) =>
+          // SAFETY: `groupId` only ever comes from this file's own `data-group` attributes, which
+          // are always one of the three `RowGroup` values.
+          new Set(prev).add(groupId as RowGroup),
+        ),
+      onExpandGroup: (groupId) =>
+        setCollapsedGroups((prev) => {
+          const next = new Set(prev);
+          // SAFETY: `groupId` only ever comes from this file's own `data-group` attributes, which
+          // are always one of the three `RowGroup` values.
+          next.delete(groupId as RowGroup);
+          return next;
+        }),
+    });
   useRowCursorWindowEntry(active, focusCursor);
 
   // Mirrors `cursorKey` into a ref for the virtualizer's `rangeExtractor` above - a plain callback
@@ -329,86 +308,75 @@ export function SkillListTable({
         hasSelection={selectedPaths.size > 0}
         isOpenSkill={skill.name === selectedSkillName}
         tabIndex={tabIndexFor(skill.name)}
-        glyphSize={GLYPH_SIZE}
         rowRef={rowRef(skill.name)}
         onOpen={() => onSelectSkill(skill.name, deploymentPathForSkill?.(skill))}
         busyLabel={pendingLabelFor(skill)}
         onAct={(label) => void handleAct(label, skill)}
         onCheckedChange={(shiftKey) => handleRowCheckboxClick(index, shiftKey)}
-        onMenuOpenChange={(open) => {
-          if (!open) focusRow(skill.name);
-        }}
       />
     );
   }
 
   return (
     <RichTooltipScope>
-      <SkillRowMenuScope>
-        <div
-          className="flex flex-col gap-3"
-          style={
-            // SAFETY: `--glyph-hit` is a custom property, not a known CSSProperties key; React
-            // passes it through to the style attribute as-is.
-            { "--glyph-hit": `${GLYPH_HIT}px` } as CSSProperties
-          }
-        >
-          {rows.length === 0 ? (
-            <SkillListEmptyState
-              hasAnySkills={hasAnySkills}
-              onClearFilters={onClearFilters}
-              onAddSkill={onAddSkill}
-            />
-          ) : (
-            <div
-              ref={setGridRef}
-              role="grid"
-              aria-label="Skills"
-              aria-rowcount={rows.length}
-              onKeyDown={onGridKeyDown}
-            >
-              {GROUP_ORDER.map((group) => {
-                const groupSkills = buckets[group];
-                if (groupSkills.length === 0) return null;
-                const open = !collapsedGroups.has(group);
-                const { start: groupStart, height: groupHeight } = groupMeta[group];
-                return (
-                  <SkillListGroup
-                    key={group}
-                    group={group}
-                    label={GROUP_LABEL[group]}
-                    count={groupSkills.length}
-                    open={open}
-                    start={groupStart}
-                    height={groupHeight}
-                    items={items}
-                    virtualItems={virtualItems}
-                    scrollMargin={scrollMargin}
-                    onToggle={() => toggleGroup(group)}
-                    renderRow={(item, top) => renderRow(item.skill, item.index, top)}
-                  />
-                );
-              })}
-            </div>
-          )}
-          {/* Visually-hidden live region: announces the cursor's position, debounced to the last move. */}
-          <div role="status" aria-live="polite" className="sr-only">
-            {statusText}
+      <div className="flex flex-col gap-3">
+        {rows.length === 0 ? (
+          <SkillListEmptyState
+            hasAnySkills={hasAnySkills}
+            onClearFilters={onClearFilters}
+            onAddSkill={onAddSkill}
+          />
+        ) : (
+          <div
+            ref={setGridRef}
+            role="grid"
+            aria-label="Skills"
+            aria-rowcount={rows.length}
+            onKeyDown={onGridKeyDown}
+          >
+            {GROUP_ORDER.map((group) => {
+              const groupSkills = buckets[group];
+              if (groupSkills.length === 0) return null;
+              const open = !collapsedGroups.has(group);
+              const { start: groupStart, height: groupHeight } = groupMeta[group];
+              return (
+                <SkillListGroup
+                  key={group}
+                  group={group}
+                  label={GROUP_LABEL[group]}
+                  count={groupSkills.length}
+                  open={open}
+                  start={groupStart}
+                  height={groupHeight}
+                  items={items}
+                  virtualItems={virtualItems}
+                  scrollMargin={scrollMargin}
+                  onToggle={() => toggleGroup(group)}
+                  renderRow={(item, top) => renderRow(item.skill, item.index, top)}
+                />
+              );
+            })}
           </div>
-
-          {selectedPaths.size > 0 && (
-            <SkillListSelectionBar
-              selectedSkills={rows.filter((skill) => selectedPaths.has(rowPath(skill) ?? ""))}
-              onCancel={clearSkillSelection}
-              onActionFinished={(hadFailures) => {
-                // A failure keeps the selection so the user can retry.
-                if (!hadFailures) clearSkillSelection();
-              }}
-            />
-          )}
-          {updateDialog}
+        )}
+        {/* Visually-hidden live region: announces the cursor's position, debounced to the last move. */}
+        <div role="status" aria-live="polite" className="sr-only">
+          {statusText}
         </div>
-      </SkillRowMenuScope>
+
+        {selectedPaths.size > 0 && (
+          <SkillListSelectionBar
+            selectedSkills={rows.filter((skill) => selectedPaths.has(rowPath(skill) ?? ""))}
+            onCancel={clearSkillSelection}
+            onAct={(label, skill) => void handleAct(label, skill)}
+            onOpen={(skill) => onSelectSkill(skill.name, deploymentPathForSkill?.(skill))}
+            onActionFinished={(hadFailures) => {
+              // A failure keeps the selection so the user can retry.
+              if (!hadFailures) clearSkillSelection();
+            }}
+          />
+        )}
+        {updateDialog}
+      </div>
     </RichTooltipScope>
   );
 }

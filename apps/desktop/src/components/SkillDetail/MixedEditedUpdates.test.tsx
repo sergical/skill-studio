@@ -92,8 +92,13 @@ function HomeUpdate() {
         onConvertLinkedRoot={noop}
         containerRef={noop}
         onGridKeyDown={noop}
-        rowRef={() => noop}
-        tabIndexFor={() => 0}
+        wiring={{
+          rowRef: () => noop,
+          tabIndexFor: () => 0,
+          isChecked: () => false,
+          hasSelection: false,
+          onToggle: noop,
+        }}
       />
       <Toaster />
     </>

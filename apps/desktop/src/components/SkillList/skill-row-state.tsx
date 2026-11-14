@@ -45,6 +45,7 @@ export interface RowState {
   level: RowLevel;
   label: string;
   detail: string | null;
+  /** The row's one fix, named on its Fix button and run by `useSkillListAct`. */
   action: string | null;
 }
 
@@ -79,7 +80,7 @@ export function rowState(skill: InstalledSkill): RowState | null {
       level: "error",
       label: first,
       detail: second ?? null,
-      action: "Fix",
+      action: "Fix link",
     };
   }
   if (rollup.level === "warning") {
@@ -340,30 +341,6 @@ export function whereFacts(
   };
 }
 
-/** The fix or fixes each ladder rung offers from the glyph, independent of
- * `state.action`. */
-export function fixesFor(state: RowState): string[] {
-  switch (state.kind) {
-    case "violation":
-      return ["Fix"];
-    case "rollup":
-      return state.level === "error" ? ["Fix link"] : [state.action ?? "Compare", "Convert"];
-    case "update":
-      return ["Pull latest"];
-    case "parked":
-      return ["Unpark"];
-    case "issue":
-      return [];
-  }
-}
-
-/** Whether the row has a state worth surfacing a glyph or menu for - every
- * kind except parked, which is a quiet fact rather than something to decide
- * about. */
-export function isDecision(state: RowState | null): boolean {
-  return state !== null && state.kind !== "parked";
-}
-
 /** The list's three state groups, in display order. */
 export type RowGroup = "attention" | "healthy" | "parked";
 
@@ -374,7 +351,7 @@ export function rowGroup(
   skill: InstalledSkill,
   state: RowState | null = rowState(skill),
 ): RowGroup {
-  if (isDecision(state)) return "attention";
+  if (state !== null && state.kind !== "parked") return "attention";
   if (skill.parked || state?.kind === "parked") return "parked";
   return "healthy";
 }

@@ -165,8 +165,13 @@ it("Home Update all displays both plugin failures instead of discarding the seco
         onConvertLinkedRoot={noop}
         containerRef={noop}
         onGridKeyDown={noop}
-        rowRef={() => noop}
-        tabIndexFor={() => 0}
+        wiring={{
+          rowRef: () => noop,
+          tabIndexFor: () => 0,
+          isChecked: () => false,
+          hasSelection: false,
+          onToggle: noop,
+        }}
       />
       <Toaster />
     </>,
@@ -233,8 +238,13 @@ it("Home Update all refreshes a shared marketplace once instead of refreshing it
         onConvertLinkedRoot={noop}
         containerRef={noop}
         onGridKeyDown={noop}
-        rowRef={() => noop}
-        tabIndexFor={() => 0}
+        wiring={{
+          rowRef: () => noop,
+          tabIndexFor: () => 0,
+          isChecked: () => false,
+          hasSelection: false,
+          onToggle: noop,
+        }}
       />
       <Toaster />
     </>,

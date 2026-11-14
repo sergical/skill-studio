@@ -21,6 +21,8 @@ import type {
 import { lifecycleTargetForHarnessRoot } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
 import { PageShell } from "../Shell/PageShell";
+import { SkillListSelectionBar } from "../SkillList/SkillListSelectionBar";
+import { useSkillListAct } from "../SkillList/useSkillListAct";
 import { InfoPopover } from "../ui/InfoPopover";
 import { MaterializeRootDialog } from "../ui/MaterializeRootDialog";
 import { TooltipControl } from "../ui/TooltipControl";
@@ -396,16 +398,36 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
 
   // Row semantics match Skills: one continuous `aria-rowindex` across every visible group, and
   // `tabIndex={0}` on only the very first rendered row.
-  const { starts, visibleKeys, openByKey } = buildHomeRowPlan({
+  const { starts, visibleKeys, openByKey, skillByKey } = buildHomeRowPlan({
     groups,
     isGroupVisible,
     isGroupExpanded,
     onSelectSkill,
   });
 
+  // Selection is per skill, as on Skills: a skill in two groups shows checked in both.
+  const selectedPaths = useAppStore((state) => state.selectedSkillPaths);
+  const toggleSkillSelection = useAppStore((state) => state.toggleSkillSelection);
+  const clearSkillSelection = useAppStore((state) => state.clearSkillSelection);
+  const rowPath = (skill: InstalledSkill) => skill.deployments[0]?.path;
+  const toggleSkill = (skill: InstalledSkill) => {
+    const path = rowPath(skill);
+    if (path) toggleSkillSelection(path);
+  };
+  const isChecked = (skill: InstalledSkill) => selectedPaths.has(rowPath(skill) ?? "");
+  const selectedSkills = groups.own.filter(isChecked);
+  const { handleAct, dialog: updateDialog } = useSkillListAct(onSelectSkill, undefined);
+
   const { rowRef, containerRef, tabIndexFor, onGridKeyDown, statusText } = useHomeRowCursor({
     visibleKeys,
     openByKey,
+    onToggle: (key) => {
+      const skill = skillByKey.get(key);
+      if (skill) toggleSkill(skill);
+    },
+    onEscape: () => {
+      if (selectedPaths.size > 0) clearSkillSelection();
+    },
     active,
     setCollapsedGroups,
   });
@@ -470,13 +492,32 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
         }
         containerRef={containerRef}
         onGridKeyDown={onGridKeyDown}
-        rowRef={rowRef}
-        tabIndexFor={tabIndexFor}
+        wiring={{
+          rowRef,
+          tabIndexFor,
+          isChecked,
+          hasSelection: selectedSkills.length > 0,
+          onToggle: toggleSkill,
+        }}
       />
       {/* Visually-hidden live region: announces the cursor's position, debounced to the last move. */}
       <div role="status" aria-live="polite" className="sr-only">
         {statusText}
       </div>
+
+      {selectedSkills.length > 0 && (
+        <SkillListSelectionBar
+          selectedSkills={selectedSkills}
+          onCancel={clearSkillSelection}
+          onAct={(label, skill) => void handleAct(label, skill)}
+          onOpen={(skill) => onSelectSkill(skill.name)}
+          onActionFinished={(hadFailures) => {
+            // A failure keeps the selection so the user can retry.
+            if (!hadFailures) clearSkillSelection();
+          }}
+        />
+      )}
+      {updateDialog}
 
       {linkedRootDialog && (
         <MaterializeRootDialog

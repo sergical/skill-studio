@@ -402,6 +402,8 @@ export interface HomeRowPlan {
   starts: { broken: number; warn: number; upd: number; unused: number; rec: number };
   visibleKeys: string[];
   openByKey: Map<string, () => void>;
+  /** Each row key's skill, so a key press can select the row's skill. */
+  skillByKey: Map<string, InstalledSkill>;
 }
 
 /**
@@ -473,6 +475,17 @@ export function buildHomeRowPlan(params: {
     ]),
   ]);
 
+  const skillByKey = new Map<string, InstalledSkill>([
+    ...brokenRows.map((issue): [string, InstalledSkill] => [
+      issueKey("broken", issue),
+      issue.skill,
+    ]),
+    ...warnRows.map((issue): [string, InstalledSkill] => [issueKey("warn", issue), issue.skill]),
+    ...updRows.map((skill): [string, InstalledSkill] => [skillKey("upd", skill), skill]),
+    ...unusedRows.map((skill): [string, InstalledSkill] => [skillKey("unused", skill), skill]),
+    ...recRows.map(({ skill }): [string, InstalledSkill] => [skillKey("rec", skill), skill]),
+  ]);
+
   return {
     starts: {
       broken: brokenStart,
@@ -483,5 +496,6 @@ export function buildHomeRowPlan(params: {
     },
     visibleKeys,
     openByKey,
+    skillByKey,
   };
 }

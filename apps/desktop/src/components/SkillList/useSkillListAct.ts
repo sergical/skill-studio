@@ -1,8 +1,8 @@
 // ============================================================================
-// useSkillListAct - Row action dispatch for SkillListTable: Park/Unpark,
-// Fix, and Pull latest act on the deployment target `HomeView` uses, every
-// other fix (Fix link, Compare, Convert, Keep) opens the skill's own detail,
-// since those flows live there. Fix now covers the repairable spec
+// useSkillListAct - Row fix dispatch for Home and Skills: Park/Unpark, Fix,
+// and Update act on the deployment target `HomeView` uses, Compare opens the
+// skill's compare dialog, and every other fix (Fix link, Convert, Keep) opens
+// the skill's own detail, since those flows live there. Fix now covers the repairable spec
 // violations too (invalid YAML frontmatter); any issue `fix_skill` leaves
 // unrepaired falls through to the detail page, which has its own card for
 // a link issue and shows the raw message otherwise.
@@ -66,7 +66,7 @@ export async function reportFixOutcome(
   });
 }
 
-/** The row's pending text for each menu verb that does work; other verbs only open the skill. */
+/** The row's pending text for each fix that does work; other verbs only open the skill. */
 function busyLabelFor(label: string): string | null {
   switch (label) {
     case "Park":
@@ -75,7 +75,7 @@ function busyLabelFor(label: string): string | null {
       return "Unparking…";
     case "Fix":
       return "Fixing…";
-    case "Pull latest":
+    case "Update":
       return "Updating…";
     default:
       return null;
@@ -87,6 +87,7 @@ export function useSkillListAct(
   deploymentPathForSkill: ((skill: InstalledSkill) => string | undefined) | undefined,
 ) {
   const addToast = useAppStore((state) => state.addToast);
+  const openSkill = useAppStore((state) => state.openSkill);
   const guard = useGuardedSkillUpdate();
   // Skill name -> what its row is doing now. The row shows a spinner until the action ends.
   const [busy, setBusy] = useState<ReadonlyMap<string, string>>(new Map());
@@ -105,8 +106,12 @@ export function useSkillListAct(
   }
 
   async function runAct(label: string, skill: InstalledSkill) {
-    if (label === "Pull latest") {
+    if (label === "Update") {
       await guard.pullLatest(skill);
+      return;
+    }
+    if (label === "Compare") {
+      openSkill(skill.name, deploymentPathForSkill?.(skill), "compare");
       return;
     }
     if (label === "Fix") {
