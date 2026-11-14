@@ -273,15 +273,22 @@ function harnessId(agent: string): AgentId | null {
 }
 
 /** "Missing description", "Missing name", etc, folded into the fixed sentence shapes from status-spec.md §5. */
-function specCondition(violations: string[], path: string): Condition | null {
+function specCondition(violations: string[], deployment: Deployment): Condition | null {
   const relevant = violations.filter((v) => specViolationSeverity(v) !== "note");
   if (relevant.length === 0) return null;
   const blocking = relevant.some(isBlockingSpecViolation);
   const sentence = describeSpecViolations(relevant);
-  const editAndReveal: MenuEntry[] = [
-    { label: "Edit SKILL.md", action: { kind: "edit-skill-md", path } },
-    { label: "Reveal in Finder", action: { kind: "reveal", path, label: "the copy" } },
-  ];
+  const { path } = deployment;
+  const reveal: MenuEntry = {
+    label: "Reveal in Finder",
+    action: { kind: "reveal", path, label: "the copy" },
+  };
+  const menu: MenuEntry[] = deployment.plugin
+    ? [reveal]
+    : [{ label: "Edit SKILL.md", action: { kind: "edit-skill-md", path } }, reveal];
+  const fix = deployment.plugin
+    ? `Managed by ${deployment.plugin.name}. Ask the plugin author to fix it.`
+    : "Edit SKILL.md.";
   return blocking
     ? {
         level: "error",
@@ -289,8 +296,8 @@ function specCondition(violations: string[], path: string): Condition | null {
         phrase: "skipped by some agents",
         plural: "skipped by some agents",
         what: `SKILL.md: ${sentence}`,
-        fix: "Edit SKILL.md.",
-        menu: editAndReveal,
+        fix,
+        menu,
       }
     : {
         level: "warning",
@@ -298,8 +305,8 @@ function specCondition(violations: string[], path: string): Condition | null {
         phrase: "to check",
         plural: "to check",
         what: `SKILL.md: ${sentence} The skill still loads.`,
-        fix: "Edit SKILL.md.",
-        menu: [editAndReveal[0]],
+        fix,
+        menu: [menu[0]],
       };
 }
 
@@ -462,7 +469,7 @@ function driftCondition(deployment: Deployment, ctx: GroupContext): Condition {
   const label = harnessLabelFromAgent(deployment.agent);
   return {
     level: "warning",
-    status: "Copy differs",
+    status: "Copies differ",
     phrase: "copy differs",
     plural: "copies differ",
     what,
@@ -516,7 +523,7 @@ function deploymentConditions(deployment: Deployment, ctx: GroupContext): Condit
   }
 
   const violations = deployment.spec_violations ?? [];
-  const spec = specCondition(violations, deployment.path);
+  const spec = specCondition(violations, deployment);
   if (spec) out.push(spec);
 
   if (ctx.driftSet.has(deployment)) out.push(driftCondition(deployment, ctx));
@@ -531,7 +538,7 @@ function deploymentConditions(deployment: Deployment, ctx: GroupContext): Condit
 function sharedConditions(shared: Deployment, ctx: GroupContext): Condition[] {
   const out: Condition[] = [];
   const violations = shared.spec_violations ?? [];
-  const spec = specCondition(violations, shared.path);
+  const spec = specCondition(violations, shared);
   if (spec) out.push(spec);
   if (ctx.driftSet.has(shared)) out.push(driftCondition(shared, ctx));
   return out.sort((a, b) => RANK[b.level] - RANK[a.level]);
@@ -875,7 +882,7 @@ export const INVOCATION_POLICY_OPTIONS: { value: InvocationPolicy; label: string
 /** True when any row across `groups` has drifted from its scope's canonical copy - `SkillLocationsCard`'s title link and the properties rail's Location warning glyph both key off this. */
 export function scopeGroupsHaveDrift(groups: ScopeGroup[]): boolean {
   return groups.some((g) =>
-    g.rows.some((r) => r.conditions.some((c) => c.status === "Copy differs")),
+    g.rows.some((r) => r.conditions.some((c) => c.status === "Copies differ")),
   );
 }
 

@@ -863,6 +863,32 @@ describe("rowMenu", () => {
     expect(menu.hint).toBe("Applies to every skill the codex plugin ships.");
   });
 
+  // Failure caught: a plugin copy with a spec violation offers "Edit SKILL.md", a dead end,
+  // because the plugin cache is read-only and the next plugin update overwrites it.
+  it("a plugin row with a spec violation offers no Edit SKILL.md and names the plugin as owner", () => {
+    const plugin = fixtureDeployment({
+      agent: "Claude Code",
+      scope: "plugin",
+      mutability: "read-only",
+      path: "/home/.claude/plugins/cache/anthropics/codex/1.0.6/skills/find-bugs",
+      spec_violations: ["missing required frontmatter field: description"],
+      plugin: {
+        name: "codex",
+        harness: "Claude Code",
+        version: "1.0.6",
+        marketplace: "anthropics",
+        id: "codex@anthropics",
+      },
+    });
+    const [global] = buildScopeGroups(fixtureSkill({ deployments: [plugin] }));
+    const row = global.rows.find((r) => r.kind === "plugin")!;
+    const spec = row.conditions.find((c) => c.status === "Spec violation")!;
+
+    expect(spec.menu.map((e) => e.label)).not.toContain("Edit SKILL.md");
+    expect(rowMenu(row, global.label).entries.map((e) => e.label)).not.toContain("Edit SKILL.md");
+    expect(spec.fix).toBe("Managed by codex. Ask the plugin author to fix it.");
+  });
+
   it("offers Update the plugin only on a plugin row whose plugin has an update", () => {
     const plugin = fixtureDeployment({
       agent: "Claude Code",
