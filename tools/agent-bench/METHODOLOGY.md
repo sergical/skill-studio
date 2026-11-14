@@ -166,17 +166,25 @@ Cursor and Grok Build are not in this run. See [Limits](#limits).
   the fixture and compares it with the hash taken at build time. A run that
   changed the fixture is kept in the results file but left out of the scores.
 - Each agent runs in an empty working folder.
-- A run whose output names a real agent skill folder in the user's home
-  (`~/.agents`, `~/.claude`, `~/.codex`, `~/.cursor`, `~/.pi`,
-  `~/.config/opencode`) is marked `read the real home` and left out of the
-  scores.
+- The answers stay in the runner's memory. No answer file is on disk while
+  an agent runs.
+- A fresh `HOME` is not a sandbox: an agent with a shell can still read the
+  real home by its full path. A run whose output names any path in the real
+  home, except the folders the agent itself is installed in, is marked
+  `read the real home` and left out of the scores. Each run keeps its full
+  output in `<workdir>/<run id>/stdout.jsonl`, so the check can run again.
+- The fixture hash includes the target of each symlink.
 
 ## Scoring
 
 - Q1, Q2 and Q4 must be exact.
 - Q3 is correct only when all five skills and all five counts are right. We
   also keep two partial scores: names (how many of the five skills are in the
-  answer) and counts (how many counts are exact).
+  answer) and counts (how many counts are exact). The question also asks
+  which agents used each skill. The answer format does not collect them, so
+  the score does not check them.
+- Numbers that are not whole numbers are wrong. A part of an answer in the
+  wrong shape is wrong; the other parts still count.
 - "Correct" for a run is the number of questions that are fully right, out of 4. An answer with no JSON block scores 0.
 
 ## Metrics
@@ -188,6 +196,12 @@ the maximum of each metric, the share of runs that got each question right,
 and answer agreement (the share of runs that gave the most common answer).
 
 Per method: the median of the cell medians.
+
+Only scored runs (no error, fixture intact) go into the medians. If a run
+ends in an error and `--retry-errors` runs it again, the report keeps the
+last attempt only, and the total cost counts every attempt. `bench.py report`
+refuses to write the homepage file while a matrix run has no scored result,
+unless you pass `--partial`.
 
 The homepage headline pairs each `cli` and `mcp` cell with the `raw` cell of
 the same harness and model, takes the ratio of the `raw` median to the Skill

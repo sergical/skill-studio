@@ -26,6 +26,7 @@ export interface BenchCell {
   correct_share: BenchStat | null;
   duration_s: BenchStat | null;
   cost_usd: BenchStat | null;
+  cost_source: "harness" | "estimate";
   tool_calls: BenchStat | null;
 }
 

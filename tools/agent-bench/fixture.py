@@ -772,7 +772,9 @@ def fixture_hash(home: Path) -> str:
             p = Path(root) / name.rstrip("/")
             st = p.lstat()
             h.update(f"{rel_root / name}\0{stat.S_IMODE(st.st_mode):o}\0{st.st_size}\0{int(st.st_mtime)}\0".encode())
-            if p.is_file() and not p.is_symlink():
+            if p.is_symlink():
+                h.update(os.readlink(p).encode())
+            elif p.is_file():
                 h.update(p.read_bytes())
     return h.hexdigest()
 
@@ -826,7 +828,6 @@ def build(out: Path, now: datetime, task: str = "usage") -> dict:
         os.utime(path, (t.timestamp(), t.timestamp()))
     make_read_only(home)
     truth["fixture_hash"] = fixture_hash(home)
-    (out / "ground_truth.json").write_text(json.dumps(truth, indent=2) + "\n")
     return truth
 
 

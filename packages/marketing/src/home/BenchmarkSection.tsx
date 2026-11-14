@@ -35,7 +35,7 @@ const TASKS: ReadonlyArray<{ id: BenchTask; label: string; question: string }> =
     id: "usage",
     label: "Skill usage",
     question:
-      "Which skills ran in the last 30 days, how often, and in which agent? Four questions with known answers.",
+      "How many skills are there, which ran in the last 45 days, and how often? Four questions with known answers.",
   },
   {
     id: "update",
@@ -110,7 +110,9 @@ function markLabel(row: Row, method: BenchMethod, metric: BenchMetric): string {
     stat.min === stat.max
       ? ""
       : ` (${formatMetric(metric, stat.min)} to ${formatMetric(metric, stat.max)})`;
-  return `${harnessName(row.harness)}, ${row.label}, ${methodLabel}: ${formatMetric(metric, stat.median)}${range}, ${cell.runs} runs`;
+  const estimate =
+    metric === "cost_usd" && cell.cost_source === "estimate" ? ", estimated from tokens" : "";
+  return `${harnessName(row.harness)}, ${row.label}, ${methodLabel}: ${formatMetric(metric, stat.median)}${range}${estimate}, ${cell.runs} runs`;
 }
 
 function Mark({ method }: { method: BenchMethod }) {
@@ -254,9 +256,10 @@ function cellText(cell: BenchCell | undefined, metric: BenchMetric): string {
   const stat = statFor(cell, metric);
   if (!stat) return "–";
   const median = formatMetric(metric, stat.median);
+  const estimate = metric === "cost_usd" && cell!.cost_source === "estimate" ? " est." : "";
   return stat.min === stat.max
-    ? median
-    : `${median} (${formatMetric(metric, stat.min)}–${formatMetric(metric, stat.max)})`;
+    ? `${median}${estimate}`
+    : `${median}${estimate} (${formatMetric(metric, stat.min)}–${formatMetric(metric, stat.max)})`;
 }
 
 function ResultsTable({ rows }: { rows: Row[] }) {
@@ -310,6 +313,11 @@ export function BenchmarkSection() {
   const faster = summary.speedup !== null && summary.speedup >= 1.15;
   const harnesses = new Set(data.cells.map((c) => c.harness)).size;
   const models = new Set(data.cells.map((c) => c.model)).size;
+  const estimated = [
+    ...new Set(
+      data.cells.filter((c) => c.cost_source === "estimate").map((c) => harnessName(c.harness)),
+    ),
+  ];
   const runDate = new Date(data.generated).toLocaleDateString("en-GB", {
     day: "numeric",
     month: "long",
@@ -394,7 +402,8 @@ export function BenchmarkSection() {
 
       <div {...stylex.props(styles.method)}>
         <p {...stylex.props(styles.methodText)}>
-          {data.total_runs} runs on {runDate}, ${data.total_cost_usd.toFixed(2)} of model use,{" "}
+          {data.total_runs} runs on {runDate}, ${data.total_cost_usd.toFixed(2)} of model use
+          {estimated.length > 0 && ` (for ${estimated.join(" and ")}, estimated from tokens)`},{" "}
           {harnesses} agents and {models} models. Each run got a fresh copy of a made-up home
           folder, and a run that changed a file failed. Your numbers will differ.
         </p>

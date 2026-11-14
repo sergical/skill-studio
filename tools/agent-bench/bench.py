@@ -38,8 +38,10 @@ RAW = RESULTS / "runs.jsonl"
 PRICES = RESULTS / "prices.json"
 SUMMARY = RESULTS / "results.json"
 MARKETING = REPO / "packages" / "marketing" / "src" / "data" / "agent-benchmark.json"
-# An agent that reaches these folders read the user's real skills, not the fixture.
-REAL_SKILL_ROOTS = tuple(f"{Path.home() / d}/" for d in (".agents", ".claude", ".codex", ".cursor", ".pi", ".config/opencode"))
+# A fresh HOME is not a sandbox: an agent can still read the real home by full path.
+# Agent installs live in these folders, so their paths in the output are expected.
+AGENT_INSTALL_DIRS = {".volta", ".vite-plus"}
+REAL_HOME_PATH = re.compile(re.escape(f"{Path.home()}/") + r"([^/\"'\s\\]+)")
 TIMEOUT_S = 900
 WRITE_LOCK = threading.Lock()
 
@@ -97,10 +99,15 @@ def extract_answer(text: str) -> dict | None:
 
 
 def as_int(value) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
+    if isinstance(value, bool):
         return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value)
+    return None
 
 
 AGENT_ALIASES = {"claude": "claude-code", "claude code": "claude-code", "open-code": "opencode", "pi-agent": "pi", "cursor-agent": "cursor"}
@@ -111,6 +118,11 @@ def norm(value) -> str:
     return AGENT_ALIASES.get(text, text)
 
 
+def rows_of(answer: dict, key: str) -> list:
+    value = answer.get(key)
+    return value if isinstance(value, list) else []
+
+
 def f1(got: set, want: set) -> float:
     if not got and not want:
         return 1.0
@@ -119,7 +131,11 @@ def f1(got: set, want: set) -> float:
 
 
 def score(task: str, answer: dict | None, truth: dict) -> dict:
-    return {"usage": score_usage, "update": score_update, "share": score_share}[task](answer or {}, truth)
+    scorer = {"usage": score_usage, "update": score_update, "share": score_share}[task]
+    try:
+        return scorer(answer if isinstance(answer, dict) else {}, truth)
+    except (TypeError, AttributeError):
+        return scorer({}, truth)
 
 
 def finish(out: dict, task: str) -> dict:
@@ -130,18 +146,18 @@ def finish(out: dict, task: str) -> dict:
 
 def score_update(answer: dict, truth: dict) -> dict:
     want = {(r["skill"], r["agent"]) for r in truth["u2"]}
-    got = {(norm(r.get("skill")), norm(r.get("agent"))) for r in answer.get("u2") or [] if isinstance(r, dict)}
+    got = {(norm(r.get("skill")), norm(r.get("agent"))) for r in rows_of(answer, "u2") if isinstance(r, dict)}
     return finish({"u1": as_int(answer.get("u1")) == truth["u1"], "u2": got == want, "u2_f1": f1(got, want)}, "update")
 
 
 def score_share(answer: dict, truth: dict) -> dict:
     got_repos = {}
-    for row in answer.get("s1") or []:
+    for row in rows_of(answer, "s1"):
         if isinstance(row, dict) and row.get("repo"):
             repo = norm(row["repo"]).removeprefix("https://github.com/").removesuffix(".git")
             got_repos[repo] = as_int(row.get("skills"))
     want_files = set(truth["s2"])
-    got_files = {norm(x) for x in answer.get("s2") or [] if isinstance(x, str)}
+    got_files = {norm(x) for x in rows_of(answer, "s2") if isinstance(x, str)}
     return finish({"s1": got_repos == truth["s1"], "s2": got_files == want_files, "s2_f1": f1(got_files, want_files)}, "share")
 
 
@@ -150,7 +166,7 @@ def score_usage(answer: dict, truth: dict) -> dict:
         return finish({"q1": False, "q2": False, "q3": False, "q4": False, "q3_names": 0.0, "q3_counts": 0.0}, "usage")
     want = {row["skill"]: row["uses"] for row in truth["q3"]}
     got = {}
-    for row in answer.get("q3") or []:
+    for row in rows_of(answer, "q3"):
         if isinstance(row, dict) and row.get("skill"):
             got[str(row["skill"]).strip().lower()] = as_int(row.get("uses"))
     names = sum(1 for s in want if s in got) / len(want)
@@ -249,7 +265,7 @@ def run_once(cell: dict, rep: int, args, prices: dict) -> dict:
     if parsed["cost_usd"] is None:
         parsed["cost_usd"] = estimate_cost(cell, parsed["tokens"], prices)
     answer = extract_answer(parsed["answer"])
-    if any(path in stdout for path in REAL_SKILL_ROOTS):
+    if any(m.group(1) not in AGENT_INSTALL_DIRS for m in REAL_HOME_PATH.finditer(stdout)):
         error, answer = "read the real home", None
     intact = fixture.fixture_hash(home) == truth["fixture_hash"]
     record = {
@@ -335,13 +351,13 @@ def spread(values: list[float]) -> dict | None:
 def answer_key(task: str, answer: dict | None) -> str:
     a = answer or {}
     if task == "usage":
-        rows = sorted((r.get("skill"), r.get("uses")) for r in (a.get("q3") or []) if isinstance(r, dict))
+        rows = sorted(((r.get("skill"), r.get("uses")) for r in rows_of(a, "q3") if isinstance(r, dict)), key=str)
         return json.dumps([a.get("q1"), a.get("q2"), a.get("q4"), rows], default=str)
     if task == "update":
-        rows = sorted((norm(r.get("skill")), norm(r.get("agent"))) for r in (a.get("u2") or []) if isinstance(r, dict))
+        rows = sorted((norm(r.get("skill")), norm(r.get("agent"))) for r in rows_of(a, "u2") if isinstance(r, dict))
         return json.dumps([a.get("u1"), rows], default=str)
-    repos = sorted((norm(r.get("repo")), r.get("skills")) for r in (a.get("s1") or []) if isinstance(r, dict))
-    return json.dumps([repos, sorted(norm(x) for x in (a.get("s2") or []) if isinstance(x, str))], default=str)
+    repos = sorted(((norm(r.get("repo")), r.get("skills")) for r in rows_of(a, "s1") if isinstance(r, dict)), key=str)
+    return json.dumps([repos, sorted(norm(x) for x in rows_of(a, "s2") if isinstance(x, str))], default=str)
 
 
 def agreement(task: str, answers: list[dict | None]) -> float:
@@ -349,8 +365,12 @@ def agreement(task: str, answers: list[dict | None]) -> float:
     return round(Counter(keys).most_common(1)[0][1] / len(keys), 2) if keys else 0.0
 
 
+def scored(record: dict) -> bool:
+    return record["fixture_intact"] and not record["error"]
+
+
 def cell_row(task: str, harness: str, model: str, method: str, runs: list[dict]) -> dict:
-    valid = [r for r in runs if r["fixture_intact"]]
+    valid = [r for r in runs if scored(r)]
     questions = QUESTIONS[task]
     return {
         "task": task, "harness": harness, "model": model, "label": runs[0]["label"], "method": method,
@@ -380,7 +400,14 @@ def method_summary(rows: list[dict]) -> dict:
 
 
 def cmd_report(args) -> None:
-    records = load_jsonl(args.out)
+    attempts = load_jsonl(args.out)
+    records = list({r["id"]: r for r in attempts}.values())
+    matrix = json.loads(args.matrix.read_text())
+    no_filter = argparse.Namespace(task=None, harness=None, method=None, model=None)
+    expected = {run_id_for(c, rep) for c in expand(matrix, no_filter) for rep in range(1, matrix.get("runs", 3) + 1)}
+    missing = sorted(expected - {r["id"] for r in records if scored(r)})
+    if missing and not args.partial:
+        raise SystemExit(f"{len(missing)} runs have no scored result, for example {missing[0]}. Run them, or pass --partial.")
     grouped: dict[tuple, list[dict]] = defaultdict(list)
     for r in records:
         grouped[(task_of(r), r["harness"], r["model"], r["method"])].append(r)
@@ -404,7 +431,7 @@ def cmd_report(args) -> None:
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "fixture_version": records[0]["truth"]["fixture_version"] if records else None,
         "total_runs": len(records),
-        "total_cost_usd": round(sum(r["cost_usd"] or 0 for r in records), 2),
+        "total_cost_usd": round(sum(r["cost_usd"] or 0 for r in attempts), 2),
         "tasks": tasks,
         "cells": rows,
     }
@@ -434,6 +461,8 @@ def main() -> None:
     run.add_argument("--dry-run", action="store_true")
     report = sub.add_parser("report", help="aggregate the results file")
     sub.add_parser("prices", help="refresh the cached OpenRouter prices")
+    report.add_argument("--matrix", type=Path, default=BENCH / "matrix.json")
+    report.add_argument("--partial", action="store_true", help="write the report even if some runs have no scored result")
     for p in (run, report):
         p.add_argument("--out", type=Path, default=RAW)
     args = parser.parse_args()
