@@ -21,8 +21,8 @@ interface RowFixButtonProps {
    * offers its Resolve menu. */
   label: string | null;
   onAct: (label: string, skill: InstalledSkill) => void;
-  /** Whether this row's step is the one running. Defaults to "an act holds this row"; a batch that
-   * holds many rows at once passes it so only the row it is on spins and the rest wait. */
+  /** Whether this held row's step is the one running. Defaults to true; a batch that holds many
+   * rows at once passes it so only the row it is on spins and the rest wait. */
   busy?: boolean;
   /** A fix with its own control (a menu, a dialog opener), shown in place of the button. */
   children?: ReactNode;
@@ -38,6 +38,16 @@ export function RowFixButton({ skill, label, onAct, busy, children }: RowFixButt
       </span>
     );
   }
+  if (act === null) {
+    const spinning = busy ?? true;
+    // A row with no fix of its own shows nothing while it waits its turn in a batch.
+    if (label === null && !spinning) return null;
+    return (
+      <Button variant="ghost" className={FIX_CLASS} busy={spinning} disabled>
+        {label ?? "Working"}
+      </Button>
+    );
+  }
   if (children) return children;
   if (label === null) {
     const [pair] = findLeftBehindPairs(skill);
@@ -47,8 +57,6 @@ export function RowFixButton({ skill, label, onAct, busy, children }: RowFixButt
     <Button
       variant="ghost"
       className={FIX_CLASS}
-      busy={busy ?? act === null}
-      disabled={act === null}
       onClick={(e) => {
         e.stopPropagation();
         // The button disables while it runs, which would drop focus to the page; the row keeps it.

@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Toaster, toast } from "sonner";
 import { HomeInboxGrid } from "../components/Home/HomeInboxGroups";
@@ -286,4 +286,46 @@ it("a second Pull latest while the edits dialog waits settles at once instead of
   await user.click(screen.getByRole("button", { name: "Pull" }));
   await user.click(await screen.findByRole("button", { name: "Cancel" }));
   expect(outcomes).toEqual(["second false", "first false"]);
+});
+
+function PullOnce({ outcomes }: { outcomes: string[] }) {
+  const { pullLatest, dialog } = useGuardedSkillUpdate();
+  return (
+    <>
+      <Button onClick={() => void pullLatest(fixture, (ok) => outcomes.push(`settled ${ok}`))}>
+        Pull
+      </Button>
+      {dialog}
+    </>
+  );
+}
+
+it("a Pull latest whose edits dialog is open settles false when its page closes, instead of leaving its row held", async () => {
+  mockIPC((command) => {
+    if (command === "skill_local_edits") return [{ edited: true, checked: true }];
+    throw new Error(`unexpected ${command}`);
+  });
+  const outcomes: string[] = [];
+  const user = userEvent.setup();
+  const { unmount } = render(<PullOnce outcomes={outcomes} />);
+  await user.click(screen.getByRole("button", { name: "Pull" }));
+  await screen.findByRole("button", { name: "Cancel" });
+  unmount();
+  expect(outcomes).toEqual(["settled false"]);
+});
+
+it("a Pull latest whose edits check is still running settles false when its page closes, instead of opening a dialog nobody sees", async () => {
+  let answer!: (edits: { edited: boolean; checked: boolean }[]) => void;
+  mockIPC((command) => {
+    if (command === "skill_local_edits") return new Promise((done) => (answer = done));
+    throw new Error(`unexpected ${command}`);
+  });
+  const outcomes: string[] = [];
+  const user = userEvent.setup();
+  const { unmount } = render(<PullOnce outcomes={outcomes} />);
+  await user.click(screen.getByRole("button", { name: "Pull" }));
+  unmount();
+  expect(outcomes).toEqual([]);
+  answer([{ edited: true, checked: true }]);
+  await vi.waitFor(() => expect(outcomes).toEqual(["settled false"]));
 });

@@ -5,7 +5,7 @@
 // fork and merge, overwrite, or cancel.
 // ============================================================================
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { forkSkill, pullForkUpstream, skillLocalEdits, updateSkill } from "../lib/skill-api";
 import { updatePluginInstall } from "./skillBatchUpdates";
 import {
@@ -74,6 +74,23 @@ export function useGuardedSkillUpdate() {
     settlers.current.get(name)?.(ok);
     settlers.current.delete(name);
   };
+  const life = useRef({ closed: false });
+  // A page that closes takes its dialog with it: a pull that waits on that dialog, or on the
+  // edits check that would open it, ends as cancelled. A pull already running settles itself.
+  useEffect(() => {
+    const state = life.current;
+    const waiting = settlers.current;
+    const running = updating.current;
+    state.closed = false;
+    return () => {
+      state.closed = true;
+      for (const [name, onSettled] of waiting) {
+        if (running.has(name)) continue;
+        onSettled(false);
+        waiting.delete(name);
+      }
+    };
+  }, []);
 
   const overwriteFor =
     (skill: InstalledSkill, { scopeTarget, onFinished, skipPlugins }: UpdateRequestOptions) =>
@@ -227,6 +244,7 @@ export function useGuardedSkillUpdate() {
         await requestUpdate(skill, {
           onFinished: ({ success }) => settle(skill.name, success),
         });
+        if (life.current.closed) settle(skill.name, false);
       }
     } catch (error) {
       // An `if`, not a conditional expression: the React Compiler can't compile a value block

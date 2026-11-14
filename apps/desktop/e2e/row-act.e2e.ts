@@ -80,6 +80,29 @@ test("Park from the selection bar keeps the row in its slot as Parked, and Undo 
   await expect(target).not.toHaveClass(/text-text-tertiary/);
 });
 
+test("a row with no fix of its own spins in its fix cell while a selection-bar Park runs on it", async ({
+  page,
+}) => {
+  await openSkillsPage(page);
+  const grid = page.getByRole("grid", { name: "Skills" });
+  const quiet = grid
+    .locator(`${SKILL_ROW}:not(.text-text-tertiary)`)
+    .filter({ hasNot: page.locator('[role="gridcell"]:last-child button') })
+    .first();
+  const target = rowNamed(grid, await nameOf(quiet));
+
+  await target.focus();
+  await page.keyboard.press("x");
+  await page.getByRole("button", { name: "Park", exact: true }).click();
+
+  await expect(target.locator('[role="gridcell"]:last-child [aria-busy="true"]')).toBeVisible();
+  await expect(target.getByText("Parked", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Undo" }).click();
+  await expect(target.getByText("Parked", { exact: true })).toHaveCount(0);
+  await expect(target).not.toHaveClass(/text-text-tertiary/);
+});
+
 test("Update all on Home keeps every Updates row in its slot and marks each one Updated", async ({
   page,
 }) => {
