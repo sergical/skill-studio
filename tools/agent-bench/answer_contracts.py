@@ -144,7 +144,7 @@ def extract(question: str, data: dict, home: Path):
         return sorted(r["name"] for r in rows if r["source"] == "manual")
     if any("copy_status" not in d for r in rows for d in r["deployments"]):
         return None
-    return [{"skill": r["name"], "agent": d["agent"]} for r in rows
+    return [{"skill": r["name"], "agent": d["harness"]} for r in rows
             if r["source"] == fixture.UPDATED_PACK for d in r["deployments"] if d["copy_status"] == "stale"]
 
 
@@ -204,7 +204,7 @@ def run(args, score, questions, repo: Path) -> int:
     baseline = set(json.loads(BASELINE.read_text()))
     regressions = (baseline & tested) - passing
     if args.update_baseline:
-        BASELINE.write_text(json.dumps(sorted((baseline - tested) | passing), indent=2) + "\n")
+        BASELINE.write_text(json.dumps(sorted(baseline | passing), indent=2) + "\n")
     print(f"{len(passing)}/{len(results)} pass; {report['duration_s']}s; JSON: {args.json_out}")
     if args.check and regressions:
         print("Regressions: " + ", ".join(sorted(regressions)))

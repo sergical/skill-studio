@@ -96,8 +96,9 @@ runner pins HOME, CODEX_HOME and agent data paths there, then deletes it.
 It does not read your skills or sessions.
 
 `--check` fails if a passing contract in `contracts/baseline.json` turns red.
-Expected red contracts do not fail the command. Use `--update-baseline` to
-save current passes for the sizes and seed you ran. Other entries stay intact.
+Expected red contracts do not fail the command. `--update-baseline` adds new
+passes and never removes an entry, so a regression stays red. To retire a
+contract, delete its line from `baseline.json` by hand in the same PR.
 The default sizes are 40 and 400. `--seed N` selects another fixture seed.
 
 `fixture.py --size 400 --seed 7 --out /tmp/example-home` creates a larger
