@@ -2,7 +2,7 @@
   "lock_only": [],
   "skills": [
     {
-      "source": "manual",
+      "source": "codex-toolkit@some-marketplace",
       "name": "audit-code",
       "description": "Helps with audit-code for fixture-driven tests.",
       "deployments": [
@@ -69,7 +69,7 @@
       ]
     },
     {
-      "source": "manual",
+      "source": "sentry-toolkit@some-marketplace",
       "name": "lint-code",
       "description": "Helps with lint-code for fixture-driven tests.",
       "deployments": [

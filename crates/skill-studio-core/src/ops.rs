@@ -738,22 +738,29 @@ fn scan_inner_with_budget(
             if skill.deployments.is_empty() {
                 return None;
             }
-            skill.source = skill
+            let owner = skill
                 .deployments
                 .iter()
-                .min_by_key(|deployment| deployment.source_kind)
-                .and_then(|deployment| {
-                    scope_ledgers.get(&deployment.root.scope).filter(|_| {
-                        matches!(
-                            deployment.source_kind,
-                            SourceKind::Dotagents | SourceKind::SkillsSh
-                        )
-                    })
-                })
-                .map_or_else(
-                    || "manual".into(),
-                    |ledger| ledger_source(ledger, &skill.name.0),
-                );
+                .min_by_key(|deployment| deployment.source_kind);
+            skill.source = match owner {
+                Some(DeploymentDto {
+                    source_kind: SourceKind::Plugin,
+                    plugin: Some(plugin),
+                    ..
+                }) => format!("{}@{}", plugin.plugin, plugin.marketplace),
+                Some(deployment)
+                    if matches!(
+                        deployment.source_kind,
+                        SourceKind::Dotagents | SourceKind::SkillsSh
+                    ) =>
+                {
+                    scope_ledgers.get(&deployment.root.scope).map_or_else(
+                        || "manual".into(),
+                        |ledger| ledger_source(ledger, &skill.name.0),
+                    )
+                }
+                _ => "manual".into(),
+            };
             req.source
                 .as_ref()
                 .is_none_or(|source| source == &skill.source)

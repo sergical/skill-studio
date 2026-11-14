@@ -107,7 +107,7 @@ enum Command {
     },
     /// List every skill installed for your agents.
     Scan {
-        /// Only show skills from this owner/repo, or manual.
+        /// Only show skills from this owner/repo, plugin@marketplace, or manual.
         #[arg(long)]
         source: Option<String>,
         /// Only show skills in ~/.agents/skills.

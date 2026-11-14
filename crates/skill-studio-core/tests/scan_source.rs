@@ -24,7 +24,17 @@ fn scan(request: &ScanRequest) -> Inventory {
             format!("---\nname: {name}\ndescription: A test skill.\n---\nBody.\n").as_bytes(),
         );
     }
-    fixture = fixture.file("/home/.agents/.skill-lock.json", br#"{"version":3,"skills":{"tracked":{"source":"owner/repo","sourceType":"github","sourceUrl":"https://github.com/owner/repo","skillFolderHash":"hash","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"},"missing":{"source":"owner/gone","sourceType":"github","sourceUrl":"https://github.com/owner/gone","skillFolderHash":"hash","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}}}"#)
+    fixture = fixture
+        .file(
+            "/home/.claude/plugins/cache/vendor-1/plugin-1/1.0.0/.claude-plugin/plugin.json",
+            br#"{"name":"plugin-1","version":"1.0.0"}"#,
+        )
+        .file(
+            "/home/.claude/plugins/cache/vendor-1/plugin-1/1.0.0/skills/plugged/SKILL.md",
+            b"---\nname: plugged\ndescription: A plugin skill.\n---\nBody.\n",
+        )
+        .alias("/home/.agents/skills/linked-gone", "/home/elsewhere/gone");
+    fixture = fixture.file("/home/.agents/.skill-lock.json", br#"{"version":3,"skills":{"linked-gone":{"source":"owner/linked","sourceType":"github","sourceUrl":"https://github.com/owner/linked","skillFolderHash":"hash","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"},"tracked":{"source":"owner/repo","sourceType":"github","sourceUrl":"https://github.com/owner/repo","skillFolderHash":"hash","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"},"missing":{"source":"owner/gone","sourceType":"github","sourceUrl":"https://github.com/owner/gone","skillFolderHash":"hash","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}}}"#)
         .file("/home/.agents/agents.lock", b"[skills.dot]\nsource = \"git:https://github.com/dot/repo.git\"\n[skills.dot-missing]\nsource = \"dot/gone\"\n");
     let ports = Ports {
         fs: Arc::new(fixture.build_fs()),
@@ -89,7 +99,7 @@ fn scan_library_filter_excludes_agent_folders_or_counts_agent_only_skills() {
         root: Some(ScanRoot::Library),
         ..Default::default()
     });
-    assert_eq!(result.skills.len(), 3);
+    assert_eq!(result.skills.len(), 4);
     assert!(result
         .skills
         .iter()
@@ -120,4 +130,33 @@ fn scan_combines_manual_and_library_filters_or_returns_an_agent_only_skill() {
     });
     assert_eq!(result.skills.len(), 1);
     assert_eq!(result.skills[0].name.0, "hand-made");
+}
+
+#[test]
+fn scan_reports_the_plugin_for_a_plugin_skill_or_calls_it_manual() {
+    let result = scan(&ScanRequest::default());
+    let skill = result
+        .skills
+        .iter()
+        .find(|s| s.name.0 == "plugged")
+        .unwrap();
+    assert_eq!(skill.source, "plugin-1@vendor-1");
+
+    let manual = scan(&ScanRequest {
+        source: Some("manual".into()),
+        ..Default::default()
+    });
+    assert!(manual.skills.iter().all(|s| s.name.0 != "plugged"));
+}
+
+#[test]
+fn scan_lists_a_locked_broken_link_as_a_skill_or_loses_it_from_both_lists() {
+    let result = scan(&ScanRequest::default());
+    let skill = result
+        .skills
+        .iter()
+        .find(|s| s.name.0 == "linked-gone")
+        .unwrap();
+    assert_eq!(skill.source, "owner/linked");
+    assert!(result.lock_only.iter().all(|e| e.name.0 != "linked-gone"));
 }

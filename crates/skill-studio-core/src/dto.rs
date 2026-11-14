@@ -250,7 +250,8 @@ pub struct DeploymentDto {
 /// One skill with all of its deployments.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct InstalledSkillDto {
-    /// Upstream owner/repo from the owning ledger, or manual.
+    /// Upstream owner/repo from the owning ledger, plugin@marketplace for a
+    /// plugin skill, or manual.
     pub source: String,
     /// Name.
     pub name: SkillName,
@@ -290,7 +291,7 @@ pub struct Inventory {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct ScanRequest {
-    /// Restrict to this upstream owner/repo, or manual.
+    /// Restrict to this owner/repo, plugin@marketplace, or manual.
     pub source: Option<String>,
     /// Restrict to the global shared library folder.
     pub root: Option<ScanRoot>,

@@ -132,7 +132,7 @@
       "type": "object",
       "properties": {
         "source": {
-          "description": "Upstream owner/repo from the owning ledger, or manual.",
+          "description": "Upstream owner/repo from the owning ledger, plugin@marketplace for a\nplugin skill, or manual.",
           "type": "string"
         },
         "name": {

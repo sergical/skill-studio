@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "source": {
-      "description": "Restrict to this upstream owner/repo, or manual.",
+      "description": "Restrict to this owner/repo, plugin@marketplace, or manual.",
       "type": [
         "string",
         "null"
