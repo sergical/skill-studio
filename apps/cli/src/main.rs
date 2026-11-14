@@ -107,6 +107,12 @@ enum Command {
     },
     /// List every skill installed for your agents.
     Scan {
+        /// Only show skills from this owner/repo, or manual.
+        #[arg(long)]
+        source: Option<String>,
+        /// Only show skills in ~/.agents/skills.
+        #[arg(long, value_parser = ["library"])]
+        root: Option<String>,
         #[command(flatten)]
         scope: ScopeArgs,
         /// Only show this skill. Repeat for more than one.
@@ -598,11 +604,13 @@ fn main() -> ExitCode {
     let time = cli.time;
     match cli.command {
         Command::Scan {
+            source,
+            root,
             scope,
             skills,
             timings,
             json,
-        } => run_scan(&scope, skills, timings, json, time),
+        } => run_scan(&scope, skills, source, root, timings, json, time),
         Command::Diagnose {
             scope,
             skills,
@@ -958,6 +966,8 @@ fn exit_code(status: i32) -> ExitCode {
 fn run_scan(
     scope: &ScopeArgs,
     skills: Vec<String>,
+    source: Option<String>,
+    root: Option<String>,
     timings: bool,
     json: bool,
     time: bool,
@@ -969,6 +979,8 @@ fn run_scan(
     };
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let req = ScanRequest {
+        source,
+        root: root.map(|_| skill_studio_core::dto::ScanRoot::Library),
         skills: skills.into_iter().map(SkillName).collect(),
         timings,
     };
@@ -1003,6 +1015,7 @@ fn run_diagnose(
     let req = ScanRequest {
         skills: skills.into_iter().map(SkillName).collect(),
         timings,
+        ..Default::default()
     };
     let result = ops::diagnose(&rt, &ctx, &req);
     let envelope = ResultEnvelope::from_result(Operation::Diagnose, &rt.scope, &ctx, result);
@@ -1779,6 +1792,7 @@ fn resolve_target(
         &ScanRequest {
             skills: vec![SkillName(name.to_string())],
             timings: false,
+            ..Default::default()
         },
     )?;
     let Some(skill) = inventory.skills.iter().find(|skill| skill.name.0 == name) else {
@@ -2109,6 +2123,7 @@ fn run_outdated(scope: &ScopeArgs, skills: Vec<String>, json: bool, time: bool) 
     let req = ScanRequest {
         skills: skills.into_iter().map(SkillName).collect(),
         timings: false,
+        ..Default::default()
     };
     let gh_bin = rt.ports.tools.as_ref().and_then(|t| t.find_binary("gh"));
     let result = match gh_bin {

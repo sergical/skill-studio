@@ -4,6 +4,26 @@
   "description": "Request for `scan`.",
   "type": "object",
   "properties": {
+    "source": {
+      "description": "Restrict to this upstream owner/repo, or manual.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "root": {
+      "description": "Restrict to the global shared library folder.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ScanRoot"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "skills": {
       "description": "Restrict to these skill names; empty means all.",
       "type": "array",
@@ -19,6 +39,16 @@
     }
   },
   "$defs": {
+    "ScanRoot": {
+      "description": "A scan root filter.",
+      "oneOf": [
+        {
+          "description": "Skills directly in ~/.agents/skills.",
+          "type": "string",
+          "const": "library"
+        }
+      ]
+    },
     "SkillName": {
       "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
       "type": "string"

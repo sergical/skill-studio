@@ -1,6 +1,8 @@
 {
+  "lock_only": [],
   "skills": [
     {
+      "source": "manual",
       "name": "omega",
       "description": "Helps with omega for fixture-driven tests.",
       "deployments": [

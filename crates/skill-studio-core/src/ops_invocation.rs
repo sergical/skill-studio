@@ -258,6 +258,7 @@ pub fn invocation(
             &crate::dto::ScanRequest {
                 skills: req.skill.iter().cloned().collect(),
                 timings: false,
+                ..Default::default()
             },
         )?;
         let mut report = InvocationReport {

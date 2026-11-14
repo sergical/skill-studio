@@ -25,6 +25,14 @@
       "description": "Result of `scan`.",
       "type": "object",
       "properties": {
+        "lock_only": {
+          "description": "Ledger entries whose skill folder is absent from disk.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LockOnlySkill"
+          },
+          "default": []
+        },
         "skills": {
           "description": "Skills sorted by name.",
           "type": "array",
@@ -74,10 +82,80 @@
         "timings"
       ]
     },
+    "LockOnlySkill": {
+      "description": "A lock entry with no installed folder.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Ledger key.",
+          "$ref": "#/$defs/SkillName"
+        },
+        "source": {
+          "description": "Recorded upstream, or manual for an adopted local folder.",
+          "type": "string"
+        },
+        "scope": {
+          "description": "Scope containing the ledger.",
+          "$ref": "#/$defs/RootScope"
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "scope"
+      ]
+    },
+    "SkillName": {
+      "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
+      "type": "string"
+    },
+    "RootScope": {
+      "description": "Where a root lives.",
+      "oneOf": [
+        {
+          "description": "Under the scope home.",
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "const": "global"
+            }
+          },
+          "required": [
+            "scope"
+          ]
+        },
+        {
+          "description": "Under one tracked project.",
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "const": "project"
+            },
+            "project": {
+              "$ref": "#/$defs/ProjectRef"
+            }
+          },
+          "required": [
+            "scope",
+            "project"
+          ]
+        }
+      ]
+    },
+    "ProjectRef": {
+      "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
+      "type": "string"
+    },
     "InstalledSkillDto": {
       "description": "One skill with all of its deployments.",
       "type": "object",
       "properties": {
+        "source": {
+          "description": "Upstream owner/repo from the owning ledger, or manual.",
+          "type": "string"
+        },
         "name": {
           "description": "Name.",
           "$ref": "#/$defs/SkillName"
@@ -98,13 +176,10 @@
         }
       },
       "required": [
+        "source",
         "name",
         "deployments"
       ]
-    },
-    "SkillName": {
-      "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-      "type": "string"
     },
     "DeploymentDto": {
       "description": "One installed copy or link of a skill.\n\nInvariant: `harness` is an [`AgentId`] or `None` for the universal and\nparked roots; it is never a display string. `plugin` is `Some` exactly\nwhen `root.kind` is [`crate::identity::RootKind::PluginCache`].",
@@ -384,45 +459,6 @@
         "scope",
         "kind"
       ]
-    },
-    "RootScope": {
-      "description": "Where a root lives.",
-      "oneOf": [
-        {
-          "description": "Under the scope home.",
-          "type": "object",
-          "properties": {
-            "scope": {
-              "type": "string",
-              "const": "global"
-            }
-          },
-          "required": [
-            "scope"
-          ]
-        },
-        {
-          "description": "Under one tracked project.",
-          "type": "object",
-          "properties": {
-            "scope": {
-              "type": "string",
-              "const": "project"
-            },
-            "project": {
-              "$ref": "#/$defs/ProjectRef"
-            }
-          },
-          "required": [
-            "scope",
-            "project"
-          ]
-        }
-      ]
-    },
-    "ProjectRef": {
-      "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-      "type": "string"
     },
     "RootKind": {
       "description": "What kind of root a path is.",

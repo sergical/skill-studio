@@ -167,3 +167,5 @@ sessions in the last 30 days, the `usage` default window. The due list refreshes
 `skill-studio usage` and includes every usage observation when counts are
 partial. A removed skill leaves the due list, and its date can still be cleared.
 Review dates are Skill Studio data in `~/.agents/review-dates.json`.
+
+Scan source inventory uses CLI `scan --json --source <owner/repo|manual> --root library` and MCP `scan` with `source` and `root`. Each skill reports `source`; `lock_only` lists ledger entries with no folder. `crates/skill-studio-core/tests/scan_source.rs` covers locked and manual sources, dotagents sources, both filters, and missing folders.

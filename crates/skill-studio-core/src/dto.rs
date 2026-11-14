@@ -250,6 +250,8 @@ pub struct DeploymentDto {
 /// One skill with all of its deployments.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct InstalledSkillDto {
+    /// Upstream owner/repo from the owning ledger, or manual.
+    pub source: String,
     /// Name.
     pub name: SkillName,
     /// Description from the first readable deployment.
@@ -261,6 +263,9 @@ pub struct InstalledSkillDto {
 /// Result of `scan`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Inventory {
+    /// Ledger entries whose skill folder is absent from disk.
+    #[serde(default)]
+    pub lock_only: Vec<LockOnlySkill>,
     /// Skills sorted by name.
     pub skills: Vec<InstalledSkillDto>,
     /// Projects that were covered, sorted by canonical path.
@@ -285,6 +290,10 @@ pub struct Inventory {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct ScanRequest {
+    /// Restrict to this upstream owner/repo, or manual.
+    pub source: Option<String>,
+    /// Restrict to the global shared library folder.
+    pub root: Option<ScanRoot>,
     /// Restrict to these skill names; empty means all.
     pub skills: Vec<SkillName>,
     /// Include per-phase timings.
@@ -1202,4 +1211,23 @@ pub struct UpdateAllOutcome {
 pub struct UpdateAllRequest {
     /// One request per skill to refresh, each its own journal entry.
     pub requests: Vec<UpdateRequest>,
+}
+
+/// A scan root filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScanRoot {
+    /// Skills directly in ~/.agents/skills.
+    Library,
+}
+
+/// A lock entry with no installed folder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LockOnlySkill {
+    /// Ledger key.
+    pub name: SkillName,
+    /// Recorded upstream, or manual for an adopted local folder.
+    pub source: String,
+    /// Scope containing the ledger.
+    pub scope: RootScope,
 }

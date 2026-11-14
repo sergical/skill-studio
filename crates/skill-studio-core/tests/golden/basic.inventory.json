@@ -1,6 +1,8 @@
 {
+  "lock_only": [],
   "skills": [
     {
+      "source": "manual",
       "name": "alpha",
       "description": "Helps with alpha for fixture-driven tests.",
       "deployments": [
@@ -62,6 +64,7 @@
       ]
     },
     {
+      "source": "manual",
       "name": "beta",
       "description": "Helps with beta for fixture-driven tests.",
       "deployments": [
@@ -123,6 +126,7 @@
       ]
     },
     {
+      "source": "owner/gamma",
       "name": "gamma",
       "description": "Helps with gamma for fixture-driven tests.",
       "deployments": [

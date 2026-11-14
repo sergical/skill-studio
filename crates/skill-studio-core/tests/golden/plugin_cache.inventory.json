@@ -1,6 +1,8 @@
 {
+  "lock_only": [],
   "skills": [
     {
+      "source": "manual",
       "name": "audit-code",
       "description": "Helps with audit-code for fixture-driven tests.",
       "deployments": [
@@ -67,6 +69,7 @@
       ]
     },
     {
+      "source": "manual",
       "name": "lint-code",
       "description": "Helps with lint-code for fixture-driven tests.",
       "deployments": [

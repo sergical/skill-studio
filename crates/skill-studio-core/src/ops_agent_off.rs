@@ -363,6 +363,7 @@ fn plan(
         &ScanRequest {
             skills: req.deployment_id.skill_name().into_iter().collect(),
             timings: false,
+            ..Default::default()
         },
     )?;
     plan_from_inventory(rt, &inventory, req)
@@ -589,6 +590,7 @@ fn park_agent_copy(
         &ScanRequest {
             skills: vec![plan.skill.clone()],
             timings: false,
+            ..Default::default()
         },
     )?;
     let copy = find_copy(rt, session, &plan.agent_copy).ok_or_else(|| {

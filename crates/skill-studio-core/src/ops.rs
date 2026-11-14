@@ -685,7 +685,81 @@ fn scan_inner_with_budget(
         step_start,
     ));
 
-    let skills: Vec<InstalledSkillDto> = skills.into_values().collect();
+    let mut lock_only = Vec::new();
+    for (scope, ledger) in &scope_ledgers {
+        let names: std::collections::BTreeSet<_> = ledger
+            .lock
+            .skills
+            .keys()
+            .map(String::as_str)
+            .chain(ledger.dotagents.iter().map(|entry| entry.name.as_str()))
+            .collect();
+        for name in names {
+            let scope_root = match scope {
+                RootScope::Global => home.as_path(),
+                RootScope::Project(project) => project.0.as_path(),
+            };
+            let folder = scope_root.join(".agents/skills").join(name);
+            let found = skills.get(name).is_some_and(|skill| {
+                skill
+                    .deployments
+                    .iter()
+                    .any(|deployment| &deployment.root.scope == scope)
+            });
+            if !found
+                && fs
+                    .symlink_metadata(&folder)
+                    .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+            {
+                let source = ledger_source(ledger, name);
+                if req.source.as_ref().is_none_or(|filter| filter == &source)
+                    && (req.root.is_none() || matches!(scope, RootScope::Global))
+                    && (req.skills.is_empty() || req.skills.iter().any(|skill| skill.0 == name))
+                {
+                    lock_only.push(crate::dto::LockOnlySkill {
+                        name: SkillName(name.into()),
+                        source,
+                        scope: scope.clone(),
+                    });
+                }
+            }
+        }
+    }
+    lock_only.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.scope.cmp(&b.scope)));
+    let library = home.join(".agents/skills");
+    let skills: Vec<InstalledSkillDto> = skills
+        .into_values()
+        .filter_map(|mut skill| {
+            if req.root.is_some() {
+                skill
+                    .deployments
+                    .retain(|deployment| deployment.path.parent() == Some(library.as_path()));
+            }
+            if skill.deployments.is_empty() {
+                return None;
+            }
+            skill.source = skill
+                .deployments
+                .iter()
+                .min_by_key(|deployment| deployment.source_kind)
+                .and_then(|deployment| {
+                    scope_ledgers.get(&deployment.root.scope).filter(|_| {
+                        matches!(
+                            deployment.source_kind,
+                            SourceKind::Dotagents | SourceKind::SkillsSh
+                        )
+                    })
+                })
+                .map_or_else(
+                    || "manual".into(),
+                    |ledger| ledger_source(ledger, &skill.name.0),
+                );
+            req.source
+                .as_ref()
+                .is_none_or(|source| source == &skill.source)
+                .then_some(skill)
+        })
+        .collect();
 
     ctx.record_timing(crate::timing::op_timing(clock, "scan", start, op_steps));
 
@@ -699,6 +773,7 @@ fn scan_inner_with_budget(
     }
 
     Ok(Inventory {
+        lock_only,
         skills,
         projects: rt
             .scope
@@ -711,6 +786,21 @@ fn scan_inner_with_budget(
         unread_roots,
         timings,
     })
+}
+
+fn ledger_source(ledger: &ownership::ScopeLedgers, name: &str) -> String {
+    let skills_sh = ledger.lock.skills.get(name);
+    ledger
+        .dotagents
+        .iter()
+        .find(|entry| entry.name == name && !(entry.is_local_path && skills_sh.is_some()))
+        .and_then(|entry| entry.source.as_deref())
+        .map(|source| {
+            crate::dotagents_ledger::github_repo_from_source(source)
+                .unwrap_or_else(|| "manual".into())
+        })
+        .or_else(|| skills_sh.map(|entry| entry.source.clone()))
+        .unwrap_or_else(|| "manual".into())
 }
 
 /// Everything [`scan_one_target`] and [`scan_one_plugin_target`] need that
@@ -1538,6 +1628,7 @@ fn insert_deployment(
     let skill = skills
         .entry(name.to_string())
         .or_insert_with(|| InstalledSkillDto {
+            source: "manual".into(),
             name: SkillName(name.to_string()),
             description: None,
             deployments: Vec::new(),
@@ -3282,6 +3373,7 @@ fn fix_skill_body(
         &ScanRequest {
             skills: vec![req.skill.clone()],
             timings: false,
+            ..Default::default()
         },
     );
     ctx.take_timing();
@@ -4092,6 +4184,7 @@ fn preview_frontmatter_repair_body(
         &ScanRequest {
             skills: Vec::new(),
             timings: false,
+            ..Default::default()
         },
     );
     // Discard `scan_inner`'s own timing immediately: an error below must
@@ -5760,6 +5853,7 @@ pub fn resolve_batch_names(
         &ScanRequest {
             skills: names.to_vec(),
             timings: false,
+            ..Default::default()
         },
     )?;
     let mut ids = Vec::new();
@@ -6783,6 +6877,7 @@ pub fn park_check(
         &ScanRequest {
             skills,
             timings: false,
+            ..Default::default()
         },
     )?;
     let skill = resolve_skill(&inventory, &req.deployment_id)?;
@@ -7054,6 +7149,7 @@ mod tests {
     #[test]
     fn partial_inventory_exits_4_without_an_error_value() {
         let inv = Inventory {
+            lock_only: Vec::new(),
             skills: vec![],
             projects: vec![],
             completeness: Completeness::Partial,
@@ -7085,6 +7181,7 @@ mod tests {
         };
         let complete = Diagnosis {
             inventory: Inventory {
+                lock_only: Vec::new(),
                 skills: vec![],
                 projects: vec![],
                 completeness: Completeness::Complete,
@@ -7110,6 +7207,7 @@ mod tests {
     #[test]
     fn an_ok_result_with_no_issues_exits_0_not_the_issues_found_code() {
         let inv = Inventory {
+            lock_only: Vec::new(),
             skills: vec![],
             projects: vec![],
             completeness: Completeness::Complete,
@@ -7540,6 +7638,7 @@ mod tests {
     fn a_skill_deployed_by_two_methods_is_classified_by_precedence_not_deployment_order_or_names_the_method_it_picked(
     ) {
         let skill = InstalledSkillDto {
+            source: "manual".into(),
             name: SkillName("write-tests".to_string()),
             description: None,
             deployments: vec![
@@ -7565,6 +7664,7 @@ mod tests {
     fn a_forked_skill_with_a_leftover_manual_link_is_still_classified_as_fork_or_names_the_method_it_picked(
     ) {
         let skill = InstalledSkillDto {
+            source: "manual".into(),
             name: SkillName("find-bugs".to_string()),
             description: None,
             deployments: vec![
@@ -7586,6 +7686,7 @@ mod tests {
         let canonical_id = DeploymentId::parse("dep:v1/g/-/universal/-/canonical").unwrap();
         let linked_id = DeploymentId::parse("dep:v1/g/-/claude-code/-/linked").unwrap();
         let mut skill = InstalledSkillDto {
+            source: "manual".into(),
             name: SkillName("write-tests".to_string()),
             description: None,
             deployments: vec![
@@ -7632,6 +7733,7 @@ mod tests {
         let canonical_id = DeploymentId::parse("dep:v1/g/-/universal/-/canonical").unwrap();
         let linked_id = DeploymentId::parse("dep:v1/g/-/claude-code/-/linked").unwrap();
         let mut skill = InstalledSkillDto {
+            source: "manual".into(),
             name: SkillName("write-tests".to_string()),
             description: None,
             deployments: vec![
@@ -7678,6 +7780,7 @@ mod tests {
         let canonical_id = DeploymentId::parse("dep:v1/g/-/universal/-/canonical").unwrap();
         let linked_id = DeploymentId::parse("dep:v1/g/-/claude-code/-/linked").unwrap();
         let mut skill = InstalledSkillDto {
+            source: "manual".into(),
             name: SkillName("write-tests".to_string()),
             description: None,
             deployments: vec![
@@ -7724,6 +7827,7 @@ mod tests {
         let canonical_id = DeploymentId::parse("dep:v1/g/-/universal/-/canonical").unwrap();
         let linked_id = DeploymentId::parse("dep:v1/g/-/claude-code/-/linked").unwrap();
         let mut skill = InstalledSkillDto {
+            source: "manual".into(),
             name: SkillName("write-tests".to_string()),
             description: None,
             deployments: vec![
@@ -8039,6 +8143,7 @@ mod tests {
             let req = ScanRequest {
                 skills: vec![SkillName("write-tests".into())],
                 timings: false,
+                ..Default::default()
             };
             let inv = scan(&rt, &ctx(), &req).unwrap();
             assert_eq!(inv.skills.len(), 1);
@@ -8226,6 +8331,7 @@ mod tests {
             let req = ScanRequest {
                 skills: Vec::new(),
                 timings: true,
+                ..Default::default()
             };
             let inv = scan(&rt, &ctx(), &req).unwrap();
             assert_eq!(inv.timings.len(), 1);

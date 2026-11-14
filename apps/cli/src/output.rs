@@ -52,8 +52,9 @@ fn print_inventory(inventory: &Inventory) {
     }
     for skill in &inventory.skills {
         println!(
-            "{}  ({} {})",
+            "{}  [{}]  ({} {})",
             skill.name.0,
+            skill.source,
             skill.deployments.len(),
             if skill.deployments.len() == 1 {
                 "copy"
@@ -92,6 +93,9 @@ fn print_inventory(inventory: &Inventory) {
                 println!("    parked from {scope}; {owner}");
             }
         }
+    }
+    for entry in &inventory.lock_only {
+        println!("lock only: {}  [{}]", entry.name.0, entry.source);
     }
     for observation in &inventory.observations {
         println!("note: {}", observation.message);

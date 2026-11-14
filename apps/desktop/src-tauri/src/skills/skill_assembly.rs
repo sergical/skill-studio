@@ -516,6 +516,7 @@ mod tests {
         order
             .into_iter()
             .map(|name| InstalledSkillDto {
+                source: "manual".into(),
                 deployments: by_name.remove(&name).unwrap(),
                 description: None,
                 name: SkillName(name),
