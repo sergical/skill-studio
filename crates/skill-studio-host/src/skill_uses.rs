@@ -429,12 +429,21 @@ fn parse_claude_code_uses_with_context(
         if uses.is_empty() {
             continue;
         }
-        let uuid = serde_json::from_str::<serde_json::Value>(line)
+        let key = serde_json::from_str::<serde_json::Value>(line)
             .ok()
-            .and_then(|record| record.get("uuid")?.as_str().map(str::to_owned))
-            .filter(|uuid| !uuid.is_empty());
-        if let Some(uuid) = uuid {
-            context.claude_records.entry(uuid).or_insert(uses);
+            .and_then(|record| {
+                let uuid = record
+                    .get("uuid")?
+                    .as_str()
+                    .filter(|uuid| !uuid.is_empty())?;
+                let session = record
+                    .get("sessionId")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                Some(format!("{session}/{uuid}"))
+            });
+        if let Some(key) = key {
+            context.claude_records.entry(key).or_insert(uses);
         } else {
             unidentified.extend(uses);
         }
@@ -452,19 +461,19 @@ fn parse_codex_uses_with_file(
 ) -> Vec<SkillInvocation> {
     let mut uses = Vec::new();
     for line in text.lines() {
-        if context.inherited_lines > 0 {
-            context.inherited_lines -= 1;
+        if let Some(start) = context
+            .history_start_ordinal
+            .filter(|_| context.inherited_lines > 0)
+        {
             let ordinal = serde_json::from_str::<serde_json::Value>(line)
                 .ok()
                 .and_then(|record| record.get("ordinal")?.as_u64());
-            if ordinal.is_none_or(|ordinal| {
-                context
-                    .history_start_ordinal
-                    .is_some_and(|start| ordinal < start)
-            }) {
+            if ordinal.is_some_and(|ordinal| ordinal >= start) {
+                context.inherited_lines = 0;
+            } else {
+                context.inherited_lines -= 1;
                 continue;
             }
-            context.inherited_lines = 0;
         }
         if context.transcript.session.is_none() && line.contains("session_meta") {
             let payload = serde_json::from_str::<serde_json::Value>(line)
@@ -474,7 +483,10 @@ fn parse_codex_uses_with_file(
                 context.history_start_ordinal = payload
                     .get("subagent_history_start_ordinal")
                     .and_then(serde_json::Value::as_u64);
-                context.inherited_lines = context.history_start_ordinal.unwrap_or(0);
+                // The header is ordinal 0, so the copied parent history is the next start - 1 lines.
+                context.inherited_lines = context
+                    .history_start_ordinal
+                    .map_or(0, |start| start.saturating_sub(1));
             }
         }
         uses.extend(parse_codex_uses_checked(
@@ -1728,7 +1740,7 @@ impl SkillInvocationIndex {
             .files
             .values()
             .flat_map(|t| t.context.claude_records.iter())
-            .filter(move |(uuid, _)| seen_uuids.insert(uuid.as_str()))
+            .filter(move |(key, _)| seen_uuids.insert(key.as_str()))
             .flat_map(|(_, uses)| uses.iter());
         self.files
             .values()
@@ -1942,6 +1954,33 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         index.stats_at(now, &filter(known_skills, sources))
+    }
+
+    #[test]
+    fn claude_records_with_one_uuid_in_two_sessions_both_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let dir = home.join(CLAUDE_PROJECTS_ROOT).join("-proj");
+        fs::create_dir_all(&dir).unwrap();
+        for session in ["one", "two"] {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&skill_line("deploy", "2026-09-16T12:00:00Z", "/proj"))
+                    .unwrap();
+            value["uuid"] = "shared".into();
+            value["sessionId"] = session.into();
+            fs::write(
+                dir.join(format!("{session}.jsonl")),
+                value.to_string() + "\n",
+            )
+            .unwrap();
+        }
+        let mut index = SkillInvocationIndex::default();
+        index.refresh(home, &DiscoverySources::default());
+        assert_eq!(
+            index.all_uses().count(),
+            2,
+            "a uuid seen in another session is a different use, not a resumed copy"
+        );
     }
 
     #[test]
@@ -2928,7 +2967,10 @@ mod tests {
 
         #[test]
         fn forked_codex_history_counts_parent_once_and_keeps_new_child_uses_after_cache_resume() {
-            for explicit_ordinals in [false, true] {
+            // Real rollouts number every line; the last case is a child line without one.
+            for (copies_have_ordinals, own_has_ordinal) in
+                [(false, false), (true, true), (true, false)]
+            {
                 let tmp = tempfile::tempdir().unwrap();
                 let home = tmp.path();
                 let dir = home.join(CODEX_SESSIONS_DIR);
@@ -2943,8 +2985,10 @@ mod tests {
                     serde_json::from_str(&session_meta_line("child", "/child")).unwrap();
                 header["payload"]["forked_from_id"] = "parent".into();
                 header["payload"]["parent_thread_id"] = "parent".into();
-                header["payload"]["subagent_history_start_ordinal"] =
-                    (parent.len() + usize::from(explicit_ordinals)).into();
+                header["payload"]["subagent_history_start_ordinal"] = (parent.len() + 1).into();
+                if copies_have_ordinals {
+                    header["ordinal"] = 0.into();
+                }
                 let path = write_rollout(&dir, "child.jsonl", &[header.to_string()]);
                 let sources = DiscoverySources::default();
                 let mut index = SkillInvocationIndex::default();
@@ -2956,14 +3000,14 @@ mod tests {
                 for (i, line) in parent.iter().enumerate() {
                     let mut copy: serde_json::Value = serde_json::from_str(line).unwrap();
                     copy["timestamp"] = "2026-09-16T12:10:00Z".into();
-                    if explicit_ordinals {
+                    if copies_have_ordinals {
                         copy["ordinal"] = (i + 1).into();
                     }
                     content.push_str(&(copy.to_string() + "\n"));
                 }
                 let mut own: serde_json::Value =
                     serde_json::from_str(&skill_block_line("2026-09-16T12:11:00Z", "foo")).unwrap();
-                if explicit_ordinals {
+                if own_has_ordinal {
                     own["ordinal"] = (parent.len() + 1).into();
                 }
                 content.push_str(&(own.to_string() + "\n"));
