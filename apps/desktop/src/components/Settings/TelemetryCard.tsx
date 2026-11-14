@@ -57,18 +57,18 @@ export function TelemetryCard() {
 
   return (
     <SettingsCard
-      icon={<Bug size={15} className="text-text-tertiary" />}
+      icon={Bug}
       title="Telemetry"
       description="Sends where in its own code a crash or error happened, how long each action took, and how fast each screen loads and responds. Skill Studio removes everything sensitive first: no skill names, files, paths, or machine name. It uses this data only to improve the app."
     >
-      <label className="flex h-9 items-center gap-2 px-2 text-body text-text-secondary">
+      <label className="flex h-9 cursor-pointer items-center gap-2 px-2 text-body text-text-secondary">
+        <span className="flex-1">Send crash and performance data</span>
         <SwitchControl
           checked={enabled}
           onCheckedChange={toggle}
           disabled={isLoading}
           ariaLabel="Telemetry"
         />
-        {enabled ? "On" : "Off"}
       </label>
     </SettingsCard>
   );

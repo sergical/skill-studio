@@ -130,7 +130,7 @@ export function AppVersionCard() {
 
   return (
     <SettingsCard
-      icon={<Info size={15} className="text-text-tertiary" />}
+      icon={Info}
       title="Version"
       description="The version of Skill Studio you're running, and what changed in it."
     >
@@ -139,7 +139,7 @@ export function AppVersionCard() {
           v{info.version} ({shortCommit})
         </p>
         {info.notes && (
-          <Button variant="ghost" onClick={() => setShowNotes((open) => !open)}>
+          <Button variant="outline" size="sm" onClick={() => setShowNotes((open) => !open)}>
             {showNotes ? "Hide what's new" : "What's new"}
           </Button>
         )}
@@ -157,11 +157,11 @@ export function AppVersionCard() {
           {updateStatusLabel(updateStatus)}
         </p>
         {updateStatus.status === "ready-to-install" ? (
-          <Button variant="secondary" onClick={handleRestartToUpdate} disabled={installing}>
+          <Button variant="default" size="sm" onClick={handleRestartToUpdate} disabled={installing}>
             {installing ? "Restarting…" : "Restart to update"}
           </Button>
         ) : (
-          <Button variant="ghost" onClick={handleCheckForUpdate} disabled={checking}>
+          <Button variant="outline" size="sm" onClick={handleCheckForUpdate} disabled={checking}>
             Check for updates
           </Button>
         )}

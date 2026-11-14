@@ -6,6 +6,7 @@
 import cliMarkdown from "./content/cli.md?raw";
 import getStartedMarkdown from "./content/get-started.md?raw";
 import mcpMarkdown from "./content/mcp.md?raw";
+import { fillAgentSetup } from "./agent-setup-markdown";
 
 export interface DocsPageEntry {
   slug: "get-started" | "cli" | "mcp";
@@ -28,7 +29,7 @@ export const DOCS_PAGES: DocsPageEntry[] = [
     title: "Get started with Skill Studio",
     description:
       "Install Skill Studio, then find, fix and park your agent skills. Every change can be undone.",
-    markdown: getStartedMarkdown,
+    markdown: fillAgentSetup(getStartedMarkdown),
   },
   {
     slug: "cli",
@@ -38,7 +39,7 @@ export const DOCS_PAGES: DocsPageEntry[] = [
     title: "Skill Studio CLI",
     description:
       "Check, fix, park and update agent skills from the terminal with npx skill-studio.",
-    markdown: cliMarkdown,
+    markdown: fillAgentSetup(cliMarkdown),
   },
   {
     slug: "mcp",
@@ -47,7 +48,7 @@ export const DOCS_PAGES: DocsPageEntry[] = [
     navLabel: "MCP server",
     title: "Skill Studio MCP server",
     description:
-      "Connect Skill Studio to Claude Code, Codex, Cursor or OpenCode, so your agent can tidy its own skills.",
-    markdown: mcpMarkdown,
+      "Connect Skill Studio to Claude Code, Codex, Cursor, OpenCode, pi, Grok Build or any MCP client, so your agent can tidy its own skills.",
+    markdown: fillAgentSetup(mcpMarkdown),
   },
 ];

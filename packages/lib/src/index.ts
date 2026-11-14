@@ -21,3 +21,4 @@ export * from "./skill-plugin-partition";
 export * from "./skill-updates";
 export * from "./skill-violation-text";
 export * from "./skill-frontmatter-repair";
+export * from "./agent-setup";

@@ -7,7 +7,7 @@ It runs on macOS, on Apple silicon and Intel Macs. It needs Node.js 18 or later.
 ## Run it
 
 ```bash
-npx skill-studio diagnose
+npx skill-studio@latest diagnose
 ```
 
 Or install it:
@@ -23,50 +23,34 @@ Some commands:
 - `skill-studio diagnose` finds broken skills and says what is wrong with each.
 - `skill-studio usage` shows which skills your agents used, and which they never used.
 - `skill-studio park <skill>` turns a skill off for all agents. `skill-studio unpark <skill>` turns it on again.
-- `skill-studio undo` reverses your last install, remove, update, split or on/off change. It does not undo park or unpark. It skips them and reverses the change before them. To undo a park, run `skill-studio unpark <skill>`.
+- `skill-studio turn-off <skill> --agent <agent> --check` shows how a skill goes off for one agent only. Run it again with `--confirm` to do it.
+- `skill-studio doctor` checks how much of each agent's skill listing budget your skills use.
+- `skill-studio undo` reverses your last change. If the last change was a park or an unpark, it stops: run `skill-studio unpark <skill>` or `skill-studio park <skill>` instead.
 
 ## Use it from your agent (MCP)
 
-`skill-studio mcp` starts an MCP server. Add it to your agent:
-
-Claude Code:
+`skill-studio mcp` starts an MCP server. To let your agent add it, copy the setup prompt from the [MCP docs](https://useskillstudio.com/docs/mcp/) and paste it into your agent. To add it yourself:
 
 ```bash
-claude mcp add --transport stdio skill-studio -- npx -y skill-studio mcp
+# Claude Code
+claude mcp add --scope user --transport stdio skill-studio -- npx -y skill-studio@latest mcp
+
+# Codex
+codex mcp add skill-studio -- npx -y skill-studio@latest mcp
+
+# OpenCode
+opencode mcp add --global skill-studio -- npx -y skill-studio@latest mcp
+
+# pi
+pi mcp add skill-studio -- npx -y skill-studio@latest mcp
+
+# Grok Build
+grok mcp add skill-studio -- npx -y skill-studio@latest mcp
 ```
 
-Codex:
+`@latest` makes `npx` use the published package. The first download can take more than ten seconds. If Codex stops waiting, set `startup_timeout_sec = 30` under `[mcp_servers.skill-studio]` in `~/.codex/config.toml`.
 
-```bash
-codex mcp add skill-studio -- npx -y skill-studio mcp
-```
-
-The first `npx` download can take more than ten seconds. If Codex stops waiting, set `startup_timeout_sec = 30` under `[mcp_servers.skill-studio]` in `~/.codex/config.toml`.
-
-Cursor, in `.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "skill-studio": { "command": "npx", "args": ["-y", "skill-studio", "mcp"] }
-  }
-}
-```
-
-OpenCode, in `opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "skill-studio": {
-      "type": "local",
-      "command": ["npx", "-y", "skill-studio", "mcp"],
-      "enabled": true
-    }
-  }
-}
-```
+Cursor, VS Code, Gemini CLI, Claude Desktop and other clients: see the [MCP docs](https://useskillstudio.com/docs/mcp/).
 
 ## Privacy
 

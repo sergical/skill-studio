@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Activity can undo updates to split copies. The app warns about edited copies before an update.
 - Claude Code plugin updates, fork-ahead notices, skill authors and install counts.
 - Turn a shared skill off for one agent (confirm, split, park). Park works for any copy and is the only off switch.
+- Settings → Connect your agents adds the MCP server to Claude Code, Codex, Cursor, OpenCode, pi and Grok Build, and has a setup prompt to paste into any agent. The homepage and the MCP docs have the same prompt; the docs and `llms.txt` list the setup for VS Code, Gemini CLI and Claude Desktop too.
 
 ### Changed
 
@@ -31,6 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Connecting an agent no longer fails with `npm error could not determine executable to run`: every MCP and CLI command uses `skill-studio@latest`.
+- The Settings cards share one layout for rows, buttons and errors; a long error shows one sentence with the command output under Show details.
 - The skill list shows a loading state and the failure reason instead of an empty list, with Try again.
 - Skill Store search ignores stale answers and keeps the search box on screen after an error.
 - Settings shows why the version check or project folders failed to load.

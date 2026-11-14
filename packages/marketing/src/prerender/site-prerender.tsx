@@ -9,6 +9,7 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { DocsPage } from "../docs/DocsPage";
+import { agentSetupLlmsLines } from "../docs/agent-setup-markdown";
 import { DOCS_PAGES, type DocsPageEntry } from "../docs/docs-pages";
 import { NotFoundPage } from "../docs/NotFoundPage";
 import { MarketingSite } from "../MarketingSite";
@@ -142,11 +143,15 @@ export function renderLlmsText(): string {
   return [
     "# Skill Studio",
     "",
-    "> A free macOS app, CLI and MCP server that finds broken, duplicate and unused agent skills across Claude Code, Codex, Cursor and more. Fix or park them, with undo.",
+    "> A free macOS app, CLI and MCP server that finds broken, duplicate and unused agent skills across Claude Code, Codex, Cursor, OpenCode, pi and Grok Build. Fix or park them, with undo.",
     "",
     "## Docs",
     "",
     ...links,
+    "",
+    "## Set up the MCP server",
+    "",
+    ...agentSetupLlmsLines(),
     "",
     "## Links",
     "",

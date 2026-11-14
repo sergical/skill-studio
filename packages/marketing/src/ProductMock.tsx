@@ -708,10 +708,7 @@ function ActivityScreen({ onOpenSkill }: { onOpenSkill: (skill: SkillRow) => voi
   const [window, setWindow] = useState<ActivityWindow>("30d");
   return (
     <section {...stylex.props(styles.page)}>
-      <PageHeading
-        title="Activity"
-        subtitle="From Claude Code transcripts. Codex, OpenCode and pi are not tracked yet."
-      />
+      <PageHeading title="Activity" subtitle="From the history files of all six agents." />
       <article {...stylex.props(styles.activityCard)}>
         <div {...stylex.props(styles.activityTop)}>
           <span {...stylex.props(styles.activityLabel)}>Activity</span>
