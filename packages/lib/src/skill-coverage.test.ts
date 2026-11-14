@@ -345,12 +345,12 @@ describe("disabled shared-root readers", () => {
         fixtureDeployment({
           agent: "shared",
           path: "/home/.agents/skills/find-bugs",
-          disabled_readers: ["open-code"],
+          disabled_readers: ["opencode"],
         }),
       ],
     });
 
-    expect(skillVisibleToAgent(skill, "open-code")).toBe("none");
+    expect(skillVisibleToAgent(skill, "opencode")).toBe("none");
     expect(skillVisibleToAgent(skill, "codex")).toBe("shared");
     expect(agentMatrix([skill])[0]?.cells.OpenCode.state).toBe("none");
     expect(agentMatrix([skill])[0]?.cells.Codex.state).toBe("shared");
@@ -362,7 +362,7 @@ describe("disabled shared-root readers", () => {
         fixtureDeployment({
           agent: "shared",
           path: "/home/.agents/skills/find-bugs",
-          disabled_readers: ["open-code"],
+          disabled_readers: ["opencode"],
         }),
         fixtureDeployment({
           agent: "OpenCode",
@@ -371,7 +371,7 @@ describe("disabled shared-root readers", () => {
       ],
     });
 
-    expect(skillVisibleToAgent(skill, "open-code")).toBe("own");
+    expect(skillVisibleToAgent(skill, "opencode")).toBe("own");
     expect(agentMatrix([skill])[0]?.cells.OpenCode.state).toBe("own");
   });
 });

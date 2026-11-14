@@ -35,7 +35,7 @@ import { useAppStore } from "../../store/appStore";
 const USAGE_READER_HARNESSES: AgentId[] = [
   "claude-code",
   "codex",
-  "open-code",
+  "opencode",
   "pi",
   "cursor",
   "grok-build",

@@ -14,17 +14,17 @@ const UNIVERSAL = "/home/.agents/skills/find-bugs";
 describe("split dialog model", () => {
   it("split_dialog_lists_one_folder_per_checked_harness_in_harness_order_or_the_user_cannot_see_what_is_written", () => {
     const targets: SplitCopy[] = [
-      { harness: "open-code", path: "/home/.opencode-custom/skills/find-bugs" },
+      { harness: "opencode", path: "/home/.opencode-custom/skills/find-bugs" },
       { harness: "claude-code", path: "/home/.claude/skills/find-bugs" },
       { harness: "codex", path: "/custom-codex/skills/find-bugs" },
       { harness: "pi", path: "/home/.pi/agent/skills/find-bugs" },
     ];
-    const checked = new Set<AgentId>(["codex", "claude-code", "open-code"]);
+    const checked = new Set<AgentId>(["codex", "claude-code", "opencode"]);
 
     expect(splitFolderRows(targets, checked)).toEqual([
       { harness: "claude-code", label: "Claude Code", path: "/home/.claude/skills/find-bugs" },
       { harness: "codex", label: "Codex", path: "/custom-codex/skills/find-bugs" },
-      { harness: "open-code", label: "OpenCode", path: "/home/.opencode-custom/skills/find-bugs" },
+      { harness: "opencode", label: "OpenCode", path: "/home/.opencode-custom/skills/find-bugs" },
     ]);
   });
 

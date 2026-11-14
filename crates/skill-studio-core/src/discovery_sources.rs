@@ -49,13 +49,24 @@ impl DiscoverySources {
 
     /// False only when `harness` is explicitly switched off.
     pub fn is_enabled(&self, harness: &str) -> bool {
-        self.0.get(harness).copied().unwrap_or(true)
+        self.0
+            .get(harness)
+            .or_else(|| {
+                (harness == "opencode")
+                    .then(|| self.0.get("open-code"))
+                    .flatten()
+            })
+            .copied()
+            .unwrap_or(true)
     }
 
     /// Switches `harness` on or off. Switching on removes the entry rather
     /// than storing `true`, so the file only ever lists harnesses that are
     /// off.
     pub fn set(&mut self, harness: &str, enabled: bool) {
+        if harness == "opencode" {
+            self.0.remove("open-code");
+        }
         if enabled {
             self.0.remove(harness);
         } else {
@@ -128,6 +139,16 @@ mod tests {
         assert!(!sources.is_enabled("open-code"));
         sources.set("open-code", true);
         assert!(sources.is_enabled("open-code"));
+        assert!(sources.is_empty());
+    }
+    /// Flow: enable discovery saved under the old id. Expect the toggle to work;
+    /// failure leaves `OpenCode` disabled after the user enables it.
+    #[test]
+    fn legacy_opencode_discovery_can_be_enabled_or_keeps_the_old_disabled_entry() {
+        let mut sources = read(br#"{"discovery":{"open-code":false}}"#);
+        assert!(!sources.is_enabled("opencode"));
+        sources.set("opencode", true);
+        assert!(sources.is_enabled("opencode"));
         assert!(sources.is_empty());
     }
 }

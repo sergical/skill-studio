@@ -141,6 +141,12 @@ pub fn parse_usage_time(text: &str) -> Result<DateTime<Utc>, String> {
 }
 
 impl SkillUsage {
+    /// Uses the runtime's resolved Codex root instead of ambient `CODEX_HOME`.
+    pub fn set_codex_home(&mut self, root: PathBuf) {
+        self.loaded_index.set_codex_home(root.clone());
+        self.index.set_codex_home(root);
+    }
+
     /// Seeds the index from `cache` when given. Never writes the file.
     pub fn load_read_only(cache: Option<&Path>) -> Self {
         let index = cache

@@ -36,7 +36,7 @@ import {
 function splitCopyPath(harness: string, skillName: string, projectPath: string | null): string {
   const global = projectPath === null;
   const root =
-    harness === "open-code"
+    harness === "opencode"
       ? global
         ? ".config/opencode/skills"
         : ".opencode/skills"
@@ -112,7 +112,7 @@ const ARCHIVED_CLIENT_PROJECT = `${HARNESS_HOME}/src/archived-client`;
 
 /** The six discovery harnesses, in the display order `discovery_harnesses()` yields on the Rust
  * side - see `crates/skill-studio-host/src/discovery.rs`'s `HISTORY_SOURCES`. */
-const DISCOVERY_HARNESSES = ["claude-code", "codex", "open-code", "pi", "cursor", "grok-build"];
+const DISCOVERY_HARNESSES = ["claude-code", "codex", "opencode", "pi", "cursor", "grok-build"];
 
 /** Installs the mock Tauri IPC layer and returns the control the harness (or the marketing
  * capture page) drives it with. */
@@ -492,7 +492,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           return {
             dotagents_installed: true,
             has_skill_lock: true,
-            installed_harnesses: ["claude-code", "codex", "open-code", "pi", "cursor"],
+            installed_harnesses: ["claude-code", "codex", "opencode", "pi", "cursor"],
             claude_reads_shared_folder: false,
           };
         case "list_github_skills":

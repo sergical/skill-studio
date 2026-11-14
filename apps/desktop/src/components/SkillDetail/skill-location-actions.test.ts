@@ -49,7 +49,7 @@ describe("forkBeforeInvocationEdit", () => {
 describe("materializeRequestForLocationAction", () => {
   it.each([
     ["claude-code", "Claude Code"],
-    ["open-code", "OpenCode"],
+    ["opencode", "OpenCode"],
   ] as const)("routes an explicit %s conversion with display label %s", (harness, harnessLabel) => {
     expect(
       materializeRequestForLocationAction({

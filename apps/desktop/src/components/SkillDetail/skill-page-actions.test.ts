@@ -420,7 +420,7 @@ describe("parkForEveryAgent", () => {
       scope: "parked",
       parked_origin: { kind: "universal", scope: "global" },
     });
-    const restoredShared = folder("tidy", { disabled_readers: ["codex", "open-code"] });
+    const restoredShared = folder("tidy", { disabled_readers: ["codex", "opencode"] });
     const { api } = fakeApi([], { rescanned: [restoredShared] });
 
     const toast = await parkForEveryAgent(skill(true, [parkedShared]), api);

@@ -18,7 +18,7 @@ import type { HarnessReach, Universal } from "./skill-row-state";
 const KNOWN_HARNESS_IDS = new Set<AgentId | "shared">([
   "claude-code",
   "codex",
-  "open-code",
+  "opencode",
   "pi",
   "cursor",
   "grok-build",

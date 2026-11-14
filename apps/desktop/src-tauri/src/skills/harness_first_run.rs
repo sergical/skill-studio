@@ -328,11 +328,7 @@ mod tests {
         );
         assert_eq!(state_of("codex"), HarnessState::DataOnly, "codex row");
         assert_eq!(state_of("pi"), HarnessState::NotFound, "pi row");
-        assert_eq!(
-            state_of("open-code"),
-            HarnessState::NotFound,
-            "open-code row"
-        );
+        assert_eq!(state_of("opencode"), HarnessState::NotFound, "opencode row");
     }
 
     /// `a_second_launch_skips_the_screen_when_the_harnesses_key_is_present_or_shows_it_again`:

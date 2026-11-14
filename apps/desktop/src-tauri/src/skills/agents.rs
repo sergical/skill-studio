@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub enum AgentId {
     ClaudeCode,
+    #[serde(rename = "opencode", alias = "open-code")]
     OpenCode,
     Pi,
     Cursor,

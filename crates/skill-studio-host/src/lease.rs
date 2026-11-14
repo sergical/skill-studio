@@ -133,31 +133,36 @@ impl LeaseProvider for FileLease {
         let mut sorted_keys = keys.to_vec();
         sorted_keys.sort();
 
-        fs::create_dir_all(&self.lease_root).map_err(|e| CoreError::io(&self.lease_root, e))?;
+        if mode == LeaseMode::Exclusive {
+            fs::create_dir_all(&self.lease_root).map_err(|e| CoreError::io(&self.lease_root, e))?;
+        }
 
         let deadline = Instant::now().checked_add(wait);
         let mut files = Vec::with_capacity(sorted_keys.len());
         for key in &sorted_keys {
             let path = self.lock_path(key);
-            let file = OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .read(true)
-                .write(true)
-                .open(&path)
-                .map_err(|e| CoreError::io(&path, e))?;
+            let mut options = OpenOptions::new();
+            options.read(true);
+            if mode == LeaseMode::Exclusive {
+                options.create(true).truncate(false).write(true);
+            }
+            let file = match options.open(&path) {
+                Ok(file) => file,
+                Err(error)
+                    if mode == LeaseMode::Shared && error.kind() == io::ErrorKind::NotFound =>
+                {
+                    continue
+                }
+                Err(error) => return Err(CoreError::io(&path, error)),
+            };
             let stale_deadline = Instant::now() + STALE_TAKEOVER_TIMEOUT;
             let mut attempted = false;
             loop {
                 match try_lock(&file, mode) {
                     Ok(true) => {
-                        // No exclusive holder can coexist with a shared one,
-                        // so any record left by an earlier writer is stale.
-                        // Left in place, it would send a later exclusive
-                        // waiter into the dead-holder takeover past its wait.
                         let _ = match mode {
                             LeaseMode::Exclusive => write_holder(&file),
-                            LeaseMode::Shared => file.set_len(0),
+                            LeaseMode::Shared => Ok(()),
                         };
                         break;
                     }
@@ -247,6 +252,11 @@ mod tests {
         let keys = vec![key("root-b")];
 
         let lease = FileLease::new(lease_root.clone());
+        drop(
+            lease
+                .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
+                .unwrap(),
+        );
         let shared = lease
             .acquire(&keys, LeaseMode::Shared, Duration::from_millis(100))
             .unwrap();
@@ -334,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_lease_clears_a_dead_writers_record_or_an_exclusive_waiter_outlasts_its_wait() {
+    fn a_shared_lease_preserves_a_dead_writers_record_or_changes_readonly_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let lease = FileLease::new(dir.path().to_path_buf());
         let keys = vec![key("shared-over-dead-writer")];
@@ -354,12 +364,7 @@ mod tests {
             .acquire(&keys, LeaseMode::Shared, Duration::from_millis(100))
             .unwrap();
 
-        assert_eq!(
-            read_holder(&path),
-            None,
-            "a live shared reader left the dead writer's record, so an exclusive waiter retries \
-             the stale takeover for {STALE_TAKEOVER_TIMEOUT:?} whatever its own wait"
-        );
+        assert_eq!(read_holder(&path).unwrap().0, u32::MAX);
         let busy = lease
             .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
             .err()
@@ -518,7 +523,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let lease = FileLease::new(dir.path().to_path_buf());
         let keys = [key("released")];
-        for mode in [LeaseMode::Shared, LeaseMode::Exclusive] {
+        for mode in [LeaseMode::Exclusive, LeaseMode::Shared] {
             drop(lease.acquire(&keys, mode, Duration::ZERO).unwrap());
             assert!(
                 lease.lock_path(&keys[0]).exists(),
@@ -533,6 +538,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let lease = FileLease::new(dir.path().to_path_buf());
         let keys = [key("shared")];
+        drop(
+            lease
+                .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
+                .unwrap(),
+        );
         let first = lease
             .acquire(&keys, LeaseMode::Shared, Duration::ZERO)
             .unwrap();

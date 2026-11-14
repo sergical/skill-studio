@@ -373,6 +373,13 @@ impl EventStore {
             .map(serde_json::to_string)
             .transpose()
             .map_err(|e| format!("Failed to serialize inverse: {e}"))?;
+        let harness = draft
+            .harness
+            .as_deref()
+            .map(skill_studio_core::identity::AgentId::parse_harness)
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .map(|id| id.to_string());
         self.conn
             .execute(
                 "INSERT INTO events
@@ -383,7 +390,7 @@ impl EventStore {
                     ts,
                     draft.kind,
                     draft.skill,
-                    draft.harness,
+                    harness,
                     draft.scope,
                     draft.project_path,
                     payload_json,

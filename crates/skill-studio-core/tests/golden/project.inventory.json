@@ -78,10 +78,10 @@
             },
             "kind": {
               "kind": "legacy",
-              "harness": "open-code"
+              "harness": "opencode"
             }
           },
-          "harness": "open-code",
+          "harness": "opencode",
           "path": "$HOME/proj/.opencode/skill/iota",
           "destination": "per_harness",
           "backing": "independent",

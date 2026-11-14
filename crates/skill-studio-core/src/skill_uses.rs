@@ -116,6 +116,7 @@ pub struct SkillInvocation {
     pub skill: String,
     /// Which harness recorded this use - an [`AgentId`](crate::identity::AgentId)
     /// wire name, e.g. [`AgentId::CLAUDE_CODE`](crate::identity::AgentId::CLAUDE_CODE).
+    #[serde(deserialize_with = "deserialize_harness")]
     pub harness: String,
     /// How the use started.
     pub trigger: SkillTrigger,
@@ -130,6 +131,17 @@ pub struct SkillInvocation {
     /// Session identity for CLI/MCP usage; desktop counts use the native session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub use_session: Option<String>,
+}
+
+fn deserialize_harness<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let raw = String::deserialize(deserializer)?;
+    Ok(if raw == "open-code" {
+        crate::identity::AgentId::OPEN_CODE.to_string()
+    } else {
+        raw
+    })
 }
 
 /// Use counts by [`SkillTrigger`], over a rolling window.

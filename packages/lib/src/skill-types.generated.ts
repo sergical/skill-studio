@@ -59,7 +59,7 @@ export type BackgroundWorker = "scan" | "invocations" | "update_check";
  */
 export type AgentId =
   | "claude-code"
-  | "open-code"
+  | "opencode"
   | "pi"
   | "cursor"
   | "cline"
@@ -138,11 +138,9 @@ export type SkillTrigger = "user" | "agent" | "file_read";
  */
 export type ProjectFolderSource = "discovered" | "added";
 /**
- * Kebab-case harness identifier, for example `claude-code` or `open-code`.
+ * Kebab-case harness identifier, for example `claude-code` or `opencode`.
  *
- * Invariant: the string is the serde wire name used by the desktop app
- * today. `open-code` is canonical; `opencode` is only a CLI binary name and
- * is never stored in an `AgentId`.
+ * Legacy spellings are normalized at input boundaries.
  */
 export type AgentIdentity = string;
 /**
@@ -653,7 +651,7 @@ export interface Deployment {
   /**
    * For a shared-root deployment (`agent == "shared"`) only: agent ids among
    * the native shared-root readers whose own mechanism disables this skill
-   * (Codex config / `OpenCode` permission deny) - `"codex"`, `"open-code"`.
+   * (Codex config / `OpenCode` permission deny) - `"codex"`, `"opencode"`.
    * Always empty for other deployments.
    */
   disabled_readers?: string[];
@@ -724,7 +722,7 @@ export interface PluginInfo {
  */
 export interface DisablingConfigFile {
   /**
-   * Agent id as in `AgentId`: `"codex"`, `"open-code"` or `"claude-code"`.
+   * Agent id as in `AgentId`: `"codex"`, `"opencode"` or `"claude-code"`.
    */
   agent: string;
   path: string;
@@ -1395,11 +1393,9 @@ export interface HarnessReport {
  */
 export interface HarnessDetection {
   /**
-   * Kebab-case harness identifier, for example `claude-code` or `open-code`.
+   * Kebab-case harness identifier, for example `claude-code` or `opencode`.
    *
-   * Invariant: the string is the serde wire name used by the desktop app
-   * today. `open-code` is canonical; `opencode` is only a CLI binary name and
-   * is never stored in an `AgentId`.
+   * Legacy spellings are normalized at input boundaries.
    */
   id: string;
   /**
@@ -1758,11 +1754,9 @@ export interface SplitOutcome {
  */
 export interface SplitCopy {
   /**
-   * Kebab-case harness identifier, for example `claude-code` or `open-code`.
+   * Kebab-case harness identifier, for example `claude-code` or `opencode`.
    *
-   * Invariant: the string is the serde wire name used by the desktop app
-   * today. `open-code` is canonical; `opencode` is only a CLI binary name and
-   * is never stored in an `AgentId`.
+   * Legacy spellings are normalized at input boundaries.
    */
   harness: string;
   /**
@@ -1796,11 +1790,9 @@ export interface AgentOffOutcome {
    */
   skill: string;
   /**
-   * Kebab-case harness identifier, for example `claude-code` or `open-code`.
+   * Kebab-case harness identifier, for example `claude-code` or `opencode`.
    *
-   * Invariant: the string is the serde wire name used by the desktop app
-   * today. `open-code` is canonical; `opencode` is only a CLI binary name and
-   * is never stored in an `AgentId`.
+   * Legacy spellings are normalized at input boundaries.
    */
   agent: string;
   /**
@@ -1987,11 +1979,9 @@ export interface DoctorReport {
  */
 export interface ListingCost {
   /**
-   * Kebab-case harness identifier, for example `claude-code` or `open-code`.
+   * Kebab-case harness identifier, for example `claude-code` or `opencode`.
    *
-   * Invariant: the string is the serde wire name used by the desktop app
-   * today. `open-code` is canonical; `opencode` is only a CLI binary name and
-   * is never stored in an `AgentId`.
+   * Legacy spellings are normalized at input boundaries.
    */
   harness: string;
   /**

@@ -662,6 +662,7 @@ impl SkillStudioServer {
             let usage = usage.get_or_insert_with(|| {
                 SkillUsage::load_read_only(scope::desktop_usage_cache().as_deref())
             });
+            usage.set_codex_home(rt.scope.codex_home.clone());
             Ok(usage.report_filtered(
                 &rt.scope.home.canonical,
                 &inventory,
@@ -893,7 +894,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Install one skill by copy, dotagents or skills.sh, for a set of agents: universal, claude-code, codex, open-code, cursor, pi, grok-build. An empty set means universal. link_mode copy writes a real folder for each agent instead of links. An untrusted dotagents source returns NeedsTrust: call again with trust_confirmed. Undo with restore_event and the event_id from the result.",
+        description = "Install one skill by copy, dotagents or skills.sh, for a set of agents: universal, claude-code, codex, opencode, cursor, pi, grok-build. An empty set means universal. link_mode copy writes a real folder for each agent instead of links. An untrusted dotagents source returns NeedsTrust: call again with trust_confirmed. Undo with restore_event and the event_id from the result.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn add(
