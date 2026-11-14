@@ -1,28 +1,51 @@
 // ============================================================================
 // Skill Studio marketing demo - interactive preview of the desktop product
+// Mirrors the desktop shell (apps/desktop/src/App.tsx), the sidebar, the page
+// header (PageShell), and the shared skill row (components/SkillList).
 // ============================================================================
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import * as stylex from "@stylexjs/stylex";
 import {
   Activity,
-  ArrowLeft,
   BookOpen,
+  Check,
   ChevronDown,
   ChevronRight,
-  Download,
+  CircleAlert,
+  CircleArrowDown,
+  CirclePause,
   Folder,
-  FolderPlus,
+  FolderGit2,
+  GitFork,
+  Globe,
+  Info,
+  Layers,
   LayoutDashboard,
-  MoreHorizontal,
+  LayoutGrid,
+  Link2,
+  Link2Off,
+  List,
+  ListFilter,
   Moon,
+  MoreHorizontal,
+  OctagonAlert,
+  PackageOpen,
   Plus,
   Puzzle,
   RefreshCw,
   Search,
   Settings,
-  SlidersHorizontal,
   Sun,
+  TriangleAlert,
   X,
 } from "lucide-react";
 
@@ -36,31 +59,37 @@ export interface ThemeToggleOrigin {
   y: number;
 }
 
-/** What the sidebar's main button does: open the Add skill drawer, or scan a folder. */
-export type ProductMockSidebarAction = "add-skill" | "scan-folder";
-
 interface ProductMockProps {
   theme: SiteTheme;
   onToggleTheme: (origin: ThemeToggleOrigin) => void;
-  sidebarAction?: ProductMockSidebarAction;
-  initialView?: ProductMockRootView;
-  initialSkillName?: string;
-  initialInstall?: boolean;
-  variant?: "hero" | "walkthrough" | "capture";
 }
 
+type Harness = AgentId | "universal";
+type SkillLocation = "Global" | "agent-studio";
+type RowState = "broken" | "warning" | "update" | "parked";
+type FixLabel = "Fix" | "Compare" | "Update" | "Park" | "Unpark";
 type Scope = "All" | "Global" | "Project";
 type ActivityWindow = "24h" | "7d" | "14d" | "30d";
 type InvocationPolicy = "Both" | "User only" | "Model only";
+type HomeFilter = "broken" | "warning" | "update" | null;
+type InstallMethod = "skills.sh" | "dotagents" | "Copy";
 
 interface SkillRow {
   name: string;
   description: string;
-  location: "Global" | "agent-studio";
-  agents: AgentId[];
-  uses: number;
-  tokens: string;
-  status?: "Update";
+  source: string;
+  locations: readonly SkillLocation[];
+  harnesses: readonly Harness[];
+  claudeLink?: "linked" | "broken";
+  state?: RowState;
+  specViolation?: boolean;
+  note?: string;
+  fix?: FixLabel;
+  method?: InstallMethod;
+  installed?: string;
+  recentUse?: { where: string; when: string; uses: number };
+  promptTokens: number;
+  fullTokens: string;
 }
 
 interface DetailState {
@@ -68,149 +97,301 @@ interface DetailState {
   from: ProductMockRootView;
 }
 
-const skills = [
+const skills: readonly SkillRow[] = [
   {
-    name: "backport-pr",
-    description: "Backport a merged PR to a maintenance branch.",
-    location: "Global",
-    agents: ["claude"],
-    uses: 0,
-    tokens: "2.7k",
-    status: "Update",
+    name: "motion",
+    description: "Animate React interfaces with Motion.",
+    source: "emilkowalski/skills",
+    locations: ["Global"],
+    harnesses: ["universal", "claude"],
+    claudeLink: "broken",
+    state: "broken",
+    note: "Claude Code · broken link at ~/.claude/skills/motion",
+    fix: "Fix",
+    promptTokens: 11,
+    fullTokens: "1.4k",
+  },
+  {
+    name: "prepare-videos",
+    description: "Prepare product videos for upload.",
+    source: "sergical/skills",
+    locations: ["Global"],
+    harnesses: ["universal"],
+    state: "broken",
+    specViolation: true,
+    note: "SKILL.md has no description in its frontmatter",
+    fix: "Fix",
+    promptTokens: 6,
+    fullTokens: "980",
+  },
+  {
+    name: "tailwind",
+    description: "Write Tailwind CSS 4 utility classes.",
+    source: "tailwindlabs/skills",
+    locations: ["Global", "agent-studio"],
+    harnesses: ["universal", "claude"],
+    claudeLink: "linked",
+    state: "broken",
+    specViolation: true,
+    note: "SKILL.md has no name in its frontmatter",
+    fix: "Fix",
+    promptTokens: 8,
+    fullTokens: "2.1k",
+  },
+  {
+    name: "writing-skills",
+    description: "Write and test new agent skills.",
+    source: "obra/superpowers",
+    locations: ["Global"],
+    harnesses: ["universal"],
+    state: "broken",
+    specViolation: true,
+    note: "Name does not match its directory",
+    fix: "Fix",
+    promptTokens: 12,
+    fullTokens: "1.6k",
   },
   {
     name: "commit",
     description: "Create commits that follow repository conventions.",
-    location: "Global",
-    agents: ["claude", "codex", "opencode"],
-    uses: 6,
-    tokens: "1.1k",
+    source: "sergical/skills",
+    locations: ["Global", "agent-studio"],
+    harnesses: ["universal", "claude", "codex"],
+    claudeLink: "linked",
+    state: "warning",
+    note: "3 copies differ: Global · Universal folder · agent-studio",
+    fix: "Compare",
+    promptTokens: 18,
+    fullTokens: "1.1k",
   },
   {
-    name: "convex-hackathon-skill",
-    description: "Create an evidence-based hackathon build log.",
-    location: "Global",
-    agents: ["codex"],
-    uses: 0,
-    tokens: "1.1k",
+    name: "add-customer-story",
+    description: "Add a customer story page to the site.",
+    source: "sergical/skills",
+    locations: ["Global"],
+    harnesses: ["universal", "claude"],
+    state: "warning",
+    note: "2 copies differ: Universal folder · Claude Code",
+    fix: "Compare",
+    promptTokens: 14,
+    fullTokens: "1.7k",
   },
   {
-    name: "create-press-release",
-    description: "Create a structured press release page.",
-    location: "Global",
-    agents: ["claude", "opencode"],
-    uses: 0,
-    tokens: "1.7k",
+    name: "code-simplifier",
+    description: "Simplify code without changing what it does.",
+    source: "anthropics/skills",
+    locations: ["Global"],
+    harnesses: ["universal", "claude", "codex"],
+    state: "warning",
+    note: "4 copies differ: Universal folder · Claude Code · Codex",
+    fix: "Compare",
+    promptTokens: 10,
+    fullTokens: "890",
+  },
+  {
+    name: "agent-browser",
+    description: "Automate a browser from the terminal.",
+    source: "vercel-labs/agent-browser",
+    locations: ["Global"],
+    harnesses: ["universal", "claude", "codex", "opencode", "cursor"],
+    claudeLink: "linked",
+    state: "update",
+    note: "716c069 → 021d925",
+    fix: "Update",
+    promptTokens: 18,
+    fullTokens: "2.4k",
+  },
+  {
+    name: "cmux",
+    description: "Manage cmux workspaces, panes, and terminals.",
+    source: "manaflow-ai/cmux",
+    locations: ["Global"],
+    harnesses: ["universal", "claude"],
+    claudeLink: "linked",
+    state: "update",
+    note: "652d0c8 → 1349bc0",
+    fix: "Update",
+    promptTokens: 9,
+    fullTokens: "1.3k",
+  },
+  {
+    name: "docker-multistage",
+    description: "Convert a Dockerfile to a leaner multi-stage build.",
+    source: "docker/buildx",
+    locations: ["Global"],
+    harnesses: ["universal", "claude"],
+    claudeLink: "linked",
+    state: "update",
+    note: "v1 → abc1234",
+    fix: "Update",
+    promptTokens: 9,
+    fullTokens: "560",
+  },
+  {
+    name: "backport-pr",
+    description: "Backport a merged PR to a maintenance branch.",
+    source: "getsentry/skills",
+    locations: ["Global"],
+    harnesses: ["universal", "claude"],
+    claudeLink: "linked",
+    installed: "3 months ago",
+    promptTokens: 12,
+    fullTokens: "2.7k",
+  },
+  {
+    name: "code-review",
+    description: "Review changes against standards and the spec.",
+    source: "getsentry/skills",
+    locations: ["Global"],
+    harnesses: ["universal", "claude", "codex"],
+    claudeLink: "linked",
+    recentUse: { where: "agent-studio", when: "3d ago", uses: 14 },
+    promptTokens: 18,
+    fullTokens: "1.5k",
   },
   {
     name: "design-vocabulary",
     description: "Precise language for interface and product design.",
-    location: "Global",
-    agents: ["claude", "codex"],
-    uses: 0,
-    tokens: "1.5k",
-  },
-  {
-    name: "matt-code-review",
-    description: "Review changes against standards and the spec.",
-    location: "Global",
-    agents: ["claude", "codex"],
-    uses: 1,
-    tokens: "1.5k",
+    source: "emilkowalski/skills",
+    locations: ["Global"],
+    harnesses: ["universal", "claude", "codex", "opencode", "pi", "cursor"],
+    claudeLink: "linked",
+    recentUse: { where: "Global", when: "1d ago", uses: 14 },
+    promptTokens: 11,
+    fullTokens: "1.5k",
   },
   {
     name: "new-branch",
     description: "Create a branch from the latest default branch.",
-    location: "Global",
-    agents: ["claude", "codex", "opencode"],
-    uses: 0,
-    tokens: "792",
-  },
-  {
-    name: "pstack-sequence-verifiable-units",
-    description: "Break multi-step work into verifiable units.",
-    location: "Global",
-    agents: ["claude", "codex"],
-    uses: 0,
-    tokens: "522",
-    status: "Update",
+    source: "sergical/skills",
+    locations: ["agent-studio"],
+    harnesses: ["claude"],
+    installed: "5 weeks ago",
+    promptTokens: 7,
+    fullTokens: "792",
   },
   {
     name: "pstack-technical-writing",
     description: "Layered standards for clear technical writing.",
-    location: "agent-studio",
-    agents: ["claude", "codex"],
-    uses: 0,
-    tokens: "2.7k",
+    source: "pstack/skills",
+    locations: ["agent-studio"],
+    harnesses: ["universal", "claude"],
+    claudeLink: "linked",
+    installed: "2 months ago",
+    promptTokens: 10,
+    fullTokens: "2.7k",
   },
-] satisfies ReadonlyArray<SkillRow>;
-
-const activitySkills = [
   {
-    name: "cmux-workspace",
-    description: "Manage cmux workspaces, panes, and terminals.",
-    location: "Global",
-    agents: ["claude"],
-    uses: 28,
-    tokens: "2.7k",
+    name: "sentry-cli",
+    description: "Query Sentry issues and releases from the terminal.",
+    source: "getsentry/cli",
+    locations: ["Global"],
+    harnesses: ["universal", "claude", "codex"],
+    claudeLink: "linked",
+    recentUse: { where: "Global", when: "12h ago", uses: 11 },
+    promptTokens: 9,
+    fullTokens: "1.2k",
   },
-  { ...skills[1], name: "cmux", uses: 25 },
-  { ...skills[2], name: "artifact-design", uses: 21 },
-  { ...skills[3], name: "codex:adversarial-review", uses: 20 },
-  { ...skills[4], name: "design-foundations", uses: 12 },
-  { ...skills[5], name: "ui-polish", uses: 12 },
-  { ...skills[6], name: "write-discoverable-code", uses: 12 },
-  { ...skills[7], name: "iterate-pr", uses: 10 },
-  { ...skills[8], name: "sentry-cli", uses: 10 },
-] satisfies ReadonlyArray<SkillRow>;
+];
+
+const initialParked: readonly SkillRow[] = [
+  {
+    name: "tailwind-v3",
+    description: "Tailwind CSS 3 class reference.",
+    source: "tailwindlabs/skills",
+    locations: ["Global"],
+    harnesses: ["universal"],
+    state: "parked",
+    note: "Parked 3 days ago",
+    fix: "Unpark",
+    promptTokens: 9,
+    fullTokens: "1.9k",
+  },
+  {
+    name: "jira-sync",
+    description: "Sync pull requests with Jira tickets.",
+    source: "sergical/skills",
+    locations: ["agent-studio"],
+    harnesses: ["claude"],
+    state: "parked",
+    note: "Parked 2 weeks ago",
+    fix: "Unpark",
+    promptTokens: 13,
+    fullTokens: "1.1k",
+  },
+  {
+    name: "old-release-notes",
+    description: "Draft release notes from merged PRs.",
+    source: "sergical/skills",
+    locations: ["Global"],
+    harnesses: ["universal", "claude"],
+    state: "parked",
+    note: "Parked last month",
+    fix: "Unpark",
+    promptTokens: 8,
+    fullTokens: "640",
+  },
+];
+
+const SKILL_TOTAL = 290;
+
+function skillNamed(name: string): SkillRow {
+  return (
+    skills.find((skill) => skill.name === name) ?? {
+      name,
+      description: "Reusable instructions for a repeated task.",
+      source: "sergical/skills",
+      locations: ["Global"],
+      harnesses: ["universal", "claude"],
+      claudeLink: "linked",
+      promptTokens: 10,
+      fullTokens: "1.2k",
+    }
+  );
+}
+
+const homeGroups = [
+  { state: "broken", label: "Broken", total: 5 },
+  { state: "warning", label: "Warnings", total: 34 },
+  { state: "update", label: "Updates", total: 22 },
+] satisfies ReadonlyArray<{ state: Exclude<HomeFilter, null>; label: string; total: number }>;
+
+const UNUSED_TOTAL = 76;
+
+const isUnused = (skill: SkillRow) => Boolean(skill.installed) && !skill.state;
+
+/** A group shows more skills than the mock has rows, so the count drops by the rows handled. */
+function remainingCount(total: number, sampleBefore: number, sampleNow: number) {
+  return sampleNow === 0 ? 0 : total - (sampleBefore - sampleNow);
+}
 
 const pluginGroups = [
   {
     name: "codex",
     version: "1.0.6",
-    agent: "codex" as const,
+    agent: "codex",
     skills: [
-      { ...skills[0], name: "codex-cli-runtime", description: "Call the Codex companion runtime." },
-      {
-        ...skills[1],
-        name: "codex-result-handling",
-        description: "Present Codex helper output clearly.",
-      },
-      {
-        ...skills[2],
-        name: "gpt-5-4-prompting",
-        description: "Compose focused coding and review prompts.",
-      },
+      ["codex-cli-runtime", "Call the Codex companion runtime.", "640"],
+      ["codex-result-handling", "Present Codex helper output clearly.", "410"],
+      ["gpt-5-4-prompting", "Compose focused coding and review prompts.", "1.2k"],
     ],
   },
   {
     name: "figma",
     version: "2.1.7",
-    agent: "claude" as const,
+    agent: "claude",
     skills: [
-      {
-        ...skills[3],
-        name: "figma-code-connect",
-        description: "Map Figma components to code snippets.",
-      },
-      {
-        ...skills[4],
-        name: "figma-create-design-system-rules",
-        description: "Generate project design-system rules.",
-      },
-      {
-        ...skills[5],
-        name: "figma-create-new-file",
-        description: "Create a new Figma or FigJam file.",
-      },
-      {
-        ...skills[6],
-        name: "figma-generate-design",
-        description: "Translate application views into Figma.",
-      },
+      ["figma-code-connect", "Map Figma components to code snippets.", "2.3k"],
+      ["figma-create-design-system-rules", "Generate project design-system rules.", "1.8k"],
+      ["figma-generate-design", "Translate application views into Figma.", "3.1k"],
     ],
   },
-];
+] satisfies ReadonlyArray<{
+  name: string;
+  version: string;
+  agent: AgentId;
+  skills: ReadonlyArray<readonly [string, string, string]>;
+}>;
 
 const navItems: ReadonlyArray<{
   id: ProductMockRootView;
@@ -219,14 +400,10 @@ const navItems: ReadonlyArray<{
   count?: number;
 }> = [
   { id: "home", label: "Home", Icon: LayoutDashboard },
-  { id: "skills", label: "Skills", Icon: Search, count: 290 },
+  { id: "skills", label: "Skills", Icon: Layers, count: SKILL_TOTAL },
   { id: "plugins", label: "Plugins", Icon: Puzzle, count: 109 },
   { id: "activity", label: "Activity", Icon: Activity },
 ];
-
-const spin = stylex.keyframes({ to: { transform: "rotate(360deg)" } });
-
-const SCAN_DURATION_MS = 1400;
 
 const viewEnter = stylex.keyframes({
   from: { opacity: 0.35, transform: "translateX(7px)" },
@@ -241,355 +418,582 @@ function toggleThemeFromButton(
   onToggleTheme({ x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 });
 }
 
-function WindowBar({
-  theme,
-  onToggleTheme,
-}: {
-  theme: SiteTheme;
-  onToggleTheme: (origin: ThemeToggleOrigin) => void;
-}) {
-  return (
-    <div {...stylex.props(styles.windowBar)}>
-      <span {...stylex.props(styles.traffic)} aria-hidden="true">
-        <i {...stylex.props(styles.trafficDot)} />
-        <i {...stylex.props(styles.trafficDot)} />
-        <i {...stylex.props(styles.trafficDot)} />
-      </span>
-      <span>Skill Studio</span>
-      <button
-        type="button"
-        aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
-        onClick={(event) => toggleThemeFromButton(event, onToggleTheme)}
-        {...stylex.props(styles.windowThemeButton)}
-      >
-        {theme === "dark" ? (
-          <Moon aria-hidden="true" size={15} />
-        ) : (
-          <Sun aria-hidden="true" size={15} />
-        )}
-      </button>
-    </div>
-  );
-}
-
-function ScanFolderButton() {
-  const [scanning, setScanning] = useState(false);
-  useEffect(() => {
-    if (!scanning) return;
-    const timer = window.setTimeout(() => setScanning(false), SCAN_DURATION_MS);
-    return () => window.clearTimeout(timer);
-  }, [scanning]);
-  return (
-    <button
-      type="button"
-      aria-busy={scanning}
-      onClick={() => setScanning(true)}
-      {...stylex.props(styles.scanFolder)}
-    >
-      {scanning ? (
-        <RefreshCw aria-hidden="true" size={15} {...stylex.props(styles.spinning)} />
-      ) : (
-        <FolderPlus aria-hidden="true" size={15} />
-      )}
-      {scanning ? "Scanning ~/src/acme-web…" : "Scan a folder"}
-    </button>
-  );
-}
-
 function Sidebar({
   activeView,
+  parkedCount,
   onNavigate,
   onAddSkill,
-  action,
   theme,
   onToggleTheme,
 }: {
   activeView: ProductMockRootView;
+  parkedCount: number;
   onNavigate: (view: ProductMockRootView) => void;
   onAddSkill: () => void;
-  action: ProductMockSidebarAction;
   theme: SiteTheme;
   onToggleTheme: (origin: ThemeToggleOrigin) => void;
 }) {
-  const search = (
-    <label {...stylex.props(styles.sidebarSearch, action === "scan-folder" && styles.searchGrow)}>
-      <Search aria-hidden="true" size={15} />
-      <input
-        aria-label="Search all skills"
-        placeholder="Search skills…"
-        {...stylex.props(styles.input)}
-      />
-    </label>
+  const navButton = ({ id, label, Icon, count }: (typeof navItems)[number]) => (
+    <button
+      key={id}
+      type="button"
+      aria-label={label}
+      aria-current={activeView === id ? "page" : undefined}
+      onClick={() => onNavigate(id)}
+      {...stylex.props(styles.navItem, activeView === id && styles.navItemActive)}
+    >
+      <Icon aria-hidden="true" size={14} {...stylex.props(styles.navIcon)} />
+      <span {...stylex.props(activeView !== id && styles.navLabelCollapsible)}>{label}</span>
+      {count !== undefined && <small {...stylex.props(styles.navCount)}>{count}</small>}
+    </button>
   );
   return (
     <aside {...stylex.props(styles.sidebar)}>
-      {action === "add-skill" ? (
-        <>
-          {search}
-          <button type="button" onClick={onAddSkill} {...stylex.props(styles.addSkill)}>
-            <Plus aria-hidden="true" size={15} />
-            Add skill
-          </button>
-        </>
-      ) : (
-        <>
-          <div {...stylex.props(styles.searchRow)}>
-            {search}
-            <button
-              type="button"
-              aria-label="Add skill"
-              onClick={onAddSkill}
-              {...stylex.props(styles.searchSideButton)}
-            >
-              <Plus aria-hidden="true" size={15} />
-            </button>
-          </div>
-          <ScanFolderButton />
-        </>
-      )}
-      <nav {...stylex.props(styles.productNav)} aria-label="Product navigation">
-        {navItems.map(({ id, label, Icon, count }) => (
+      <div {...stylex.props(styles.dragStrip)}>
+        <span {...stylex.props(styles.traffic)} aria-hidden="true">
+          <i {...stylex.props(styles.trafficDot)} />
+          <i {...stylex.props(styles.trafficDot)} />
+          <i {...stylex.props(styles.trafficDot)} />
+        </span>
+      </div>
+      <div {...stylex.props(styles.sidebarTitleRow)}>
+        <span {...stylex.props(styles.sidebarTitle)}>Skill Studio</span>
+        <span {...stylex.props(styles.sidebarTitleActions)}>
           <button
-            key={id}
             type="button"
-            aria-current={activeView === id ? "page" : undefined}
-            onClick={() => onNavigate(id)}
-            {...stylex.props(
-              styles.navItem,
-              activeView === id &&
-                (action === "add-skill" ? styles.navItemActive : styles.navItemActiveNeutral),
-            )}
+            aria-label="Search skills"
+            onClick={() => onNavigate("skills")}
+            {...stylex.props(styles.iconButton)}
           >
-            <Icon aria-hidden="true" size={15} />
-            <span>{label}</span>
-            {count !== undefined && <small {...stylex.props(styles.navCount)}>{count}</small>}
+            <Search aria-hidden="true" size={14} />
           </button>
-        ))}
+          <button
+            type="button"
+            aria-label="Add skill"
+            onClick={onAddSkill}
+            {...stylex.props(styles.iconButton)}
+          >
+            <Plus aria-hidden="true" size={14} />
+          </button>
+        </span>
+      </div>
+      <nav {...stylex.props(styles.productNav)} aria-label="Product navigation">
+        {navItems.map(navButton)}
+        {parkedCount > 0 && (
+          <span {...stylex.props(styles.navGap)}>
+            {navButton({ id: "parked", label: "Parked", Icon: PackageOpen, count: parkedCount })}
+          </span>
+        )}
       </nav>
       <div {...stylex.props(styles.sidebarFooter)}>
-        <span {...stylex.props(styles.sidebarFooterStatus)}>
-          <RefreshCw aria-hidden="true" size={12} />
-          Scanned just now
+        <button type="button" {...stylex.props(styles.syncButton)}>
+          <RefreshCw aria-hidden="true" size={13} />
+          Sync
+        </button>
+        <span {...stylex.props(styles.footerActions)}>
+          <button
+            type="button"
+            aria-label="Learn"
+            {...stylex.props(styles.iconButton, styles.footerOnlyDesktop)}
+          >
+            <BookOpen aria-hidden="true" size={13} />
+          </button>
+          <button
+            type="button"
+            aria-label="Settings"
+            {...stylex.props(styles.iconButton, styles.footerOnlyDesktop)}
+          >
+            <Settings aria-hidden="true" size={13} />
+          </button>
+          <button
+            type="button"
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+            onClick={(event) => toggleThemeFromButton(event, onToggleTheme)}
+            {...stylex.props(styles.iconButton, styles.themeButton)}
+          >
+            {theme === "dark" ? (
+              <Moon aria-hidden="true" size={13} />
+            ) : (
+              <Sun aria-hidden="true" size={13} />
+            )}
+          </button>
         </span>
-        <button
-          type="button"
-          aria-label="Documentation"
-          {...stylex.props(styles.sidebarFooterButton)}
-        >
-          <BookOpen aria-hidden="true" size={13} />
-        </button>
-        <button type="button" aria-label="Settings" {...stylex.props(styles.sidebarFooterButton)}>
-          <Settings aria-hidden="true" size={13} />
-        </button>
-        <button
-          type="button"
-          aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
-          onClick={(event) => toggleThemeFromButton(event, onToggleTheme)}
-          {...stylex.props(styles.sidebarFooterButton)}
-        >
-          {theme === "dark" ? (
-            <Moon aria-hidden="true" size={13} />
-          ) : (
-            <Sun aria-hidden="true" size={13} />
-          )}
-        </button>
       </div>
     </aside>
   );
 }
 
-function PageHeading({
+function PageHeader({
   title,
+  parent,
+  onParent,
   subtitle,
-  aside,
+  actions,
 }: {
   title: string;
+  parent?: string;
+  onParent?: () => void;
   subtitle?: string;
-  aside?: string;
+  actions?: ReactNode;
 }) {
   return (
-    <div {...stylex.props(styles.pageHeading)}>
-      <div>
-        <h2 {...stylex.props(styles.pageTitle)}>{title}</h2>
-        {subtitle && <p {...stylex.props(styles.pageSubtitle)}>{subtitle}</p>}
-      </div>
-      {aside && <span {...stylex.props(styles.pageCount)}>{aside}</span>}
-    </div>
+    <header {...stylex.props(styles.pageHeader)}>
+      <h2 {...stylex.props(styles.crumbs)}>
+        {parent && (
+          <>
+            <button type="button" onClick={onParent} {...stylex.props(styles.crumbParent)}>
+              {parent}
+            </button>
+            <ChevronRight aria-hidden="true" size={12} {...stylex.props(styles.crumbChevron)} />
+          </>
+        )}
+        <span {...stylex.props(styles.crumbTitle)}>{title}</span>
+      </h2>
+      {subtitle && <span {...stylex.props(styles.crumbSubtitle)}>· {subtitle}</span>}
+      {actions && <div {...stylex.props(styles.headerActions)}>{actions}</div>}
+    </header>
   );
 }
 
-function AgentStack({ agents }: { agents: readonly AgentId[] }) {
+function StateGlyph({ state, specViolation }: { state?: RowState; specViolation?: boolean }) {
+  switch (state) {
+    case "broken":
+      return specViolation ? (
+        <OctagonAlert aria-label="Spec violation" size={14} {...stylex.props(styles.danger)} />
+      ) : (
+        <CircleAlert aria-label="Broken" size={14} {...stylex.props(styles.danger)} />
+      );
+    case "warning":
+      return <TriangleAlert aria-label="Warning" size={14} {...stylex.props(styles.warning)} />;
+    case "update":
+      return (
+        <CircleArrowDown aria-label="Update available" size={14} {...stylex.props(styles.accent)} />
+      );
+    case "parked":
+      return <CirclePause aria-label="Parked" size={14} {...stylex.props(styles.faint)} />;
+    case undefined:
+      return <span />;
+  }
+}
+
+function LocationCell({ locations }: { locations: readonly SkillLocation[] }) {
+  const [first, ...rest] = locations;
   return (
-    <span {...stylex.props(styles.agentStack)}>
-      {agents.map((agent) => (
-        <AgentIcon key={agent} agent={agent} size={14} />
-      ))}
+    <span {...stylex.props(styles.locationCell)}>
+      <span {...stylex.props(styles.locationChip)}>
+        {first === "Global" ? (
+          <Globe aria-hidden="true" size={13} {...stylex.props(styles.faint)} />
+        ) : (
+          <FolderGit2 aria-hidden="true" size={13} {...stylex.props(styles.faint)} />
+        )}
+        <span {...stylex.props(styles.truncate)}>{first}</span>
+      </span>
+      {rest.length > 0 && <span {...stylex.props(styles.faint)}>+{rest.length}</span>}
     </span>
   );
 }
 
-function HomeScreen({
-  onCompare,
-  onOpenSkill,
+const MAX_DISCS = 5;
+
+function HarnessDiscs({
+  harnesses,
+  claudeLink,
 }: {
-  onCompare: (skillName: string) => void;
-  onOpenSkill: (skill: SkillRow) => void;
+  harnesses: readonly Harness[];
+  claudeLink?: SkillRow["claudeLink"];
 }) {
-  const attention = [
-    {
-      label: "Broken",
-      count: 5,
-      tone: "danger" as const,
-      rows: [
-        ["motion", "Missing required frontmatter fields"],
-        ["prepare-videos", "Missing required frontmatter fields"],
-        ["tailwind", "Missing required frontmatter fields"],
-        ["writing-skills", "Name does not match its directory"],
-      ],
-    },
-    {
-      label: "Warnings",
-      count: 34,
-      tone: "warning" as const,
-      rows: [
-        ["agent-browser", "Shared folder needs per-skill links"],
-        ["commit", "Global and project copies differ"],
-        ["add-customer-story", "Three copies differ"],
-        ["code-simplifier", "Four copies differ"],
-      ],
-    },
-    {
-      label: "Updates",
-      count: 22,
-      tone: "accent" as const,
-      rows: [
-        ["agent-browser", "716c069 → 021d925"],
-        ["bro", "b8b594d → cdba491"],
-        ["cmux", "652d0c8 → 1349bc0"],
-        ["cmux-customization", "f9b1835 → 8c8c2ba"],
-      ],
-    },
-  ];
+  const shown = harnesses.slice(0, MAX_DISCS);
+  const overflow = harnesses.length - shown.length;
   return (
-    <section {...stylex.props(styles.page)}>
-      <PageHeading title="Home" />
-      <div {...stylex.props(styles.statGrid)}>
-        {attention.map((item) => (
-          <button key={item.label} type="button" {...stylex.props(styles.statCard)}>
-            <span {...stylex.props(styles.cardLabel)}>{item.label}</span>
-            <strong {...stylex.props(styles.statNumber, styles[item.tone])}>{item.count}</strong>
+    <span {...stylex.props(styles.discs)}>
+      {shown.map((harness, index) => (
+        <span key={harness} {...stylex.props(styles.disc, index > 0 && styles.discOverlap)}>
+          {harness === "universal" ? (
+            <Layers aria-label="Universal folder" size={11} />
+          ) : (
+            <AgentIcon agent={harness} size={11} />
+          )}
+          {harness === "claude" && claudeLink && (
+            <span {...stylex.props(styles.discBadge)}>
+              {claudeLink === "broken" ? (
+                <Link2Off aria-label="Broken link" size={7} {...stylex.props(styles.danger)} />
+              ) : (
+                <Link2 aria-label="Linked" size={7} {...stylex.props(styles.muted)} />
+              )}
+            </span>
+          )}
+        </span>
+      ))}
+      {overflow > 0 && <span {...stylex.props(styles.discOverflow)}>+{overflow}</span>}
+    </span>
+  );
+}
+
+function SkillListRow({
+  skill,
+  onOpen,
+  onFix,
+}: {
+  skill: SkillRow;
+  onOpen: () => void;
+  onFix: () => void;
+}) {
+  return (
+    <div {...stylex.props(styles.row)}>
+      <span {...stylex.props(styles.rowSlot)}>
+        <StateGlyph state={skill.state} specViolation={skill.specViolation} />
+      </span>
+      <button type="button" onClick={onOpen} {...stylex.props(styles.rowName)}>
+        <span {...stylex.props(styles.truncate)}>{skill.name}</span>
+      </button>
+      <LocationCell locations={skill.locations} />
+      <span {...stylex.props(styles.hideBelowNarrow)}>
+        <HarnessDiscs harnesses={skill.harnesses} claudeLink={skill.claudeLink} />
+      </span>
+      <span {...stylex.props(styles.noteCell)}>
+        <span {...stylex.props(styles.noteText)}>{skill.note}</span>
+        <span {...stylex.props(styles.tokenPair)}>
+          <span {...stylex.props(styles.faint)}>{skill.promptTokens}</span>
+          <span>{skill.fullTokens}</span>
+        </span>
+      </span>
+      <span {...stylex.props(styles.fixCell)}>
+        {skill.fix && (
+          <button type="button" onClick={onFix} {...stylex.props(styles.fixButton)}>
+            {skill.fix}
           </button>
+        )}
+      </span>
+    </div>
+  );
+}
+
+interface GroupAction {
+  label: string;
+  onClick: () => void;
+}
+
+function GroupHead({
+  label,
+  count,
+  open,
+  onToggle,
+  action,
+}: {
+  label: string;
+  count: number;
+  open: boolean;
+  onToggle: () => void;
+  action?: GroupAction;
+}) {
+  return (
+    <div {...stylex.props(styles.groupHead)}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        {...stylex.props(styles.groupToggle)}
+      >
+        <ChevronDown
+          aria-hidden="true"
+          size={14}
+          {...stylex.props(styles.groupChevron, !open && styles.groupChevronClosed)}
+        />
+        {label}
+        <span {...stylex.props(styles.groupCount)}>{count}</span>
+      </button>
+      {action && (
+        <button type="button" onClick={action.onClick} {...stylex.props(styles.groupAction)}>
+          {action.label}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SkillGroup({
+  label,
+  count,
+  rows,
+  action,
+  defaultOpen = true,
+  onOpenSkill,
+  onFix,
+  children,
+}: {
+  label: string;
+  count: number;
+  rows: readonly SkillRow[];
+  action?: GroupAction;
+  defaultOpen?: boolean;
+  onOpenSkill: (skill: SkillRow) => void;
+  onFix: (skill: SkillRow) => void;
+  children?: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section {...stylex.props(styles.group)}>
+      <GroupHead
+        label={label}
+        count={count}
+        open={open}
+        onToggle={() => setOpen(!open)}
+        action={action}
+      />
+      {open &&
+        rows.map((skill) => (
+          <SkillListRow
+            key={skill.name}
+            skill={skill}
+            onOpen={() => onOpenSkill(skill)}
+            onFix={() => onFix(skill)}
+          />
         ))}
-      </div>
-      <article {...stylex.props(styles.laneCard)}>
-        <div {...stylex.props(styles.laneRow)}>
-          <span {...stylex.props(styles.laneTitle)}>
-            Who can invoke <b>290</b>
-          </span>
-          <div {...stylex.props(styles.laneSegments)}>
-            <button type="button" {...stylex.props(styles.lanePrimary, styles.laneBoth)}>
-              <b>202</b>
-              <span {...stylex.props(styles.laneLongLabel)}>you or the model</span>
-              <span {...stylex.props(styles.laneShortLabel)}>both</span>
-            </button>
-            <button type="button" {...stylex.props(styles.laneSecondary, styles.laneModel)}>
-              <b>18</b>
-              <span {...stylex.props(styles.laneLongLabel)}>model only</span>
-              <span {...stylex.props(styles.laneShortLabel)}>model</span>
-            </button>
-            <button type="button" {...stylex.props(styles.laneTertiary, styles.laneUser)}>
-              <b>87</b>
-              <span {...stylex.props(styles.laneLongLabel)}>you only</span>
-              <span {...stylex.props(styles.laneShortLabel)}>you</span>
-            </button>
-          </div>
-        </div>
-        <div {...stylex.props(styles.laneRow)}>
-          <span {...stylex.props(styles.laneTitle)}>
-            Prompt cost <b>12.5k</b>
-          </span>
-          <div {...stylex.props(styles.laneSegments)}>
-            <button type="button" {...stylex.props(styles.lanePrimary, styles.laneActive)}>
-              <b>9.3k</b>
-              <span {...stylex.props(styles.laneLongLabel)}>· 214 skills used in 30 days</span>
-              <span {...stylex.props(styles.laneShortLabel)}>active</span>
-            </button>
-            <button type="button" {...stylex.props(styles.laneTertiary, styles.laneIdle)}>
-              <b>3.2k</b>
-              <span {...stylex.props(styles.laneLongLabel)}>· 76 skills not used</span>
-              <span {...stylex.props(styles.laneShortLabel)}>idle</span>
-            </button>
-          </div>
-        </div>
-      </article>
-      <div {...stylex.props(styles.inbox)}>
-        {attention.map((item, index) => (
-          <section key={item.label}>
-            <button type="button" {...stylex.props(styles.sectionLabel)}>
-              <ChevronDown aria-hidden="true" size={14} />
-              {item.label}
-              <span>{item.count}</span>
-            </button>
-            {item.rows.map(([name, detail], rowIndex) => (
-              <button
-                key={name}
-                type="button"
-                onClick={() => {
-                  if (item.label === "Warnings" && detail.includes("copies differ")) {
-                    onCompare(name);
-                    return;
-                  }
-                  const fallback = skills[(index * 3 + rowIndex) % skills.length];
-                  const skill = skills.find((candidate) => candidate.name === name) ?? {
-                    ...fallback,
-                    name,
-                    description: detail,
-                  };
-                  onOpenSkill(skill);
-                }}
-                {...stylex.props(styles.inboxRow)}
-              >
-                <i {...stylex.props(styles.statusDot, styles[`${item.tone}Background`])} />
-                <span {...stylex.props(styles.inboxCopy)}>
-                  <span {...stylex.props(styles.inboxName)}>
-                    <strong>{name}</strong>
-                    <AgentStack agents={skills[(index * 3 + rowIndex) % skills.length].agents} />
-                  </span>
-                  <small {...stylex.props(styles.inboxDetail)}>{detail}</small>
-                </span>
-                <span {...stylex.props(styles.rowAction)}>
-                  {item.label === "Updates"
-                    ? "Pull latest"
-                    : item.label === "Warnings" && detail.includes("copies differ")
-                      ? "Compare"
-                      : "Open"}
-                </span>
-              </button>
-            ))}
-          </section>
-        ))}
-      </div>
+      {open && children}
     </section>
   );
 }
 
-function SkillsScreen({ onOpenSkill }: { onOpenSkill: (skill: SkillRow) => void }) {
+function HomeScreen({
+  rows,
+  onOpenSkill,
+  onFix,
+  onUpdateAll,
+  onShowActivity,
+}: {
+  rows: readonly SkillRow[];
+  onOpenSkill: (skill: SkillRow) => void;
+  onFix: (skill: SkillRow) => void;
+  onUpdateAll: () => void;
+  onShowActivity: () => void;
+}) {
+  const [filter, setFilter] = useState<HomeFilter>(null);
+  const toggleFilter = (next: Exclude<HomeFilter, null>) =>
+    setFilter((current) => (current === next ? null : next));
+  const groups = homeGroups.map((group) => {
+    const groupRows = rows.filter((skill) => skill.state === group.state);
+    const sampleBefore = skills.filter((skill) => skill.state === group.state).length;
+    return {
+      ...group,
+      total: remainingCount(group.total, sampleBefore, groupRows.length),
+      rows: groupRows,
+    };
+  });
+  const unused = rows.filter(isUnused).map((skill): SkillRow => ({
+    ...skill,
+    note: `${skill.locations[0]} · installed ${skill.installed} · description in every prompt`,
+    fix: "Park",
+  }));
+  const unusedTotal = remainingCount(UNUSED_TOTAL, skills.filter(isUnused).length, unused.length);
+  const recent = rows.flatMap((skill): SkillRow[] =>
+    skill.recentUse && !skill.state
+      ? [
+          {
+            ...skill,
+            note: `${skill.recentUse.where} · ${skill.recentUse.when} · ${skill.recentUse.uses} uses`,
+          },
+        ]
+      : [],
+  );
+  return (
+    <>
+      <PageHeader title="Home" />
+      <div {...stylex.props(styles.view)}>
+        <section {...stylex.props(styles.page)}>
+          <div {...stylex.props(styles.statGrid)}>
+            {groups.map((group) => (
+              <div key={group.state} {...stylex.props(styles.statWrap)}>
+                <button
+                  type="button"
+                  aria-pressed={filter === group.state}
+                  onClick={() => toggleFilter(group.state)}
+                  {...stylex.props(styles.statTile, filter === group.state && styles.statTileOn)}
+                >
+                  <span
+                    {...stylex.props(styles.statLabel, filter === group.state && styles.accent)}
+                  >
+                    {group.label}
+                  </span>
+                  <span
+                    {...stylex.props(
+                      styles.statValue,
+                      group.state === "broken" && styles.danger,
+                      group.state === "warning" && styles.warning,
+                    )}
+                  >
+                    {group.total}
+                  </span>
+                  {group.state === "update" && (
+                    <span {...stylex.props(styles.statCaption)}>Checked just now</span>
+                  )}
+                </button>
+                {group.state === "update" && (
+                  <button
+                    type="button"
+                    aria-label="Check now"
+                    {...stylex.props(styles.iconButton, styles.statCheck)}
+                  >
+                    <RefreshCw aria-hidden="true" size={14} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          <LaneCard />
+          <div {...stylex.props(styles.groups)}>
+            {groups
+              .filter(
+                (group) => group.rows.length > 0 && (filter === null || filter === group.state),
+              )
+              .map((group) => (
+                <SkillGroup
+                  key={group.state}
+                  label={group.label}
+                  count={group.total}
+                  rows={group.rows}
+                  action={
+                    group.state === "update"
+                      ? { label: "Update all", onClick: onUpdateAll }
+                      : undefined
+                  }
+                  onOpenSkill={onOpenSkill}
+                  onFix={onFix}
+                />
+              ))}
+            {filter === null && unused.length > 0 && (
+              <SkillGroup
+                label="Not used in the last 30 days"
+                count={unusedTotal}
+                rows={unused}
+                defaultOpen={false}
+                onOpenSkill={onOpenSkill}
+                onFix={onFix}
+              />
+            )}
+            {filter === null && recent.length > 0 && (
+              <SkillGroup
+                label="Recently used"
+                count={recent.length}
+                rows={recent}
+                onOpenSkill={onOpenSkill}
+                onFix={onFix}
+              >
+                <div {...stylex.props(styles.groupFoot)}>
+                  <button
+                    type="button"
+                    onClick={onShowActivity}
+                    {...stylex.props(styles.groupAction)}
+                  >
+                    See all activity
+                  </button>
+                </div>
+              </SkillGroup>
+            )}
+          </div>
+        </section>
+      </div>
+    </>
+  );
+}
+
+function LaneSegment({
+  value,
+  long,
+  short,
+  weight,
+  tone,
+}: {
+  value: string;
+  long: string;
+  short: string;
+  weight: number;
+  tone: "soft" | "softer" | "plain";
+}) {
+  return (
+    <button
+      type="button"
+      {...stylex.props(
+        styles.laneSegment,
+        tone === "soft" && styles.laneSoft,
+        tone === "softer" && styles.laneSofter,
+      )}
+      style={{ flexGrow: weight }}
+    >
+      <b {...stylex.props(styles.laneValue)}>{value}</b>
+      <span {...stylex.props(styles.laneLongLabel)}>{long}</span>
+      <span {...stylex.props(styles.laneShortLabel)}>{short}</span>
+    </button>
+  );
+}
+
+function LaneCard() {
+  return (
+    <article {...stylex.props(styles.laneCard)}>
+      <div {...stylex.props(styles.laneRow)}>
+        <span {...stylex.props(styles.laneTitle)}>
+          Who can invoke <b {...stylex.props(styles.laneTotal)}>{SKILL_TOTAL}</b>
+          <Info aria-hidden="true" size={12} {...stylex.props(styles.faint)} />
+        </span>
+        <div {...stylex.props(styles.laneSegments)}>
+          <LaneSegment value="185" long="you or the model" short="both" weight={4} tone="soft" />
+          <LaneSegment value="18" long="model only" short="model" weight={1.4} tone="softer" />
+          <LaneSegment value="87" long="you only" short="you" weight={1.6} tone="plain" />
+        </div>
+      </div>
+      <div {...stylex.props(styles.laneRow)}>
+        <span {...stylex.props(styles.laneTitle)}>
+          Prompt cost <b {...stylex.props(styles.laneTotal)}>12.5k</b>
+          <Info aria-hidden="true" size={12} {...stylex.props(styles.faint)} />
+        </span>
+        <div {...stylex.props(styles.laneSegments)}>
+          <LaneSegment
+            value="9.3k"
+            long="· 214 skills used in 30 days"
+            short="used"
+            weight={2.4}
+            tone="soft"
+          />
+          <LaneSegment
+            value="3.2k"
+            long="· 76 skills not used in 30 days"
+            short="idle"
+            weight={1.6}
+            tone="plain"
+          />
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function SkillsScreen({
+  rows,
+  onOpenSkill,
+  onFix,
+}: {
+  rows: readonly SkillRow[];
+  onOpenSkill: (skill: SkillRow) => void;
+  onFix: (skill: SkillRow) => void;
+}) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<Scope>("All");
   const visibleSkills = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    return skills.filter(
+    return rows.filter(
       (skill) =>
         (!normalized ||
           skill.name.includes(normalized) ||
           skill.description.toLowerCase().includes(normalized)) &&
         (scope === "All" ||
-          (scope === "Global" ? skill.location === "Global" : skill.location !== "Global")),
+          skill.locations.includes(scope === "Global" ? "Global" : "agent-studio")),
     );
-  }, [query, scope]);
+  }, [rows, query, scope]);
+  const filtered = query.trim() !== "" || scope !== "All";
+  const attention = visibleSkills.filter((skill) => skill.state);
+  const healthy = visibleSkills.filter((skill) => !skill.state);
   return (
-    <section {...stylex.props(styles.page)}>
-      <PageHeading title="Skills" aside="290 skills" />
+    <>
+      <PageHeader title="Skills" />
       <div {...stylex.props(styles.toolbar)}>
         <label {...stylex.props(styles.filterInput)}>
           <Search aria-hidden="true" size={13} />
@@ -601,436 +1005,603 @@ function SkillsScreen({ onOpenSkill }: { onOpenSkill: (skill: SkillRow) => void 
             {...stylex.props(styles.input)}
           />
         </label>
-        <div {...stylex.props(styles.segmented)} role="group" aria-label="Skill scope">
+        <div
+          role="group"
+          aria-label="Skill scope"
+          {...stylex.props(styles.segmented, styles.inlineHideBelowNarrow)}
+        >
           {(["All", "Global", "Project"] satisfies Scope[]).map((item) => (
             <button
               key={item}
               type="button"
               aria-pressed={scope === item}
               onClick={() => setScope(item)}
-              {...stylex.props(styles.segmentButton, scope === item && styles.segmentButtonActive)}
+              {...stylex.props(styles.segment, scope === item && styles.segmentOn)}
             >
               {item}
+              {item === "Project" && <ChevronDown aria-hidden="true" size={12} />}
             </button>
           ))}
         </div>
-        <button type="button" {...stylex.props(styles.filterButton)}>
-          <SlidersHorizontal aria-hidden="true" size={12} />
+        <button type="button" {...stylex.props(styles.outlineButton, styles.inlineHideBelowMedium)}>
+          <ListFilter aria-hidden="true" size={13} />
           Filter
         </button>
+        <span {...stylex.props(styles.toolbarEnd)}>
+          <span {...stylex.props(styles.toolbarCount)}>
+            {filtered ? visibleSkills.length : SKILL_TOTAL} skills
+          </span>
+          <button type="button" {...stylex.props(styles.outlineButton, styles.inlineHideBelowWide)}>
+            <span {...stylex.props(styles.faint)}>Sort:</span> Name
+            <ChevronDown aria-hidden="true" size={12} />
+          </button>
+          <span
+            role="group"
+            aria-label="Layout"
+            {...stylex.props(styles.segmented, styles.inlineHideBelowWide)}
+          >
+            <button
+              type="button"
+              aria-label="List"
+              aria-pressed="true"
+              {...stylex.props(styles.segment, styles.segmentOn)}
+            >
+              <List aria-hidden="true" size={14} />
+            </button>
+            <button
+              type="button"
+              aria-label="Grid"
+              aria-pressed="false"
+              {...stylex.props(styles.segment)}
+            >
+              <LayoutGrid aria-hidden="true" size={14} />
+            </button>
+          </span>
+        </span>
       </div>
-      <div {...stylex.props(styles.tableHeader)}>
-        <span>Name</span>
-        <span {...stylex.props(styles.mobileHidden)}>Description</span>
-        <span {...stylex.props(styles.mobileHidden)}>Location</span>
-        <span {...stylex.props(styles.mobileHidden)}>Uses</span>
-        <span>Tokens</span>
+      <div {...stylex.props(styles.view)}>
+        <section {...stylex.props(styles.page)}>
+          <div {...stylex.props(styles.groups)}>
+            {attention.length > 0 && (
+              <SkillGroup
+                label="Needs attention"
+                count={attention.length}
+                rows={attention}
+                onOpenSkill={onOpenSkill}
+                onFix={onFix}
+              />
+            )}
+            {healthy.length > 0 && (
+              <SkillGroup
+                label="Healthy"
+                count={healthy.length}
+                rows={healthy}
+                onOpenSkill={onOpenSkill}
+                onFix={onFix}
+              />
+            )}
+            {visibleSkills.length === 0 && (
+              <p {...stylex.props(styles.empty)}>No skills match this filter.</p>
+            )}
+          </div>
+        </section>
       </div>
-      <div {...stylex.props(styles.rows)}>
-        {visibleSkills.map((skill) => (
-          <SkillTableRow key={skill.name} skill={skill} onClick={() => onOpenSkill(skill)} />
-        ))}
-        {visibleSkills.length === 0 && (
-          <p {...stylex.props(styles.empty)}>No skills match this filter.</p>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function SkillTableRow({ skill, onClick }: { skill: SkillRow; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} {...stylex.props(styles.skillRow)}>
-      <span {...stylex.props(styles.skillName)}>
-        {skill.name}
-        {skill.status && <small {...stylex.props(styles.updateBadge)}>{skill.status}</small>}
-      </span>
-      <span {...stylex.props(styles.truncate, styles.mobileHidden)}>{skill.description}</span>
-      <span {...stylex.props(styles.location, styles.mobileHidden)}>
-        <AgentStack agents={skill.agents} />
-        {skill.location}
-      </span>
-      <span {...stylex.props(styles.number, styles.mobileHidden)}>{skill.uses}</span>
-      <span {...stylex.props(styles.number)}>{skill.tokens}</span>
-    </button>
+    </>
   );
 }
 
 function PluginsScreen({ onOpenSkill }: { onOpenSkill: (skill: SkillRow) => void }) {
   return (
-    <section {...stylex.props(styles.page)}>
-      <PageHeading
+    <>
+      <PageHeader
         title="Plugin skills"
-        subtitle="Shipped inside agent plugins and updated with them — managed by the plugin, not by Skill Studio."
+        subtitle="Shipped inside agent plugins and updated with them - managed by the plugin, not by Skill Studio."
       />
-      <div {...stylex.props(styles.pluginGroups)}>
-        {pluginGroups.map((group) => (
-          <article key={group.name} {...stylex.props(styles.pluginGroup)}>
-            <header {...stylex.props(styles.pluginHeader)}>
-              <span {...stylex.props(styles.pluginTitle)}>
+      <div {...stylex.props(styles.view)}>
+        <section {...stylex.props(styles.page)}>
+          {pluginGroups.map((group) => (
+            <article key={group.name} {...stylex.props(styles.pluginGroup)}>
+              <header {...stylex.props(styles.pluginHeader)}>
                 <AgentIcon agent={group.agent} size={14} />
-                <strong>{group.name}</strong>
-              </span>
-              <small>v{group.version}</small>
-            </header>
-            {group.skills.map((skill) => (
-              <button
-                key={skill.name}
-                type="button"
-                onClick={() => onOpenSkill(skill)}
-                {...stylex.props(styles.pluginRow)}
-              >
-                <span {...stylex.props(styles.pluginCopy)}>
-                  <strong {...stylex.props(styles.pluginName)}>{skill.name}</strong>
-                  <small {...stylex.props(styles.truncate, styles.pluginDescription)}>
-                    {skill.description}
-                  </small>
-                </span>
-                <span {...stylex.props(styles.number)}>{skill.tokens}</span>
-                <ChevronRight aria-hidden="true" size={14} />
-              </button>
-            ))}
-          </article>
-        ))}
+                <strong {...stylex.props(styles.pluginName)}>{group.name}</strong>
+                <small {...stylex.props(styles.faint)}>v{group.version}</small>
+                <small {...stylex.props(styles.pluginCount)}>{group.skills.length} skills</small>
+              </header>
+              <div {...stylex.props(styles.pluginCard)}>
+                {group.skills.map(([name, description, tokenCount]) => (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={() =>
+                      onOpenSkill({
+                        ...skillNamed(name),
+                        description,
+                        source: `${group.name} plugin`,
+                        harnesses: [group.agent],
+                        claudeLink: undefined,
+                        fullTokens: tokenCount,
+                      })
+                    }
+                    {...stylex.props(styles.pluginRow)}
+                  >
+                    <span {...stylex.props(styles.pluginSkill, styles.truncate)}>{name}</span>
+                    <span {...stylex.props(styles.pluginDescription, styles.hideBelowNarrow)}>
+                      {description}
+                    </span>
+                    <span {...stylex.props(styles.number)}>{tokenCount}</span>
+                  </button>
+                ))}
+              </div>
+            </article>
+          ))}
+        </section>
       </div>
-    </section>
+    </>
   );
 }
 
-const heatLevels = [0, 1, 2, 3, 4] as const;
-const heat = Array.from({ length: 364 }, (_, index) => {
+const HEAT_WEEKS = 48;
+const heat = Array.from({ length: HEAT_WEEKS * 7 }, (_, index) => {
+  const day = index % 7;
   const activity = (index * 37 + Math.floor(index / 7) * 13) % 101;
-  if (index % 7 === 6 || activity < 20) return 0;
-  return heatLevels[1 + (activity % 4)];
+  if (day >= 5) return activity < 70 ? 1 : 0;
+  if (activity < 18) return 0;
+  return 1 + (activity % 4);
 });
+const heatMonths = [
+  "Dec",
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+];
+
+const activityRows = [
+  ["sdk-migration", "15h ago", 70],
+  ["commit", "just now", 47],
+  ["agent-browser", "13h ago", 35],
+  ["release-notes", "16h ago", 20],
+  ["code-review", "3d ago", 14],
+  ["design-vocabulary", "1d ago", 14],
+  ["sentry-cli", "12h ago", 11],
+] satisfies ReadonlyArray<readonly [string, string, number]>;
+
+const activityBars = [
+  {
+    label: "Agent",
+    rows: [
+      { name: "Claude Code", agent: "claude", value: 297 },
+      { name: "Cursor", agent: "cursor", value: 10 },
+      { name: "Grok Build", agent: "grok", value: 3 },
+    ],
+  },
+  {
+    label: "Trigger",
+    rows: [
+      { name: "Typed", value: 91 },
+      { name: "Called by the model", value: 206 },
+      { name: "SKILL.md read", value: 13 },
+    ],
+  },
+] satisfies ReadonlyArray<{
+  label: string;
+  rows: ReadonlyArray<{ name: string; agent?: AgentId; value: number }>;
+}>;
 
 function ActivityScreen({ onOpenSkill }: { onOpenSkill: (skill: SkillRow) => void }) {
-  const [window, setWindow] = useState<ActivityWindow>("30d");
+  const [timeWindow, setTimeWindow] = useState<ActivityWindow>("30d");
   return (
-    <section {...stylex.props(styles.page)}>
-      <PageHeading title="Activity" subtitle="From the history files of all six agents." />
-      <article {...stylex.props(styles.activityCard)}>
-        <div {...stylex.props(styles.activityTop)}>
-          <span {...stylex.props(styles.activityLabel)}>Activity</span>
-          <span {...stylex.props(styles.activityTotal)}>
-            {heat.reduce<number>((total, count) => total + count, 0)} invocations in the last year
-          </span>
-        </div>
-        <div {...stylex.props(styles.heatmapMonths)} aria-hidden="true">
-          {[
-            [1, 4, "Oct"],
-            [5, 4, "Nov"],
-            [9, 5, "Dec"],
-            [14, 4, "Jan"],
-            [18, 4, "Feb"],
-            [22, 5, "Mar"],
-            [27, 4, "Apr"],
-            [31, 5, "May"],
-            [36, 4, "Jun"],
-            [40, 5, "Jul"],
-            [45, 4, "Aug"],
-            [49, 4, "Sep"],
-          ].map(([start, span, label]) => (
-            <span key={label} style={{ gridColumn: `${start} / span ${span}` }}>
-              {label}
-            </span>
-          ))}
-        </div>
-        <div {...stylex.props(styles.heatmapBody)}>
-          <div {...stylex.props(styles.weekdays)} aria-hidden="true">
-            <span>Mon</span>
-            <span />
-            <span>Wed</span>
-            <span />
-            <span>Fri</span>
-            <span />
-            <span />
-          </div>
-          <div aria-label="Invocation activity for the last year" {...stylex.props(styles.heatmap)}>
-            {heat.map((level, index) => (
-              <i
-                key={index}
-                title={`${level} invocations`}
-                {...stylex.props(
-                  styles.heatCell,
-                  level === 1 && styles.heat1,
-                  level === 2 && styles.heat2,
-                  level === 3 && styles.heat3,
-                  level === 4 && styles.heat4,
-                )}
-              />
-            ))}
-          </div>
-        </div>
-      </article>
-      <div {...stylex.props(styles.activityTable)}>
-        <div {...stylex.props(styles.activityTableTop)}>
-          <span {...stylex.props(styles.activityLabel)}>By skill</span>
-          <div {...stylex.props(styles.activitySegmented)}>
-            {(["24h", "7d", "14d", "30d"] satisfies ActivityWindow[]).map((item) => (
-              <button
-                key={item}
-                type="button"
-                aria-pressed={window === item}
-                onClick={() => setWindow(item)}
-                {...stylex.props(
-                  styles.activitySegmentButton,
-                  window === item && styles.segmentButtonActive,
-                )}
-              >
-                {item}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div {...stylex.props(styles.activityHeader)}>
-          <span>Skill</span>
-          <span {...stylex.props(styles.mobileHidden)}>Last used</span>
-          <span>Invocations</span>
-          <span {...stylex.props(styles.mobileHidden)}>Projects</span>
-        </div>
-        {activitySkills.map((skill, index) => (
-          <button
-            key={skill.name}
-            type="button"
-            onClick={() => onOpenSkill(skill)}
-            {...stylex.props(styles.activityRow)}
-          >
-            <span {...stylex.props(styles.activitySkill)}>{skill.name}</span>
-            <span {...stylex.props(styles.mobileHidden)}>
-              {index < 2 ? "5h ago" : `${index + 1}d ago`}
-            </span>
-            <span>{skill.uses}</span>
-            <span {...stylex.props(styles.mobileHidden)}>{Math.max(3, 19 - index * 2)}</span>
-          </button>
-        ))}
+    <>
+      <PageHeader title="Activity" subtitle="From every agent turned on in Settings" />
+      <div {...stylex.props(styles.toolbar)}>
+        <button type="button" {...stylex.props(styles.outlineButton)}>
+          <Layers aria-hidden="true" size={13} />
+          All agents
+          <ChevronDown aria-hidden="true" size={12} />
+        </button>
+        <button type="button" {...stylex.props(styles.outlineButton)}>
+          Any trigger
+          <ChevronDown aria-hidden="true" size={12} />
+        </button>
       </div>
-    </section>
+      <div {...stylex.props(styles.view)}>
+        <section {...stylex.props(styles.page, styles.activityLayout)}>
+          <div {...stylex.props(styles.activityMain)}>
+            <div>
+              <div {...stylex.props(styles.sectionTop)}>
+                <span {...stylex.props(styles.caption)}>Last 48 weeks</span>
+                <span {...stylex.props(styles.sectionMeta)}>6,867 uses</span>
+              </div>
+              <div {...stylex.props(styles.heatFrame)}>
+                <span />
+                <div {...stylex.props(styles.heatMonths)} aria-hidden="true">
+                  {heatMonths.map((month) => (
+                    <span key={month}>{month}</span>
+                  ))}
+                </div>
+                <div {...stylex.props(styles.weekdays)} aria-hidden="true">
+                  <span>Mon</span>
+                  <span />
+                  <span>Wed</span>
+                  <span />
+                  <span>Fri</span>
+                  <span />
+                  <span />
+                </div>
+                <div
+                  aria-label="Skill uses for the last 48 weeks"
+                  {...stylex.props(styles.heatmap)}
+                >
+                  {heat.map((level, index) => (
+                    <i
+                      key={index}
+                      {...stylex.props(
+                        styles.heatCell,
+                        level === 1 && styles.heat1,
+                        level === 2 && styles.heat2,
+                        level === 3 && styles.heat3,
+                        level === 4 && styles.heat4,
+                      )}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div {...stylex.props(styles.heatLegend)} aria-hidden="true">
+                Less
+                <i {...stylex.props(styles.legendCell, styles.heatCellEmpty)} />
+                <i {...stylex.props(styles.legendCell, styles.heat1)} />
+                <i {...stylex.props(styles.legendCell, styles.heat2)} />
+                <i {...stylex.props(styles.legendCell, styles.heat3)} />
+                <i {...stylex.props(styles.legendCell, styles.heat4)} />
+                More
+              </div>
+            </div>
+            <div>
+              <div {...stylex.props(styles.sectionTop)}>
+                <span {...stylex.props(styles.caption)}>By skill</span>
+                <div role="group" aria-label="Time window" {...stylex.props(styles.segmented)}>
+                  {(["24h", "7d", "14d", "30d"] satisfies ActivityWindow[]).map((item) => (
+                    <button
+                      key={item}
+                      type="button"
+                      aria-pressed={timeWindow === item}
+                      onClick={() => setTimeWindow(item)}
+                      {...stylex.props(
+                        styles.segment,
+                        styles.segmentSmall,
+                        timeWindow === item && styles.segmentOn,
+                      )}
+                    >
+                      {item}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {activityRows.map(([name, lastUsed, uses]) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => onOpenSkill(skillNamed(name))}
+                  {...stylex.props(styles.activityRow)}
+                >
+                  <span {...stylex.props(styles.truncate)}>{name}</span>
+                  <span {...stylex.props(styles.faint)}>{lastUsed}</span>
+                  <span {...stylex.props(styles.number)}>{uses}</span>
+                </button>
+              ))}
+              <button type="button" {...stylex.props(styles.showMore)}>
+                Show 16 more
+              </button>
+            </div>
+          </div>
+          <aside {...stylex.props(styles.activitySide)}>
+            <div>
+              <strong {...stylex.props(styles.sideTitle)}>Last 30 days</strong>
+              <span {...stylex.props(styles.sideMeta)}>310 uses</span>
+            </div>
+            {activityBars.map((group) => (
+              <div key={group.label} {...stylex.props(styles.barGroup)}>
+                <span {...stylex.props(styles.sideLabel)}>{group.label}</span>
+                {group.rows.map((row) => (
+                  <div key={row.name} {...stylex.props(styles.barRow)}>
+                    <span {...stylex.props(styles.barName)}>
+                      {"agent" in row && <AgentIcon agent={row.agent} size={13} />}
+                      {row.name}
+                      <span {...stylex.props(styles.barValue)}>{row.value}</span>
+                    </span>
+                    <span {...stylex.props(styles.barTrack)}>
+                      <i
+                        {...stylex.props(styles.barFill)}
+                        style={{ width: `${Math.max(1, (row.value / 310) * 100)}%` }}
+                      />
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <div {...stylex.props(styles.barGroup)}>
+              <span {...stylex.props(styles.sideLabel)}>Busiest day</span>
+              <span {...stylex.props(styles.barName)}>
+                Fri, Oct 23
+                <span {...stylex.props(styles.barValue)}>20 uses</span>
+              </span>
+            </div>
+            <p {...stylex.props(styles.sideHint)}>Click a day to see its details here.</p>
+          </aside>
+        </section>
+      </div>
+    </>
   );
 }
 
-const installAgents = ["codex", "opencode", "pi", "cursor", "grok"] satisfies AgentId[];
-const installScopes = ["Global", "Project"] satisfies ReadonlyArray<"Global" | "Project">;
+function ParkedScreen({
+  parked,
+  onOpenSkill,
+  onFix,
+}: {
+  parked: readonly SkillRow[];
+  onOpenSkill: (skill: SkillRow) => void;
+  onFix: (skill: SkillRow) => void;
+}) {
+  return (
+    <>
+      <PageHeader title="Parked" subtitle="Turned off for every agent. Unpark to bring one back." />
+      <div {...stylex.props(styles.view)}>
+        <section {...stylex.props(styles.page)}>
+          <div {...stylex.props(styles.groups)}>
+            {parked.map((skill) => (
+              <SkillListRow
+                key={skill.name}
+                skill={skill}
+                onOpen={() => onOpenSkill(skill)}
+                onFix={() => onFix(skill)}
+              />
+            ))}
+            {parked.length === 0 && <p {...stylex.props(styles.empty)}>Nothing is parked.</p>}
+          </div>
+        </section>
+      </div>
+    </>
+  );
+}
 
-function AddSkillDrawer({
+const destinations = [
+  { id: "universal", name: "Universal", global: "~/.agents/skills", project: ".agents/skills" },
+  { id: "claude", name: "Claude Code", global: "~/.claude/skills", project: ".claude/skills" },
+  { id: "codex", name: "Codex", global: "~/.codex/skills", project: ".codex/skills" },
+  {
+    id: "opencode",
+    name: "OpenCode",
+    global: "~/.config/opencode/skills",
+    project: ".opencode/skills",
+  },
+  { id: "pi", name: "pi", global: "~/.pi/agent/skills", project: ".pi/skills" },
+  { id: "cursor", name: "Cursor", global: "~/.cursor/skills", project: ".cursor/skills" },
+  { id: "grok", name: "Grok Build", global: "~/.grok/skills", project: ".grok/skills" },
+] satisfies ReadonlyArray<{ id: Harness; name: string; global: string; project: string }>;
+
+const READS_UNIVERSAL: readonly Harness[] = ["codex", "opencode", "pi", "cursor", "grok"];
+
+const methodNotes = {
+  "skills.sh": "Tracked in .skill-lock.json. Installs to Universal.",
+  dotagents: "Tracked in agents.toml. Installs to Universal.",
+  Copy: "Copies the folder. No lock file tracks it.",
+} satisfies Record<InstallMethod, string>;
+
+function AddSkillSheet({
   onClose,
   onInstall,
 }: {
   onClose: () => void;
   onInstall: (skill: SkillRow) => void;
 }) {
+  const { dialog, initialFocus: sourceInput, onKeyDown } = useModalFocus<HTMLInputElement>(onClose);
   const [source, setSource] = useState("");
+  const [method, setMethod] = useState<InstallMethod>("skills.sh");
   const [scope, setScope] = useState<"Global" | "Project">("Global");
-  const [selectedAgents, setSelectedAgents] = useState<AgentId[]>(["claude", ...installAgents]);
-
-  const toggleAgent = (agent: AgentId) => {
-    if (agent === "codex") {
-      setSelectedAgents((current) =>
-        current.includes("codex")
-          ? current.filter((item) => item === "claude")
-          : [...current, ...installAgents],
-      );
-      return;
-    }
-    setSelectedAgents((current) =>
-      current.includes(agent) ? current.filter((item) => item !== agent) : [...current, agent],
+  const [picked, setPicked] = useState<readonly Harness[]>(["universal", "claude"]);
+  const universal = picked.includes("universal");
+  const coveredByUniversal = (id: Harness) => universal && READS_UNIVERSAL.includes(id);
+  const togglePick = (id: Harness) =>
+    setPicked((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
     );
-  };
-  const installSkill = () => {
-    const skillSource = source.trim();
+  const trimmed = source.trim();
+  const skillName = trimmed.replace(/\/$/, "").split("/").pop() ?? "";
+  const harnesses = destinations
+    .map((destination) => destination.id)
+    .filter((id) => picked.includes(id) || coveredByUniversal(id));
+
+  const installSkill = () =>
     onInstall({
-      name: skillSource.replace(/\/$/, "").split("/").pop() || "new-skill",
-      description: skillSource.endsWith("/frontend-design")
+      name: skillName || "new-skill",
+      description: skillName.endsWith("frontend-design")
         ? "Create distinctive, production-grade frontend interfaces."
-        : `Added from ${skillSource}.`,
-      location: scope === "Global" ? "Global" : "agent-studio",
-      agents: selectedAgents,
-      uses: 0,
-      tokens: "1.4k",
+        : `Added from ${trimmed}.`,
+      source: trimmed.split("/").slice(0, 2).join("/"),
+      locations: [scope === "Global" ? "Global" : "agent-studio"],
+      harnesses,
+      claudeLink: picked.includes("claude") && universal ? "linked" : undefined,
+      method,
+      promptTokens: 12,
+      fullTokens: "1.4k",
     });
-  };
 
   return (
-    <div role="dialog" aria-label="Add skill" {...stylex.props(styles.addSkillDrawer)}>
-      <header {...stylex.props(styles.addSkillHeader)}>
-        <h2 {...stylex.props(styles.addSkillTitle)}>Add skill</h2>
-        <button
-          type="button"
-          aria-label="Close add skill"
-          onClick={onClose}
-          {...stylex.props(styles.drawerClose)}
-        >
-          <X aria-hidden="true" size={15} />
-        </button>
-      </header>
-      <div {...stylex.props(styles.addSkillTabs)} role="tablist" aria-label="Add skill method">
-        <button
-          type="button"
-          role="tab"
-          aria-selected="true"
-          {...stylex.props(styles.addSkillTab, styles.addSkillTabActive)}
-        >
-          Add by source
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          {...stylex.props(styles.addSkillTab)}
-        >
-          Browse skills.sh
-        </button>
-      </div>
-      <div {...stylex.props(styles.addSkillBody)}>
-        <label {...stylex.props(styles.addSkillField)}>
-          <span {...stylex.props(styles.cardLabel)}>Source</span>
-          <input
-            value={source}
-            onChange={(event) => setSource(event.target.value)}
-            aria-label="Skill source"
-            placeholder="owner/repo, a GitHub URL, a skills.sh URL, or a local path"
-            {...stylex.props(styles.addSkillInput)}
-          />
-          <small {...stylex.props(styles.addSkillHelp)}>
-            {source ? `github · ${source}` : "Paste a repo, URL, or path to get started."}
-          </small>
-        </label>
-
-        <div {...stylex.props(styles.installGroup)}>
-          <span {...stylex.props(styles.cardLabel)}>Method</span>
-          <div {...stylex.props(styles.methodPicker)} role="group" aria-label="Install method">
-            <button
-              type="button"
-              aria-pressed="true"
-              {...stylex.props(styles.methodButton, styles.segmentButtonActive)}
-            >
-              dotagents
-            </button>
-            <button type="button" aria-pressed="false" {...stylex.props(styles.methodButton)}>
-              skills.sh
-            </button>
-            <button type="button" aria-pressed="false" {...stylex.props(styles.methodButton)}>
-              Copy
-            </button>
-          </div>
+    <div {...stylex.props(styles.sheetBackdrop)}>
+      <button
+        type="button"
+        aria-label="Close add skill"
+        tabIndex={-1}
+        onClick={onClose}
+        {...stylex.props(styles.sheetScrim)}
+      />
+      <section
+        ref={dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Add skill"
+        onKeyDown={onKeyDown}
+        {...stylex.props(styles.sheet)}
+      >
+        <header {...stylex.props(styles.sheetHeader)}>
+          <h2 {...stylex.props(styles.sheetTitle)}>Add skill</h2>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            {...stylex.props(styles.iconButton)}
+          >
+            <X aria-hidden="true" size={15} />
+          </button>
+        </header>
+        <div role="tablist" aria-label="Add skill method" {...stylex.props(styles.sheetTabs)}>
+          <button
+            type="button"
+            role="tab"
+            aria-selected="true"
+            {...stylex.props(styles.sheetTab, styles.sheetTabOn)}
+          >
+            Add by source
+          </button>
+          <button type="button" role="tab" aria-selected="false" {...stylex.props(styles.sheetTab)}>
+            Browse skills.sh
+          </button>
         </div>
-
-        <div {...stylex.props(styles.installControls)}>
-          <div {...stylex.props(styles.installGroup)}>
-            <span {...stylex.props(styles.cardLabel)}>Scope</span>
-            <div {...stylex.props(styles.installScope)} role="group" aria-label="Install scope">
-              {installScopes.map((item) => (
+        <div {...stylex.props(styles.sheetBody)}>
+          <label {...stylex.props(styles.field)}>
+            <span {...stylex.props(styles.caption)}>Source</span>
+            <input
+              ref={sourceInput}
+              value={source}
+              onChange={(event) => setSource(event.target.value)}
+              aria-label="Skill source"
+              placeholder="owner/repo, a GitHub URL, a skills.sh URL, or a local path"
+              {...stylex.props(styles.textInput)}
+            />
+            <small {...stylex.props(styles.fieldHelp)}>
+              {trimmed ? `github · ${trimmed}` : "Paste a repo, URL, or path to get started."}
+            </small>
+          </label>
+          {skillName && (
+            <div {...stylex.props(styles.field)}>
+              <span {...stylex.props(styles.caption)}>Skills</span>
+              <span {...stylex.props(styles.foundSkill)}>
+                <Folder aria-hidden="true" size={14} {...stylex.props(styles.faint)} />
+                {skillName}
+              </span>
+            </div>
+          )}
+          <div {...stylex.props(styles.field)}>
+            <span {...stylex.props(styles.caption)}>Method</span>
+            <div role="group" aria-label="Install method" {...stylex.props(styles.segmented)}>
+              {(["skills.sh", "dotagents", "Copy"] satisfies InstallMethod[]).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  aria-pressed={method === item}
+                  onClick={() => setMethod(item)}
+                  {...stylex.props(styles.segment, method === item && styles.segmentOn)}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+            <small {...stylex.props(styles.fieldHelp)}>{methodNotes[method]}</small>
+          </div>
+          <div {...stylex.props(styles.field)}>
+            <span {...stylex.props(styles.caption)}>Scope</span>
+            <div role="group" aria-label="Install scope" {...stylex.props(styles.segmented)}>
+              {(["Global", "Project"] as const).map((item) => (
                 <button
                   key={item}
                   type="button"
                   aria-pressed={scope === item}
                   onClick={() => setScope(item)}
-                  {...stylex.props(
-                    styles.installScopeButton,
-                    scope === item && styles.segmentButtonActive,
-                  )}
+                  {...stylex.props(styles.segment, scope === item && styles.segmentOn)}
                 >
                   {item}
                 </button>
               ))}
             </div>
           </div>
-
-          <div {...stylex.props(styles.installGroup)}>
-            <span {...stylex.props(styles.cardLabel)}>Harnesses</span>
-            <div {...stylex.props(styles.installTargetRow)}>
-              <span {...stylex.props(styles.installTargetIdentity)}>
-                <Folder aria-hidden="true" size={16} />
-                <span {...stylex.props(styles.installTargetCopy)}>
-                  <strong {...stylex.props(styles.installTargetName)}>Shared folder</strong>
-                  <small {...stylex.props(styles.installTargetPath)}>
-                    {scope === "Global" ? "~/.agents/skills" : ".agents/skills"}
-                  </small>
-                </span>
-              </span>
-              <AgentStack
-                agents={installAgents.filter((agent) => selectedAgents.includes(agent))}
-              />
-              <button
-                type="button"
-                role="switch"
-                aria-label="Install to the shared folder"
-                aria-checked={selectedAgents.includes("codex")}
-                onClick={() => toggleAgent("codex")}
-                {...stylex.props(
-                  styles.installSwitch,
-                  selectedAgents.includes("codex") && styles.installSwitchActive,
-                )}
-              >
-                <i
-                  {...stylex.props(
-                    styles.installSwitchKnob,
-                    selectedAgents.includes("codex") && styles.installSwitchKnobActive,
+          <div {...stylex.props(styles.field)}>
+            <span {...stylex.props(styles.caption)}>Destination</span>
+            {destinations.map((destination) => {
+              const covered = coveredByUniversal(destination.id);
+              const checked = covered || picked.includes(destination.id);
+              return (
+                <label key={destination.id} {...stylex.props(styles.destination)}>
+                  {destination.id === "universal" ? (
+                    <Folder aria-hidden="true" size={15} />
+                  ) : (
+                    <AgentIcon agent={destination.id} size={15} />
                   )}
-                />
-              </button>
-            </div>
-            <div {...stylex.props(styles.installTargetRow)}>
-              <span {...stylex.props(styles.installTargetIdentity)}>
-                <AgentIcon agent="claude" size={16} />
-                <span {...stylex.props(styles.installTargetCopy)}>
-                  <strong {...stylex.props(styles.installTargetName)}>Claude Code</strong>
-                  <small {...stylex.props(styles.installTargetPath)}>
-                    {scope === "Global" ? "~/.claude/skills" : ".claude/skills"}
-                  </small>
-                </span>
-              </span>
-              <button
-                type="button"
-                role="switch"
-                aria-label="Install for Claude Code"
-                aria-checked={selectedAgents.includes("claude")}
-                onClick={() => toggleAgent("claude")}
-                {...stylex.props(
-                  styles.installSwitch,
-                  selectedAgents.includes("claude") && styles.installSwitchActive,
-                )}
-              >
-                <i
-                  {...stylex.props(
-                    styles.installSwitchKnob,
-                    selectedAgents.includes("claude") && styles.installSwitchKnobActive,
-                  )}
-                />
-              </button>
-            </div>
+                  <span {...stylex.props(styles.destinationCopy)}>
+                    <span>{destination.name}</span>
+                    <code {...stylex.props(styles.destinationPath)}>
+                      {scope === "Global" ? destination.global : destination.project}
+                    </code>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={covered}
+                    onChange={() => togglePick(destination.id)}
+                    {...stylex.props(stylex.defaultMarker(), styles.checkboxInput)}
+                  />
+                  <span
+                    aria-hidden="true"
+                    {...stylex.props(
+                      styles.checkbox,
+                      checked && styles.checkboxOn,
+                      covered && styles.checkboxCovered,
+                    )}
+                  >
+                    {checked && <Check size={11} strokeWidth={3} />}
+                  </span>
+                </label>
+              );
+            })}
           </div>
         </div>
-      </div>
-      <footer {...stylex.props(styles.addSkillFooter)}>
-        <button type="button" onClick={onClose} {...stylex.props(styles.cancelAction)}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          disabled={!source.trim() || selectedAgents.length === 0}
-          onClick={installSkill}
-          {...stylex.props(styles.installAction)}
-        >
-          Add skill
-        </button>
-      </footer>
+        <footer {...stylex.props(styles.sheetFooter)}>
+          <button type="button" onClick={onClose} {...stylex.props(styles.outlineButton)}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={!trimmed || harnesses.length === 0}
+            onClick={installSkill}
+            {...stylex.props(styles.solidButton)}
+          >
+            Add skill
+          </button>
+        </footer>
+      </section>
     </div>
   );
 }
 
-function CompareDialog({ skillName, onClose }: { skillName: string; onClose: () => void }) {
+function useModalFocus<T extends HTMLElement>(onClose: () => void) {
   const dialog = useRef<HTMLElement>(null);
-  const closeButton = useRef<HTMLButtonElement>(null);
+  const initialFocus = useRef<T>(null);
 
   useEffect(() => {
     const previousFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    closeButton.current?.focus();
+    initialFocus.current?.focus();
     return () => previousFocus?.focus();
   }, []);
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
       onClose();
@@ -1052,6 +1623,16 @@ function CompareDialog({ skillName, onClose }: { skillName: string; onClose: () 
     }
   };
 
+  return { dialog, initialFocus, onKeyDown };
+}
+
+function CompareDialog({ skillName, onClose }: { skillName: string; onClose: () => void }) {
+  const {
+    dialog,
+    initialFocus: closeButton,
+    onKeyDown,
+  } = useModalFocus<HTMLButtonElement>(onClose);
+
   return (
     <div {...stylex.props(styles.compareBackdrop)}>
       <section
@@ -1059,36 +1640,36 @@ function CompareDialog({ skillName, onClose }: { skillName: string; onClose: () 
         role="dialog"
         aria-modal="true"
         aria-label={`Compare copies of ${skillName}`}
-        onKeyDown={handleKeyDown}
+        onKeyDown={onKeyDown}
         {...stylex.props(styles.compareDialog)}
       >
         <header {...stylex.props(styles.compareHeader)}>
-          <h2 {...stylex.props(styles.compareTitle)}>Compare copies of {skillName}</h2>
+          <h2 {...stylex.props(styles.sheetTitle)}>Compare copies of {skillName}</h2>
           <button
             ref={closeButton}
             type="button"
             aria-label="Close comparison"
             onClick={onClose}
-            {...stylex.props(styles.drawerClose)}
+            {...stylex.props(styles.iconButton)}
           >
             <X aria-hidden="true" size={15} />
           </button>
         </header>
         <div {...stylex.props(styles.comparePickers)}>
-          <button type="button" {...stylex.props(styles.comparePicker)}>
+          <button type="button" {...stylex.props(styles.outlineButton, styles.comparePicker)}>
             Global · ~/.agents/skills
-            <ChevronDown aria-hidden="true" size={14} />
+            <ChevronDown aria-hidden="true" size={12} />
           </button>
-          <button type="button" {...stylex.props(styles.comparePicker)}>
+          <button type="button" {...stylex.props(styles.outlineButton, styles.comparePicker)}>
             agent-studio · .agents/skills
-            <ChevronDown aria-hidden="true" size={14} />
+            <ChevronDown aria-hidden="true" size={12} />
           </button>
         </div>
         <div {...stylex.props(styles.diff)}>
           <div {...stylex.props(styles.diffHeader)}>
             <span>SKILL.md</span>
-            <span>−2</span>
-            <span>+2</span>
+            <span {...stylex.props(styles.danger)}>−2</span>
+            <span {...stylex.props(styles.success)}>+2</span>
           </div>
           {[
             ["1", "1", "---", "context"],
@@ -1106,11 +1687,8 @@ function CompareDialog({ skillName, onClose }: { skillName: string; onClose: () 
               key={index}
               {...stylex.props(
                 styles.diffRow,
-                kind === "removed"
-                  ? styles.diffRemoved
-                  : kind === "added"
-                    ? styles.diffAdded
-                    : styles.diffContext,
+                kind === "removed" && styles.diffRemoved,
+                kind === "added" && styles.diffAdded,
               )}
             >
               <span>{before}</span>
@@ -1124,176 +1702,287 @@ function CompareDialog({ skillName, onClose }: { skillName: string; onClose: () 
   );
 }
 
-function DetailScreen({ detail, onBack }: { detail: DetailState; onBack: () => void }) {
-  const [invocation, setInvocation] = useState<InvocationPolicy>("Both");
-  const [locationExpanded, setLocationExpanded] = useState(false);
-  const location = detail.skill.location;
-  const skillPath = `${location === "Global" ? "~/" : "agent-studio/"}.agents/skills/${detail.skill.name}`;
-  const backLabel = productMockDetailBackLabel(detail.from);
+function Toggle({ on, label, onToggle }: { on: boolean; label: string; onToggle: () => void }) {
   return (
-    <section {...stylex.props(styles.page)}>
-      <header {...stylex.props(styles.detailHeader)}>
-        <div {...stylex.props(styles.detailHeading)}>
-          <button type="button" onClick={onBack} {...stylex.props(styles.backButton)}>
-            <ArrowLeft aria-hidden="true" size={16} />
-            <span {...stylex.props(styles.backButtonLabel)}>{backLabel}</span>
-          </button>
-          <h2 {...stylex.props(styles.pageTitle, styles.detailTitle)}>{detail.skill.name}</h2>
-          <div {...stylex.props(styles.detailActions)}>
-            <button type="button" {...stylex.props(styles.updateButton)}>
-              <Download aria-hidden="true" size={14} />
-              Update
-            </button>
-            <button type="button" aria-label="More actions" {...stylex.props(styles.iconButton)}>
-              <MoreHorizontal aria-hidden="true" size={16} />
-            </button>
-          </div>
-        </div>
-        <p {...stylex.props(styles.detailDescription)}>{detail.skill.description}</p>
-        <div {...stylex.props(styles.chips)}>
-          <span {...stylex.props(styles.chip)}>dotagents</span>
-          {detail.skill.status && (
-            <span {...stylex.props(styles.chip, styles.accent)}>Update available</span>
-          )}
-        </div>
-        <p {...stylex.props(styles.metadata)}>
-          18.4 KB · {detail.skill.tokens} tokens · {detail.skill.uses} uses in 30 days · edited
-          today · source dotagents
-        </p>
-      </header>
-
-      <div {...stylex.props(styles.detailStack)}>
-        <article {...stylex.props(styles.detailCard)}>
-          <div {...stylex.props(styles.cardHeading)}>
-            <h3 {...stylex.props(styles.cardTitle)}>Locations</h3>
-          </div>
-          <div {...stylex.props(styles.scopeRow)}>
-            <button
-              type="button"
-              aria-expanded={locationExpanded}
-              onClick={() => setLocationExpanded(!locationExpanded)}
-              {...stylex.props(styles.scopeMain)}
-            >
-              <span {...stylex.props(styles.scopeChevron)}>
-                {locationExpanded ? (
-                  <ChevronDown aria-hidden="true" size={14} />
-                ) : (
-                  <ChevronRight aria-hidden="true" size={14} />
-                )}
-              </span>
-              <span {...stylex.props(styles.scopeIdentity)}>
-                <Folder aria-hidden="true" size={16} />
-                <span {...stylex.props(styles.scopeName)}>{location}</span>
-              </span>
-              <span {...stylex.props(styles.readerStack)}>
-                {detail.skill.agents.map((agent, index) => (
-                  <span
-                    key={agent}
-                    {...stylex.props(styles.readerBadge, index > 0 && styles.readerBadgeOverlap)}
-                  >
-                    <AgentIcon agent={agent} size={12} />
-                  </span>
-                ))}
-              </span>
-            </button>
-            <span {...stylex.props(styles.locationControls)}>
-              <span {...stylex.props(styles.switchTrack)}>
-                <i {...stylex.props(styles.switchKnob)} />
-              </span>
-              <button type="button" aria-label="Location actions" {...stylex.props(styles.rowMenu)}>
-                <MoreHorizontal aria-hidden="true" size={14} />
-              </button>
-            </span>
-          </div>
-          {locationExpanded && (
-            <p {...stylex.props(styles.locationPath)}>
-              <code>{skillPath}</code>
-            </p>
-          )}
-          <div {...stylex.props(styles.invocation)}>
-            <span {...stylex.props(styles.invocationLabel)}>Invocation</span>
-            <div {...stylex.props(styles.invocationRow)}>
-              <Folder aria-hidden="true" size={16} />
-              <span {...stylex.props(styles.invocationFile)}>
-                <b>{location === "Global" ? "Global folder" : "Project folder"}</b>
-              </span>
-              <div
-                role="group"
-                aria-label="Invocation policy"
-                {...stylex.props(styles.invocationSegments)}
-              >
-                {(["Both", "User only", "Model only"] satisfies InvocationPolicy[]).map((label) => (
-                  <button
-                    key={label}
-                    type="button"
-                    aria-pressed={invocation === label}
-                    onClick={() => setInvocation(label)}
-                    {...stylex.props(
-                      styles.invocationButton,
-                      invocation === label && styles.segmentButtonActive,
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <p {...stylex.props(styles.invocationNote)}>
-              {invocation === "Both" &&
-                `Both: you can call /${detail.skill.name} and the model can pick it.`}
-              {invocation === "User only" && `User only: only /${detail.skill.name} starts it.`}
-              {invocation === "Model only" &&
-                `Model only: the model picks it; there is no /${detail.skill.name} command.`}
-            </p>
-          </div>
-        </article>
-
-        <article {...stylex.props(styles.detailCard)}>
-          <div {...stylex.props(styles.cardHeading)}>
-            <h3 {...stylex.props(styles.cardTitle)}>SKILL.md</h3>
-            <span {...stylex.props(styles.markdownActions)}>
-              <small>{location}</small>
-              <button type="button" {...stylex.props(styles.editButton)}>
-                Edit
-              </button>
-            </span>
-          </div>
-          <div {...stylex.props(styles.markdown)}>
-            <h4 {...stylex.props(styles.markdownTitle)}>{detail.skill.name}</h4>
-            <p {...stylex.props(styles.markdownParagraph)}>{detail.skill.description}</p>
-            <h5 {...stylex.props(styles.markdownHeading)}>When to use this skill</h5>
-            <p {...stylex.props(styles.markdownParagraph)}>
-              Use it when the work needs a repeatable workflow, clear constraints, and a result that
-              the project can verify.
-            </p>
-            <h5 {...stylex.props(styles.markdownHeading)}>Core principles</h5>
-            <ul {...stylex.props(styles.markdownList)}>
-              <li>Keep the instructions focused.</li>
-              <li>Verify the result in the real workspace.</li>
-            </ul>
-          </div>
-        </article>
-      </div>
-    </section>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      onClick={onToggle}
+      {...stylex.props(styles.switchTrack, on && styles.switchTrackOn)}
+    >
+      <i {...stylex.props(styles.switchKnob, on && styles.switchKnobOn)} />
+    </button>
   );
 }
 
-export function ProductMock({
-  theme,
-  onToggleTheme,
-  initialView = "home",
-  initialSkillName,
-  initialInstall = false,
-  variant = "hero",
-  sidebarAction = "add-skill",
-}: ProductMockProps) {
-  const initialSkill = skills.find((skill) => skill.name === initialSkillName);
-  const [activeView, setActiveView] = useState<ProductMockRootView>(initialView);
-  const [detail, setDetail] = useState<DetailState | null>(
-    initialSkill ? { skill: initialSkill, from: initialView } : null,
+function DetailScreen({
+  detail,
+  onBack,
+  onUpdate,
+}: {
+  detail: DetailState;
+  onBack: () => void;
+  onUpdate: () => void;
+}) {
+  const { skill } = detail;
+  const [invocation, setInvocation] = useState<InvocationPolicy>("Both");
+  const [expanded, setExpanded] = useState(false);
+  const [offRows, setOffRows] = useState<readonly string[]>([]);
+  const toggleRow = (row: string) =>
+    setOffRows((current) =>
+      current.includes(row) ? current.filter((item) => item !== row) : [...current, row],
+    );
+  const location = skill.locations[0] ?? "Global";
+  const folderLabel = location === "Global" ? "Global folder" : "Project folder";
+  const agents = skill.harnesses.filter((harness) => harness !== "universal");
+  const lifecycle = skill.source.endsWith("plugin")
+    ? "Plugin"
+    : skill.method === "dotagents"
+      ? "dotagents"
+      : skill.method === "Copy"
+        ? "Manual"
+        : "skills.sh";
+  const locationRows = [
+    ...skill.locations.map((item) => ({ id: item, kind: "folder" as const })),
+    ...(skill.harnesses.includes("claude") && skill.harnesses.includes("universal")
+      ? [{ id: "Claude Code", kind: "claude" as const }]
+      : []),
+  ];
+  return (
+    <>
+      <PageHeader
+        parent={productMockDetailBackLabel(detail.from)}
+        onParent={onBack}
+        title={skill.name}
+        actions={
+          <>
+            {skill.state === "update" && (
+              <button type="button" onClick={onUpdate} {...stylex.props(styles.solidButton)}>
+                Update
+              </button>
+            )}
+            <button
+              type="button"
+              {...stylex.props(styles.outlineButton, styles.inlineHideBelowNarrow)}
+            >
+              <GitFork aria-hidden="true" size={13} />
+              Fork
+            </button>
+            <button
+              type="button"
+              aria-label="More actions"
+              {...stylex.props(styles.outlineButton, styles.squareButton)}
+            >
+              <MoreHorizontal aria-hidden="true" size={14} />
+            </button>
+          </>
+        }
+      />
+      <div {...stylex.props(styles.view)}>
+        <section {...stylex.props(styles.page, styles.detailLayout)}>
+          <div {...stylex.props(styles.detailMain)}>
+            <div {...stylex.props(styles.detailIntro)}>
+              <h3 {...stylex.props(styles.detailTitle)}>{skill.name}</h3>
+              <span {...stylex.props(styles.detailSource)}>{skill.source}</span>
+              <p {...stylex.props(styles.detailDescription)}>{skill.description}</p>
+              {skill.state === "update" && (
+                <span {...stylex.props(styles.pill)}>Update available</span>
+              )}
+              {skill.state === "broken" && (
+                <span {...stylex.props(styles.pill, styles.pillDanger)}>{skill.note}</span>
+              )}
+              {skill.state === "warning" && (
+                <span {...stylex.props(styles.pill, styles.pillWarning)}>{skill.note}</span>
+              )}
+            </div>
+
+            <article {...stylex.props(styles.card)}>
+              <h4 {...stylex.props(styles.cardTitle)}>Locations</h4>
+              {locationRows.map((row, index) => (
+                <div key={row.id}>
+                  <div {...stylex.props(styles.locationRow)}>
+                    {row.kind === "folder" ? (
+                      <button
+                        type="button"
+                        aria-expanded={index === 0 ? expanded : undefined}
+                        onClick={() => index === 0 && setExpanded(!expanded)}
+                        {...stylex.props(styles.locationMain)}
+                      >
+                        <ChevronRight
+                          aria-hidden="true"
+                          size={14}
+                          {...stylex.props(
+                            styles.locationChevron,
+                            index === 0 && expanded && styles.locationChevronOpen,
+                          )}
+                        />
+                        <Folder aria-hidden="true" size={15} {...stylex.props(styles.muted)} />
+                        <span>{row.id}</span>
+                      </button>
+                    ) : (
+                      <span {...stylex.props(styles.locationMain, styles.locationIndent)}>
+                        <AgentIcon agent="claude" size={15} />
+                        <span>Claude Code</span>
+                        <Link2 aria-label="Linked" size={12} {...stylex.props(styles.faint)} />
+                      </span>
+                    )}
+                    {row.kind === "folder" && (
+                      <span {...stylex.props(styles.hideBelowNarrow)}>
+                        <HarnessDiscs
+                          harnesses={agents.filter((agent) => READS_UNIVERSAL.includes(agent))}
+                        />
+                      </span>
+                    )}
+                    <Toggle
+                      on={!offRows.includes(row.id)}
+                      label={`Turn on ${skill.name} in ${row.id}`}
+                      onToggle={() => toggleRow(row.id)}
+                    />
+                    <button
+                      type="button"
+                      aria-label={`${row.id} actions`}
+                      {...stylex.props(styles.iconButton)}
+                    >
+                      <MoreHorizontal aria-hidden="true" size={14} />
+                    </button>
+                  </div>
+                  {index === 0 && expanded && (
+                    <code {...stylex.props(styles.locationPath)}>
+                      {row.id === "Global" ? "~/" : "agent-studio/"}.agents/skills/{skill.name}
+                    </code>
+                  )}
+                </div>
+              ))}
+              <div {...stylex.props(styles.invocation)}>
+                <span {...stylex.props(styles.caption)}>Invocation</span>
+                <div {...stylex.props(styles.invocationRow)}>
+                  <span {...stylex.props(styles.invocationName)}>
+                    <Folder aria-hidden="true" size={15} {...stylex.props(styles.muted)} />
+                    {folderLabel}
+                  </span>
+                  <div
+                    role="group"
+                    aria-label="Invocation policy"
+                    {...stylex.props(styles.segmented)}
+                  >
+                    {(["Both", "User only", "Model only"] satisfies InvocationPolicy[]).map(
+                      (label) => (
+                        <button
+                          key={label}
+                          type="button"
+                          aria-pressed={invocation === label}
+                          onClick={() => setInvocation(label)}
+                          {...stylex.props(
+                            styles.segment,
+                            invocation === label && styles.segmentOn,
+                          )}
+                        >
+                          {label}
+                        </button>
+                      ),
+                    )}
+                  </div>
+                </div>
+                <p {...stylex.props(styles.invocationNote)}>
+                  {invocation === "Both" &&
+                    `Both: you can call /${skill.name} and the model can pick it.`}
+                  {invocation === "User only" && `User only: only /${skill.name} starts it.`}
+                  {invocation === "Model only" &&
+                    `Model only: the model picks it; there is no /${skill.name} command.`}
+                </p>
+              </div>
+            </article>
+
+            <article {...stylex.props(styles.card)}>
+              <div {...stylex.props(styles.cardTop)}>
+                <h4 {...stylex.props(styles.cardTitle)}>SKILL.md</h4>
+                <span {...stylex.props(styles.cardTopEnd)}>
+                  <small {...stylex.props(styles.faint)}>{location} · Universal folder</small>
+                  <button type="button" {...stylex.props(styles.outlineButton)}>
+                    Edit
+                  </button>
+                </span>
+              </div>
+              <div {...stylex.props(styles.markdown)}>
+                <h5 {...stylex.props(styles.markdownTitle)}>{skill.name}</h5>
+                <p {...stylex.props(styles.markdownParagraph)}>{skill.description}</p>
+                <h6 {...stylex.props(styles.markdownHeading)}>When to use this skill</h6>
+                <p {...stylex.props(styles.markdownParagraph)}>
+                  Use it when the work needs a repeatable workflow, clear constraints, and a result
+                  that the project can verify.
+                </p>
+              </div>
+            </article>
+          </div>
+
+          <dl {...stylex.props(styles.rail)}>
+            <dt>Location</dt>
+            <dd>{skill.locations.join(", ")}</dd>
+            <dt>Agents</dt>
+            <dd {...stylex.props(styles.railAgents)}>
+              <HarnessDiscs harnesses={skill.harnesses} claudeLink={skill.claudeLink} />
+              <span {...stylex.props(styles.faint)}>{agents.length}</span>
+            </dd>
+            <dt>Source</dt>
+            <dd>
+              <code {...stylex.props(styles.railMono)}>{skill.source}</code>
+              <small {...stylex.props(styles.railSub)}>{lifecycle}</small>
+            </dd>
+            <dt>Lifecycle</dt>
+            <dd>{lifecycle === "Manual" ? "Manual · Not tracked" : `${lifecycle} · Managed`}</dd>
+            <dt>Tokens</dt>
+            <dd>
+              Prompt {skill.promptTokens} · Full {skill.fullTokens}
+            </dd>
+            <dt>Installed</dt>
+            <dd>
+              Sep 2, 2026 <span {...stylex.props(styles.faint)}>· Modified Sep 3, 2026</span>
+            </dd>
+          </dl>
+        </section>
+      </div>
+    </>
   );
-  const [installOpen, setInstallOpen] = useState(initialInstall);
+}
+
+const UPDATABLE_NAMES = skills
+  .filter((skill) => skill.state === "update")
+  .map((skill) => skill.name);
+
+const clearState = (skill: SkillRow): SkillRow => ({
+  ...skill,
+  state: undefined,
+  note: undefined,
+  fix: undefined,
+});
+
+const park = (skill: SkillRow): SkillRow => ({
+  ...skill,
+  state: "parked",
+  note: "Parked just now",
+  fix: "Unpark",
+});
+
+export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
+  const [activeView, setActiveView] = useState<ProductMockRootView>("home");
+  const [detail, setDetail] = useState<DetailState | null>(null);
+  const [installOpen, setInstallOpen] = useState(false);
   const [compareSkill, setCompareSkill] = useState<string | null>(null);
+  const [library, setLibrary] = useState<readonly SkillRow[]>(() => [...skills, ...initialParked]);
+  const rows = library.filter((skill) => skill.state !== "parked");
+  const parked = library.filter((skill) => skill.state === "parked");
+  const changeSkills = (names: readonly string[], change: (skill: SkillRow) => SkillRow) => {
+    setLibrary((current) =>
+      current.map((skill) => (names.includes(skill.name) ? change(skill) : skill)),
+    );
+    setDetail((current) =>
+      current && names.includes(current.skill.name)
+        ? { ...current, skill: change(current.skill) }
+        : current,
+    );
+  };
   const navigate = (view: ProductMockRootView) => {
     setActiveView(view);
     setDetail(null);
@@ -1305,49 +1994,63 @@ export function ProductMock({
     setInstallOpen(false);
     setCompareSkill(null);
   };
+  const fixSkill = (skill: SkillRow) => {
+    if (skill.fix === "Compare") setCompareSkill(skill.name);
+    else if (skill.fix === "Update" || skill.fix === "Unpark")
+      changeSkills([skill.name], clearState);
+    else if (skill.fix === "Park") changeSkills([skill.name], park);
+    else openSkill(skill);
+  };
   return (
     <div
       role="region"
       aria-label="Interactive Skill Studio product preview"
-      {...stylex.props(
-        styles.window,
-        variant === "walkthrough" && styles.walkthroughWindow,
-        variant === "capture" && styles.captureWindow,
-        theme === "light" && productDemoLightTheme,
-      )}
+      {...stylex.props(styles.window, theme === "light" && productDemoLightTheme)}
     >
-      <WindowBar theme={theme} onToggleTheme={onToggleTheme} />
-      <div {...stylex.props(styles.app)}>
-        <Sidebar
-          activeView={activeView}
-          onNavigate={navigate}
-          onAddSkill={() => {
-            setInstallOpen(true);
-            setDetail(null);
-          }}
-          action={sidebarAction}
-          theme={theme}
-          onToggleTheme={onToggleTheme}
-        />
-        <div
+      <Sidebar
+        activeView={activeView}
+        parkedCount={parked.length}
+        onNavigate={navigate}
+        onAddSkill={() => {
+          setInstallOpen(true);
+          setCompareSkill(null);
+        }}
+        theme={theme}
+        onToggleTheme={onToggleTheme}
+      />
+      <div {...stylex.props(styles.contentColumn)}>
+        <div {...stylex.props(styles.dragStrip, styles.contentStrip)} />
+        <main
           key={detail ? `detail-${detail.skill.name}` : activeView}
-          {...stylex.props(styles.view)}
+          {...stylex.props(styles.panel)}
         >
           {detail ? (
-            <DetailScreen detail={detail} onBack={() => setDetail(null)} />
+            <DetailScreen
+              detail={detail}
+              onBack={() => setDetail(null)}
+              onUpdate={() => changeSkills([detail.skill.name], clearState)}
+            />
           ) : activeView === "home" ? (
-            <HomeScreen onCompare={setCompareSkill} onOpenSkill={openSkill} />
+            <HomeScreen
+              rows={rows}
+              onOpenSkill={openSkill}
+              onFix={fixSkill}
+              onUpdateAll={() => changeSkills(UPDATABLE_NAMES, clearState)}
+              onShowActivity={() => navigate("activity")}
+            />
           ) : activeView === "skills" ? (
-            <SkillsScreen onOpenSkill={openSkill} />
+            <SkillsScreen rows={rows} onOpenSkill={openSkill} onFix={fixSkill} />
           ) : activeView === "plugins" ? (
             <PluginsScreen onOpenSkill={openSkill} />
-          ) : (
+          ) : activeView === "activity" ? (
             <ActivityScreen onOpenSkill={openSkill} />
+          ) : (
+            <ParkedScreen parked={parked} onOpenSkill={openSkill} onFix={fixSkill} />
           )}
-        </div>
+        </main>
       </div>
       {installOpen && (
-        <AddSkillDrawer
+        <AddSkillSheet
           onClose={() => setInstallOpen(false)}
           onInstall={(skill) => {
             setActiveView("skills");
@@ -1363,223 +2066,261 @@ export function ProductMock({
   );
 }
 
-const tableColumns = "minmax(0,1.2fr) minmax(0,1.8fr) 140px 48px 64px";
-
-// The lane card width follows the hero column, not the viewport, so the lane layout uses
-// container queries. Both rows of long labels need about 360 px of lane width.
-const LANE_ROW_STACKED = "@container (max-width: 559px)";
+const MOBILE = "@media (max-width: 680px)";
+// The panel width follows the hero column, not the viewport, so rows, toolbars and the lane
+// card use container queries against the panel.
+const PANEL_BELOW_WIDE = "@container (max-width: 759px)";
+const PANEL_BELOW_MEDIUM = "@container (max-width: 619px)";
+const PANEL_BELOW_NARROW = "@container (max-width: 459px)";
+const PANEL_MEDIUM_ONLY = "@container (min-width: 460px) and (max-width: 619px)";
 const LANE_LONG_LABELS = "@container (min-width: 380px)";
-// The inbox sits beside the sidebar from 681 px up, so the viewport says little about its width.
-const INBOX_NARROW = "@container (max-width: 559px)";
+
+const fontStack = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif";
+const monoStack = "ui-monospace, SFMono-Regular, Menlo, monospace";
 
 const styles = stylex.create({
   window: {
-    backgroundColor: tokens.background,
+    backgroundColor: tokens.surface,
     borderColor: tokens.border,
-    borderRadius: 8,
+    borderRadius: 10,
     borderStyle: "solid",
     borderWidth: 1,
     boxShadow: "0 2px 5px oklch(0 0 0 / .22), 0 20px 55px oklch(0 0 0 / .34)",
     color: tokens.text,
     display: "flex",
-    flexDirection: "column",
-    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif",
+    fontFamily: fontStack,
+    fontSize: 13,
     height: 600,
     isolation: "isolate",
     overflow: "hidden",
     position: "relative",
     WebkitFontSmoothing: "antialiased",
     width: "100%",
-    "@media (max-width: 680px)": {
-      borderRadius: "min(3vw, 10px)",
-      height: 520,
-    },
+    [MOBILE]: { borderRadius: "min(3vw, 10px)", flexDirection: "column", height: 540 },
   },
-  walkthroughWindow: {
-    height: 800,
-    transform: "scale(.57)",
-    transformOrigin: "top left",
-    width: "175.439%",
-    "@media (max-width: 680px)": {
-      height: 500,
-      transform: "none",
+
+  // Shell
+  sidebar: {
+    display: "flex",
+    flexDirection: "column",
+    flexShrink: 0,
+    width: 220,
+    [MOBILE]: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: 4,
+      paddingInline: 6,
       width: "100%",
     },
   },
-  captureWindow: {
-    height: 800,
-    transform: "scale(1.14)",
-    transformOrigin: "top left",
-    width: "87.719%",
-  },
-  compareBackdrop: {
-    alignItems: "center",
-    backgroundColor: "oklch(0 0 0 / .58)",
-    display: "flex",
-    inset: 0,
-    justifyContent: "center",
-    position: "absolute",
-    zIndex: 8,
-  },
-  compareDialog: {
-    backgroundColor: tokens.raised,
-    borderColor: tokens.border,
-    borderRadius: 8,
-    borderStyle: "solid",
-    borderWidth: 1,
-    boxShadow: "0 24px 80px oklch(0 0 0 / .45)",
-    display: "flex",
-    flexDirection: "column",
-    maxHeight: "85%",
-    overflow: "hidden",
-    width: "72%",
-  },
-  compareHeader: {
-    alignItems: "center",
-    borderBottomColor: tokens.border,
-    borderBottomStyle: "solid",
-    borderBottomWidth: 1,
-    display: "flex",
-    justifyContent: "space-between",
-    padding: "16px 20px",
-  },
-  compareTitle: { fontSize: 16, fontWeight: 600, margin: 0 },
-  comparePickers: {
-    borderBottomColor: tokens.border,
-    borderBottomStyle: "solid",
-    borderBottomWidth: 1,
-    display: "grid",
-    gap: 12,
-    gridTemplateColumns: "1fr 1fr",
-    padding: "12px 20px",
-  },
-  comparePicker: {
-    alignItems: "center",
-    backgroundColor: tokens.surface,
-    borderColor: tokens.border,
-    borderRadius: 5,
-    borderStyle: "solid",
-    borderWidth: 1,
-    color: tokens.text,
-    display: "flex",
-    fontSize: 13,
-    height: 34,
-    justifyContent: "space-between",
-    paddingInline: 10,
-  },
-  diff: {
-    backgroundColor: tokens.background,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: 12,
-    margin: 20,
-    overflow: "hidden",
-  },
-  diffHeader: {
-    backgroundColor: tokens.surface,
-    borderColor: tokens.border,
-    borderStyle: "solid",
-    borderWidth: 1,
-    display: "grid",
-    gridTemplateColumns: "1fr auto auto",
-    gap: 10,
-    padding: "8px 12px",
-  },
-  diffRow: {
-    display: "grid",
-    gridTemplateColumns: "34px 34px minmax(0, 1fr)",
-    minHeight: 28,
-  },
-  diffContext: { backgroundColor: tokens.background },
-  diffRemoved: { backgroundColor: "oklch(0.42 0.12 25 / .32)" },
-  diffAdded: { backgroundColor: "oklch(0.42 0.11 150 / .3)" },
-  windowBar: {
-    alignItems: "center",
-    backgroundColor: tokens.surface,
-    borderBottomColor: tokens.border,
-    borderBottomStyle: "solid",
-    borderBottomWidth: 1,
-    color: tokens.muted,
-    display: "grid",
-    flexShrink: 0,
-    fontSize: 12,
-    gridTemplateColumns: "auto 1fr auto",
-    gap: 10,
-    height: 30,
-    paddingInline: 12,
-    "@media (max-width: 680px)": { height: 40, paddingInline: 10 },
-  },
-  windowThemeButton: {
-    display: "none",
-    "@media (max-width: 680px)": {
-      alignItems: "center",
-      backgroundColor: "transparent",
-      borderColor: tokens.border,
-      borderRadius: 5,
-      borderStyle: "solid",
-      borderWidth: 1,
-      color: tokens.muted,
-      display: "flex",
-      height: 30,
-      justifyContent: "center",
-      padding: 0,
-      width: 30,
-    },
-    ":active": { transform: "scale(.94)" },
-  },
-  traffic: { display: "flex", gap: 7 },
+  dragStrip: { alignItems: "center", display: "flex", flexShrink: 0, height: 36 },
+  contentStrip: { [MOBILE]: { display: "none" } },
+  traffic: { display: "flex", gap: 8, paddingInline: 14, [MOBILE]: { display: "none" } },
   trafficDot: {
-    backgroundColor: tokens.border,
+    backgroundColor: tokens.strongBorder,
     borderRadius: "50%",
     display: "block",
-    height: 10,
-    width: 10,
+    height: 12,
+    width: 12,
   },
-  scanned: { fontVariantNumeric: "tabular-nums", justifySelf: "end" },
-  app: {
-    display: "grid",
-    flex: 1,
-    gridTemplateColumns: "240px minmax(0,1fr)",
-    gridTemplateRows: "minmax(0,1fr)",
-    minHeight: 0,
-    "@media (max-width: 680px)": {
-      display: "flex",
-      flexDirection: "column",
-    },
+  sidebarTitleRow: {
+    alignItems: "center",
+    display: "flex",
+    height: 40,
+    justifyContent: "space-between",
+    paddingInline: "14px 8px",
+    [MOBILE]: { display: "none" },
   },
-  sidebar: {
-    backgroundColor: tokens.surface,
-    borderRightColor: tokens.border,
-    borderRightStyle: "solid",
-    borderRightWidth: 1,
+  sidebarTitle: { fontSize: 12, fontWeight: 600 },
+  sidebarTitleActions: { display: "flex", gap: 2 },
+  iconButton: {
+    alignItems: "center",
+    backgroundColor: { default: "transparent", ":hover": tokens.hover },
+    borderRadius: 4,
+    borderWidth: 0,
+    color: { default: tokens.faint, ":hover": tokens.text },
+    cursor: "pointer",
+    display: "inline-flex",
+    flexShrink: 0,
+    height: 24,
+    justifyContent: "center",
+    padding: 0,
+    transition: "background-color 150ms ease-out, color 150ms ease-out",
+    width: 24,
+  },
+  productNav: {
     display: "flex",
     flexDirection: "column",
-    minWidth: 0,
-    padding: 12,
-    "@media (max-width: 680px)": {
-      borderBottomColor: tokens.border,
-      borderBottomStyle: "solid",
-      borderBottomWidth: 1,
-      borderRightWidth: 0,
-      gap: 4,
-      height: 56,
-      padding: 6,
-      width: "100%",
+    gap: 1,
+    paddingInline: 8,
+    [MOBILE]: { flex: 1, flexDirection: "row", gap: 2, minWidth: 0, paddingInline: 0 },
+  },
+  navGap: {
+    display: "flex",
+    flexDirection: "column",
+    paddingTop: 12,
+    [MOBILE]: { display: "contents" },
+  },
+  navItem: {
+    alignItems: "center",
+    backgroundColor: { default: "transparent", ":hover": tokens.hover },
+    borderRadius: 4,
+    borderWidth: 0,
+    color: { default: tokens.muted, ":hover": tokens.text },
+    cursor: "pointer",
+    display: "grid",
+    fontSize: 13,
+    gap: 8,
+    gridTemplateColumns: "14px 1fr auto",
+    height: 26,
+    paddingInline: 8,
+    textAlign: "left",
+    transition: "background-color 150ms ease-out, color 150ms ease-out",
+    ":active": { transform: "scale(.97)" },
+    [MOBILE]: {
+      display: "flex",
+      flex: 1,
+      fontSize: 12,
+      gap: 5,
+      height: 40,
+      justifyContent: "center",
+      minWidth: 0,
+      paddingInline: 4,
     },
   },
-  sidebarSearch: {
+  navIcon: { flexShrink: 0 },
+  navLabelCollapsible: { display: { default: "inline", [MOBILE]: "none" } },
+  navItemActive: { backgroundColor: tokens.active, color: tokens.text },
+  navCount: {
+    color: tokens.faint,
+    fontSize: 11,
+    fontVariantNumeric: "tabular-nums",
+    [MOBILE]: { display: "none" },
+  },
+  sidebarFooter: {
     alignItems: "center",
+    display: "flex",
+    justifyContent: "space-between",
+    marginTop: "auto",
+    padding: "8px 8px 10px",
+    [MOBILE]: { marginTop: 0, padding: 0 },
+  },
+  syncButton: {
+    alignItems: "center",
+    backgroundColor: { default: "transparent", ":hover": tokens.hover },
+    borderRadius: 4,
+    borderWidth: 0,
+    color: { default: tokens.muted, ":hover": tokens.text },
+    cursor: "pointer",
+    display: "flex",
+    fontSize: 12,
+    gap: 6,
+    height: 24,
+    paddingInline: 6,
+    [MOBILE]: { display: "none" },
+  },
+  footerActions: { display: "flex", gap: 2 },
+  footerOnlyDesktop: { [MOBILE]: { display: "none" } },
+  themeButton: { [MOBILE]: { height: 32, width: 32 } },
+  contentColumn: {
+    display: "flex",
+    flex: 1,
+    flexDirection: "column",
+    minHeight: 0,
+    minWidth: 0,
+    paddingBottom: 8,
+    paddingRight: 8,
+    [MOBILE]: { paddingInline: 6, paddingBottom: 6 },
+  },
+  panel: {
+    animationDuration: "190ms",
+    animationName: viewEnter,
+    animationTimingFunction: "cubic-bezier(.16,1,.3,1)",
     backgroundColor: tokens.background,
     borderColor: tokens.border,
+    borderRadius: 6,
+    borderStyle: "solid",
+    borderWidth: 1,
+    containerType: "inline-size",
+    display: "flex",
+    flex: 1,
+    flexDirection: "column",
+    minHeight: 0,
+    overflow: "hidden",
+    "@media (prefers-reduced-motion: reduce)": { animationName: "none" },
+  },
+
+  // Page header and toolbar (PageShell)
+  pageHeader: {
+    alignItems: "center",
+    borderBottomColor: tokens.subtleBorder,
+    borderBottomStyle: "solid",
+    borderBottomWidth: 1,
+    display: "flex",
+    flexShrink: 0,
+    gap: 8,
+    height: 40,
+    minWidth: 0,
+    paddingInline: 16,
+    [MOBILE]: { paddingInline: 12 },
+  },
+  crumbs: {
+    alignItems: "center",
+    display: "flex",
+    flexShrink: 0,
+    fontSize: 12,
+    fontWeight: 500,
+    gap: 6,
+    margin: 0,
+    maxWidth: "60%",
+    minWidth: 0,
+  },
+  crumbParent: {
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    color: { default: tokens.faint, ":hover": tokens.text },
+    cursor: "pointer",
+    fontSize: 12,
+    padding: 0,
+  },
+  crumbChevron: { color: tokens.ghost, flexShrink: 0 },
+  crumbTitle: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  crumbSubtitle: {
+    color: tokens.faint,
+    fontSize: 12,
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  headerActions: { alignItems: "center", display: "flex", gap: 6, marginLeft: "auto" },
+  toolbar: {
+    alignItems: "center",
+    borderBottomColor: tokens.subtleBorder,
+    borderBottomStyle: "solid",
+    borderBottomWidth: 1,
+    display: "flex",
+    flexShrink: 0,
+    gap: 8,
+    height: 44,
+    paddingInline: 16,
+    [MOBILE]: { paddingInline: 12 },
+  },
+  toolbarEnd: { alignItems: "center", display: "flex", gap: 8, marginLeft: "auto" },
+  toolbarCount: { color: tokens.faint, fontSize: 12, whiteSpace: "nowrap" },
+  filterInput: {
+    alignItems: "center",
+    borderColor: { default: tokens.border, ":focus-within": tokens.accent },
     borderRadius: 4,
     borderStyle: "solid",
     borderWidth: 1,
     color: tokens.faint,
     display: "flex",
-    gap: 7,
-    height: 32,
-    paddingInline: 12,
-    ":focus-within": { borderColor: tokens.accent },
-    "@media (max-width: 680px)": { display: "none" },
+    flex: "0 1 190px",
+    gap: 6,
+    height: 28,
+    minWidth: 0,
+    paddingInline: 8,
   },
   input: {
     backgroundColor: "transparent",
@@ -1590,364 +2331,649 @@ const styles = stylex.create({
     outline: "none",
     padding: 0,
     width: "100%",
-    "@media (max-width: 680px)": { fontSize: 16 },
+    "::placeholder": { color: tokens.faint },
+    [MOBILE]: { fontSize: 16 },
   },
-  addSkill: {
-    alignItems: "center",
-    backgroundColor: tokens.accentSoft,
-    borderRadius: 4,
-    borderWidth: 0,
-    color: tokens.text,
-    display: "flex",
-    fontSize: 13,
-    fontWeight: 500,
-    gap: 6,
-    height: 30,
-    justifyContent: "center",
-    marginBlock: "6px 10px",
-    transition: "background-color 150ms ease-out, transform 150ms ease-out",
-    ":hover": { backgroundColor: tokens.accentHover },
-    ":active": { transform: "scale(.96)" },
-    "@media (max-width: 680px)": { display: "none" },
-  },
-  searchRow: {
-    display: "flex",
-    gap: 6,
-    "@media (max-width: 680px)": { display: "none" },
-  },
-  searchGrow: { flex: 1, minWidth: 0 },
-  searchSideButton: {
-    alignItems: "center",
-    backgroundColor: tokens.background,
+  segmented: {
+    alignSelf: "flex-start",
     borderColor: tokens.border,
     borderRadius: 4,
     borderStyle: "solid",
     borderWidth: 1,
-    color: tokens.muted,
-    display: "flex",
+    display: "inline-flex",
     flexShrink: 0,
-    height: 32,
-    justifyContent: "center",
-    padding: 0,
-    transition: "color 150ms ease-out, border-color 150ms ease-out, transform 150ms ease-out",
-    width: 32,
-    ":hover": { borderColor: tokens.faint, color: tokens.text },
-    ":active": { transform: "scale(.94)" },
+    overflow: "hidden",
   },
-  // A fixed deep violet, so white text keeps its contrast in both themes.
-  scanFolder: {
+  segment: {
     alignItems: "center",
-    backgroundColor: { default: "oklch(0.5 0.2 293)", ":hover": "oklch(0.45 0.2 293)" },
+    backgroundColor: { default: "transparent", ":hover": tokens.hover },
+    borderColor: tokens.border,
+    borderStyle: "solid",
+    borderWidth: 0,
+    borderLeftWidth: { default: 1, ":first-child": 0 },
+    color: { default: tokens.muted, ":hover": tokens.text },
+    cursor: "pointer",
+    display: "inline-flex",
+    fontSize: 12,
+    gap: 4,
+    height: 26,
+    paddingInline: 10,
+    whiteSpace: "nowrap",
+  },
+  segmentSmall: { fontSize: 11, height: 22, paddingInline: 8 },
+  segmentOn: { backgroundColor: tokens.active, color: tokens.text, fontWeight: 500 },
+  outlineButton: {
+    alignItems: "center",
+    backgroundColor: { default: "transparent", ":hover": tokens.hover },
+    borderColor: tokens.border,
+    borderRadius: 4,
+    borderStyle: "solid",
+    borderWidth: 1,
+    color: tokens.text,
+    cursor: "pointer",
+    display: "inline-flex",
+    flexShrink: 0,
+    fontSize: 12,
+    gap: 6,
+    height: 28,
+    paddingInline: 10,
+    whiteSpace: "nowrap",
+  },
+  squareButton: { justifyContent: "center", paddingInline: 0, width: 28 },
+  solidButton: {
+    alignItems: "center",
+    backgroundColor: { default: tokens.accentSolid, ":hover": tokens.accentSolidHover },
     borderRadius: 4,
     borderWidth: 0,
     color: "oklch(1 0 0)",
-    display: "flex",
-    fontSize: 13,
-    fontWeight: 560,
-    gap: 6,
-    height: 30,
-    justifyContent: "center",
-    marginBlock: "8px 10px",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    transition: "background-color 150ms ease-out, transform 150ms ease-out",
-    whiteSpace: "nowrap",
-    ":active": { transform: "scale(.96)" },
-    "@media (max-width: 680px)": { display: "none" },
-  },
-  spinning: {
-    animationDuration: "900ms",
-    animationIterationCount: "infinite",
-    animationName: spin,
-    animationTimingFunction: "linear",
+    cursor: { default: "pointer", ":disabled": "default" },
+    display: "inline-flex",
     flexShrink: 0,
+    fontSize: 12,
+    fontWeight: 500,
+    height: 28,
+    opacity: { default: 1, ":disabled": 0.45 },
+    paddingInline: 12,
+    ":active": { transform: "scale(.97)" },
   },
-  productNav: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 1,
-    "@media (max-width: 680px)": { flex: 1, flexDirection: "row", gap: 4, minWidth: 0 },
-  },
-  navItem: {
-    alignItems: "center",
-    backgroundColor: "transparent",
-    borderRadius: 4,
-    borderWidth: 0,
-    color: tokens.muted,
-    display: "grid",
-    fontSize: 13,
-    gap: 8,
-    gridTemplateColumns: "15px 1fr auto",
-    height: 30,
-    paddingInline: 10,
-    textAlign: "left",
-    transition: "background-color 150ms ease-out, color 150ms ease-out",
-    ":hover": { backgroundColor: tokens.hover, color: tokens.text },
-    ":active": { transform: "scale(.96)" },
-    "@media (max-width: 680px)": {
-      display: "flex",
-      flex: 1,
-      fontSize: 12,
-      gap: 5,
-      height: 44,
-      justifyContent: "center",
-      paddingInline: 4,
-    },
-  },
-  navCount: {
-    color: tokens.faint,
-    fontSize: 11,
-    fontVariantNumeric: "tabular-nums",
-    "@media (max-width: 680px)": { display: "none" },
-  },
-  navItemActive: { backgroundColor: tokens.accentSoft, color: tokens.text },
-  navItemActiveNeutral: { backgroundColor: tokens.raised, color: tokens.text },
-  sidebarFooter: {
-    alignItems: "center",
-    borderTopColor: tokens.subtleBorder,
-    borderTopStyle: "solid",
-    borderTopWidth: 1,
-    color: tokens.faint,
-    display: "grid",
-    fontSize: 11,
-    gap: 4,
-    gridTemplateColumns: "1fr auto auto auto",
-    marginTop: "auto",
-    padding: "8px 2px 0",
-    "@media (max-width: 680px)": { display: "none" },
-  },
-  sidebarFooterStatus: {
-    alignItems: "center",
-    display: "flex",
-    gap: 6,
-    minWidth: 0,
-    whiteSpace: "nowrap",
-  },
-  sidebarFooterButton: {
-    alignItems: "center",
-    backgroundColor: "transparent",
-    borderColor: "transparent",
-    borderRadius: 4,
-    borderStyle: "solid",
-    borderWidth: 0,
-    color: tokens.faint,
-    display: "flex",
-    height: 24,
-    justifyContent: "center",
-    padding: 0,
-    width: 24,
-    ":hover": { backgroundColor: tokens.hover, color: tokens.text },
-  },
+
+  // Page body
   view: {
-    animationDuration: "190ms",
-    animationName: viewEnter,
-    animationTimingFunction: "cubic-bezier(.16,1,.3,1)",
+    flex: 1,
     minHeight: 0,
-    minWidth: 0,
     overflow: "auto",
     scrollbarWidth: "none",
     "::-webkit-scrollbar": { display: "none" },
-    "@media (max-width: 680px)": { flex: 1, width: "100%" },
-    "@media (prefers-reduced-motion: reduce)": { animationName: "none" },
   },
   page: {
     display: "flex",
     flexDirection: "column",
+    gap: 20,
     marginInline: "auto",
     maxWidth: 1200,
-    minHeight: "100%",
-    minWidth: 0,
-    padding: "28px 32px",
-    width: "100%",
-    "@media (max-width: 680px)": { padding: "18px 16px" },
+    padding: "20px 24px 28px",
+    [MOBILE]: { gap: 14, padding: "14px 10px 20px" },
   },
-  pageHeading: {
-    alignItems: "flex-start",
-    display: "flex",
-    justifyContent: "space-between",
-    marginBottom: 24,
-    "@media (max-width: 680px)": { marginBottom: 18 },
+  caption: {
+    color: tokens.faint,
+    fontSize: 11,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
   },
-  pageTitle: {
-    fontSize: 20,
-    fontWeight: 600,
-    letterSpacing: "-.01em",
-    lineHeight: 1.15,
-    margin: 0,
+  truncate: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  number: { color: tokens.muted, fontSize: 12, fontVariantNumeric: "tabular-nums" },
+  empty: { color: tokens.faint, fontSize: 13, margin: 0, padding: 16, textAlign: "center" },
+  danger: { color: tokens.danger },
+  warning: { color: tokens.warning },
+  accent: { color: tokens.accent },
+  success: { color: "oklch(0.696 0.149 162.48)" },
+  muted: { color: tokens.muted },
+  faint: { color: tokens.faint },
+  inlineHideBelowWide: { display: { default: "inline-flex", [PANEL_BELOW_WIDE]: "none" } },
+  inlineHideBelowMedium: { display: { default: "inline-flex", [PANEL_BELOW_MEDIUM]: "none" } },
+  inlineHideBelowNarrow: { display: { default: "inline-flex", [PANEL_BELOW_NARROW]: "none" } },
+  hideBelowNarrow: { display: { default: null, [PANEL_BELOW_NARROW]: "none" } },
+
+  // Home
+  statGrid: {
+    display: "grid",
+    gap: 12,
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    [MOBILE]: { gap: 6 },
   },
-  pageSubtitle: {
-    color: tokens.muted,
-    fontSize: 13,
-    lineHeight: 1.4,
-    margin: "6px 0 0",
-    maxWidth: 510,
-  },
-  pageCount: { color: tokens.muted, fontSize: 11, fontVariantNumeric: "tabular-nums" },
-  addSkillDrawer: {
-    backgroundColor: tokens.surface,
-    borderLeftColor: tokens.border,
-    borderLeftStyle: "solid",
-    borderLeftWidth: 1,
-    boxShadow: "-18px 0 54px oklch(0 0 0 / .3)",
-    display: "flex",
-    flexDirection: "column",
-    inset: "22px 0 0 auto",
-    position: "absolute",
-    width: 420,
-    zIndex: 2,
-    "@media (max-width: 680px)": { inset: "40px 0 0", width: "100%" },
-  },
-  addSkillHeader: {
-    alignItems: "center",
-    borderBottomColor: tokens.border,
-    borderBottomStyle: "solid",
-    borderBottomWidth: 1,
-    display: "flex",
-    justifyContent: "space-between",
-    minHeight: 56,
-    paddingInline: 20,
-  },
-  addSkillTitle: { fontSize: 15, fontWeight: 600, margin: 0 },
-  drawerClose: {
-    alignItems: "center",
-    backgroundColor: "transparent",
-    borderColor: "transparent",
-    borderRadius: 4,
-    borderWidth: 0,
-    color: tokens.muted,
-    display: "flex",
-    height: 32,
-    justifyContent: "center",
-    padding: 0,
-    width: 32,
-    ":hover": { backgroundColor: tokens.hover, color: tokens.text },
-    ":active": { transform: "scale(.96)" },
-  },
-  addSkillTabs: {
-    borderBottomColor: tokens.border,
-    borderBottomStyle: "solid",
-    borderBottomWidth: 1,
-    display: "flex",
-    minHeight: 42,
-    paddingInline: 20,
-  },
-  addSkillTab: {
-    backgroundColor: "transparent",
-    borderColor: "transparent",
+  statWrap: { display: "flex", minWidth: 0, position: "relative" },
+  statTile: {
+    alignItems: "stretch",
+    backgroundColor: { default: tokens.elevated, ":hover": tokens.surface },
+    borderColor: tokens.subtleBorder,
+    borderRadius: 6,
     borderStyle: "solid",
-    borderWidth: "0 0 2px",
-    color: tokens.muted,
-    fontSize: 12,
-    paddingInline: 12,
-  },
-  addSkillTabActive: { borderBottomColor: tokens.accent, color: tokens.accent },
-  addSkillBody: {
+    borderWidth: 1,
+    color: tokens.text,
+    cursor: "pointer",
     display: "flex",
     flex: 1,
     flexDirection: "column",
-    gap: 22,
-    overflow: "hidden",
-    padding: "18px 20px",
+    gap: 4,
+    minWidth: 0,
+    padding: "14px 16px",
+    textAlign: "left",
+    transition: "background-color 150ms ease-out, transform 150ms ease-out",
+    ":active": { transform: "scale(.98)" },
+    [MOBILE]: { padding: "10px 10px" },
   },
-  addSkillField: { display: "flex", flexDirection: "column", gap: 8 },
-  addSkillInput: {
+  statTileOn: { backgroundColor: tokens.accentSofter, borderColor: tokens.accent },
+  statLabel: {
+    color: tokens.faint,
+    fontSize: 11,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+  },
+  statValue: {
+    fontSize: 24,
+    fontVariantNumeric: "tabular-nums",
+    fontWeight: 600,
+    letterSpacing: "-0.02em",
+    lineHeight: 1.1,
+    [MOBILE]: { fontSize: 20 },
+  },
+  statCaption: {
+    color: tokens.faint,
+    fontSize: 11,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  statCheck: { position: "absolute", right: 10, top: 10, [MOBILE]: { right: 4, top: 4 } },
+  laneCard: {
+    backgroundColor: tokens.elevated,
+    borderColor: tokens.subtleBorder,
+    borderRadius: 6,
+    borderStyle: "solid",
+    borderWidth: 1,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    padding: "14px 16px",
+    [MOBILE]: { padding: 10 },
+  },
+  laneRow: {
+    alignItems: "center",
+    display: "grid",
+    gap: { default: 12, [PANEL_BELOW_MEDIUM]: 6 },
+    gridTemplateColumns: { default: "170px minmax(0,1fr)", [PANEL_BELOW_MEDIUM]: "1fr" },
+  },
+  laneTitle: {
+    alignItems: "center",
+    color: tokens.muted,
+    display: "flex",
+    fontSize: 12,
+    gap: 6,
+    whiteSpace: "nowrap",
+  },
+  laneTotal: { color: tokens.text, fontWeight: 500 },
+  laneSegments: { containerType: "inline-size", display: "flex", gap: 2, minWidth: 0 },
+  laneSegment: {
+    alignItems: "center",
+    backgroundColor: tokens.raised,
+    borderRadius: 4,
+    borderWidth: 0,
+    color: tokens.muted,
+    cursor: "pointer",
+    display: "flex",
+    flexBasis: 0,
+    fontSize: 12,
+    gap: 4,
+    height: 28,
+    justifyContent: "center",
+    minWidth: 0,
+    overflow: "hidden",
+    paddingInline: 8,
+    whiteSpace: "nowrap",
+    ":hover": { filter: "brightness(1.15)" },
+  },
+  laneSoft: { backgroundColor: tokens.accentSoft, color: tokens.text },
+  laneSofter: { backgroundColor: tokens.accentSofter },
+  laneValue: { fontWeight: 500 },
+  laneLongLabel: {
+    display: { default: "none", [LANE_LONG_LABELS]: "inline" },
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  laneShortLabel: { display: { default: "inline", [LANE_LONG_LABELS]: "none" } },
+
+  // Skill list
+  groups: { display: "flex", flexDirection: "column" },
+  group: { display: "flex", flexDirection: "column" },
+  groupHead: {
+    alignItems: "center",
+    backgroundColor: tokens.surface,
+    borderRadius: 4,
+    display: "flex",
+    gap: 8,
+    height: 28,
+    paddingInline: 12,
+    [MOBILE]: { paddingInline: 8 },
+  },
+  groupToggle: {
+    alignItems: "center",
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    color: tokens.muted,
+    cursor: "pointer",
+    display: "flex",
+    flex: 1,
+    fontSize: 12,
+    fontWeight: 500,
+    gap: 8,
+    height: "100%",
+    minWidth: 0,
+    padding: 0,
+    textAlign: "left",
+  },
+  groupChevron: {
+    color: tokens.faint,
+    flexShrink: 0,
+    transition: "transform 150ms ease-out",
+    "@media (prefers-reduced-motion: reduce)": { transition: "none" },
+  },
+  groupChevronClosed: { transform: "rotate(-90deg)" },
+  groupCount: { color: tokens.faint, fontVariantNumeric: "tabular-nums", fontWeight: 400 },
+  groupFoot: {
+    alignItems: "center",
+    display: "flex",
+    height: 36,
+    paddingInline: 12,
+    [MOBILE]: { paddingInline: 8 },
+  },
+  groupAction: {
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    color: { default: tokens.accent, ":hover": tokens.accentHover },
+    cursor: "pointer",
+    fontSize: 12,
+    padding: 0,
+  },
+  row: {
+    alignItems: "center",
+    backgroundColor: { default: "transparent", ":hover": tokens.hover },
+    borderBottomColor: tokens.subtleBorder,
+    borderBottomStyle: "solid",
+    borderBottomWidth: { default: 1, ":last-child": 0 },
+    columnGap: 12,
+    display: "grid",
+    gridTemplateColumns: {
+      default: "14px minmax(0,1fr) 120px 84px minmax(0,1.1fr) 72px",
+      [PANEL_MEDIUM_ONLY]: "14px minmax(0,1fr) 84px minmax(0,1fr) 64px",
+      [PANEL_BELOW_NARROW]: "14px minmax(0,1fr) 64px",
+    },
+    height: 32,
+    minWidth: 0,
+    paddingInline: 12,
+    position: "relative",
+    [MOBILE]: { columnGap: 8, paddingInline: 8 },
+  },
+  rowSlot: { alignItems: "center", display: "flex" },
+  rowName: {
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    color: tokens.text,
+    cursor: "pointer",
+    display: "flex",
+    fontSize: 13,
+    minWidth: 0,
+    padding: 0,
+    textAlign: "left",
+    "::after": { content: '""', inset: 0, position: "absolute" },
+  },
+  locationCell: {
+    alignItems: "center",
+    color: tokens.muted,
+    display: { default: "flex", [PANEL_BELOW_MEDIUM]: "none" },
+    fontSize: 12,
+    gap: 6,
+    minWidth: 0,
+  },
+  locationChip: { alignItems: "center", display: "inline-flex", gap: 4, minWidth: 0 },
+  discs: { alignItems: "center", display: "inline-flex" },
+  disc: {
+    alignItems: "center",
+    backgroundColor: tokens.surface,
+    borderRadius: "50%",
+    boxShadow: `0 0 0 2px ${tokens.background}`,
+    color: tokens.text,
+    display: "inline-flex",
+    flexShrink: 0,
+    height: 20,
+    justifyContent: "center",
+    position: "relative",
+    width: 20,
+  },
+  discOverlap: { marginLeft: -4 },
+  discBadge: {
+    alignItems: "center",
     backgroundColor: tokens.background,
-    borderColor: tokens.border,
+    borderRadius: "50%",
+    bottom: -3,
+    display: "inline-flex",
+    height: 10,
+    justifyContent: "center",
+    position: "absolute",
+    right: -3,
+    width: 10,
+  },
+  discOverflow: { color: tokens.faint, fontSize: 11, marginLeft: 4 },
+  noteCell: {
+    alignItems: "center",
+    display: { default: "flex", [PANEL_BELOW_NARROW]: "none" },
+    gap: 10,
+    minWidth: 0,
+  },
+  noteText: {
+    color: tokens.muted,
+    flex: 1,
+    fontSize: 12,
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  tokenPair: {
+    display: "inline-flex",
+    flexShrink: 0,
+    fontSize: 12,
+    fontVariantNumeric: "tabular-nums",
+    gap: 6,
+  },
+  fixCell: { display: "flex", justifyContent: "flex-end", position: "relative", zIndex: 1 },
+  fixButton: {
+    backgroundColor: { default: "transparent", ":hover": tokens.raised },
+    borderRadius: 4,
+    borderWidth: 0,
+    color: { default: tokens.muted, ":hover": tokens.text },
+    cursor: "pointer",
+    fontSize: 12,
+    height: 24,
+    paddingInline: 8,
+    transition: "background-color 150ms ease-out, color 150ms ease-out",
+    ":active": { transform: "scale(.96)" },
+  },
+
+  // Plugins
+  pluginGroup: { display: "flex", flexDirection: "column", gap: 6 },
+  pluginHeader: {
+    alignItems: "center",
+    display: "flex",
+    fontSize: 11,
+    gap: 8,
+    paddingInline: 12,
+  },
+  pluginName: { fontSize: 13, fontWeight: 600 },
+  pluginCount: { color: tokens.faint, marginLeft: "auto" },
+  pluginCard: {
+    backgroundColor: tokens.elevated,
+    borderColor: tokens.subtleBorder,
+    borderRadius: 6,
+    borderStyle: "solid",
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  pluginRow: {
+    alignItems: "center",
+    backgroundColor: { default: "transparent", ":hover": tokens.hover },
+    borderBottomColor: tokens.subtleBorder,
+    borderBottomStyle: "solid",
+    borderBottomWidth: { default: 1, ":last-child": 0 },
+    borderWidth: 0,
+    color: tokens.text,
+    columnGap: 16,
+    cursor: "pointer",
+    display: "grid",
+    gridTemplateColumns: {
+      default: "minmax(0,0.9fr) minmax(0,1.6fr) 48px",
+      [PANEL_BELOW_NARROW]: "minmax(0,1fr) 48px",
+    },
+    height: 42,
+    paddingInline: 12,
+    textAlign: "left",
+    width: "100%",
+  },
+  pluginSkill: { fontSize: 13, fontWeight: 600 },
+  pluginDescription: {
+    color: tokens.muted,
+    fontSize: 12,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+
+  // Activity
+  activityLayout: {
+    alignItems: "start",
+    display: "grid",
+    gap: 24,
+    gridTemplateColumns: { default: "minmax(0,1fr) 260px", [PANEL_BELOW_WIDE]: "minmax(0,1fr)" },
+  },
+  activityMain: { display: "flex", flexDirection: "column", gap: 24, minWidth: 0 },
+  sectionTop: {
+    alignItems: "center",
+    display: "flex",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  sectionMeta: { color: tokens.muted, fontSize: 12, fontVariantNumeric: "tabular-nums" },
+  heatFrame: {
+    color: tokens.faint,
+    columnGap: 8,
+    display: "grid",
+    fontSize: 10,
+    gridTemplateColumns: "24px minmax(0,1fr)",
+    rowGap: 4,
+  },
+  heatMonths: {
+    display: "grid",
+    gridTemplateColumns: "repeat(12, minmax(0,1fr))",
+    whiteSpace: "nowrap",
+  },
+  weekdays: { display: "grid", gridTemplateRows: "repeat(7, minmax(0,1fr))", rowGap: 3 },
+  heatmap: {
+    display: "grid",
+    gap: 3,
+    gridAutoFlow: "column",
+    gridTemplateColumns: `repeat(${HEAT_WEEKS}, minmax(0,1fr))`,
+    gridTemplateRows: "repeat(7, auto)",
+  },
+  heatCell: {
+    aspectRatio: "1",
+    backgroundColor: tokens.raised,
+    borderRadius: 2,
+    display: "block",
+  },
+  heatCellEmpty: { backgroundColor: tokens.raised },
+  heat1: { backgroundColor: `color-mix(in oklch, ${tokens.accent} 30%, transparent)` },
+  heat2: { backgroundColor: `color-mix(in oklch, ${tokens.accent} 50%, transparent)` },
+  heat3: { backgroundColor: `color-mix(in oklch, ${tokens.accent} 72%, transparent)` },
+  heat4: { backgroundColor: `color-mix(in oklch, ${tokens.accent} 100%, transparent)` },
+  heatLegend: {
+    alignItems: "center",
+    color: tokens.faint,
+    display: "flex",
+    fontSize: 10,
+    gap: 4,
+    justifyContent: "flex-end",
+    marginTop: 8,
+  },
+  legendCell: { borderRadius: 2, display: "block", height: 9, width: 9 },
+  activityRow: {
+    alignItems: "center",
+    backgroundColor: { default: "transparent", ":hover": tokens.hover },
+    borderBottomColor: tokens.subtleBorder,
+    borderBottomStyle: "solid",
+    borderBottomWidth: 1,
+    borderWidth: 0,
+    color: tokens.text,
+    columnGap: 12,
+    cursor: "pointer",
+    display: "grid",
+    fontSize: 13,
+    gridTemplateColumns: "minmax(0,1fr) auto 40px",
+    height: 32,
+    paddingInline: 8,
+    textAlign: "left",
+    width: "100%",
+  },
+  showMore: {
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    color: { default: tokens.faint, ":hover": tokens.text },
+    cursor: "pointer",
+    fontSize: 12,
+    padding: "10px 8px",
+  },
+  activitySide: {
+    backgroundColor: tokens.elevated,
+    borderColor: tokens.subtleBorder,
+    borderRadius: 6,
+    borderStyle: "solid",
+    borderWidth: 1,
+    display: { default: "flex", [PANEL_BELOW_WIDE]: "none" },
+    flexDirection: "column",
+    gap: 16,
+    padding: 16,
+  },
+  sideTitle: { display: "block", fontSize: 13, fontWeight: 600 },
+  sideMeta: { color: tokens.muted, fontSize: 12 },
+  sideLabel: { color: tokens.faint, fontSize: 11 },
+  barGroup: { display: "flex", flexDirection: "column", gap: 10 },
+  barRow: { display: "flex", flexDirection: "column", gap: 5 },
+  barName: { alignItems: "center", display: "flex", fontSize: 12, gap: 6 },
+  barValue: { color: tokens.muted, fontVariantNumeric: "tabular-nums", marginLeft: "auto" },
+  barTrack: {
+    backgroundColor: tokens.raised,
+    borderRadius: 2,
+    display: "block",
+    height: 3,
+    overflow: "hidden",
+  },
+  barFill: { backgroundColor: tokens.muted, display: "block", height: "100%" },
+  sideHint: { color: tokens.faint, fontSize: 12, margin: 0 },
+
+  // Add skill sheet
+  sheetBackdrop: {
+    display: "flex",
+    inset: 0,
+    justifyContent: "flex-end",
+    position: "absolute",
+    zIndex: 8,
+  },
+  sheetScrim: {
+    backgroundColor: tokens.scrim,
+    borderWidth: 0,
+    cursor: "default",
+    inset: 0,
+    padding: 0,
+    position: "absolute",
+  },
+  sheet: {
+    backgroundColor: tokens.background,
+    borderLeftColor: tokens.border,
+    borderLeftStyle: "solid",
+    borderLeftWidth: 1,
+    boxShadow: "-16px 0 48px oklch(0 0 0 / .3)",
+    display: "flex",
+    flexDirection: "column",
+    maxWidth: "100%",
+    position: "relative",
+    width: 400,
+  },
+  sheetHeader: {
+    alignItems: "center",
+    display: "flex",
+    justifyContent: "space-between",
+    padding: "14px 12px 10px 20px",
+  },
+  sheetTitle: { fontSize: 14, fontWeight: 600, margin: 0 },
+  sheetTabs: {
+    borderBottomColor: tokens.border,
+    borderBottomStyle: "solid",
+    borderBottomWidth: 1,
+    display: "flex",
+    paddingInline: 16,
+  },
+  sheetTab: {
+    backgroundColor: "transparent",
+    borderBottomColor: "transparent",
+    borderBottomStyle: "solid",
+    borderBottomWidth: 2,
+    borderWidth: 0,
+    color: { default: tokens.muted, ":hover": tokens.text },
+    cursor: "pointer",
+    fontSize: 13,
+    height: 36,
+    paddingInline: 12,
+  },
+  sheetTabOn: { borderBottomColor: tokens.accent, color: tokens.text },
+  sheetBody: {
+    display: "flex",
+    flex: 1,
+    flexDirection: "column",
+    gap: 18,
+    minHeight: 0,
+    overflow: "auto",
+    padding: "16px 20px",
+    scrollbarWidth: "none",
+  },
+  field: { display: "flex", flexDirection: "column", gap: 8 },
+  textInput: {
+    backgroundColor: "transparent",
+    borderColor: { default: tokens.border, ":focus": tokens.accent },
     borderRadius: 4,
     borderStyle: "solid",
     borderWidth: 1,
     color: tokens.text,
-    fontFamily: "inherit",
-    fontSize: 12,
-    height: 34,
+    fontSize: 13,
+    height: 32,
     outline: "none",
     paddingInline: 10,
-    width: "100%",
-    ":focus": { borderColor: tokens.accent },
+    "::placeholder": { color: tokens.faint },
+    [MOBILE]: { fontSize: 16 },
   },
-  addSkillHelp: { color: tokens.faint, fontSize: 12, lineHeight: 1.4 },
-  methodPicker: { display: "flex" },
-  methodButton: {
-    backgroundColor: "transparent",
-    borderColor: tokens.border,
-    borderStyle: "solid",
-    borderWidth: 1,
-    color: tokens.muted,
-    fontSize: 11,
-    height: 28,
-    marginLeft: -1,
-    paddingInline: 11,
-    ":first-child": { borderRadius: "4px 0 0 4px", marginLeft: 0 },
-    ":last-child": { borderRadius: "0 4px 4px 0" },
-  },
-  installControls: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 20,
-  },
-  installGroup: { display: "flex", flexDirection: "column", gap: 10 },
-  installScope: { display: "grid", gridTemplateColumns: "1fr 1fr" },
-  installScopeButton: {
-    backgroundColor: "transparent",
-    borderColor: tokens.border,
-    borderStyle: "solid",
-    borderWidth: 1,
-    color: tokens.muted,
-    fontSize: 12,
-    height: 34,
-    marginLeft: -1,
-    ":first-child": { borderRadius: "4px 0 0 4px", marginLeft: 0 },
-    ":last-child": { borderRadius: "0 4px 4px 0" },
-  },
-  installTargetRow: {
+  fieldHelp: { color: tokens.faint, fontSize: 11 },
+  foundSkill: { alignItems: "center", display: "flex", fontSize: 13, gap: 8 },
+  destination: {
     alignItems: "center",
-    borderColor: tokens.subtleBorder,
-    borderStyle: "solid",
-    borderWidth: "0 0 1px",
-    color: tokens.text,
+    cursor: "pointer",
     display: "grid",
     gap: 10,
-    gridTemplateColumns: "minmax(0,1fr) auto auto",
-    minHeight: 52,
-    padding: "7px 2px",
-    textAlign: "left",
-    ":last-child": { gridTemplateColumns: "minmax(0,1fr) auto" },
+    gridTemplateColumns: "16px minmax(0,1fr) 16px",
+    position: "relative",
   },
-  installTargetIdentity: {
+  destinationCopy: { display: "flex", flexDirection: "column", fontSize: 13, minWidth: 0 },
+  destinationPath: { color: tokens.faint, fontFamily: monoStack, fontSize: 10 },
+  checkboxInput: { gridColumn: 3, gridRow: 1, height: 16, margin: 0, opacity: 0, width: 16 },
+  checkbox: {
     alignItems: "center",
-    display: "flex",
-    gap: 9,
-    minWidth: 0,
+    borderColor: tokens.strongBorder,
+    borderRadius: 4,
+    borderStyle: "solid",
+    borderWidth: 1,
+    color: "oklch(1 0 0)",
+    display: "inline-flex",
+    gridColumn: 3,
+    gridRow: 1,
+    height: 16,
+    justifyContent: "center",
+    outline: {
+      default: "none",
+      [stylex.when.siblingBefore(":focus-visible")]: `2px solid ${tokens.accent}`,
+    },
+    outlineOffset: 2,
+    pointerEvents: "none",
+    width: 16,
   },
-  installTargetCopy: { display: "flex", flexDirection: "column", gap: 3, minWidth: 0 },
-  installTargetName: { fontSize: 12 },
-  installTargetPath: {
-    color: tokens.faint,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: 12,
-  },
-  installSwitch: {
-    backgroundColor: tokens.raised,
-    borderWidth: 0,
-    borderRadius: 999,
-    display: "block",
-    height: 18,
-    padding: 2,
-    transition: "background-color 150ms ease-out",
-    width: 30,
-  },
-  installSwitchActive: { backgroundColor: tokens.accent },
-  installSwitchKnob: {
-    backgroundColor: tokens.text,
-    borderRadius: "50%",
-    display: "block",
-    height: 14,
-    transform: "translateX(0)",
-    transition: "transform 150ms ease-out",
-    width: 14,
-  },
-  installSwitchKnobActive: { transform: "translateX(12px)" },
-  addSkillFooter: {
+  checkboxOn: { backgroundColor: tokens.accentSolid, borderColor: tokens.accentSolid },
+  checkboxCovered: { opacity: 0.5 },
+  sheetFooter: {
     borderTopColor: tokens.border,
     borderTopStyle: "solid",
     borderTopWidth: 1,
@@ -1956,786 +2982,202 @@ const styles = stylex.create({
     justifyContent: "flex-end",
     padding: "14px 20px",
   },
-  cancelAction: {
-    backgroundColor: "transparent",
-    borderColor: tokens.border,
-    borderRadius: 5,
-    borderStyle: "solid",
-    borderWidth: 1,
-    color: tokens.text,
-    fontSize: 12,
-    height: 34,
-    paddingInline: 14,
-    ":hover": { backgroundColor: tokens.hover },
-    ":active": { transform: "scale(.96)" },
-  },
-  installAction: {
+
+  // Compare dialog
+  compareBackdrop: {
     alignItems: "center",
-    backgroundColor: tokens.accent,
-    borderRadius: 5,
-    borderWidth: 0,
-    color: tokens.text,
+    backgroundColor: tokens.scrim,
     display: "flex",
-    fontSize: 12,
-    fontWeight: 600,
-    height: 34,
+    inset: 0,
     justifyContent: "center",
-    paddingInline: 14,
-    transition: "background-color 150ms ease-out, transform 150ms ease-out",
-    ":hover": { backgroundColor: tokens.accentHover },
-    ":active": { transform: "scale(.96)" },
-    ":disabled": { backgroundColor: tokens.raised, color: tokens.faint },
+    position: "absolute",
+    zIndex: 8,
   },
-  mobileHidden: { "@media (max-width: 680px)": { display: "none" } },
-  statGrid: {
-    display: "grid",
-    gap: 12,
-    gridTemplateColumns: "repeat(3,1fr)",
-    "@media (max-width: 680px)": { gap: 5 },
-  },
-  statCard: {
-    backgroundColor: tokens.surface,
-    borderColor: tokens.subtleBorder,
-    borderRadius: 6,
+  compareDialog: {
+    backgroundColor: tokens.background,
+    borderColor: tokens.border,
+    borderRadius: 10,
     borderStyle: "solid",
     borderWidth: 1,
-    color: tokens.text,
+    boxShadow: "0 24px 80px oklch(0 0 0 / .45)",
     display: "flex",
     flexDirection: "column",
-    gap: 4,
-    padding: "14px 16px",
-    textAlign: "left",
-    transition: "background-color 150ms ease-out, border-color 150ms ease-out",
-    ":hover": { backgroundColor: tokens.hover, borderColor: tokens.border },
-    ":active": { transform: "scale(.96)" },
-    "@media (max-width: 680px)": { minWidth: 0, padding: "10px 11px" },
-  },
-  statNumber: {
-    fontSize: 24,
-    fontVariantNumeric: "tabular-nums",
-    letterSpacing: "-.02em",
-    lineHeight: 1.1,
-  },
-  danger: { color: tokens.danger },
-  warning: { color: tokens.warning },
-  accent: { color: tokens.accent },
-  dangerBackground: { backgroundColor: tokens.danger },
-  warningBackground: { backgroundColor: tokens.warning },
-  accentBackground: { backgroundColor: tokens.accent },
-  summaryCard: {
-    alignItems: "center",
-    backgroundColor: tokens.surface,
-    borderColor: tokens.border,
-    borderRadius: 6,
-    borderStyle: "solid",
-    borderWidth: 1,
-    display: "grid",
-    gap: 12,
-    gridTemplateColumns: "1fr 2fr",
-    marginTop: 10,
-    padding: "14px 16px",
-  },
-  cardLabel: {
-    color: tokens.faint,
-    display: "block",
-    fontSize: 11,
-    letterSpacing: ".06em",
-    textTransform: "uppercase",
-  },
-  laneCard: {
-    backgroundColor: tokens.surface,
-    borderColor: tokens.subtleBorder,
-    borderRadius: 6,
-    borderStyle: "solid",
-    borderWidth: 1,
-    containerType: "inline-size",
-    display: "flex",
-    flexDirection: "column",
-    gap: 8,
-    marginTop: 24,
+    maxHeight: "85%",
     overflow: "hidden",
-    padding: "14px 16px",
+    width: "min(720px, 92%)",
   },
-  laneRow: {
-    alignItems: "baseline",
-    display: "grid",
-    gap: { default: 12, [LANE_ROW_STACKED]: 6 },
-    gridTemplateColumns: { default: "170px minmax(0,1fr)", [LANE_ROW_STACKED]: "1fr" },
-  },
-  laneTitle: { color: tokens.muted, fontSize: 12, whiteSpace: "nowrap" },
-  laneSegments: {
-    containerType: "inline-size",
-    display: "flex",
-    gap: 2,
-    height: 28,
-    maxWidth: "100%",
-    minWidth: 0,
-    "@media (max-width: 680px)": { fontSize: 12 },
-  },
-  lanePrimary: {
+  compareHeader: {
     alignItems: "center",
-    backgroundColor: tokens.accentSoft,
-    borderRadius: 4,
-    borderWidth: 0,
-    color: tokens.text,
+    borderBottomColor: tokens.border,
+    borderBottomStyle: "solid",
+    borderBottomWidth: 1,
     display: "flex",
-    fontSize: 12,
-    gap: 4,
-    minWidth: "max-content",
-    overflow: "hidden",
-    paddingInline: 10,
-    whiteSpace: "nowrap",
-    "@media (max-width: 680px)": { paddingInline: 6 },
-  },
-  laneSecondary: {
-    alignItems: "center",
-    backgroundColor: "oklch(0.668 0.176 293 / .08)",
-    borderRadius: 4,
-    borderWidth: 0,
-    color: tokens.muted,
-    display: "flex",
-    fontSize: 12,
-    gap: 4,
-    minWidth: "max-content",
-    overflow: "hidden",
-    paddingInline: 10,
-    whiteSpace: "nowrap",
-    "@media (max-width: 680px)": { paddingInline: 6 },
-  },
-  laneTertiary: {
-    alignItems: "center",
-    backgroundColor: tokens.raised,
-    borderRadius: 4,
-    borderWidth: 0,
-    color: tokens.muted,
-    display: "flex",
-    fontSize: 12,
-    gap: 4,
-    minWidth: "max-content",
-    overflow: "hidden",
-    paddingInline: 10,
-    whiteSpace: "nowrap",
-    "@media (max-width: 680px)": { paddingInline: 6 },
-  },
-  laneLongLabel: { display: { default: "none", [LANE_LONG_LABELS]: "inline" } },
-  laneShortLabel: { display: { default: "inline", [LANE_LONG_LABELS]: "none" } },
-  laneBoth: { flex: "2.1 1 0", "@media (max-width: 680px)": { flex: "1 1 0" } },
-  laneModel: { flex: "1 1 0" },
-  laneUser: { flex: "1 1 0" },
-  laneActive: { flex: "2.2 1 0" },
-  laneIdle: { flex: "1 1 0" },
-  summaryMetrics: { display: "grid", gridTemplateColumns: "repeat(4,1fr)" },
-  metric: { color: tokens.muted, display: "flex", flexDirection: "column", fontSize: 11, gap: 2 },
-  inbox: {
-    containerType: "inline-size",
-    display: "flex",
-    flexDirection: "column",
-    marginTop: 24,
-  },
-  sectionLabel: {
-    alignItems: "center",
-    borderColor: tokens.subtleBorder,
-    borderStyle: "solid",
-    borderWidth: "1px 0",
-    color: tokens.text,
-    display: "flex",
-    backgroundColor: tokens.surface,
-    fontSize: 12,
-    fontWeight: 600,
-    gap: 8,
-    height: 34,
-    margin: 0,
-    paddingInline: 12,
-    textAlign: "left",
-    width: "100%",
-  },
-  inboxRow: {
-    alignItems: "center",
-    backgroundColor: "transparent",
-    borderColor: tokens.subtleBorder,
-    borderRadius: 0,
-    borderStyle: "solid",
-    borderWidth: "0 0 1px",
-    color: tokens.text,
-    display: "grid",
-    gap: 12,
-    gridTemplateColumns: {
-      default: "6px minmax(0,260px) minmax(0,1fr) auto",
-      "@media (max-width: 680px)": "6px minmax(0,1fr) auto",
-      [INBOX_NARROW]: "6px minmax(0,1fr) auto",
-    },
-    height: 36,
-    padding: "0 12px 0 16px",
-    textAlign: "left",
-    transition: "background-color 150ms ease-out",
-    width: "100%",
-    ":hover": { backgroundColor: tokens.raised },
-    ":active": { transform: "scale(.99)" },
-  },
-  inboxCopy: {
-    display: "contents",
-  },
-  inboxName: { alignItems: "center", display: "flex", fontSize: 13, gap: 8, minWidth: 0 },
-  inboxDetail: {
-    color: tokens.faint,
-    fontSize: 12,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-    display: { default: null, "@media (max-width: 680px)": "none", [INBOX_NARROW]: "none" },
-  },
-  rowAction: { color: tokens.faint, fontSize: 12, minWidth: 64, textAlign: "right" },
-  statusDot: { borderRadius: "50%", height: 6, width: 6 },
-  toolbar: {
-    alignItems: "center",
-    display: "flex",
-    gap: 8,
-    marginBottom: 18,
-    "@media (max-width: 680px)": { flexWrap: "wrap" },
-  },
-  filterInput: {
-    alignItems: "center",
-    backgroundColor: tokens.surface,
-    borderColor: tokens.border,
-    borderRadius: 4,
-    borderStyle: "solid",
-    borderWidth: 1,
-    color: tokens.faint,
-    display: "flex",
-    flex: 1,
-    gap: 7,
-    height: 32,
-    maxWidth: 260,
-    paddingInline: 12,
-    ":focus-within": { borderColor: tokens.accent },
-    "@media (max-width: 680px)": { flexBasis: "100%", maxWidth: "none" },
-  },
-  segmented: { display: "flex" },
-  segmentButton: {
-    backgroundColor: "transparent",
-    borderColor: tokens.border,
-    borderStyle: "solid",
-    borderWidth: 1,
-    color: tokens.muted,
-    fontSize: 12,
-    height: 32,
-    marginLeft: -1,
-    paddingInline: 12,
-    transition: "background-color 150ms ease-out, color 150ms ease-out",
-    ":first-child": { borderRadius: "4px 0 0 4px", marginLeft: 0 },
-    ":last-child": { borderRadius: "0 4px 4px 0" },
-    ":hover": { color: tokens.text },
-    "@media (max-width: 680px)": { height: 36, paddingInline: 10 },
-  },
-  segmentButtonActive: { backgroundColor: tokens.raised, color: tokens.text },
-  filterButton: {
-    alignItems: "center",
-    backgroundColor: "transparent",
-    borderColor: tokens.border,
-    borderRadius: 4,
-    borderStyle: "solid",
-    borderWidth: 1,
-    color: tokens.muted,
-    display: "flex",
-    fontSize: 12,
-    gap: 6,
-    height: 32,
-    paddingInline: 12,
-    "@media (max-width: 680px)": { height: 36 },
-  },
-  tableHeader: {
-    color: tokens.faint,
-    display: "grid",
-    fontSize: 11,
-    gap: 12,
-    gridTemplateColumns: tableColumns,
-    padding: "0 12px 6px",
-    "@media (max-width: 680px)": { gridTemplateColumns: "minmax(0,1fr) 64px" },
-  },
-  rows: { display: "flex", flexDirection: "column", gap: 6 },
-  skillRow: {
-    alignItems: "center",
-    backgroundColor: tokens.surface,
-    borderColor: tokens.border,
-    borderRadius: 6,
-    borderStyle: "solid",
-    borderWidth: 1,
-    color: tokens.text,
-    display: "grid",
-    fontSize: 13,
-    gap: 12,
-    gridTemplateColumns: tableColumns,
-    minHeight: 44,
-    paddingInline: 12,
-    textAlign: "left",
-    transition: "background-color 150ms ease-out, border-color 150ms ease-out",
-    width: "100%",
-    ":hover": { backgroundColor: tokens.raised, borderColor: tokens.accent },
-    ":active": { transform: "scale(.99)" },
-    "@media (max-width: 680px)": { gridTemplateColumns: "minmax(0,1fr) 64px" },
-  },
-  skillName: {
-    alignItems: "center",
-    display: "flex",
-    fontWeight: 600,
-    gap: 6,
-    minWidth: 0,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  },
-  updateBadge: {
-    backgroundColor: tokens.accentSoft,
-    borderRadius: 2,
-    color: tokens.text,
-    fontSize: 11,
-    fontWeight: 600,
-    padding: "1px 6px",
-  },
-  truncate: {
-    color: tokens.muted,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  },
-  location: { alignItems: "center", color: tokens.muted, display: "flex", gap: 6, minWidth: 0 },
-  agentStack: { alignItems: "center", display: "flex", gap: 4 },
-  number: { color: tokens.muted, fontVariantNumeric: "tabular-nums", textAlign: "right" },
-  empty: { color: tokens.muted, fontSize: 12, textAlign: "center" },
-  pluginGroups: { display: "flex", flexDirection: "column", gap: 16 },
-  pluginGroup: {
-    backgroundColor: "transparent",
-    borderWidth: 0,
-    overflow: "hidden",
-  },
-  pluginHeader: {
-    alignItems: "center",
-    color: tokens.muted,
-    display: "flex",
-    fontSize: 12,
     justifyContent: "space-between",
-    minHeight: 32,
-    paddingInline: 8,
+    padding: "12px 12px 12px 20px",
   },
-  pluginTitle: { alignItems: "center", color: tokens.text, display: "flex", gap: 8 },
-  pluginCopy: {
-    alignItems: "center",
+  comparePickers: {
     display: "grid",
     gap: 12,
-    gridTemplateColumns: "190px 1fr",
-    minWidth: 0,
-    "@media (max-width: 680px)": { gridTemplateColumns: "minmax(0,1fr)" },
+    gridTemplateColumns: "1fr 1fr",
+    padding: "12px 20px 0",
   },
-  pluginDescription: { "@media (max-width: 680px)": { display: "none" } },
-  pluginName: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  pluginRow: {
-    alignItems: "center",
-    backgroundColor: "transparent",
-    borderColor: tokens.subtleBorder,
+  comparePicker: { justifyContent: "space-between", minWidth: 0, overflow: "hidden" },
+  diff: {
+    borderColor: tokens.border,
+    borderRadius: 6,
     borderStyle: "solid",
-    borderRadius: 2,
     borderWidth: 1,
-    color: tokens.text,
+    fontFamily: monoStack,
+    fontSize: 12,
+    margin: 20,
+    overflow: "hidden",
+  },
+  diffHeader: {
+    backgroundColor: tokens.surface,
+    borderBottomColor: tokens.border,
+    borderBottomStyle: "solid",
+    borderBottomWidth: 1,
     display: "grid",
     gap: 10,
     gridTemplateColumns: "1fr auto auto",
-    fontSize: 13,
-    minHeight: 44,
-    marginBottom: 6,
-    paddingInline: 12,
-    textAlign: "left",
-    transition: "background-color 150ms ease-out",
-    width: "100%",
-    ":hover": { backgroundColor: tokens.hover },
-    ":active": { transform: "scale(.99)" },
+    padding: "8px 12px",
   },
-  activityCard: {
-    backgroundColor: "transparent",
-    borderWidth: 0,
-    padding: 0,
-  },
-  activityTop: {
-    alignItems: "baseline",
-    display: "flex",
-    gap: 12,
-    justifyContent: "space-between",
-  },
-  activityLabel: {
-    color: tokens.faint,
-    fontSize: 11,
-    fontWeight: 500,
-    letterSpacing: ".08em",
-    textTransform: "uppercase",
-  },
-  activityTotal: { color: tokens.faint, fontSize: 12 },
-  heatmapMonths: {
-    color: tokens.faint,
-    display: "grid",
-    fontSize: 12,
-    gap: 3,
-    gridTemplateColumns: "repeat(52,1fr)",
-    marginLeft: 34,
-    marginTop: 12,
-    "@media (max-width: 680px)": { display: "none" },
-  },
-  heatmapBody: { display: "flex", gap: 6 },
-  weekdays: {
-    color: tokens.faint,
-    display: "grid",
-    flexShrink: 0,
-    fontSize: 11,
-    gridTemplateRows: "repeat(7,1fr)",
-    paddingBlock: 2,
-    width: 28,
-  },
-  heatmap: {
-    display: "grid",
-    flex: 1,
-    gap: 3,
-    gridAutoFlow: "column",
-    gridTemplateColumns: "repeat(52,1fr)",
-    gridTemplateRows: "repeat(7,1fr)",
-    "@media (max-width: 680px)": {
-      gridTemplateColumns: "repeat(26,1fr)",
-      overflow: "hidden",
-    },
-  },
-  heatCell: {
-    aspectRatio: "1",
-    backgroundColor: tokens.raised,
-    borderRadius: 2,
-    "@media (max-width: 680px)": { ":nth-child(-n+182)": { display: "none" } },
-  },
-  heat1: { backgroundColor: "oklch(0.668 0.176 293 / .3)" },
-  heat2: { backgroundColor: "oklch(0.668 0.176 293 / .5)" },
-  heat3: { backgroundColor: "oklch(0.668 0.176 293 / .72)" },
-  heat4: { backgroundColor: tokens.accent },
-  activityTable: { marginTop: 24 },
-  activityTableTop: {
-    alignItems: "baseline",
-    display: "flex",
-    justifyContent: "space-between",
-    marginBottom: 12,
-  },
-  activitySegmented: {
-    borderColor: tokens.border,
-    borderRadius: 4,
-    borderStyle: "solid",
-    borderWidth: 1,
-    display: "flex",
-    overflow: "hidden",
-  },
-  activitySegmentButton: {
-    backgroundColor: "transparent",
-    borderColor: tokens.border,
-    borderStyle: "solid",
-    borderWidth: "0 0 0 1px",
-    color: tokens.faint,
-    fontSize: 11,
-    height: 24,
-    paddingInline: 8,
-    ":first-child": { borderLeftWidth: 0 },
-  },
-  activityHeader: {
-    color: tokens.faint,
-    display: "grid",
-    fontSize: 11,
-    gap: 12,
-    gridTemplateColumns: "minmax(0,1fr) 72px 88px 72px",
-    padding: "0 8px 6px",
-    "@media (max-width: 680px)": { gridTemplateColumns: "minmax(0,1fr) 72px" },
-  },
-  activityRow: {
+  diffRow: {
     alignItems: "center",
-    backgroundColor: "transparent",
-    borderColor: tokens.subtleBorder,
-    borderStyle: "solid",
-    borderWidth: "1px 0 0",
     color: tokens.muted,
     display: "grid",
-    fontSize: 13,
-    gap: 12,
-    gridTemplateColumns: "minmax(0,1fr) 72px 88px 72px",
-    minHeight: 32,
-    paddingInline: 8,
-    textAlign: "left",
-    width: "100%",
-    ":hover": { backgroundColor: tokens.hover },
-    ":active": { transform: "scale(.99)" },
-    "@media (max-width: 680px)": {
-      gridTemplateColumns: "minmax(0,1fr) 72px",
-      minHeight: 40,
-    },
+    gridTemplateColumns: "34px 34px minmax(0, 1fr)",
+    minHeight: 24,
+    paddingInline: 4,
   },
-  activitySkill: {
-    color: tokens.text,
-    fontWeight: 400,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
+  diffRemoved: { backgroundColor: "oklch(0.645 0.208 25.331 / .14)", color: tokens.text },
+  diffAdded: { backgroundColor: "oklch(0.696 0.149 162.48 / .14)", color: tokens.text },
+
+  // Detail
+  detailLayout: {
+    alignItems: "start",
+    display: "grid",
+    gap: 32,
+    gridTemplateColumns: { default: "minmax(0,1fr) 250px", [PANEL_BELOW_WIDE]: "minmax(0,1fr)" },
   },
-  locationPath: { color: tokens.muted, fontSize: 12, margin: "0 0 14px", overflowWrap: "anywhere" },
-  detailHeader: { display: "flex", flexDirection: "column", gap: 8 },
-  detailTitle: {
-    flex: 1,
-    minWidth: 0,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-    "@media (max-width: 680px)": { fontSize: 16 },
-  },
-  detailHeading: {
-    alignItems: "center",
-    display: "flex",
-    gap: 16,
-    "@media (max-width: 680px)": { gap: 6 },
-  },
-  backButton: {
-    alignItems: "center",
-    backgroundColor: "transparent",
-    borderWidth: 0,
-    color: tokens.faint,
-    display: "flex",
-    flexShrink: 0,
-    fontSize: 12,
-    gap: 6,
-    padding: 4,
-  },
-  backButtonLabel: { "@media (max-width: 440px)": { display: "none" } },
-  detailActions: {
-    alignItems: "center",
-    display: "flex",
-    flexShrink: 0,
-    gap: 8,
-    "@media (max-width: 680px)": { gap: 3 },
-  },
-  updateButton: {
-    alignItems: "center",
-    backgroundColor: tokens.accent,
-    borderRadius: 6,
-    borderWidth: 0,
-    color: tokens.text,
-    display: "flex",
-    fontSize: 13,
-    fontWeight: 600,
-    gap: 6,
-    height: 32,
-    paddingInline: 12,
-    transition: "background-color 150ms ease-out, transform 150ms ease-out",
-    ":hover": { backgroundColor: tokens.accentHover },
-    ":active": { transform: "scale(.96)" },
-    "@media (max-width: 680px)": { fontSize: 12, paddingInline: 6 },
-  },
-  iconButton: {
-    alignItems: "center",
-    backgroundColor: "transparent",
-    borderColor: tokens.border,
-    borderRadius: 6,
-    borderStyle: "solid",
-    borderWidth: 1,
-    color: tokens.muted,
-    display: "flex",
-    height: 32,
-    justifyContent: "center",
-    width: 32,
-    ":active": { transform: "scale(.96)" },
-  },
-  detailDescription: {
-    color: tokens.muted,
-    fontSize: 13,
-    lineHeight: 1.5,
-    margin: 0,
-    maxWidth: "65ch",
-    textWrap: "pretty",
-  },
-  chips: { display: "flex", gap: 6 },
-  chip: {
-    backgroundColor: tokens.raised,
+  detailMain: { display: "flex", flexDirection: "column", gap: 20, minWidth: 0 },
+  detailIntro: { alignItems: "flex-start", display: "flex", flexDirection: "column", gap: 6 },
+  detailTitle: { fontSize: 18, fontWeight: 600, margin: 0 },
+  detailSource: { color: tokens.faint, fontSize: 12 },
+  detailDescription: { color: tokens.muted, fontSize: 13, lineHeight: 1.5, margin: "4px 0 0" },
+  pill: {
+    backgroundColor: tokens.accentSoft,
     borderRadius: 999,
-    color: tokens.muted,
+    color: tokens.accent,
     fontSize: 11,
-    padding: "2px 8px",
+    marginTop: 4,
+    maxWidth: "100%",
+    overflow: "hidden",
+    paddingBlock: 3,
+    paddingInline: 8,
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
   },
-  metadata: {
-    color: tokens.faint,
-    fontSize: 12,
-    fontVariantNumeric: "tabular-nums",
-    margin: 0,
-  },
-  detailStack: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 24,
-    marginTop: 24,
-    "@media (max-width: 680px)": { gap: 16, marginTop: 18 },
-  },
-  detailCard: {
-    backgroundColor: "transparent",
-    borderColor: tokens.subtleBorder,
-    borderRadius: 8,
+  pillDanger: { backgroundColor: "oklch(0.645 0.208 25.331 / .12)", color: tokens.danger },
+  pillWarning: { backgroundColor: "oklch(0.769 0.165 70.08 / .12)", color: tokens.warning },
+  card: {
+    borderColor: tokens.border,
+    borderRadius: 10,
     borderStyle: "solid",
     borderWidth: 1,
     display: "flex",
     flexDirection: "column",
-    gap: 4,
+    gap: 6,
     padding: 16,
-    "@media (max-width: 680px)": { padding: 12 },
+    [MOBILE]: { padding: 12 },
   },
-  cardHeading: {
+  cardTop: { alignItems: "center", display: "flex", justifyContent: "space-between" },
+  cardTopEnd: { alignItems: "center", display: "flex", fontSize: 11, gap: 8 },
+  cardTitle: { fontSize: 13, fontWeight: 600, margin: "0 0 4px" },
+  locationRow: {
     alignItems: "center",
-    display: "flex",
-    fontSize: 13,
-    justifyContent: "space-between",
-  },
-  cardTitle: { fontSize: 13, margin: 0 },
-  scopeRow: {
-    alignItems: "center",
-    borderRadius: 6,
-    color: tokens.faint,
     display: "grid",
-    gap: 12,
-    gridTemplateColumns: "minmax(0,1fr) auto",
-    height: 36,
-    marginInline: -8,
-    paddingInline: 8,
-    ":hover": { backgroundColor: tokens.hover },
+    gap: 10,
+    gridTemplateColumns: "minmax(0,1fr) auto auto auto",
+    height: 34,
   },
-  scopeMain: {
+  locationMain: {
     alignItems: "center",
     backgroundColor: "transparent",
     borderWidth: 0,
-    color: tokens.faint,
-    display: "grid",
-    gap: 12,
-    gridTemplateColumns: "20px minmax(0,1fr) auto",
-    height: "100%",
+    color: tokens.text,
+    cursor: "pointer",
+    display: "flex",
+    fontSize: 13,
+    gap: 8,
     minWidth: 0,
     padding: 0,
     textAlign: "left",
   },
-  scopeChevron: {
-    alignItems: "center",
-    display: "flex",
-    height: 20,
-    justifyContent: "center",
-    width: 20,
+  locationIndent: { cursor: "default", paddingLeft: 22 },
+  locationChevron: { color: tokens.faint, transition: "transform 150ms ease-out" },
+  locationChevronOpen: { transform: "rotate(90deg)" },
+  locationPath: {
+    color: tokens.faint,
+    display: "block",
+    fontFamily: monoStack,
+    fontSize: 11,
+    paddingBottom: 6,
+    paddingLeft: 45,
   },
-  scopeIdentity: {
-    alignItems: "center",
-    color: tokens.text,
-    display: "flex",
-    gap: 8,
-    minWidth: 0,
-  },
-  scopeName: { color: tokens.text, fontSize: 13 },
-  readerStack: { alignItems: "center", display: "flex", paddingLeft: 4 },
-  readerBadge: {
-    alignItems: "center",
-    backgroundColor: tokens.raised,
-    borderColor: tokens.background,
-    borderRadius: "50%",
-    borderStyle: "solid",
-    borderWidth: 2,
-    display: "flex",
-    height: 18,
-    justifyContent: "center",
-    width: 18,
-  },
-  readerBadgeOverlap: { marginLeft: -4 },
-  locationControls: { alignItems: "center", display: "flex", gap: 4 },
   switchTrack: {
-    backgroundColor: tokens.accent,
+    backgroundColor: tokens.strongBorder,
     borderRadius: 999,
-    display: "flex",
-    height: 14,
-    justifyContent: "flex-end",
-    padding: 1,
-    width: 24,
+    borderWidth: 0,
+    cursor: "pointer",
+    display: "inline-flex",
+    height: 16,
+    padding: 2,
+    transition: "background-color 150ms ease-out",
+    width: 26,
   },
+  switchTrackOn: { backgroundColor: tokens.accentSolid },
   switchKnob: {
-    backgroundColor: tokens.text,
+    backgroundColor: "oklch(1 0 0)",
     borderRadius: "50%",
     display: "block",
     height: 12,
+    transition: "transform 150ms ease-out",
     width: 12,
   },
-  rowMenu: {
-    alignItems: "center",
-    backgroundColor: "transparent",
-    borderWidth: 0,
-    color: tokens.faint,
-    display: "flex",
-    height: 24,
-    justifyContent: "center",
-    padding: 0,
-    width: 24,
-  },
+  switchKnobOn: { transform: "translateX(10px)" },
   invocation: {
     borderTopColor: tokens.subtleBorder,
     borderTopStyle: "solid",
     borderTopWidth: 1,
     display: "flex",
     flexDirection: "column",
-    gap: 6,
-    marginTop: 12,
-    paddingTop: 12,
-  },
-  invocationLabel: {
-    color: tokens.faint,
-    fontSize: 11,
-    fontWeight: 500,
-    letterSpacing: ".08em",
-    textTransform: "uppercase",
+    gap: 8,
+    marginTop: 8,
+    paddingTop: 14,
   },
   invocationRow: {
     alignItems: "center",
-    display: "grid",
+    display: "flex",
+    flexWrap: "wrap",
     gap: 10,
-    gridTemplateColumns: "16px minmax(0,1fr) auto",
-    minHeight: 32,
-    "@media (max-width: 680px)": { gridTemplateColumns: "16px minmax(0,1fr)" },
+    justifyContent: "space-between",
   },
-  invocationFile: { display: "flex", flexDirection: "column", minWidth: 0 },
-  invocationSegments: {
-    display: "flex",
-    "@media (max-width: 680px)": { gridColumn: "1 / -1", width: "100%" },
-  },
-  invocationButton: {
-    backgroundColor: "transparent",
-    borderColor: tokens.border,
-    borderStyle: "solid",
-    borderWidth: "1px 1px 1px 0",
-    color: tokens.faint,
+  invocationName: { alignItems: "center", display: "flex", fontSize: 13, gap: 8 },
+  invocationNote: { color: tokens.faint, fontSize: 12, margin: 0 },
+  markdown: { display: "flex", flexDirection: "column", gap: 8, padding: "8px 16px 4px" },
+  markdownTitle: { fontSize: 17, fontWeight: 600, margin: 0 },
+  markdownHeading: { fontSize: 13, fontWeight: 600, margin: "6px 0 0" },
+  markdownParagraph: { color: tokens.muted, fontSize: 13, lineHeight: 1.55, margin: 0 },
+  rail: {
+    columnGap: 16,
+    display: { default: "grid", [PANEL_BELOW_WIDE]: "none" },
     fontSize: 12,
-    height: 26,
-    paddingInline: 12,
-    whiteSpace: "nowrap",
-    ":first-child": { borderLeftWidth: 1, borderRadius: "6px 0 0 6px" },
-    ":last-child": { borderRadius: "0 6px 6px 0" },
-    "@media (max-width: 680px)": { flex: 1, paddingInline: 8 },
+    gridTemplateColumns: "64px minmax(0,1fr)",
+    margin: 0,
+    rowGap: 14,
   },
-  invocationNote: { color: tokens.faint, fontSize: 12, lineHeight: 1.4, margin: 0 },
-  markdownActions: {
-    alignItems: "center",
-    color: tokens.faint,
-    display: "flex",
-    fontSize: 11,
-    gap: 8,
-  },
-  editButton: {
-    backgroundColor: "transparent",
-    borderColor: tokens.border,
-    borderRadius: 6,
-    borderStyle: "solid",
-    borderWidth: 1,
-    color: tokens.muted,
-    fontSize: 12,
-    height: 28,
-    paddingInline: 10,
-  },
-  markdown: { color: tokens.muted, fontSize: 13, lineHeight: 1.6, padding: "12px 16px" },
-  markdownTitle: { color: tokens.text, fontSize: 18, margin: "0 0 8px" },
-  markdownHeading: { color: tokens.text, fontSize: 14, margin: "16px 0 8px" },
-  markdownParagraph: { margin: "0 0 13px", maxWidth: "72ch" },
-  markdownList: { margin: "0 0 13px", paddingLeft: 20 },
+  railAgents: { alignItems: "center", display: "flex", gap: 6 },
+  railMono: { display: "block", fontFamily: monoStack, fontSize: 11 },
+  railSub: { color: tokens.faint, fontSize: 11 },
 });

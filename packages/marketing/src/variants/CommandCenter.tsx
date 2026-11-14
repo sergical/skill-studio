@@ -187,7 +187,7 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
           id="product"
           {...stylex.props(siteLayout.container, styles.product, styles.anchor)}
         >
-          <ProductMock theme={theme} onToggleTheme={onToggleTheme} sidebarAction="scan-folder" />
+          <ProductMock theme={theme} onToggleTheme={onToggleTheme} />
         </section>
 
         <section {...stylex.props(styles.agentProof)} aria-label="Supported agents">
