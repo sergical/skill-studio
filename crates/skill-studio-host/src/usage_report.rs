@@ -432,6 +432,54 @@ mod tests {
             .expect("every installed skill has a row")
     }
 
+    #[test]
+    fn reporting_resumed_history_rebuilds_old_cache_instead_of_returning_double_counts() {
+        let fixture = fixture();
+        let inventory = scan(&fixture.home);
+        let path = fixture.home.join(".claude/projects/-work/resumed.jsonl");
+        let mut record: serde_json::Value =
+            serde_json::from_str(&claude_skill_line("gamma", &days_ago(1))).unwrap();
+        record["uuid"] = "resumed-use".into();
+        record["sessionId"] = "resumed-session".into();
+        fs::write(&path, (record.to_string() + "\n").repeat(2)).unwrap();
+        let cache = fixture.home.join("usage-cache.json");
+        let mut index = SkillInvocationIndex::default();
+        index.refresh_all(&fixture.home, &DiscoverySources::default());
+        index.save(&cache).unwrap();
+        let mut old: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&cache).unwrap()).unwrap();
+        old["reader_version"] = 3.into();
+        for file in old["files"].as_object_mut().unwrap().values_mut() {
+            file["context"]
+                .as_object_mut()
+                .unwrap()
+                .remove("claude_records");
+        }
+        let doubled = skill_studio_core::skill_uses::parse_claude_code_uses(
+            &fs::read_to_string(&path).unwrap(),
+        );
+        old["files"][path.to_str().unwrap()]["uses"] = serde_json::to_value(doubled).unwrap();
+        fs::write(&cache, serde_json::to_string(&old).unwrap()).unwrap();
+        let original = fs::read(&cache).unwrap();
+        let report =
+            SkillUsage::load_read_only(Some(&cache)).report(&fixture.home, &inventory, 30, now());
+        assert_eq!(
+            row(&report, "gamma").total_uses,
+            3,
+            "CLI and MCP must discard stale doubled counts"
+        );
+        assert_eq!(
+            row(&report, "gamma").recent_uses,
+            2,
+            "the resumed use must count once in the recent window"
+        );
+        assert_eq!(
+            fs::read(&cache).unwrap(),
+            original,
+            "read-only reports must leave the desktop cache untouched"
+        );
+    }
+
     /// Flow: report a 30-day window over the fixture home.
     /// Expectation: `gamma` has 1 recent use by claude-code and 2 in total
     /// (the plugin-qualified use folds into it); `idle` has none recent, 1
