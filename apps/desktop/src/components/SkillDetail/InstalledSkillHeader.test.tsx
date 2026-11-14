@@ -47,3 +47,23 @@ it("opening a fork note with duplicate source records shows one comparison link 
   await user.keyboard("{Enter}");
   expect(activated).toBe(true);
 });
+
+it("a skill whose SKILL.md lacks a description shows an Edit SKILL.md button that opens the editor, so the red line is not a dead end", async () => {
+  const copy = {
+    ...deployment({ agent: "shared", scope: "global", path: "/fixture/.agents/skills/lint" }),
+    spec_violations: ["missing required frontmatter field: description"],
+  };
+  let opened = false;
+  render(
+    <InstalledSkillHeader
+      skill={skill({ name: "lint", deployments: [copy] })}
+      deployment={copy}
+      onFixRepair={() => {}}
+      onEditManually={() => {
+        opened = true;
+      }}
+    />,
+  );
+  await userEvent.setup().click(screen.getByRole("button", { name: "Edit SKILL.md" }));
+  expect(opened).toBe(true);
+});

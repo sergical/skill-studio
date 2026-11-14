@@ -247,7 +247,7 @@ function SourceField({
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onEnter}
         onBlur={() => setTouched(true)}
-        placeholder="owner/repo, a GitHub URL, a skills.sh URL, or a local path"
+        placeholder="owner/repo, a URL, or a local path"
         spellCheck={false}
         autoCorrect="off"
         autoCapitalize="off"

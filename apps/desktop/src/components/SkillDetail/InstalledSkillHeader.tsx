@@ -194,25 +194,27 @@ export function InstalledSkillHeader({
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-1.5">
-        {skill.parked && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-2 py-0.5 text-caption text-warning">
-            {parkedChipLabel(skill.parked_at)}
-          </span>
-        )}
-        {skill.update_owner_ids.length > 0 && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-2 py-0.5 text-caption text-accent">
-            Update available
-          </span>
-        )}
-        {nonBlockingCount > 0 && (
-          <TooltipControl content={nonBlockingNotes.join("; ")}>
-            <span className="inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-2 py-0.5 text-caption text-text-tertiary">
-              {nonBlockingCount} spec note{nonBlockingCount !== 1 ? "s" : ""}
+      {(skill.parked || skill.update_owner_ids.length > 0 || nonBlockingCount > 0) && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {skill.parked && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-2 py-0.5 text-caption text-warning">
+              {parkedChipLabel(skill.parked_at)}
             </span>
-          </TooltipControl>
-        )}
-      </div>
+          )}
+          {skill.update_owner_ids.length > 0 && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-2 py-0.5 text-caption text-accent">
+              Update available
+            </span>
+          )}
+          {nonBlockingCount > 0 && (
+            <TooltipControl content={nonBlockingNotes.join("; ")}>
+              <span className="inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-2 py-0.5 text-caption text-text-tertiary">
+                {nonBlockingCount} spec note{nonBlockingCount !== 1 ? "s" : ""}
+              </span>
+            </TooltipControl>
+          )}
+        </div>
+      )}
 
       {blockingViolations.length > 0 && (
         <div className="flex items-center gap-2 text-small text-error">
@@ -235,6 +237,11 @@ export function InstalledSkillHeader({
                 Edit manually
               </Button>
             ))}
+          {!quoteRepair && !hasMalformedYaml && (
+            <Button size="sm" variant="outline" onClick={() => onEditManually()}>
+              Edit SKILL.md
+            </Button>
+          )}
         </div>
       )}
       {warningViolations.length > 0 && (

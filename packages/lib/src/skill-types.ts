@@ -137,10 +137,10 @@ export interface Toast {
 export const SOURCE_KIND_LABELS = {
   "skills-sh": "skills.sh",
   dotagents: "dotagents",
-  plugin: "plugin",
-  "in-repo": "in repo",
-  manual: "manual",
-  fork: "fork",
+  plugin: "Plugin",
+  "in-repo": "In repo",
+  manual: "Manual",
+  fork: "Fork",
 } as const satisfies Record<SkillSourceKind, string>;
 
 /**

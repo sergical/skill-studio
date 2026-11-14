@@ -31,6 +31,8 @@ interface InstallRowProps {
   disabled: boolean;
   /** Shown on hover when the checkbox is disabled. */
   reason: string | null;
+  /** The harness gets the skill from the ticked Universal folder, so its own folder is not written. */
+  readsUniversal?: boolean;
 }
 
 function InstallRow({
@@ -41,6 +43,7 @@ function InstallRow({
   onCheckedChange,
   disabled,
   reason,
+  readsUniversal = false,
 }: InstallRowProps) {
   const checkbox = (
     <CheckboxControl
@@ -55,7 +58,11 @@ function InstallRow({
       {icon}
       <span className="flex min-w-0 flex-col">
         <span className="truncate text-body text-text-primary">{label}</span>
-        <span className="truncate font-mono text-caption text-text-tertiary">{folder}</span>
+        <span
+          className={`truncate text-caption text-text-tertiary ${readsUniversal ? "" : "font-mono"}`}
+        >
+          {readsUniversal ? "Gets it from Universal" : folder}
+        </span>
       </span>
       {reason ? (
         <TooltipControl content={reason}>
@@ -123,17 +130,19 @@ export function InstallHarnessSelector({
         {offered.map((id) => {
           const harness = installHarness(id);
           const label = harness?.label ?? id;
+          const locked = installHarnessLocked(id, claudeReadsShared, universal);
           return (
             <InstallRow
               key={id}
               icon={<HarnessIcon harness={id} size={16} />}
               label={label}
               folder={harness?.folder[scope] ?? ""}
+              readsUniversal={locked}
               checked={chosenSet.has(id)}
               onCheckedChange={(on) =>
                 onChosenChange(toggleInstallHarness(offered, chosen, id, on))
               }
-              disabled={rowsLocked || installHarnessLocked(id, claudeReadsShared, universal)}
+              disabled={rowsLocked || locked}
               reason={installHarnessLockReason(id, claudeReadsShared, scope, universal)}
             />
           );

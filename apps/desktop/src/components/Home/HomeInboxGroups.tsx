@@ -145,14 +145,14 @@ function ShowAllLink({
   label,
   onClick,
 }: {
-  count: number;
+  count?: number;
   label: string;
   onClick: () => void;
 }) {
   return (
     <div className="flex h-9 items-center px-4">
       <Button variant="link" className={LINK_CLASS} onClick={onClick}>
-        {label} {count}
+        {count === undefined ? label : `${label} ${count}`}
       </Button>
     </div>
   );
@@ -425,7 +425,7 @@ function RecentGroup({
               />
             );
           })}
-          <ShowAllLink count={0} label="See all activity" onClick={onShowAll} />
+          <ShowAllLink label="See all activity" onClick={onShowAll} />
         </div>
       </CollapsiblePanel>
     </Collapsible>

@@ -176,7 +176,9 @@ describe("findDuplicateSkills", () => {
     });
     const issues = findDuplicateSkills([skill]);
     expect(issues).toHaveLength(1);
-    expect(issues[0].detail).toBe("Global · Cursor differs from Global · Universal folder");
+    expect(issues[0].detail).toBe(
+      "1 copy differs: Global · Cursor, from Global · Universal folder",
+    );
   });
 
   it("uses a plural verb when more than one copy differs", () => {
@@ -191,7 +193,7 @@ describe("findDuplicateSkills", () => {
     });
     const issues = findDuplicateSkills([skill]);
     expect(issues[0].detail).toBe(
-      "Global \u00b7 Cursor; Global \u00b7 Codex differ from Global \u00b7 Universal folder",
+      "2 copies differ: Global · Cursor; Global · Codex, from Global · Universal folder",
     );
   });
 
@@ -205,7 +207,7 @@ describe("findDuplicateSkills", () => {
     });
     const issues = findDuplicateSkills([skill]);
     expect(issues[0].detail).toBe(
-      "Global · Cursor; Global · Codex differ from Global · Universal folder",
+      "2 copies differ: Global · Cursor; Global · Codex, from Global · Universal folder",
     );
   });
 
@@ -222,7 +224,9 @@ describe("findDuplicateSkills", () => {
       ],
     });
     const issues = findDuplicateSkills([skill]);
-    expect(issues[0].detail).toBe("web · Universal folder differs from Global · Universal folder");
+    expect(issues[0].detail).toBe(
+      "1 copy differs: web · Universal folder, from Global · Universal folder",
+    );
     expect(issues[0].detail).not.toMatch(/copies differ/);
   });
 

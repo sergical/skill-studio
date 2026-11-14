@@ -34,7 +34,7 @@ export function PluginSkillsView({
 
   if (!snapshot) {
     return (
-      <PageShell title="Plugin skills">
+      <PageShell title="Plugins">
         <FirstScanState isLoading={isLoading} error={error} onRetry={onRetry} />
       </PageShell>
     );
@@ -42,8 +42,8 @@ export function PluginSkillsView({
 
   return (
     <PageShell
-      title="Plugin skills"
-      subtitle="Shipped inside agent plugins and updated with them - managed by the plugin, not by Skill Studio."
+      title="Plugins"
+      subtitle="Skills that ship inside agent plugins. The plugin installs and updates them, not Skill Studio."
     >
       {groups.length === 0 ? (
         <p className="m-0 text-small text-text-tertiary">
@@ -73,17 +73,15 @@ export function PluginSkillsView({
                     {skills.length} skill{skills.length !== 1 ? "s" : ""}
                   </span>
                 </header>
-                <div className="flex flex-col gap-1.5">
+                <div className="flex flex-col">
                   {skills.map((skill) => (
                     <Button
                       key={skill.name}
                       variant="ghost"
-                      className="grid h-11 min-w-0 gap-3 overflow-hidden rounded-md border border-border bg-bg-secondary px-3 justify-start text-left [grid-template-columns:minmax(0,1fr)_minmax(0,2fr)_64px]"
+                      className="grid h-8 min-w-0 justify-start gap-3 overflow-hidden rounded-none border-0 border-b border-border-subtle px-3 text-left font-normal last:border-b-0 [grid-template-columns:minmax(0,1fr)_minmax(0,2fr)_64px]"
                       onClick={() => onSelectSkill(skill.name, deploymentPathInGroup(skill, group))}
                     >
-                      <span className="truncate text-body font-semibold text-text-primary">
-                        {skill.name}
-                      </span>
+                      <span className="truncate text-body text-text-primary">{skill.name}</span>
                       <span className="select-text truncate text-small text-text-tertiary">
                         {skill.description}
                       </span>
