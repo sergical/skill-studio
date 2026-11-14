@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SkillSnapshot } from "@skill-studio/lib";
+import { pastTenseOf } from "../SkillList/useSkillListAct";
 import { HomeView } from "./HomeView";
 import { buildHarnessSnapshot } from "../../dev/harness/skill-fixture";
 
@@ -159,7 +160,7 @@ it("Check now that returns an undated summary yields to a newer dated snapshot i
   expect(updatesTile().textContent).not.toContain("Not checked yet");
 });
 
-it("Broken_rows_carry_no_button_that_only_repeats_the_row_click_and_a_click_on_the_row_still_opens_the_skill", async () => {
+it("Broken_rows_carry_only_buttons_that_fix_in_place_and_a_click_on_the_row_still_opens_the_skill", async () => {
   const onSelectSkill = vi.fn();
   render(
     <HomeView
@@ -174,7 +175,13 @@ it("Broken_rows_carry_no_button_that_only_repeats_the_row_click_and_a_click_on_t
     .find((group) => group.getAttribute("data-group") === "broken");
   const rows = within(broken!).getAllByRole("row").slice(1);
   expect(rows.length).toBeGreaterThan(0);
-  for (const row of rows) expect(within(row).queryAllByRole("button")).toEqual([]);
+  // A button that only opened the skill would repeat the row click; each one must do the fix here.
+  const labels = rows.flatMap((row) =>
+    within(row)
+      .queryAllByRole("button")
+      .map((button) => button.textContent),
+  );
+  for (const label of labels) expect(pastTenseOf(label ?? "")).not.toBeNull();
   await userEvent.setup().click(within(rows[0]).getByText(/broken link at/));
   expect(onSelectSkill).toHaveBeenCalledTimes(1);
 });

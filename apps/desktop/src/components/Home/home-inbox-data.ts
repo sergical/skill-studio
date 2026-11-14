@@ -110,6 +110,8 @@ interface UpdateAllTally {
   errors: string[];
   /** Skills whose pull left conflict markers; set only when there are any. */
   conflicted?: string[];
+  /** The skills every copy of which was updated, so their rows can say so. */
+  updated: string[];
 }
 
 const MAX_ERROR_LENGTH = 140;
@@ -202,6 +204,7 @@ export async function updateAllOutdatedSkills(
     skillsAttempted: forks.length + ownerSkillNames.size,
     skillsSucceeded: 0,
     errors: [],
+    updated: [],
   };
   let pluginsDone = 0;
   const fail = (count: number, message: string) => {
@@ -362,6 +365,11 @@ export async function updateAllOutdatedSkills(
   // Core can report one requested skill under two names, so the difference can go below zero.
   const notUpdated = new Set([...failedSkillNames, ...skippedSkillNames]);
   tally.skillsSucceeded = Math.max(0, tally.skillsAttempted - notUpdated.size);
+  const requested = [...forks.map((skill) => skill.name), ...ownerSkillNames];
+  const requestedNames = new Set(requested);
+  // A failure reported under a name nobody requested cannot be pinned to a row, so no row claims it.
+  const unattributed = [...notUpdated].some((name) => !requestedNames.has(name));
+  tally.updated = unattributed ? [] : requested.filter((name) => !notUpdated.has(name));
   if (skippedSkillNames.size > 0) tally.stopped = true;
   return tally;
 }
@@ -398,10 +406,22 @@ export function computeHomeGroups(snapshot: SkillSnapshot | undefined): HomeGrou
   return { own, broken, warnings, updates, inv, cost, unused, recent, allClear };
 }
 
+/** The inbox lists as a page shows them: the live groups, or the same groups with acted-on rows
+ * held in place (see `useHeldLayout`). */
+export interface HomeInboxLists {
+  broken: readonly HealthIssue[];
+  warnings: readonly HealthIssue[];
+  updates: readonly InstalledSkill[];
+  unused: readonly InstalledSkill[];
+  recent: readonly RecentlyUsedSkill[];
+}
+
 export interface HomeRowPlan {
   starts: { broken: number; warn: number; upd: number; unused: number; rec: number };
   visibleKeys: string[];
   openByKey: Map<string, () => void>;
+  /** Each row key's skill, so a key press can select the row's skill. */
+  skillByKey: Map<string, InstalledSkill>;
 }
 
 /**
@@ -410,7 +430,7 @@ export interface HomeRowPlan {
  * them, so a collapsed or filtered-out group's rows drop out of both.
  */
 export function buildHomeRowPlan(params: {
-  groups: HomeGroups;
+  groups: HomeInboxLists;
   isGroupVisible: (id: GroupId) => boolean;
   isGroupExpanded: (id: GroupId) => boolean;
   onSelectSkill: (name: string, deploymentPath?: string) => void;
@@ -431,7 +451,7 @@ export function buildHomeRowPlan(params: {
 
   // The cursor's row keys and their open actions, in the same visible-and-expanded order the JSX
   // renders - a collapsed or filtered-out group's rows drop out of both.
-  const rowsFor = <T>(id: GroupId, all: T[], capped = true): T[] =>
+  const rowsFor = <T>(id: GroupId, all: readonly T[], capped = true): readonly T[] =>
     isGroupVisible(id) && isGroupExpanded(id)
       ? capped
         ? all.slice(0, MAX_ROWS_PER_GROUP)
@@ -473,6 +493,17 @@ export function buildHomeRowPlan(params: {
     ]),
   ]);
 
+  const skillByKey = new Map<string, InstalledSkill>([
+    ...brokenRows.map((issue): [string, InstalledSkill] => [
+      issueKey("broken", issue),
+      issue.skill,
+    ]),
+    ...warnRows.map((issue): [string, InstalledSkill] => [issueKey("warn", issue), issue.skill]),
+    ...updRows.map((skill): [string, InstalledSkill] => [skillKey("upd", skill), skill]),
+    ...unusedRows.map((skill): [string, InstalledSkill] => [skillKey("unused", skill), skill]),
+    ...recRows.map(({ skill }): [string, InstalledSkill] => [skillKey("rec", skill), skill]),
+  ]);
+
   return {
     starts: {
       broken: brokenStart,
@@ -483,5 +514,6 @@ export function buildHomeRowPlan(params: {
     },
     visibleKeys,
     openByKey,
+    skillByKey,
   };
 }

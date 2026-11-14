@@ -20,6 +20,7 @@ import {
   planBulkAction,
   runBulkSequentially,
   runBulkUpdate,
+  withoutRunningRows,
 } from "./skill-bulk-actions";
 
 function globalFolder(name: string, fields: Partial<Deployment> = {}): Deployment {
@@ -162,6 +163,22 @@ describe("planBulkAction", () => {
     expect(bulkDisabledReason({ kind: "park" }, none)).toBe("Nothing to park: 2 already parked");
     const some = planBulkAction([unparked], { kind: "park" });
     expect(bulkDisabledReason({ kind: "park" }, some)).toBeNull();
+  });
+});
+
+describe("withoutRunningRows", () => {
+  it("moves a row another action still runs on to the skipped list; fails if a bar action runs on a busy row", () => {
+    // Flow: two rows selected, one of them mid-Update, then Park from the bar. The guard held only
+    // "free". Expect: Park runs on "free" and reports "busy" as still running.
+    const plan = planBulkAction([fixtureSkill("free"), fixtureSkill("busy")], { kind: "park" });
+    const out = withoutRunningRows(plan, new Set(["free"]));
+    expect(names(out.applicable)).toEqual(["free"]);
+    expect(out.skipped.map((s) => [s.skill.name, s.reason])).toEqual([["busy", "still running"]]);
+  });
+
+  it("returns the same plan when every row is free", () => {
+    const plan = planBulkAction([fixtureSkill("free")], { kind: "park" });
+    expect(withoutRunningRows(plan, new Set(["free"]))).toBe(plan);
   });
 });
 

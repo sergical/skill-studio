@@ -18,16 +18,19 @@ import type {
   SkillListFilter,
   SkillSnapshot,
 } from "@skill-studio/lib";
+import { useHeldLayout } from "../../lib/held-layout";
 import { lifecycleTargetForHarnessRoot } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
 import { PageShell } from "../Shell/PageShell";
+import { SkillListSelectionBar } from "../SkillList/SkillListSelectionBar";
+import { useSkillListAct } from "../SkillList/useSkillListAct";
 import { InfoPopover } from "../ui/InfoPopover";
 import { MaterializeRootDialog } from "../ui/MaterializeRootDialog";
 import { TooltipControl } from "../ui/TooltipControl";
 import { useUpdateCheck } from "./useUpdateCheck";
 import { HomeInboxGrid } from "./HomeInboxGroups";
 import { buildHomeRowPlan, computeHomeGroups } from "./home-inbox-data";
-import type { HomeFilter } from "./home-inbox-data";
+import type { HomeFilter, HomeInboxLists } from "./home-inbox-data";
 import { useHomeGroupVisibility } from "./useHomeGroupVisibility";
 import { useHomeRowCursor } from "./useHomeRowCursor";
 
@@ -363,7 +366,6 @@ function InvocationCostCard({
 export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeViewProps) {
   const setActiveView = useAppStore((state) => state.setActiveView);
   const replaceSkillListFilter = useAppStore((state) => state.replaceSkillListFilter);
-  const openSkill = useAppStore((state) => state.openSkill);
 
   const [linkedRootDialog, setLinkedRootDialog] = useState<{
     target: LifecycleTarget;
@@ -388,6 +390,22 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
     toggleGroup,
   } = useHomeGroupVisibility();
 
+  // An acted-on row keeps its place until the user changes what the list shows; see `rowActs`.
+  const resetKey = String(filter);
+  const heldSkills = useHeldLayout(
+    { updates, unused: groups.unused },
+    (skill) => skill.name,
+    (skill) => skill.name,
+    resetKey,
+  );
+  const heldIssues = useHeldLayout(
+    { broken, warnings },
+    (issue) => `${issue.kind}:${issue.skill.name}:${issue.detail}`,
+    (issue) => issue.skill.name,
+    resetKey,
+  );
+  const shown: HomeInboxLists = { ...heldSkills, ...heldIssues, recent: groups.recent };
+
   const goToSkills = (patch: Parameters<typeof replaceSkillListFilter>[0]) => {
     replaceSkillListFilter(patch);
     setActiveView({ kind: "skills" });
@@ -396,19 +414,40 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
 
   // Row semantics match Skills: one continuous `aria-rowindex` across every visible group, and
   // `tabIndex={0}` on only the very first rendered row.
-  const { starts, visibleKeys, openByKey } = buildHomeRowPlan({
-    groups,
+  const { starts, visibleKeys, openByKey, skillByKey } = buildHomeRowPlan({
+    groups: shown,
     isGroupVisible,
     isGroupExpanded,
     onSelectSkill,
   });
 
-  const { rowRef, containerRef, tabIndexFor, onGridKeyDown, statusText } = useHomeRowCursor({
-    visibleKeys,
-    openByKey,
-    active,
-    setCollapsedGroups,
-  });
+  // Selection is per skill, as on Skills: a skill in two groups shows checked in both.
+  const selectedPaths = useAppStore((state) => state.selectedSkillPaths);
+  const toggleSkillSelection = useAppStore((state) => state.toggleSkillSelection);
+  const clearSkillSelection = useAppStore((state) => state.clearSkillSelection);
+  const rowPath = (skill: InstalledSkill) => skill.deployments[0]?.path;
+  const toggleSkill = (skill: InstalledSkill) => {
+    const path = rowPath(skill);
+    if (path) toggleSkillSelection(path);
+  };
+  const isChecked = (skill: InstalledSkill) => selectedPaths.has(rowPath(skill) ?? "");
+  const selectedSkills = groups.own.filter(isChecked);
+  const { handleAct, dialog: updateDialog } = useSkillListAct(onSelectSkill, undefined);
+
+  const { rowRef, containerRef, tabIndexFor, onGridKeyDown, followRow, statusText } =
+    useHomeRowCursor({
+      visibleKeys,
+      openByKey,
+      onToggle: (key) => {
+        const skill = skillByKey.get(key);
+        if (skill) toggleSkill(skill);
+      },
+      onEscape: () => {
+        if (selectedPaths.size > 0) clearSkillSelection();
+      },
+      active,
+      setCollapsedGroups,
+    });
 
   if (!snapshot) {
     if (isLoading) {
@@ -447,7 +486,8 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
       />
 
       <HomeInboxGrid
-        groups={groups}
+        groups={shown}
+        live={groups}
         starts={starts}
         filter={filter}
         onClearFilter={() => setFilter(null)}
@@ -459,7 +499,6 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
         onShowAllUpdates={() => goToSkills({ update: "available" })}
         onShowAllUnused={() => goToSkills({ usage: "unused-30d" })}
         onShowAllRecent={() => setActiveView({ kind: "activity" })}
-        openSkill={openSkill}
         onConvertLinkedRoot={(skill, harness, harnessLabel, root) =>
           setLinkedRootDialog({
             target: lifecycleTargetForHarnessRoot(skill, harness, root),
@@ -470,13 +509,34 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
         }
         containerRef={containerRef}
         onGridKeyDown={onGridKeyDown}
-        rowRef={rowRef}
-        tabIndexFor={tabIndexFor}
+        followRow={followRow}
+        wiring={{
+          rowRef,
+          tabIndexFor,
+          isChecked,
+          hasSelection: selectedSkills.length > 0,
+          onToggle: toggleSkill,
+          act: (label, skill) => void handleAct(label, skill),
+        }}
       />
       {/* Visually-hidden live region: announces the cursor's position, debounced to the last move. */}
       <div role="status" aria-live="polite" className="sr-only">
         {statusText}
       </div>
+
+      {selectedSkills.length > 0 && (
+        <SkillListSelectionBar
+          selectedSkills={selectedSkills}
+          onCancel={clearSkillSelection}
+          onAct={(label, skill) => void handleAct(label, skill)}
+          onOpen={(skill) => onSelectSkill(skill.name)}
+          onActionFinished={(hadFailures) => {
+            // A failure keeps the selection so the user can retry.
+            if (!hadFailures) clearSkillSelection();
+          }}
+        />
+      )}
+      {updateDialog}
 
       {linkedRootDialog && (
         <MaterializeRootDialog

@@ -4,7 +4,6 @@
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import {
   defaultRangeExtractor,
   observeElementRect as observeDefaultElementRect,
@@ -12,10 +11,10 @@ import {
 } from "@tanstack/react-virtual";
 import type { InstalledSkill, SkillInvocationStats } from "@skill-studio/lib";
 import { groupSkillRows } from "../../lib/skill-list-model";
+import { useHeldLayout } from "../../lib/held-layout";
 import type { SortMode } from "../../lib/skill-list-sort";
 import { useRowCursor, useRowCursorWindowEntry } from "../../hooks/useRowCursor";
 import { RichTooltipScope } from "../ui/RichTooltip";
-import { SkillRowMenuScope } from "./SkillRowMenu";
 import { SkillListEmptyState } from "./SkillListEmptyState";
 import { SkillListGroup } from "./SkillListGroup";
 import { SkillListRow } from "./SkillListRow";
@@ -25,10 +24,6 @@ import { useSkillListScrollMargin } from "./useSkillListScrollMargin";
 import { useSkillListSelection } from "./useSkillListSelection";
 import type { RowGroup } from "./skill-row-state";
 
-/** The row's leading-glyph hit box, and the icon it holds - fixed sizes. */
-const GLYPH_HIT = 28;
-const GLYPH_SIZE = 14;
-
 /** The three state groups, in display order, and their header labels. */
 const GROUP_ORDER: RowGroup[] = ["attention", "healthy", "parked"];
 const GROUP_LABEL = {
@@ -36,6 +31,8 @@ const GROUP_LABEL = {
   healthy: "Healthy",
   parked: "Parked",
 };
+
+const skillName = (skill: InstalledSkill) => skill.name;
 
 /** Fixed row/header sizes for the virtualizer - `GroupHead`'s `h-7` and `ROW_CLASS`'s `h-8`, both
  * border-box so their border doesn't add to these. No `measureElement`: every row and header is
@@ -83,7 +80,7 @@ function useSkillListVirtualizer(
  * container. Pulled out of the component so its loop doesn't count against its control-flow
  * complexity. */
 function buildListItems(
-  buckets: Record<RowGroup, InstalledSkill[]>,
+  buckets: Readonly<Record<RowGroup, readonly InstalledSkill[]>>,
   collapsedGroups: Set<RowGroup>,
 ): ListItems {
   const items: ListItem[] = [];
@@ -135,15 +132,18 @@ interface SkillListTableProps {
   onClearFilters?: () => void;
   /** Opens the add-skill sheet, for the "You haven't added a skill yet" empty state. */
   onAddSkill?: () => void;
+  /** Changes when the caller's filter changes: the list then lays out fresh, dropping the rows
+   * an action held in place. */
+  resetKey?: string;
+  /** Finds a skill outside `skills`, so a row an action took out of the caller's filter (an update
+   * under "Update available") stays in its slot with fresh data until the filter changes. */
+  latestSkill?: (name: string) => InstalledSkill | undefined;
 }
 
 /**
  * A grid of skill rows split into three sticky-headed state groups (Needs
- * attention, Healthy, Parked): the state glyph, name, disk location, harness
- * stack, and token pair. Checking a row's checkbox selects it - no separate
- * selection mode - and the action bar (Create pack, Cancel) shows once
- * anything is checked. Pack creation is deferred (unit 4.3), so the bar's
- * Create pack button never renders.
+ * attention, Healthy, Parked). Checking a row's slot selects it - no separate
+ * selection mode - and the selection bar shows once anything is checked.
  */
 export function SkillListTable({
   skills,
@@ -157,6 +157,8 @@ export function SkillListTable({
   hasAnySkills: hasAnySkillsProp,
   onClearFilters,
   onAddSkill,
+  resetKey = "",
+  latestSkill,
 }: SkillListTableProps) {
   const selectedSkillName = selectedSkillNameProp ?? null;
   const initialCursorSkillName = initialCursorSkillNameProp ?? null;
@@ -171,7 +173,16 @@ export function SkillListTable({
    * stays put when the copy the row opens changes with a rescan. */
   const rowPath = (skill: InstalledSkill): string | undefined => skill.deployments[0]?.path;
 
-  const { buckets, statesBySkill, rows } = groupSkillRows(skills, sort, stats);
+  const grouped = groupSkillRows(skills, sort, stats);
+  const { statesBySkill } = grouped;
+  const buckets = useHeldLayout(
+    grouped.buckets,
+    skillName,
+    skillName,
+    `${sort}\n${resetKey}`,
+    latestSkill,
+  );
+  const rows = GROUP_ORDER.flatMap((group) => buckets[group]);
   /** Row keys `useRowCursor` navigates, in rendered order - a collapsed group's rows drop out. */
   const visibleKeys = GROUP_ORDER.flatMap((group) =>
     collapsedGroups.has(group) ? [] : buckets[group].map((skill) => skill.name),
@@ -179,11 +190,10 @@ export function SkillListTable({
 
   const { selectedPaths, selectSkills, clearSkillSelection, handleRowCheckboxClick } =
     useSkillListSelection(rows, rowPath);
-  const {
-    handleAct,
-    pendingLabelFor,
-    dialog: updateDialog,
-  } = useSkillListAct(onSelectSkill, deploymentPathForSkill);
+  const { handleAct, dialog: updateDialog } = useSkillListAct(
+    onSelectSkill,
+    deploymentPathForSkill,
+  );
   const { scrollElement, scrollMargin, setGridElement } = useSkillListScrollMargin();
 
   /** The flat item list the virtualizer measures, and each group's offset/size in that same
@@ -230,8 +240,8 @@ export function SkillListTable({
     containerRef,
     tabIndexFor,
     onGridKeyDown,
+    followRow,
     focusCursor,
-    focusRow,
     statusText,
     cursorKey,
   } = useRowCursor({
@@ -259,10 +269,6 @@ export function SkillListTable({
       const next = new Set(selectedPaths);
       next.add(path);
       selectSkills([...next]);
-    },
-    onMenu: (_key, rowEl) => {
-      const triggers = rowEl.querySelectorAll<HTMLElement>('[data-slot="dropdown-menu-trigger"]');
-      triggers[triggers.length - 1]?.click();
     },
     onEscape: () => {
       if (selectedPaths.size > 0) clearSkillSelection();
@@ -329,86 +335,76 @@ export function SkillListTable({
         hasSelection={selectedPaths.size > 0}
         isOpenSkill={skill.name === selectedSkillName}
         tabIndex={tabIndexFor(skill.name)}
-        glyphSize={GLYPH_SIZE}
         rowRef={rowRef(skill.name)}
         onOpen={() => onSelectSkill(skill.name, deploymentPathForSkill?.(skill))}
-        busyLabel={pendingLabelFor(skill)}
         onAct={(label) => void handleAct(label, skill)}
         onCheckedChange={(shiftKey) => handleRowCheckboxClick(index, shiftKey)}
-        onMenuOpenChange={(open) => {
-          if (!open) focusRow(skill.name);
-        }}
       />
     );
   }
 
   return (
     <RichTooltipScope>
-      <SkillRowMenuScope>
-        <div
-          className="flex flex-col gap-3"
-          style={
-            // SAFETY: `--glyph-hit` is a custom property, not a known CSSProperties key; React
-            // passes it through to the style attribute as-is.
-            { "--glyph-hit": `${GLYPH_HIT}px` } as CSSProperties
-          }
-        >
-          {rows.length === 0 ? (
-            <SkillListEmptyState
-              hasAnySkills={hasAnySkills}
-              onClearFilters={onClearFilters}
-              onAddSkill={onAddSkill}
-            />
-          ) : (
-            <div
-              ref={setGridRef}
-              role="grid"
-              aria-label="Skills"
-              aria-rowcount={rows.length}
-              onKeyDown={onGridKeyDown}
-            >
-              {GROUP_ORDER.map((group) => {
-                const groupSkills = buckets[group];
-                if (groupSkills.length === 0) return null;
-                const open = !collapsedGroups.has(group);
-                const { start: groupStart, height: groupHeight } = groupMeta[group];
-                return (
-                  <SkillListGroup
-                    key={group}
-                    group={group}
-                    label={GROUP_LABEL[group]}
-                    count={groupSkills.length}
-                    open={open}
-                    start={groupStart}
-                    height={groupHeight}
-                    items={items}
-                    virtualItems={virtualItems}
-                    scrollMargin={scrollMargin}
-                    onToggle={() => toggleGroup(group)}
-                    renderRow={(item, top) => renderRow(item.skill, item.index, top)}
-                  />
-                );
-              })}
-            </div>
-          )}
-          {/* Visually-hidden live region: announces the cursor's position, debounced to the last move. */}
-          <div role="status" aria-live="polite" className="sr-only">
-            {statusText}
+      <div className="flex flex-col gap-3">
+        {rows.length === 0 ? (
+          <SkillListEmptyState
+            hasAnySkills={hasAnySkills}
+            onClearFilters={onClearFilters}
+            onAddSkill={onAddSkill}
+          />
+        ) : (
+          <div
+            ref={setGridRef}
+            role="grid"
+            aria-label="Skills"
+            aria-rowcount={rows.length}
+            onKeyDown={onGridKeyDown}
+            onPointerDown={followRow}
+            onFocus={followRow}
+          >
+            {GROUP_ORDER.map((group) => {
+              const groupSkills = buckets[group];
+              if (groupSkills.length === 0) return null;
+              const open = !collapsedGroups.has(group);
+              const { start: groupStart, height: groupHeight } = groupMeta[group];
+              return (
+                <SkillListGroup
+                  key={group}
+                  group={group}
+                  label={GROUP_LABEL[group]}
+                  count={grouped.buckets[group].length}
+                  open={open}
+                  start={groupStart}
+                  height={groupHeight}
+                  items={items}
+                  virtualItems={virtualItems}
+                  scrollMargin={scrollMargin}
+                  onToggle={() => toggleGroup(group)}
+                  renderRow={(item, top) => renderRow(item.skill, item.index, top)}
+                />
+              );
+            })}
           </div>
-
-          {selectedPaths.size > 0 && (
-            <SkillListSelectionBar
-              selectedSkills={rows.filter((skill) => selectedPaths.has(rowPath(skill) ?? ""))}
-              onCancel={clearSkillSelection}
-              onActionFinished={(hadFailures) => {
-                // A failure keeps the selection so the user can retry.
-                if (!hadFailures) clearSkillSelection();
-              }}
-            />
-          )}
-          {updateDialog}
+        )}
+        {/* Visually-hidden live region: announces the cursor's position, debounced to the last move. */}
+        <div role="status" aria-live="polite" className="sr-only">
+          {statusText}
         </div>
-      </SkillRowMenuScope>
+
+        {selectedPaths.size > 0 && (
+          <SkillListSelectionBar
+            selectedSkills={rows.filter((skill) => selectedPaths.has(rowPath(skill) ?? ""))}
+            onCancel={clearSkillSelection}
+            onAct={(label, skill) => void handleAct(label, skill)}
+            onOpen={(skill) => onSelectSkill(skill.name, deploymentPathForSkill?.(skill))}
+            onActionFinished={(hadFailures) => {
+              // A failure keeps the selection so the user can retry.
+              if (!hadFailures) clearSkillSelection();
+            }}
+          />
+        )}
+        {updateDialog}
+      </div>
     </RichTooltipScope>
   );
 }

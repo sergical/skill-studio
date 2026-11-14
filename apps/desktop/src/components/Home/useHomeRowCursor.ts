@@ -12,6 +12,9 @@ import type { GroupId } from "./home-inbox-data";
 interface UseHomeRowCursorParams {
   visibleKeys: string[];
   openByKey: Map<string, () => void>;
+  /** X or Space on a row toggles its skill; Escape clears the selection. */
+  onToggle: (key: string) => void;
+  onEscape: () => void;
   active: boolean;
   setCollapsedGroups: (updater: (prev: Set<GroupId>) => Set<GroupId>) => void;
 }
@@ -23,6 +26,8 @@ interface UseHomeRowCursorParams {
 export function useHomeRowCursor({
   visibleKeys,
   openByKey,
+  onToggle,
+  onEscape,
   active,
   setCollapsedGroups,
 }: UseHomeRowCursorParams): RowCursor {
@@ -38,6 +43,8 @@ export function useHomeRowCursor({
     initialKey: initialCursorKey,
     active,
     onOpen: (key) => openByKey.get(key)?.(),
+    onToggle,
+    onEscape,
     onCollapseGroup: (groupId) =>
       setCollapsedGroups((prev) =>
         // SAFETY: `groupId` only ever comes from this file's own `data-group` attributes, which

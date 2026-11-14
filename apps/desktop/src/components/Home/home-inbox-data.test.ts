@@ -225,6 +225,7 @@ describe("updateAllOutdatedSkills", () => {
       skillsAttempted: 3,
       skillsSucceeded: 3,
       errors: [],
+      updated: ["alpha", "beta", "gamma"],
     });
   });
 
@@ -320,6 +321,7 @@ describe("updateAllOutdatedSkills", () => {
       skillsAttempted: 2,
       skillsSucceeded: 2,
       errors: [],
+      updated: ["forked", "alpha"],
     });
   });
 
@@ -344,6 +346,7 @@ describe("updateAllOutdatedSkills", () => {
       skillsAttempted: 2,
       skillsSucceeded: 0,
       errors: ["update failed"],
+      updated: [],
     });
   });
 
@@ -377,6 +380,7 @@ describe("updateAllOutdatedSkills", () => {
       skillsAttempted: 1,
       skillsSucceeded: 0,
       errors: ["update failed"],
+      updated: [],
     });
   });
 
@@ -410,6 +414,7 @@ describe("updateAllOutdatedSkills", () => {
       skillsAttempted: 3,
       skillsSucceeded: 1,
       errors: ["beta is wildcard-dotagents (read-only)", "gamma failed"],
+      updated: ["alpha"],
     });
   });
 
@@ -436,6 +441,7 @@ describe("updateAllOutdatedSkills", () => {
       skillsAttempted: 2,
       skillsSucceeded: 0,
       errors: ["backend unreachable"],
+      updated: [],
     });
   });
 
@@ -478,6 +484,7 @@ describe("updateAllFailureMessage", () => {
       skillsAttempted: 5,
       skillsSucceeded: 2,
       errors: ["read-only"],
+      updated: [],
     };
     expect(updateAllFailureMessage(tally)).toBe("3 failed: read-only");
     expect(updateAllFailureMessage({ ...tally, failures: 0, errors: [] })).toBeUndefined();
@@ -487,7 +494,7 @@ describe("updateAllFailureMessage", () => {
   });
 
   it("update_all_toast_counts_skills_not_copies_so_it_agrees_with_its_title", () => {
-    const base = { attempted: 2, errors: ["read-only"] };
+    const base = { attempted: 2, errors: ["read-only"], updated: [] };
     // One skill, both copies failed: title "Updated 0 of 1 skill", so one failed.
     expect(
       updateAllFailureMessage({

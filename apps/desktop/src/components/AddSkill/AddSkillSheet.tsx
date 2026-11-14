@@ -974,9 +974,10 @@ function SubmitFooter({
         <Button
           className="h-(--control-height) rounded-md bg-accent-solid px-3.5 text-body font-medium text-text-on-accent hover:bg-accent-solid-hover"
           onClick={onSubmit}
+          busy={inProgress}
           disabled={!isValid || isSubmitting}
         >
-          {inProgress ? "Adding…" : submitLabel}
+          {submitLabel}
         </Button>
       </div>
     </div>

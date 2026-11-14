@@ -1,10 +1,10 @@
 // ============================================================================
-// SkillListSelectionBar - The docked bar that appears once any row is
-// checked: the selected count, the bulk actions (Park/Unpark, Invocation,
-// Update, Remove), and Cancel. Each action runs the single-skill call on every
+// SkillListSelectionBar - The docked bar on Home and Skills that appears once
+// any row is checked. One skill: its name, its fix, Open, then the other
+// actions. Several: the count and the bulk actions (Park/Unpark, Invocation,
+// Update, Remove). Each bulk action runs the single-skill call on every
 // selected skill it applies to (see skill-bulk-actions.ts); a button that
-// applies to none is disabled and its tooltip says why. Pack creation stays
-// deferred (unit 4.3).
+// applies to none is disabled and its tooltip says why.
 // ============================================================================
 
 import { useState } from "react";
@@ -26,6 +26,7 @@ import { INVOCATION_POLICY_OPTIONS } from "../SkillDetail/skill-location-status"
 import { MenuControl, MenuItem } from "../ui/MenuControl";
 import { TooltipControl } from "../ui/TooltipControl";
 import { bulkDisabledReason, describeSkipped, planBulkAction } from "./skill-bulk-actions";
+import { rowState } from "./skill-row-state";
 import type { BulkAction } from "./skill-bulk-actions";
 import { UpdateOverwritesEditsDialog } from "../SkillDetail/UpdateOverwritesEditsDialog";
 import { useSkillBulkActions } from "./useSkillBulkActions";
@@ -36,20 +37,28 @@ interface SkillListSelectionBarProps {
   onCancel: () => void;
   /** Called after a bulk action; the caller clears the selection unless `hadFailures`. */
   onActionFinished: (hadFailures: boolean) => void;
+  /** Runs one skill's fix, named by `RowState.action`. */
+  onAct: (label: string, skill: InstalledSkill) => void;
+  onOpen: (skill: InstalledSkill) => void;
 }
 
 const BAR_BUTTON_CLASS = "rounded-sm px-2 text-text-secondary";
 
-/** A bar button; when `disabledReason` is set it is disabled and a tooltip gives the reason. */
+/**
+ * A bar button; when `disabledReason` is set it is disabled and a tooltip gives the reason. While
+ * any bar action runs every button is disabled, and the one that started it spins in place.
+ */
 function BarButton({
   disabledReason,
-  busy,
+  running,
+  kind,
   onClick,
   children,
   className,
 }: {
   disabledReason: string | null;
-  busy: boolean;
+  running: BulkAction["kind"] | null;
+  kind?: BulkAction["kind"];
   onClick: () => void;
   children: ReactNode;
   className?: string;
@@ -60,7 +69,8 @@ function BarButton({
       size="sm"
       className={className ?? BAR_BUTTON_CLASS}
       onClick={onClick}
-      disabled={busy || disabledReason !== null}
+      busy={kind === undefined ? undefined : running === kind}
+      disabled={running !== null || disabledReason !== null}
     >
       {children}
     </Button>
@@ -77,10 +87,12 @@ export function SkillListSelectionBar({
   selectedSkills,
   onCancel,
   onActionFinished,
+  onAct,
+  onOpen,
 }: SkillListSelectionBarProps) {
   const [confirmingRemove, setConfirmingRemove] = useState(false);
-  const { progress, run, updatePrompt } = useSkillBulkActions(onActionFinished);
-  const busy = progress !== null;
+  const { running, progress, run, updatePrompt } = useSkillBulkActions(onActionFinished);
+  const busy = running !== null;
 
   const parkPlan = planBulkAction(selectedSkills, { kind: "park" });
   const unparkPlan = planBulkAction(selectedSkills, { kind: "unpark" });
@@ -93,6 +105,10 @@ export function SkillListSelectionBar({
   const showPark = parkPlan.applicable.length > 0 || unparkPlan.applicable.length === 0;
   const showUnpark = unparkPlan.applicable.length > 0;
 
+  const single = selectedSkills.length === 1 ? selectedSkills[0] : null;
+  const fix = single ? rowState(single)?.action : undefined;
+  const count = (n: number) => (single ? "" : ` ${n}`);
+
   const handleConfirmRemove = () => {
     setConfirmingRemove(false);
     void run({ kind: "remove" }, selectedSkills);
@@ -104,32 +120,57 @@ export function SkillListSelectionBar({
     // the scroll area without an enter transition.
     <div className="pointer-events-none sticky inset-x-0 bottom-4 z-10 flex h-0 items-end justify-center">
       <div className="pointer-events-auto flex h-9 max-w-[calc(100%-2rem)] items-center gap-1.5 rounded-md border border-border bg-bg-secondary px-2 shadow">
-        <span
-          className="min-w-0 truncate px-1 text-small whitespace-nowrap text-text-secondary tabular-nums"
-          aria-live="polite"
-        >
-          {progress ?? `${selectedSkills.length} selected`}
+        <span className="min-w-0 truncate px-1 text-small whitespace-nowrap text-text-secondary tabular-nums">
+          {single?.name ?? `${selectedSkills.length} selected`}
         </span>
+        <span role="status" className="sr-only">
+          {progress ?? ""}
+        </span>
+        {single && fix && (
+          <Button
+            size="sm"
+            className="rounded-sm px-2"
+            disabled={busy}
+            onClick={() => {
+              onAct(fix, single);
+              onCancel();
+            }}
+          >
+            {fix}
+          </Button>
+        )}
+        {single && (
+          <BarButton running={running} disabledReason={null} onClick={() => onOpen(single)}>
+            Open
+          </BarButton>
+        )}
         {showPark && (
           <BarButton
-            busy={busy}
+            running={running}
+            kind="park"
             disabledReason={bulkDisabledReason({ kind: "park" }, parkPlan)}
             onClick={() => void run({ kind: "park" }, selectedSkills)}
           >
-            Park {parkPlan.applicable.length}
+            Park{count(parkPlan.applicable.length)}
           </BarButton>
         )}
-        {showUnpark && (
+        {showUnpark && fix !== "Unpark" && (
           <BarButton
-            busy={busy}
+            running={running}
+            kind="unpark"
             disabledReason={bulkDisabledReason({ kind: "unpark" }, unparkPlan)}
             onClick={() => void run({ kind: "unpark" }, selectedSkills)}
           >
-            Unpark {unparkPlan.applicable.length}
+            Unpark{count(unparkPlan.applicable.length)}
           </BarButton>
         )}
         {invocationDisabled !== null || busy ? (
-          <BarButton busy={busy} disabledReason={invocationDisabled} onClick={() => undefined}>
+          <BarButton
+            running={running}
+            kind="invocation"
+            disabledReason={invocationDisabled}
+            onClick={() => undefined}
+          >
             Invocation
             <ChevronDown size={12} />
           </BarButton>
@@ -157,15 +198,19 @@ export function SkillListSelectionBar({
             ))}
           </MenuControl>
         )}
+        {fix !== "Update" && (
+          <BarButton
+            running={running}
+            kind="update"
+            disabledReason={bulkDisabledReason({ kind: "update" }, updatePlan)}
+            onClick={() => void run({ kind: "update" }, selectedSkills)}
+          >
+            Update{count(updatePlan.applicable.length)}
+          </BarButton>
+        )}
         <BarButton
-          busy={busy}
-          disabledReason={bulkDisabledReason({ kind: "update" }, updatePlan)}
-          onClick={() => void run({ kind: "update" }, selectedSkills)}
-        >
-          Update {updatePlan.applicable.length}
-        </BarButton>
-        <BarButton
-          busy={busy}
+          running={running}
+          kind="remove"
           disabledReason={bulkDisabledReason({ kind: "remove" }, removePlan)}
           onClick={() => setConfirmingRemove(true)}
           className="rounded-sm px-2 text-error"

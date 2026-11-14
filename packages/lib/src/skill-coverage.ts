@@ -133,7 +133,8 @@ export function deploymentLinkTarget(deployment: Deployment): string | null | un
 
 /** Where a skill really lives, and who links to or copies it - see `SkillLocationCell`. */
 export interface LocationSummary {
-  /** The deployment under the shared root, when the skill has one. */
+  /** The deployment under the shared root, when the skill has one; the global one when the skill
+   * has a shared root in more than one scope. */
   truth: Deployment | null;
   /** Deployments that are symlinks into the shared root. */
   links: Deployment[];
@@ -152,7 +153,14 @@ export function locationSummary(skill: InstalledSkill): LocationSummary {
   for (const deployment of ownDeployments(skill)) {
     switch (deploymentLinkKind(deployment)) {
       case "shared-root":
-        summary.truth = deployment;
+        if (summary.truth === null) {
+          summary.truth = deployment;
+        } else if (summary.truth.scope !== "global" && deployment.scope === "global") {
+          summary.copies.push(summary.truth);
+          summary.truth = deployment;
+        } else {
+          summary.copies.push(deployment);
+        }
         break;
       case "linked-to-shared":
         summary.links.push(deployment);
@@ -168,17 +176,27 @@ export function locationSummary(skill: InstalledSkill): LocationSummary {
   return summary;
 }
 
+/** The copy every other copy is measured against: the Universal folder, or with none the first
+ * live copy that has a content hash. */
+export function driftReference(summary: LocationSummary): Deployment | null {
+  return summary.truth ?? comparableCopies(summary)[0] ?? null;
+}
+
+function comparableCopies(summary: LocationSummary): Deployment[] {
+  return summary.copies.filter((copy) => copy.scope !== "parked" && copy.content_hash);
+}
+
 /**
- * Which of `summary.copies` have actually drifted from the truth: content
- * hash different from the shared-root truth's, or (with no truth) from the
- * first copy's. Same-content copies aren't a drift risk worth a warning
- * border - see `SkillLocationCell`.
+ * Which live copies have drifted from `driftReference`: a different content hash. A parked copy
+ * is off for every agent, so it never counts. Same-content copies aren't a drift risk worth a
+ * warning border - see `SkillLocationCell`.
  */
 export function driftingCopies(summary: LocationSummary): Deployment[] {
-  const referenceHash = summary.truth?.content_hash ?? summary.copies[0]?.content_hash;
-  if (referenceHash === undefined) return [];
-  const copiesToCompare = summary.truth ? summary.copies : summary.copies.slice(1);
-  return copiesToCompare.filter((copy) => copy.content_hash !== referenceHash);
+  const reference = driftReference(summary);
+  if (!reference?.content_hash) return [];
+  return comparableCopies(summary).filter(
+    (copy) => copy !== reference && copy.content_hash !== reference.content_hash,
+  );
 }
 
 /** A shared-root deployment plus every harness that reads it through a whole-root link, for the Locations card's shared group. */

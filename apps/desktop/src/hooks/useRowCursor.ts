@@ -1,21 +1,20 @@
 // ============================================================================
 // useRowCursor - Roving-tabIndex keyboard navigation for the Skills and Home
 // grids: j/k and arrow keys move the cursor row, Enter opens it, Space/x
-// toggles it, Shift+Up/Down extends the selection, `.`/Shift+F10 opens the
-// row's ⋯ menu, and ArrowLeft/ArrowRight collapse or expand its group.
+// toggles it, Shift+Up/Down extends the selection, and ArrowLeft/ArrowRight
+// collapse or expand its group.
 // `useRowCursorWindowEntry` is the window-level counterpart: j/k/arrows focus
 // the cursor row from anywhere in the active view.
 // ============================================================================
 
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, SyntheticEvent } from "react";
 
 interface UseRowCursorOptions {
   /** Visible row keys, in rendered order - skips rows inside collapsed groups. */
   keys: string[];
   onOpen: (key: string) => void;
   onToggle?: (key: string) => void;
-  onMenu?: (key: string, rowEl: HTMLElement) => void;
   /** Shift+ArrowUp/Down: called with the row the cursor moved onto, to extend the selection. */
   onExtend?: (key: string) => void;
   /** Escape: clears the selection, mirroring the list's own Cancel/Escape behaviour. */
@@ -45,10 +44,10 @@ export interface RowCursor {
   containerRef: (el: HTMLDivElement | null) => void;
   tabIndexFor: (key: string) => 0 | -1;
   onGridKeyDown: (e: ReactKeyboardEvent) => void;
+  /** For the grid's `onPointerDown` and `onFocus`: the cursor follows the row clicked or focused. */
+  followRow: (e: SyntheticEvent) => void;
   /** Focuses the current cursor row (or the first row) - the window-level entry point calls this. */
   focusCursor: () => void;
-  /** Focuses one row by key - e.g. refocusing the row once its own menu (opened by mouse or `.`) closes. */
-  focusRow: (key: string) => void;
   /** "12 of 80" - the visually-hidden `role="status"` text, debounced to the last move. */
   statusText: string;
 }
@@ -74,7 +73,6 @@ export function useRowCursor({
   keys,
   onOpen,
   onToggle,
-  onMenu,
   onExtend,
   onEscape,
   onCollapseGroup,
@@ -183,10 +181,14 @@ export function useRowCursor({
     scrollAndFocus(effectiveCursorKey ?? keys[0]);
   }
 
-  /** Public: focuses one row without touching the announced status or extending the selection -
-   * e.g. refocusing the row once its own menu (opened by mouse or `.`) closes. */
-  function focusRow(key: string) {
-    moveTo(key, false);
+  /** Moves the cursor to the row the pointer or focus went into (its checkbox, its fix button),
+   * so the next X, j or k starts from that row and not from where the keys last left it. */
+  function followRow(e: SyntheticEvent) {
+    const target = e.target;
+    if (!(target instanceof Node)) return;
+    const key = [...rowsRef.current].find(([, el]) => el.contains(target))?.[0];
+    if (key !== undefined && key !== effectiveCursorKey && keys.includes(key))
+      setCursor({ key, index: keys.indexOf(key) });
   }
 
   function onGridKeyDown(e: ReactKeyboardEvent) {
@@ -246,18 +248,6 @@ export function useRowCursor({
           onToggle(cursorKey);
         }
         break;
-      case ".":
-        if (onMenu) {
-          e.preventDefault();
-          onMenu(cursorKey, target.closest('[role="row"]') ?? target);
-        }
-        break;
-      case "F10":
-        if (e.shiftKey && onMenu) {
-          e.preventDefault();
-          onMenu(cursorKey, target.closest('[role="row"]') ?? target);
-        }
-        break;
       case "ArrowLeft": {
         const rowEl = rowsRef.current.get(cursorKey);
         const groupId = rowEl ? groupIdFor(rowEl) : null;
@@ -298,8 +288,8 @@ export function useRowCursor({
     },
     tabIndexFor: (key) => (key === effectiveCursorKey ? 0 : -1),
     onGridKeyDown,
+    followRow,
     focusCursor,
-    focusRow,
     statusText,
   };
 }

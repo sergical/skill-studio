@@ -168,7 +168,10 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
     const skills = skillItems(
       snapshot?.skills ?? [],
       (skill) => GROUP_LABEL[rowGroup(skill, rowState(skill))],
-      (skill) => <RowGlyph state={rowState(skill)} size={14} />,
+      (skill) => {
+        const state = rowState(skill);
+        return state && <RowGlyph state={state} size={14} />;
+      },
       (skill) => openSkill(skill.name),
     );
 

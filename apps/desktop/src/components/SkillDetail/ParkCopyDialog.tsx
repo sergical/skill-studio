@@ -75,8 +75,8 @@ export function ParkCopyDialog({
           <AlertDialogCancel onClick={onClose} disabled={isParking}>
             Cancel
           </AlertDialogCancel>
-          <AlertDialogAction onClick={handlePark} disabled={isParking || isChecking}>
-            {isParking ? "Parking…" : isChecking ? "Checking git…" : "Park"}
+          <AlertDialogAction onClick={handlePark} busy={isParking || isChecking}>
+            Park
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -5,7 +5,13 @@
 // isolation (Vitest, once a runner is wired up).
 // ============================================================================
 
-import { agentIdFromDeploymentLabel, isUnresolvedDeployment } from "./skill-coverage";
+import {
+  agentIdFromDeploymentLabel,
+  driftReference,
+  driftingCopies,
+  isUnresolvedDeployment,
+  locationSummary,
+} from "./skill-coverage";
 import { editableDeployments, ownDeployments } from "./skill-plugin-partition";
 import { homeRelativePath, parentDirectory } from "./skill-path-format";
 import { describeSpecViolations } from "./skill-violation-text";
@@ -142,49 +148,23 @@ export function deploymentLabel(deployment: Deployment): string {
 }
 
 /**
- * Skills whose non-plugin deployments disagree on content: the same skill
- * name has more than one distinct `content_hash` across its own copies (e.g.
- * a stale copy left behind by a manual edit). Built from `ownDeployments` so
- * a plugin-managed copy - which the user doesn't edit directly - never
- * creates a false duplicate. `detail` names the copy with a strict majority
- * as the reference and lists the copies that differ from it, e.g. "sentry ·
- * Cursor differs from Global · shared" - the verb agrees with the number of
- * differing copies; with no strict majority, every copy
- * is listed instead, e.g. "2 copies differ: Global · Claude Code;
- * webvitals.com · shared".
+ * Skills with a live copy whose content differs from the copy it is measured against - the
+ * Universal folder, or the first copy when there is none (see `driftingCopies`), so Home, the
+ * Skills list and the skill page count the same copies. A plugin-managed copy, which the user
+ * doesn't edit, never counts. `detail` names the differing copies and the reference, e.g.
+ * "sentry · Cursor differs from Global · Universal folder".
  */
 export function findDuplicateSkills(skills: InstalledSkill[]): HealthIssue[] {
   const issues: HealthIssue[] = [];
-
   for (const skill of skills) {
-    const withHash = ownDeployments(skill).filter((d) => d.content_hash);
-    const distinctHashes = new Set(withHash.map((d) => d.content_hash));
-    if (distinctHashes.size <= 1) continue;
-
-    const counts = new Map<string, number>();
-    for (const d of withHash) {
-      counts.set(d.content_hash, (counts.get(d.content_hash) ?? 0) + 1);
-    }
-    const majorityHash = [...counts.entries()].find(
-      ([, count]) => count * 2 > withHash.length,
-    )?.[0];
-
-    let detail: string;
-    if (majorityHash !== undefined) {
-      const majorityDeployment = withHash.find((d) => d.content_hash === majorityHash);
-      const majorityLabel = majorityDeployment ? deploymentLabel(majorityDeployment) : "Global";
-      const differingLabels = withHash
-        .filter((d) => d.content_hash !== majorityHash)
-        .map(deploymentLabel);
-      const verb = differingLabels.length === 1 ? "differs" : "differ";
-      detail = `${differingLabels.join("; ")} ${verb} from ${majorityLabel}`;
-    } else {
-      detail = `${withHash.length} copies differ: ${withHash.map(deploymentLabel).join("; ")}`;
-    }
-
+    const summary = locationSummary(skill);
+    const drifting = driftingCopies(summary);
+    const reference = driftReference(summary);
+    if (drifting.length === 0 || !reference) continue;
+    const verb = drifting.length === 1 ? "differs" : "differ";
+    const detail = `${drifting.map(deploymentLabel).join("; ")} ${verb} from ${deploymentLabel(reference)}`;
     issues.push({ kind: "duplicate", skill, detail });
   }
-
   return issues;
 }
 

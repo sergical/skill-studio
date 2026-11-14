@@ -94,12 +94,10 @@ export function MaterializeRootDialog({
           <Button variant="outline" onClick={onClose} disabled={isConverting}>
             Cancel
           </Button>
-          <Button onClick={handleConvert} disabled={isConverting}>
-            {isConverting
-              ? "Converting…"
-              : intent.kind === "convert-then-disable"
-                ? `Convert, then turn off ${intent.skill}`
-                : "Convert"}
+          <Button onClick={handleConvert} busy={isConverting}>
+            {intent.kind === "convert-then-disable"
+              ? `Convert, then turn off ${intent.skill}`
+              : "Convert"}
           </Button>
         </DialogFooter>
       </DialogContent>

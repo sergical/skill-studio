@@ -287,3 +287,23 @@ describe("back/forward history", () => {
     expect(useAppStore.getState().lastClosedSkillName).toBe("a");
   });
 });
+
+describe("holdSkills", () => {
+  it("holds only the free rows and leaves a row another act runs on; fails if two acts run on one row", () => {
+    // Flow: an Update runs on "busy"; a bar action then asks for "busy" and "free". Expect: the
+    // guard hands back only "free", holds it, and leaves "busy" running under its own act.
+    useAppStore.setState({
+      rowActs: new Map([
+        ["busy", null],
+        ["done", "Updated"],
+      ]),
+    });
+    const held = useAppStore.getState().holdSkills(["busy", "free", "done"]);
+    expect(held).toEqual(["free", "done"]);
+    expect([...useAppStore.getState().rowActs]).toEqual([
+      ["busy", null],
+      ["done", null],
+      ["free", null],
+    ]);
+  });
+});

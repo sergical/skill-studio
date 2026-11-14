@@ -157,8 +157,8 @@ export function AppVersionCard() {
           {updateStatusLabel(updateStatus)}
         </p>
         {updateStatus.status === "ready-to-install" ? (
-          <Button variant="default" size="sm" onClick={handleRestartToUpdate} disabled={installing}>
-            {installing ? "Restarting…" : "Restart to update"}
+          <Button variant="default" size="sm" onClick={handleRestartToUpdate} busy={installing}>
+            Restart to update
           </Button>
         ) : (
           <Button variant="outline" size="sm" onClick={handleCheckForUpdate} disabled={checking}>

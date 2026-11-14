@@ -343,8 +343,8 @@ export function InstalledSkillLifecycleActions({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={isRemoving}>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={handleRemove} disabled={isRemoving}>
-              {isRemoving ? "Removing…" : "Confirm Remove"}
+            <AlertDialogAction variant="destructive" onClick={handleRemove} busy={isRemoving}>
+              Confirm Remove
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -74,32 +74,37 @@ interface CardHeaderProps {
   deploymentUnresolved: boolean;
   ownDeploymentOptions: Deployment[];
   isEditing: boolean;
+  /** Whether this copy can be edited at all; `canEdit` adds "and its text has loaded". */
+  editable: boolean;
   canEdit: boolean;
-  editState: SkillMarkdownEditState;
   onSelectDeployment: (path: string) => void;
   onStartEdit: () => void;
 }
 
-/** SKILL.md's own header: title, the copy picker/label, and Edit or the "Unsaved changes" hint. */
+/** SKILL.md's own header: title, the copy picker or label, and Edit. Every control keeps its box
+ * through loading and editing - Edit waits disabled for the text, stays in place hidden while the
+ * editor's own toolbar is up, and the picker locks instead of turning into a label - so the
+ * header never changes size and the card below it never moves. */
 function CardHeader({
   deployment,
   deploymentUnresolved,
   ownDeploymentOptions,
   isEditing,
+  editable,
   canEdit,
-  editState,
   onSelectDeployment,
   onStartEdit,
 }: CardHeaderProps) {
   return (
-    <div className="flex items-center justify-between gap-3 text-body font-semibold text-text-primary">
+    <div className="flex min-h-7 items-center justify-between gap-3 text-body font-semibold text-text-primary">
       <span>SKILL.md</span>
       <span className="flex min-w-0 items-center gap-2">
         {deployment &&
           !deploymentUnresolved &&
-          (ownDeploymentOptions.length > 1 && !isEditing ? (
+          (ownDeploymentOptions.length > 1 ? (
             <SelectControl
               ariaLabel="Copy to show and edit"
+              disabled={isEditing}
               value={deployment.path}
               onValueChange={onSelectDeployment}
               items={ownDeploymentOptions.map((d) => ({
@@ -114,13 +119,18 @@ function CardHeader({
               </span>
             </TooltipControl>
           ))}
-        {editState.kind === "editing"
-          ? editState.isDirty && <span className="text-caption text-warning">Unsaved changes</span>
-          : canEdit && (
-              <Button variant="outline" size="sm" onClick={onStartEdit}>
-                Edit
-              </Button>
-            )}
+        {editable && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onStartEdit}
+            disabled={!canEdit}
+            className={isEditing ? "invisible" : undefined}
+            aria-hidden={isEditing || undefined}
+          >
+            Edit
+          </Button>
+        )}
       </span>
     </div>
   );
@@ -240,7 +250,8 @@ export function SkillMarkdownCard({
   highlightLine,
 }: SkillMarkdownCardProps) {
   const isEditing = editState.kind === "editing";
-  const canEdit = !isEditing && !isPluginManaged && !deploymentUnresolved && rawContent !== null;
+  const editable = !isPluginManaged && !deploymentUnresolved;
+  const canEdit = editable && !isEditing && rawContent !== null;
   const plugin = isPluginManaged ? pluginInfoForSkill(skill) : undefined;
   const pluginManagedText = plugin
     ? `Managed by the ${plugin.name} plugin for ${plugin.harness}.`
@@ -253,8 +264,8 @@ export function SkillMarkdownCard({
         deploymentUnresolved={deploymentUnresolved}
         ownDeploymentOptions={ownDeploymentOptions}
         isEditing={isEditing}
+        editable={editable}
         canEdit={canEdit}
-        editState={editState}
         onSelectDeployment={onSelectDeployment}
         onStartEdit={onStartEdit}
       />

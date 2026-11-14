@@ -392,6 +392,17 @@ export function describeSkipped(skipped: BulkSkipped[]): string {
   return [...counts].map(([reason, count]) => `${count} ${reason}`).join(", ");
 }
 
+/** `plan` with the skills another action is still running on moved to `skipped`; `held` names
+ * the skills this action holds. */
+export function withoutRunningRows(plan: BulkPlan, held: ReadonlySet<string>): BulkPlan {
+  const running = plan.applicable.filter((skill) => !held.has(skill.name));
+  if (running.length === 0) return plan;
+  return {
+    applicable: plan.applicable.filter((skill) => held.has(skill.name)),
+    skipped: [...plan.skipped, ...running.map((skill) => ({ skill, reason: "still running" }))],
+  };
+}
+
 /** The tooltip for a bar button whose action applies to none of the selection, or `null` when it can run. */
 export function bulkDisabledReason(action: BulkAction, plan: BulkPlan): string | null {
   if (plan.applicable.length > 0) return null;
@@ -405,6 +416,11 @@ export function bulkDisabledReason(action: BulkAction, plan: BulkPlan): string |
   return plan.skipped.length === 0
     ? `Select skills to ${verb}`
     : `Nothing to ${verb}: ${describeSkipped(plan.skipped)}`;
+}
+
+/** The word a skill's row shows once a bulk action has changed it ("Parked"). */
+export function bulkRowPastTense(action: Exclude<BulkAction, { kind: "remove" }>): string {
+  return action.kind === "invocation" ? "Set" : pastTitle(action);
 }
 
 function pastTitle(action: BulkAction): string {

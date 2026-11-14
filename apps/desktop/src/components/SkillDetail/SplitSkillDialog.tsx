@@ -122,8 +122,8 @@ export function SplitSkillDialog({
           <Button variant="outline" onClick={onClose} disabled={isSplitting}>
             Cancel
           </Button>
-          <Button onClick={handleSplit} disabled={isSplitting || checked.size === 0}>
-            {isSplitting ? "Splitting…" : "Split"}
+          <Button onClick={handleSplit} busy={isSplitting} disabled={checked.size === 0}>
+            Split
           </Button>
         </DialogFooter>
       </DialogContent>
