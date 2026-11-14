@@ -52,7 +52,7 @@ your real home is marked as an error and left out of the scores.
 
 | File                   | Purpose                                                                   |
 | ---------------------- | ------------------------------------------------------------------------- |
-| `fixture.py`           | Builds the synthetic home and `ground_truth.json`.                        |
+| `fixture.py`           | Builds the synthetic home; computes truth in memory.                      |
 | `prompts/`             | The task prompt and one note per method.                                  |
 | `harnesses.py`         | How to start each agent CLI isolated, and how to read its output.         |
 | `bench.py`             | Runs the matrix, scores answers, writes the results.                      |
@@ -68,6 +68,42 @@ The homepage reads `packages/marketing/src/data/agent-benchmark.json`, which
 
 ```bash
 python3 tools/agent-bench/fixture.py --out /tmp/skill-studio-fixture
-cat /tmp/skill-studio-fixture/ground_truth.json
 target/debug/skill-studio usage --home /tmp/skill-studio-fixture/home --json
 ```
+
+## Answer contracts
+
+No agent account or API key is needed. Build the binaries from this checkout,
+then run:
+
+```bash
+cargo build --workspace --all-features
+python3 tools/agent-bench/bench.py contract --size 40 --size 400 --check
+python3 tools/agent-bench/bench.py contract --size 4000
+```
+
+Each question gets one CLI call and one MCP tool call. The runner extracts an
+answer from that output and uses the existing scorer. A pass needs a correct
+answer and at most 2,048 output bytes. Most contracts start red. The table
+shows missing answers, wrong counts and output over the limit. MCP bytes count
+the complete tool result, including text and structured content, without the
+JSON-RPC envelope or handshake. CLI bytes count stdout, including its newline.
+
+The JSON report goes to `results/contracts.json`. Use `--json-out PATH` to
+change it. It records calls, byte counts, reasons and total run time, including
+fixture creation and cleanup. Each task and size uses a temporary home. The
+runner pins HOME, CODEX_HOME and agent data paths there, then deletes it.
+It does not read your skills or sessions.
+
+`--check` fails if a passing contract in `contracts/baseline.json` turns red.
+Expected red contracts do not fail the command. Use `--update-baseline` to
+save current passes for the sizes and seed you ran. Other entries stay intact.
+The default sizes are 40 and 400. `--seed N` selects another fixture seed.
+
+`fixture.py --size 400 --seed 7 --out /tmp/example-home` creates a larger
+fixture. Sizes of at least 36 are supported. The default 36 keeps the published
+fixture. Larger fixtures add skills, copies, links, manual policies and months
+of sessions, with repeated resume and fork traps. Their default clock is
+2026-11-14 at noon UTC. Use `--now` to change it. With the same size, seed and
+clock, content and truth stay the same. Contract runs set the clock to today
+so the product's rolling usage window stays current. Truth stays in memory.
