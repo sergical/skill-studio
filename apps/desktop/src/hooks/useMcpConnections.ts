@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { connectMcp, getMcpConnections, invokeErrorMessage } from "../lib/skill-api";
 
 export interface McpConnections {
@@ -19,13 +19,7 @@ export function useMcpConnections(): McpConnections {
   const [attempted, setAttempted] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
-  const reload = useCallback(
-    () =>
-      getMcpConnections().then((agents) => {
-        setConnected(new Set(agents));
-      }),
-    [],
-  );
+  const reload = () => getMcpConnections().then((agents) => setConnected(new Set(agents)));
 
   useEffect(() => {
     let cancelled = false;
@@ -38,13 +32,14 @@ export function useMcpConnections(): McpConnections {
       });
     // Cursor writes its entry after its own install dialog, and a user can add
     // the server from a terminal, so read again when the window comes back.
-    const onFocus = () => void reload().catch(() => undefined);
+    const onFocus = () =>
+      void getMcpConnections().then((agents) => setConnected(new Set(agents)), () => undefined);
     window.addEventListener("focus", onFocus);
     return () => {
       cancelled = true;
       window.removeEventListener("focus", onFocus);
     };
-  }, [reload]);
+  }, []);
 
   const connect = (agent: string) => {
     setPending(agent);

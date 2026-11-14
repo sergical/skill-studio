@@ -277,6 +277,7 @@ mod tests {
         )
         .unwrap();
 
+        let _opencode_home = crate::skills::test_support::OpencodeHomeGuard::new(home.path());
         let agents = connected_agents(&runtime(home.path(), spawner(None))).unwrap();
 
         // OpenCode comes back under the harness report's id, so its Settings row shows Connected.
