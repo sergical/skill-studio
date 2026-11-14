@@ -285,7 +285,7 @@ function specCondition(violations: string[], path: string): Condition | null {
   return blocking
     ? {
         level: "error",
-        status: "Skipped by some agents",
+        status: "Spec violation",
         phrase: "skipped by some agents",
         plural: "skipped by some agents",
         what: `SKILL.md: ${sentence}`,
@@ -294,7 +294,7 @@ function specCondition(violations: string[], path: string): Condition | null {
       }
     : {
         level: "warning",
-        status: "To check",
+        status: "Spec warning",
         phrase: "to check",
         plural: "to check",
         what: `SKILL.md: ${sentence} The skill still loads.`,
@@ -428,7 +428,7 @@ function parkedStillInDotagentsCondition(deployment: Deployment): Condition {
 function leftBehindCondition(pair: LeftBehindPair): Condition {
   return {
     level: "error",
-    status: "Left behind",
+    status: "Parked copy left behind",
     phrase: "parked copy left behind",
     plural: "parked copies left behind",
     what: "A live copy came back where this copy was parked.",
@@ -462,7 +462,7 @@ function driftCondition(deployment: Deployment, ctx: GroupContext): Condition {
   const label = harnessLabelFromAgent(deployment.agent);
   return {
     level: "warning",
-    status: "Differs",
+    status: "Copy differs",
     phrase: "copy differs",
     plural: "copies differ",
     what,
@@ -874,7 +874,9 @@ export const INVOCATION_POLICY_OPTIONS: { value: InvocationPolicy; label: string
 
 /** True when any row across `groups` has drifted from its scope's canonical copy - `SkillLocationsCard`'s title link and the properties rail's Location warning glyph both key off this. */
 export function scopeGroupsHaveDrift(groups: ScopeGroup[]): boolean {
-  return groups.some((g) => g.rows.some((r) => r.conditions.some((c) => c.status === "Differs")));
+  return groups.some((g) =>
+    g.rows.some((r) => r.conditions.some((c) => c.status === "Copy differs")),
+  );
 }
 
 /** The card title's one right-aligned action link, precedence per status-spec.md §2: compare > install-again. Update stays in the page header: here it read as updating the locations. Turning a parked copy on is its own row's "Turn on". */

@@ -51,8 +51,9 @@ interface InstalledSkillHeaderProps {
   /** Omitted when the rendered copy cannot be edited in place (plugin-managed). */
   onQuoteRepair?: (repair: FrontmatterQuoteRepair) => void;
   onFixRepair: (kind: FrontmatterRepairKind) => void;
-  /** Opens the editor; `line` is the YAML error's line in SKILL.md, when the message names one. */
-  onEditManually: (line?: number) => void;
+  /** Opens the editor; `line` is the YAML error's line in SKILL.md, when the message names one.
+   * Omitted when the rendered copy cannot be edited in place (plugin-managed). */
+  onEditManually?: (line?: number) => void;
 }
 
 /** "Parked · Aug 25, 2026" / "Parked" when the timestamp is missing or unparseable. */
@@ -226,18 +227,18 @@ export function InstalledSkillHeader({
             </Button>
           )}
           {hasMalformedYaml &&
-            (fixLine === "error" && lineRepair ? (
-              lineFixButton
-            ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => onEditManually(yamlLocation?.line)}
-              >
-                Edit manually
-              </Button>
-            ))}
-          {!quoteRepair && !hasMalformedYaml && (
+            (fixLine === "error" && lineRepair
+              ? lineFixButton
+              : onEditManually && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onEditManually(yamlLocation?.line)}
+                  >
+                    Edit manually
+                  </Button>
+                ))}
+          {!quoteRepair && !hasMalformedYaml && onEditManually && (
             <Button size="sm" variant="outline" onClick={() => onEditManually()}>
               Edit SKILL.md
             </Button>

@@ -153,7 +153,7 @@ describe("buildScopeGroups", () => {
     const skill = fixtureSkill({ deployments: [shared], has_spec: false });
     const [global] = buildScopeGroups(skill);
     expect(global.shared?.level).toBe("error");
-    expect(global.shared?.conditions[0].status).toBe("Skipped by some agents");
+    expect(global.shared?.conditions[0].status).toBe("Spec violation");
     expect(global.shared?.conditions[0].what).toBe(
       "SKILL.md: SKILL.md has no description in its frontmatter. Codex, OpenCode, and pi skip it. Claude Code still loads it.",
     );
@@ -374,7 +374,7 @@ describe("buildScopeGroups", () => {
     const row = global.parked[0];
 
     expect(row.level).toBe("error");
-    expect(row.conditions[0].status).toBe("Left behind");
+    expect(row.conditions[0].status).toBe("Parked copy left behind");
     expect(row.leftBehind).toEqual({ live, parked });
     expect(rowMenu(row, global.label).entries.map((e) => e.label)).toEqual([
       "Keep live",
