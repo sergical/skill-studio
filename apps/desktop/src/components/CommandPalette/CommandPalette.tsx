@@ -7,7 +7,7 @@
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -71,6 +71,9 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  // WebKit fires mousemove at an unchanged position when the list scrolls under a resting
+  // pointer; only a real move may take the highlight from the keyboard.
+  const pointerRef = useRef<{ x: number; y: number } | null>(null);
 
   function close() {
     setOpen(false);
@@ -174,6 +177,13 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
 
   const results = rankItems(items, query);
 
+  function onOptionMouseMove(e: ReactMouseEvent, index: number) {
+    const last = pointerRef.current;
+    if (last && last.x === e.clientX && last.y === e.clientY) return;
+    pointerRef.current = { x: e.clientX, y: e.clientY };
+    setHighlight(index);
+  }
+
   function onQueryChange(value: string) {
     setQuery(value);
     setHighlight(0);
@@ -194,7 +204,7 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
       restoreFocusRef.current =
         document.activeElement instanceof HTMLElement ? document.activeElement : null;
     } else {
-      restoreFocusRef.current?.focus();
+      restoreFocusRef.current?.focus({ preventScroll: true });
       restoreFocusRef.current = null;
     }
   }, [open]);
@@ -239,7 +249,8 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
         overlayClassName={NO_ANIMATION}
         className={`top-[15vh] left-1/2 w-[560px] max-w-[calc(100%-2rem)] -translate-x-1/2 translate-y-0 gap-0 rounded-lg border border-border bg-bg-secondary p-0 shadow-lg ring-0 ${NO_ANIMATION}`}
       >
-        <div className="border-b border-border-subtle px-3 py-2.5">
+        <div className="flex items-center gap-2 border-b border-border-subtle px-3 py-2.5">
+          <Search size={16} aria-hidden className="shrink-0 text-text-tertiary" />
           <Input
             ref={inputRef}
             role="combobox"
@@ -249,7 +260,7 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
             aria-activedescendant={activeId}
             autoFocus
             placeholder="Type a command or skill"
-            className="h-8 border-none bg-transparent px-0 shadow-none focus-visible:border-none"
+            className="h-8 border-none bg-transparent px-0 shadow-none focus-visible:border-none dark:bg-transparent"
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             onKeyDown={onKeyDown}
@@ -280,7 +291,7 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
                     className={`flex h-8 cursor-pointer items-center gap-2 rounded-sm px-2 text-body text-text-secondary ${
                       isHighlighted ? "bg-bg-active text-text-primary" : ""
                     }`}
-                    onMouseMove={() => setHighlight(index)}
+                    onMouseMove={(e) => onOptionMouseMove(e, index)}
                     onClick={() => run(item)}
                   >
                     {item.icon && (

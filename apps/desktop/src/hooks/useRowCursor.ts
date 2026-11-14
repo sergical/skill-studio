@@ -195,6 +195,7 @@ export function useRowCursor({
     // React bubbles keys from portaled dialogs and menus through the component tree, so a key
     // pressed in a row action's dialog reaches the grid even though the dialog is not in its DOM.
     if (!e.currentTarget.contains(target) || isEditable(target)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
 
     // `ArrowRight` on a collapsed group's own header button expands it and moves into the group.
     const headerGroupId = target.getAttribute("data-group-header");
@@ -312,7 +313,7 @@ export function useRowCursorWindowEntry(active: boolean, focusCursor: () => void
   useEffect(() => {
     if (!active) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (!WINDOW_ENTRY_KEYS.has(e.key)) return;
+      if (!WINDOW_ENTRY_KEYS.has(e.key) || e.metaKey || e.ctrlKey || e.altKey) return;
       if (isEditable(e.target)) return;
       const activeEl = document.activeElement;
       if (activeEl instanceof HTMLElement && activeEl.closest('[role="row"]')) return;

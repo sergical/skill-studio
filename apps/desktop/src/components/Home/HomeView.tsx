@@ -7,6 +7,7 @@
 // ============================================================================
 
 import { useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import { formatTokens, homeInvocationCounts, homePromptCost } from "@skill-studio/lib";
 import type {
@@ -23,7 +24,7 @@ import { PageShell } from "../Shell/PageShell";
 import { InfoPopover } from "../ui/InfoPopover";
 import { MaterializeRootDialog } from "../ui/MaterializeRootDialog";
 import { TooltipControl } from "../ui/TooltipControl";
-import { HomeUpdateCheck } from "./HomeUpdateCheck";
+import { useUpdateCheck } from "./useUpdateCheck";
 import { HomeInboxGrid } from "./HomeInboxGroups";
 import { buildHomeRowPlan, computeHomeGroups } from "./home-inbox-data";
 import type { HomeFilter } from "./home-inbox-data";
@@ -94,6 +95,7 @@ function HomeStatTiles({
   broken,
   warnings,
   updates,
+  updateCheckSummary,
   filter,
   toggleFilter,
   onLearnMore,
@@ -101,10 +103,12 @@ function HomeStatTiles({
   broken: HealthIssue[];
   warnings: HealthIssue[];
   updates: InstalledSkill[];
+  updateCheckSummary: SkillSnapshot["update_check"];
   filter: HomeFilter | null;
   toggleFilter: (id: HomeFilter) => void;
   onLearnMore: () => void;
 }) {
+  const updateCheck = useUpdateCheck(updateCheckSummary);
   return (
     <div className="grid grid-cols-3 gap-3">
       <div className="group/stat relative flex">
@@ -159,7 +163,7 @@ function HomeStatTiles({
         </span>
       </div>
 
-      <div className="flex">
+      <div className="relative flex">
         <Button
           variant="outline"
           className="h-auto flex-1 flex-col items-stretch gap-1 rounded-md border-border-subtle bg-bg-elevated px-4 py-3.5 justify-start text-left active:scale-98 aria-pressed:border-accent aria-pressed:bg-accent-softer"
@@ -174,7 +178,39 @@ function HomeStatTiles({
           <span className="text-display leading-[1.1] font-semibold tracking-[-0.02em] tabular-nums">
             {updates.length}
           </span>
+          <span
+            className={`truncate text-caption font-normal ${updateCheck.failed ? "text-error" : "text-text-tertiary"}`}
+            title={updateCheck.caption}
+          >
+            {updateCheck.caption}
+          </span>
         </Button>
+        <span className="absolute top-2.5 right-2.5">
+          <TooltipControl content="Check sources for updates">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-text-tertiary hover:text-text-primary"
+              aria-label={updateCheck.pending ? "Checking…" : "Check now"}
+              disabled={updateCheck.pending}
+              onClick={updateCheck.check}
+            >
+              <RefreshCw
+                aria-hidden
+                className={updateCheck.pending ? "motion-safe:animate-spin" : undefined}
+              />
+            </Button>
+          </TooltipControl>
+        </span>
+        {updateCheck.checkError ? (
+          <span role="alert" className="sr-only">
+            {updateCheck.checkError}
+          </span>
+        ) : (
+          <span role="status" className="sr-only">
+            {updateCheck.caption}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -393,12 +429,11 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
         broken={broken}
         warnings={warnings}
         updates={updates}
+        updateCheckSummary={snapshot.update_check}
         filter={filter}
         toggleFilter={toggleFilter}
         onLearnMore={() => setActiveView({ kind: "learn", section: "broken" })}
       />
-
-      <HomeUpdateCheck summary={snapshot.update_check} />
 
       <InvocationCostCard
         inv={inv}

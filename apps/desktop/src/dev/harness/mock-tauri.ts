@@ -318,6 +318,10 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
       const payload = isObjectInvokeArgs(rawPayload) ? rawPayload : {};
       switch (command) {
         case "check_skill_updates_now":
+          currentSnapshot = {
+            ...currentSnapshot,
+            update_check: { ...currentSnapshot.update_check, checked_at: new Date().toISOString() },
+          };
           return currentSnapshot.update_check;
         case "get_background_status":
           return { revision: 0, tasks: [] };
