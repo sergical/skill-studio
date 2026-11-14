@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use tiktoken_rs::CoreBPE;
 
 use crate::dto::{
-    CapabilitiesRequest, Completeness, DeploymentDto, Diagnosis, DriftState, EventDto,
+    CapabilitiesRequest, Completeness, CopyStatus, DeploymentDto, Diagnosis, DriftState, EventDto,
     FrontmatterRepairPreview, HarnessesRequest, InstalledSkillDto, Inventory, Issue, IssueKind,
     ListEventsRequest, NextAction, Observation, ParkCheck, ParkCheckRequest, ParkOutcome,
     ParkRequest, PluginSourceDto, RepairApplyMode, RepairApplyRequest, RepairOutcome,
@@ -695,11 +695,7 @@ fn scan_inner_with_budget(
             .chain(ledger.dotagents.iter().map(|entry| entry.name.as_str()))
             .collect();
         for name in names {
-            let scope_root = match scope {
-                RootScope::Global => home.as_path(),
-                RootScope::Project(project) => project.0.as_path(),
-            };
-            let folder = scope_root.join(".agents/skills").join(name);
+            let folder = library_dir(home, scope).join(name);
             let found = skills.get(name).is_some_and(|skill| {
                 skill
                     .deployments
@@ -714,6 +710,7 @@ fn scan_inner_with_budget(
                 let source = ledger_source(ledger, name);
                 if req.source.as_ref().is_none_or(|filter| filter == &source)
                     && (req.root.is_none() || matches!(scope, RootScope::Global))
+                    && req.copy_status.is_none()
                     && (req.skills.is_empty() || req.skills.iter().any(|skill| skill.0 == name))
                 {
                     lock_only.push(crate::dto::LockOnlySkill {
@@ -730,6 +727,7 @@ fn scan_inner_with_budget(
     let skills: Vec<InstalledSkillDto> = skills
         .into_values()
         .filter_map(|mut skill| {
+            set_copy_status(fs, home, &scope_ledgers, &mut skill);
             if req.root.is_some() {
                 skill
                     .deployments
@@ -761,10 +759,19 @@ fn scan_inner_with_budget(
                 }
                 _ => "manual".into(),
             };
-            req.source
+            if req
+                .source
                 .as_ref()
-                .is_none_or(|source| source == &skill.source)
-                .then_some(skill)
+                .is_some_and(|source| source != &skill.source)
+            {
+                return None;
+            }
+            if let Some(status) = req.copy_status {
+                skill
+                    .deployments
+                    .retain(|deployment| deployment.copy_status == Some(status));
+            }
+            (!skill.deployments.is_empty()).then_some(skill)
         })
         .collect();
 
@@ -793,6 +800,74 @@ fn scan_inner_with_budget(
         unread_roots,
         timings,
     })
+}
+
+fn library_dir(home: &Path, scope: &RootScope) -> PathBuf {
+    match scope {
+        RootScope::Global => home.join(UNIVERSAL_ROOT_RELATIVE),
+        RootScope::Project(project) => project.0.join(UNIVERSAL_ROOT_RELATIVE),
+    }
+}
+
+/// Compares each agent copy of `skill` with the library copy in its scope.
+/// A differing copy is stale when all of its files are older than the
+/// skill's last install or update in that scope's lock file.
+fn set_copy_status(
+    fs: &dyn ScopeFs,
+    home: &Path,
+    scope_ledgers: &HashMap<RootScope, ownership::ScopeLedgers>,
+    skill: &mut InstalledSkillDto,
+) {
+    let libraries: HashMap<RootScope, (PathBuf, String)> = skill
+        .deployments
+        .iter()
+        .filter(|deployment| {
+            deployment.path.parent() == Some(library_dir(home, &deployment.root.scope).as_path())
+        })
+        .map(|deployment| {
+            let real = fs
+                .canonicalize(&deployment.path)
+                .unwrap_or_else(|_| deployment.path.clone());
+            (
+                deployment.root.scope.clone(),
+                (real, deployment.content_hash.clone()),
+            )
+        })
+        .collect();
+    for deployment in &mut skill.deployments {
+        if deployment.harness.is_none()
+            || deployment.plugin.is_some()
+            || deployment.parked_origin.is_some()
+            || deployment.symlink_is_broken
+        {
+            continue;
+        }
+        let Some((library, library_hash)) = libraries.get(&deployment.root.scope) else {
+            continue;
+        };
+        let updated_at = scope_ledgers
+            .get(&deployment.root.scope)
+            .and_then(|ledger| ledger.lock.skills.get(&skill.name.0))
+            .and_then(|entry| DateTime::parse_from_rfc3339(&entry.updated_at).ok());
+        deployment.copy_status = Some(
+            if fs
+                .canonicalize(&deployment.path)
+                .is_ok_and(|real| &real == library)
+            {
+                CopyStatus::Link
+            } else if &deployment.content_hash == library_hash {
+                CopyStatus::Same
+            } else if deployment
+                .modified_at
+                .zip(updated_at)
+                .is_some_and(|(modified, updated)| modified < updated)
+            {
+                CopyStatus::Stale
+            } else {
+                CopyStatus::Differs
+            },
+        );
+    }
 }
 
 fn ledger_source(ledger: &ownership::ScopeLedgers, name: &str) -> String {
@@ -1140,6 +1215,7 @@ fn scan_one_plugin_target(
                     source_kind: SourceKind::Plugin,
                     parked_origin: None,
                     parked_owner_kind: None,
+                    copy_status: None,
                 };
                 insert_deployment(
                     &mut accum.skills,
@@ -1555,6 +1631,7 @@ fn process_entries(
             source_kind,
             parked_origin: cx.target.parked_origin.clone(),
             parked_owner_kind,
+            copy_status: None,
         };
 
         insert_deployment(&mut accum.skills, &entry.name, description, deployment);
@@ -7631,6 +7708,7 @@ mod tests {
             source_kind,
             parked_origin: None,
             parked_owner_kind: None,
+            copy_status: None,
         }
     }
 

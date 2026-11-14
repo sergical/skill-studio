@@ -65,8 +65,13 @@ fn print_inventory(inventory: &Inventory) {
         // The id is what `park`, `unpark` and `remove --id` take when a
         // name matches more than one copy.
         for deployment in &skill.deployments {
+            let status = deployment
+                .copy_status
+                .zip(deployment.harness.as_ref())
+                .map(|(status, agent)| format!("  {agent} copy: {}", status.as_str()))
+                .unwrap_or_default();
             println!(
-                "  - {}  id {}",
+                "  - {}  id {}{status}",
                 deployment.path.display(),
                 deployment.id.as_str()
             );

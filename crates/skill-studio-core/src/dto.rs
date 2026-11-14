@@ -245,6 +245,12 @@ pub struct DeploymentDto {
     /// was parked before the marker recorded it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_owner_kind: Option<LifecycleOwnerKind>,
+    /// For an agent copy, how it compares with the library copy
+    /// (`.agents/skills`) in the same scope. `None` for the library copy,
+    /// a plugin or parked copy, a broken link, or an agent copy with no
+    /// library copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_status: Option<CopyStatus>,
 }
 
 /// One skill with all of its deployments.
@@ -297,6 +303,8 @@ pub struct ScanRequest {
     pub root: Option<ScanRoot>,
     /// Restrict to these skill names; empty means all.
     pub skills: Vec<SkillName>,
+    /// Keep only the agent copies with this copy status.
+    pub copy_status: Option<CopyStatus>,
     /// Include per-phase timings.
     pub timings: bool,
 }
@@ -1220,6 +1228,37 @@ pub struct UpdateAllRequest {
 pub enum ScanRoot {
     /// Skills directly in ~/.agents/skills.
     Library,
+}
+
+/// How an agent copy compares with the library copy in its scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CopyStatus {
+    /// A link that resolves to the library copy.
+    Link,
+    /// A real folder with the same files as the library copy.
+    Same,
+    /// A real folder with other files, changed after the last install or
+    /// update of the skill, or with no lock entry to compare with.
+    Differs,
+    /// A real folder with other files, all older than the last install or
+    /// update in the lock file: the copy did not get that update.
+    Stale,
+}
+
+impl CopyStatus {
+    /// Every status, in the order the CLI lists them.
+    pub const ALL: [Self; 4] = [Self::Link, Self::Same, Self::Differs, Self::Stale];
+
+    /// The wire name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Link => "link",
+            Self::Same => "same",
+            Self::Differs => "differs",
+            Self::Stale => "stale",
+        }
+    }
 }
 
 /// A lock entry with no installed folder.

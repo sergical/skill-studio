@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use skill_studio_core::dto::{
-    CapabilitiesRequest, HarnessesRequest, InstallFile, InstallLinkMode, InstallMethod,
+    CapabilitiesRequest, CopyStatus, HarnessesRequest, InstallFile, InstallLinkMode, InstallMethod,
     InstallPreferencesRequest, InstallRequest, Inventory, ListEventsRequest, ParkRequest,
     RepairApplyMode, RepairApplyRequest, RepairPreviewRequest, RestoreRequest, ScanRequest,
     UnparkRequest, UpdateRequest,
@@ -113,6 +113,10 @@ enum Command {
         /// Only show skills in ~/.agents/skills.
         #[arg(long, value_parser = ["library"])]
         root: Option<String>,
+        /// Only show agent copies with this status against the library copy:
+        /// link, same, differs or stale (older than the last update).
+        #[arg(long, value_parser = parse_copy_status)]
+        copy_status: Option<CopyStatus>,
         #[command(flatten)]
         scope: ScopeArgs,
         /// Only show this skill. Repeat for more than one.
@@ -606,11 +610,24 @@ fn main() -> ExitCode {
         Command::Scan {
             source,
             root,
+            copy_status,
             scope,
             skills,
             timings,
             json,
-        } => run_scan(&scope, skills, source, root, timings, json, time),
+        } => run_scan(
+            &scope,
+            skills,
+            ScanRequest {
+                source,
+                root: root.map(|_| skill_studio_core::dto::ScanRoot::Library),
+                copy_status,
+                ..Default::default()
+            },
+            timings,
+            json,
+            time,
+        ),
         Command::Diagnose {
             scope,
             skills,
@@ -963,11 +980,17 @@ fn exit_code(status: i32) -> ExitCode {
     ExitCode::from(status.clamp(0, 255) as u8)
 }
 
+fn parse_copy_status(value: &str) -> Result<CopyStatus, String> {
+    CopyStatus::ALL
+        .into_iter()
+        .find(|status| status.as_str() == value)
+        .ok_or_else(|| "expected link, same, differs or stale".into())
+}
+
 fn run_scan(
     scope: &ScopeArgs,
     skills: Vec<String>,
-    source: Option<String>,
-    root: Option<String>,
+    filters: ScanRequest,
     timings: bool,
     json: bool,
     time: bool,
@@ -979,10 +1002,9 @@ fn run_scan(
     };
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let req = ScanRequest {
-        source,
-        root: root.map(|_| skill_studio_core::dto::ScanRoot::Library),
         skills: skills.into_iter().map(SkillName).collect(),
         timings,
+        ..filters
     };
     let result = ops::scan(&rt, &ctx, &req);
     let envelope = ResultEnvelope::from_result(Operation::Scan, &rt.scope, &ctx, result);

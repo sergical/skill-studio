@@ -410,6 +410,17 @@
               "type": "null"
             }
           ]
+        },
+        "copy_status": {
+          "description": "For an agent copy, how it compares with the library copy\n(`.agents/skills`) in the same scope. `None` for the library copy,\na plugin or parked copy, a broken link, or an agent copy with no\nlibrary copy.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CopyStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -816,6 +827,31 @@
           "description": "Detached from its dotagents/skills.sh ledger via \"Fork\" so local\nedits survive `sync`/`update`. Never produced by classification\ndirectly; assigned afterward from the fork registry.",
           "type": "string",
           "const": "fork"
+        }
+      ]
+    },
+    "CopyStatus": {
+      "description": "How an agent copy compares with the library copy in its scope.",
+      "oneOf": [
+        {
+          "description": "A link that resolves to the library copy.",
+          "type": "string",
+          "const": "link"
+        },
+        {
+          "description": "A real folder with the same files as the library copy.",
+          "type": "string",
+          "const": "same"
+        },
+        {
+          "description": "A real folder with other files, changed after the last install or\nupdate of the skill, or with no lock entry to compare with.",
+          "type": "string",
+          "const": "differs"
+        },
+        {
+          "description": "A real folder with other files, all older than the last install or\nupdate in the lock file: the copy did not get that update.",
+          "type": "string",
+          "const": "stale"
         }
       ]
     },

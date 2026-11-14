@@ -169,3 +169,5 @@ partial. A removed skill leaves the due list, and its date can still be cleared.
 Review dates are Skill Studio data in `~/.agents/review-dates.json`.
 
 Scan source inventory uses CLI `scan --json --source <owner/repo|manual> --root library` and MCP `scan` with `source` and `root`. Each skill reports `source`; `lock_only` lists ledger entries with no folder. `crates/skill-studio-core/tests/scan_source.rs` covers locked and manual sources, dotagents sources, both filters, and missing folders.
+
+Copy status uses CLI `scan --json --copy-status <link|same|differs|stale>` and MCP `scan` with `copy_status`. Each agent copy reports `copy_status` against the library copy in its scope, offline: `stale` means it differs and all its files are older than the lock entry's `updatedAt`. `crates/skill-studio-core/tests/scan_copy_status.rs` covers the four values and the filter.

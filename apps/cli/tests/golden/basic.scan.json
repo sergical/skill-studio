@@ -194,7 +194,8 @@
             "folder_truncated": false,
             "in_git_repo": false,
             "studio_disabled": false,
-            "source_kind": "manual"
+            "source_kind": "manual",
+            "copy_status": "link"
           },
           {
             "id": "dep:v1/global/universal/universal/gamma/-/%24HOME%2F.agents%2Fskills%2Fgamma",
@@ -303,7 +304,8 @@
             "folder_truncated": false,
             "in_git_repo": false,
             "studio_disabled": false,
-            "source_kind": "manual"
+            "source_kind": "manual",
+            "copy_status": "link"
           }
         ]
       }
