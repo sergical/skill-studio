@@ -205,6 +205,7 @@ export function SkillThrow() {
     if (!body || body.awake) return;
     const element = chipRefs.current[index];
     if (element) settleAnimations(element);
+    setStyle(element, { opacity: "1" });
     body.awake = true;
   };
 
@@ -642,8 +643,12 @@ export function SkillThrow() {
       const size = chipSize(index);
       const r = (to.r ?? 0) + (rand(index, 15) - 0.5) * 120;
       const { halfW, halfH } = rotatedHalf(size, r);
-      const landing = { ...to, y: to.y + 2 };
-      landing.x = clampX(g, to.x, rotatedHalf({ w: size.w * 1.14, h: size.h * 0.82 }, to.r).halfW);
+      const squashed = rotatedHalf({ w: size.w * 1.14, h: size.h * 0.82 }, to.r);
+      const landing = {
+        ...to,
+        x: clampX(g, to.x, squashed.halfW),
+        y: Math.min(to.y + 2, g.h - squashed.halfH),
+      };
       place(element, {
         x: clampX(g, to.x + (rand(index, 14) - 0.5) * 60, halfW),
         y: Math.max(halfH, to.y - 170 - rand(index, 13) * 150),
@@ -783,11 +788,11 @@ export function SkillThrow() {
   };
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    stopAutoTidy();
     const index = chipIndexAt(event.target);
     const body = bodies.current[index];
     const point = stagePoint(event);
     if (index < 0 || !body || body.mode === "gone" || !point || hold.current) return;
+    stopAutoTidy();
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const cos = Math.cos(body.r * RAD);
