@@ -100,6 +100,7 @@ esac
 
 def base_env(run: Run) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k not in ("XDG_DATA_HOME", "OPENCODE_DB", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
+    env["PWD"] = str(run.cwd)
     if run.method == "cli":
         write_cli_wrapper(run)
         env["PATH"] = f"{run.wrapper_dir}:{env['PATH']}"

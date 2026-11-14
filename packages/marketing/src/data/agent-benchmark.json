@@ -1,11 +1,11 @@
 {
- "generated": "2026-11-14T07:52:15+00:00",
+ "generated": "2026-11-14T09:18:28+00:00",
  "fixture_version": 1,
- "total_runs": 18,
- "total_cost_usd": 6.04,
+ "total_runs": 171,
+ "total_cost_usd": 34.12,
  "tasks": {
   "usage": {
-   "runs": 18,
+   "runs": 99,
    "questions": [
     "q1",
     "q2",
@@ -14,72 +14,228 @@
    ],
    "overall": {
     "cli": {
-     "cells": 6,
+     "cells": 11,
      "correct_share": {
       "median": 0.75,
-      "min": 0.75,
+      "min": 0.0,
       "max": 1.0
      },
      "duration_s": {
-      "median": 69.0,
-      "min": 18.0,
-      "max": 146.1
+      "median": 91.0,
+      "min": 21.4,
+      "max": 204.7
      },
      "cost_usd": {
-      "median": 0.233,
-      "min": 0.044,
+      "median": 0.1269,
+      "min": 0.0036,
       "max": 0.8663
      },
      "tool_calls": {
-      "median": 11.5,
-      "min": 4,
-      "max": 28
+      "median": 14,
+      "min": 6,
+      "max": 32
      }
     },
     "mcp": {
-     "cells": 5,
+     "cells": 11,
      "correct_share": {
       "median": 0.75,
-      "min": 0.75,
+      "min": 0.25,
       "max": 0.75
      },
      "duration_s": {
-      "median": 26.5,
-      "min": 18.1,
-      "max": 42.7
+      "median": 33.8,
+      "min": 19.6,
+      "max": 205.8
      },
      "cost_usd": {
-      "median": 0.123,
-      "min": 0.0845,
-      "max": 0.3449
+      "median": 0.0913,
+      "min": 0.0041,
+      "max": 0.8746
      },
      "tool_calls": {
-      "median": 6,
+      "median": 8,
       "min": 3,
-      "max": 11
+      "max": 32
      }
     },
     "raw": {
-     "cells": 7,
+     "cells": 11,
      "correct_share": {
       "median": 0.75,
-      "min": 0.75,
+      "min": 0.25,
+      "max": 0.75
+     },
+     "duration_s": {
+      "median": 104.3,
+      "min": 63.3,
+      "max": 172.1
+     },
+     "cost_usd": {
+      "median": 0.2472,
+      "min": 0.0097,
+      "max": 1.1292
+     },
+     "tool_calls": {
+      "median": 12.5,
+      "min": 7,
+      "max": 29
+     }
+    }
+   }
+  },
+  "update": {
+   "runs": 36,
+   "questions": [
+    "u1",
+    "u2"
+   ],
+   "overall": {
+    "cli": {
+     "cells": 4,
+     "correct_share": {
+      "median": 1.0,
+      "min": 1.0,
       "max": 1.0
      },
      "duration_s": {
-      "median": 105.2,
-      "min": 55.2,
-      "max": 189.9
+      "median": 29.15,
+      "min": 21.6,
+      "max": 44.1
      },
      "cost_usd": {
-      "median": 0.2944,
-      "min": 0.2008,
-      "max": 0.927
+      "median": 0.0984,
+      "min": 0.0885,
+      "max": 0.1334
      },
      "tool_calls": {
-      "median": 12,
+      "median": 8.0,
+      "min": 6,
+      "max": 10
+     }
+    },
+    "mcp": {
+     "cells": 4,
+     "correct_share": {
+      "median": 1.0,
+      "min": 0.5,
+      "max": 1.0
+     },
+     "duration_s": {
+      "median": 21.0,
+      "min": 16.2,
+      "max": 36.5
+     },
+     "cost_usd": {
+      "median": 0.1037,
+      "min": 0.0795,
+      "max": 0.124
+     },
+     "tool_calls": {
+      "median": 5.5,
+      "min": 5,
+      "max": 6
+     }
+    },
+    "raw": {
+     "cells": 4,
+     "correct_share": {
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+     },
+     "duration_s": {
+      "median": 21.2,
+      "min": 15.6,
+      "max": 38.3
+     },
+     "cost_usd": {
+      "median": 0.0798,
+      "min": 0.0515,
+      "max": 0.0902
+     },
+     "tool_calls": {
+      "median": 4.5,
+      "min": 4,
+      "max": 5
+     }
+    }
+   }
+  },
+  "share": {
+   "runs": 36,
+   "questions": [
+    "s1",
+    "s2"
+   ],
+   "overall": {
+    "cli": {
+     "cells": 4,
+     "correct_share": {
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+     },
+     "duration_s": {
+      "median": 27.1,
+      "min": 22.9,
+      "max": 37.2
+     },
+     "cost_usd": {
+      "median": 0.1033,
+      "min": 0.0749,
+      "max": 0.1346
+     },
+     "tool_calls": {
+      "median": 7.0,
       "min": 7,
-      "max": 28
+      "max": 9
+     }
+    },
+    "mcp": {
+     "cells": 4,
+     "correct_share": {
+      "median": 1.0,
+      "min": 0.5,
+      "max": 1.0
+     },
+     "duration_s": {
+      "median": 23.45,
+      "min": 18.7,
+      "max": 31.0
+     },
+     "cost_usd": {
+      "median": 0.0917,
+      "min": 0.0736,
+      "max": 0.117
+     },
+     "tool_calls": {
+      "median": 5.5,
+      "min": 4,
+      "max": 6
+     }
+    },
+    "raw": {
+     "cells": 4,
+     "correct_share": {
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+     },
+     "duration_s": {
+      "median": 28.15,
+      "min": 21.1,
+      "max": 34.7
+     },
+     "cost_usd": {
+      "median": 0.0975,
+      "min": 0.0626,
+      "max": 0.1197
+     },
+     "tool_calls": {
+      "median": 6.0,
+      "min": 5,
+      "max": 6
      }
     }
    }
@@ -89,98 +245,245 @@
   {
    "task": "usage",
    "harness": "claude",
-   "model": "claude-opus-5-5",
-   "label": "Opus 5.5",
+   "model": "claude-haiku-5-5",
+   "label": "Haiku 5.5",
    "method": "cli",
-   "runs": 1,
+   "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
    "questions": 4,
    "correct": {
     "median": 3,
-    "min": 3,
+    "min": 2,
     "max": 3
    },
    "correct_share": {
     "median": 0.75,
-    "min": 0.75,
+    "min": 0.5,
     "max": 0.75
    },
    "per_question": {
-    "q1": 1.0,
+    "q1": 0.67,
     "q2": 1.0,
     "q3": 0.0,
     "q4": 1.0
    },
    "duration_s": {
-    "median": 37.4,
-    "min": 37.4,
-    "max": 37.4
+    "median": 194.8,
+    "min": 153.8,
+    "max": 231.5
    },
    "cost_usd": {
-    "median": 0.2819,
-    "min": 0.2819,
-    "max": 0.2819
+    "median": 0.1269,
+    "min": 0.0455,
+    "max": 0.2261
    },
    "cost_source": "harness",
    "tokens": {
-    "median": 256102,
-    "min": 256102,
-    "max": 256102
+    "median": 2601006,
+    "min": 1509358,
+    "max": 2890277
    },
    "tool_calls": {
-    "median": 8,
-    "min": 8,
-    "max": 8
+    "median": 32,
+    "min": 28,
+    "max": 38
    },
-   "agreement": 1.0
+   "agreement": 0.33
   },
   {
    "task": "usage",
    "harness": "claude",
-   "model": "claude-opus-5-5",
-   "label": "Opus 5.5",
+   "model": "claude-haiku-5-5",
+   "label": "Haiku 5.5",
    "method": "mcp",
-   "runs": 1,
+   "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
    "questions": 4,
    "correct": {
     "median": 3,
-    "min": 3,
+    "min": 2,
     "max": 3
    },
    "correct_share": {
     "median": 0.75,
-    "min": 0.75,
+    "min": 0.5,
     "max": 0.75
    },
    "per_question": {
-    "q1": 1.0,
+    "q1": 0.67,
     "q2": 1.0,
     "q3": 0.0,
     "q4": 1.0
    },
    "duration_s": {
-    "median": 42.7,
-    "min": 42.7,
-    "max": 42.7
+    "median": 110.7,
+    "min": 45.9,
+    "max": 162.3
    },
    "cost_usd": {
-    "median": 0.3449,
-    "min": 0.3449,
-    "max": 0.3449
+    "median": 0.0349,
+    "min": 0.0149,
+    "max": 0.145
    },
    "cost_source": "harness",
    "tokens": {
-    "median": 333398,
-    "min": 333398,
-    "max": 333398
+    "median": 1064928,
+    "min": 376074,
+    "max": 2251698
    },
    "tool_calls": {
-    "median": 11,
+    "median": 19,
     "min": 11,
-    "max": 11
+    "max": 31
+   },
+   "agreement": 0.33
+  },
+  {
+   "task": "usage",
+   "harness": "claude",
+   "model": "claude-haiku-5-5",
+   "label": "Haiku 5.5",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 3
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 0.75
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.0,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 172.1,
+    "min": 153.1,
+    "max": 172.2
+   },
+   "cost_usd": {
+    "median": 0.153,
+    "min": 0.104,
+    "max": 0.1585
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 2105825,
+    "min": 2027467,
+    "max": 2298379
+   },
+   "tool_calls": {
+    "median": 29,
+    "min": 25,
+    "max": 29
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "usage",
+   "harness": "claude",
+   "model": "claude-opus-5-5",
+   "label": "Opus 5.5",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 4
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 1.0
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.33,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 42.3,
+    "min": 30.7,
+    "max": 160.9
+   },
+   "cost_usd": {
+    "median": 0.2871,
+    "min": 0.2107,
+    "max": 1.0572
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 283414,
+    "min": 182697,
+    "max": 1207773
+   },
+   "tool_calls": {
+    "median": 9,
+    "min": 6,
+    "max": 23
+   },
+   "agreement": 0.67
+  },
+  {
+   "task": "usage",
+   "harness": "claude",
+   "model": "claude-opus-5-5",
+   "label": "Opus 5.5",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 3
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 0.75
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.0,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 33.8,
+    "min": 26.6,
+    "max": 38.7
+   },
+   "cost_usd": {
+    "median": 0.3041,
+    "min": 0.2634,
+    "max": 0.3121
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 222890,
+    "min": 181125,
+    "max": 255144
+   },
+   "tool_calls": {
+    "median": 8,
+    "min": 7,
+    "max": 8
    },
    "agreement": 1.0
   },
@@ -190,7 +493,7 @@
    "model": "claude-opus-5-5",
    "label": "Opus 5.5",
    "method": "raw",
-   "runs": 1,
+   "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
    "questions": 4,
@@ -205,433 +508,41 @@
     "max": 0.75
    },
    "per_question": {
-    "q1": 1.0,
+    "q1": 0.67,
     "q2": 1.0,
-    "q3": 0.0,
+    "q3": 0.33,
     "q4": 1.0
    },
    "duration_s": {
-    "median": 109.4,
-    "min": 109.4,
-    "max": 109.4
+    "median": 109.9,
+    "min": 103.3,
+    "max": 136.1
    },
    "cost_usd": {
-    "median": 0.8873,
-    "min": 0.8873,
-    "max": 0.8873
+    "median": 1.0787,
+    "min": 1.0283,
+    "max": 1.1963
    },
    "cost_source": "harness",
    "tokens": {
-    "median": 805701,
-    "min": 805701,
-    "max": 805701
-   },
-   "tool_calls": {
-    "median": 13,
-    "min": 13,
-    "max": 13
-   },
-   "agreement": 1.0
-  },
-  {
-   "task": "usage",
-   "harness": "claude",
-   "model": "claude-sonnet-5-5",
-   "label": "Sonnet 5.5",
-   "method": "cli",
-   "runs": 1,
-   "errors": 0,
-   "fixture_changed": 0,
-   "questions": 4,
-   "correct": {
-    "median": 3,
-    "min": 3,
-    "max": 3
-   },
-   "correct_share": {
-    "median": 0.75,
-    "min": 0.75,
-    "max": 0.75
-   },
-   "per_question": {
-    "q1": 1.0,
-    "q2": 1.0,
-    "q3": 0.0,
-    "q4": 1.0
-   },
-   "duration_s": {
-    "median": 19.9,
-    "min": 19.9,
-    "max": 19.9
-   },
-   "cost_usd": {
-    "median": 0.0835,
-    "min": 0.0835,
-    "max": 0.0835
-   },
-   "cost_source": "harness",
-   "tokens": {
-    "median": 141201,
-    "min": 141201,
-    "max": 141201
-   },
-   "tool_calls": {
-    "median": 5,
-    "min": 5,
-    "max": 5
-   },
-   "agreement": 1.0
-  },
-  {
-   "task": "usage",
-   "harness": "claude",
-   "model": "claude-sonnet-5-5",
-   "label": "Sonnet 5.5",
-   "method": "mcp",
-   "runs": 1,
-   "errors": 0,
-   "fixture_changed": 0,
-   "questions": 4,
-   "correct": {
-    "median": 3,
-    "min": 3,
-    "max": 3
-   },
-   "correct_share": {
-    "median": 0.75,
-    "min": 0.75,
-    "max": 0.75
-   },
-   "per_question": {
-    "q1": 1.0,
-    "q2": 1.0,
-    "q3": 0.0,
-    "q4": 1.0
-   },
-   "duration_s": {
-    "median": 25.5,
-    "min": 25.5,
-    "max": 25.5
-   },
-   "cost_usd": {
-    "median": 0.123,
-    "min": 0.123,
-    "max": 0.123
-   },
-   "cost_source": "harness",
-   "tokens": {
-    "median": 206088,
-    "min": 206088,
-    "max": 206088
-   },
-   "tool_calls": {
-    "median": 8,
-    "min": 8,
-    "max": 8
-   },
-   "agreement": 1.0
-  },
-  {
-   "task": "usage",
-   "harness": "claude",
-   "model": "claude-sonnet-5-5",
-   "label": "Sonnet 5.5",
-   "method": "raw",
-   "runs": 1,
-   "errors": 0,
-   "fixture_changed": 0,
-   "questions": 4,
-   "correct": {
-    "median": 3,
-    "min": 3,
-    "max": 3
-   },
-   "correct_share": {
-    "median": 0.75,
-    "min": 0.75,
-    "max": 0.75
-   },
-   "per_question": {
-    "q1": 1.0,
-    "q2": 1.0,
-    "q3": 0.0,
-    "q4": 1.0
-   },
-   "duration_s": {
-    "median": 55.2,
-    "min": 55.2,
-    "max": 55.2
-   },
-   "cost_usd": {
-    "median": 0.2944,
-    "min": 0.2944,
-    "max": 0.2944
-   },
-   "cost_source": "harness",
-   "tokens": {
-    "median": 455717,
-    "min": 455717,
-    "max": 455717
-   },
-   "tool_calls": {
-    "median": 10,
-    "min": 10,
-    "max": 10
-   },
-   "agreement": 1.0
-  },
-  {
-   "task": "usage",
-   "harness": "codex",
-   "model": "gpt-6-astra",
-   "label": "GPT-6 Astra",
-   "method": "cli",
-   "runs": 1,
-   "errors": 0,
-   "fixture_changed": 0,
-   "questions": 4,
-   "correct": {
-    "median": 3,
-    "min": 3,
-    "max": 3
-   },
-   "correct_share": {
-    "median": 0.75,
-    "min": 0.75,
-    "max": 0.75
-   },
-   "per_question": {
-    "q1": 1.0,
-    "q2": 1.0,
-    "q3": 0.0,
-    "q4": 1.0
-   },
-   "duration_s": {
-    "median": 100.6,
-    "min": 100.6,
-    "max": 100.6
-   },
-   "cost_usd": {
-    "median": 0.8663,
-    "min": 0.8663,
-    "max": 0.8663
-   },
-   "cost_source": "estimate",
-   "tokens": {
-    "median": 409454,
-    "min": 409454,
-    "max": 409454
+    "median": 1007947,
+    "min": 859420,
+    "max": 1313600
    },
    "tool_calls": {
     "median": 15,
-    "min": 15,
-    "max": 15
-   },
-   "agreement": 1.0
-  },
-  {
-   "task": "usage",
-   "harness": "codex",
-   "model": "gpt-6-astra",
-   "label": "GPT-6 Astra",
-   "method": "raw",
-   "runs": 1,
-   "errors": 0,
-   "fixture_changed": 0,
-   "questions": 4,
-   "correct": {
-    "median": 3,
-    "min": 3,
-    "max": 3
-   },
-   "correct_share": {
-    "median": 0.75,
-    "min": 0.75,
-    "max": 0.75
-   },
-   "per_question": {
-    "q1": 1.0,
-    "q2": 1.0,
-    "q3": 0.0,
-    "q4": 1.0
-   },
-   "duration_s": {
-    "median": 74.7,
-    "min": 74.7,
-    "max": 74.7
-   },
-   "cost_usd": {
-    "median": 0.927,
-    "min": 0.927,
-    "max": 0.927
-   },
-   "cost_source": "estimate",
-   "tokens": {
-    "median": 327088,
-    "min": 327088,
-    "max": 327088
-   },
-   "tool_calls": {
-    "median": 7,
-    "min": 7,
-    "max": 7
-   },
-   "agreement": 1.0
-  },
-  {
-   "task": "usage",
-   "harness": "codex",
-   "model": "gpt-6.1-sol",
-   "label": "GPT-6.1 Sol",
-   "method": "cli",
-   "runs": 1,
-   "errors": 0,
-   "fixture_changed": 0,
-   "questions": 4,
-   "correct": {
-    "median": 4,
-    "min": 4,
-    "max": 4
-   },
-   "correct_share": {
-    "median": 1.0,
-    "min": 1.0,
-    "max": 1.0
-   },
-   "per_question": {
-    "q1": 1.0,
-    "q2": 1.0,
-    "q3": 1.0,
-    "q4": 1.0
-   },
-   "duration_s": {
-    "median": 106.4,
-    "min": 106.4,
-    "max": 106.4
-   },
-   "cost_usd": {
-    "median": 0.1842,
-    "min": 0.1842,
-    "max": 0.1842
-   },
-   "cost_source": "estimate",
-   "tokens": {
-    "median": 523581,
-    "min": 523581,
-    "max": 523581
-   },
-   "tool_calls": {
-    "median": 17,
-    "min": 17,
+    "min": 14,
     "max": 17
    },
-   "agreement": 1.0
+   "agreement": 0.33
   },
   {
    "task": "usage",
-   "harness": "codex",
-   "model": "gpt-6.1-sol",
-   "label": "GPT-6.1 Sol",
-   "method": "mcp",
-   "runs": 1,
-   "errors": 0,
-   "fixture_changed": 0,
-   "questions": 4,
-   "correct": {
-    "median": 3,
-    "min": 3,
-    "max": 3
-   },
-   "correct_share": {
-    "median": 0.75,
-    "min": 0.75,
-    "max": 0.75
-   },
-   "per_question": {
-    "q1": 1.0,
-    "q2": 1.0,
-    "q3": 0.0,
-    "q4": 1.0
-   },
-   "duration_s": {
-    "median": 26.5,
-    "min": 26.5,
-    "max": 26.5
-   },
-   "cost_usd": {
-    "median": 0.0845,
-    "min": 0.0845,
-    "max": 0.0845
-   },
-   "cost_source": "estimate",
-   "tokens": {
-    "median": 149653,
-    "min": 149653,
-    "max": 149653
-   },
-   "tool_calls": {
-    "median": 3,
-    "min": 3,
-    "max": 3
-   },
-   "agreement": 1.0
-  },
-  {
-   "task": "usage",
-   "harness": "codex",
-   "model": "gpt-6.1-sol",
-   "label": "GPT-6.1 Sol",
-   "method": "raw",
-   "runs": 1,
-   "errors": 0,
-   "fixture_changed": 0,
-   "questions": 4,
-   "correct": {
-    "median": 4,
-    "min": 4,
-    "max": 4
-   },
-   "correct_share": {
-    "median": 1.0,
-    "min": 1.0,
-    "max": 1.0
-   },
-   "per_question": {
-    "q1": 1.0,
-    "q2": 1.0,
-    "q3": 1.0,
-    "q4": 1.0
-   },
-   "duration_s": {
-    "median": 107.9,
-    "min": 107.9,
-    "max": 107.9
-   },
-   "cost_usd": {
-    "median": 0.2008,
-    "min": 0.2008,
-    "max": 0.2008
-   },
-   "cost_source": "estimate",
-   "tokens": {
-    "median": 471042,
-    "min": 471042,
-    "max": 471042
-   },
-   "tool_calls": {
-    "median": 10,
-    "min": 10,
-    "max": 10
-   },
-   "agreement": 1.0
-  },
-  {
-   "task": "usage",
-   "harness": "opencode",
-   "model": "anthropic/claude-sonnet-5.5",
+   "harness": "claude",
+   "model": "claude-sonnet-5-5",
    "label": "Sonnet 5.5",
    "method": "cli",
-   "runs": 1,
+   "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
    "questions": 4,
@@ -652,84 +563,819 @@
     "q4": 1.0
    },
    "duration_s": {
-    "median": 146.1,
-    "min": 146.1,
-    "max": 146.1
+    "median": 21.4,
+    "min": 20.6,
+    "max": 23.8
    },
    "cost_usd": {
-    "median": 0.5689,
-    "min": 0.5689,
-    "max": 0.5689
+    "median": 0.0991,
+    "min": 0.0989,
+    "max": 0.1483
    },
-   "cost_source": "estimate",
+   "cost_source": "harness",
    "tokens": {
-    "median": 1831316,
-    "min": 1831316,
-    "max": 1831316
-   },
-   "tool_calls": {
-    "median": 28,
-    "min": 28,
-    "max": 28
-   },
-   "agreement": 1.0
-  },
-  {
-   "task": "usage",
-   "harness": "opencode",
-   "model": "anthropic/claude-sonnet-5.5",
-   "label": "Sonnet 5.5",
-   "method": "mcp",
-   "runs": 1,
-   "errors": 0,
-   "fixture_changed": 0,
-   "questions": 4,
-   "correct": {
-    "median": 3,
-    "min": 3,
-    "max": 3
-   },
-   "correct_share": {
-    "median": 0.75,
-    "min": 0.75,
-    "max": 0.75
-   },
-   "per_question": {
-    "q1": 1.0,
-    "q2": 1.0,
-    "q3": 0.0,
-    "q4": 1.0
-   },
-   "duration_s": {
-    "median": 37.4,
-    "min": 37.4,
-    "max": 37.4
-   },
-   "cost_usd": {
-    "median": 0.1942,
-    "min": 0.1942,
-    "max": 0.1942
-   },
-   "cost_source": "estimate",
-   "tokens": {
-    "median": 247620,
-    "min": 247620,
-    "max": 247620
+    "median": 174598,
+    "min": 147158,
+    "max": 196667
    },
    "tool_calls": {
     "median": 6,
-    "min": 6,
+    "min": 5,
     "max": 6
    },
    "agreement": 1.0
   },
   {
    "task": "usage",
+   "harness": "claude",
+   "model": "claude-sonnet-5-5",
+   "label": "Sonnet 5.5",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 2,
+    "max": 3
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.5,
+    "max": 0.75
+   },
+   "per_question": {
+    "q1": 0.67,
+    "q2": 1.0,
+    "q3": 0.0,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 19.6,
+    "min": 19.5,
+    "max": 24.7
+   },
+   "cost_usd": {
+    "median": 0.1066,
+    "min": 0.1051,
+    "max": 0.1268
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 166546,
+    "min": 136071,
+    "max": 206415
+   },
+   "tool_calls": {
+    "median": 7,
+    "min": 6,
+    "max": 8
+   },
+   "agreement": 0.67
+  },
+  {
+   "task": "usage",
+   "harness": "claude",
+   "model": "claude-sonnet-5-5",
+   "label": "Sonnet 5.5",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 3
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 0.75
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.0,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 63.3,
+    "min": 55.8,
+    "max": 71.9
+   },
+   "cost_usd": {
+    "median": 0.3185,
+    "min": 0.3167,
+    "max": 0.3916
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 612949,
+    "min": 539911,
+    "max": 737488
+   },
+   "tool_calls": {
+    "median": 13,
+    "min": 12,
+    "max": 14
+   },
+   "agreement": 0.33
+  },
+  {
+   "task": "usage",
+   "harness": "codex",
+   "model": "gpt-6-astra",
+   "label": "GPT-6 Astra",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 4
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 1.0
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.33,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 99.5,
+    "min": 75.7,
+    "max": 100.6
+   },
+   "cost_usd": {
+    "median": 0.8663,
+    "min": 0.8661,
+    "max": 1.0206
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 409454,
+    "min": 399803,
+    "max": 429187
+   },
+   "tool_calls": {
+    "median": 15,
+    "min": 15,
+    "max": 16
+   },
+   "agreement": 0.67
+  },
+  {
+   "task": "usage",
+   "harness": "codex",
+   "model": "gpt-6-astra",
+   "label": "GPT-6 Astra",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 4
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 1.0
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.33,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 88.7,
+    "min": 65.4,
+    "max": 113.5
+   },
+   "cost_usd": {
+    "median": 0.8746,
+    "min": 0.8405,
+    "max": 1.4039
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 375034,
+    "min": 320139,
+    "max": 686128
+   },
+   "tool_calls": {
+    "median": 8,
+    "min": 7,
+    "max": 12
+   },
+   "agreement": 0.33
+  },
+  {
+   "task": "usage",
+   "harness": "codex",
+   "model": "gpt-6-astra",
+   "label": "GPT-6 Astra",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 4
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 1.0
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.33,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 103.4,
+    "min": 74.7,
+    "max": 104.5
+   },
+   "cost_usd": {
+    "median": 1.1292,
+    "min": 0.927,
+    "max": 1.1883
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 410894,
+    "min": 327088,
+    "max": 475629
+   },
+   "tool_calls": {
+    "median": 7,
+    "min": 7,
+    "max": 9
+   },
+   "agreement": 0.67
+  },
+  {
+   "task": "usage",
+   "harness": "codex",
+   "model": "gpt-6-luna",
+   "label": "GPT-6 Luna",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 0,
+    "min": 0,
+    "max": 1
+   },
+   "correct_share": {
+    "median": 0.0,
+    "min": 0.0,
+    "max": 0.25
+   },
+   "per_question": {
+    "q1": 0.33,
+    "q2": 0.0,
+    "q3": 0.0,
+    "q4": 0.0
+   },
+   "duration_s": {
+    "median": 39.7,
+    "min": 37.2,
+    "max": 48.7
+   },
+   "cost_usd": {
+    "median": 0.0036,
+    "min": 0.0035,
+    "max": 0.0043
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 102545,
+    "min": 100455,
+    "max": 132560
+   },
+   "tool_calls": {
+    "median": 8,
+    "min": 8,
+    "max": 10
+   },
+   "agreement": 0.33
+  },
+  {
+   "task": "usage",
+   "harness": "codex",
+   "model": "gpt-6-luna",
+   "label": "GPT-6 Luna",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 1,
+    "min": 0,
+    "max": 1
+   },
+   "correct_share": {
+    "median": 0.25,
+    "min": 0.0,
+    "max": 0.25
+   },
+   "per_question": {
+    "q1": 0.0,
+    "q2": 0.0,
+    "q3": 0.0,
+    "q4": 0.67
+   },
+   "duration_s": {
+    "median": 30.5,
+    "min": 26.0,
+    "max": 33.4
+   },
+   "cost_usd": {
+    "median": 0.0041,
+    "min": 0.004,
+    "max": 0.0042
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 126622,
+    "min": 97283,
+    "max": 129241
+   },
+   "tool_calls": {
+    "median": 6,
+    "min": 4,
+    "max": 9
+   },
+   "agreement": 0.67
+  },
+  {
+   "task": "usage",
+   "harness": "codex",
+   "model": "gpt-6-luna",
+   "label": "GPT-6 Luna",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 1,
+    "min": 1,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 0.25,
+    "min": 0.25,
+    "max": 0.5
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 0.0,
+    "q3": 0.0,
+    "q4": 0.33
+   },
+   "duration_s": {
+    "median": 73.3,
+    "min": 62.2,
+    "max": 171.3
+   },
+   "cost_usd": {
+    "median": 0.0097,
+    "min": 0.0063,
+    "max": 0.0142
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 321989,
+    "min": 240407,
+    "max": 573786
+   },
+   "tool_calls": {
+    "median": 8,
+    "min": 8,
+    "max": 13
+   },
+   "agreement": 0.33
+  },
+  {
+   "task": "usage",
+   "harness": "codex",
+   "model": "gpt-6.1-sol",
+   "label": "GPT-6.1 Sol",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 4,
+    "min": 3,
+    "max": 4
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 0.75,
+    "max": 1.0
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.67,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 91.0,
+    "min": 42.0,
+    "max": 106.4
+   },
+   "cost_usd": {
+    "median": 0.1842,
+    "min": 0.0983,
+    "max": 0.2005
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 454742,
+    "min": 160179,
+    "max": 523581
+   },
+   "tool_calls": {
+    "median": 13,
+    "min": 10,
+    "max": 17
+   },
+   "agreement": 0.67
+  },
+  {
+   "task": "usage",
+   "harness": "codex",
+   "model": "gpt-6.1-sol",
+   "label": "GPT-6.1 Sol",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 3
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 0.75
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.0,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 33.7,
+    "min": 26.5,
+    "max": 35.4
+   },
+   "cost_usd": {
+    "median": 0.0867,
+    "min": 0.0845,
+    "max": 0.1053
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 150788,
+    "min": 149653,
+    "max": 197150
+   },
+   "tool_calls": {
+    "median": 3,
+    "min": 3,
+    "max": 4
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "usage",
+   "harness": "codex",
+   "model": "gpt-6.1-sol",
+   "label": "GPT-6.1 Sol",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 4
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 1.0
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.33,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 112.1,
+    "min": 107.9,
+    "max": 116.4
+   },
+   "cost_usd": {
+    "median": 0.2008,
+    "min": 0.1374,
+    "max": 0.2013
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 471042,
+    "min": 401693,
+    "max": 472437
+   },
+   "tool_calls": {
+    "median": 10,
+    "min": 9,
+    "max": 12
+   },
+   "agreement": 0.67
+  },
+  {
+   "task": "usage",
+   "harness": "codex",
+   "model": "gpt-6.1-terra",
+   "label": "GPT-6.1 Terra",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 2,
+    "max": 3
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.5,
+    "max": 0.75
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.0,
+    "q4": 0.67
+   },
+   "duration_s": {
+    "median": 44.8,
+    "min": 35.2,
+    "max": 63.2
+   },
+   "cost_usd": {
+    "median": 0.0635,
+    "min": 0.0513,
+    "max": 0.0692
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 356103,
+    "min": 141173,
+    "max": 450110
+   },
+   "tool_calls": {
+    "median": 14,
+    "min": 10,
+    "max": 21
+   },
+   "agreement": 0.33
+  },
+  {
+   "task": "usage",
+   "harness": "codex",
+   "model": "gpt-6.1-terra",
+   "label": "GPT-6.1 Terra",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 3
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 0.75
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.0,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 28.7,
+    "min": 28.5,
+    "max": 31.9
+   },
+   "cost_usd": {
+    "median": 0.0409,
+    "min": 0.0362,
+    "max": 0.0448
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 154578,
+    "min": 132764,
+    "max": 176376
+   },
+   "tool_calls": {
+    "median": 9,
+    "min": 8,
+    "max": 13
+   },
+   "agreement": 0.67
+  },
+  {
+   "task": "usage",
+   "harness": "codex",
+   "model": "gpt-6.1-terra",
+   "label": "GPT-6.1 Terra",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 3
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 0.75
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.0,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 64.4,
+    "min": 60.7,
+    "max": 66.6
+   },
+   "cost_usd": {
+    "median": 0.0596,
+    "min": 0.0585,
+    "max": 0.0646
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 283335,
+    "min": 224614,
+    "max": 300219
+   },
+   "tool_calls": {
+    "median": 8,
+    "min": 7,
+    "max": 8
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "usage",
+   "harness": "opencode",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 3
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 0.75
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.0,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 139.8,
+    "min": 35.8,
+    "max": 146.1
+   },
+   "cost_usd": {
+    "median": 0.4223,
+    "min": 0.1137,
+    "max": 0.5689
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 1072371,
+    "min": 168158,
+    "max": 1831316
+   },
+   "tool_calls": {
+    "median": 27,
+    "min": 9,
+    "max": 28
+   },
+   "agreement": 0.33
+  },
+  {
+   "task": "usage",
+   "harness": "opencode",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 3
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 0.75
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.0,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 37.4,
+    "min": 29.5,
+    "max": 80.7
+   },
+   "cost_usd": {
+    "median": 0.1942,
+    "min": 0.1532,
+    "max": 0.3627
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 247620,
+    "min": 140770,
+    "max": 631038
+   },
+   "tool_calls": {
+    "median": 6,
+    "min": 4,
+    "max": 11
+   },
+   "agreement": 0.67
+  },
+  {
+   "task": "usage",
    "harness": "opencode",
    "model": "anthropic/claude-sonnet-5.5",
    "label": "Sonnet 5.5",
    "method": "raw",
-   "runs": 1,
+   "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
    "questions": 4,
@@ -751,26 +1397,247 @@
    },
    "duration_s": {
     "median": 105.2,
-    "min": 105.2,
-    "max": 105.2
+    "min": 89.9,
+    "max": 111.5
    },
    "cost_usd": {
     "median": 0.3882,
-    "min": 0.3882,
-    "max": 0.3882
+    "min": 0.3877,
+    "max": 0.4253
    },
    "cost_source": "estimate",
    "tokens": {
     "median": 692319,
-    "min": 692319,
-    "max": 692319
+    "min": 574786,
+    "max": 806371
    },
    "tool_calls": {
     "median": 15,
-    "min": 15,
-    "max": 15
+    "min": 13,
+    "max": 17
    },
    "agreement": 1.0
+  },
+  {
+   "task": "usage",
+   "harness": "opencode",
+   "model": "moonshotai/kimi-k2.6",
+   "label": "Kimi K2.6",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 1,
+    "min": 0,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 0.25,
+    "min": 0.0,
+    "max": 0.5
+   },
+   "per_question": {
+    "q1": 0.67,
+    "q2": 0.0,
+    "q3": 0.0,
+    "q4": 0.33
+   },
+   "duration_s": {
+    "median": 204.7,
+    "min": 46.4,
+    "max": 569.9
+   },
+   "cost_usd": {
+    "median": 0.1828,
+    "min": 0.048,
+    "max": 0.1891
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 329940,
+    "min": 135986,
+    "max": 665325
+   },
+   "tool_calls": {
+    "median": 15,
+    "min": 10,
+    "max": 36
+   },
+   "agreement": 0.33
+  },
+  {
+   "task": "usage",
+   "harness": "opencode",
+   "model": "moonshotai/kimi-k2.6",
+   "label": "Kimi K2.6",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 3
+   },
+   "correct_share": {
+    "median": 0.5,
+    "min": 0.5,
+    "max": 0.75
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.0,
+    "q4": 0.33
+   },
+   "duration_s": {
+    "median": 124.3,
+    "min": 104.5,
+    "max": 306.9
+   },
+   "cost_usd": {
+    "median": 0.1489,
+    "min": 0.1409,
+    "max": 0.1708
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 432786,
+    "min": 396523,
+    "max": 528928
+   },
+   "tool_calls": {
+    "median": 15,
+    "min": 13,
+    "max": 18
+   },
+   "agreement": 0.33
+  },
+  {
+   "task": "usage",
+   "harness": "opencode",
+   "model": "moonshotai/kimi-k2.6",
+   "label": "Kimi K2.6",
+   "method": "raw",
+   "runs": 3,
+   "errors": 3,
+   "fixture_changed": 2,
+   "questions": 4,
+   "correct": null,
+   "correct_share": null,
+   "per_question": {
+    "q1": null,
+    "q2": null,
+    "q3": null,
+    "q4": null
+   },
+   "duration_s": null,
+   "cost_usd": null,
+   "cost_source": "estimate",
+   "tokens": null,
+   "tool_calls": null,
+   "agreement": 0.0
+  },
+  {
+   "task": "usage",
+   "harness": "pi",
+   "model": "anthropic/claude-haiku-5.5",
+   "label": "Haiku 5.5",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 3,
+    "max": 3
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.75,
+    "max": 0.75
+   },
+   "per_question": {
+    "q1": 1.0,
+    "q2": 1.0,
+    "q3": 0.0,
+    "q4": 1.0
+   },
+   "duration_s": {
+    "median": 148.2,
+    "min": 139.6,
+    "max": 180.4
+   },
+   "cost_usd": {
+    "median": 0.0762,
+    "min": 0.0394,
+    "max": 0.1006
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 1630614,
+    "min": 1602523,
+    "max": 2281869
+   },
+   "tool_calls": {
+    "median": 31,
+    "min": 30,
+    "max": 35
+   },
+   "agreement": 0.67
+  },
+  {
+   "task": "usage",
+   "harness": "pi",
+   "model": "anthropic/claude-haiku-5.5",
+   "label": "Haiku 5.5",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 4,
+   "correct": {
+    "median": 3,
+    "min": 1,
+    "max": 3
+   },
+   "correct_share": {
+    "median": 0.75,
+    "min": 0.25,
+    "max": 0.75
+   },
+   "per_question": {
+    "q1": 0.67,
+    "q2": 1.0,
+    "q3": 0.0,
+    "q4": 0.67
+   },
+   "duration_s": {
+    "median": 205.8,
+    "min": 157.8,
+    "max": 225.1
+   },
+   "cost_usd": {
+    "median": 0.0831,
+    "min": 0.0416,
+    "max": 0.2053
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 2825758,
+    "min": 1646985,
+    "max": 2917847
+   },
+   "tool_calls": {
+    "median": 32,
+    "min": 27,
+    "max": 43
+   },
+   "agreement": 0.33
   },
   {
    "task": "usage",
@@ -778,7 +1645,7 @@
    "model": "anthropic/claude-haiku-5.5",
    "label": "Haiku 5.5",
    "method": "raw",
-   "runs": 1,
+   "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
    "questions": 4,
@@ -799,27 +1666,27 @@
     "q4": 1.0
    },
    "duration_s": {
-    "median": 189.9,
-    "min": 189.9,
-    "max": 189.9
+    "median": 140.7,
+    "min": 139.4,
+    "max": 168.4
    },
    "cost_usd": {
-    "median": 0.2423,
-    "min": 0.2423,
-    "max": 0.2423
+    "median": 0.107,
+    "min": 0.0873,
+    "max": 0.1464
    },
    "cost_source": "harness",
    "tokens": {
-    "median": 2921921,
-    "min": 2921921,
-    "max": 2921921
+    "median": 1549013,
+    "min": 1547129,
+    "max": 1673116
    },
    "tool_calls": {
-    "median": 28,
-    "min": 28,
-    "max": 28
+    "median": 23,
+    "min": 22,
+    "max": 24
    },
-   "agreement": 1.0
+   "agreement": 0.67
   },
   {
    "task": "usage",
@@ -827,7 +1694,7 @@
    "model": "anthropic/claude-sonnet-5.5",
    "label": "Sonnet 5.5",
    "method": "cli",
-   "runs": 1,
+   "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
    "questions": 4,
@@ -848,25 +1715,25 @@
     "q4": 1.0
    },
    "duration_s": {
-    "median": 18.0,
-    "min": 18.0,
-    "max": 18.0
+    "median": 23.5,
+    "min": 17.6,
+    "max": 23.9
    },
    "cost_usd": {
-    "median": 0.044,
-    "min": 0.044,
-    "max": 0.044
+    "median": 0.0577,
+    "min": 0.04,
+    "max": 0.0601
    },
    "cost_source": "harness",
    "tokens": {
-    "median": 34283,
-    "min": 34283,
-    "max": 34283
+    "median": 55924,
+    "min": 30263,
+    "max": 56815
    },
    "tool_calls": {
-    "median": 4,
+    "median": 6,
     "min": 4,
-    "max": 4
+    "max": 6
    },
    "agreement": 1.0
   },
@@ -876,7 +1743,7 @@
    "model": "anthropic/claude-sonnet-5.5",
    "label": "Sonnet 5.5",
    "method": "mcp",
-   "runs": 1,
+   "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
    "questions": 4,
@@ -897,20 +1764,20 @@
     "q4": 1.0
    },
    "duration_s": {
-    "median": 18.1,
-    "min": 18.1,
-    "max": 18.1
+    "median": 20.7,
+    "min": 17.5,
+    "max": 21.1
    },
    "cost_usd": {
-    "median": 0.0868,
-    "min": 0.0868,
-    "max": 0.0868
+    "median": 0.0913,
+    "min": 0.0889,
+    "max": 0.0931
    },
    "cost_source": "harness",
    "tokens": {
-    "median": 76896,
-    "min": 76896,
-    "max": 76896
+    "median": 77544,
+    "min": 77342,
+    "max": 77900
    },
    "tool_calls": {
     "median": 4,
@@ -925,7 +1792,7 @@
    "model": "anthropic/claude-sonnet-5.5",
    "label": "Sonnet 5.5",
    "method": "raw",
-   "runs": 1,
+   "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
    "questions": 4,
@@ -946,25 +1813,1153 @@
     "q4": 1.0
    },
    "duration_s": {
-    "median": 76.4,
-    "min": 76.4,
-    "max": 76.4
+    "median": 69.5,
+    "min": 61.6,
+    "max": 92.7
    },
    "cost_usd": {
-    "median": 0.24,
-    "min": 0.24,
-    "max": 0.24
+    "median": 0.2936,
+    "min": 0.2346,
+    "max": 0.3235
    },
    "cost_source": "harness",
    "tokens": {
-    "median": 361410,
-    "min": 361410,
-    "max": 361410
+    "median": 404694,
+    "min": 326067,
+    "max": 613758
    },
    "tool_calls": {
     "median": 12,
     "min": 12,
+    "max": 18
+   },
+   "agreement": 0.33
+  },
+  {
+   "task": "update",
+   "harness": "claude",
+   "model": "claude-sonnet-5-5",
+   "label": "Sonnet 5.5",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "u1": 1.0,
+    "u2": 1.0
+   },
+   "duration_s": {
+    "median": 21.6,
+    "min": 18.0,
+    "max": 22.2
+   },
+   "cost_usd": {
+    "median": 0.1334,
+    "min": 0.12,
+    "max": 0.1466
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 225288,
+    "min": 195256,
+    "max": 234350
+   },
+   "tool_calls": {
+    "median": 6,
+    "min": 5,
+    "max": 7
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "update",
+   "harness": "claude",
+   "model": "claude-sonnet-5-5",
+   "label": "Sonnet 5.5",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "u1": 1.0,
+    "u2": 1.0
+   },
+   "duration_s": {
+    "median": 16.2,
+    "min": 16.0,
+    "max": 19.5
+   },
+   "cost_usd": {
+    "median": 0.1023,
+    "min": 0.0977,
+    "max": 0.107
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 159817,
+    "min": 159373,
+    "max": 221772
+   },
+   "tool_calls": {
+    "median": 6,
+    "min": 6,
+    "max": 8
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "update",
+   "harness": "claude",
+   "model": "claude-sonnet-5-5",
+   "label": "Sonnet 5.5",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "u1": 1.0,
+    "u2": 1.0
+   },
+   "duration_s": {
+    "median": 15.6,
+    "min": 15.5,
+    "max": 20.3
+   },
+   "cost_usd": {
+    "median": 0.089,
+    "min": 0.0888,
+    "max": 0.1088
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 137313,
+    "min": 109175,
+    "max": 172138
+   },
+   "tool_calls": {
+    "median": 4,
+    "min": 3,
+    "max": 5
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "update",
+   "harness": "codex",
+   "model": "gpt-6.1-sol",
+   "label": "GPT-6.1 Sol",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "u1": 1.0,
+    "u2": 1.0
+   },
+   "duration_s": {
+    "median": 44.1,
+    "min": 37.3,
+    "max": 53.1
+   },
+   "cost_usd": {
+    "median": 0.0885,
+    "min": 0.0787,
+    "max": 0.165
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 208295,
+    "min": 196882,
+    "max": 290428
+   },
+   "tool_calls": {
+    "median": 10,
+    "min": 9,
     "max": 12
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "update",
+   "harness": "codex",
+   "model": "gpt-6.1-sol",
+   "label": "GPT-6.1 Sol",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 1,
+    "min": 0,
+    "max": 1
+   },
+   "correct_share": {
+    "median": 0.5,
+    "min": 0.0,
+    "max": 0.5
+   },
+   "per_question": {
+    "u1": 0.0,
+    "u2": 0.67
+   },
+   "duration_s": {
+    "median": 36.5,
+    "min": 32.7,
+    "max": 44.2
+   },
+   "cost_usd": {
+    "median": 0.1051,
+    "min": 0.0986,
+    "max": 0.1311
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 236428,
+    "min": 177370,
+    "max": 265681
+   },
+   "tool_calls": {
+    "median": 5,
+    "min": 5,
+    "max": 6
+   },
+   "agreement": 0.67
+  },
+  {
+   "task": "update",
+   "harness": "codex",
+   "model": "gpt-6.1-sol",
+   "label": "GPT-6.1 Sol",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "u1": 1.0,
+    "u2": 1.0
+   },
+   "duration_s": {
+    "median": 38.3,
+    "min": 33.4,
+    "max": 38.7
+   },
+   "cost_usd": {
+    "median": 0.0706,
+    "min": 0.0659,
+    "max": 0.0713
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 139989,
+    "min": 127031,
+    "max": 159375
+   },
+   "tool_calls": {
+    "median": 5,
+    "min": 5,
+    "max": 7
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "update",
+   "harness": "opencode",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "u1": 1.0,
+    "u2": 1.0
+   },
+   "duration_s": {
+    "median": 32.0,
+    "min": 30.8,
+    "max": 34.6
+   },
+   "cost_usd": {
+    "median": 0.0954,
+    "min": 0.0745,
+    "max": 0.1398
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 172113,
+    "min": 127069,
+    "max": 239197
+   },
+   "tool_calls": {
+    "median": 9,
+    "min": 7,
+    "max": 9
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "update",
+   "harness": "opencode",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "u1": 1.0,
+    "u2": 1.0
+   },
+   "duration_s": {
+    "median": 22.6,
+    "min": 21.3,
+    "max": 26.0
+   },
+   "cost_usd": {
+    "median": 0.124,
+    "min": 0.1197,
+    "max": 0.1605
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 181215,
+    "min": 177709,
+    "max": 234284
+   },
+   "tool_calls": {
+    "median": 5,
+    "min": 5,
+    "max": 6
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "update",
+   "harness": "opencode",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "u1": 1.0,
+    "u2": 1.0
+   },
+   "duration_s": {
+    "median": 24.6,
+    "min": 22.4,
+    "max": 29.9
+   },
+   "cost_usd": {
+    "median": 0.0902,
+    "min": 0.0729,
+    "max": 0.0961
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 117764,
+    "min": 86713,
+    "max": 124181
+   },
+   "tool_calls": {
+    "median": 5,
+    "min": 4,
+    "max": 5
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "update",
+   "harness": "pi",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "u1": 1.0,
+    "u2": 1.0
+   },
+   "duration_s": {
+    "median": 26.3,
+    "min": 22.3,
+    "max": 27.1
+   },
+   "cost_usd": {
+    "median": 0.1014,
+    "min": 0.0811,
+    "max": 0.1258
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 136883,
+    "min": 88377,
+    "max": 182546
+   },
+   "tool_calls": {
+    "median": 7,
+    "min": 6,
+    "max": 8
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "update",
+   "harness": "pi",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "u1": 1.0,
+    "u2": 1.0
+   },
+   "duration_s": {
+    "median": 19.4,
+    "min": 12.7,
+    "max": 20.7
+   },
+   "cost_usd": {
+    "median": 0.0795,
+    "min": 0.0663,
+    "max": 0.0835
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 120259,
+    "min": 72274,
+    "max": 121338
+   },
+   "tool_calls": {
+    "median": 6,
+    "min": 4,
+    "max": 6
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "update",
+   "harness": "pi",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "u1": 1.0,
+    "u2": 1.0
+   },
+   "duration_s": {
+    "median": 17.8,
+    "min": 16.2,
+    "max": 18.1
+   },
+   "cost_usd": {
+    "median": 0.0515,
+    "min": 0.0509,
+    "max": 0.0525
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 50225,
+    "min": 49863,
+    "max": 50620
+   },
+   "tool_calls": {
+    "median": 4,
+    "min": 4,
+    "max": 4
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "share",
+   "harness": "claude",
+   "model": "claude-sonnet-5-5",
+   "label": "Sonnet 5.5",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "s1": 1.0,
+    "s2": 1.0
+   },
+   "duration_s": {
+    "median": 22.9,
+    "min": 18.7,
+    "max": 23.7
+   },
+   "cost_usd": {
+    "median": 0.1346,
+    "min": 0.1268,
+    "max": 0.1452
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 252726,
+    "min": 188290,
+    "max": 262765
+   },
+   "tool_calls": {
+    "median": 7,
+    "min": 5,
+    "max": 7
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "share",
+   "harness": "claude",
+   "model": "claude-sonnet-5-5",
+   "label": "Sonnet 5.5",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "s1": 1.0,
+    "s2": 1.0
+   },
+   "duration_s": {
+    "median": 21.5,
+    "min": 18.1,
+    "max": 21.5
+   },
+   "cost_usd": {
+    "median": 0.0869,
+    "min": 0.0727,
+    "max": 0.0918
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 167442,
+    "min": 137405,
+    "max": 189839
+   },
+   "tool_calls": {
+    "median": 6,
+    "min": 5,
+    "max": 7
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "share",
+   "harness": "claude",
+   "model": "claude-sonnet-5-5",
+   "label": "Sonnet 5.5",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "s1": 1.0,
+    "s2": 1.0
+   },
+   "duration_s": {
+    "median": 24.3,
+    "min": 20.6,
+    "max": 25.0
+   },
+   "cost_usd": {
+    "median": 0.1197,
+    "min": 0.1025,
+    "max": 0.1266
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 204642,
+    "min": 162239,
+    "max": 234320
+   },
+   "tool_calls": {
+    "median": 6,
+    "min": 5,
+    "max": 7
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "share",
+   "harness": "codex",
+   "model": "gpt-6.1-sol",
+   "label": "GPT-6.1 Sol",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "s1": 1.0,
+    "s2": 1.0
+   },
+   "duration_s": {
+    "median": 37.2,
+    "min": 35.3,
+    "max": 40.3
+   },
+   "cost_usd": {
+    "median": 0.0749,
+    "min": 0.0664,
+    "max": 0.0766
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 170645,
+    "min": 165327,
+    "max": 171581
+   },
+   "tool_calls": {
+    "median": 9,
+    "min": 6,
+    "max": 9
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "share",
+   "harness": "codex",
+   "model": "gpt-6.1-sol",
+   "label": "GPT-6.1 Sol",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 1,
+    "min": 1,
+    "max": 1
+   },
+   "correct_share": {
+    "median": 0.5,
+    "min": 0.5,
+    "max": 0.5
+   },
+   "per_question": {
+    "s1": 0.0,
+    "s2": 1.0
+   },
+   "duration_s": {
+    "median": 31.0,
+    "min": 26.2,
+    "max": 31.7
+   },
+   "cost_usd": {
+    "median": 0.0965,
+    "min": 0.0917,
+    "max": 0.1067
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 214117,
+    "min": 170066,
+    "max": 238668
+   },
+   "tool_calls": {
+    "median": 5,
+    "min": 4,
+    "max": 7
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "share",
+   "harness": "codex",
+   "model": "gpt-6.1-sol",
+   "label": "GPT-6.1 Sol",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "s1": 1.0,
+    "s2": 1.0
+   },
+   "duration_s": {
+    "median": 34.7,
+    "min": 30.5,
+    "max": 35.7
+   },
+   "cost_usd": {
+    "median": 0.0969,
+    "min": 0.0848,
+    "max": 0.1263
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 181764,
+    "min": 153694,
+    "max": 190072
+   },
+   "tool_calls": {
+    "median": 5,
+    "min": 4,
+    "max": 7
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "share",
+   "harness": "opencode",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "s1": 1.0,
+    "s2": 1.0
+   },
+   "duration_s": {
+    "median": 29.9,
+    "min": 28.1,
+    "max": 37.5
+   },
+   "cost_usd": {
+    "median": 0.117,
+    "min": 0.1129,
+    "max": 0.1248
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 182287,
+    "min": 172787,
+    "max": 192292
+   },
+   "tool_calls": {
+    "median": 7,
+    "min": 7,
+    "max": 7
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "share",
+   "harness": "opencode",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "s1": 1.0,
+    "s2": 1.0
+   },
+   "duration_s": {
+    "median": 25.4,
+    "min": 24.7,
+    "max": 29.9
+   },
+   "cost_usd": {
+    "median": 0.117,
+    "min": 0.112,
+    "max": 0.1257
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 199471,
+    "min": 197448,
+    "max": 248209
+   },
+   "tool_calls": {
+    "median": 6,
+    "min": 5,
+    "max": 6
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "share",
+   "harness": "opencode",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "s1": 1.0,
+    "s2": 1.0
+   },
+   "duration_s": {
+    "median": 32.0,
+    "min": 31.8,
+    "max": 33.4
+   },
+   "cost_usd": {
+    "median": 0.0982,
+    "min": 0.0961,
+    "max": 0.1049
+   },
+   "cost_source": "estimate",
+   "tokens": {
+    "median": 150538,
+    "min": 124040,
+    "max": 171877
+   },
+   "tool_calls": {
+    "median": 6,
+    "min": 6,
+    "max": 8
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "share",
+   "harness": "pi",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "cli",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "s1": 1.0,
+    "s2": 1.0
+   },
+   "duration_s": {
+    "median": 24.3,
+    "min": 22.1,
+    "max": 24.9
+   },
+   "cost_usd": {
+    "median": 0.0895,
+    "min": 0.084,
+    "max": 0.0954
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 118961,
+    "min": 112988,
+    "max": 134361
+   },
+   "tool_calls": {
+    "median": 7,
+    "min": 6,
+    "max": 7
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "share",
+   "harness": "pi",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "mcp",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "s1": 1.0,
+    "s2": 1.0
+   },
+   "duration_s": {
+    "median": 18.7,
+    "min": 14.7,
+    "max": 20.1
+   },
+   "cost_usd": {
+    "median": 0.0736,
+    "min": 0.0601,
+    "max": 0.0785
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 90967,
+    "min": 80692,
+    "max": 128508
+   },
+   "tool_calls": {
+    "median": 4,
+    "min": 4,
+    "max": 6
+   },
+   "agreement": 1.0
+  },
+  {
+   "task": "share",
+   "harness": "pi",
+   "model": "anthropic/claude-sonnet-5.5",
+   "label": "Sonnet 5.5",
+   "method": "raw",
+   "runs": 3,
+   "errors": 0,
+   "fixture_changed": 0,
+   "questions": 2,
+   "correct": {
+    "median": 2,
+    "min": 2,
+    "max": 2
+   },
+   "correct_share": {
+    "median": 1.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "per_question": {
+    "s1": 1.0,
+    "s2": 1.0
+   },
+   "duration_s": {
+    "median": 21.1,
+    "min": 17.3,
+    "max": 26.4
+   },
+   "cost_usd": {
+    "median": 0.0626,
+    "min": 0.0506,
+    "max": 0.068
+   },
+   "cost_source": "harness",
+   "tokens": {
+    "median": 74986,
+    "min": 36683,
+    "max": 83316
+   },
+   "tool_calls": {
+    "median": 6,
+    "min": 4,
+    "max": 7
    },
    "agreement": 1.0
   }

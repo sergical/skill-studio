@@ -35,6 +35,8 @@ python3 tools/agent-bench/bench.py run --dry-run
 
 # Aggregate results/runs.jsonl into results/results.json and the homepage data file
 python3 tools/agent-bench/bench.py report
+# Write it even when some cells have no scored run (the published data needs this)
+python3 tools/agent-bench/bench.py report --partial
 ```
 
 If a CLI is not on `PATH`, set `BENCH_<NAME>_BIN`, for example
@@ -43,7 +45,8 @@ If a CLI is not on `PATH`, set `BENCH_<NAME>_BIN`, for example
 Each run writes its fixture, its runtime home and the agent's raw output to
 `/tmp/skill-studio-bench/<run>/` (change with `--workdir`). Nothing goes to
 your real home folder: the fixture is read-only and its hash is checked after
-each run.
+each run. A fresh home is not a sandbox, so a run whose output names a path in
+your real home is marked as an error and left out of the scores.
 
 ## Files
 

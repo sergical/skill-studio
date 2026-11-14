@@ -98,6 +98,13 @@ function niceMax(value: number): number {
   return step * 4;
 }
 
+function speedWords(speedup: number | null) {
+  if (speedup === null) return { ratio: "–", word: "" };
+  if (speedup >= 1.15) return { ratio: formatRatio(speedup), word: "faster" };
+  if (speedup < 1) return { ratio: formatRatio(1 / speedup), word: "slower" };
+  return { ratio: "", word: "About the same speed" };
+}
+
 function statFor(cell: BenchCell | undefined, metric: BenchMetric): BenchStat | null {
   return cell ? cell[metric] : null;
 }
@@ -310,7 +317,13 @@ export function BenchmarkSection() {
   const rows = rowsFor(task);
   const summary = summarizeTask(data, task);
   const taskMeta = tasks.find((t) => t.id === task)!;
-  const faster = summary.speedup !== null && summary.speedup >= 1.15;
+  const speed = speedWords(summary.speedup);
+  const noResult = data.cells
+    .filter((c) => c.task === task && !c.duration_s)
+    .map(
+      (c) =>
+        `${harnessName(c.harness)} ${c.label} ${METHODS.find((m) => m.id === c.method)!.label.toLowerCase()}`,
+    );
   const harnesses = new Set(data.cells.map((c) => c.harness)).size;
   const models = new Set(data.cells.map((c) => c.model)).size;
   const estimated = [
@@ -341,8 +354,8 @@ export function BenchmarkSection() {
       <div {...stylex.props(styles.headline)}>
         <div>
           <p {...stylex.props(styles.hero)}>
-            {summary.speedup === null ? "–" : formatRatio(summary.speedup)}
-            <span {...stylex.props(styles.heroWord)}>{faster ? "faster" : "no faster"}</span>
+            {speed.ratio}
+            <span {...stylex.props(styles.heroWord)}>{speed.word}</span>
           </p>
           <p {...stylex.props(styles.heroCaption)}>
             Median time to a final answer with Skill Studio, compared with the same agent and model
@@ -397,6 +410,8 @@ export function BenchmarkSection() {
           {METRICS.find((m) => m.id === metric)!.lowerIsBetter
             ? "Further left is better."
             : "Further right is better."}
+          {noResult.length > 0 &&
+            ` No result for ${noResult.join(", ")}: every run hit the 15-minute limit or failed.`}
         </figcaption>
       </figure>
 

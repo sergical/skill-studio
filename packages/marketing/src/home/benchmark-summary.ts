@@ -92,12 +92,12 @@ export function summarizeTask(data: BenchData, task: BenchTask): TaskSummary {
     const cost = ratio(raw.cost_usd, cell.cost_usd);
     if (cost !== null) costRatios.push(cost);
   }
-  const correct = (methods: BenchMethod[]) =>
-    median(
-      cells
-        .filter((c) => methods.includes(c.method) && c.correct_share)
-        .map((c) => c.correct_share!.median),
-    );
+  const correct = (methods: BenchMethod[]) => {
+    const shares = cells
+      .filter((c) => methods.includes(c.method) && c.correct_share)
+      .map((c) => c.correct_share!.median);
+    return shares.length ? shares.reduce((sum, v) => sum + v, 0) / shares.length : null;
+  };
   return {
     pairs: speedups.length,
     speedup: median(speedups),

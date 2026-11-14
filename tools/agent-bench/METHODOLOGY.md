@@ -148,7 +148,8 @@ Every agent gets a fresh `HOME` inside its run folder, so a `~` path cannot
 reach the user's real skills. Claude Code signs in from the macOS keychain: its
 fresh `HOME` holds a link to `~/Library/Keychains` and a `.claude.json` that
 keeps only the account fields. pi reads its sign-in through
-`PI_CODING_AGENT_DIR`.
+`PI_CODING_AGENT_DIR`. The runner also sets `PWD` to the run folder: without
+it, OpenCode used the inherited `PWD` (the repo checkout) as its shell folder.
 
 Codex and OpenCode do not report cost. We estimate it from the token counts
 they report and the OpenRouter list price of the same model
@@ -195,7 +196,9 @@ Per cell (harness × model × method), from 3 runs: the median, the minimum and
 the maximum of each metric, the share of runs that got each question right,
 and answer agreement (the share of runs that gave the most common answer).
 
-Per method: the median of the cell medians.
+Per method: the median of the cell medians. The homepage line "correct
+answers" is the mean of the cell medians, so one cell that is often wrong
+still shows.
 
 Only scored runs (no error, fixture intact) go into the medians. If a run
 ends in an error and `--retry-errors` runs it again, the report keeps the
@@ -207,6 +210,39 @@ The homepage headline pairs each `cli` and `mcp` cell with the `raw` cell of
 the same harness and model, takes the ratio of the `raw` median to the Skill
 Studio median, and shows the median of those ratios. It also shows how many
 pairs were slower with Skill Studio.
+
+## Results (14 November 2026)
+
+171 scored or failed runs: 4 agents, 10 models, 3 runs per cell. "Pairs"
+are Skill Studio cells (`cli` or `mcp`) matched with the `raw` cell of the same
+agent and model.
+
+| Task     | Pairs | Time with Skill Studio | Cost with Skill Studio | Correct by hand | Correct with Skill Studio | Slower pairs |
+| -------- | ----- | ---------------------- | ---------------------- | --------------- | ------------------------- | ------------ |
+| `usage`  | 20    | 2.0× faster            | 2.2× lower             | 70%             | 67%                       | 4 of 20      |
+| `update` | 8     | 1.1× slower            | 1.4× higher            | 100%            | 94%                       | 6 of 8       |
+| `share`  | 8     | about the same (1.09×) | 1.1× higher            | 100%            | 94%                       | 2 of 8       |
+
+Findings:
+
+- Skill Studio helps on the usage task, which asks for counts across many
+  log files. It does not help on the update and share tasks, where a few file
+  reads give the answer.
+- Q3 (the top five skills with counts) is almost always wrong, with every
+  method: 3 of 30 by hand, 4 of 33 with the CLI, 1 of 33 with MCP. Agents that
+  use Skill Studio inherit its double count (see below). Agents that read by
+  hand get the counts wrong too.
+- Codex GPT-6.1 Sol with MCP got 1 of 2 questions right on the update and
+  share tasks. The scan output does not name the repo or pack of a skill, so
+  the agent must infer it.
+- MCP is faster than the CLI in most pairs, because the CLI output is long.
+- OpenCode with Kimi K2.6 by hand hit the 900-second limit in all 3 runs. That
+  cell has no result, and the homepage says so.
+
+Spend: $34.12 of model use in the kept runs (Codex and OpenCode estimated
+from tokens). About $10 more went to runs that read the real home and were
+thrown away before the leak guard was added (see [Safety](#safety)). Total
+about $44.
 
 ## Limits
 
