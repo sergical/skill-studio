@@ -323,7 +323,12 @@ const styles = stylex.create({
     textWrap: "pretty",
     "@media (max-width: 600px)": { fontSize: 16 },
   },
-  visual: { minWidth: 0, position: "relative", width: "100%" },
+  visual: {
+    minWidth: 0,
+    position: "relative",
+    width: "100%",
+    "@media (max-width: 1080px)": { maxWidth: 680 },
+  },
   product: {
     paddingBottom: 96,
     position: "relative",

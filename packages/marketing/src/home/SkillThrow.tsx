@@ -3,7 +3,8 @@
 // The homepage hero pile is physical. Grab a skill and throw it: it tumbles,
 // knocks its neighbours and lands on the heap. Throw it at the mascot and the
 // mascot sorts it. A click pops a copy into the parked drawer. A click on the
-// mascot tidies everything. One rAF loop runs damped springs and sleeps when
+// mascot tidies everything, and so does the mascot itself when the visitor
+// leaves the pile alone. One rAF loop runs damped springs and sleeps when
 // nothing moves.
 // ============================================================================
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
@@ -20,13 +21,13 @@ import {
   frame,
   geometry,
   heapPoses,
-  introSeen,
+  clampX,
   lerpPose,
-  markIntroSeen,
   place,
   poseTransform,
   pulse,
   rand,
+  rotatedHalf,
   setCount,
   setStyle,
   settleAnimations,
@@ -36,9 +37,19 @@ import {
   type Geometry,
   type Point,
   type Pose,
+  type StageSize,
 } from "./skill-pile-kit";
 
-const INTRO = "throw";
+const POUR_MS = 1500;
+const DROP_MS = 560;
+const MASCOT_ENTER_MS = POUR_MS + DROP_MS * 0.6;
+const AUTO_TIDY_AFTER_INTRO_MS = MASCOT_ENTER_MS + 1900;
+const AUTO_TIDY_MS = 2400;
+const AUTO_TIDY_IN_VIEW_MS = 1200;
+const AUTO_TIDY_WIND_UP_MS = 320;
+// Share of the stage on screen before the intro plays and before the mascot tidies.
+const INTRO_IN_VIEW = 0.3;
+const TIDY_IN_VIEW = 0.5;
 const DRAG_THRESHOLD = 5;
 const REPEL_RADIUS = 90;
 const SUBSTEP = 1 / 240;
@@ -163,6 +174,8 @@ export function SkillThrow() {
   const bodies = useRef<Body[]>([]);
   const mascot = useRef({ s: 1, vs: 0, r: 0, vr: 0, lean: 0, open: false, awake: false });
   const geo = useRef<Geometry | null>(null);
+  const heap = useRef<Pose[]>([]);
+  const seen = useRef(false);
   const collected = useRef(new Set<number>());
   const parked = useRef(0);
   const hold = useRef<Hold | null>(null);
@@ -170,7 +183,8 @@ export function SkillThrow() {
   const lastTime = useRef(0);
   const slowUntil = useRef(0);
   const started = useRef(false);
-  const g = size ? geometry(size.w, size.h) : null;
+  const autoTidy = useRef({ timer: 0, due: 0, done: false });
+  const g = size ? geometry(size) : null;
   const tidy = collectedCount === PILE.length;
 
   useEffect(() => () => cancelAnimationFrame(frameId.current), []);
@@ -191,13 +205,17 @@ export function SkillThrow() {
     if (!body || body.awake) return;
     const element = chipRefs.current[index];
     if (element) settleAnimations(element);
+    setStyle(element, { opacity: "1" });
     body.awake = true;
   };
 
   const wakeMascot = () => {
     const state = mascot.current;
     if (state.awake) return;
-    if (mascotRef.current) settleAnimations(mascotRef.current);
+    if (mascotRef.current) {
+      settleAnimations(mascotRef.current);
+      mascotRef.current.style.opacity = "1";
+    }
     state.awake = true;
   };
 
@@ -573,11 +591,14 @@ export function SkillThrow() {
     frameId.current = requestAnimationFrame(loop);
   };
 
-  const resetBodies = (g: Geometry) => {
-    const heap = heapPoses(g);
-    bodies.current = heap.map((pose, index) => {
-      const width = chipRefs.current[index]?.offsetWidth ?? 120;
-      const height = chipRefs.current[index]?.offsetHeight ?? 28;
+  const chipSize = (index: number) => {
+    const element = chipRefs.current[index];
+    return { w: element?.offsetWidth ?? 120, h: element?.offsetHeight ?? 28 };
+  };
+
+  const resetBodies = () => {
+    bodies.current = heap.current.map((pose, index) => {
+      const { w: width, h: height } = chipSize(index);
       return {
         mode: collected.current.has(index) ? "gone" : "rest",
         awake: false,
@@ -604,26 +625,65 @@ export function SkillThrow() {
   };
 
   const showMessy = (g: Geometry) => {
-    const heap = heapPoses(g);
     PILE.forEach((chip, index) => {
       const element = chipRefs.current[index];
       setStyle(element, { zIndex: "" });
-      place(element, collected.current.has(index) ? targetPose(g, chip.id) : heap[index]);
+      place(element, collected.current.has(index) ? targetPose(g, chip.id) : heap.current[index]);
     });
     place(mascotRef.current, g.mascot);
     setCount(countRef, parked.current);
   };
 
+  // Skills pile up the way they do on a real machine: a few at first, then whole folders.
+  // The heap fills from its bottom row, so dropping in pile order stacks it. The mascot comes last.
   const playIntro = (g: Geometry) => {
-    const heap = heapPoses(g);
     PILE.forEach((_, index) => {
-      const to = heap[index];
+      const to = heap.current[index];
       const element = chipRefs.current[index];
-      place(element, { ...to, y: to.y - 18, o: 0 });
-      fly(element, [frame(to)], { duration: 420, delay: rand(index, 11) * 520 });
+      const size = chipSize(index);
+      const r = (to.r ?? 0) + (rand(index, 15) - 0.5) * 120;
+      const { halfW, halfH } = rotatedHalf(size, r);
+      const squashed = rotatedHalf({ w: size.w * 1.14, h: size.h * 0.82 }, to.r);
+      const landing = {
+        ...to,
+        x: clampX(g, to.x, squashed.halfW),
+        y: Math.min(to.y + 2, g.h - squashed.halfH),
+      };
+      place(element, {
+        x: clampX(g, to.x + (rand(index, 14) - 0.5) * 60, halfW),
+        y: Math.max(halfH, to.y - 170 - rand(index, 13) * 150),
+        r,
+        o: 0,
+      });
+      fly(
+        element,
+        [
+          { opacity: 1, offset: 0.12 },
+          {
+            transform: squash(landing, 1.14, 0.82),
+            offset: 0.6,
+            easing: "cubic-bezier(0.2, 0.8, 0.3, 1)",
+          },
+          { transform: poseTransform({ ...to, y: to.y - 6 }), offset: 0.8, easing: "ease-in-out" },
+          frame(to),
+        ],
+        {
+          duration: DROP_MS,
+          delay: POUR_MS * Math.sqrt(index / PILE.length),
+          startEasing: "cubic-bezier(0.55, 0, 0.9, 0.45)",
+        },
+      );
     });
-    place(mascotRef.current, { ...g.mascot, y: g.mascot.y + 20, s: 0.94, o: 0 });
-    fly(mascotRef.current, [frame(g.mascot)], { duration: 480, delay: 560 });
+    place(mascotRef.current, { ...g.mascot, y: g.mascot.y + 24, s: 0.5, o: 0 });
+    fly(
+      mascotRef.current,
+      [
+        frame({ ...g.mascot, y: g.mascot.y - 12, s: 1.14 }, { offset: 0.5 }),
+        frame({ ...g.mascot, s: 0.95 }, { offset: 0.78 }),
+        frame(g.mascot),
+      ],
+      { duration: 560, delay: MASCOT_ENTER_MS },
+    );
   };
 
   const tidyAll = (g: Geometry) => {
@@ -633,13 +693,12 @@ export function SkillThrow() {
     );
   };
 
-  const messUp = (g: Geometry) => {
+  const messUp = () => {
     collected.current.clear();
     parked.current = 0;
     setCollectedCount(0);
     setCount(countRef, 0);
-    const heap = heapPoses(g);
-    resetBodies(g);
+    resetBodies();
     bodies.current.forEach((body) => {
       body.mode = "gone";
     });
@@ -648,7 +707,7 @@ export function SkillThrow() {
       setStyle(element, { zIndex: "" });
       fly(
         element,
-        [frame(heap[index])],
+        [frame(heap.current[index])],
         { duration: 420, delay: (PILE.length - index) * 3 },
         () => {
           const body = bodies.current[index];
@@ -658,21 +717,30 @@ export function SkillThrow() {
     });
   };
 
-  const onStageSize = useEffectEvent((size: { w: number; h: number }) => {
-    const g = geometry(size.w, size.h);
-    geo.current = g;
-    resetBodies(g);
-    if (!started.current) {
-      started.current = true;
-      setReady(true);
-      if (reduced || introSeen(INTRO)) showMessy(g);
-      else {
-        markIntroSeen(INTRO);
-        playIntro(g);
-      }
-      return;
+  const start = useEffectEvent(() => {
+    const g = geo.current;
+    if (started.current || !g || !(reduced || seen.current)) return;
+    started.current = true;
+    setReady(true);
+    if (reduced) {
+      showMessy(g);
+      autoTidy.current.due = clock() + AUTO_TIDY_MS;
+    } else {
+      playIntro(g);
+      autoTidy.current.due = clock() + AUTO_TIDY_AFTER_INTRO_MS;
     }
-    showMessy(g);
+  });
+
+  const onStageSize = useEffectEvent((size: StageSize) => {
+    const g = geometry(size);
+    geo.current = g;
+    heap.current = heapPoses(
+      g,
+      PILE.map((_, index) => chipSize(index)),
+    );
+    resetBodies();
+    if (started.current) showMessy(g);
+    else start();
   });
 
   useLayoutEffect(() => {
@@ -724,6 +792,7 @@ export function SkillThrow() {
     const body = bodies.current[index];
     const point = stagePoint(event);
     if (index < 0 || !body || body.mode === "gone" || !point || hold.current) return;
+    stopAutoTidy();
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const cos = Math.cos(body.r * RAD);
@@ -829,29 +898,99 @@ export function SkillThrow() {
     tick();
   };
 
+  // Reduced motion: the toggle moves every chip to its end position at once.
+  const toggleNow = () => {
+    const g = geo.current;
+    if (!g) return;
+    if (tidy) {
+      collected.current.clear();
+      parked.current = 0;
+      setCollectedCount(0);
+      resetBodies();
+    } else {
+      PILE.forEach((_, index) => collected.current.add(index));
+      parked.current = PILE_COUNTS.parked;
+      setCollectedCount(PILE.length);
+    }
+    showMessy(g);
+  };
+
   const onMascotClick = () => {
+    stopAutoTidy();
     const g = geo.current;
     if (!g) return;
     if (reduced) {
-      if (tidy) {
-        collected.current.clear();
-        parked.current = 0;
-        setCollectedCount(0);
-        resetBodies(g);
-      } else {
-        PILE.forEach((_, index) => collected.current.add(index));
-        parked.current = PILE_COUNTS.parked;
-        setCollectedCount(PILE.length);
-      }
-      showMessy(g);
+      toggleNow();
       return;
     }
     wakeMascot();
     mascot.current.vs += 2.4;
     tick();
-    if (tidy) messUp(g);
+    if (tidy) messUp();
     else tidyAll(g);
   };
+
+  const stopAutoTidy = () => {
+    autoTidy.current.done = true;
+    window.clearTimeout(autoTidy.current.timer);
+  };
+
+  // The mascot leans back, then tidies, unless the visitor grabs something first.
+  const runAutoTidy = useEffectEvent(() => {
+    const state = autoTidy.current;
+    if (state.done || tidy) return;
+    if (reduced) {
+      state.done = true;
+      toggleNow();
+      return;
+    }
+    wakeMascot();
+    mascot.current.vr -= 120;
+    mascot.current.vs -= 0.8;
+    tick();
+    state.timer = window.setTimeout(() => {
+      const g = geo.current;
+      if (state.done || !g) return;
+      state.done = true;
+      wakeMascot();
+      mascot.current.vs += 2.4;
+      tick();
+      tidyAll(g);
+    }, AUTO_TIDY_WIND_UP_MS);
+  });
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const state = autoTidy.current;
+    let inView = false;
+    const arm = () => {
+      window.clearTimeout(state.timer);
+      if (state.done || !started.current || !inView || document.hidden) return;
+      state.timer = window.setTimeout(
+        runAutoTidy,
+        Math.max(state.due - clock(), AUTO_TIDY_IN_VIEW_MS),
+      );
+    };
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.intersectionRatio >= INTRO_IN_VIEW) {
+          seen.current = true;
+          start();
+        }
+        inView = entry.intersectionRatio >= TIDY_IN_VIEW;
+        arm();
+      },
+      { threshold: [INTRO_IN_VIEW, TIDY_IN_VIEW] },
+    );
+    observer.observe(stage);
+    document.addEventListener("visibilitychange", arm);
+    return () => {
+      observer.disconnect();
+      document.removeEventListener("visibilitychange", arm);
+      window.clearTimeout(state.timer);
+    };
+  }, [stageRef]);
 
   return (
     <div

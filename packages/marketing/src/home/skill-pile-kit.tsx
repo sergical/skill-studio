@@ -18,7 +18,6 @@ import {
   type PileState,
 } from "./skill-pile-data";
 
-const INTRO_KEY_PREFIX = "skill-pile-intro-";
 export const KEPT_SLOT = new Map(KEPT_CHIPS.map((chip, slot) => [chip.id, slot]));
 const SETTLE = "cubic-bezier(0.32, 0.72, 0, 1)";
 
@@ -50,19 +49,28 @@ export interface Geometry {
   w: number;
   h: number;
   narrow: boolean;
+  // Mascot on top, drawer at the bottom: for a stage alone in a centred column.
+  stacked: boolean;
   mascotSize: number;
   mascot: Point;
   drawer: Point;
 }
 
-export function geometry(w: number, h: number): Geometry {
+export interface StageSize {
+  w: number;
+  h: number;
+  centered: boolean;
+}
+
+export function geometry({ w, h, centered }: StageSize): Geometry {
   const narrow = w < 520;
-  const mascotSize = narrow ? 92 : 132;
-  const mascot = narrow ? { x: w / 2, y: 52 } : { x: w * 0.8, y: h * 0.27 };
-  const drawer = narrow
+  const stacked = narrow || centered;
+  const mascotSize = narrow ? 92 : stacked ? 112 : 132;
+  const mascot = stacked ? { x: w / 2, y: mascotSize / 2 + 6 } : { x: w * 0.8, y: h * 0.27 };
+  const drawer = stacked
     ? { x: w / 2, y: h - 18 }
     : { x: mascot.x, y: mascot.y + mascotSize / 2 + 34 };
-  return { w, h, narrow, mascotSize, mascot, drawer };
+  return { w, h, narrow, stacked, mascotSize, mascot, drawer };
 }
 
 export function slotPose(g: Geometry, slot: number): Pose {
@@ -70,6 +78,13 @@ export function slotPose(g: Geometry, slot: number): Pose {
   const column = slot < perColumn ? 0 : 1;
   const row = slot % perColumn;
   if (g.narrow) return { x: column === 0 ? 0 : g.w / 2 + 4, y: 128 + row * 32, ax: 0 };
+  if (g.stacked) {
+    const top = g.mascot.y + g.mascotSize / 2 + 22;
+    const step = Math.min(34, (g.drawer.y - 22 - top) / perColumn);
+    return column === 0
+      ? { x: g.w / 2 - 8, y: top + row * step, ax: -100 }
+      : { x: g.w / 2 + 8, y: top + row * step, ax: 0 };
+  }
   const step = 38;
   const top = (g.h - perColumn * step) / 2 + step / 2;
   return { x: column === 0 ? 0 : g.w * 0.34, y: top + row * step, ax: 0 };
@@ -81,12 +96,53 @@ export function rand(index: number, salt: number) {
   return value - Math.floor(value);
 }
 
+export interface ChipSize {
+  w: number;
+  h: number;
+}
+
+const HEAP_EDGE = 4;
+
+// The heap sits under the mascot and, on stacked stages, above the drawer.
+function heapBounds(g: Geometry) {
+  const mascotBottom = g.mascot.y + g.mascotSize / 2;
+  return g.stacked
+    ? { top: mascotBottom + 12, bottom: g.drawer.y - 20 }
+    : { top: mascotBottom, bottom: g.h };
+}
+
+// Half the width and height of the box that a tilted chip covers.
+export function rotatedHalf(size: ChipSize, r = 0) {
+  const angle = (Math.abs(r) * Math.PI) / 180;
+  return {
+    halfW: (size.w * Math.cos(angle) + size.h * Math.sin(angle)) / 2,
+    halfH: (size.w * Math.sin(angle) + size.h * Math.cos(angle)) / 2,
+  };
+}
+
+export const clampX = (g: Geometry, x: number, halfW: number) =>
+  Math.min(Math.max(x, halfW + HEAP_EDGE), g.w - halfW - HEAP_EDGE);
+
+function keepInside(g: Geometry, bottom: number, pose: Pose, size: ChipSize): Pose {
+  const { halfW, halfH } = rotatedHalf(size, pose.r);
+  return { ...pose, x: clampX(g, pose.x, halfW), y: Math.min(pose.y, bottom - halfH) };
+}
+
 // A mound: wide rows at the bottom, narrower rows on top, chips overlapping and tilted.
-export function heapPoses(g: Geometry): Pose[] {
-  const spacing = g.narrow ? 30 : 46;
+// A small stage packs chips closer so the mound stays as low as the free band allows.
+export function heapPoses(g: Geometry, sizes: ChipSize[]): Pose[] {
+  const { top, bottom } = heapBounds(g);
   const rise = g.narrow ? 17 : 21;
+  const maxRows = Math.max(1, Math.floor((bottom - top - 40) / rise));
   const span = (row: number) => g.w * Math.max(0.18, 0.96 - row * 0.075);
+  let spacing = g.narrow ? 30 : 46;
   const capacity = (row: number) => Math.max(2, Math.floor(span(row) / spacing));
+  const rowsNeeded = () => {
+    let rows = 0;
+    for (let left = PILE.length; left > 0; rows += 1) left -= capacity(rows);
+    return rows;
+  };
+  while (spacing > 12 && rowsNeeded() > maxRows) spacing -= 2;
   const poses: Pose[] = [];
   let row = 0;
   let inRow = 0;
@@ -101,11 +157,12 @@ export function heapPoses(g: Geometry): Pose[] {
       width / 2 +
       (inRow + 0.5) * (width / capacity(row)) +
       (rand(index, 1) - 0.5) * spacing * 0.7;
-    poses.push({
+    const pose = {
       x,
-      y: g.h - 24 - row * rise + (rand(index, 2) - 0.5) * 8,
+      y: bottom - 16 - row * rise + (rand(index, 2) - 0.5) * 8,
       r: (rand(index, 3) - 0.5) * 32,
-    });
+    };
+    poses.push(keepInside(g, bottom, pose, sizes[index] ?? { w: 120, h: 28 }));
     inRow += 1;
   });
   return poses;
@@ -202,37 +259,24 @@ export function pulse(element: HTMLElement | null, amount = 1.08) {
   });
 }
 
-export function introSeen(key: string) {
-  try {
-    return sessionStorage.getItem(INTRO_KEY_PREFIX + key) === "1";
-  } catch {
-    return false;
-  }
-}
-
-export function markIntroSeen(key: string) {
-  try {
-    sessionStorage.setItem(INTRO_KEY_PREFIX + key, "1");
-  } catch {
-    // Without storage the intro plays on every visit, which is harmless.
-  }
-}
-
 export function usePileStage() {
   const stageRef = useRef<HTMLDivElement>(null);
   const chipRefs = useRef<Array<HTMLSpanElement | null>>([]);
   const mascotRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLSpanElement>(null);
   const countRef = useRef<HTMLSpanElement>(null);
-  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  const [size, setSize] = useState<StageSize | null>(null);
 
   useLayoutEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
     const measure = () => {
-      const { width, height } = stage.getBoundingClientRect();
+      const { left, width, height } = stage.getBoundingClientRect();
+      const centered = Math.abs(left + width / 2 - window.innerWidth / 2) < 24;
       setSize((current) =>
-        current && current.w === width && current.h === height ? current : { w: width, h: height },
+        current && current.w === width && current.h === height && current.centered === centered
+          ? current
+          : { w: width, h: height, centered },
       );
     };
     measure();
