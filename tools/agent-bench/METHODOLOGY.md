@@ -52,8 +52,8 @@ The logs hold traps that a careful reader must not count as uses:
 | A use on day 44 (in the window) and uses on day 46 and later (out)         | all                |
 | A use of a skill that is no longer in the library                          | Claude Code        |
 
-`ground_truth.json` holds the answers. The generator computes them from the
-uses it plans, not from any parser.
+The generator computes answers in memory from the uses it plans, not from
+any parser. It never writes truth into the fixture.
 
 ## Task 1: skill usage (`usage`)
 
@@ -271,3 +271,16 @@ about $44.
 | Read-only commands (`scan`, `usage`, `invocation`) take a write lease in `~/.skill-studio/leases`.    | They fail when that folder is not writable, for example under `codex --sandbox read-only`. |
 | `--home` does not override `CODEX_HOME`.                                                              | Under Codex, the CLI reads the agent's own Codex folder unless `CODEX_HOME` is pinned.     |
 | `scan --json` and `invocation --json` print about 150 KB and 120 KB for 38 skills.                    | Agents spend tokens on long paths before they get to the counts.                           |
+
+## Answer contracts
+
+`bench.py contract` checks each question with one CLI call and one MCP tool
+call, without a model. A code extractor reads only the returned output. The
+existing scorer checks the answer against truth held in memory. A pass also
+needs output of at most 2,048 bytes. The JSON report records the call, size,
+seed, byte count and reason. Missing product fields fail the contract.
+
+Sizes 40, 400 and 4,000 add skills and months of sessions with the same traps.
+Size 36 keeps the published fixture and truth. CI reports sizes 40 and 400.
+`contracts/baseline.json` stores passes by question, size, seed and transport.
+`--check` rejects regressions among the entries tested in that run.
