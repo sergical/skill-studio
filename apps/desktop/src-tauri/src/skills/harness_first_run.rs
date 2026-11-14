@@ -21,6 +21,7 @@ use tauri::Manager;
 pub struct HarnessesChoice {
     /// Catalog ids (`AgentId::as_str()`, e.g. `"claude-code"`) of the rows
     /// the user kept on the first-run screen.
+    #[serde(deserialize_with = "deserialize_kept")]
     pub kept: Vec<String>,
     /// Whether the user opted in to searching harness history (Codex
     /// `config.toml` trust rows, Claude Code transcripts, ...) for project
@@ -30,6 +31,19 @@ pub struct HarnessesChoice {
     /// RFC 3339 timestamp of the save, for a support report; not read by any
     /// decision in the app.
     pub saved_at: String,
+}
+
+fn deserialize_kept<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    Vec::<String>::deserialize(deserializer).map(|ids| {
+        ids.into_iter()
+            .map(|id| {
+                skill_studio_core::identity::AgentId::parse_harness(&id)
+                    .map_or(id, |parsed| parsed.as_str().to_owned())
+            })
+            .collect()
+    })
 }
 
 /// Runs `ops::harnesses` off the UI thread, for the first-run screen.
@@ -626,5 +640,17 @@ mod tests {
         assert!(!home.join(".codex").exists());
         assert!(!home.join(".claude").exists());
         assert!(set_harness_enabled_at(&lease, &home, "unknown", true).is_err());
+    }
+}
+
+#[cfg(test)]
+mod legacy_choice_regression {
+    #[test]
+    fn first_run_reads_legacy_kept_opencode_as_enabled_instead_of_switching_it_off() {
+        let choice: super::HarnessesChoice = serde_json::from_value(serde_json::json!({
+            "kept": ["open-code"], "search_project_folders": false, "saved_at": ""
+        }))
+        .unwrap();
+        assert_eq!(choice.kept, ["opencode"]);
     }
 }

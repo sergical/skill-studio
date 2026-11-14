@@ -103,7 +103,11 @@ pub fn resolve_agent_homes(
 /// Project paths recorded in Codex's `[projects."/abs/path"]` config
 /// sections (`~/.codex/config.toml`, or `$CODEX_HOME/config.toml`).
 fn codex_project_paths(home: &Path) -> Vec<PathBuf> {
-    let Ok(content) = fs::read_to_string(codex_home(home).join("config.toml")) else {
+    codex_project_paths_at(&codex_home(home))
+}
+
+fn codex_project_paths_at(root: &Path) -> Vec<PathBuf> {
+    let Ok(content) = fs::read_to_string(root.join("config.toml")) else {
         return Vec::new();
     };
     let Ok(value) = content.parse::<toml::Table>() else {
@@ -666,6 +670,7 @@ fn discover_with_roots(
                 .unwrap_or_else(|| home.join(name))
         };
         let discovered = match (*harness, roots) {
+            (AgentId::CODEX, Some(_)) => codex_project_paths_at(&root(".codex")),
             (AgentId::CLAUDE_CODE, Some(_)) => transcript_cwds(&root(".claude").join("projects")),
             (AgentId::PI, Some(_)) => transcript_cwds(&root(".pi/agent").join("sessions")),
             (AgentId::GROK_BUILD, Some(_)) => grok_session_cwds_at(&root(".grok")),
@@ -709,7 +714,11 @@ impl HostProjectDiscovery {
     /// Use the same resolved agent homes as scan and extras, including explicit scopes.
     pub fn for_scope(scope: &skill_studio_core::RuntimeScope) -> Self {
         Self {
-            roots: Some(scope.agent_home_roots.clone()),
+            roots: Some({
+                let mut roots = scope.agent_home_roots.clone();
+                roots.insert(".codex".into(), scope.codex_home_or_default());
+                roots
+            }),
         }
     }
 

@@ -14,6 +14,7 @@ pub fn review_due_report(
     let cache = seed.map(crate::cli_usage_cache_path);
     let mut usage =
         crate::SkillUsage::load_read_only(cache.as_deref().filter(|path| path.exists()).or(seed));
+    usage.set_codex_home(rt.scope.codex_home.clone());
     let report = usage.report_named(
         &rt.scope.home.canonical,
         &inventory,
@@ -23,12 +24,7 @@ pub fn review_due_report(
         &dates.keys().cloned().collect(),
     );
     if let Some(path) = &cache {
-        usage.save_cache(path).map_err(|_| {
-            CoreError::new(
-                skill_studio_core::ErrorCode::Io,
-                "could not save usage cache",
-            )
-        })?;
+        let _ = usage.save_cache(path);
     }
     Ok(ReviewDueReport {
         rows: dates

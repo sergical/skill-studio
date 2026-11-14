@@ -338,3 +338,52 @@ fn explicit_home_usage_ignores_codex_home_or_counts_foreign_sessions() {
         "{json}"
     );
 }
+
+#[test]
+fn review_due_selected_home_counts_local_sessions_instead_of_ambient_codex_sessions() {
+    let (_dir, home) = home();
+    let foreign = tempfile::tempdir().unwrap();
+    std::fs::create_dir(foreign.path().join("sessions")).unwrap();
+    let line = serde_json::json!({"type":"response_item", "timestamp":days_ago(1), "payload":{"type":"function_call", "namespace":"skills", "name":"read", "arguments":"{\"package\":\"skill://root/gamma\"}"}});
+    std::fs::write(
+        foreign.path().join("sessions/foreign.jsonl"),
+        format!(
+            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"foreign\"}}}}\n{line}\n{line}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        foreign.path().join("sessions/another-foreign.jsonl"),
+        format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"foreign-two\"}}}}\n{line}\n"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(home.join(".codex/sessions")).unwrap();
+    std::fs::write(
+        home.join(".codex/sessions/local.jsonl"),
+        format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"local\"}}}}\n{line}\n"),
+    )
+    .unwrap();
+    let set = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+        .args(["review", "set", "gamma", "2000-01-01", "--home"])
+        .arg(&home)
+        .output()
+        .unwrap();
+    assert!(set.status.success());
+    let output = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+        .args(["review", "due", "--json", "--home"])
+        .arg(&home)
+        .env("CODEX_HOME", foreign.path())
+        .env("SKILL_STUDIO_TELEMETRY", "0")
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["data"]["rows"].as_array().unwrap().len(), 1, "{json}");
+    assert!(
+        json["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["sessions"] == u64::from(r["skill"] == "gamma")),
+        "{json}"
+    );
+}

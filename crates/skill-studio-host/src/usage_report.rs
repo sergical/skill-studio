@@ -251,7 +251,10 @@ impl SkillUsage {
             .index
             .all_uses()
             .filter(|u| {
-                selection.harness.as_ref().is_none_or(|h| h == &u.harness)
+                selection.harness.as_ref().is_none_or(|h| {
+                    skill_studio_core::identity::AgentId::parse_harness(h)
+                        .is_ok_and(|id| id.as_str() == u.harness)
+                })
                     && (selection.projects.is_empty()
                         || selection.projects.iter().any(|p| {
                             u.project_path
@@ -614,6 +617,65 @@ mod tests {
             fs::read(&cache).unwrap(),
             original,
             "read-only reports must leave the desktop cache untouched"
+        );
+    }
+
+    #[test]
+    fn usage_legacy_harness_filter_counts_sessions_instead_of_returning_zero() {
+        let fixture = fixture();
+        let database = fixture.home.join(".local/share/opencode/opencode.db");
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection.execute_batch(
+            "CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);
+             CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT);
+             INSERT INTO session VALUES ('s1', '/work');"
+        ).unwrap();
+        connection
+            .execute(
+                "INSERT INTO session_message VALUES ('m1', 's1', 'skill', ?1, ?1, ?2)",
+                rusqlite::params![
+                    (now() - chrono::Duration::days(1)).timestamp_millis(),
+                    r#"{"skill":"gamma"}"#
+                ],
+            )
+            .unwrap();
+        drop(connection);
+        let inventory = scan(&fixture.home);
+        let report = SkillUsage::default().report_filtered(
+            &fixture.home,
+            &inventory,
+            30,
+            now(),
+            &UsageFilter {
+                harness: Some("open-code".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(row(&report, "gamma").sessions, 1);
+    }
+
+    #[test]
+    fn review_due_returns_report_when_cache_parent_is_a_file_instead_of_failing_save() {
+        let fixture = fixture();
+        let mut scope = RuntimeScope::live(
+            fixture.home.clone(),
+            fixture.home.join(".skill-studio/history"),
+        );
+        scope.projects = ProjectSelection::Explicit { paths: Vec::new() };
+        let rt = Runtime::new(
+            &scope,
+            crate::default_ports(
+                fixture.home.join(".skill-studio/leases"),
+                Arc::new(HarnessCatalog::builtin()),
+            ),
+        )
+        .unwrap();
+        let blocked = fixture.home.join("blocked");
+        fs::write(&blocked, "file").unwrap();
+        let ctx = OpContext::uncancellable(CorrelationId("review-cache".into()));
+        assert!(
+            crate::review_due_report(&rt, &ctx, Some(&blocked.join("skill-uses.json"))).is_ok()
         );
     }
 
