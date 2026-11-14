@@ -9,8 +9,10 @@ import { lightSiteTheme, siteTokens, type SiteTheme } from "../SiteTheme.stylex"
 import { SidecarWalkthrough } from "../walkthrough/SidecarWalkthrough";
 import { ClosingFinale } from "../home/ClosingFinale";
 import { finaleCtaMarker } from "../home/ClosingFinale.stylex";
+import { BenchmarkSection } from "../home/BenchmarkSection";
 import { FaqSection } from "../home/FaqSection";
 import { homeSectionStyles } from "../home/HomeSection.stylex";
+import { JobsSection } from "../home/JobsSection";
 import { MascotStage } from "../home/MascotStage";
 import { UsageSection } from "../home/UsageSection";
 import {
@@ -109,10 +111,11 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
       <main>
         <section {...stylex.props(siteLayout.container, styles.hero)}>
           <div {...stylex.props(styles.copy)}>
-            <h1 {...stylex.props(styles.title)}>Tidy up your agent skills.</h1>
+            <h1 {...stylex.props(styles.title)}>Every agent skill, in one place.</h1>
             <p {...stylex.props(styles.lede)}>
-              Find the broken, duplicate and unused skills across all your agents. Park them, with
-              undo.
+              Claude Code, Codex, Cursor and the rest each keep their own skill folders. See what
+              you have, update your skill packs, fix broken skills and park the ones you never use.
+              With undo.
             </p>
             <div {...stylex.props(styles.actions)}>
               <DownloadButton theme={theme} />
@@ -163,12 +166,20 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
           </div>
         </section>
 
+        <section id="jobs" {...stylex.props(siteLayout.container, homeSectionStyles.section)}>
+          <JobsSection />
+        </section>
+
         <section id="how-it-works" {...stylex.props(siteLayout.container, styles.importSection)}>
           <SidecarWalkthrough theme={theme} />
         </section>
 
         <section id="use-it" {...stylex.props(siteLayout.container, homeSectionStyles.section)}>
           <UsageSection />
+        </section>
+
+        <section id="benchmark" {...stylex.props(siteLayout.container, homeSectionStyles.section)}>
+          <BenchmarkSection />
         </section>
 
         <section id="faq" {...stylex.props(siteLayout.container, homeSectionStyles.section)}>
@@ -190,10 +201,10 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
             {...stylex.props(styles.closingMascot)}
           />
           <h2 id="download-title" {...stylex.props(styles.closingTitle)}>
-            Clear out your skills.
+            Stop managing skills by hand.
           </h2>
           <p {...stylex.props(styles.closingCopy)}>
-            Keep the ones your agents use and park the rest.
+            Updates, broken skills, extra copies and unused skills, for every agent, in one app.
           </p>
           <DownloadButton theme={theme} inFinale />
           <TrustLine />

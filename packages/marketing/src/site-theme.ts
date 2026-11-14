@@ -5,6 +5,7 @@
 
 import * as stylex from "@stylexjs/stylex";
 
+import { lightChartTheme } from "./home/BenchmarkChart.stylex";
 import { getPaletteTheme } from "./PaletteThemes.stylex";
 import type { ThemeToggleOrigin } from "./ProductMock";
 import { lightSiteTheme, type SiteTheme } from "./SiteTheme.stylex";
@@ -16,7 +17,7 @@ const LIGHT_QUERY = "(prefers-color-scheme: light)";
 // violet palette's light values, and custom properties resolve where they are declared, so
 // the palette has to sit on <html> together with the light theme.
 const LIGHT_THEME_CLASSES = (
-  stylex.props(getPaletteTheme("violet"), lightSiteTheme).className ?? ""
+  stylex.props(getPaletteTheme("violet"), lightSiteTheme, lightChartTheme).className ?? ""
 )
   .split(" ")
   .filter(Boolean);

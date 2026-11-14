@@ -26,6 +26,7 @@
     "clean:target": "tools/cargo-build-gc.pl",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run doctor && pnpm run knip && pnpm run test && pnpm --filter skill-studio run types:check && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
     "doctor": "react-doctor apps/desktop -y --no-score --no-supply-chain --blocking warning",
+    "bench:agents": "python3 tools/agent-bench/bench.py run && python3 tools/agent-bench/bench.py report",
     "perf:baseline": "python3 tools/perf-baseline.py"
   },
   "devDependencies": {

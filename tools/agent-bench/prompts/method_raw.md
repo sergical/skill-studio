@@ -1,0 +1,1 @@
+Tools: Skill Studio is not available. Do not run any skill-studio binary, `npx skill-studio`, or the Skill Studio app. Find the answers from files on disk: skill folders, agent config, and agent session logs.

@@ -43,3 +43,6 @@ lerna-debug.log*
 # Derived from the committed performance trace.
 /docs/perf/real-shaped-profile.folded.txt
 /docs/perf/real-shaped-flamegraph.svg
+
+# Python bytecode from tools/ scripts
+__pycache__/
