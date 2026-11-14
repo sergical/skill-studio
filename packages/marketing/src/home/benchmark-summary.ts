@@ -79,8 +79,10 @@ export function cellsForTask(data: BenchData, task: BenchTask): BenchCell[] {
   return data.cells.filter((cell) => cell.task === task && cell.runs > cell.errors);
 }
 
+const MIN_SCORED_RUNS = 3;
+
 export function summarizeTask(data: BenchData, task: BenchTask): TaskSummary {
-  const cells = cellsForTask(data, task);
+  const cells = cellsForTask(data, task).filter((c) => c.runs - c.errors >= MIN_SCORED_RUNS);
   const byHand = new Map(cells.filter((c) => c.method === "raw").map((c) => [rowKey(c), c]));
   const speedups: number[] = [];
   const costRatios: number[] = [];

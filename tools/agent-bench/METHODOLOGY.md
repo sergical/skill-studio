@@ -208,7 +208,8 @@ unless you pass `--partial`.
 
 The homepage headline pairs each `cli` and `mcp` cell with the `raw` cell of
 the same harness and model, takes the ratio of the `raw` median to the Skill
-Studio median, and shows the median of those ratios. It also shows how many
+Studio median, and shows the median of those ratios. Only cells with at
+least 3 scored runs go into the headline. It also shows how many
 pairs were slower with Skill Studio.
 
 ## Results (14 November 2026)

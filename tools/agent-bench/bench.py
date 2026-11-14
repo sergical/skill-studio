@@ -105,7 +105,7 @@ def as_int(value) -> int | None:
         return value
     if isinstance(value, float) and value.is_integer():
         return int(value)
-    if isinstance(value, str) and value.strip().isdigit():
+    if isinstance(value, str) and value.strip().isascii() and value.strip().isdigit():
         return int(value)
     return None
 

@@ -14,6 +14,7 @@ function cell(harness: string, method: BenchCell["method"], seconds: number, cos
     runs: 3,
     errors: 0,
     questions: 4,
+    cost_source: "harness",
     correct_share: stat(0.75),
     duration_s: stat(seconds),
     cost_usd: stat(cost),
@@ -64,5 +65,20 @@ describe("agent benchmark headline", () => {
     const failed = { ...cell("a", "cli", 1, 0.01), errors: 3 };
     const summary = summarizeTask(data([cell("a", "raw", 60, 0.2), failed]), "usage");
     expect(summary.pairs).toBe(0);
+  });
+
+  it("leaves out cells with fewer than 3 scored runs, so one lucky run cannot set the headline", () => {
+    const partial = { ...cell("a", "cli", 1, 0.01), errors: 2 };
+    const summary = summarizeTask(data([cell("a", "raw", 60, 0.2), partial]), "usage");
+    expect(summary.pairs).toBe(0);
+  });
+
+  it("shows a cell that is often wrong in the correct-answer share instead of hiding it in a median", () => {
+    const wrong = { ...cell("b", "mcp", 30, 0.1), correct_share: stat(0) };
+    const summary = summarizeTask(
+      data([cell("a", "cli", 30, 0.1), cell("a", "mcp", 30, 0.1), wrong]),
+      "usage",
+    );
+    expect(summary.correctWithStudio).toBeCloseTo(0.5);
   });
 });
