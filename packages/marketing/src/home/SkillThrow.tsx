@@ -563,7 +563,8 @@ export function SkillThrow() {
       if (body.awake) active = true;
     });
     stepMascot(g, dt);
-    if (active || mascot.current.awake) frameId.current = requestAnimationFrame(loop);
+    if ((active || mascot.current.awake) && !frameId.current)
+      frameId.current = requestAnimationFrame(loop);
   }
 
   const tick = () => {
@@ -856,8 +857,12 @@ export function SkillThrow() {
     <div
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
-      onPointerUp={(event) => release(false, event.timeStamp)}
-      onPointerCancel={(event) => release(true, event.timeStamp)}
+      onPointerUp={(event) => {
+        if (event.pointerId === hold.current?.pointerId) release(false, event.timeStamp);
+      }}
+      onPointerCancel={(event) => {
+        if (event.pointerId === hold.current?.pointerId) release(true, event.timeStamp);
+      }}
       onPointerLeave={() => {
         if (!hold.current) repel(null);
       }}
