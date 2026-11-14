@@ -476,18 +476,18 @@ fn parse_codex_uses_with_file(
             }
         }
         if context.transcript.session.is_none() && line.contains("session_meta") {
-            let payload = serde_json::from_str::<serde_json::Value>(line)
+            context.history_start_ordinal = serde_json::from_str::<serde_json::Value>(line)
                 .ok()
-                .and_then(|record| record.get("payload").cloned());
-            if let Some(payload) = payload {
-                context.history_start_ordinal = payload
-                    .get("subagent_history_start_ordinal")
-                    .and_then(serde_json::Value::as_u64);
-                // The header is ordinal 0, so the copied parent history is the next start - 1 lines.
-                context.inherited_lines = context
-                    .history_start_ordinal
-                    .map_or(0, |start| start.saturating_sub(1));
-            }
+                .and_then(|record| {
+                    record
+                        .get("payload")?
+                        .get("subagent_history_start_ordinal")?
+                        .as_u64()
+                });
+            // The header is ordinal 0, so the copied parent history is the next start - 1 lines.
+            context.inherited_lines = context
+                .history_start_ordinal
+                .map_or(0, |start| start.saturating_sub(1));
         }
         uses.extend(parse_codex_uses_checked(
             line,
