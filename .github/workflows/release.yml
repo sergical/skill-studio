@@ -388,7 +388,11 @@ jobs:
 
   release-smoke:
     needs: build
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -410,11 +414,12 @@ jobs:
             *) echo "Unsupported runner CPU" >&2; exit 1 ;;
           esac
           tar -xzf "$RUNNER_TEMP/cli-smoke/skill-studio-cli-$target.tar.gz" -C "$RUNNER_TEMP/cli-smoke"
-          scripts/rehearse-npm.sh "$RUNNER_TEMP/cli-smoke/skill-studio"
+          python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ is required"'
+          scripts/rehearse-npm.sh "$RUNNER_TEMP/cli-smoke/skill-studio" "${GITHUB_REF_NAME#v}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: release-smoke-evidence
+          name: release-smoke-evidence-${{ matrix.runner }}
           path: .gate/out/npm-smoke/
           if-no-files-found: error
 
