@@ -80,7 +80,7 @@ fn assert_home_refused(result: std::thread::Result<()>) {
 #[test]
 fn setup_refuses_the_os_user_home() {
     assert_home_refused(std::panic::catch_unwind(|| {
-        assert_temporary_home(os_user_home())
+        assert_temporary_home(os_user_home());
     }));
 }
 
@@ -112,6 +112,6 @@ fn setup_refuses_a_missing_os_home_for_its_identity() {
     let temporary = tempfile::tempdir().unwrap();
     let missing = temporary.path().join("missing-user-home");
     assert_home_refused(std::panic::catch_unwind(|| {
-        assert_not_os_home(&missing, &missing)
+        assert_not_os_home(&missing, &missing);
     }));
 }
