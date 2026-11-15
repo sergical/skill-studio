@@ -78,3 +78,31 @@ class ProofTests(GateTests):
                 with self.assertRaises(SystemExit) as error:
                     proof.guard()
                 self.assertEqual(error.exception.code, 2)
+
+    def test_guard_passes_file_tools(self):
+        from io import StringIO
+        for tool in sorted(proof.FILE_TOOLS):
+            with self.subTest(tool=tool), patch('sys.stdin', StringIO(json.dumps({
+                'tool_name': tool, 'tool_input': {'content': 'gate:approved gate/approved'},
+            }))):
+                proof.guard()
+
+    def test_guard_blocks_github_tools(self):
+        from io import StringIO
+        with patch('sys.stdin', StringIO(json.dumps({
+            'tool_name': 'mcp__github__issue_write',
+            'tool_input': {'labels': ['gate:approved']},
+        }))):
+            with self.assertRaises(SystemExit) as error:
+                proof.guard()
+            self.assertEqual(error.exception.code, 2)
+
+    def test_guard_checks_other_command_tools(self):
+        from io import StringIO
+        for tool in ['Bash', 'Monitor', 'exec_command', 'functions.exec', 'mcp__other__run', None]:
+            with self.subTest(tool=tool), patch('sys.stdin', StringIO(json.dumps({
+                'tool_name': tool, 'tool_input': {'command': 'gh pr edit 1 --add-label gate:approved'},
+            }))):
+                with self.assertRaises(SystemExit) as error:
+                    proof.guard()
+                self.assertEqual(error.exception.code, 2)

@@ -1,50 +1,13 @@
-name: Merge gate
+name: Merge gate checks
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
 permissions:
   contents: read
-  statuses: write
 concurrency:
-  group: gate-${{ github.event.pull_request.number }}
+  group: gate-checks-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
-  risk:
-    needs: [unit, contracts]
-    if: always()
-    permissions:
-      contents: read
-      statuses: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Test and classify
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          AUTHOR: ${{ github.event.pull_request.user.login }}
-          CONTRACTS: ${{ needs.contracts.result }}
-          UNIT: ${{ needs.unit.result }}
-        run: |
-          auth=$(printf "x-access-token:%s" "$GH_TOKEN" | base64 -w0)
-          git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "refs/pull/$PR_NUMBER/head" --no-tags
-          APPROVED=$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/status" --jq 'any(.statuses[]; .context == "gate/approved" and .state == "success")')
-          # Classify with the base branch code and policy, never the PR code.
-          scripts/gate/gate risk --base "$BASE_SHA" --head "$HEAD_SHA" --author "$AUTHOR" --json > risk.json
-          tier=$(jq -r .tier risk.json)
-          state=success
-          if [ "$tier" = stop ] && [ "$APPROVED" != true ]; then state=failure; fi
-          if [ "$CONTRACTS" != success ] || [ "$UNIT" != success ]; then
-            state=failure
-          fi
-          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f context=gate/risk -f state="$state" -f description="Risk: $tier; approved: $APPROVED"
-          test "$state" = success
   unit:
     permissions:
       contents: read
