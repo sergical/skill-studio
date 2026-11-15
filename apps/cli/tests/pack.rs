@@ -76,3 +76,58 @@ fn pack_show_reports_one_pack_and_names_a_missing_source_on_cli_and_mcp_or_fails
         "{cli}"
     );
 }
+
+#[test]
+fn pack_dry_runs_give_the_same_plan_on_cli_and_mcp_and_change_nothing_or_the_surfaces_drift() {
+    let home = home();
+    let lock = std::fs::read(home.path().join(".agents/.skill-lock.json")).unwrap();
+    let cases = [
+        (
+            vec![
+                "pack",
+                "add",
+                "owner/repo",
+                "--skill",
+                "tracked",
+                "--skill",
+                "fresh",
+                "--dry-run",
+            ],
+            "pack_add",
+            json!({ "source": "owner/repo", "skills": ["tracked", "fresh"], "dry_run": true }),
+            json!([["fresh", "planned"], ["tracked", "skipped"]]),
+        ),
+        (
+            vec!["pack", "update", "owner/repo", "--dry-run"],
+            "pack_update",
+            json!({ "source": "owner/repo", "dry_run": true }),
+            json!([["tracked", "skipped"]]),
+        ),
+        (
+            vec!["pack", "remove", "owner/repo", "--dry-run"],
+            "pack_remove",
+            json!({ "source": "owner/repo", "dry_run": true }),
+            json!([["tracked", "skipped"]]),
+        ),
+    ];
+    for (args, tool, arguments, expected) in cases {
+        let cli = headless::cli(home.path(), &args);
+        let mcp = headless::mcp(home.path(), tool, &arguments);
+        let mcp = &mcp["result"]["structuredContent"];
+        assert_eq!(cli["status"], "ok", "{tool}: {cli}");
+        assert_eq!(cli["data"], mcp["data"], "{tool}");
+        let states: Vec<_> = cli["data"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| json!([step["skill"], step["state"]["state"]]))
+            .collect();
+        assert_eq!(json!(states), expected, "{tool}: {cli}");
+    }
+    assert!(home.path().join(".agents/skills/tracked/SKILL.md").exists());
+    assert!(!home.path().join(".agents/skills/fresh").exists());
+    assert_eq!(
+        std::fs::read(home.path().join(".agents/.skill-lock.json")).unwrap(),
+        lock
+    );
+}

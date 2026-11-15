@@ -486,6 +486,66 @@ impl SkillStudioServer {
     }
 
     #[tool(
+        description = "Install the skills of one git pack (owner/repo or a git URL) with npx skills add. Name skills, or leave skills empty to install every skill of the pack that is not installed yet (reads the source with git). Set dry_run to get the plan only. Each installed skill gets its own event_id; undo one with restore_event.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn pack_add(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::pack_action::PackAddRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op_in_project(
+            Operation::PackAdd,
+            true,
+            req.project_path.as_deref(),
+            &context,
+            |rt, ctx| {
+                let remote = pack_remote(rt, req.skills.is_empty());
+                ops::pack_add(rt, ctx, &req, remote.as_ref().map(|r| r as _))
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Update the skills of one pack (source as pack_list reports it), or of every pack with all, through the tool that installed them. Skips plugin and npm packs, and skills with local edits. Set dry_run to get the plan only. Undo one skill with restore_event and its event_id; dotagents refreshes every declared skill in a scope, so those skills share one event_id.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn pack_update(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::pack_action::PackUpdateRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op_in_project(
+            Operation::PackUpdate,
+            true,
+            req.project_path.as_deref(),
+            &context,
+            |rt, ctx| ops::pack_update(rt, ctx, &req),
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Remove the skills of one pack (source as pack_list reports it) through the tool that installed them. Skips plugin and npm packs, and skills with local edits. Set dry_run to get the plan only. Undo one skill with restore_event and its event_id.",
+        annotations(read_only_hint = false, destructive_hint = true)
+    )]
+    async fn pack_remove(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::pack_action::PackRemoveRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op_in_project(
+            Operation::PackRemove,
+            true,
+            req.project_path.as_deref(),
+            &context,
+            |rt, ctx| ops::pack_remove(rt, ctx, &req),
+        )
+        .await
+    }
+
+    #[tool(
         description = "Show how often each skill was used in the last N days, and which skills were not used. Use it to find skills to park.",
         annotations(read_only_hint = true)
     )]
