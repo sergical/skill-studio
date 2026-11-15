@@ -224,48 +224,53 @@ ratio tiles, so speed cannot hide a miss. It stays in the correct shares.
 - The "Every run" table below the race shows every cell, also the ones the
   race leaves out.
 
-## Results (14 November 2026)
+## Results (15 November 2026)
 
-171 scored or failed runs: 4 agents, 10 models, 3 runs per cell. "Pairs"
-are Skill Studio cells (`cli` or `mcp`) matched with the `raw` cell of the same
-agent and model.
+171 runs: 4 agents, 10 models, 3 runs per cell, on Skill Studio from #626.
+A "pair" is one agent and model: its `raw` cell and its best Skill Studio
+cell (see [Metrics](#metrics)). The ratios are medians over the pairs; the
+homepage shows the best pair.
 
-| Task     | Pairs | Time with Skill Studio | Cost with Skill Studio | Correct by hand | Correct with Skill Studio | Slower pairs |
-| -------- | ----- | ---------------------- | ---------------------- | --------------- | ------------------------- | ------------ |
-| `usage`  | 20    | 2.0× faster            | 2.2× lower             | 70%             | 67%                       | 4 of 20      |
-| `update` | 8     | 1.1× slower            | 1.4× higher            | 100%            | 94%                       | 6 of 8       |
-| `share`  | 8     | about the same (1.09×) | 1.1× higher            | 100%            | 94%                       | 2 of 8       |
+| Task     | Pairs | Time        | Tool calls | Cost       | Correct by hand | Correct with Skill Studio | Slower pairs |
+| -------- | ----- | ----------- | ---------- | ---------- | --------------- | ------------------------- | ------------ |
+| `usage`  | 10    | 5.8× faster | 4.5× fewer | 4.4× lower | 78%             | 100%                      | 0 of 10      |
+| `update` | 4     | 1.5× faster | 1.3× fewer | 1.4× lower | 100%            | 100%                      | 1 of 4       |
+| `share`  | 4     | 2.3× faster | 2.5× fewer | 2.4× lower | 100%            | 100%                      | 0 of 4       |
+
+Best pairs on the usage task: pi with Sonnet 5.5 is 10.3× faster (69 s to
+6.7 s), Codex with GPT-6.1 Sol needs 7× fewer tool calls (7 to 1), and pi with
+Haiku 5.5 costs 17.9× less ($0.117 to $0.0065).
 
 Findings:
 
-- Skill Studio helps on the usage task, which asks for counts across many
-  log files. It does not help on the update and share tasks, where a few file
-  reads give the answer.
-- Q3 (the top five skills with counts) is almost always wrong, with every
-  method: 3 of 30 by hand, 4 of 33 with the CLI, 1 of 33 with MCP. Agents that
-  use Skill Studio inherit its double count (see below). Agents that read by
-  hand get the counts wrong too.
-- Codex GPT-6.1 Sol with MCP got 1 of 2 questions right on the update and
-  share tasks. The scan output does not name the repo or pack of a skill, so
-  the agent must infer it.
-- MCP is faster than the CLI in most pairs, because the CLI output is long.
-- OpenCode with Kimi K2.6 by hand hit the 900-second limit in all 3 runs. That
-  cell has no result, and the homepage says so.
+- On the usage task, 9 of 30 runs by hand got all 4 answers right. With Skill
+  Studio, 64 of 66 runs did (32 of 33 with the CLI, 32 of 33 with MCP). Q3,
+  the top five skills with counts, was right in 10 of 30 runs by hand and 65
+  of 66 with Skill Studio.
+- The `library` answer (#626) gives the whole table in one call, and its
+  counts agree with `usage`. Before #626, agents saw counts that did not agree
+  and checked the logs by hand; the previous run was only 2.0× faster on this
+  task, and less correct than by hand.
+- The update and share tasks need only a few file reads, so the gain is
+  smaller. On `update`, Claude Code with Sonnet 5.5 is 3% slower with Skill
+  Studio, and OpenCode with Sonnet 5.5 costs more.
+- OpenCode with Kimi K2.6 by hand hit the 900-second limit in 2 runs and
+  changed the fixture in 1. That cell has no result. With MCP it got 4 of 4
+  right in 37 s.
+- The leak guard stopped 2 runs by hand that read the real home folder. They
+  ran again; the report keeps the last attempt.
 
-Spend: $34.12 of model use in the kept runs (Codex and OpenCode estimated
-from tokens). About $10 more went to runs that read the real home and were
-thrown away before the leak guard was added (see [Safety](#safety)). Total
-about $44.
+Spend: $21.98 of model use, every attempt counted (Codex and OpenCode
+estimated from tokens).
 
 ## Limits
 
 - One fixture. The traps are the ones we know of. A real home folder has more
   shapes. The fixture is a test of reading skill logs, not of general coding.
 - Three runs per cell show the spread, not a confidence interval.
-- Skill Studio itself gets some answers wrong on this fixture: it counts
-  resumed Claude Code sessions and forked Codex rollouts twice (see below).
-  Agents that trust it inherit that error on Q3. The results show this, and
-  we do not correct for it.
+- The fixture was built before the Skill Studio fixes it measures (#606,
+  #613, #626), and the same team wrote both. The traps come from real log
+  shapes, but a fixture can still favour the tool that was tuned on it.
 - Codex and OpenCode costs are estimates.
 - pi and OpenCode reach Anthropic and Moonshot models through OpenRouter, not
   through the model maker's own API.
@@ -276,10 +281,8 @@ about $44.
 
 ## Known Skill Studio issues on this fixture
 
-| Issue                                                                                                 | Effect                                                                                     |
-| ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Resumed Claude Code sessions repeat records with the same `uuid`, and Skill Studio counts them again. | +3 uses (sql-review, release-notes, flaky-test-hunter)                                     |
-| Forked Codex sub-agent rollouts copy the parent history, and Skill Studio counts it again.            | +3 uses (sql-review, commit-message, test-triage)                                          |
-| Read-only commands (`scan`, `usage`, `invocation`) take a write lease in `~/.skill-studio/leases`.    | They fail when that folder is not writable, for example under `codex --sandbox read-only`. |
-| `--home` does not override `CODEX_HOME`.                                                              | Under Codex, the CLI reads the agent's own Codex folder unless `CODEX_HOME` is pinned.     |
-| `scan --json` and `invocation --json` print about 150 KB and 120 KB for 38 skills.                    | Agents spend tokens on long paths before they get to the counts.                           |
+| Issue                                                                                              | Effect                                                                                     |
+| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Read-only commands (`scan`, `usage`, `invocation`) take a write lease in `~/.skill-studio/leases`. | They fail when that folder is not writable, for example under `codex --sandbox read-only`. |
+| `--home` does not override `CODEX_HOME`.                                                           | Under Codex, the CLI reads the agent's own Codex folder unless `CODEX_HOME` is pinned.     |
+| `scan --json` and `invocation --json` print about 150 KB and 120 KB for 38 skills.                 | Agents spend tokens on long paths before they get to the counts.                           |
