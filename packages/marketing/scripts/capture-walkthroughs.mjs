@@ -81,7 +81,7 @@ function captureMap(theme, width, suffix = "") {
   open("map", theme, width);
   clickExact("Global folder");
   capture(`map-${theme}-global${suffix}`);
-  clickExact("Project folder");
+  browser("find", "role", "button", "click", "--name", "Project folder");
   capture(`map-${theme}-expanded${suffix}`);
   clickExact("Compare copies");
   browser(

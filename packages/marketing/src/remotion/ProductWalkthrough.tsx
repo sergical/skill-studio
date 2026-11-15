@@ -235,8 +235,8 @@ function MapStory({ format, theme }: StoryProps) {
               { frame: 160, centerX: 640, centerY: 600, cropWidth: 800 },
               { frame: 205, centerX: 640, centerY: 600, cropWidth: 800 },
               { frame: 240, centerX: 640, centerY: 300, cropWidth: 800 },
-              { frame: 263, centerX: 640, centerY: 300, cropWidth: 800 },
-              { frame: 264, centerX: 520, centerY: 500, cropWidth: 1000 },
+              { frame: 259, centerX: 640, centerY: 300, cropWidth: 800 },
+              { frame: 260, centerX: 520, centerY: 500, cropWidth: 1000 },
               { frame: 290, centerX: 520, centerY: 500, cropWidth: 1000 },
               { frame: 325, centerX: 520, centerY: 530, cropWidth: 940 },
             ]
