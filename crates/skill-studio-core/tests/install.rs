@@ -106,7 +106,7 @@ impl ProcessSpawner for FakeNpxSpawner {
             .filter(|w| w[0] == "--agent")
             .map(|w| match w[1].as_str() {
                 "claude-code" => ".claude/skills",
-                "pi" => ".pi/skills",
+                "grok" => ".grok/skills",
                 _ => UNIVERSAL_ROOT_RELATIVE,
             })
             .collect();
@@ -804,7 +804,7 @@ fn skills_sh_install_with_claude_code_keeps_the_cli_link_or_names_the_eexist_fai
 }
 
 /// `skills_sh_project_install_runs_npx_in_the_project_dir_not_via_a_cwd_flag_or_names_the_stray_write`:
-/// `skills@1.7.0` has no `--cwd` flag, so a project-scope skills.sh install
+/// `skills@1.8.1` has no `--cwd` flag, so a project-scope skills.sh install
 /// must carry the project path as the spawned process's own cwd, not as an
 /// argv token - otherwise the CLI writes into whatever directory the host
 /// process happened to start in instead of the project (the bug this test
@@ -836,7 +836,7 @@ fn skills_sh_project_install_runs_npx_in_the_project_dir_not_via_a_cwd_flag_or_n
     let (args, cwd) = &recorded[0];
     assert!(
         !args.contains(&"--cwd".to_string()),
-        "skills@1.7.0 has no --cwd flag; the argv must not carry one: {args:?}"
+        "skills@1.8.1 has no --cwd flag; the argv must not carry one: {args:?}"
     );
     assert_eq!(
         cwd.as_deref(),
@@ -870,13 +870,9 @@ fn skills_sh_project_install_runs_npx_in_the_project_dir_not_via_a_cwd_flag_or_n
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// `skills_sh_project_install_leaves_a_skipped_pi_out_of_the_cli_agents_or_names_the_agent_it_passed`:
-/// in a project with no `.pi` folder, the plan skips pi, so the `npx skills`
-/// argv names Claude Code and not pi. Fails when `--agent pi` reaches the
-/// CLI, which would then make the `.pi` folder the plan refused to make.
+/// skills 1.8.1 serves pi from the shared folder without creating `.pi`.
 #[test]
-fn skills_sh_project_install_leaves_a_skipped_pi_out_of_the_cli_agents_or_names_the_agent_it_passed(
-) {
+fn skills_sh_project_pi_reads_shared_without_a_pi_folder() {
     let home = unique_temp_dir("install_skills_sh_skipped_pi");
     let project = home.join("proj");
     std::fs::create_dir_all(&project).unwrap();
@@ -900,21 +896,23 @@ fn skills_sh_project_install_leaves_a_skipped_pi_out_of_the_cli_agents_or_names_
         .collect();
     assert_eq!(
         agents,
-        vec!["claude-code"],
+        vec!["claude-code", "pi"],
         "the CLI argv: {:?}",
         recorded[0].0
     );
     assert!(
-        matches!(&results[1], InstallHarnessResult::Skipped { harness, .. } if harness.as_str() == AgentId::PI),
-        "pi must be reported as skipped: {results:?}"
+        matches!(&results[1], InstallHarnessResult::ReadsShared { harness, .. } if harness.as_str() == AgentId::PI),
+        "pi must read the shared copy: {results:?}"
     );
 
+    assert!(!project.join(".pi").exists());
+    assert!(project.join(".agents/skills/pi-skip/SKILL.md").exists());
     std::fs::remove_dir_all(&home).ok();
 }
 
 /// `skills_sh_project_install_with_one_served_harness_copies_into_its_folder_or_names_the_missing_destination`:
-/// `add --harness claude-code --harness pi` in a project with no `.pi`. The
-/// plan skips pi, so only the Claude Code folder is served. The skills CLI
+/// `add --harness claude-code --harness grok-build` in a project with no `.grok`. The
+/// plan skips Grok, so only the Claude Code folder is served. The skills CLI
 /// sees one distinct folder and copies into `.claude/skills/<name>` on its
 /// own, so core must expect a copy there. Fails when core still expects
 /// a shared copy plus a link: the install errors with "the CLI did not create
@@ -930,7 +928,7 @@ fn skills_sh_project_install_with_one_served_harness_copies_into_its_folder_or_n
     let mut req = cli_request("one-served", InstallMethod::SkillsSh);
     req.harnesses = vec![
         AgentId::from(AgentId::CLAUDE_CODE),
-        AgentId::from(AgentId::PI),
+        AgentId::from(AgentId::GROK_BUILD),
     ];
     req.scope = RootScope::Project(skill_studio_core::identity::ProjectRef(project.clone()));
 
@@ -1291,7 +1289,7 @@ fn cli_add_matches_the_npx_skills_add_trace_byte_for_byte_apart_from_timestamps_
     );
     let (args, cwd) = &recorded[0];
     let mut pinned_args = trace.args.clone();
-    pinned_args[0] = "skills@1.7.0".to_string();
+    pinned_args[0] = skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string();
     assert_eq!(
         args, &pinned_args,
         "install_via_cli's argv drifted from the recorded skills.sh trace"

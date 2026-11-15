@@ -77,7 +77,7 @@ use crate::ports::{
 /// Both run with the process cwd set to the project path for a
 /// project-scope update (`commands.rs`'s `run_update_skill`:
 /// `command.current_dir(project_path)`), the same fix `install`'s own
-/// `cli_args_and_cwd` carries for a project-scope install (`skills@1.7.0`
+/// `cli_args_and_cwd` carries for a project-scope install (`skills@1.8.1`
 /// has no `--cwd` flag). `skills update` without a scope flag means scope
 /// "both", so a project update names `--project` to leave the global copy of
 /// the same name alone.
@@ -1627,14 +1627,24 @@ mod tests {
                 "skills.sh global",
                 InstallMethod::SkillsSh,
                 &RootScope::Global,
-                vec!["skills@1.7.0", "update", "alpha", "--global"],
+                vec![
+                    crate::skills_cli_agents::SKILLS_CLI_PACKAGE,
+                    "update",
+                    "alpha",
+                    "--global",
+                ],
                 None,
             ),
             (
                 "skills.sh project",
                 InstallMethod::SkillsSh,
                 &project,
-                vec!["skills@1.7.0", "update", "alpha", "--project"],
+                vec![
+                    crate::skills_cli_agents::SKILLS_CLI_PACKAGE,
+                    "update",
+                    "alpha",
+                    "--project",
+                ],
                 Some(PathBuf::from("/proj")),
             ),
             (

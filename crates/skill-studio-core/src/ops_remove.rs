@@ -59,7 +59,7 @@ fn cli_package(owner_kind: LifecycleOwnerKind) -> Option<&'static str> {
 /// `skills_sh_remove_args_for_scope` (`npx skills remove <name> --yes
 /// [--global]`) and `dotagents_remove_args` (`npx -y @sentry/dotagents
 /// [--project] remove <name>`). Matching `ops_install_cli::cli_args_and_cwd`
-/// (`skills@1.7.0` has neither a `--cwd` nor a `--project` flag), both
+/// (`skills@1.8.1 remove` has neither a `--cwd` nor a `--project` flag), both
 /// kinds here get the project path as their process cwd for a project
 /// scope - `commands.rs`'s `remove_skill` sets `command.current_dir(path)`
 /// whenever `project_path` is `Some`, for both CLI kinds alike; `remove`
@@ -1066,14 +1066,25 @@ mod tests {
                 "skills.sh global",
                 LifecycleOwnerKind::SkillsSh,
                 &RootScope::Global,
-                vec!["skills@1.7.0", "remove", "alpha", "--yes", "--global"],
+                vec![
+                    crate::skills_cli_agents::SKILLS_CLI_PACKAGE,
+                    "remove",
+                    "alpha",
+                    "--yes",
+                    "--global",
+                ],
                 Some(PathBuf::from("/home")),
             ),
             (
                 "skills.sh project",
                 LifecycleOwnerKind::SkillsSh,
                 &project,
-                vec!["skills@1.7.0", "remove", "alpha", "--yes"],
+                vec![
+                    crate::skills_cli_agents::SKILLS_CLI_PACKAGE,
+                    "remove",
+                    "alpha",
+                    "--yes",
+                ],
                 Some(PathBuf::from("/proj")),
             ),
             (

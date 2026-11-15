@@ -149,7 +149,7 @@ pub struct SkillInstallSpec {
 }
 
 /// Universal skills.sh argv, and the process cwd to run it in. Never
-/// includes Codex as a proxy for Universal. `skills@1.7.0` has no `--cwd`
+/// includes Codex as a proxy for Universal. `skills@1.8.1` has no `--cwd`
 /// flag (PR #101 / `fix/project-install-runs-in-project-dir`), so a project
 /// scope returns the project path as the process cwd instead of an argv
 /// token - the same fix as `ops_install_cli.rs`'s `cli_args_and_cwd`.
@@ -1803,7 +1803,8 @@ mod tests {
             let args =
                 super::super::skill_lifecycle::skills_sh_remove_args_for_scope("alpha", scope);
             assert_eq!(
-                args[0], "skills@1.7.0",
+                args[0],
+                skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE,
                 "fork removal must use the audited CLI"
             );
         }
@@ -1814,7 +1815,8 @@ mod tests {
         let (args, _) =
             skills_sh_universal_add_args("owner/repo", Some("alpha"), &universal_global()).unwrap();
         assert_eq!(
-            args[0], "skills@1.7.0",
+            args[0],
+            skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE,
             "unfork reinstall must use the audited CLI"
         );
     }
@@ -1837,7 +1839,7 @@ mod tests {
         assert_eq!(
             argv,
             vec![
-                "skills@1.7.0",
+                skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE,
                 "add",
                 "o/r",
                 "--yes",
@@ -1870,7 +1872,7 @@ mod tests {
         assert!(!argv.iter().any(|arg| arg == "codex"));
     }
 
-    /// `skills@1.7.0` has no `--cwd` flag: a project scope must carry the
+    /// `skills@1.8.1` has no `--cwd` flag: a project scope must carry the
     /// project path as the process cwd, not as an argv token, or the CLI
     /// writes into whatever directory the process happened to start in.
     #[test]
@@ -3660,7 +3662,7 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "skills@1.7.0",
+                skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE,
                 "add",
                 "obra/find-bugs@v1.2.3",
                 "--yes",
