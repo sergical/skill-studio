@@ -3,6 +3,9 @@ import os
 from pathlib import Path
 import subprocess
 import textwrap
+import unittest
+
+from approval import is_approved
 
 from test_gate import GateTests
 
@@ -31,6 +34,7 @@ class ApprovalTests(GateTests):
         self.database.write_text(json.dumps({'statuses': {}, 'calls': []}))
         self.write('approval.sh', workflow_script('gate-approve.yml', 'Record approval and remove trigger'))
         self.write('risk.sh', workflow_script('gate.yml', 'Test and classify'))
+        self.write('scripts/gate/approval.py', (WORKFLOWS.parents[1] / 'scripts/gate/approval.py').read_text())
         self.write('scripts/gate/gate', '#!/bin/sh\nprintf \'{"tier":"stop"}\\n\'\n')
         Path('scripts/gate/gate').chmod(0o755)
         self.write('bin/git', '#!/bin/sh\nexit 0\n')
@@ -39,6 +43,8 @@ class ApprovalTests(GateTests):
             import json, os, subprocess, sys
             from pathlib import Path
             args = sys.argv[1:]
+            if '--slurp' in args and ('--jq' in args or '--template' in args):
+                sys.exit('unsupported slurp filter')
             path = Path(os.environ['API_DATABASE'])
             endpoint = next(a for a in args if a.startswith('repos/'))
             method = args[args.index('--method') + 1] if '--method' in args else 'GET'
@@ -57,7 +63,7 @@ class ApprovalTests(GateTests):
                 result = {}
             else:
                 sha = endpoint.split('/commits/')[1].split('/')[0]
-                result = {'sha': sha, 'statuses': [{'context': k, 'state': v} for k, v in data['statuses'].get(sha, {}).items()]}
+                result = [[{'context': k, 'state': v, 'creator': {'login': 'github-actions[bot]'}} for k, v in data['statuses'].get(sha, {}).items()]]
             path.write_text(json.dumps(data))
             output = json.dumps(result)
             if '--jq' in args:
@@ -94,7 +100,7 @@ class ApprovalTests(GateTests):
         self.assertEqual(self.status(self.head, 'gate/risk'), 'failure')
         self.assertIsNone(self.status(self.head, 'gate/approved'))
         reads = [c['endpoint'] for c in json.loads(self.database.read_text())['calls'] if c['method'] == 'GET']
-        self.assertEqual(reads, [f'repos/example/repo/commits/{self.head}/status'])
+        self.assertEqual(reads, [f'repos/example/repo/commits/{self.head}/statuses?per_page=100'])
 
     def test_approval_on_current_sha_passes_only_after_checks_pass(self):
         self.assertEqual(self.execute('approval.sh').returncode, 0)
@@ -102,6 +108,13 @@ class ApprovalTests(GateTests):
         self.assertEqual(risk.returncode, 0, risk.stderr)
         self.assertEqual(self.status(self.head, 'gate/risk'), 'success')
         self.assertEqual(self.execute('risk.sh', CONTRACTS='failure').returncode, 1)
+        self.assertEqual(self.status(self.head, 'gate/risk'), 'failure')
+
+    def test_missing_base_helper_refuses_approval_and_posts_risk(self):
+        Path('scripts/gate/approval.py').unlink()
+        self.assertEqual(self.execute('approval.sh').returncode, 0)
+        risk = self.execute('risk.sh')
+        self.assertEqual(risk.returncode, 1, risk.stderr)
         self.assertEqual(self.status(self.head, 'gate/risk'), 'failure')
 
     def test_approval_workflow_is_independent_and_runs_no_pr_code(self):
@@ -112,3 +125,36 @@ class ApprovalTests(GateTests):
         self.assertNotIn('checkout', approval)
         self.assertNotIn('concurrency:', approval)
         self.assertNotIn('needs:', approval)
+
+
+def status(creator, state):
+    return {'context': 'gate/approved', 'creator': {'login': creator}, 'state': state}
+
+
+class ApprovalStatusTests(unittest.TestCase):
+    def test_bot_success(self):
+        self.assertTrue(is_approved([status('github-actions[bot]', 'success')]))
+
+    def test_user_success_only(self):
+        self.assertFalse(is_approved([status('user', 'success')]))
+
+    def test_newer_bot_failure(self):
+        self.assertFalse(is_approved([
+            status('github-actions[bot]', 'failure'),
+            status('github-actions[bot]', 'success'),
+        ]))
+
+    def test_newer_user_failure(self):
+        self.assertTrue(is_approved([
+            status('user', 'failure'),
+            status('github-actions[bot]', 'success'),
+        ]))
+
+    def test_no_entries(self):
+        self.assertFalse(is_approved([]))
+
+    def test_other_context_and_missing_creator(self):
+        self.assertFalse(is_approved([
+            {'context': 'gate/approved', 'state': 'success'},
+            {'context': 'gate/review', 'creator': {'login': 'github-actions[bot]'}, 'state': 'success'},
+        ]))

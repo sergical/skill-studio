@@ -131,6 +131,9 @@ def guard():
     import sys
     try:
         event = json.load(sys.stdin)
+        tool = event.get('tool_name', 'Bash')
+        if tool != 'Bash' and not tool.startswith('mcp__github__'):
+            return
         command = unquote(json.dumps(event.get('tool_input', event)))
         command = re.sub(r"['\"\\]", '', command)
         if re.search(r'gate\s*[:/]\s*approved', command, re.I):

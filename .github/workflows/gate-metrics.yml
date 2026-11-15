@@ -1,0 +1,28 @@
+name: Monthly gate metrics
+on:
+  schedule:
+    - cron: "0 6 1 * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Report previous month
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          since=$(date -u -d "$(date -u +%Y-%m-01) -1 month" +%F)
+          until=$(date -u -d "$(date -u +%Y-%m-01) -1 day" +%F)
+          scripts/gate/gate metrics --since "$since" --until "$until" > metrics.json
+          {
+            printf '## Gate metrics\n\n```json\n'
+            cat metrics.json
+            printf '\n```\n'
+          } >> "$GITHUB_STEP_SUMMARY"

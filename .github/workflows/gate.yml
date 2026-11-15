@@ -34,7 +34,10 @@ jobs:
         run: |
           auth=$(printf "x-access-token:%s" "$GH_TOKEN" | base64 -w0)
           git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "refs/pull/$PR_NUMBER/head" --no-tags
-          APPROVED=$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/status" --jq 'any(.statuses[]; .context == "gate/approved" and .state == "success")')
+          APPROVED=false
+          if [ -f scripts/gate/approval.py ]; then
+            APPROVED=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/statuses?per_page=100" | jq 'add' | python3 scripts/gate/approval.py)
+          fi
           # Classify with the base branch code and policy, never the PR code.
           scripts/gate/gate risk --base "$BASE_SHA" --head "$HEAD_SHA" --author "$AUTHOR" --json > risk.json
           tier=$(jq -r .tier risk.json)
