@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use serde::Serialize;
-use skill_studio_core::answers::{InvocationMismatches, ScanSummary};
+use skill_studio_core::answers::InvocationMismatches;
 use skill_studio_core::doctor::DoctorInvariant;
 use skill_studio_core::dto::{
     CommandHealth, ConflictReport, Diagnosis, DoctorReport, EventDto, FixApplied, FixSkillOutcome,
@@ -117,40 +117,6 @@ pub fn print_scan_table(envelope: &ResultEnvelope<Inventory>) {
     }
 }
 
-/// Prints `scan --short`: one line per skill, no paths.
-pub fn print_scan_summary(envelope: &ResultEnvelope<ScanSummary>) {
-    print_errors(envelope);
-    let Some(summary) = &envelope.data else {
-        return;
-    };
-    if summary.skills.is_empty() {
-        println!("No skills found.");
-    }
-    for skill in &summary.skills {
-        let mut places: Vec<String> = Vec::new();
-        if skill.library {
-            places.push("library".into());
-        }
-        places.extend(
-            skill
-                .agents
-                .iter()
-                .map(|agent| match skill.copies.get(agent) {
-                    Some(status) => format!("{agent} ({})", status.as_str()),
-                    None => agent.to_string(),
-                }),
-        );
-        if skill.parked {
-            places.push("parked".into());
-        }
-        println!("{}  [{}]  {}", skill.name, skill.source, places.join(", "));
-    }
-    if summary.partial {
-        println!("note: a folder could not be read, so a skill may be missing.");
-    }
-}
-
-/// Prints `invocation --mismatches`: one line per skill with each agent's mode.
 pub fn print_invocation_mismatches(envelope: &ResultEnvelope<InvocationMismatches>) {
     print_errors(envelope);
     let Some(report) = &envelope.data else {
@@ -435,7 +401,7 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
         .max()
         .unwrap_or(0);
     if !unused.is_empty() {
-        println!("Not used in the last {} days:", report.days);
+        println!("Not used ({}):", report.window);
         for row in &unused {
             println!(
                 "  {:width$}  last used {}  ({} uses all time)",
@@ -449,7 +415,7 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
         if !unused.is_empty() {
             println!();
         }
-        println!("Used in the last {} days:", report.days);
+        println!("Used ({}):", report.window);
         for row in &used {
             let agents = row
                 .agents
@@ -473,11 +439,14 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
     if !report.rows.is_empty() {
         println!();
     }
+    let window = report.window.days.map_or_else(
+        || report.window.to_string(),
+        |days| format!("in {days} days"),
+    );
     println!(
-        "{} of {} skills not used in {} days",
+        "{} of {} skills not used {window}",
         report.unused.len(),
-        report.rows.len(),
-        report.days
+        report.rows.len()
     );
     if report.partial {
         println!("Partial report. Some counts may be low:");
@@ -1035,18 +1004,15 @@ pub fn print_library(envelope: &ResultEnvelope<skill_studio_core::library::Libra
         return;
     };
     println!(
-        "Library: {} skills, {} used; days={}, since={}, until={}",
-        report.count,
-        report.used,
-        report.days,
-        report.since.as_deref().unwrap_or("rolling"),
-        report.until.as_deref().unwrap_or("now")
+        "Skills: {} skills, {} used; window: {}",
+        report.count, report.used, report.window
     );
-    println!("NAME  SOURCE  USES  AGENTS  MODES  COPIES");
+    println!("NAME  LIBRARY  SOURCE  USES  AGENTS  MODES  COPIES");
     for row in &report.rows {
         println!(
-            "{}  {}  {}  {}  {}  {}",
+            "{}  {}  {}  {}  {}  {}  {}",
             row.name,
+            row.library,
             row.source.as_deref().unwrap_or("-"),
             row.uses,
             serde_json::json!(row.agents),

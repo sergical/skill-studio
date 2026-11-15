@@ -77,20 +77,19 @@ impl From<AddMethod> for InstallMethod {
 
 const QUESTIONS: &str = "\
 Common questions:
-  What is in my shared library, where is it from, and how is it used?
-      skill-studio library
-  Which skills do I have, and which agents read them?
-      skill-studio scan --short
+  Which library skills did I load most, and where did they come from?
+      skill-studio library --since 2026-10-01 --until 2026-11-16 --sort uses --top 10 --json
+  Rows: name = skill; library = shared folder; uses = loads in the window, counted once per session; agents = loads by agent; source null = not installed from a repo; modes = manual/auto; copies = link/same/old/changed.
+  Which skills are installed outside my library too?
+      skill-studio library --all --json
   Which copies of a pack did not get the last update?
-      skill-studio scan --short --source <owner/repo> --copy-status stale
-  Which skills did I use most in a month?
-      skill-studio usage --since 2026-10-01 --until 2026-11-01 --top 10
+      skill-studio library --source <owner/repo> --copy-status old --json
   Which skills did I not use in the last 30 days?
-      skill-studio usage
+      skill-studio usage --json
   Which skills do agents read in different modes?
-      skill-studio invocation --mismatches
+      skill-studio invocation --mismatches --json
   What is broken?
-      skill-studio diagnose
+      skill-studio diagnose --json
 Add --json for one JSON document.";
 
 #[derive(Parser)]
@@ -148,9 +147,6 @@ enum Command {
         /// Include per-phase timings.
         #[arg(long, hide = true)]
         timings: bool,
-        /// One row per skill: its agents, library copy and copy status. No paths.
-        #[arg(long)]
-        short: bool,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -184,6 +180,19 @@ enum Command {
     },
     /// Show library skills, their sources, uses, invocation modes and agent copies.
     Library {
+        /// Include skills outside ~/.agents/skills.
+        #[arg(long)]
+        all: bool,
+        /// Only show this owner/repo, plugin@marketplace, or manual.
+        #[arg(long)]
+        source: Option<String>,
+        /// Only show this skill. Repeat for more than one.
+        #[arg(long = "skill")]
+        skills: Vec<String>,
+        /// Only show rows with this agent copy status: link, same, old, changed.
+        #[arg(long, value_parser = parse_library_copy_status)]
+        copy_status: Option<skill_studio_core::library::LibraryCopyStatus>,
+
         #[command(flatten)]
         scope: ScopeArgs,
         /// How many days back to count uses.
@@ -672,7 +681,6 @@ fn main() -> ExitCode {
             scope,
             skills,
             timings,
-            short,
             json,
         } => run_scan(
             &scope,
@@ -683,7 +691,7 @@ fn main() -> ExitCode {
                 skills: skills.into_iter().map(SkillName).collect(),
                 timings,
             },
-            ScanOutput { short, json },
+            json,
             time,
         ),
         Command::Diagnose {
@@ -727,6 +735,10 @@ fn main() -> ExitCode {
         Command::Undo { scope, force, json } => run_undo(&scope, force, json, time),
         Command::Review { action } => run_review(action, time),
         Command::Library {
+            all,
+            source,
+            skills,
+            copy_status,
             scope,
             days,
             since,
@@ -736,6 +748,10 @@ fn main() -> ExitCode {
             json,
         } => {
             let request = skill_studio_core::library::LibraryRequest {
+                all,
+                source,
+                skills,
+                copy_status,
                 days: Some(days),
                 since,
                 until,
@@ -1081,6 +1097,18 @@ fn exit_code(status: i32) -> ExitCode {
     ExitCode::from(status.clamp(0, 255) as u8)
 }
 
+fn parse_library_copy_status(
+    value: &str,
+) -> Result<skill_studio_core::library::LibraryCopyStatus, String> {
+    match value {
+        "old" => Ok(skill_studio_core::library::LibraryCopyStatus::Old),
+        "changed" => Ok(skill_studio_core::library::LibraryCopyStatus::Changed),
+        other => parse_copy_status(other)
+            .map(Into::into)
+            .map_err(|_| "expected link, same, old or changed".into()),
+    }
+}
+
 fn parse_copy_status(value: &str) -> Result<CopyStatus, String> {
     CopyStatus::ALL
         .into_iter()
@@ -1088,36 +1116,16 @@ fn parse_copy_status(value: &str) -> Result<CopyStatus, String> {
         .ok_or_else(|| "expected link, same, differs or stale".into())
 }
 
-#[derive(Clone, Copy)]
-struct ScanOutput {
-    short: bool,
-    json: bool,
-}
-
-fn run_scan(scope: &ScopeArgs, req: &ScanRequest, out: ScanOutput, time: bool) -> ExitCode {
-    let rt = match build_runtime::<skill_studio_core::dto::Inventory>(
-        scope,
-        Operation::Scan,
-        out.json,
-    ) {
+fn run_scan(scope: &ScopeArgs, req: &ScanRequest, json: bool, time: bool) -> ExitCode {
+    let rt = match build_runtime::<skill_studio_core::dto::Inventory>(scope, Operation::Scan, json)
+    {
         Ok(rt) => rt,
         Err(code) => return code,
     };
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::scan(&rt, &ctx, req);
-    if out.short {
-        let summary = result.map(|inventory| answers::summarize_scan(&inventory));
-        let envelope = ResultEnvelope::from_result(Operation::Scan, &rt.scope, &ctx, summary);
-        if out.json {
-            output::print_json(&envelope);
-        } else {
-            output::print_scan_summary(&envelope);
-        }
-        print_timing(time, envelope.timings.as_ref());
-        return exit_code(envelope.exit_status());
-    }
     let envelope = ResultEnvelope::from_result(Operation::Scan, &rt.scope, &ctx, result);
-    if out.json {
+    if json {
         output::print_json(&envelope);
     } else {
         output::print_scan_table(&envelope);

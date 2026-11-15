@@ -139,6 +139,15 @@ impl Default for SkillStudioServer {
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct LibraryRequest {
+    /// Include skills outside the shared library.
+    pub all: bool,
+    /// Restrict to owner/repo, plugin@marketplace, or manual.
+    pub source: Option<String>,
+    /// Restrict to these skill names; empty means all.
+    pub skills: Vec<String>,
+    /// Keep rows with this agent copy status.
+    pub copy_status: Option<skill_studio_core::library::LibraryCopyStatus>,
+
     /// Rolling window in days; defaults to 30.
     pub days: Option<u32>,
     /// Inclusive start (YYYY-MM-DD or RFC 3339).
@@ -364,22 +373,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "One row per skill: its agents, library copy and copy status, with no paths or ids. Takes the scan filters. Use it to answer questions; use scan when you need ids.",
-        annotations(read_only_hint = true)
-    )]
-    async fn scan_summary(
-        &self,
-        Parameters(req): Parameters<ScanRequest>,
-        context: RequestContext<RoleServer>,
-    ) -> CallToolResult {
-        run_op(Operation::Scan, false, &context, |rt, ctx| {
-            ops::scan(rt, ctx, &req).map(|inventory| answers::summarize_scan(&inventory))
-        })
-        .await
-    }
-
-    #[tool(
-        description = "One row per real shared-library skill: repository source, uses and agents in the window, verified invocation modes, and agent copies (link, same, old, changed). Defaults to 30 days. Top selects the most used skills. Unsupported invocation modes are omitted.",
+        description = "One row per shared-library skill (all=true also includes outside skills with library=false): repository source, uses and agents in the window, verified invocation modes, and agent copies (link, same, old, changed). Defaults to 30 days. Top selects the most used skills. Unsupported invocation modes are omitted.",
         annotations(read_only_hint = true)
     )]
     async fn library(
@@ -397,6 +391,10 @@ impl SkillStudioServer {
                     })
             };
             let request = skill_studio_core::library::LibraryRequest {
+                all: req.all,
+                source: req.source.clone(),
+                skills: req.skills.clone(),
+                copy_status: req.copy_status,
                 days: req.days,
                 since: bound(&req.since)?,
                 until: bound(&req.until)?,

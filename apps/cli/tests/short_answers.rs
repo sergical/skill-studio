@@ -10,8 +10,6 @@ mod headless;
 use serde_json::json;
 use std::path::Path;
 
-const SKILLS: usize = 20;
-
 fn write_skill(dir: &Path, name: &str, body: &str) {
     let skill = dir.join(name);
     std::fs::create_dir_all(&skill).unwrap();
@@ -20,84 +18,6 @@ fn write_skill(dir: &Path, name: &str, body: &str) {
         format!("---\nname: {name}\ndescription: A pack skill.\n---\n{body}\n"),
     )
     .unwrap();
-}
-
-/// A home with `SKILLS` library skills. Each one is linked into Claude Code
-/// and has a real Codex copy; every second Codex copy differs.
-fn pack_home() -> tempfile::TempDir {
-    let home = tempfile::tempdir().unwrap();
-    let root = home.path();
-    std::fs::create_dir_all(root.join(".claude/skills")).unwrap();
-    for index in 0..SKILLS {
-        let name = format!("pack-skill-{index:02}");
-        write_skill(&root.join(".agents/skills"), &name, "Version 2.");
-        std::os::unix::fs::symlink(
-            format!("../../.agents/skills/{name}"),
-            root.join(".claude/skills").join(&name),
-        )
-        .unwrap();
-        let body = if index % 2 == 0 {
-            "Version 2."
-        } else {
-            "Version 1."
-        };
-        write_skill(&root.join(".codex/skills"), &name, body);
-    }
-    home
-}
-
-/// Flow: `scan --short` and the MCP `scan_summary` tool on the same home.
-/// Expectation: the same data, one row per skill with its agents, the
-/// library flag and each agent copy's status.
-/// Failure means one surface answers a question the other gets wrong.
-#[test]
-fn short_scan_gives_the_same_rows_on_the_cli_and_mcp() {
-    let home = pack_home();
-
-    let cli = headless::cli(home.path(), &["scan", "--short"]);
-    let mcp = headless::mcp(home.path(), "scan_summary", &json!({}));
-
-    assert_eq!(
-        cli["data"], mcp["result"]["structuredContent"]["data"],
-        "cli: {cli}\nmcp: {mcp}"
-    );
-    let rows = cli["data"]["skills"].as_array().unwrap();
-    assert_eq!(rows.len(), SKILLS, "{cli}");
-    assert_eq!(
-        rows[1],
-        json!({
-            "name": "pack-skill-01",
-            "source": "manual",
-            "agents": ["claude-code", "codex"],
-            "library": true,
-            "copies": {"claude-code": "link", "codex": "differs"},
-        }),
-        "{cli}"
-    );
-}
-
-/// Flow: `scan --json` against `scan --short --json` on the same home.
-/// Expectation: the short answer costs at most 160 bytes per skill, and at
-/// most a fifth of the full scan.
-/// Failure means the short answer grew back toward the raw scan an agent
-/// would have to read.
-#[test]
-fn short_scan_stays_inside_its_byte_budget() {
-    let home = pack_home();
-
-    let full = headless::cli(home.path(), &["scan"]);
-    let short = headless::cli(home.path(), &["scan", "--short"]);
-
-    let full_bytes = full["data"].to_string().len();
-    let short_bytes = short["data"].to_string().len();
-    assert!(
-        short_bytes <= 160 * SKILLS,
-        "{short_bytes} bytes for {SKILLS} skills: {short}"
-    );
-    assert!(
-        short_bytes * 5 <= full_bytes,
-        "short {short_bytes} bytes, full {full_bytes} bytes"
-    );
 }
 
 /// Flow: `invocation --mismatches` and the MCP `invocation_mismatches` tool

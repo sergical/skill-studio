@@ -72,6 +72,21 @@ fn library_matches_usage_scan_and_mcp() {
         data, &mcp["result"]["structuredContent"]["data"],
         "{cli}\n{mcp}"
     );
+    let all = headless::cli(
+        root,
+        &[
+            "library",
+            "--all",
+            "--since",
+            "2026-10-01",
+            "--until",
+            "2026-11-01",
+        ],
+    );
+    assert_eq!(
+        data, &all["data"],
+        "Library aliases are not outside skills: {all}"
+    );
     assert_eq!(data["count"], 40);
     assert_eq!(data["used"], 1);
     assert_eq!(data["rows"][0]["source"], "fixture/pack");
@@ -86,7 +101,7 @@ fn library_matches_usage_scan_and_mcp() {
         root,
         &["usage", "--since", "2026-10-01", "--until", "2026-11-01"],
     );
-    let scan = headless::cli(root, &["scan", "--short"]);
+    let scan = headless::cli(root, &["scan"]);
     for row in data["rows"].as_array().unwrap() {
         let used = usage["data"]["rows"]
             .as_array()
@@ -102,7 +117,15 @@ fn library_matches_usage_scan_and_mcp() {
             .iter()
             .find(|s| s["name"] == row["name"])
             .unwrap();
-        let status = match scanned["copies"]["codex"].as_str().unwrap() {
+        let status = match scanned["deployments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["harness"] == "codex")
+            .unwrap()["copy_status"]
+            .as_str()
+            .unwrap()
+        {
             "stale" => "old",
             "differs" => "changed",
             other => panic!("unexpected {other}"),
@@ -142,7 +165,7 @@ fn library_matches_usage_scan_and_mcp() {
         "{}",
         String::from_utf8_lossy(&text.stderr)
     );
-    assert!(String::from_utf8_lossy(&text.stdout).starts_with("Library: 40 skills, 1 used;"));
+    assert!(String::from_utf8_lossy(&text.stdout).starts_with("Skills: 40 skills, 1 used;"));
     eprintln!(
         "40-skill fixture: JSON data={} bytes; JSON envelope={} bytes; text={} bytes",
         data.to_string().len(),
@@ -237,4 +260,154 @@ fn library_ignores_broken_agent_links_for_modes() {
     assert_eq!(cli["data"]["count"], 1, "{cli}");
     assert_eq!(cli["data"]["rows"][0]["modes"]["codex"], "manual", "{cli}");
     assert!(cli["data"]["rows"][0]["copies"].get("codex").is_none());
+}
+
+#[test]
+fn all_library_rows_and_filters_match_mcp() {
+    let home = tempfile::tempdir().unwrap();
+    for (root, name) in [
+        (".agents/skills", "shared"),
+        (".claude/skills", "outside"),
+        (".codex/skills", "shared"),
+    ] {
+        let path = home.path().join(root).join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: Fixture.\n---\n{root}\n"),
+        )
+        .unwrap();
+    }
+    for (args, params, count) in [
+        (vec!["library"], json!({}), 1),
+        (vec!["library", "--all"], json!({"all":true}), 2),
+        (
+            vec![
+                "library", "--all", "--source", "manual", "--skill", "outside",
+            ],
+            json!({"all":true,"source":"manual","skills":["outside"]}),
+            1,
+        ),
+        (
+            vec!["library", "--copy-status", "changed"],
+            json!({"copy_status":"changed"}),
+            1,
+        ),
+        (
+            vec!["library", "--source", "missing/repo"],
+            json!({"source":"missing/repo"}),
+            0,
+        ),
+    ] {
+        let cli = headless::cli(home.path(), &args);
+        let mcp = headless::mcp(home.path(), "library", &params);
+        assert_eq!(
+            cli["data"], mcp["result"]["structuredContent"]["data"],
+            "{cli}\n{mcp}"
+        );
+        assert_eq!(cli["data"]["count"], count, "{cli}");
+        for row in cli["data"]["rows"].as_array().unwrap() {
+            assert_eq!(row["library"], row["name"] == "shared");
+        }
+    }
+}
+
+#[test]
+fn explicit_window_echo_matches_counted_boundaries_on_both_surfaces() {
+    let home = tempfile::tempdir().unwrap();
+    let folder = home.path().join(".agents/skills/window");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("SKILL.md"),
+        "---\nname: window\ndescription: Fixture.\n---\n",
+    )
+    .unwrap();
+    let history = home.path().join(".claude/projects/work");
+    std::fs::create_dir_all(&history).unwrap();
+    let records: Vec<_> = ["2026-09-30T23:59:59Z", "2026-10-01T00:00:00Z", "2026-11-15T23:59:59Z", "2026-11-16T00:00:00Z"].iter().enumerate().map(|(id, at)| json!({"type":"assistant","uuid":id.to_string(),"sessionId":id.to_string(),"timestamp":at,"message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"window"}}]}}).to_string()).collect();
+    std::fs::write(history.join("session.jsonl"), records.join("\n") + "\n").unwrap();
+    for (command, tool, uses) in [
+        ("library", "library", "uses"),
+        ("usage", "skill_usage", "recent_uses"),
+    ] {
+        let cli = headless::cli(
+            home.path(),
+            &[command, "--since", "2026-10-01", "--until", "2026-11-16"],
+        );
+        let mcp = headless::mcp(
+            home.path(),
+            tool,
+            &json!({"since":"2026-10-01","until":"2026-11-16"}),
+        );
+        assert_eq!(cli["data"], mcp["result"]["structuredContent"]["data"]);
+        assert!(cli["data"].get("days").is_none(), "{cli}");
+        assert_eq!(cli["data"]["since"], "2026-10-01T00:00:00+00:00");
+        assert_eq!(cli["data"]["until"], "2026-11-16T00:00:00+00:00");
+        assert_eq!(cli["data"]["rows"][0][uses], 2, "{cli}");
+        let text = std::process::Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+            .args([
+                command,
+                "--home",
+                home.path().to_str().unwrap(),
+                "--since",
+                "2026-10-01",
+                "--until",
+                "2026-11-16",
+            ])
+            .env_clear()
+            .env("HOME", home.path())
+            .env("PATH", "/usr/bin:/bin")
+            .env("SKILL_STUDIO_TELEMETRY", "0")
+            .current_dir(home.path())
+            .output()
+            .unwrap();
+        assert!(text.status.success());
+        let text = String::from_utf8(text.stdout).unwrap();
+        assert!(
+            text.contains("since=2026-10-01T00:00:00+00:00 until=2026-11-16T00:00:00+00:00"),
+            "{text}"
+        );
+        assert!(!text.contains("30 days"), "{text}");
+    }
+}
+
+#[test]
+fn repository_filters_match_displayed_dotagents_and_local_sources() {
+    let home = tempfile::tempdir().unwrap();
+    for name in ["dot", "local"] {
+        let path = home.path().join(".agents/skills").join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: Fixture.\n---\n"),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        home.path().join(".agents/agents.lock"),
+        "[skills.dot]\nsource = \"git:https://github.com/dot/repo.git\"\n",
+    )
+    .unwrap();
+    std::fs::write(home.path().join(".agents/.skill-lock.json"), json!({"version":3,"skills":{"local":{"source":"/tmp/source","sourceType":"local","sourceUrl":"/tmp/source","skillFolderHash":"hash","installedAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}}}).to_string()).unwrap();
+    for all in [false, true] {
+        let mut args = vec!["library", "--source", "dot/repo"];
+        if all {
+            args.push("--all");
+        }
+        let cli = headless::cli(home.path(), &args);
+        let mcp = headless::mcp(
+            home.path(),
+            "library",
+            &json!({"all":all,"source":"dot/repo"}),
+        );
+        assert_eq!(cli["data"], mcp["result"]["structuredContent"]["data"]);
+        assert_eq!(cli["data"]["count"], 1, "{cli}");
+        assert_eq!(cli["data"]["rows"][0]["source"], "dot/repo");
+    }
+    let local = headless::cli(home.path(), &["library", "--skill", "local"]);
+    assert!(local["data"]["rows"][0]["source"].is_null(), "{local}");
+    assert_eq!(
+        headless::cli(home.path(), &["library", "--source", "/tmp/source"])["data"]["count"],
+        0
+    );
 }

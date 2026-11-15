@@ -64,14 +64,9 @@ pub struct SkillUsageRow {
 pub struct UsageReport {
     /// Roots or files whose history was unavailable or skipped.
     pub observations: Vec<crate::skill_uses::UsageObservation>,
-    /// The window, in days, that `recent_uses` and `unused` cover.
-    pub days: u32,
-    /// Start of the window, RFC 3339, when the caller gave one instead of `days`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub since: Option<String>,
-    /// End of the window (not included), RFC 3339, when the caller gave one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub until: Option<String>,
+    /// Window used by the tally.
+    #[serde(flatten)]
+    pub window: skill_studio_core::usage_window::UsageWindow,
     /// Skills not used in the window first, by name; then the rest, most
     /// used first.
     pub rows: Vec<SkillUsageRow>,
@@ -324,9 +319,11 @@ impl SkillUsage {
         }
 
         UsageReport {
-            days,
-            since: selection.since.map(|at| at.to_rfc3339()),
-            until: selection.until.map(|at| at.to_rfc3339()),
+            window: skill_studio_core::usage_window::UsageWindow::new(
+                days,
+                selection.since,
+                selection.until,
+            ),
             rows,
             unused,
             partial: !observations.is_empty(),
@@ -581,7 +578,7 @@ mod tests {
 
         let report = SkillUsage::default().report(&fixture.home, &inventory, 30, now());
 
-        assert_eq!(report.days, 30);
+        assert_eq!(report.window.days, Some(30));
         assert!(!report.partial, "absent history is complete: {report:?}");
         let names: Vec<&str> = report.rows.iter().map(|r| r.skill.as_str()).collect();
         assert_eq!(names, ["idle", "gamma"], "{report:?}");
@@ -643,8 +640,8 @@ mod tests {
         assert_eq!(row(&report, "idle").recent_uses, 1, "{report:?}");
         assert_eq!(row(&report, "gamma").recent_uses, 0, "{report:?}");
         assert_eq!(report.unused, ["gamma"]);
-        assert_eq!(report.since, Some(since.to_rfc3339()));
-        assert_eq!(report.until, Some(until.to_rfc3339()));
+        assert_eq!(report.window.since, Some(since.to_rfc3339()));
+        assert_eq!(report.window.until, Some(until.to_rfc3339()));
     }
 
     /// Flow: report the 30 days before a date 50 days ago (`until` only).

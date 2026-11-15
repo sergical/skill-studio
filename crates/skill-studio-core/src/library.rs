@@ -16,6 +16,14 @@ use crate::CoreError;
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct LibraryRequest {
+    /// Include skills outside the shared library.
+    pub all: bool,
+    /// Restrict to owner/repo, plugin@marketplace, or manual.
+    pub source: Option<String>,
+    /// Restrict to these skill names; empty means all.
+    pub skills: Vec<String>,
+    /// Keep rows with an agent copy of this status.
+    pub copy_status: Option<LibraryCopyStatus>,
     /// Rolling window in days; defaults to 30.
     pub days: Option<u32>,
     /// Inclusive start, instead of days before the end.
@@ -56,12 +64,9 @@ pub struct LibraryReport {
     pub count: usize,
     /// Number used in the window, before top selection.
     pub used: usize,
-    /// Rolling window setting.
-    pub days: u32,
-    /// Explicit inclusive start, when supplied.
-    pub since: Option<String>,
-    /// Explicit exclusive end, when supplied.
-    pub until: Option<String>,
+    /// Window used by the tally.
+    #[serde(flatten)]
+    pub window: crate::usage_window::UsageWindow,
     /// Selected skills.
     pub rows: Vec<LibraryRow>,
     /// Some inventory or history could not be read.
@@ -71,9 +76,14 @@ pub struct LibraryReport {
 /// One real folder in the home's shared skill library.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LibraryRow {
+    /// A real folder exists in the home's shared library.
+    pub library: bool,
+    /// Every deployment is parked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub parked: bool,
     /// Installed name.
     pub name: String,
-    /// Repository from the skills lock, or null for a non-repository install.
+    /// Repository from the install ledgers, or null for a non-repository install.
     pub source: Option<String>,
     /// Uses in the requested window.
     pub uses: u32,
@@ -96,8 +106,10 @@ pub enum LibraryCopyStatus {
     /// Matches the library's files.
     Same,
     /// Missed the library's last update.
+    #[serde(alias = "stale")]
     Old,
     /// Has independent changes.
+    #[serde(alias = "differs")]
     Changed,
 }
 
@@ -145,40 +157,90 @@ pub fn library(
     ctx.checkpoint()?;
     let mut rows = Vec::new();
     for skill in &inventory.skills {
-        let Some(folder) = skill.deployments.iter().find(|d| {
+        if !request.skills.is_empty() && !request.skills.contains(&skill.name.0) {
+            continue;
+        }
+        let folder = skill.deployments.iter().find(|d| {
             d.root.kind == RootKind::Universal
                 && d.path.parent() == Some(root.as_path())
                 && !d.is_symlink
-        }) else {
+        });
+        if folder.is_none()
+            && (!request.all
+                || skill
+                    .deployments
+                    .iter()
+                    .all(|d| d.path.parent() == Some(root.as_path())))
+        {
             continue;
-        };
+        }
         let counts = usage.iter().find(|u| u.name == skill.name.0);
         let mut row = LibraryRow {
+            library: folder.is_some(),
+            parked: skill
+                .deployments
+                .iter()
+                .all(|d| d.root.kind == RootKind::Parked),
             name: skill.name.0.clone(),
             source: lock
                 .as_ref()
                 .and_then(|lock| lock.skills.get(&skill.name.0))
                 .filter(|entry| matches!(entry.source_type.as_str(), "github" | "gitlab" | "git"))
-                .map(|entry| entry.source.clone()),
+                .map(|entry| entry.source.clone())
+                .or_else(|| {
+                    let local_lock = lock
+                        .as_ref()
+                        .and_then(|lock| lock.skills.get(&skill.name.0))
+                        .is_some_and(|entry| entry.source == skill.source);
+                    if local_lock || skill.source.contains('@') {
+                        None
+                    } else {
+                        crate::dotagents_ledger::github_repo_from_source(&skill.source)
+                    }
+                }),
             uses: counts.map_or(0, |u| u.uses),
             agents: counts.map(|u| u.agents.clone()).unwrap_or_default(),
             modes: BTreeMap::new(),
             copies: BTreeMap::new(),
         };
+        if request
+            .source
+            .as_ref()
+            .is_some_and(|source| match source.as_str() {
+                "manual" => skill.source != "manual",
+                _ if source.contains('@') => source != &skill.source,
+                _ => row.source.as_ref() != Some(source),
+            })
+        {
+            continue;
+        }
         let copies: Vec<_> = skill
             .deployments
             .iter()
             .filter(|d| {
-                d.root.scope == RootScope::Global
-                    && !d.symlink_is_broken
-                    && matches!(d.root.kind, RootKind::Harness(_) | RootKind::Legacy(_))
+                !d.symlink_is_broken
+                    && d.root.kind != RootKind::Parked
+                    && if folder.is_some() {
+                        d.root.scope == RootScope::Global
+                            && matches!(d.root.kind, RootKind::Harness(_) | RootKind::Legacy(_))
+                    } else {
+                        true
+                    }
             })
             .collect();
+        if request.copy_status.is_some_and(|status| {
+            !copies
+                .iter()
+                .any(|d| d.copy_status.map(LibraryCopyStatus::from) == Some(status))
+        }) {
+            continue;
+        }
         for library_copy in [true, false] {
             let mut modes = BTreeMap::new();
-            for deployment in std::iter::once(folder)
+            for deployment in folder
+                .into_iter()
                 .chain(copies.iter().copied())
-                .filter(|d| (d.path == folder.path) == library_copy)
+                .filter(|d| folder.is_some_and(|folder| d.path == folder.path) == library_copy)
             {
                 ctx.checkpoint()?;
                 match deployment_invocation(rt, deployment) {
@@ -227,9 +289,11 @@ pub fn library(
     Ok(LibraryReport {
         count,
         used,
-        days: request.days.unwrap_or(30),
-        since: request.since.map(|t| t.to_rfc3339()),
-        until: request.until.map(|t| t.to_rfc3339()),
+        window: crate::usage_window::UsageWindow::new(
+            request.days.unwrap_or(30),
+            request.since,
+            request.until,
+        ),
         rows,
         partial,
     })

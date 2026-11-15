@@ -156,7 +156,6 @@ fn every_common_question_example_runs() {
             .args(&args)
             .arg("--home")
             .arg(home.path())
-            .arg("--json")
             .env("HOME", home.path())
             .env("SKILL_STUDIO_TELEMETRY", "0")
             .output()
@@ -166,5 +165,30 @@ fn every_common_question_example_runs() {
             "`skill-studio {example}` failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+}
+
+#[test]
+fn common_questions_teach_library_without_more_help_calls() {
+    let text = help(&[]);
+    let questions = text.split("Common questions:").nth(1).unwrap();
+    let example = questions
+        .lines()
+        .find(|line| line.trim().starts_with("skill-studio "))
+        .unwrap();
+    assert_eq!(
+        example.trim(),
+        "skill-studio library --since 2026-10-01 --until 2026-11-16 --sort uses --top 10 --json"
+    );
+    for field in [
+        "name = skill",
+        "library = shared folder",
+        "uses = loads in the window, counted once per session",
+        "agents = loads by agent",
+        "source null = not installed from a repo",
+        "modes = manual/auto",
+        "copies = link/same/old/changed",
+    ] {
+        assert!(questions.contains(field), "{text}");
     }
 }
