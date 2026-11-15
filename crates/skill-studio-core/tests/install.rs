@@ -804,7 +804,7 @@ fn skills_sh_install_with_claude_code_keeps_the_cli_link_or_names_the_eexist_fai
 }
 
 /// `skills_sh_project_install_runs_npx_in_the_project_dir_not_via_a_cwd_flag_or_names_the_stray_write`:
-/// `skills@1.7.0` has no `--cwd` flag, so a project-scope skills.sh install
+/// `skills@1.8.1` has no `--cwd` flag, so a project-scope skills.sh install
 /// must carry the project path as the spawned process's own cwd, not as an
 /// argv token - otherwise the CLI writes into whatever directory the host
 /// process happened to start in instead of the project (the bug this test
@@ -836,7 +836,7 @@ fn skills_sh_project_install_runs_npx_in_the_project_dir_not_via_a_cwd_flag_or_n
     let (args, cwd) = &recorded[0];
     assert!(
         !args.contains(&"--cwd".to_string()),
-        "skills@1.7.0 has no --cwd flag; the argv must not carry one: {args:?}"
+        "skills@1.8.1 has no --cwd flag; the argv must not carry one: {args:?}"
     );
     assert_eq!(
         cwd.as_deref(),
@@ -1291,7 +1291,7 @@ fn cli_add_matches_the_npx_skills_add_trace_byte_for_byte_apart_from_timestamps_
     );
     let (args, cwd) = &recorded[0];
     let mut pinned_args = trace.args.clone();
-    pinned_args[0] = "skills@1.7.0".to_string();
+    pinned_args[0] = skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string();
     assert_eq!(
         args, &pinned_args,
         "install_via_cli's argv drifted from the recorded skills.sh trace"

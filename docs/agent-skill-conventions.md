@@ -511,3 +511,18 @@ The host resolves these roots for scan, extras, and skill operations; project pa
 | Grok Build  | Non-empty `GROK_HOME` replaces `~/.grok`, including skills, hooks, config, plugins and sessions. The value is a directory path used as given.                                                  | Grok is not installed on this machine. Checked upstream `xai-org/grok-build`, `crates/codegen/xai-dirs/src/lib.rs`, `resolve_grok_home_from`, and `crates/codegen/xai-grok-config/src/paths.rs`. |
 
 On macOS, the desktop app started from Finder does not receive shell environment variables.
+
+## skills CLI pack contract
+
+`crates/skill-studio-core/tests/skills_cli_contract.rs` records the pinned
+`npx skills` pack behavior for global installs, updates, removal, project
+restore at a tag, and npm sync. It uses the offline smart-HTTP git fixture in
+`tests/support/git_pack.rs`. Upstream changes overwrite local edits; unchanged
+skills keep edits, and update does not add new upstream skills. Adding with one
+selected agent defaults to copies in 1.8.1; restore and update can create links.
+The tests set the host-agent identity to Claude so updates target the same agent
+when run from Codex or another agent.
+
+The tests are ignored by default because fetching the CLI needs npm registry
+access. Run `cargo test --workspace --all-features -- --ignored skills_cli_contract`.
+The non-required `skills-cli-contract` workflow runs on pull requests and weekly.

@@ -112,7 +112,12 @@ printf '%s\n' '---' 'name: gamma' 'description: probe' '---' 'Body' > "$HOME/.ag
         ),
     )
     .unwrap();
-    std::os::unix::fs::symlink("skills", home.path().join("skills@1.7.0")).unwrap();
+    std::os::unix::fs::symlink(
+        "skills",
+        home.path()
+            .join(skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE),
+    )
+    .unwrap();
     let before = tree(outside.path());
     let args = [
         "add",

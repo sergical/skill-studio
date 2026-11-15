@@ -336,7 +336,9 @@ impl ProcessSpawner for RecordedUpdateCli {
         spec: &ProcessSpec,
         _: &dyn CancelToken,
     ) -> Result<ProcessOutput, skill_studio_core::CoreError> {
-        assert_eq!(serde_json::json!(spec.args), self.trace["args"]);
+        let mut args = self.trace["args"].clone();
+        args[0] = serde_json::json!(skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE);
+        assert_eq!(serde_json::json!(spec.args), args);
         std::fs::remove_dir_all(self.home.join(".agents/skills/trace-skill")).unwrap();
         recorded_files(&self.home, &self.trace["files_after"]);
         std::fs::write(

@@ -58,7 +58,12 @@ esac
             script.replace('\'', "'\\''")
         );
         std::fs::write(home.path().join("skills"), runner).unwrap();
-        std::os::unix::fs::symlink("skills", home.path().join("skills@1.7.0")).unwrap();
+        std::os::unix::fs::symlink(
+            "skills",
+            home.path()
+                .join(skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE),
+        )
+        .unwrap();
         let mut env = HOME_KEYS
             .iter()
             .map(|key| (key.to_string(), outside.path().display().to_string()))

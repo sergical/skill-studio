@@ -27,10 +27,10 @@
 #     runtime across traces instead of re-fetching hundreds of MB each time.
 #   - a `trap` removes every `mktemp -d` directory this run created, even on
 #     failure or interrupt.
-#   - the CLI is pinned to `skills@1.7.0`.
+#   - the CLI is pinned to `skills@1.8.1`.
 set -eu
 
-CLI_VERSION="skills@1.7.0"
+CLI_VERSION="skills@1.8.1"
 REAL_HOME="$HOME"
 REAL_NPM_CACHE="$REAL_HOME/.npm"
 XDG_DATA_DIR="$REAL_HOME/.cache/skill-studio-cli-trace-recorder/xdg-data"
@@ -73,7 +73,7 @@ guard_temp_home() {
   esac
 }
 
-# Runs one `npx skills@1.7.0 ...` call inside `cwd` (or $HOME when `cwd` is
+# Runs one `npx skills@1.8.1 ...` call inside `cwd` (or $HOME when `cwd` is
 # empty), with the safety env from the module doc comment. Never reads or
 # writes a real `~/.agents`, `~/.claude`, `~/.codex`, `~/.cursor`, or
 # `~/.config/opencode` - those live under $HOME, which is always this
@@ -108,7 +108,7 @@ run_cli() {
       # "skills" is one of its own argv tokens, not an npx-level flag (see
       # `cli_args_and_cwd`/`remove_cli_args_and_cwd`/`update_cli_args_and_cwd`
       # in `ops_install_cli.rs`/`ops_remove.rs`/`ops_update.rs`). This
-      # recorder instead runs `npx --yes skills@1.7.0 <subcommand-args...>`
+      # recorder instead runs `npx --yes skills@1.8.1 <subcommand-args...>`
       # for reproducibility, so "skills" is prepended here to make the
       # *recorded* argv match the shape `ops` actually builds, without
       # changing what real command executes above.
@@ -376,7 +376,7 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# Trace 03: add a local folder, project scope. skills@1.7.0's `add` has no
+# Trace 03: add a local folder, project scope. skills@1.8.1's `add` has no
 # `--cwd` flag (confirmed against `add --help`, and against a real run: the
 # CLI writes wherever the process's own cwd is, ignoring any `--cwd` value)
 # - recorded here as the real invocation, cd-ing into $PROJECT first and
@@ -409,7 +409,7 @@ EOF
   "cli_version": "$CLI_VERSION",
   "source": "local folder (authored for this fixture, not fetched)",
   "exit_status": $CLI_EXIT_STATUS,
-  "notes": "InstallMethod::SkillsSh, project scope. Recorded by cd-ing into \$PROJECT first and never passing --cwd, since skills@1.7.0's add has no working --cwd flag. Whether this still diverges from ops_install_cli.rs's SkillsSh builder is decided in cli_parity.rs's KNOWN_DIVERGENCES, not here."
+  "notes": "InstallMethod::SkillsSh, project scope. Recorded by cd-ing into \$PROJECT first and never passing --cwd, since skills@1.8.1's add has no working --cwd flag. Whether this still diverges from ops_install_cli.rs's SkillsSh builder is decided in cli_parity.rs's KNOWN_DIVERGENCES, not here."
 }
 EOF
   unset PROJECT_DIR LOCAL_SKILL_DIR

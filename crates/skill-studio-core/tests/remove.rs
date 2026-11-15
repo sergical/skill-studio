@@ -1607,7 +1607,8 @@ fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_times
         "remove_via_cli must call npx exactly once"
     );
     let (args, cwd, env) = &recorded[0];
-    let pinned_args = trace.args.clone();
+    let mut pinned_args = trace.args.clone();
+    pinned_args[0] = skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string();
     assert_eq!(
         args, &pinned_args,
         "remove_via_cli's argv drifted from the recorded skills.sh trace"
