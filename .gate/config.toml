@@ -51,6 +51,8 @@ paths = [
 id = "gate-policy"
 tier = "stop"
 paths = [
+  ".gate/*.toml",
+  ".gate/.gitignore",
   "scripts/gate/gate",
   "scripts/gate/gate.py",
   "scripts/gate/approval.py",
