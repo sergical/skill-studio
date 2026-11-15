@@ -2,8 +2,9 @@
 import json
 from pathlib import Path
 import re
-import subprocess
-from gate import classify, gh, git, run, state_path
+import tomllib
+from urllib.parse import unquote
+from gate import classify, gh, git, run, state_path, read_at, TIERS
 
 START, END = '<!-- gate:card -->', '<!-- /gate:card -->'
 
@@ -13,13 +14,19 @@ def local_state():
     return json.loads(path.read_text()) if path.exists() else {}
 
 
-def start(args):
+def start(args, cfg=None):
     intent = args.intent or args.issue
     if not intent:
         raise ValueError('Supply an intent or --issue URL')
-    if args.issue and not re.fullmatch(r'https://[^\s]+', args.issue):
+    if args.issue and (not re.fullmatch(r'https://[^\s]+', args.issue) or (cfg and cfg.get('issue_patterns') and not any(re.fullmatch(p, args.issue) for p in cfg['issue_patterns']))):
         raise ValueError('--issue requires an HTTPS URL')
-    state_path().write_text(json.dumps({'intent': intent, 'author_model': args.author_model}, indent=2) + '\n')
+    state = local_state()
+    state['intent'] = intent
+    if args.issue:
+        state['issue'] = args.issue
+    if args.author_model:
+        state['author_model'] = args.author_model
+    state_path().write_text(json.dumps(state, indent=2) + '\n')
     print('Intent saved for this branch')
 
 
@@ -57,11 +64,20 @@ def replace_card(body, card):
 
 
 def card(args, cfg):
-    pr = json.loads(run('gh', 'pr', 'view', '--json', 'number,body,headRefOid,title,statusCheckRollup'))
+    pr = json.loads(run('gh', 'pr', 'view', '--json', 'number,body,headRefOid,baseRefOid,author,title,statusCheckRollup'))
     sha = git('rev-parse', 'HEAD')
     if pr['headRefOid'] != sha:
         raise ValueError('Push the local head before writing its card')
-    risk = classify(cfg, git('merge-base', cfg['base'], sha), sha)
+    base = git('merge-base', pr['baseRefOid'], sha)
+    policy = read_at(base, '.gate/config.toml')
+    risk = classify(tomllib.loads(policy) if policy else cfg, base, sha, author=pr['author']['login'])
+    raised_path = state_path().with_suffix('.risk.json')
+    raised = json.loads(raised_path.read_text()) if raised_path.exists() else {}
+    if raised.get('head') == sha:
+        for reason in raised['reasons']:
+            if reason['rule'] == 'manual':
+                risk['reasons'].append(reason)
+                risk['tier'] = max(risk['tier'], reason['tier'], key=TIERS.index)
     statuses = gh(f"repos/{cfg['repository']}/commits/{sha}/status")['statuses']
     states = {s['context']: s['state'] for s in reversed(statuses)}
     for check in pr['statusCheckRollup']:
@@ -73,14 +89,21 @@ def card(args, cfg):
     record = json.loads(review_path.read_text()) if review_path.exists() else {}
     if record.get('head') != sha:
         record = {}
-    lines = [START, f"| Intent | {cell(local_state().get('intent', 'not recorded'))} |", '| :-- | :-- |', f"| Result | {cell(args.result or pr['title'])} |", f'| Head | `{sha}` |', f"| Tier | **{risk['tier']}** |", f"| Reasons | {cell(', '.join(r['rule'] for r in risk['reasons']) or 'no rule matched')} |", f"| Review | {cell(record.get('reviewer', 'unknown'))}: {cell(record.get('verdict', states.get('gate/review', 'not run')))} |", '', '| Check | Status |', '| :-- | :-- |']
+    lines = [START, f"| Intent | {cell(local_state().get('intent', 'not recorded'))} |", '| :-- | :-- |', f"| Result | {cell(args.result or pr['title'])} |", f'| Head | `{sha}` |', f"| Tier | **{risk['tier']}** |", f"| Reasons | {cell('; '.join(r['rule'] + ': ' + r.get('reason', ', '.join(r.get('files', []))) for r in risk['reasons']) or 'no rule matched')} |", f"| Review | {cell(record.get('reviewer', 'unknown'))}: {cell(record.get('verdict', states.get('gate/review', 'not run')))} |", '', '| Check | Status |', '| :-- | :-- |']
     names = [cfg['check'], *cfg.get('ci_jobs', []), *states, 'gate/risk', 'gate/review']
     for name in dict.fromkeys(names):
         state = states.get(name, 'not reported')
         mark = '✅' if state == 'success' else '❌' if state in ['failure', 'error', 'cancelled', 'timed_out'] else '⏳'
         lines.append(f'| {cell(name)} | {mark} {cell(state)} |')
     scenarios = verify.get('scenarios', []) if verify else []
+    stale = bool(verify and verify.get('head') and verify['head'] != sha)
+    if stale:
+        scenarios = []
     status = 'not run' if not scenarios else 'pass' if all(s['status'] == 'pass' for s in scenarios) else 'fail'
+    if stale:
+        status = 'not run (stale head)'
+    elif scenarios and not verify.get('head'):
+        status = 'unbound evidence; reported ' + status
     lines += [f'| verify | {status} |']
     if scenarios:
         lines += ['', '| Scenario | Intent | Status | Evidence | Notes |', '| :-- | :-- | :-- | :-- | :-- |']
@@ -91,6 +114,8 @@ def card(args, cfg):
                 if Path(path).is_absolute() or re.match(r'^[A-Za-z]:', path):
                     raise ValueError('Evidence paths must be repo-relative or HTTPS URLs')
                 # Local paths cannot be viewed by a reviewer on GitHub.
+                if path.startswith('https://') and not re.fullmatch(r'https://[^\s()<>|"\\]+', path):
+                    raise ValueError('Invalid HTTPS evidence URL')
                 if path.startswith('https://'):
                     evidence.append(f"![{cell(entry['kind'])}]({path})" if entry['kind'] == 'screenshot' else f"[{cell(entry['kind'])}]({path})")
                 else:
@@ -104,10 +129,14 @@ def card(args, cfg):
 
 def guard():
     import sys
-    event = json.load(sys.stdin)
-    command = json.dumps(event.get('tool_input', event))
-    if re.search(r'gate(?::|%3[aA])approved', command, re.I):
-        print('Only a human may add gate:approved', file=sys.stderr)
+    try:
+        event = json.load(sys.stdin)
+        command = unquote(json.dumps(event.get('tool_input', event)))
+        command = re.sub(r"['\"\\]", '', command)
+        if re.search(r'gate\s*:\s*approved', command, re.I):
+            raise ValueError('Only a human may add gate:approved')
+    except Exception as error:
+        print(str(error), file=sys.stderr)
         raise SystemExit(2)
 
 
