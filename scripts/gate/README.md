@@ -132,3 +132,7 @@ The privileged risk job checks out base-branch gate code and policy. PR changes
 cannot change their own classification. The first gate PR needs a manual
 bootstrap because base does not yet contain the gate. Unit and contract jobs
 run PR code with read-only permissions.
+
+Approval labels are removed on every PR synchronize event, including automatic branch updates. A human must approve the new head again. Risk waits for unit and contract checks; a stale contract therefore fails gate/risk even when no stop rule matched. The private-repo fetch uses a one-time auth header.
+
+Main CI metrics count push runs from this repository and the configured `ci_workflows` only. Historical merge ancestry supports squash and merge commits; rebase-merge history needs a separate base reconstruction and is not supported. `--last` refuses a window with too few PRs; widen `--since`. Main-commit and PR follow-up windows both extend 14 days past the reporting period, and merged PR commits are counted once.

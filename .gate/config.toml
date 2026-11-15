@@ -1,3 +1,8 @@
+ci_workflows = [
+  ".github/workflows/rust.yml",
+  ".github/workflows/web.yml",
+  ".github/workflows/performance.yml",
+]
 issue_patterns = [
   'https://github\.com/[^/]+/[^/]+/issues/[0-9]+/?',
   'https://[^/]*sentry\.io/.*issues/[0-9]+/?(?:\?.*)?',

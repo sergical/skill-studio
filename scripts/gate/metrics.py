@@ -43,7 +43,7 @@ def collect(cfg, since, until):
         details = list(pool.map(detail, prs))
     selected = [p for p in details if datetime.fromisoformat(p['mergedAt'].replace('Z', '+00:00')) < end]
     commits = []
-    for line in git('log', cfg['base'], '--first-parent', f'--since={since}', f'--until={until}T23:59:59Z', '--format=%H%x09%cI%x09%s').splitlines():
+    for line in git('log', cfg['base'], '--first-parent', f'--since={since}', f'--until={(end + timedelta(days=14)).isoformat()}', '--format=%H%x09%cI%x09%s').splitlines():
         sha, date, title = line.split('\t', 2)
         if re.search(r'\b(fix|regression|hotfix|revert)\b', title, re.I):
             commits.append({'sha': sha, 'date': date, 'title': title, 'files': git('diff-tree', '--no-commit-id', '--name-only', '-r', sha).splitlines()})
@@ -55,10 +55,10 @@ def collect(cfg, since, until):
             later = datetime.fromisoformat(time.replace('Z', '+00:00'))
             return date < later <= date + timedelta(days=14) and (bool(set(files) & set(pr['files'])) or re.search(rf'(?<!\d)#{pr["number"]}(?!\d)', title + ' ' + body))
         fixes = [f"PR #{p['number']}" for p in details if fix_pattern.search(p['title']) and related(p['title'], p['body'], p['files'], p['mergedAt'])]
-        fixes += [c['sha'] for c in commits if related(c['title'], '', c['files'], c['date']) and c['sha'] != pr['mergeCommit']['oid']]
+        fixes += [c['sha'] for c in commits if related(c['title'], '', c['files'], c['date']) and c['sha'] not in {p['mergeCommit']['oid'] for p in details}]
         if fixes:
             followups[str(pr['number'])] = fixes
-    runs = [r for page in pages(f'repos/{repo}/actions/runs?branch={cfg["base"].split("/")[-1]}&status=failure&per_page=100&created={since}..{until}') for r in page['workflow_runs']]
+    runs = [r for page in pages(f'repos/{repo}/actions/runs?branch={cfg["base"].split("/")[-1]}&event=push&status=failure&per_page=100&created={since}..{until}') for r in page['workflow_runs'] if r['event'] == 'push' and r['head_repository']['full_name'] == repo and (not cfg.get('ci_workflows') or r['path'].split('@')[0] in cfg['ci_workflows'])]
     n = len(selected)
     stop = [p for p in selected if p['risk']['tier'] == 'stop']
     per_rule = {}
@@ -71,11 +71,15 @@ def collect(cfg, since, until):
 def metrics(args, cfg):
     report = collect(cfg, args.since, args.until)
     if args.last:
+        if len(report['prs']) < args.last:
+            raise ValueError('Not enough PRs for --last; widen --since')
         # Backtest uses the same classifier; select the most recent merge dates, not PR numbers.
         ordered = sorted(report['prs'], key=lambda p: p['merged_at'], reverse=True)[:args.last]
         counts = {}
         for pr in ordered:
             for rule in {r['rule'] for r in pr['risk']['reasons'] if r['tier'] == 'stop'}:
                 counts[rule] = counts.get(rule, 0) + 1
-        report['backtest'] = {'count': len(ordered), 'stop_rate': sum(p['risk']['tier'] == 'stop' for p in ordered) / len(ordered) if ordered else 0, 'per_rule': {k: {'count': v, 'rate': v / len(ordered)} for k, v in counts.items()}}
+        stop_ids = {str(p['number']) for p in ordered if p['risk']['tier'] == 'stop'}
+        followups = set(report['followup_fixes']['prs'])
+        report['backtest'] = {'stop_with_followups': len(stop_ids & followups), 'non_stop_with_followups': sum(str(p['number']) in followups for p in ordered if p['risk']['tier'] != 'stop'), 'count': len(ordered), 'stop_rate': sum(p['risk']['tier'] == 'stop' for p in ordered) / len(ordered) if ordered else 0, 'per_rule': {k: {'count': v, 'rate': v / len(ordered)} for k, v in counts.items()}}
     print(json.dumps(report, indent=2))
