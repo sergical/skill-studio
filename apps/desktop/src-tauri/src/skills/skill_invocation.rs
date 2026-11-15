@@ -113,6 +113,7 @@ fn write_invocation_target(
         &skill_studio_core::dto::ScanRequest {
             skills: vec![skill_studio_core::identity::SkillName(name.into())],
             timings: false,
+            ..Default::default()
         },
     )
     .map_err(|e| e.message)?;

@@ -245,11 +245,20 @@ pub struct DeploymentDto {
     /// was parked before the marker recorded it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_owner_kind: Option<LifecycleOwnerKind>,
+    /// For an agent copy, how it compares with the library copy
+    /// (`.agents/skills`) in the same scope. `None` for the library copy,
+    /// a plugin or parked copy, a broken link, or an agent copy with no
+    /// library copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_status: Option<CopyStatus>,
 }
 
 /// One skill with all of its deployments.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct InstalledSkillDto {
+    /// Upstream owner/repo from the owning ledger, plugin@marketplace for a
+    /// plugin skill, or manual.
+    pub source: String,
     /// Name.
     pub name: SkillName,
     /// Description from the first readable deployment.
@@ -261,6 +270,9 @@ pub struct InstalledSkillDto {
 /// Result of `scan`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Inventory {
+    /// Ledger entries whose skill folder is absent from disk.
+    #[serde(default)]
+    pub lock_only: Vec<LockOnlySkill>,
     /// Skills sorted by name.
     pub skills: Vec<InstalledSkillDto>,
     /// Projects that were covered, sorted by canonical path.
@@ -285,8 +297,14 @@ pub struct Inventory {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct ScanRequest {
+    /// Restrict to this owner/repo, plugin@marketplace, or manual.
+    pub source: Option<String>,
+    /// Restrict to the global shared library folder.
+    pub root: Option<ScanRoot>,
     /// Restrict to these skill names; empty means all.
     pub skills: Vec<SkillName>,
+    /// Keep only the agent copies with this copy status.
+    pub copy_status: Option<CopyStatus>,
     /// Include per-phase timings.
     pub timings: bool,
 }
@@ -1202,4 +1220,54 @@ pub struct UpdateAllOutcome {
 pub struct UpdateAllRequest {
     /// One request per skill to refresh, each its own journal entry.
     pub requests: Vec<UpdateRequest>,
+}
+
+/// A scan root filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScanRoot {
+    /// Skills directly in ~/.agents/skills.
+    Library,
+}
+
+/// How an agent copy compares with the library copy in its scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CopyStatus {
+    /// A link that resolves to the library copy.
+    Link,
+    /// A real folder with the same files as the library copy.
+    Same,
+    /// A real folder with other files, changed after the last install or
+    /// update of the skill, or with no lock entry to compare with.
+    Differs,
+    /// A real folder with other files, all older than the last install or
+    /// update in the lock file: the copy did not get that update.
+    Stale,
+}
+
+impl CopyStatus {
+    /// Every status, in the order the CLI lists them.
+    pub const ALL: [Self; 4] = [Self::Link, Self::Same, Self::Differs, Self::Stale];
+
+    /// The wire name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Link => "link",
+            Self::Same => "same",
+            Self::Differs => "differs",
+            Self::Stale => "stale",
+        }
+    }
+}
+
+/// A lock entry with no installed folder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LockOnlySkill {
+    /// Ledger key.
+    pub name: SkillName,
+    /// Recorded upstream, or manual for an adopted local folder.
+    pub source: String,
+    /// Scope containing the ledger.
+    pub scope: RootScope,
 }

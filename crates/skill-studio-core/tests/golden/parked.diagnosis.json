@@ -1,7 +1,9 @@
 {
   "inventory": {
+    "lock_only": [],
     "skills": [
       {
+        "source": "manual",
         "name": "zeta",
         "description": "Helps with zeta for fixture-driven tests.",
         "deployments": [

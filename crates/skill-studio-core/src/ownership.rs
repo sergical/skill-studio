@@ -29,8 +29,7 @@ pub(crate) fn skill_studio_json_path(home: &Path) -> PathBuf {
 }
 
 /// One skill named in `agents.lock`, joined with whether `agents.toml` also
-/// declares it by name. Mirrors the desktop's `DotagentsSkill`
-/// (`dotagents_ledger.rs`), carrying only the fields `classify_owner` needs.
+/// declares it by name.
 #[derive(Debug, Clone)]
 pub(crate) struct DotagentsEntry {
     pub name: String,
@@ -38,6 +37,7 @@ pub(crate) struct DotagentsEntry {
     /// --all`), which has an `agents.lock` row but no `[[skills]]` row in
     /// `agents.toml`.
     pub has_manifest_row: bool,
+    pub source: Option<String>,
     /// True when the ledger records a `path:` source - a folder `dotagents
     /// sync` adopted, with no upstream. Such a row never claims a skill
     /// another ledger also claims, see `classify_owner`.
@@ -89,9 +89,7 @@ pub(crate) fn read_scope_ledgers(
 }
 
 /// Reads `agents.lock`'s skill names, joined with whether each also has a
-/// `[[skills]]` row in `agents.toml`. Matches the desktop's
-/// `read_dotagents_ledger` (`dotagents_ledger.rs`), minus the fields
-/// `classify_owner` doesn't need (`source`, `installed_commit`, ...).
+/// `[[skills]]` row in `agents.toml`, retaining each locked source.
 fn read_dotagents_ledger(fs: &dyn ScopeFs, agents_dir: &Path) -> Vec<DotagentsEntry> {
     let manifest_names = dotagents_manifest_names(fs, agents_dir);
     dotagents_lock_sources(fs, agents_dir)
@@ -102,7 +100,9 @@ fn read_dotagents_ledger(fs: &dyn ScopeFs, agents_dir: &Path) -> Vec<DotagentsEn
                 name,
                 has_manifest_row,
                 is_local_path: source
-                    .is_some_and(|s| crate::dotagents_ledger::is_local_path_source(&s)),
+                    .as_deref()
+                    .is_some_and(crate::dotagents_ledger::is_local_path_source),
+                source,
             }
         })
         .collect()

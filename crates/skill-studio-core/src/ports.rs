@@ -1568,6 +1568,7 @@ impl MutationSession {
             &crate::dto::ScanRequest {
                 skills: scanned_skills,
                 timings: false,
+                ..Default::default()
             },
         )?;
         Ok(MutationSession {

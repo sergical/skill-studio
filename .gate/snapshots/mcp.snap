@@ -401,6 +401,59 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "copy_status": {
+          "anyOf": [
+            {
+              "description": "How an agent copy compares with the library copy in its scope.",
+              "oneOf": [
+                {
+                  "const": "link",
+                  "description": "A link that resolves to the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "same",
+                  "description": "A real folder with the same files as the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "differs",
+                  "description": "A real folder with other files, changed after the last install or\nupdate of the skill, or with no lock entry to compare with.",
+                  "type": "string"
+                },
+                {
+                  "const": "stale",
+                  "description": "A real folder with other files, all older than the last install or\nupdate in the lock file: the copy did not get that update.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Keep only the agent copies with this copy status."
+        },
+        "root": {
+          "anyOf": [
+            {
+              "description": "A scan root filter.",
+              "oneOf": [
+                {
+                  "const": "library",
+                  "description": "Skills directly in ~/.agents/skills.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Restrict to the global shared library folder."
+        },
         "skills": {
           "default": [],
           "description": "Restrict to these skill names; empty means all.",
@@ -409,6 +462,14 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "source": {
+          "default": null,
+          "description": "Restrict to this owner/repo, plugin@marketplace, or manual.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "timings": {
           "default": false,
@@ -523,6 +584,137 @@
   },
   {
     "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "invocation_mismatches"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "all": {
+          "default": false,
+          "description": "Include skills outside the shared library.",
+          "type": "boolean"
+        },
+        "copy_status": {
+          "anyOf": [
+            {
+              "description": "Copy severity, from a link to a changed independent folder.",
+              "oneOf": [
+                {
+                  "const": "link",
+                  "description": "Resolves to the library.",
+                  "type": "string"
+                },
+                {
+                  "const": "same",
+                  "description": "Matches the library's files.",
+                  "type": "string"
+                },
+                {
+                  "const": "old",
+                  "description": "Missed the library's last update.",
+                  "type": "string"
+                },
+                {
+                  "const": "changed",
+                  "description": "Has independent changes.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Keep rows with this agent copy status."
+        },
+        "days": {
+          "default": null,
+          "description": "Rolling window in days; defaults to 30.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "since": {
+          "default": null,
+          "description": "Inclusive start (YYYY-MM-DD or RFC 3339).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skills": {
+          "default": [],
+          "description": "Restrict to these skill names; empty means all.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "description": "Supported library row order.",
+              "oneOf": [
+                {
+                  "const": "name",
+                  "description": "Alphabetical skill names.",
+                  "type": "string"
+                },
+                {
+                  "const": "uses",
+                  "description": "Most uses first, then name.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Sort by name (default) or uses descending."
+        },
+        "source": {
+          "default": null,
+          "description": "Restrict to owner/repo, plugin@marketplace, or manual.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "top": {
+          "default": null,
+          "description": "Keep the N most used skills.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "until": {
+          "default": null,
+          "description": "Exclusive end (YYYY-MM-DD or RFC 3339).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "library"
+  },
+  {
+    "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "after": {
@@ -572,6 +764,59 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "copy_status": {
+          "anyOf": [
+            {
+              "description": "How an agent copy compares with the library copy in its scope.",
+              "oneOf": [
+                {
+                  "const": "link",
+                  "description": "A link that resolves to the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "same",
+                  "description": "A real folder with the same files as the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "differs",
+                  "description": "A real folder with other files, changed after the last install or\nupdate of the skill, or with no lock entry to compare with.",
+                  "type": "string"
+                },
+                {
+                  "const": "stale",
+                  "description": "A real folder with other files, all older than the last install or\nupdate in the lock file: the copy did not get that update.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Keep only the agent copies with this copy status."
+        },
+        "root": {
+          "anyOf": [
+            {
+              "description": "A scan root filter.",
+              "oneOf": [
+                {
+                  "const": "library",
+                  "description": "Skills directly in ~/.agents/skills.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Restrict to the global shared library folder."
+        },
         "skills": {
           "default": [],
           "description": "Restrict to these skill names; empty means all.",
@@ -580,6 +825,14 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "source": {
+          "default": null,
+          "description": "Restrict to this owner/repo, plugin@marketplace, or manual.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "timings": {
           "default": false,
@@ -873,6 +1126,59 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "copy_status": {
+          "anyOf": [
+            {
+              "description": "How an agent copy compares with the library copy in its scope.",
+              "oneOf": [
+                {
+                  "const": "link",
+                  "description": "A link that resolves to the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "same",
+                  "description": "A real folder with the same files as the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "differs",
+                  "description": "A real folder with other files, changed after the last install or\nupdate of the skill, or with no lock entry to compare with.",
+                  "type": "string"
+                },
+                {
+                  "const": "stale",
+                  "description": "A real folder with other files, all older than the last install or\nupdate in the lock file: the copy did not get that update.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Keep only the agent copies with this copy status."
+        },
+        "root": {
+          "anyOf": [
+            {
+              "description": "A scan root filter.",
+              "oneOf": [
+                {
+                  "const": "library",
+                  "description": "Skills directly in ~/.agents/skills.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Restrict to the global shared library folder."
+        },
         "skills": {
           "default": [],
           "description": "Restrict to these skill names; empty means all.",
@@ -881,6 +1187,14 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "source": {
+          "default": null,
+          "description": "Restrict to this owner/repo, plugin@marketplace, or manual.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "timings": {
           "default": false,
@@ -919,6 +1233,59 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "copy_status": {
+          "anyOf": [
+            {
+              "description": "How an agent copy compares with the library copy in its scope.",
+              "oneOf": [
+                {
+                  "const": "link",
+                  "description": "A link that resolves to the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "same",
+                  "description": "A real folder with the same files as the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "differs",
+                  "description": "A real folder with other files, changed after the last install or\nupdate of the skill, or with no lock entry to compare with.",
+                  "type": "string"
+                },
+                {
+                  "const": "stale",
+                  "description": "A real folder with other files, all older than the last install or\nupdate in the lock file: the copy did not get that update.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Keep only the agent copies with this copy status."
+        },
+        "root": {
+          "anyOf": [
+            {
+              "description": "A scan root filter.",
+              "oneOf": [
+                {
+                  "const": "library",
+                  "description": "Skills directly in ~/.agents/skills.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Restrict to the global shared library folder."
+        },
         "skills": {
           "default": [],
           "description": "Restrict to these skill names; empty means all.",
@@ -927,6 +1294,14 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "source": {
+          "default": null,
+          "description": "Restrict to this owner/repo, plugin@marketplace, or manual.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "timings": {
           "default": false,
@@ -963,6 +1338,32 @@
         "project": {
           "default": null,
           "description": "Keep uses with this recorded project path only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "since": {
+          "default": null,
+          "description": "Count uses from this date (YYYY-MM-DD or RFC 3339) instead of `days`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "top": {
+          "default": null,
+          "description": "Keep only the N most used skills.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "until": {
+          "default": null,
+          "description": "Count uses before this date (YYYY-MM-DD or RFC 3339).",
           "type": [
             "string",
             "null"

@@ -49,7 +49,7 @@ fn report(home: &Path) -> serde_json::Value {
     )
     .unwrap()
 }
-/// Flow: read live and archived compressed Codex sessions. Expect two uses and sessions.
+/// Flow: read live and archived compressed Codex sessions. Expect one use for the copied session and no separate session count.
 /// Failure: compressed history is missing or counted twice across refreshes.
 #[test]
 fn usage_compressed_codex_history_includes_live_and_archived_sessions() {
@@ -81,14 +81,13 @@ fn usage_compressed_codex_history_includes_live_and_archived_sessions() {
             .any(|v| v["reason"].as_str().is_some_and(|s| s.contains("decode"))),
         "{data}"
     );
-    // The same session in live and archived logs is one distinct session.
-    assert_eq!(data["rows"][0]["total_uses"], 2, "{data}");
-    assert_eq!(data["rows"][0]["sessions"], 1, "{data}");
+    assert_eq!(data["rows"][0]["total_uses"], 1, "{data}");
+    assert!(data["rows"][0].get("sessions").is_none(), "{data}");
 }
 /// Flow: report Claude user, Skill tool and direct reads in separate sessions.
-/// Expect three sessions and one of each trigger. Failure: the report loses trigger evidence.
+/// Expect three uses and one of each trigger. Failure: the report loses trigger evidence.
 #[test]
-fn usage_claude_history_preserves_sessions_and_each_trigger() {
+fn usage_claude_history_preserves_uses_and_each_trigger() {
     let dir = fixture();
     let path = dir.path().join(".claude/projects/work");
     fs::create_dir_all(&path).unwrap();
@@ -106,7 +105,8 @@ fn usage_claude_history_preserves_sessions_and_each_trigger() {
     }
     fs::write(path.join("s.jsonl"), format!("{text}{{bad json\n")).unwrap();
     let data = report(dir.path());
-    assert_eq!(data["rows"][0]["sessions"], 3, "{data}");
+    assert_eq!(data["rows"][0]["recent_uses"], 3, "{data}");
+    assert!(data["rows"][0].get("sessions").is_none(), "{data}");
     assert!(
         data["observations"]
             .as_array()
@@ -158,10 +158,26 @@ fn usage_reads_large_history_in_one_report_without_a_cache() {
     let dir = fixture();
     let root = dir.path().join(".codex/sessions");
     fs::create_dir_all(&root).unwrap();
+    let template = String::from_utf8(
+        zstd::stream::decode_all(include_bytes!("fixtures/usage-large.jsonl.zst").as_slice())
+            .unwrap(),
+    )
+    .unwrap();
     for n in 0..64 {
+        let lines: Vec<_> = template
+            .lines()
+            .map(|line| {
+                let mut record: serde_json::Value = serde_json::from_str(line).unwrap();
+                if record["type"] == "session_meta" {
+                    record["payload"]["id"] = format!("session-{n}").into();
+                }
+                record.to_string()
+            })
+            .collect();
+        let text = lines.join("\n") + "\n";
         fs::write(
             root.join(format!("{n}.jsonl.zst")),
-            include_bytes!("fixtures/usage-large.jsonl.zst"),
+            zstd::stream::encode_all(text.as_bytes(), 1).unwrap(),
         )
         .unwrap();
     }
@@ -253,11 +269,10 @@ fn usage_compressed_large_records_and_active_tail_are_complete_instead_of_false_
     assert_eq!(data["rows"][0]["total_uses"], 2, "{data}");
 }
 /// Flow: `usage --days 30` with one use in the window and one 60 days old.
-/// Expect `sessions` and `triggers` to count only the window, like
-/// `recent_uses`. Failure: they count all history, so `--days 1` and
-/// `--days 45` print the same sessions and triggers.
+/// Expect uses and triggers to count only the window.
+/// Failure: they count all history despite the window.
 #[test]
-fn usage_sessions_and_triggers_count_only_the_days_window() {
+fn usage_uses_and_triggers_count_only_the_days_window() {
     let dir = fixture();
     let path = dir.path().join(".claude/projects/work");
     fs::create_dir_all(&path).unwrap();
@@ -275,7 +290,7 @@ fn usage_sessions_and_triggers_count_only_the_days_window() {
     let row = &report(dir.path())["rows"][0];
     assert_eq!(row["total_uses"], 2, "{row}");
     assert_eq!(row["recent_uses"], 1, "{row}");
-    assert_eq!(row["sessions"], 1, "{row}");
+    assert!(row.get("sessions").is_none(), "{row}");
     assert_eq!(
         row["triggers"],
         serde_json::json!({"user":1,"agent":0,"file_read":0,"unknown":0}),

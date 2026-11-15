@@ -91,6 +91,7 @@ fn usage_json_lists_unused_skills_first_with_counts_per_agent() {
     assert_eq!(rows[0]["total_uses"], 1);
     assert_eq!(rows[1]["skill"], "gamma", "{data}");
     assert_eq!(rows[1]["recent_uses"], 1);
+    assert!(rows.iter().all(|row| row.get("sessions").is_none()));
     assert_eq!(rows[1]["agents"], serde_json::json!({"claude-code": 1}));
 }
 
@@ -102,6 +103,7 @@ fn usage_json_lists_unused_skills_first_with_counts_per_agent() {
 fn usage_text_ends_with_a_summary_for_the_window() {
     let (_dir, home) = home();
     let stdout = String::from_utf8(run(&home, &[]).stdout).unwrap();
+    assert!(!stdout.contains("sessions"), "{stdout}");
     let idle = stdout.find("idle").unwrap_or_else(|| panic!("{stdout}"));
     let gamma = stdout.find("gamma").unwrap_or_else(|| panic!("{stdout}"));
     assert!(idle < gamma, "unused skills should come first:\n{stdout}");

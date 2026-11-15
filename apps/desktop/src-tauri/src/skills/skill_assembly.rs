@@ -486,6 +486,7 @@ mod tests {
             source_kind: SourceKind::Manual,
             parked_origin: None,
             parked_owner_kind: None,
+            copy_status: None,
         }
     }
 
@@ -516,6 +517,7 @@ mod tests {
         order
             .into_iter()
             .map(|name| InstalledSkillDto {
+                source: "manual".into(),
                 deployments: by_name.remove(&name).unwrap(),
                 description: None,
                 name: SkillName(name),

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use serde::Serialize;
+use skill_studio_core::answers::InvocationMismatches;
 use skill_studio_core::doctor::DoctorInvariant;
 use skill_studio_core::dto::{
     CommandHealth, ConflictReport, Diagnosis, DoctorReport, EventDto, FixApplied, FixSkillOutcome,
@@ -12,6 +13,7 @@ use skill_studio_core::dto::{
     UnparkOutcome, UpdateAllOutcome, UpdateOutcome,
 };
 use skill_studio_core::harness::{Capabilities, HarnessReport};
+use skill_studio_core::identity::AgentId;
 use skill_studio_core::ops::ResultEnvelope;
 use skill_studio_core::skill_update_check::{Currency, OutdatedRecord};
 use skill_studio_host::{SkillUsageRow, UsageReport};
@@ -52,8 +54,9 @@ fn print_inventory(inventory: &Inventory) {
     }
     for skill in &inventory.skills {
         println!(
-            "{}  ({} {})",
+            "{}  [{}]  ({} {})",
             skill.name.0,
+            skill.source,
             skill.deployments.len(),
             if skill.deployments.len() == 1 {
                 "copy"
@@ -64,8 +67,13 @@ fn print_inventory(inventory: &Inventory) {
         // The id is what `park`, `unpark` and `remove --id` take when a
         // name matches more than one copy.
         for deployment in &skill.deployments {
+            let status = deployment
+                .copy_status
+                .zip(deployment.harness.as_ref())
+                .map(|(status, agent)| format!("  {agent} copy: {}", status.as_str()))
+                .unwrap_or_default();
             println!(
-                "  - {}  id {}",
+                "  - {}  id {}{status}",
                 deployment.path.display(),
                 deployment.id.as_str()
             );
@@ -93,6 +101,9 @@ fn print_inventory(inventory: &Inventory) {
             }
         }
     }
+    for entry in &inventory.lock_only {
+        println!("lock only: {}  [{}]", entry.name.0, entry.source);
+    }
     for observation in &inventory.observations {
         println!("note: {}", observation.message);
     }
@@ -103,6 +114,31 @@ pub fn print_scan_table(envelope: &ResultEnvelope<Inventory>) {
     print_errors(envelope);
     if let Some(inventory) = &envelope.data {
         print_inventory(inventory);
+    }
+}
+
+pub fn print_invocation_mismatches(envelope: &ResultEnvelope<InvocationMismatches>) {
+    print_errors(envelope);
+    let Some(report) = &envelope.data else {
+        return;
+    };
+    if report.skills.is_empty() {
+        println!("All agents read each skill in the same mode.");
+    }
+    for skill in &report.skills {
+        let names = |agents: &std::collections::BTreeSet<AgentId>| {
+            agents
+                .iter()
+                .map(AgentId::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        println!(
+            "{}  manual: {}  auto: {}",
+            skill.skill,
+            names(&skill.manual),
+            names(&skill.auto)
+        );
     }
 }
 
@@ -365,7 +401,7 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
         .max()
         .unwrap_or(0);
     if !unused.is_empty() {
-        println!("Not used in the last {} days:", report.days);
+        println!("Not used ({}):", report.window);
         for row in &unused {
             println!(
                 "  {:width$}  last used {}  ({} uses all time)",
@@ -379,7 +415,7 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
         if !unused.is_empty() {
             println!();
         }
-        println!("Used in the last {} days:", report.days);
+        println!("Used ({}):", report.window);
         for row in &used {
             let agents = row
                 .agents
@@ -395,19 +431,22 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
                 last_used(row),
             );
             println!(
-                "    {} sessions, triggers {:?}; {} uses all time",
-                row.sessions, row.triggers, row.total_uses
+                "    triggers {:?}; {} uses all time",
+                row.triggers, row.total_uses
             );
         }
     }
     if !report.rows.is_empty() {
         println!();
     }
+    let window = report.window.days.map_or_else(
+        || report.window.to_string(),
+        |days| format!("in {days} days"),
+    );
     println!(
-        "{} of {} skills not used in {} days",
+        "{} of {} skills not used {window}",
         report.unused.len(),
-        report.rows.len(),
-        report.days
+        report.rows.len()
     );
     if report.partial {
         println!("Partial report. Some counts may be low:");
@@ -1042,5 +1081,32 @@ pub fn print_review_due(envelope: &ResultEnvelope<skill_studio_core::review::Rev
         for observation in &data.observations {
             println!("{}: {}", observation.path.display(), observation.reason);
         }
+    }
+}
+
+pub fn print_library(envelope: &ResultEnvelope<skill_studio_core::library::LibraryReport>) {
+    print_errors(envelope);
+    let Some(report) = &envelope.data else {
+        return;
+    };
+    println!(
+        "Skills: {} skills, {} used; window: {}",
+        report.count, report.used, report.window
+    );
+    println!("NAME  LIBRARY  SOURCE  USES  AGENTS  MODES  COPIES");
+    for row in &report.rows {
+        println!(
+            "{}  {}  {}  {}  {}  {}  {}",
+            row.name,
+            row.library,
+            row.source.as_deref().unwrap_or("-"),
+            row.uses,
+            serde_json::json!(row.agents),
+            serde_json::json!(row.modes),
+            serde_json::json!(row.copies)
+        );
+    }
+    if report.partial {
+        println!("Partial: some skills or history could not be read.");
     }
 }

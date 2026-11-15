@@ -1,6 +1,8 @@
 {
+  "lock_only": [],
   "skills": [
     {
+      "source": "manual",
       "name": "giant",
       "description": "Helps with giant for fixture-driven tests.",
       "deployments": [

@@ -155,6 +155,7 @@ fn a_forked_skill_with_a_leftover_manual_link_reports_the_fork_rules_currency_or
     let req = ScanRequest {
         skills: Vec::new(),
         timings: false,
+        ..Default::default()
     };
     let result = ops::outdated(
         &rt,

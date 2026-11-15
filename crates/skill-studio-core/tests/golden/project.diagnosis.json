@@ -1,7 +1,9 @@
 {
   "inventory": {
+    "lock_only": [],
     "skills": [
       {
+        "source": "manual",
         "name": "eta",
         "description": "Helps with eta for fixture-driven tests.",
         "deployments": [
@@ -64,6 +66,7 @@
         ]
       },
       {
+        "source": "manual",
         "name": "iota",
         "description": "Helps with iota for fixture-driven tests.",
         "deployments": [
@@ -126,6 +129,7 @@
         ]
       },
       {
+        "source": "manual",
         "name": "theta",
         "description": "Helps with theta for fixture-driven tests.",
         "deployments": [
