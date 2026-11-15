@@ -52,3 +52,54 @@ No Rust code or Rust contracts are required. Add `[[contracts]]` with `kind =
 
 Run `python3 -m unittest discover -s scripts/gate -p 'test_*.py'`.
 Tests create temporary git repositories and do not call a live account.
+
+## Intent and review
+
+`gate start "Users can ..." --author-model <model>` saves branch intent under
+Git's private directory. `gate start --issue <HTTPS URL>` can link an issue.
+Author model is optional. If both model names are known, a matching reviewer
+is refused. Use exact provider model IDs, not aliases.
+
+Write findings as `{"head":"<full SHA>","findings":[{"severity":"high",
+"resolved":false}]}`. Run `gate review-status --verdict pass --reviewer <model>
+--findings findings.json`. Any unresolved high or critical finding posts failure.
+A deferred finding remains unresolved. Unknown authors are permitted and are not
+proof of model independence. Statuses belong to the head SHA; pushes need a new
+review. Run review-status only after the review is complete.
+
+`gate card --result "One-line result"` replaces only its marked block in the PR
+body. It reads checks from GitHub and `.gate/out/verify.json`. Missing evidence
+shows `verify: not run`. Local evidence paths are listed as local. Upload them
+and use HTTPS paths to show images to GitHub reviewers. Never use machine paths
+or private details in an evidence manifest intended for a public PR.
+
+## Approval and agent guard
+
+`gate:approved` is a human approval convention. Agents use the owner's token, so
+this label is not a technical boundary. Configure each agent's pre-tool-use hook
+to run `scripts/gate/gate guard` with the tool event JSON on stdin. Exit 2 blocks
+commands containing the approval label, including URL-encoded colons. For Claude
+Code, put this hook in local settings, not shared account settings:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/gate/gate guard" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+This guard must be installed in the agent host before agent use. The gate does
+not claim to sandbox a token or prevent an agent from bypassing its own hooks.
+No approval label is added by any gate command.
+
+The guard is a best-effort string match, not a token sandbox. It blocks quoted, escaped and URL-encoded approval labels and fails closed on malformed input, even outside a git checkout.
+
+Verify manifests keep the documented scenarios format. An optional `head` field binds evidence to a commit. A mismatched head shows not run; evidence without a head is rendered as unbound and cannot claim a verified current head.

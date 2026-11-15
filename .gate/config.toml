@@ -1,3 +1,7 @@
+issue_patterns = [
+  'https://github\.com/[^/]+/[^/]+/issues/[0-9]+/?',
+  'https://[^/]*sentry\.io/.*issues/[0-9]+/?(?:\?.*)?',
+]
 prepare_linux = [
   [
     "sh",
@@ -10,7 +14,7 @@ repository = "sergical/skill-studio"
 check = "pnpm run check"
 version_files = ["**/package.json", "package.json", "**/Cargo.toml", "Cargo.toml", "**/tauri*.json"]
 dependency_files = ["**/package.json", "package.json", "**/Cargo.toml", "Cargo.toml"]
-patch_bots = ["dependabot[bot]"]
+patch_bots = ["dependabot[bot]", "app/dependabot"]
 ci_jobs = ["test", "host-macos", "check", "e2e"]
 
 [[rules]]
