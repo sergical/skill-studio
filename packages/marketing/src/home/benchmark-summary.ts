@@ -102,7 +102,7 @@ export function racePairs(data: BenchData, task: BenchTask): RacePair[] {
     const studio = [row.mcp, row.cli]
       .filter((cell): cell is BenchCell => cell !== undefined)
       .sort((a, b) => share(b) - share(a) || seconds(a) - seconds(b))[0];
-    if (!byHand || !studio || share(studio) < share(byHand)) continue;
+    if (!byHand || !studio) continue;
     pairs.push({
       key,
       harness: byHand.harness,
@@ -119,6 +119,8 @@ export function racePairs(data: BenchData, task: BenchTask): RacePair[] {
 
 const MIN_FEATURED_SPEEDUP = 1.25;
 
+const holdsUp = (pair: RacePair) => share(pair.studio) >= share(pair.byHand);
+
 // One pair per harness, in harness order, when Skill Studio clearly wins it: the fastest pair
 // with every answer right, or else the fastest pair.
 export function featuredPairs(pairs: readonly RacePair[]): RacePair[] {
@@ -127,18 +129,21 @@ export function featuredPairs(pairs: readonly RacePair[]): RacePair[] {
     (a, b) => share(b.studio) - share(a.studio) || b.speedup - a.speedup,
   );
   for (const pair of ranked) {
-    if (pair.speedup >= MIN_FEATURED_SPEEDUP && !best.has(pair.harness))
+    if (holdsUp(pair) && pair.speedup >= MIN_FEATURED_SPEEDUP && !best.has(pair.harness))
       best.set(pair.harness, pair);
   }
   const order = [...HARNESS_NAMES.keys()];
   return [...best.values()].sort((a, b) => order.indexOf(a.harness) - order.indexOf(b.harness));
 }
 
+// Ratios come only from pairs where Skill Studio is at least as correct, so speed cannot hide a
+// miss. The correct shares count every pair, so a miss still shows.
 export function raceHeadline(pairs: readonly RacePair[]): RaceHeadline | null {
-  if (pairs.length === 0) return null;
+  const winners = pairs.filter(holdsUp);
+  if (winners.length === 0) return null;
   const mean = (values: number[]) => values.reduce((sum, v) => sum + v, 0) / values.length;
   const best = (ratio: (pair: RacePair) => number) =>
-    pairs.reduce((top, pair) => (ratio(pair) > ratio(top) ? pair : top));
+    winners.reduce((top, pair) => (ratio(pair) > ratio(top) ? pair : top));
   return {
     speedup: best((p) => p.speedup),
     callRatio: best((p) => p.callRatio),

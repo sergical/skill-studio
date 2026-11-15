@@ -206,11 +206,23 @@ last attempt only, and the total cost counts every attempt. `bench.py report`
 refuses to write the homepage file while a matrix run has no scored result,
 unless you pass `--partial`.
 
-The homepage headline pairs each `cli` and `mcp` cell with the `raw` cell of
-the same harness and model, takes the ratio of the `raw` median to the Skill
-Studio median, and shows the median of those ratios. Only cells with at
-least 3 scored runs go into the headline. It also shows how many
-pairs were slower with Skill Studio.
+The homepage shows a race. For each harness and model, it pairs the `raw`
+cell with one Skill Studio cell: the more correct of `cli` and `mcp`, then
+the faster. Only cells with at least 3 scored runs go into a pair. A pair
+where Skill Studio is less correct than `raw` is left out of the race and the
+ratio tiles, so speed cannot hide a miss. It stays in the correct shares.
+
+- Each lane plays the cell's median time on a sped-up clock. Each tick is one
+  tool call (the median).
+- The race shows at most one pair per harness, and only pairs that are at
+  least 1.25× faster. It picks the pair with every answer right first, then
+  the fastest.
+- The tiles above the race show the best pair for time, tool calls and cost,
+  each with its agent and model. A tile with the mean correct share by hand
+  and with Skill Studio, over every pair, shows only when Skill Studio is
+  higher.
+- The "Every run" table below the race shows every cell, also the ones the
+  race leaves out.
 
 ## Results (14 November 2026)
 

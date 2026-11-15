@@ -67,12 +67,19 @@ describe("agent benchmark race", () => {
     expect(pair.studio.method).toBe("cli");
   });
 
-  it("drops a pair where Skill Studio gets fewer answers right, so speed cannot hide a miss", () => {
+  it("keeps a pair where Skill Studio gets fewer answers right out of the race and the ratios, but in the correct shares", () => {
     const pairs = racePairs(
-      data([right(cell("a", "raw", 90, 0.3), 1), right(cell("a", "mcp", 10, 0.1), 0.5)]),
+      data([
+        right(cell("a", "raw", 90, 0.3), 1),
+        right(cell("a", "mcp", 5, 0.01), 0.5),
+        right(cell("b", "raw", 20, 0.1), 1),
+        right(cell("b", "mcp", 10, 0.1), 1),
+      ]),
       "usage",
     );
-    expect(pairs).toEqual([]);
+    expect(featuredPairs(pairs).map((p) => p.key)).toEqual(["b/b-model"]);
+    expect(raceHeadline(pairs)?.speedup.key).toBe("b/b-model");
+    expect(raceHeadline(pairs)).toMatchObject({ correctByHand: 1, correctWithStudio: 0.75 });
   });
 
   it("features the fastest pair of each harness, in harness order", () => {
