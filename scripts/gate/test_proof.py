@@ -9,8 +9,11 @@ import proof
 
 class ProofTests(GateTests):
     def test_card_preserves_human_text(self):
+        new = '<!-- gate:card -->new<!-- /gate:card -->'
         body = 'Human intro\n\n<!-- gate:card -->old<!-- /gate:card -->\nHuman end'
-        self.assertEqual(proof.replace_card(body, '<!-- gate:card -->new<!-- /gate:card -->'), body.replace('old', 'new'))
+        self.assertEqual(proof.replace_card(body, new), f'Human intro\n\nHuman end\n\n{new}\n')
+        self.assertEqual(proof.replace_card('<!-- gate:card -->old<!-- /gate:card -->\n\nHuman text', new), f'Human text\n\n{new}\n')
+        self.assertEqual(proof.replace_card('Human text\n\n' + new + '\n', new), f'Human text\n\n{new}\n')
         with self.assertRaises(ValueError):
             proof.replace_card('<!-- gate:card -->', 'new')
 
