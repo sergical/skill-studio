@@ -80,9 +80,10 @@ or private details in an evidence manifest intended for a public PR.
 An agent adds the label to a **stop** PR when all of these are true for the
 head commit:
 
-- `gate/review` passes, from a reviewer of a different provider than the
-  writer, with no open findings.
-- Each CI job passes.
+- `gate/review` passes with `0 open`, from a reviewer of a different
+  provider than the writer.
+- Each CI job passes. The `risk` job is the exception: it fails until the
+  approval exists.
 - The proof card shows this head.
 
 The owner does not approve. Add the label after the last push, because a new

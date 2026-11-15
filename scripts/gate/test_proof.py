@@ -23,6 +23,7 @@ class ProofTests(GateTests):
         with patch.object(proof, 'gh') as api:
             proof.review(args, {'repository': 'example/repo'})
             self.assertEqual(api.call_args.args[2]['state'], 'failure')
+            self.assertEqual(api.call_args.args[2]['description'], 'fail: review-model, 1 open')
         args.reviewer = 'AUTHOR-MODEL'
         with self.assertRaisesRegex(ValueError, 'differ'):
             proof.review(args, {'repository': 'example/repo'})

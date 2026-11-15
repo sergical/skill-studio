@@ -44,8 +44,9 @@ def review(args, cfg):
     if author and author.strip().casefold() == args.reviewer.strip().casefold():
         raise ValueError('Reviewer model must differ from author model')
     verdict = 'fail' if any(f['severity'] in ['high', 'critical'] and not f['resolved'] for f in findings) else args.verdict
+    open_findings = sum(not f['resolved'] for f in findings)
     record = {'head': sha, 'reviewer': args.reviewer, 'verdict': verdict, 'findings': findings}
-    gh(f"repos/{cfg['repository']}/statuses/{sha}", 'POST', {'state': 'success' if verdict == 'pass' else 'failure', 'context': 'gate/review', 'description': f'{verdict}: {args.reviewer}'[:140]})
+    gh(f"repos/{cfg['repository']}/statuses/{sha}", 'POST', {'state': 'success' if verdict == 'pass' else 'failure', 'context': 'gate/review', 'description': f'{verdict}: {args.reviewer}, {open_findings} open'[:140]})
     state_path().with_suffix('.review.json').write_text(json.dumps(record, indent=2) + '\n')
     print(json.dumps(record, indent=2))
 
