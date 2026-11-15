@@ -76,6 +76,7 @@ paths = ["packages/marketing/**", "README*", "**/README*", "docs/**"]
 
 [[contracts]]
 kind = "cli"
+env = { COLUMNS = "80", NO_COLOR = "1" }
 command = ["target/debug/skill-studio"]
 snapshot = ".gate/snapshots/cli.snap"
 extra_commands = [
@@ -113,6 +114,7 @@ extra_commands = [
 
 [[contracts]]
 kind = "mcp"
+env = { SKILL_STUDIO_MCP_DEV_TOOLS = "0" }
 command = ["target/debug/skill-studio-mcp"]
 snapshot = ".gate/snapshots/mcp.snap"
 

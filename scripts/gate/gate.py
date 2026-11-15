@@ -16,8 +16,8 @@ sys.modules.setdefault('gate', sys.modules[__name__])
 TIERS = ['ship', 'show', 'stop']
 
 
-def run(*args, cwd=None):
-    return subprocess.check_output(args, cwd=cwd, text=True).strip()
+def run(*args, cwd=None, env=None):
+    return subprocess.check_output(args, cwd=cwd, env=env, text=True).strip()
 
 
 def git(*args):
@@ -51,6 +51,8 @@ def matches(path, patterns):
 def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
     files = git('diff', '--name-only', '--no-renames', base, head).splitlines()
     hits = []
+    if read_at(base, '.gate/config.toml') != read_at(head, '.gate/config.toml'):
+        hits.append({'rule': 'policy-change', 'tier': 'stop', 'files': ['.gate/config.toml']})
     for rule in cfg.get('rules', []):
         affected = [p for p in files if matches(p, rule['paths'])]
         if affected:
@@ -60,15 +62,14 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
             continue
         old, new = read_at(base, path), read_at(head, path)
         if matches(path, cfg.get('version_files', [])):
-            pattern = r'(?m)^\s*"?version"?\s*[:=]\s*"([^"\n]+)"'
-            if re.findall(pattern, old) != re.findall(pattern, new):
+            if version(path, old) != version(path, new):
                 hits.append({'rule': 'version', 'tier': 'stop', 'files': [path]})
         if path.endswith('package.json') and old and new and json.loads(old).get('scripts') != json.loads(new).get('scripts'):
             hits.append({'rule': 'check-scripts', 'tier': 'stop', 'files': [path]})
         if matches(path, cfg.get('dependency_files', [])):
             before, after = dependencies(path, old), dependencies(path, new)
             added = set(after) - set(before)
-            patch = author in cfg.get('patch_bots', []) and not added and all(
+            patch = author in cfg.get('patch_bots', []) and set(before) == set(after) and all(
                 before.get(k) == v or patch_bump(before.get(k, ''), v) for k, v in after.items())
             if added or (author in cfg.get('patch_bots', []) and not patch):
                 hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
@@ -95,19 +96,37 @@ def dependencies(path, text):
         for key, value in node.items():
             if key.endswith('dependencies') and isinstance(value, dict):
                 for name, spec in value.items():
-                    result[f'{prefix}{key}/{name}'] = str(spec)
+                    result[f'{prefix}{key}/{name}'] = spec
             elif isinstance(value, dict):
                 walk(value, prefix + key + '/')
     walk(data)
     return result
 
 
+def version(path, text):
+    if not text:
+        return None
+    data = json.loads(text) if path.endswith('.json') else tomllib.loads(text)
+    if path.endswith('.json'):
+        return data.get('version')
+    return [data.get('package', {}).get('version'), data.get('workspace', {}).get('package', {}).get('version')]
+
+
 def patch_bump(before, after):
+    if isinstance(before, dict) or isinstance(after, dict):
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            return False
+        if {k: v for k, v in before.items() if k != 'version'} != {k: v for k, v in after.items() if k != 'version'}:
+            return False
+        before, after = before.get('version', ''), after.get('version', '')
+    if not isinstance(before, str) or not isinstance(after, str):
+        return False
     a, b = re.fullmatch(r'([~^]?)(\d+)\.(\d+)\.(\d+)', before), re.fullmatch(r'([~^]?)(\d+)\.(\d+)\.(\d+)', after)
     return bool(a and b and a.groups()[:3] == b.groups()[:3] and int(b[4]) >= int(a[4]))
 
 
 def capture_contract(spec):
+    env = os.environ | spec.get('env', {})
     if spec['kind'] == 'files':
         return {p: json.loads(Path(p).read_text()) for p in sorted(git('ls-files', spec['glob']).splitlines())}
     if spec['kind'] == 'cli':
@@ -117,7 +136,7 @@ def capture_contract(spec):
             key = ' '.join(command) or '<root>'
             if key in result:
                 continue
-            text = run(*spec['command'], *command, '--help')
+            text = run(*spec['command'], *command, '--help', env=env)
             result[key] = text
             section = re.search(r'(?m)^Commands:\n((?:  .*\n?)+)', text)
             if section:
@@ -125,7 +144,7 @@ def capture_contract(spec):
         return result
     if spec['kind'] == 'mcp':
         requests = [dict(jsonrpc='2.0', id=1, method='initialize', params={'protocolVersion': '2024-11-05', 'capabilities': {}, 'clientInfo': {'name': 'gate', 'version': '1'}}), dict(jsonrpc='2.0', method='notifications/initialized'), dict(jsonrpc='2.0', id=2, method='tools/list', params={})]
-        proc = subprocess.Popen(spec['command'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc = subprocess.Popen(spec['command'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
         try:
             output, errors = proc.communicate('\n'.join(json.dumps(r) for r in requests) + '\n', timeout=30)
             for line in output.splitlines():
@@ -184,7 +203,9 @@ def main():
     cfg = config()
     if args.command == 'risk':
         base = args.base or cfg['base']
-        result = classify(cfg, git('merge-base', base, args.head), args.head, args.raise_to, args.reason, args.author)
+        base = git('merge-base', base, args.head)
+        policy = read_at(base, '.gate/config.toml')
+        result = classify(tomllib.loads(policy) if policy else cfg, base, args.head, args.raise_to, args.reason, args.author)
         print(json.dumps(result, indent=2) if args.json else result['tier'] + '\n' + '\n'.join(f"- {r['rule']}: {r.get('reason', ', '.join(r.get('files', [])))}" for r in result['reasons']))
     elif args.command == 'snapshots':
         snapshots(cfg, args.update, args.prepare)
