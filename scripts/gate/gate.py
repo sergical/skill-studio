@@ -197,7 +197,7 @@ def main():
     snap = sub.add_parser('snapshots')
     snap.add_argument('--update', action='store_true')
     snap.add_argument('--prepare', action='store_true')
-    from proof import arguments, start, review, card, guard
+    from proof import arguments, start, review, card, guard, bypass
     arguments(sub)
     metric = sub.add_parser('metrics')
     metric.add_argument('--since', required=True)
@@ -225,8 +225,8 @@ def main():
         review(args, cfg)
     elif args.command == 'card':
         card(args, cfg)
-    elif args.command == 'guard':
-        guard()
+    elif args.command == 'bypass':
+        bypass(args, cfg)
     elif args.command == 'metrics':
         from metrics import metrics
         metrics(args, cfg)

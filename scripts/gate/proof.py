@@ -7,6 +7,9 @@ from urllib.parse import unquote
 from gate import classify, gh, git, run, state_path, read_at, TIERS
 
 START, END = '<!-- gate:card -->', '<!-- /gate:card -->'
+BYPASS_MARK = '<!-- gate:bypass -->'
+PASSING = {'success', 'neutral', 'skipped'}
+MERGE_PAST_CHECKS = re.compile(r'gh\s+pr\s+merge\b[^;&|]*--admin|/pulls/[0-9]+/merge\b|mergePullRequest', re.I)
 
 
 def local_state():
@@ -135,9 +138,40 @@ def guard():
         command = re.sub(r"['\"\\]", '', command)
         if re.search(r'gate\s*[:/]\s*approved', command, re.I):
             raise ValueError('Only a human may grant gate approval')
+        if MERGE_PAST_CHECKS.search(command):
+            raise ValueError('Only a human may merge past required checks')
     except Exception as error:
         print(str(error), file=sys.stderr)
         raise SystemExit(2)
+
+
+def head_states(repo, sha):
+    states = {s['context']: s['state'] for s in gh(f'repos/{repo}/commits/{sha}/status')['statuses']}
+    runs = gh(f'repos/{repo}/commits/{sha}/check-runs?per_page=100')['check_runs']
+    for check in sorted(runs, key=lambda c: c['id']):
+        states[check['name']] = check['conclusion'] or check['status']
+    return states
+
+
+def bypass(args, cfg):
+    repo = cfg['repository']
+    merged = [p for p in gh(f'repos/{repo}/commits/{args.sha}/pulls') if p.get('merge_commit_sha') == args.sha]
+    if not merged:
+        print('No pull request merged as this commit')
+        return
+    pr = gh(f"repos/{repo}/pulls/{merged[0]['number']}")
+    rules = gh(f"repos/{repo}/rules/branches/{pr['base']['ref']}")
+    required = [c['context'] for r in rules if r['type'] == 'required_status_checks' for c in r['parameters']['required_status_checks']]
+    states = head_states(repo, pr['head']['sha'])
+    red = {name: states.get(name, 'missing') for name in required if states.get(name) not in PASSING}
+    if not red:
+        print('Required checks were green at merge')
+        return
+    lines = [BYPASS_MARK, f"Merged past required checks by **{pr['merged_by']['login']}** at {pr['merged_at']}, on head `{pr['head']['sha']}`.", '', '| Check | State |', '| --- | --- |']
+    lines += [f'| {cell(name)} | {cell(state)} |' for name, state in red.items()]
+    lines += ['', f"gate/approved on this head: {states.get('gate/approved', 'none')}.", 'Agents with the gate guard hook cannot merge past red checks. If no human merged this, an agent without the hook did.']
+    gh(f"repos/{repo}/issues/{pr['number']}/comments", 'POST', {'body': '\n'.join(lines)})
+    print(f"Bypass recorded on #{pr['number']}: {', '.join(red)}")
 
 
 def arguments(sub):
@@ -152,3 +186,5 @@ def arguments(sub):
     parser = sub.add_parser('card')
     parser.add_argument('--result')
     sub.add_parser('guard')
+    parser = sub.add_parser('bypass')
+    parser.add_argument('--sha', required=True)

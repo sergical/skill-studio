@@ -78,3 +78,52 @@ class ProofTests(GateTests):
                 with self.assertRaises(SystemExit) as error:
                     proof.guard()
                 self.assertEqual(error.exception.code, 2)
+
+    def test_guard_blocks_merges_past_required_checks(self):
+        from io import StringIO
+        for command in ['gh pr merge 5 --squash --admin', 'gh api -X PUT repos/example/repo/pulls/5/merge', 'gh api graphql -f query="mutation { mergePullRequest(input: {}) { clientMutationId } }"']:
+            with patch('sys.stdin', StringIO(json.dumps({'tool_input': {'command': command}}))):
+                with self.assertRaises(SystemExit) as error:
+                    proof.guard()
+                self.assertEqual(error.exception.code, 2)
+        for command in ['gh pr merge 5 --squash', 'gh pr view 5 --json mergeStateStatus', 'gh pr merge 5 --squash && echo --admin-free']:
+            with patch('sys.stdin', StringIO(json.dumps({'tool_input': {'command': command}}))):
+                self.assertIsNone(proof.guard())
+
+    def bypass_api(self, statuses, runs, merged=True):
+        posted = []
+        pr = {'number': 7, 'merge_commit_sha': 'm1', 'merged_by': {'login': 'owner'}, 'merged_at': 'T', 'base': {'ref': 'main'}, 'head': {'sha': 'h1'}}
+        responses = {
+            'repos/example/repo/commits/m1/pulls': [pr] if merged else [],
+            'repos/example/repo/pulls/7': pr,
+            'repos/example/repo/rules/branches/main': [{'type': 'pull_request', 'parameters': {}}, {'type': 'required_status_checks', 'parameters': {'required_status_checks': [{'context': 'check'}, {'context': 'gate/risk'}, {'context': 'gate/review'}]}}],
+            'repos/example/repo/commits/h1/status': {'statuses': statuses},
+            'repos/example/repo/commits/h1/check-runs?per_page=100': {'check_runs': runs},
+        }
+        def api(endpoint, method='GET', data=None):
+            if method == 'POST':
+                posted.append((endpoint, data))
+                return {}
+            return responses[endpoint]
+        with patch.object(proof, 'gh', side_effect=api):
+            proof.bypass(argparse.Namespace(sha='m1'), {'repository': 'example/repo'})
+        return posted
+
+    def test_bypass_records_red_required_checks(self):
+        runs = [{'id': 1, 'name': 'check', 'conclusion': 'failure', 'status': 'completed'}, {'id': 2, 'name': 'check', 'conclusion': 'success', 'status': 'completed'}]
+        posted = self.bypass_api([{'context': 'gate/risk', 'state': 'failure'}, {'context': 'gate/review', 'state': 'success'}], runs)
+        self.assertEqual(len(posted), 1)
+        endpoint, data = posted[0]
+        self.assertEqual(endpoint, 'repos/example/repo/issues/7/comments')
+        self.assertIn('| gate/risk | failure |', data['body'])
+        self.assertIn('**owner**', data['body'])
+        self.assertIn('gate/approved on this head: none', data['body'])
+        self.assertNotIn('| check |', data['body'])
+        self.assertNotIn('gate/review |', data['body'])
+
+    def test_bypass_reports_missing_check_and_skips_green_or_direct_pushes(self):
+        posted = self.bypass_api([{'context': 'gate/risk', 'state': 'success'}], [{'id': 1, 'name': 'check', 'conclusion': 'success', 'status': 'completed'}])
+        self.assertIn('| gate/review | missing |', posted[0][1]['body'])
+        green = [{'context': 'gate/risk', 'state': 'success'}, {'context': 'gate/review', 'state': 'success'}]
+        self.assertEqual(self.bypass_api(green, [{'id': 1, 'name': 'check', 'conclusion': 'success', 'status': 'completed'}]), [])
+        self.assertEqual(self.bypass_api([], [], merged=False), [])

@@ -1,0 +1,22 @@
+name: Record gate bypass
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  statuses: read
+  checks: read
+  issues: write
+  pull-requests: write
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Comment when a merge skipped required checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ github.sha }}
+        run: scripts/gate/gate bypass --sha "$MERGE_SHA"

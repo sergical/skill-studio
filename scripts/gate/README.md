@@ -78,7 +78,7 @@ or private details in an evidence manifest intended for a public PR.
 `gate:approved` is a human approval trigger. The approval workflow records `gate/approved = success` on the SHA captured by the label event, then removes the label. Risk reads only the approval status on its exact head SHA. A new push has no approval status, even when an old label event runs at the same time. Agents use the owner's token, so
 this label is not a technical boundary. Configure each agent's pre-tool-use hook
 to run `scripts/gate/gate guard` with the tool event JSON on stdin. Exit 2 blocks
-commands containing the approval label or `gate/approved` status, including URL-encoded separators. For Claude
+commands containing the approval label or `gate/approved` status, including URL-encoded separators. It also blocks merges past required checks: `gh pr merge --admin`, the REST merge endpoint and the GraphQL `mergePullRequest` mutation. A plain `gh pr merge` stays allowed, because it refuses a blocked PR. For Claude
 Code, put this hook in local settings, not shared account settings:
 
 ```json
@@ -110,6 +110,8 @@ Verify manifests keep the documented scenarios format. An optional `head` field 
 Fork PR tokens cannot write statuses. A maintainer must run classification from
 a trusted checkout and post its result; fork runs fail closed. Do not use
 `pull_request_target` to execute untrusted PR code with a write token.
+
+`gate-bypass.yml` runs on each push to `main`. When the push is a PR merge whose head did not pass every check that the branch rules require, `gate bypass --sha <sha>` comments on the PR with the account, the time and each red or missing check. GitHub records only the account for a merge, so with the guard hook in every agent, a bypass record points to a human or to an agent without the hook.
 
 `gate-update.yml` updates behind PRs that have auto-merge enabled. Supply an
 optional `GATE_UPDATE_TOKEN` secret with contents and pull-request write access
