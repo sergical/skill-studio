@@ -767,6 +767,18 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         ("pack_report", || {
             schemars::schema_for!(skill_studio_core::pack::PackReport)
         }),
+        ("pack_add_request", || {
+            schemars::schema_for!(skill_studio_core::pack_action::PackAddRequest)
+        }),
+        ("pack_update_request", || {
+            schemars::schema_for!(skill_studio_core::pack_action::PackUpdateRequest)
+        }),
+        ("pack_remove_request", || {
+            schemars::schema_for!(skill_studio_core::pack_action::PackRemoveRequest)
+        }),
+        ("pack_action_report", || {
+            schemars::schema_for!(skill_studio_core::pack_action::PackActionReport)
+        }),
         ("agent_off_request", || {
             schemars::schema_for!(skill_studio_core::dto::AgentOffRequest)
         }),
@@ -951,6 +963,30 @@ pub fn print_review(envelope: &ResultEnvelope<skill_studio_core::review::ReviewO
         );
     }
 }
+pub fn print_pack_action(
+    envelope: &ResultEnvelope<skill_studio_core::pack_action::PackActionReport>,
+) {
+    use skill_studio_core::pack_action::PackStepState;
+    print_errors(envelope);
+    let Some(report) = &envelope.data else {
+        return;
+    };
+    for step in &report.steps {
+        let scope = match &step.scope {
+            skill_studio_core::identity::RootScope::Global => "global".to_string(),
+            skill_studio_core::identity::RootScope::Project(p) => p.0.display().to_string(),
+        };
+        let state = match &step.state {
+            PackStepState::Planned => "planned".to_string(),
+            PackStepState::Done { event_id } => format!("done  (undo: {})", event_id.0),
+            PackStepState::Skipped { reason } => format!("skipped: {reason}"),
+            PackStepState::Failed { reason, .. } => format!("failed: {reason}"),
+        };
+        println!("{}  {}  {scope}  {state}", step.source, step.skill);
+    }
+    println!("{}", report.summary);
+}
+
 pub fn print_packs(envelope: &ResultEnvelope<skill_studio_core::pack::PackReport>) {
     print_errors(envelope);
     let Some(report) = &envelope.data else {

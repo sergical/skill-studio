@@ -1,0 +1,278 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PackActionReport",
+  "description": "Result of `pack_add`, `pack_update`, and `pack_remove`.",
+  "type": "object",
+  "properties": {
+    "dry_run": {
+      "description": "The call changed nothing.",
+      "type": "boolean"
+    },
+    "steps": {
+      "description": "One step per skill.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PackStep"
+      }
+    },
+    "summary": {
+      "description": "One line for a person or agent.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "dry_run",
+    "steps",
+    "summary"
+  ],
+  "$defs": {
+    "PackStep": {
+      "description": "One skill in a pack action.",
+      "type": "object",
+      "properties": {
+        "source": {
+          "description": "Pack source.",
+          "type": "string"
+        },
+        "skill": {
+          "description": "Skill name.",
+          "type": "string"
+        },
+        "scope": {
+          "description": "Global or one project.",
+          "$ref": "#/$defs/RootScope"
+        },
+        "action": {
+          "description": "What the step does.",
+          "$ref": "#/$defs/PackStepAction"
+        },
+        "state": {
+          "description": "Where the step is.",
+          "$ref": "#/$defs/PackStepState"
+        }
+      },
+      "required": [
+        "source",
+        "skill",
+        "scope",
+        "action",
+        "state"
+      ]
+    },
+    "RootScope": {
+      "description": "Where a root lives.",
+      "oneOf": [
+        {
+          "description": "Under the scope home.",
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "const": "global"
+            }
+          },
+          "required": [
+            "scope"
+          ]
+        },
+        {
+          "description": "Under one tracked project.",
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "const": "project"
+            },
+            "project": {
+              "$ref": "#/$defs/ProjectRef"
+            }
+          },
+          "required": [
+            "scope",
+            "project"
+          ]
+        }
+      ]
+    },
+    "ProjectRef": {
+      "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
+      "type": "string"
+    },
+    "PackStepAction": {
+      "description": "What one step does to one skill.",
+      "oneOf": [
+        {
+          "description": "Install the skill.",
+          "type": "string",
+          "const": "install"
+        },
+        {
+          "description": "Update the skill from its source.",
+          "type": "string",
+          "const": "update"
+        },
+        {
+          "description": "Remove the skill.",
+          "type": "string",
+          "const": "remove"
+        }
+      ]
+    },
+    "PackStepState": {
+      "description": "Where one step is.",
+      "oneOf": [
+        {
+          "description": "Dry run: the step would run.",
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "planned"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "description": "The step ran. `restore_event` with this event undoes it.",
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "done"
+            },
+            "event_id": {
+              "description": "The per-skill journal event.",
+              "$ref": "#/$defs/EventId"
+            }
+          },
+          "required": [
+            "state",
+            "event_id"
+          ]
+        },
+        {
+          "description": "The step does not run.",
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "skipped"
+            },
+            "reason": {
+              "description": "Why, in one sentence.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "reason"
+          ]
+        },
+        {
+          "description": "The step ran and failed.",
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "failed"
+            },
+            "code": {
+              "description": "Stable code of the failure.",
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "reason": {
+              "description": "The per-skill op's message.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "code",
+            "reason"
+          ]
+        }
+      ]
+    },
+    "EventId": {
+      "description": "History event id (ULID string).\n\nInvariant: lexical order equals creation order inside one store.",
+      "type": "string"
+    },
+    "ErrorCode": {
+      "description": "Stable error code.\n\nInvariant: the serialized name (`snake_case`) and the exit status of a\nvariant never change once released. New variants may be added.",
+      "oneOf": [
+        {
+          "description": "The request itself is malformed (missing field, bad id syntax).",
+          "type": "string",
+          "const": "invalid_request"
+        },
+        {
+          "description": "The scope cannot be used (missing home, override outside fixture mode).",
+          "type": "string",
+          "const": "invalid_scope"
+        },
+        {
+          "description": "A target id matched more than one deployment or none after re-validation.",
+          "type": "string",
+          "const": "ambiguous_target"
+        },
+        {
+          "description": "The harness has no support for the requested mechanism.",
+          "type": "string",
+          "const": "unsupported"
+        },
+        {
+          "description": "Retention has expired the backup needed to undo an event.",
+          "type": "string",
+          "const": "backup_expired"
+        },
+        {
+          "description": "A child process or external tool failed.",
+          "type": "string",
+          "const": "execution_failed"
+        },
+        {
+          "description": "A filesystem or store read or write failed.",
+          "type": "string",
+          "const": "io"
+        },
+        {
+          "description": "Another process holds the lease and the wait budget ran out.",
+          "type": "string",
+          "const": "scope_busy"
+        },
+        {
+          "description": "The proposal fingerprint no longer matches the file on disk.",
+          "type": "string",
+          "const": "stale_proposal"
+        },
+        {
+          "description": "The live content drifted from the fingerprint recorded in history.",
+          "type": "string",
+          "const": "drift_conflict"
+        },
+        {
+          "description": "The owner of the deployment changed between preview and apply.",
+          "type": "string",
+          "const": "ownership_changed"
+        },
+        {
+          "description": "The event was already reverted by another restore.",
+          "type": "string",
+          "const": "already_reverted"
+        },
+        {
+          "description": "The operation finished but some roots could not be read in time.",
+          "type": "string",
+          "const": "incomplete"
+        },
+        {
+          "description": "The caller cancelled the operation.",
+          "type": "string",
+          "const": "cancelled"
+        }
+      ]
+    }
+  }
+}
