@@ -151,8 +151,8 @@ export function deploymentLabel(deployment: Deployment): string {
  * Skills with a live copy whose content differs from the copy it is measured against - the
  * Universal folder, or the first copy when there is none (see `driftingCopies`), so Home, the
  * Skills list and the skill page count the same copies. A plugin-managed copy, which the user
- * doesn't edit, never counts. `detail` names the differing copies and the reference, e.g.
- * "sentry · Cursor differs from Global · Universal folder".
+ * doesn't edit, never counts. `detail` leads with the count the Skills row shows, then names the
+ * differing copies and the reference, e.g. "1 copy differs: sentry · Cursor, from Global · Universal folder".
  */
 export function findDuplicateSkills(skills: InstalledSkill[]): HealthIssue[] {
   const issues: HealthIssue[] = [];
@@ -161,8 +161,8 @@ export function findDuplicateSkills(skills: InstalledSkill[]): HealthIssue[] {
     const drifting = driftingCopies(summary);
     const reference = driftReference(summary);
     if (drifting.length === 0 || !reference) continue;
-    const verb = drifting.length === 1 ? "differs" : "differ";
-    const detail = `${drifting.map(deploymentLabel).join("; ")} ${verb} from ${deploymentLabel(reference)}`;
+    const count = drifting.length === 1 ? "1 copy differs" : `${drifting.length} copies differ`;
+    const detail = `${count}: ${drifting.map(deploymentLabel).join("; ")}, from ${deploymentLabel(reference)}`;
     issues.push({ kind: "duplicate", skill, detail });
   }
   return issues;
@@ -179,9 +179,7 @@ export function findBrokenSymlinks(skills: InstalledSkill[]): HealthIssue[] {
       issues.push({
         kind: "broken-symlink",
         skill,
-        detail: deployment.symlink_target
-          ? `${deployment.agent} links to ${deployment.symlink_target}, which is missing`
-          : `${deployment.agent} · broken link at ${deployment.path}`,
+        detail: `Broken link: ${deploymentLabel(deployment)} → ${deployment.symlink_target ?? deployment.path}`,
       });
     }
   }

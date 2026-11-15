@@ -444,6 +444,7 @@ fn install_body(
         &harnesses,
         mode,
         req.destination,
+        req.method,
     )?;
     // A skipped harness never reaches the skills CLI, so its folder must not
     // count toward the link mode: the CLI copies when it sees one distinct
@@ -468,6 +469,7 @@ fn install_body(
             &harnesses,
             served_mode,
             req.destination,
+            req.method,
         )?;
     }
     let mode = plan.mode;
@@ -578,7 +580,7 @@ fn install_body(
                 event_id: id,
                 skill: req.skill.clone(),
                 deployment_path: destination,
-                linked_harnesses: linked_harnesses(&harness_results),
+                linked_harnesses: linked_harnesses(&harness_results, req.method),
                 harness_results,
             })
         }
@@ -640,13 +642,13 @@ fn written_inverse_patch(
 
 /// Harnesses with their own folder that now see the skill through a link:
 /// a new per-skill link, or a whole-folder link into the shared folder.
-fn linked_harnesses(results: &[InstallHarnessResult]) -> Vec<AgentId> {
+fn linked_harnesses(results: &[InstallHarnessResult], method: InstallMethod) -> Vec<AgentId> {
     results
         .iter()
         .filter_map(|r| match r {
             InstallHarnessResult::Linked { harness, .. } => Some(harness.clone()),
             InstallHarnessResult::ReadsShared { harness, .. }
-                if install_targets::has_own_folder(harness) =>
+                if install_targets::has_own_folder(harness, method) =>
             {
                 Some(harness.clone())
             }

@@ -172,7 +172,7 @@ pub fn read_dotagents_ledger(
 
 /// Reads and parses `path` as TOML into `T` through `fs`, or `Ok(None)` when
 /// `path` doesn't exist.
-fn read_toml<T: for<'de> Deserialize<'de>>(
+pub(crate) fn read_toml<T: for<'de> Deserialize<'de>>(
     fs: &dyn ScopeFs,
     path: &Path,
 ) -> Result<Option<T>, CoreError> {

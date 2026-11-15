@@ -17,7 +17,7 @@ const SECTIONS: { key: LearnSection; title: string }[] = [
   { key: "broken", title: "Broken and warnings" },
   { key: "invoke", title: "Who can invoke a skill" },
   { key: "cost", title: "Prompt cost" },
-  { key: "unused", title: "Not used in the last 30 days" },
+  { key: "unused", title: "Not used in 30 days" },
 ];
 
 /**
@@ -72,27 +72,27 @@ export function LearnView({ section }: LearnViewProps) {
             <p className="m-0">An agent loads nothing, or something you did not intend.</p>
             <ul className="m-0 flex flex-col gap-1 pl-4.5">
               <li>
-                <b className="font-medium text-text-primary">Dead link</b> — a symlink points at a
+                <b className="font-medium text-text-primary">Broken link</b>: a symlink points at a
                 folder that no longer exists.
               </li>
               <li>
-                <b className="font-medium text-text-primary">Rejected SKILL.md</b> — the name or
+                <b className="font-medium text-text-primary">Spec violation</b>: the name or
                 frontmatter breaks the agentskills.io spec, so the loader skips the skill.
               </li>
               <li>
-                <b className="font-medium text-text-primary">Parked skill reinstalled</b> — you
-                parked it, then an installer put it back. It runs again.
+                <b className="font-medium text-text-primary">Parked copy left behind</b>: you parked
+                it, then an installer put it back. It runs again.
               </li>
             </ul>
             <h4 className="mt-2 mb-0 text-body font-semibold text-text-primary">Warnings</h4>
             <p className="m-0">Everything still loads, but the state drifted.</p>
             <ul className="m-0 flex flex-col gap-1 pl-4.5">
               <li>
-                <b className="font-medium text-text-primary">Copies differ</b> — the same skill has
+                <b className="font-medium text-text-primary">Copies differ</b>: the same skill has
                 different content in two places, so two agents behave differently.
               </li>
               <li>
-                <b className="font-medium text-text-primary">Lock file only</b> —{" "}
+                <b className="font-medium text-text-primary">Lock entry only</b>:{" "}
                 <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
                   .skill-lock.json
                 </code>{" "}

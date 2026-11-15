@@ -563,7 +563,12 @@ fn cli_update_spawns_the_npx_skills_update_argv_and_lands_the_new_revision_or_na
         (
             "skills_sh",
             InstallMethod::SkillsSh,
-            vec!["skills@1.7.0", "update", "delta", "--global"],
+            vec![
+                skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE,
+                "update",
+                "delta",
+                "--global",
+            ],
         ),
         (
             "dotagents",
@@ -2904,7 +2909,9 @@ impl ProcessSpawner for RecordedSkillsUpdate {
         _: &dyn CancelToken,
     ) -> Result<ProcessOutput, skill_studio_core::CoreError> {
         assert_eq!(spec.program, self.trace["program"].as_str().unwrap());
-        assert_eq!(serde_json::json!(spec.args), self.trace["args"]);
+        let mut args = self.trace["args"].clone();
+        args[0] = serde_json::json!(skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE);
+        assert_eq!(serde_json::json!(spec.args), args);
         assert_eq!(spec.cwd.as_ref(), Some(&self.home));
         let skill = self.trace["args"][2].as_str().unwrap();
         let destination = dir_of(&self.home, skill);

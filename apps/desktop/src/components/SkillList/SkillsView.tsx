@@ -83,9 +83,11 @@ export function SkillsView({
     if (added) setSkillListFilter({ scope: { project: added } });
   };
 
+  const title = filter.scope === "parked" ? "Parked" : "Skills";
+
   if (!snapshot) {
     return (
-      <PageShell title="Skills">
+      <PageShell title={title}>
         <FirstScanState isLoading={isLoading} error={error} onRetry={onRetry} />
       </PageShell>
     );
@@ -93,7 +95,7 @@ export function SkillsView({
 
   return (
     <PageShell
-      title="Skills"
+      title={title}
       toolbar={
         <SkillListFilterBar
           filter={filter}

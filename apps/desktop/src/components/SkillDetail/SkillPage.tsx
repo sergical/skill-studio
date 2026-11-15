@@ -320,7 +320,7 @@ export function SkillPage({
             skillMdContent={rawContent}
             onQuoteRepair={isPluginManaged ? undefined : handleQuoteRepair}
             onFixRepair={setOpenRepairKind}
-            onEditManually={openEditor}
+            onEditManually={isPluginManaged ? undefined : openEditor}
           />
 
           <SkillLocationsCard skill={skill} onCompareCopies={() => setIsCompareOpen(true)} />

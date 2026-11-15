@@ -198,7 +198,7 @@ export function SkillListSelectionBar({
             ))}
           </MenuControl>
         )}
-        {fix !== "Update" && (
+        {fix !== "Update" && updatePlan.applicable.length > 0 && (
           <BarButton
             running={running}
             kind="update"
@@ -217,6 +217,7 @@ export function SkillListSelectionBar({
         >
           Remove
         </BarButton>
+        <span aria-hidden="true" className="mx-0.5 h-4 w-px bg-border" />
         <Button
           variant="outline"
           size="sm"

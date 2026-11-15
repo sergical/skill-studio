@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-use std::process::Command;
+#[allow(dead_code)]
+#[path = "support/test_home.rs"]
+mod test_home;
 
 fn cli_bin() -> std::path::PathBuf {
     std::env::var_os("SKILL_STUDIO_TEST_BINARY").map_or_else(
@@ -24,7 +26,7 @@ fn doctor_cli_warns_for_external_links_and_errors_for_broken_links_or_reports_a_
     let link = root.join("dev-skill");
     std::os::unix::fs::symlink(&external, &link).unwrap();
     let run = |json: bool| {
-        let mut command = Command::new(cli_bin());
+        let mut command = test_home::command(cli_bin(), &home);
         command.args(["doctor", "--fixture", home.to_str().unwrap()]);
         if json {
             command.arg("--json");
@@ -92,7 +94,7 @@ fn doctor_live_home_reports_old_orphan_fork_and_preserves_active_base_or_skips_d
         .unwrap(),
     )
     .unwrap();
-    let output = Command::new(cli_bin())
+    let output = test_home::command(cli_bin(), home)
         .args(["doctor", "--home", home.to_str().unwrap(), "--json"])
         .env("HOME", home)
         .env("SKILL_STUDIO_TELEMETRY", "0")
@@ -170,7 +172,7 @@ fn doctor_cli_preserves_empty_and_populated_trees_or_creates_lease_files() {
             .unwrap();
         }
         let before = complete_tree(dir.path());
-        let output = Command::new(cli_bin())
+        let output = test_home::command(cli_bin(), &home)
             .args(["doctor", "--fixture", home.to_str().unwrap(), "--json"])
             .env("HOME", &home)
             .env("SKILL_STUDIO_TELEMETRY", "0")

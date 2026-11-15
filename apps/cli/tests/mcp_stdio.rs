@@ -6,8 +6,12 @@
 //! `skill-studio mcp` serves MCP over stdio: stdout carries JSON-RPC and
 //! nothing else.
 
+#[allow(dead_code)]
+#[path = "support/test_home.rs"]
+mod test_home;
+
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -20,7 +24,7 @@ use std::time::Duration;
 #[test]
 fn mcp_subcommand_answers_initialize_and_tools_list_over_stdio() {
     let home = tempfile::tempdir().unwrap();
-    let mut child = Command::new(undo_fixtures::cli_binary())
+    let mut child = test_home::command(undo_fixtures::cli_binary(), home.path())
         .arg("mcp")
         .env("HOME", home.path())
         .env("SKILL_STUDIO_HOME", home.path())
@@ -108,7 +112,7 @@ struct UndoMcp {
 
 impl UndoMcp {
     fn new(home: &std::path::Path) -> Self {
-        let mut child = Command::new(undo_fixtures::cli_binary())
+        let mut child = test_home::command(undo_fixtures::cli_binary(), home)
             .arg("mcp")
             .env("HOME", home)
             .env("SKILL_STUDIO_HOME", home)

@@ -1,0 +1,1753 @@
+[
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "destination": {
+          "default": "universal",
+          "description": "`Universal` is the `skills` CLI's pick above. `PerHarness` (`Copy`\nonly) gives every chosen harness a real folder in its own skills\nfolder, Codex, `OpenCode`, and Cursor included, and writes no shared\ncopy; `link_mode` is ignored.",
+          "oneOf": [
+            {
+              "const": "universal",
+              "description": "The shared root.",
+              "type": "string"
+            },
+            {
+              "const": "per_harness",
+              "description": "A harness's own root.",
+              "type": "string"
+            }
+          ]
+        },
+        "files": {
+          "default": [],
+          "description": "`Copy` only: the folder's files, staged then swapped into place.",
+          "items": {
+            "description": "One file `InstallMethod::Copy` stages into the new skill's folder, path\nrelative to the folder root (for example `SKILL.md` or\n`scripts/run.sh`).",
+            "properties": {
+              "contents": {
+                "description": "The file's bytes.",
+                "items": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "mode": {
+                "default": null,
+                "description": "The `0o777` permission bits the source file had, so a copied\n`scripts/run.sh` stays executable. `None` gives the process default;\nignored off Unix.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "relative_path": {
+                "description": "Path relative to the skill folder's own root.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "relative_path",
+              "contents"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "harnesses": {
+          "default": [],
+          "description": "The harness set to install for, as the `skills` CLI's `--agent` list:\nharness ids plus the pseudo id `universal` for the shared\n`.agents/skills` folder alone. Empty means `universal` only. Codex,\n`OpenCode`, Cursor, and `universal` read the shared folder; Claude\nCode, pi, and Grok Build get their own folder (see `link_mode`).",
+          "items": {
+            "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "link_mode": {
+          "default": "link",
+          "description": "How each chosen harness with its own folder receives the skill. See\n[`InstallLinkMode`].",
+          "oneOf": [
+            {
+              "const": "link",
+              "description": "One real folder at `<scope>/.agents/skills/<name>`, and a relative\nsymlink to it in each other chosen harness folder.",
+              "type": "string"
+            },
+            {
+              "const": "copy",
+              "description": "One real folder in each chosen harness folder. The shared folder\ngets one only when a harness that reads it is chosen.",
+              "type": "string"
+            }
+          ]
+        },
+        "method": {
+          "description": "Which method writes the bytes.",
+          "oneOf": [
+            {
+              "const": "copy",
+              "description": "Fetches or copies bytes and stages/swaps them into place directly -\nno external CLI.",
+              "type": "string"
+            },
+            {
+              "const": "dotagents",
+              "description": "`npx -y @sentry/dotagents add <source>`.",
+              "type": "string"
+            },
+            {
+              "const": "skills_sh",
+              "description": "`npx -y skills add <source>`.",
+              "type": "string"
+            }
+          ]
+        },
+        "save_as_preference": {
+          "default": true,
+          "description": "Saves this call's method and harnesses as the preference\n`install_preferences` returns for the next install. Defaults to\n`true` so a caller opts out, not in.",
+          "type": "boolean"
+        },
+        "scope": {
+          "description": "`Global` installs under the scope home; `Project` installs under one\nproject.",
+          "oneOf": [
+            {
+              "description": "Under the scope home.",
+              "properties": {
+                "scope": {
+                  "const": "global",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "scope"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Under one tracked project.",
+              "properties": {
+                "project": {
+                  "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
+                  "type": "string"
+                },
+                "scope": {
+                  "const": "project",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "scope",
+                "project"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "skill": {
+          "description": "The folder name the skill will be installed under, both at\n`.agents/skills/<name>` and, for `Dotagents`/`SkillsSh`, the name the\nCLI is expected to create.",
+          "type": "string"
+        },
+        "source": {
+          "default": null,
+          "description": "`Dotagents`/`SkillsSh` only: the source argument passed to the CLI's\n`add` command (for example `owner/repo`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trust_confirmed": {
+          "default": false,
+          "description": "Confirms the trust prompt for `trust_identity`. A first call with\nthis `false` against an untrusted identity returns\n[`InstallOutcome::NeedsTrust`] instead of writing.",
+          "type": "boolean"
+        },
+        "trust_identity": {
+          "default": null,
+          "description": "The source's normalized repository identity, for the trust check\n(`None` for a source the policy never gates, like a local path).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "skill",
+        "method",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "name": "add"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "mode": {
+          "description": "Chosen mode; must be in `preview.allowed_apply_modes`.",
+          "oneOf": [
+            {
+              "const": "apply-fix",
+              "description": "Rewrite the file in place.",
+              "type": "string"
+            },
+            {
+              "const": "fix-installed-copy",
+              "description": "Rewrite the installed copy that a ledger owns.",
+              "type": "string"
+            },
+            {
+              "const": "fork-and-fix",
+              "description": "Fork first, then rewrite the fork.",
+              "type": "string"
+            }
+          ]
+        },
+        "preview": {
+          "description": "The preview to apply, unchanged.",
+          "properties": {
+            "allowed_apply_modes": {
+              "description": "Modes the caller may choose from.",
+              "items": {
+                "description": "Ways a frontmatter repair may be applied.",
+                "oneOf": [
+                  {
+                    "const": "apply-fix",
+                    "description": "Rewrite the file in place.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "fix-installed-copy",
+                    "description": "Rewrite the installed copy that a ledger owns.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "fork-and-fix",
+                    "description": "Fork first, then rewrite the fork.",
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "deployment_id": {
+              "description": "Target deployment.",
+              "type": "string"
+            },
+            "diff": {
+              "description": "Unified diff for a person.",
+              "type": "string"
+            },
+            "expected_fingerprint": {
+              "description": "Fingerprint of the current `SKILL.md` bytes.",
+              "type": "string"
+            },
+            "managed_update_warning": {
+              "description": "Warning shown for [`RepairApplyMode::FixInstalledCopy`]: the next\nmanaged update overwrites the fix.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "original_content": {
+              "description": "Current `SKILL.md` text, for a side-by-side view.",
+              "type": "string"
+            },
+            "owner_id": {
+              "anyOf": [
+                {
+                  "description": "Opaque lifecycle owner id.\n\nInvariant: the string starts with `owner:v1/`. It names the ledger entry\nthat installed the skill, not a path.",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Owner at preview time."
+            },
+            "owner_kind": {
+              "description": "Owner kind at preview time.",
+              "oneOf": [
+                {
+                  "const": "skills_sh",
+                  "description": "`~/.agents/.skill-lock.json`.",
+                  "type": "string"
+                },
+                {
+                  "const": "dotagents",
+                  "description": "A dotagents ledger.",
+                  "type": "string"
+                },
+                {
+                  "const": "copy",
+                  "description": "A copy install recorded by Skill Studio.",
+                  "type": "string"
+                },
+                {
+                  "const": "fork",
+                  "description": "A fork recorded by Skill Studio.",
+                  "type": "string"
+                },
+                {
+                  "const": "plugin",
+                  "description": "A harness plugin cache.",
+                  "type": "string"
+                },
+                {
+                  "const": "in_repo",
+                  "description": "Committed in the project repository.",
+                  "type": "string"
+                },
+                {
+                  "const": "manual",
+                  "description": "Placed by hand.",
+                  "type": "string"
+                },
+                {
+                  "const": "wildcard_dotagents",
+                  "description": "A dotagents wildcard entry.",
+                  "type": "string"
+                },
+                {
+                  "const": "ambiguous",
+                  "description": "More than one ledger claims the name.",
+                  "type": "string"
+                }
+              ]
+            },
+            "path": {
+              "description": "Absolute path of `SKILL.md`.",
+              "type": "string"
+            },
+            "proposal_id": {
+              "description": "Proposal id.",
+              "type": "string"
+            },
+            "proposed_content": {
+              "description": "Proposed `SKILL.md` text, for a side-by-side view.",
+              "type": "string"
+            },
+            "proposed_fingerprint": {
+              "description": "Fingerprint of the proposed bytes.",
+              "type": "string"
+            },
+            "reason": {
+              "description": "Why the repair is proposed, for a person (the spec rule that fails).",
+              "type": "string"
+            },
+            "scope": {
+              "description": "Scope of the deployment's root.",
+              "oneOf": [
+                {
+                  "description": "Under the scope home.",
+                  "properties": {
+                    "scope": {
+                      "const": "global",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "scope"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "description": "Under one tracked project.",
+                  "properties": {
+                    "project": {
+                      "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
+                      "type": "string"
+                    },
+                    "scope": {
+                      "const": "project",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "scope",
+                    "project"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "required": [
+            "proposal_id",
+            "deployment_id",
+            "path",
+            "scope",
+            "reason",
+            "owner_kind",
+            "expected_fingerprint",
+            "proposed_fingerprint",
+            "original_content",
+            "proposed_content",
+            "diff",
+            "allowed_apply_modes"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "preview",
+        "mode"
+      ],
+      "type": "object"
+    },
+    "name": "apply_frontmatter_repair"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "copy_status": {
+          "anyOf": [
+            {
+              "description": "How an agent copy compares with the library copy in its scope.",
+              "oneOf": [
+                {
+                  "const": "link",
+                  "description": "A link that resolves to the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "same",
+                  "description": "A real folder with the same files as the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "differs",
+                  "description": "A real folder with other files, changed after the last install or\nupdate of the skill, or with no lock entry to compare with.",
+                  "type": "string"
+                },
+                {
+                  "const": "stale",
+                  "description": "A real folder with other files, all older than the last install or\nupdate in the lock file: the copy did not get that update.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Keep only the agent copies with this copy status."
+        },
+        "root": {
+          "anyOf": [
+            {
+              "description": "A scan root filter.",
+              "oneOf": [
+                {
+                  "const": "library",
+                  "description": "Skills directly in ~/.agents/skills.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Restrict to the global shared library folder."
+        },
+        "skills": {
+          "default": [],
+          "description": "Restrict to these skill names; empty means all.",
+          "items": {
+            "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "default": null,
+          "description": "Restrict to this owner/repo, plugin@marketplace, or manual.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timings": {
+          "default": false,
+          "description": "Include per-phase timings.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "diagnose"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object"
+    },
+    "name": "diagnose_conflict"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object"
+    },
+    "name": "doctor"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object"
+    },
+    "name": "extras"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "skill": {
+          "description": "Skill to run the doctor checks and repairs for.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "skill"
+      ],
+      "type": "object"
+    },
+    "name": "fix"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "deployment_id": {
+          "anyOf": [
+            {
+              "description": "Opaque deployment id.\n\nInvariant: the string starts with `dep:v1/`. Its internal layout is a core\ndetail; adapters and the UI compare it as a string and never split it.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Desktop edits one exact copy."
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "description": "The three invocation-control states a skill's frontmatter can express.",
+              "oneOf": [
+                {
+                  "const": "both",
+                  "description": "Both explicit (`/name`) and model auto-invoke are available.",
+                  "type": "string"
+                },
+                {
+                  "const": "user-only",
+                  "description": "`disable-model-invocation: true` - explicit invocation only.",
+                  "type": "string"
+                },
+                {
+                  "const": "model-only",
+                  "description": "`user-invocable: false` - model auto-invoke only.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent checks only. A policy writes all copies of the named skill."
+        },
+        "skill": {
+          "anyOf": [
+            {
+              "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Name filter; required for writes."
+        }
+      },
+      "type": "object"
+    },
+    "name": "invocation"
+  },
+  {
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "invocation_mismatches"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "all": {
+          "default": false,
+          "description": "Include skills outside the shared library.",
+          "type": "boolean"
+        },
+        "copy_status": {
+          "anyOf": [
+            {
+              "description": "Copy severity, from a link to a changed independent folder.",
+              "oneOf": [
+                {
+                  "const": "link",
+                  "description": "Resolves to the library.",
+                  "type": "string"
+                },
+                {
+                  "const": "same",
+                  "description": "Matches the library's files.",
+                  "type": "string"
+                },
+                {
+                  "const": "old",
+                  "description": "Missed the library's last update.",
+                  "type": "string"
+                },
+                {
+                  "const": "changed",
+                  "description": "Has independent changes.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Keep rows with this agent copy status."
+        },
+        "days": {
+          "default": null,
+          "description": "Rolling window in days; defaults to 30.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "since": {
+          "default": null,
+          "description": "Inclusive start (YYYY-MM-DD or RFC 3339).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skills": {
+          "default": [],
+          "description": "Restrict to these skill names; empty means all.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "description": "Supported library row order.",
+              "oneOf": [
+                {
+                  "const": "name",
+                  "description": "Alphabetical skill names.",
+                  "type": "string"
+                },
+                {
+                  "const": "uses",
+                  "description": "Most uses first, then name.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Sort by name (default) or uses descending."
+        },
+        "source": {
+          "default": null,
+          "description": "Restrict to owner/repo, plugin@marketplace, or manual.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "top": {
+          "default": null,
+          "description": "Keep the N most used skills.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "until": {
+          "default": null,
+          "description": "Exclusive end (YYYY-MM-DD or RFC 3339).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "library"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "description": "History event id (ULID string).\n\nInvariant: lexical order equals creation order inside one store.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pagination cursor: return only rows older than this event. Pass the\nlast id of the previous page. Ids are ULIDs, so \"older\" is \"sorts\nbefore\"."
+        },
+        "check_drift": {
+          "default": false,
+          "description": "Compare live fingerprints with the recorded ones and fill `drift`.\nCosts one read per touched path; `false` leaves `Unchecked`.",
+          "type": "boolean"
+        },
+        "limit": {
+          "default": 0,
+          "description": "Maximum rows; `0` means the core default.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skill": {
+          "anyOf": [
+            {
+              "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Restrict to one skill."
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_events"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "copy_status": {
+          "anyOf": [
+            {
+              "description": "How an agent copy compares with the library copy in its scope.",
+              "oneOf": [
+                {
+                  "const": "link",
+                  "description": "A link that resolves to the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "same",
+                  "description": "A real folder with the same files as the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "differs",
+                  "description": "A real folder with other files, changed after the last install or\nupdate of the skill, or with no lock entry to compare with.",
+                  "type": "string"
+                },
+                {
+                  "const": "stale",
+                  "description": "A real folder with other files, all older than the last install or\nupdate in the lock file: the copy did not get that update.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Keep only the agent copies with this copy status."
+        },
+        "root": {
+          "anyOf": [
+            {
+              "description": "A scan root filter.",
+              "oneOf": [
+                {
+                  "const": "library",
+                  "description": "Skills directly in ~/.agents/skills.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Restrict to the global shared library folder."
+        },
+        "skills": {
+          "default": [],
+          "description": "Restrict to these skill names; empty means all.",
+          "items": {
+            "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "default": null,
+          "description": "Restrict to this owner/repo, plugin@marketplace, or manual.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timings": {
+          "default": false,
+          "description": "Include per-phase timings.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "outdated"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "dry_run": {
+          "default": false,
+          "description": "Return the plan and change nothing.",
+          "type": "boolean"
+        },
+        "harnesses": {
+          "default": [],
+          "description": "Agents to install for, in the `skills` CLI's `--agent` spelling.\nEmpty: the shared `.agents/skills` folder only.",
+          "items": {
+            "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "project_path": {
+          "default": null,
+          "description": "Install into this tracked project. Absent: the home.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ref_pin": {
+          "default": null,
+          "description": "Branch, tag, or commit to pin the pack to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skills": {
+          "default": [],
+          "description": "Skills to install. Empty: every skill of the pack that is not\ninstalled yet, which needs git access to list them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "description": "Git source as `npx skills add` takes it: `owner/repo` or a git URL.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "name": "pack_add"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "project_path": {
+          "default": null,
+          "description": "Only this tracked project. Absent: the home and every tracked project.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remote": {
+          "default": false,
+          "description": "Ask each git source for its newest commit and skills. Off by default:\nwithout it the call reads local files only.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "pack_list"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "dry_run": {
+          "default": false,
+          "description": "Return the plan and change nothing.",
+          "type": "boolean"
+        },
+        "project_path": {
+          "default": null,
+          "description": "Only this tracked project. Absent: the home and every tracked project.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "Pack source as `pack_list` reports it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "name": "pack_remove"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "project_path": {
+          "default": null,
+          "description": "Only this tracked project. Absent: the home and every tracked project.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remote": {
+          "default": false,
+          "description": "Ask the git source for its newest commit and skills.",
+          "type": "boolean"
+        },
+        "source": {
+          "description": "Pack source exactly as `pack_list` reports it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "name": "pack_show"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "all": {
+          "default": false,
+          "description": "Update every installed pack.",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "Return the plan and change nothing.",
+          "type": "boolean"
+        },
+        "project_path": {
+          "default": null,
+          "description": "Only this tracked project. Absent: the home and every tracked project.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "default": null,
+          "description": "Pack source as `pack_list` reports it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "pack_update"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "deployment_id": {
+          "anyOf": [
+            {
+              "description": "Opaque deployment id.\n\nInvariant: the string starts with `dep:v1/`. Its internal layout is a core\ndetail; adapters and the UI compare it as a string and never split it.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "One copy to change. Cannot be used with skills."
+        },
+        "skills": {
+          "description": "Names to change together. All names are checked before any move.",
+          "items": {
+            "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "park"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "deployment_id": {
+          "description": "Target deployment.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "deployment_id"
+      ],
+      "type": "object"
+    },
+    "name": "preview_frontmatter_repair"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "deployment_id": {
+          "description": "The deployment to remove. Must resolve to a universal, canonical\ndeployment whose owner kind is mutable (`Copy`, `Fork`, `Dotagents`,\nor `SkillsSh`) - see [`crate::identity::LifecycleOwnerKind::is_mutable`].",
+          "type": "string"
+        }
+      },
+      "required": [
+        "deployment_id"
+      ],
+      "type": "object"
+    },
+    "name": "remove"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "event_id": {
+          "description": "Event to revert.",
+          "type": "string"
+        },
+        "force": {
+          "default": false,
+          "description": "Proceed on drift; the drifted bytes are backed up first.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "event_id"
+      ],
+      "type": "object"
+    },
+    "name": "restore_event"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "date": {
+          "description": "Calendar date in YYYY-MM-DD form.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skill": {
+          "description": "Installed skill name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "skill"
+      ],
+      "type": "object"
+    },
+    "name": "review_clear"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "copy_status": {
+          "anyOf": [
+            {
+              "description": "How an agent copy compares with the library copy in its scope.",
+              "oneOf": [
+                {
+                  "const": "link",
+                  "description": "A link that resolves to the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "same",
+                  "description": "A real folder with the same files as the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "differs",
+                  "description": "A real folder with other files, changed after the last install or\nupdate of the skill, or with no lock entry to compare with.",
+                  "type": "string"
+                },
+                {
+                  "const": "stale",
+                  "description": "A real folder with other files, all older than the last install or\nupdate in the lock file: the copy did not get that update.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Keep only the agent copies with this copy status."
+        },
+        "root": {
+          "anyOf": [
+            {
+              "description": "A scan root filter.",
+              "oneOf": [
+                {
+                  "const": "library",
+                  "description": "Skills directly in ~/.agents/skills.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Restrict to the global shared library folder."
+        },
+        "skills": {
+          "default": [],
+          "description": "Restrict to these skill names; empty means all.",
+          "items": {
+            "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "default": null,
+          "description": "Restrict to this owner/repo, plugin@marketplace, or manual.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timings": {
+          "default": false,
+          "description": "Include per-phase timings.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "review_due"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "date": {
+          "description": "Calendar date in YYYY-MM-DD form.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skill": {
+          "description": "Installed skill name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "skill"
+      ],
+      "type": "object"
+    },
+    "name": "review_set"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "copy_status": {
+          "anyOf": [
+            {
+              "description": "How an agent copy compares with the library copy in its scope.",
+              "oneOf": [
+                {
+                  "const": "link",
+                  "description": "A link that resolves to the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "same",
+                  "description": "A real folder with the same files as the library copy.",
+                  "type": "string"
+                },
+                {
+                  "const": "differs",
+                  "description": "A real folder with other files, changed after the last install or\nupdate of the skill, or with no lock entry to compare with.",
+                  "type": "string"
+                },
+                {
+                  "const": "stale",
+                  "description": "A real folder with other files, all older than the last install or\nupdate in the lock file: the copy did not get that update.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Keep only the agent copies with this copy status."
+        },
+        "root": {
+          "anyOf": [
+            {
+              "description": "A scan root filter.",
+              "oneOf": [
+                {
+                  "const": "library",
+                  "description": "Skills directly in ~/.agents/skills.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Restrict to the global shared library folder."
+        },
+        "skills": {
+          "default": [],
+          "description": "Restrict to these skill names; empty means all.",
+          "items": {
+            "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "default": null,
+          "description": "Restrict to this owner/repo, plugin@marketplace, or manual.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timings": {
+          "default": false,
+          "description": "Include per-phase timings.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "scan"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "days": {
+          "default": null,
+          "description": "How many days back to count uses. Default 30.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "harness": {
+          "default": null,
+          "description": "Keep uses from this harness id only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project": {
+          "default": null,
+          "description": "Keep uses with this recorded project path only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "since": {
+          "default": null,
+          "description": "Count uses from this date (YYYY-MM-DD or RFC 3339) instead of `days`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "top": {
+          "default": null,
+          "description": "Keep only the N most used skills.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "until": {
+          "default": null,
+          "description": "Count uses before this date (YYYY-MM-DD or RFC 3339).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "skill_usage"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "deployment_id": {
+          "description": "The Universal deployment to split.",
+          "type": "string"
+        },
+        "harnesses": {
+          "description": "The harnesses that keep the skill. Must not be empty.",
+          "items": {
+            "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "deployment_id",
+        "harnesses"
+      ],
+      "type": "object"
+    },
+    "name": "split"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "agent": {
+          "description": "The agent that loses the skill. Must read the shared folder.",
+          "type": "string"
+        },
+        "deployment_id": {
+          "description": "The live Universal (shared folder) copy, at global or project scope.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "deployment_id",
+        "agent"
+      ],
+      "type": "object"
+    },
+    "name": "turn_off_check"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "agent": {
+          "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+          "type": "string"
+        },
+        "confirmed": {
+          "default": false,
+          "description": "Confirm splitting the shared skill and stopping source updates for its copies.",
+          "type": "boolean"
+        },
+        "deployment_id": {
+          "description": "Opaque deployment id.\n\nInvariant: the string starts with `dep:v1/`. Its internal layout is a core\ndetail; adapters and the UI compare it as a string and never split it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "deployment_id",
+        "agent"
+      ],
+      "type": "object"
+    },
+    "name": "turn_off_for_agent"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "deployment_id": {
+          "anyOf": [
+            {
+              "description": "Opaque deployment id.\n\nInvariant: the string starts with `dep:v1/`. Its internal layout is a core\ndetail; adapters and the UI compare it as a string and never split it.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "One copy to change. Cannot be used with skills."
+        },
+        "skills": {
+          "description": "Names to change together. All names are checked before any move.",
+          "items": {
+            "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "unpark"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "files": {
+          "default": [],
+          "description": "`Copy` only: the fresh files to stage and swap in.",
+          "items": {
+            "description": "One file `InstallMethod::Copy` stages into the new skill's folder, path\nrelative to the folder root (for example `SKILL.md` or\n`scripts/run.sh`).",
+            "properties": {
+              "contents": {
+                "description": "The file's bytes.",
+                "items": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "mode": {
+                "default": null,
+                "description": "The `0o777` permission bits the source file had, so a copied\n`scripts/run.sh` stays executable. `None` gives the process default;\nignored off Unix.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "relative_path": {
+                "description": "Path relative to the skill folder's own root.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "relative_path",
+              "contents"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "method": {
+          "description": "Which method wrote the deployment being refreshed.",
+          "oneOf": [
+            {
+              "const": "copy",
+              "description": "Fetches or copies bytes and stages/swaps them into place directly -\nno external CLI.",
+              "type": "string"
+            },
+            {
+              "const": "dotagents",
+              "description": "`npx -y @sentry/dotagents add <source>`.",
+              "type": "string"
+            },
+            {
+              "const": "skills_sh",
+              "description": "`npx -y skills add <source>`.",
+              "type": "string"
+            }
+          ]
+        },
+        "ref_pin": {
+          "default": null,
+          "description": "`Dotagents` only: an already-resolved commit for a pinned\n(`declared_ref`) ledger entry - the caller's own concern, not\nre-derived here (see `ops_update`'s module doc). The update writes it\ninto that entry's `ref` before running `dotagents install`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "description": "`Global` updates the scope home; `Project` updates one project.",
+          "oneOf": [
+            {
+              "description": "Under the scope home.",
+              "properties": {
+                "scope": {
+                  "const": "global",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "scope"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Under one tracked project.",
+              "properties": {
+                "project": {
+                  "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
+                  "type": "string"
+                },
+                "scope": {
+                  "const": "project",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "scope",
+                "project"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "skill": {
+          "description": "The already-installed skill's folder name.",
+          "type": "string"
+        },
+        "source": {
+          "default": null,
+          "description": "`Dotagents` only: must be present, but no longer reaches the CLI -\nthe update runs `dotagents install`, which reads the source from the\nscope's `agents.toml` entry (see `ops_update`'s module doc).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "skill",
+        "method",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "name": "update"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "requests": {
+          "description": "One request per skill to refresh, each its own journal entry.",
+          "items": {
+            "description": "Request to refresh one already-installed skill in place, via\n`ops::update`. Reuses [`InstallMethod`]: `Copy` re-stages fresh `files`\nand swaps them in, quarantining the previous tree; `Dotagents`/`SkillsSh`\nre-run the same CLI `install` shelled out to, in place over the existing\ndestination.",
+            "properties": {
+              "files": {
+                "default": [],
+                "description": "`Copy` only: the fresh files to stage and swap in.",
+                "items": {
+                  "description": "One file `InstallMethod::Copy` stages into the new skill's folder, path\nrelative to the folder root (for example `SKILL.md` or\n`scripts/run.sh`).",
+                  "properties": {
+                    "contents": {
+                      "description": "The file's bytes.",
+                      "items": {
+                        "format": "uint8",
+                        "maximum": 255,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "mode": {
+                      "default": null,
+                      "description": "The `0o777` permission bits the source file had, so a copied\n`scripts/run.sh` stays executable. `None` gives the process default;\nignored off Unix.",
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "relative_path": {
+                      "description": "Path relative to the skill folder's own root.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "relative_path",
+                    "contents"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "method": {
+                "description": "Which method wrote the deployment being refreshed.",
+                "oneOf": [
+                  {
+                    "const": "copy",
+                    "description": "Fetches or copies bytes and stages/swaps them into place directly -\nno external CLI.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "dotagents",
+                    "description": "`npx -y @sentry/dotagents add <source>`.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "skills_sh",
+                    "description": "`npx -y skills add <source>`.",
+                    "type": "string"
+                  }
+                ]
+              },
+              "ref_pin": {
+                "default": null,
+                "description": "`Dotagents` only: an already-resolved commit for a pinned\n(`declared_ref`) ledger entry - the caller's own concern, not\nre-derived here (see `ops_update`'s module doc). The update writes it\ninto that entry's `ref` before running `dotagents install`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "scope": {
+                "description": "`Global` updates the scope home; `Project` updates one project.",
+                "oneOf": [
+                  {
+                    "description": "Under the scope home.",
+                    "properties": {
+                      "scope": {
+                        "const": "global",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "scope"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "description": "Under one tracked project.",
+                    "properties": {
+                      "project": {
+                        "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
+                        "type": "string"
+                      },
+                      "scope": {
+                        "const": "project",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "scope",
+                      "project"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "skill": {
+                "description": "The already-installed skill's folder name.",
+                "type": "string"
+              },
+              "source": {
+                "default": null,
+                "description": "`Dotagents` only: must be present, but no longer reaches the CLI -\nthe update runs `dotagents install`, which reads the source from the\nscope's `agents.toml` entry (see `ops_update`'s module doc).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "skill",
+              "method",
+              "scope"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "requests"
+      ],
+      "type": "object"
+    },
+    "name": "update_all"
+  }
+]

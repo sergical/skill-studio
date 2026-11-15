@@ -1,12 +1,15 @@
 //! Where `ops::install` writes for a chosen harness set, following `skills`
-//! CLI 1.7.0 (`installSkillForAgent`, `createSymlink`, and the mode choice
-//! in `add`):
+//! CLI 1.8.1 for skills.sh installs. Native Copy and dotagents keep pi
+//! in its own agent folder. These rules follow `installSkillForAgent`,
+//! `createSymlink`, and the mode choice in `add`:
 //!
 //! - The shared copy lives at `<scope>/.agents/skills/<name>`. Codex,
 //!   `OpenCode`, Cursor, and the `universal` pseudo id read it directly.
-//! - Claude Code (`.claude/skills`), pi (`.pi/agent/skills` globally,
-//!   `.pi/skills` in a project), and Grok Build (`.grok/skills`) have their
-//!   own folder. `Link` puts a relative symlink there; `Copy` a real folder.
+//!   skills.sh installs also put pi here.
+//! - Claude Code (`.claude/skills`) and Grok Build (`.grok/skills`) have
+//!   their own folder. Native Copy and dotagents also use pi's own folder
+//!   (`.pi/agent/skills` globally, `.pi/skills` in a project). `Link` puts
+//!   a relative symlink there; `Copy` a real folder.
 //! - When the chosen harnesses name one folder or fewer, `Copy` is forced.
 //! - A harness folder that already resolves to the shared folder (a
 //!   whole-folder link such as `~/.claude/skills -> ~/.agents/skills`) gets
@@ -17,9 +20,10 @@
 //! through it. `install` refuses, so it never writes into a folder the user
 //! keeps elsewhere (for example a dotfiles checkout).
 //!
-//! The CLI also skips a missing `.pi`/`.grok` project folder only for an
+//! The CLI skips a missing `.grok` project folder only for an
 //! agent it detected itself; an agent named with `--agent` gets the folder
-//! created. `install` skips it for every request, per the brief for this
+//! created. `install` skips it for every request, and applies the same
+//! rule to native pi folders, per the brief for this
 //! feature, and reports the skip.
 //!
 //! [`SkillDestination::PerHarness`] (`Copy` only) is Skill Studio's own
@@ -82,6 +86,7 @@ fn folder_for(
     harness: &AgentId,
     scope: &RootScope,
     destination: SkillDestination,
+    method: InstallMethod,
 ) -> Result<Folder, CoreError> {
     let global = matches!(scope, RootScope::Global);
     if destination == SkillDestination::PerHarness {
@@ -100,6 +105,7 @@ fn folder_for(
             relative: ".claude/skills",
             project_marker: None,
         }),
+        AgentId::PI if method == InstallMethod::SkillsSh => Ok(Folder::Shared),
         AgentId::PI => Ok(Folder::Own {
             relative: if global {
                 ".pi/agent/skills"
@@ -124,9 +130,14 @@ fn folder_for(
 
 /// `true` for a harness with a skills folder of its own (Claude Code, pi,
 /// Grok Build), `false` for one that reads the shared folder.
-pub(crate) fn has_own_folder(harness: &AgentId) -> bool {
+pub(crate) fn has_own_folder(harness: &AgentId, method: InstallMethod) -> bool {
     matches!(
-        folder_for(harness, &RootScope::Global, SkillDestination::Universal),
+        folder_for(
+            harness,
+            &RootScope::Global,
+            SkillDestination::Universal,
+            method
+        ),
         Ok(Folder::Own { .. })
     )
 }
@@ -158,7 +169,12 @@ pub(crate) fn requested_harnesses(harnesses: &[AgentId]) -> Vec<AgentId> {
 /// Fails on the first id `install` cannot write for.
 pub(crate) fn validate_harnesses(harnesses: &[AgentId]) -> Result<(), CoreError> {
     for harness in harnesses {
-        folder_for(harness, &RootScope::Global, SkillDestination::Universal)?;
+        folder_for(
+            harness,
+            &RootScope::Global,
+            SkillDestination::Universal,
+            InstallMethod::Copy,
+        )?;
     }
     Ok(())
 }
@@ -174,7 +190,7 @@ pub(crate) fn effective_link_mode(
 ) -> Result<InstallLinkMode, CoreError> {
     let mut folders: Vec<Folder> = Vec::new();
     for harness in harnesses {
-        let folder = folder_for(harness, scope, SkillDestination::Universal)?;
+        let folder = folder_for(harness, scope, SkillDestination::Universal, method)?;
         if !folders.contains(&folder) {
             folders.push(folder);
         }
@@ -265,13 +281,14 @@ pub(crate) fn plan_install(
     harnesses: &[AgentId],
     mode: InstallLinkMode,
     destination: SkillDestination,
+    method: InstallMethod,
 ) -> Result<InstallPlan, CoreError> {
     let universal_root = root.join(UNIVERSAL_ROOT_RELATIVE);
     let shared_path = universal_root.join(&skill.0);
     let mut shared_needed = mode == InstallLinkMode::Link;
     let mut steps = Vec::new();
     for harness in harnesses {
-        let action = match folder_for(harness, scope, destination)? {
+        let action = match folder_for(harness, scope, destination, method)? {
             Folder::Shared => {
                 shared_needed = true;
                 StepAction::ReadsShared {
@@ -433,6 +450,41 @@ mod tests {
         assert_eq!(
             mode(InstallMethod::Dotagents, &["claude-code"]),
             InstallLinkMode::Link
+        );
+    }
+
+    #[test]
+    fn skills_sh_pi_reads_shared_but_native_copy_keeps_its_own_folder() {
+        let pi = AgentId::from(AgentId::PI);
+        assert_eq!(
+            folder_for(
+                &pi,
+                &RootScope::Global,
+                SkillDestination::Universal,
+                InstallMethod::SkillsSh
+            )
+            .unwrap(),
+            Folder::Shared
+        );
+        assert!(matches!(
+            folder_for(
+                &pi,
+                &RootScope::Global,
+                SkillDestination::Universal,
+                InstallMethod::Copy
+            )
+            .unwrap(),
+            Folder::Own { .. }
+        ));
+        assert_eq!(
+            effective_link_mode(
+                InstallMethod::SkillsSh,
+                &ids(&["pi", "codex"]),
+                &RootScope::Global,
+                InstallLinkMode::Link
+            )
+            .unwrap(),
+            InstallLinkMode::Copy
         );
     }
 

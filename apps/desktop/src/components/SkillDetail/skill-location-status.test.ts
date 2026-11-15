@@ -153,7 +153,7 @@ describe("buildScopeGroups", () => {
     const skill = fixtureSkill({ deployments: [shared], has_spec: false });
     const [global] = buildScopeGroups(skill);
     expect(global.shared?.level).toBe("error");
-    expect(global.shared?.conditions[0].status).toBe("Skipped by some agents");
+    expect(global.shared?.conditions[0].status).toBe("Spec violation");
     expect(global.shared?.conditions[0].what).toBe(
       "SKILL.md: SKILL.md has no description in its frontmatter. Codex, OpenCode, and pi skip it. Claude Code still loads it.",
     );
@@ -374,7 +374,7 @@ describe("buildScopeGroups", () => {
     const row = global.parked[0];
 
     expect(row.level).toBe("error");
-    expect(row.conditions[0].status).toBe("Left behind");
+    expect(row.conditions[0].status).toBe("Parked copy left behind");
     expect(row.leftBehind).toEqual({ live, parked });
     expect(rowMenu(row, global.label).entries.map((e) => e.label)).toEqual([
       "Keep live",
@@ -861,6 +861,32 @@ describe("rowMenu", () => {
     expect(menu.entries.map((e) => e.label)).toContain("Disable the codex plugin for Claude Code");
     expect(menu.danger.map((e) => e.label)).toContain("Uninstall the codex plugin…");
     expect(menu.hint).toBe("Applies to every skill the codex plugin ships.");
+  });
+
+  // Failure caught: a plugin copy with a spec violation offers "Edit SKILL.md", a dead end,
+  // because the plugin cache is read-only and the next plugin update overwrites it.
+  it("a plugin row with a spec violation offers no Edit SKILL.md and names the plugin as owner", () => {
+    const plugin = fixtureDeployment({
+      agent: "Claude Code",
+      scope: "plugin",
+      mutability: "read-only",
+      path: "/home/.claude/plugins/cache/anthropics/codex/1.0.6/skills/find-bugs",
+      spec_violations: ["missing required frontmatter field: description"],
+      plugin: {
+        name: "codex",
+        harness: "Claude Code",
+        version: "1.0.6",
+        marketplace: "anthropics",
+        id: "codex@anthropics",
+      },
+    });
+    const [global] = buildScopeGroups(fixtureSkill({ deployments: [plugin] }));
+    const row = global.rows.find((r) => r.kind === "plugin")!;
+    const spec = row.conditions.find((c) => c.status === "Spec violation")!;
+
+    expect(spec.menu.map((e) => e.label)).not.toContain("Edit SKILL.md");
+    expect(rowMenu(row, global.label).entries.map((e) => e.label)).not.toContain("Edit SKILL.md");
+    expect(spec.fix).toBe("Managed by codex. Ask the plugin author to fix it.");
   });
 
   it("offers Update the plugin only on a plugin row whose plugin has an update", () => {

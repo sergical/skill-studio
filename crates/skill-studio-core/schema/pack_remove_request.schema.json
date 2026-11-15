@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PackRemoveRequest",
+  "description": "Input for `pack_remove`.",
+  "type": "object",
+  "properties": {
+    "source": {
+      "description": "Pack source as `pack_list` reports it.",
+      "type": "string"
+    },
+    "project_path": {
+      "description": "Only this tracked project. Absent: the home and every tracked project.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "dry_run": {
+      "description": "Return the plan and change nothing.",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "source"
+  ]
+}

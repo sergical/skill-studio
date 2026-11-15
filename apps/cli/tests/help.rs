@@ -7,7 +7,8 @@
 //! user command, keep the dev commands out of sight, and use none of the
 //! words that only make sense inside this codebase.
 
-use std::process::Command;
+#[path = "support/test_home.rs"]
+mod test_home;
 
 const USER_COMMANDS: &[&str] = &[
     "extras",
@@ -47,7 +48,9 @@ const HIDDEN_COMMANDS: &[&str] = &[
 ];
 
 fn help(args: &[&str]) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+    let home = test_home::TestHome::default();
+    let output = home
+        .command(env!("CARGO_BIN_EXE_skill-studio"))
         .args(args)
         .arg("--help")
         .output()
@@ -152,12 +155,10 @@ fn every_common_question_example_runs() {
                 }
             })
             .collect();
-        let output = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+        let output = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), home.path())
             .args(&args)
             .arg("--home")
             .arg(home.path())
-            .env("HOME", home.path())
-            .env("SKILL_STUDIO_TELEMETRY", "0")
             .output()
             .unwrap();
         assert!(

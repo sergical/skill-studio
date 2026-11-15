@@ -1,9 +1,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(dead_code)]
+#[path = "support/test_home.rs"]
+mod test_home;
+
 use std::path::Path;
-use std::process::Command;
 
 fn run(home: &Path, args: &[&str]) -> serde_json::Value {
-    let out = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+    let out = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), home)
         .arg("review")
         .args(args)
         .args(["--home", home.to_str().unwrap(), "--json"])
@@ -105,7 +108,7 @@ fn review_due_reuses_the_cli_usage_cache_instead_of_writing_a_second_index() {
     let home = dir.path().canonicalize().unwrap();
     gamma_with_one_session(&home);
     let cli = |args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+        let out = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
             .args(args)
             .arg("--json")
             .env("HOME", &home)

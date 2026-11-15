@@ -13,12 +13,14 @@
 //! `UPDATE_GOLDENS=1 cargo test -p skill-studio-cli --test envelope`.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use skill_studio_core::ports::{LeaseKey, LeaseMode, LeaseProvider};
 use skill_studio_core::testing::fixtures;
 use skill_studio_host::FileLease;
+
+#[path = "support/test_home.rs"]
+mod test_home;
 
 fn complete_folder_tree(root: &Path) -> Vec<(PathBuf, u64, Vec<u8>)> {
     fn walk(root: &Path, path: &Path, entries: &mut Vec<(PathBuf, u64, Vec<u8>)>) {
@@ -80,7 +82,23 @@ fn run(args: &[&str]) -> Run {
 }
 
 fn run_with_env(args: &[&str], env: &[(&str, &str)]) -> Run {
-    let output = Command::new(bin())
+    for (key, value) in env {
+        if *key == "HOME" {
+            test_home::assert_temporary_home(Path::new(value));
+        }
+    }
+    let test_home = test_home::TestHome::default();
+    let mut command = test_home.command(bin());
+    if let Some(home) = args
+        .windows(2)
+        .find_map(|pair| matches!(pair[0], "--home" | "--fixture").then_some(Path::new(pair[1])))
+    {
+        if home.exists() {
+            test_home::assert_temporary_home(home);
+            command.env("HOME", home);
+        }
+    }
+    let output = command
         .args(args)
         .envs(env.iter().copied())
         .output()
@@ -209,7 +227,10 @@ fn scan_on_a_clean_fixture_exits_0() {
 #[test]
 fn scan_time_prints_step_lines_to_stderr() {
     let home = materialized_fixture("basic");
-    let output = Command::new(bin())
+    let test_home = test_home::TestHome::default();
+    let output = test_home
+        .command(bin())
+        .env("HOME", &home)
         .args([
             "scan",
             "--fixture",
@@ -584,7 +605,10 @@ fn harnesses_with_no_binaries_on_path_prints_unknown_for_every_row() {
     // executable resolves; the test process's own PATH and HOME are left
     // untouched.
     let empty_path_dir = tempfile::tempdir().unwrap();
-    let output = Command::new(bin())
+    let test_home = test_home::TestHome::default();
+    let output = test_home
+        .command(bin())
+        .env("HOME", &home)
         .args(["harnesses", "--fixture", home.to_str().unwrap()])
         .env("PATH", empty_path_dir.path())
         .output()
@@ -817,7 +841,10 @@ fn unpark_puts_a_parked_skill_and_its_link_back_or_names_the_envelope() {
 #[test]
 fn outdated_separates_an_unknown_check_from_an_untracked_skill_or_names_the_currency() {
     let (_home_dir, home) = parkable_live_home();
-    let output = Command::new(bin())
+    let test_home = test_home::TestHome::default();
+    let output = test_home
+        .command(bin())
+        .env("HOME", &home)
         .args(["outdated", "--home", home.to_str().unwrap(), "--json"])
         .env("PATH", "")
         .output()
@@ -918,7 +945,9 @@ fn undo_finds_the_last_user_change_past_automatic_rows_or_names_the_event_it_mis
 #[test]
 fn schema_regenerates_the_checked_in_snapshot() {
     let out = tempfile::tempdir().unwrap();
-    let status = Command::new(bin())
+    let test_home = test_home::TestHome::default();
+    let status = test_home
+        .command(bin())
         .args(["schema", "--out"])
         .arg(out.path())
         .status()
@@ -972,7 +1001,10 @@ fn a_fixture_scan_reads_opencode_config_under_the_fixture_even_with_xdg_config_h
     let unrelated_xdg = tempfile::tempdir().unwrap();
     let unrelated_opencode_config_dir = tempfile::tempdir().unwrap();
 
-    let output = Command::new(bin())
+    let test_home = test_home::TestHome::default();
+    let output = test_home
+        .command(bin())
+        .env("HOME", &home)
         .args(["scan", "--fixture", home.to_str().unwrap(), "--json"])
         .env("XDG_CONFIG_HOME", unrelated_xdg.path())
         .env("OPENCODE_CONFIG_DIR", unrelated_opencode_config_dir.path())

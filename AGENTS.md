@@ -180,6 +180,10 @@ pnpm run doctor
 pnpm run check
 ```
 
+### Versions
+
+The app, CLI, MCP server, npm packages and workspace packages share one version, taken from `[workspace.package]` in the root `Cargo.toml`. Change it only with `pnpm run version:set <major.minor.patch>`, which writes every manifest and `Cargo.lock`. `pnpm run versions:check` fails on drift; CI runs it on every PR, and `release.yml` runs it against the tag.
+
 ## Tech Stack
 
 | Layer       | Technology                                                      |

@@ -182,6 +182,6 @@ it("Broken_rows_carry_only_buttons_that_fix_in_place_and_a_click_on_the_row_stil
       .map((button) => button.textContent),
   );
   for (const label of labels) expect(pastTenseOf(label ?? "")).not.toBeNull();
-  await userEvent.setup().click(within(rows[0]).getByText(/broken link at/));
+  await userEvent.setup().click(within(rows[0]).getByText(/Broken link:/));
   expect(onSelectSkill).toHaveBeenCalledTimes(1);
 });

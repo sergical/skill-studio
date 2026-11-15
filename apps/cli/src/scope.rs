@@ -36,22 +36,6 @@ impl ScopeArgs {
         &self.projects
     }
 
-    /// Builds the `RuntimeScope` and the lease root for this invocation.
-    ///
-    /// `--fixture <dir>` builds `RuntimeScope::fixture(dir)`, with its lease
-    /// root at `<dir>/.skill-studio/leases`. `--home <dir>` builds a `Live` scope
-    /// rooted at `<dir>`, but keeps its history and lease roots namespaced
-    /// under that same `<dir>` (`<dir>/.skill-studio/history` and
-    /// `<dir>/.skill-studio/leases`) rather than the real machine's data
-    /// directory, so an explicit `--home` never reads or writes outside the
-    /// directory the caller gave us. Only the true default — neither flag
-    /// given — resolves against the host's home directory and the ambient
-    /// `data_root()` (`$XDG_DATA_HOME/skill-studio` or
-    /// `~/.local/share/skill-studio`).
-    pub fn resolve(&self) -> (RuntimeScope, PathBuf) {
-        self.resolve_with_extra_project(None)
-    }
-
     pub fn process_spawner(&self, home: &Path) -> skill_studio_host::RealProcessSpawner {
         let spawner = skill_studio_host::RealProcessSpawner::for_home(home, Vec::new());
         if self.fixture.is_some() || self.home.is_some() {
@@ -71,8 +55,21 @@ impl ScopeArgs {
         dirs::data_dir().map(|dir| skill_studio_host::desktop_usage_cache_path(&dir))
     }
 
-    /// Like [`Self::resolve`], but folds `extra_project` into the scope's
-    /// explicit project list even when `--project` was never given.
+    /// Builds the `RuntimeScope` and the lease root for this invocation.
+    ///
+    /// `--fixture <dir>` builds `RuntimeScope::fixture(dir)`, with its lease
+    /// root at `<dir>/.skill-studio/leases`. `--home <dir>` builds a `Live` scope
+    /// rooted at `<dir>`, but keeps its history and lease roots namespaced
+    /// under that same `<dir>` (`<dir>/.skill-studio/history` and
+    /// `<dir>/.skill-studio/leases`) rather than the real machine's data
+    /// directory, so an explicit `--home` never reads or writes outside the
+    /// directory the caller gave us. Only the true default — neither flag
+    /// given — resolves against the host's home directory and the ambient
+    /// `data_root()` (`$XDG_DATA_HOME/skill-studio` or
+    /// `~/.local/share/skill-studio`).
+    ///
+    /// `extra_project` joins the scope's explicit project list even when
+    /// `--project` was never given.
     /// `add --project-path` installs into a project the scope has not
     /// otherwise been told about; without this, the runtime's `ScopeFs`
     /// rejects the write as outside the scope ("path lies outside the

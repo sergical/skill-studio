@@ -385,11 +385,22 @@ mod tests {
     fn skills_sh_remove_args_selects_global_flag() {
         assert_eq!(
             skills_sh_remove_args_for_scope("foo", InstallScope::Global),
-            vec!["skills@1.7.0", "remove", "foo", "--yes", "--global"]
+            vec![
+                skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE,
+                "remove",
+                "foo",
+                "--yes",
+                "--global"
+            ]
         );
         assert_eq!(
             skills_sh_remove_args_for_scope("foo", InstallScope::Project),
-            vec!["skills@1.7.0", "remove", "foo", "--yes"]
+            vec![
+                skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE,
+                "remove",
+                "foo",
+                "--yes"
+            ]
         );
     }
 

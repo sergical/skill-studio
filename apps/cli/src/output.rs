@@ -797,6 +797,27 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         ("extras_report", || {
             schemars::schema_for!(skill_studio_core::extras::ExtrasReport)
         }),
+        ("pack_list_request", || {
+            schemars::schema_for!(skill_studio_core::pack::PackListRequest)
+        }),
+        ("pack_show_request", || {
+            schemars::schema_for!(skill_studio_core::pack::PackShowRequest)
+        }),
+        ("pack_report", || {
+            schemars::schema_for!(skill_studio_core::pack::PackReport)
+        }),
+        ("pack_add_request", || {
+            schemars::schema_for!(skill_studio_core::pack_action::PackAddRequest)
+        }),
+        ("pack_update_request", || {
+            schemars::schema_for!(skill_studio_core::pack_action::PackUpdateRequest)
+        }),
+        ("pack_remove_request", || {
+            schemars::schema_for!(skill_studio_core::pack_action::PackRemoveRequest)
+        }),
+        ("pack_action_report", || {
+            schemars::schema_for!(skill_studio_core::pack_action::PackActionReport)
+        }),
         ("agent_off_request", || {
             schemars::schema_for!(skill_studio_core::dto::AgentOffRequest)
         }),
@@ -981,6 +1002,71 @@ pub fn print_review(envelope: &ResultEnvelope<skill_studio_core::review::ReviewO
         );
     }
 }
+pub fn print_pack_action(
+    envelope: &ResultEnvelope<skill_studio_core::pack_action::PackActionReport>,
+) {
+    use skill_studio_core::pack_action::PackStepState;
+    print_errors(envelope);
+    let Some(report) = &envelope.data else {
+        return;
+    };
+    for step in &report.steps {
+        let scope = match &step.scope {
+            skill_studio_core::identity::RootScope::Global => "global".to_string(),
+            skill_studio_core::identity::RootScope::Project(p) => p.0.display().to_string(),
+        };
+        let state = match &step.state {
+            PackStepState::Planned => "planned".to_string(),
+            PackStepState::Done { event_id } => format!("done  (undo: {})", event_id.0),
+            PackStepState::Skipped { reason } => format!("skipped: {reason}"),
+            PackStepState::Failed { reason, .. } => format!("failed: {reason}"),
+        };
+        println!("{}  {}  {scope}  {state}", step.source, step.skill);
+    }
+    println!("{}", report.summary);
+}
+
+pub fn print_packs(envelope: &ResultEnvelope<skill_studio_core::pack::PackReport>) {
+    print_errors(envelope);
+    let Some(report) = &envelope.data else {
+        return;
+    };
+    for pack in &report.packs {
+        let pin = pack
+            .ref_pin
+            .as_deref()
+            .map_or_else(String::new, |pin| format!(" @ {pin}"));
+        println!("{}{pin}  ({:?})  {}", pack.source, pack.kind, pack.summary);
+        for skill in &pack.skills {
+            let scope = match &skill.scope {
+                skill_studio_core::identity::RootScope::Global => "global".to_string(),
+                skill_studio_core::identity::RootScope::Project(p) => p.0.display().to_string(),
+            };
+            let mut flags = Vec::new();
+            if skill.edited == Some(true) {
+                flags.push("edited");
+            }
+            if skill.behind == Some(true) {
+                flags.push("behind");
+            }
+            println!(
+                "  {}  {scope}  {}  {}",
+                skill.name,
+                if skill.agents.is_empty() {
+                    "-".to_string()
+                } else {
+                    skill.agents.join(",")
+                },
+                flags.join(",")
+            );
+        }
+        for command in &pack.update_commands {
+            println!("  update with: {command}");
+        }
+    }
+    println!("{}", report.summary);
+}
+
 pub fn print_review_due(envelope: &ResultEnvelope<skill_studio_core::review::ReviewDueReport>) {
     if let Some(data) = &envelope.data {
         for row in &data.rows {
