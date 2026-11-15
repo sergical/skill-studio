@@ -48,6 +48,16 @@ paths = [
 ]
 
 [[rules]]
+id = "gate-policy"
+tier = "stop"
+paths = [
+  "scripts/gate/gate",
+  "scripts/gate/gate.py",
+  "scripts/gate/approval.py",
+  ".github/workflows/**",
+]
+
+[[rules]]
 id = "deploy-secrets"
 tier = "stop"
 paths = ["apps/server/wrangler.jsonc", "**/deploy-server.yml", "**/.env*", ".env*"]
@@ -82,6 +92,12 @@ id = "user-data-writes"
 tier = "stop"
 paths = [
   "crates/skill-studio-core/src/fsops.rs",
+  "crates/skill-studio-core/src/ops.rs",
+  "crates/skill-studio-core/src/ops_agent_off.rs",
+  "crates/skill-studio-core/src/ops_install.rs",
+  "crates/skill-studio-core/src/ops_install_cli.rs",
+  "crates/skill-studio-core/src/ops_park_dotagents.rs",
+  "crates/skill-studio-core/src/ops_split.rs",
   "crates/skill-studio-core/src/ops_remove.rs",
   "crates/skill-studio-core/src/ops_discard.rs",
   "crates/skill-studio-core/src/ops_update.rs",
