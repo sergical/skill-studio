@@ -11,12 +11,13 @@ export VERSIONS_ROOT="$work"
 
 reset() {
   rm -rf "${work:?}"/*
-  mkdir -p "$work/crates/a" "$work/apps/desktop/src-tauri" "$work/packages/npm/main" "$work/node_modules/dep"
+  mkdir -p "$work/crates/a" "$work/apps/desktop/src-tauri" "$work/packages/npm/main" "$work/packages/npm/arm" "$work/node_modules/dep"
   printf '[workspace]\nmembers = ["crates/*"]\n\n[workspace.package]\nversion = "1.2.3"\n' > "$work/Cargo.toml"
   printf '[package]\nname = "a"\nversion.workspace = true\n' > "$work/crates/a/Cargo.toml"
   printf '{\n  "name": "root",\n  "version": "1.2.3"\n}\n' > "$work/package.json"
   printf '{\n  "productName": "App",\n  "version": "1.2.3"\n}\n' > "$work/apps/desktop/src-tauri/tauri.conf.json"
-  printf '{\n  "name": "main",\n  "version": "1.2.3",\n  "optionalDependencies": {\n    "@skill-studio/cli-darwin-arm64": "1.2.3"\n  }\n}\n' > "$work/packages/npm/main/package.json"
+  printf '{\n  "name": "@skill-studio/cli-darwin-arm64",\n  "version": "1.2.3"\n}\n' > "$work/packages/npm/arm/package.json"
+  printf '{\n  "name": "skill-studio",\n  "version": "1.2.3",\n  "optionalDependencies": {\n    "@skill-studio/cli-darwin-arm64": "1.2.3"\n  }\n}\n' > "$work/packages/npm/main/package.json"
   printf '{ "name": "dep", "version": "9.9.9" }\n' > "$work/node_modules/dep/package.json"
 }
 
@@ -50,6 +51,21 @@ expect 1 "a stale CLI pin fails" check
 reset
 printf '[package]\nname = "a"\nversion = "1.2.3"\n' > "$work/crates/a/Cargo.toml"
 expect 1 "a crate with its own version fails" check
+
+reset
+printf '{\n  "name": "skill-studio",\n  "version": "1.2.3"\n}\n' > "$work/packages/npm/main/package.json"
+expect 1 "a launcher without a platform pin fails" check
+
+reset
+printf '{\n  "name": "root",\n  "config": {\n    "version": "9.9.9"\n  },\n  "version": "1.2.3"\n}\n' > "$work/package.json"
+expect 0 "version:set skips a nested version key" node "$here/set-version.mjs" 2.0.0
+expect 0 "the nested version key is left as it was" grep -q '"version": "9.9.9"' "$work/package.json"
+expect 0 "after version:set with a nested key the tag matches" check v2.0.0
+
+reset
+printf '{\n"name": "root",\n"version": "1.2.3"\n}\n' > "$work/package.json"
+expect 1 "version:set refuses a file it cannot set" node "$here/set-version.mjs" 2.0.0
+expect 0 "a refused version:set writes nothing" grep -q '"version": "1.2.3"' "$work/apps/desktop/src-tauri/tauri.conf.json"
 
 reset
 expect 0 "version:set writes every manifest" node "$here/set-version.mjs" 2.0.0

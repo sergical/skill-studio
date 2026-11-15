@@ -19,7 +19,7 @@ const SKIPPED_DIRS = new Set([
   "dist",
   "mutants.out",
 ]);
-export const CLI_PIN = /("@skill-studio\/cli-[^"]+":\s*")([^"]*)(")/g;
+const PLATFORM_PREFIX = "@skill-studio/cli-";
 export const WORKSPACE_VERSION = /(\[workspace\.package\][^[]*?^version\s*=\s*")([^"]*)(")/m;
 
 export function repoRoot() {
@@ -44,6 +44,7 @@ export function manifests(root = repoRoot()) {
     const text = readFileSync(path, "utf8");
     const file = relative(root, path);
     const versions = [];
+    let json;
     if (path.endsWith("Cargo.toml")) {
       const workspace = text.match(WORKSPACE_VERSION);
       if (workspace) versions.push(workspace[2]);
@@ -51,12 +52,21 @@ export function manifests(root = repoRoot()) {
         versions.push("not `version.workspace = true`");
       }
     } else {
-      const json = JSON.parse(text);
+      json = JSON.parse(text);
       if (json.version !== undefined) versions.push(json.version);
-      for (const [, , pin] of text.matchAll(CLI_PIN)) versions.push(pin);
+      versions.push(...Object.values(platformPins(json)));
     }
-    return { path, file, text, versions };
+    return { path, file, text, json, versions };
   });
+}
+
+/** The launcher's pins on the per-platform CLI packages. */
+export function platformPins(json) {
+  return Object.fromEntries(
+    Object.entries(json.optionalDependencies ?? {}).filter(([name]) =>
+      name.startsWith(PLATFORM_PREFIX),
+    ),
+  );
 }
 
 export function problems(root = repoRoot(), tag = undefined) {
@@ -65,6 +75,14 @@ export function problems(root = repoRoot(), tag = undefined) {
   if (!cargo) return ["Cargo.toml has no [workspace.package] version"];
   const expected = tag === undefined ? cargo : tag.replace(/^v/, "").split("-")[0];
   const found = [];
+  const launcher = all.find(
+    (m) => m.json?.name === "skill-studio" && m.file.startsWith(join("packages", "npm")),
+  );
+  for (const { json } of all) {
+    if (json?.name?.startsWith(PLATFORM_PREFIX) && !platformPins(launcher?.json ?? {})[json.name]) {
+      found.push(`${launcher?.file ?? "the skill-studio package"}: does not pin ${json.name}`);
+    }
+  }
   for (const { file, versions } of all) {
     for (const version of versions) {
       if (version !== expected) found.push(`${file}: ${version}, expected ${expected}`);
