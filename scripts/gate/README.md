@@ -105,7 +105,7 @@ Verify manifests keep the documented scenarios format. An optional `head` field 
 
 The proof card lists `gate/approved` separately from risk and review. Without a trusted passing approval status on the current SHA, a stop-tier PR fails risk. Do not execute PR code in a workflow that has write access.
 
-`gate-bypass.yml` runs on each push to `main`. When the push is a PR merge whose head did not pass every check that the branch rules require, `gate bypass --sha <sha>` comments on the PR with the account, the time and each red or missing check. GitHub records only the account for a merge, not whether a person or a tool made it.
+`gate-bypass.yml` runs on each push to `main`. When the push is a PR merge whose head did not pass every check that the branch rules require, `gate bypass --sha <sha>` comments on the PR with the account, the time and each red or missing check. GitHub records only the account for a merge, not whether a person or a tool made it. It posts once per PR. It reads required checks from rulesets only, not from classic branch protection.
 
 `gate-update.yml` updates behind PRs that have auto-merge enabled. Supply an
 optional `GATE_UPDATE_TOKEN` secret with contents and pull-request write access

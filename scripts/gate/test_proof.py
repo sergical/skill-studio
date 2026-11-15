@@ -53,7 +53,7 @@ class ProofTests(GateTests):
                 if data and data.get('head') == sha:
                     self.assertIn('![screenshot](https://example.invalid/evidence.png)', body)
 
-    def bypass_api(self, statuses, runs, merged=True):
+    def bypass_api(self, statuses, runs, merged=True, comments=()):
         posted = []
         pr = {'number': 7, 'merge_commit_sha': 'm1', 'merged_by': {'login': 'owner'}, 'merged_at': '2026-01-01T10:00:00Z', 'base': {'ref': 'main'}, 'head': {'sha': 'h1'}}
         responses = {
@@ -63,7 +63,8 @@ class ProofTests(GateTests):
         }
         listed = {
             'repos/example/repo/commits/h1/statuses?per_page=100': [statuses],
-            'repos/example/repo/commits/h1/check-runs?per_page=100': [{'check_runs': runs}],
+            'repos/example/repo/commits/h1/check-runs?filter=all&per_page=100': [{'check_runs': runs}],
+            'repos/example/repo/issues/7/comments?per_page=100': [[{'body': body} for body in comments]],
         }
 
         def api(endpoint, method='GET', data=None):
@@ -113,3 +114,8 @@ class ProofTests(GateTests):
         green = [self.status('gate/risk', 'success'), self.status('gate/review', 'success')]
         self.assertEqual(self.bypass_api(green, [self.check_run('check', 'success')]), [])
         self.assertEqual(self.bypass_api([], [], merged=False), [])
+
+    def test_bypass_posts_once_per_pull_request(self):
+        red = [self.status('gate/risk', 'failure')]
+        self.assertEqual(len(self.bypass_api(red, [], comments=['unrelated'])), 1)
+        self.assertEqual(self.bypass_api(red, [], comments=[f'{proof.BYPASS_MARK}\nMerged past required checks']), [])

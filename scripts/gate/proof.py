@@ -138,7 +138,7 @@ def states_at(repo, sha, merged_at):
 
     statuses = sorted((s for page in pages(f'repos/{repo}/commits/{sha}/statuses?per_page=100') for s in page), key=lambda s: s['created_at'])
     latest = {s['context']: s['state'] for s in statuses if s['created_at'] <= merged_at}
-    runs = sorted((c for page in pages(f'repos/{repo}/commits/{sha}/check-runs?per_page=100') for c in page['check_runs']), key=lambda c: c['started_at'] or '')
+    runs = sorted((c for page in pages(f'repos/{repo}/commits/{sha}/check-runs?filter=all&per_page=100') for c in page['check_runs']), key=lambda c: c['started_at'] or '')
     checks = {}
     for check in runs:
         if (check['started_at'] or '') <= merged_at:
@@ -162,6 +162,10 @@ def bypass(args, cfg):
     red = {name: states.get(name, 'missing') for name in required if states.get(name) not in PASSING}
     if not red:
         print('Required checks were green at merge')
+        return
+    comments = pages(f"repos/{repo}/issues/{pr['number']}/comments?per_page=100")
+    if any(BYPASS_MARK in (c.get('body') or '') for page in comments for c in page):
+        print(f"Bypass already recorded on #{pr['number']}")
         return
     lines = [BYPASS_MARK, f"Merged past required checks by **{pr['merged_by']['login']}** at {pr['merged_at']}, on head `{pr['head']['sha']}`.", '', '| Check | State |', '| --- | --- |']
     lines += [f'| {cell(name)} | {cell(state)} |' for name, state in red.items()]
