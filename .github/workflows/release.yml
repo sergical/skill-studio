@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: node scripts/release/check-versions.mjs "${{ github.ref_name }}"
+      - run: node scripts/release/check-versions.mjs "$GITHUB_REF_NAME"
       - name: Require SKILL_STUDIO_SERVER_URL for release builds
         # The released binary's skills.sh backend is compiled in from this
         # repository variable (see `default_server_url` in
@@ -67,7 +67,8 @@ jobs:
       - name: Assert the tagged commit is on the default branch
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./scripts/release/check-tag-ancestry.sh "${{ github.sha }}" "${{ github.event.repository.default_branch }}"
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: ./scripts/release/check-tag-ancestry.sh "$GITHUB_SHA" "$DEFAULT_BRANCH"
 
   build:
     needs: [check-version, check-on-main]
@@ -103,9 +104,11 @@ jobs:
         with:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # A tag run restores caches only from its tag and from main, and only
+      # push runs on main write them, so no PR code reaches this build.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3 # zizmor: ignore[cache-poisoning]
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0 # zizmor: ignore[cache-poisoning]
         with:
           node-version: 22
           cache: pnpm
@@ -273,7 +276,7 @@ jobs:
       - name: Attach debug symbols to the release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "$dsym_zip" --clobber
+        run: gh release upload "$GITHUB_REF_NAME" "$dsym_zip" --clobber
 
       # The fixed names let the website link to /releases/latest/download/;
       # tauri-action's DMG names carry the version.
@@ -377,7 +380,7 @@ jobs:
       - name: Attach the CLI to the release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "$cli_archive" --clobber
+        run: gh release upload "$GITHUB_REF_NAME" "$cli_archive" --clobber
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -400,6 +403,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          package-manager-cache: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: skill-studio-cli-*
@@ -440,7 +444,7 @@ jobs:
       - name: Assert the draft release is complete
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./scripts/release/check-release-complete.sh "${{ github.ref_name }}"
+        run: ./scripts/release/check-release-complete.sh "$GITHUB_REF_NAME"
       # npmjs.com lets you set a trusted publisher only on a package that
       # already exists, so a package never published by hand cannot accept
       # the OIDC publish in `npm-publish`. Checked here, while the release is
@@ -495,6 +499,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          package-manager-cache: false
           registry-url: https://registry.npmjs.org
       - run: npm install -g "npm@^11.5.1"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
