@@ -526,3 +526,7 @@ when run from Codex or another agent.
 The tests are ignored by default because fetching the CLI needs npm registry
 access. Run `cargo test --workspace --all-features -- --ignored skills_cli_contract`.
 The non-required `skills-cli-contract` workflow runs on pull requests and weekly.
+It also checks the app's universal/pi flags and verifies that every folder
+created by an all-agent install is covered by the removal backup table.
+skills 1.8.1 places pi, Codex, and fx in the shared folder; legacy per-agent
+folders remain readable by Skill Studio but are not cleared by the CLI.

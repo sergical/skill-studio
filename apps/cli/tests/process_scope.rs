@@ -18,6 +18,8 @@ const HOME_KEYS: &[&str] = &[
     "VIBE_HOME",
     "HERMES_HOME",
     "AUTOHAND_HOME",
+    "REASONIX_HOME",
+    "SARVAM_HOME",
 ];
 
 fn envelope(response: &Value) -> &Value {
@@ -35,7 +37,7 @@ fn scoped_install_update_remove_pin_every_child_home_on_cli_and_mcp_or_name_the_
         let record = outside.path().join("environment");
         let script = r#"
 : > "$RECORD_PATH"
-for key in HOME CODEX_HOME CLAUDE_CONFIG_DIR GROK_HOME XDG_CONFIG_HOME XDG_STATE_HOME DOTAGENTS_HOME VIBE_HOME HERMES_HOME AUTOHAND_HOME; do
+for key in HOME CODEX_HOME CLAUDE_CONFIG_DIR GROK_HOME XDG_CONFIG_HOME XDG_STATE_HOME DOTAGENTS_HOME VIBE_HOME HERMES_HOME AUTOHAND_HOME REASONIX_HOME SARVAM_HOME; do
     eval "value=\${$key-}"
     printf '%s=%s\n' "$key" "$value" >> "$RECORD_PATH"
 done

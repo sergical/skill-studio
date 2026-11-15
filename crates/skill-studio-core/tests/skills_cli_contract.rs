@@ -8,7 +8,8 @@ use std::process::Command;
 
 use git_pack::{run, skill_body, GitPack};
 use serde_json::{json, Value};
-use skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE;
+use skill_studio_core::identity::RootScope;
+use skill_studio_core::skills_cli_agents::{cli_env_pins, cli_removal_targets, SKILLS_CLI_PACKAGE};
 
 struct Contract {
     root: tempfile::TempDir,
@@ -32,10 +33,8 @@ impl Contract {
             .current_dir(cwd)
             .env("HOME", &self.home)
             .env_remove("XDG_STATE_HOME")
-            .env_remove("XDG_CONFIG_HOME")
+            .envs(cli_env_pins(&self.home, &self.home.join(".codex")))
             .env_remove("XDG_CACHE_HOME")
-            .env_remove("CLAUDE_CONFIG_DIR")
-            .env_remove("CODEX_HOME")
             .env("DISABLE_TELEMETRY", "1")
             .env("DO_NOT_TRACK", "1")
             // Update uses host-agent detection, independent of add --agent.
@@ -72,6 +71,8 @@ fn skills_cli_contract_global_pack() {
     c.global(&["add", &c.pack.url, "-l"]);
     assert!(!c.home.join(".agents/skills").exists());
     assert!(!c.home.join(".agents/.skill-lock.json").exists());
+    assert!(!c.home.join("skills-lock.json").exists());
+    assert!(!c.home.join(".claude/skills").exists());
     // W2 and W3. One selected agent defaults to copies in skills 1.8.1.
     c.global(&[
         "add",
@@ -108,6 +109,7 @@ fn skills_cli_contract_global_pack() {
     std::fs::write(&b, skill_body("b", "local")).unwrap();
     c.pack.skill("a", "v2");
     c.pack.skill("d", "v2");
+    c.pack.skill("c", "v2");
     c.pack.publish("v2");
     c.global(&["update", "-g", "-y"]);
     assert_skill(&c.home, "a", "v2");
@@ -276,4 +278,83 @@ fn git_pack_fixture_shallow_clone_and_tag() {
         std::fs::read_to_string(clone.join("skills/a/SKILL.md")).unwrap(),
         skill_body("a", "v2")
     );
+}
+
+#[test]
+#[ignore = "requires npm registry access to fetch the pinned skills CLI"]
+fn skills_cli_contract_agent_removal_paths() {
+    let c = Contract::new();
+    c.global(&[
+        "add",
+        &c.pack.url,
+        "--yes",
+        "--global",
+        "--skill",
+        "b",
+        "--agent",
+        "universal",
+        "--agent",
+        "pi",
+        "--copy",
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(c.home.join(".agents/skills/b/SKILL.md")).unwrap(),
+        skill_body("b", "v1")
+    );
+    assert!(!c.home.join(".pi").exists());
+    c.global(&["remove", "b", "--yes", "--global"]);
+    c.global(&[
+        "add",
+        &c.pack.url,
+        "--yes",
+        "--global",
+        "--skill",
+        "a",
+        "--agent",
+        "*",
+        "--copy",
+    ]);
+    let mut installed = Vec::new();
+    installed_skills(&c.home, &mut installed);
+    assert!(installed.len() > 40);
+    let backed_up = cli_removal_targets(&c.home, &c.home.join(".codex"), &RootScope::Global, "a");
+    for path in &installed {
+        assert!(
+            backed_up.contains(path),
+            "CLI writes an unbacked-up path: {path:?}"
+        );
+    }
+    let legacy: Vec<_> = [".pi/agent/skills/a", ".codex/skills/a"]
+        .map(|relative| c.home.join(relative))
+        .into();
+    for path in &legacy {
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::write(path.join("SKILL.md"), "legacy skill").unwrap();
+    }
+    c.global(&["remove", "a", "--yes", "--global"]);
+    for path in installed {
+        assert!(!path.exists(), "CLI left {path:?}");
+    }
+    for path in legacy {
+        assert_eq!(
+            std::fs::read_to_string(path.join("SKILL.md")).unwrap(),
+            "legacy skill"
+        );
+    }
+    assert!(c.lock()["skills"].as_object().unwrap().is_empty());
+}
+
+fn installed_skills(dir: &Path, skills: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name() == ".npm" {
+            continue;
+        }
+        let path = entry.path();
+        if entry.file_type().unwrap().is_dir() {
+            installed_skills(&path, skills);
+        } else if entry.file_name() == "SKILL.md" {
+            skills.push(dir.to_path_buf());
+        }
+    }
 }

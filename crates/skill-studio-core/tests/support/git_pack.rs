@@ -8,7 +8,13 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 pub fn run(command: &mut Command) -> Vec<u8> {
-    let output = command.output().unwrap();
+    let output = command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .output()
+        .unwrap();
     assert!(
         output.status.success(),
         "{command:?}\n{}\n{}",
