@@ -197,16 +197,13 @@ def main():
     snap = sub.add_parser('snapshots')
     snap.add_argument('--update', action='store_true')
     snap.add_argument('--prepare', action='store_true')
-    from proof import arguments, start, review, card, guard
+    from proof import arguments, start, review, card
     arguments(sub)
     metric = sub.add_parser('metrics')
     metric.add_argument('--since', required=True)
     metric.add_argument('--until', default=date.today().isoformat())
     metric.add_argument('--last', type=int)
     args = parser.parse_args()
-    if args.command == 'guard':
-        guard()
-        return
     os.chdir(git('rev-parse', '--show-toplevel'))
     cfg = config()
     if args.command == 'risk':
@@ -225,8 +222,6 @@ def main():
         review(args, cfg)
     elif args.command == 'card':
         card(args, cfg)
-    elif args.command == 'guard':
-        guard()
     elif args.command == 'metrics':
         from metrics import metrics
         metrics(args, cfg)

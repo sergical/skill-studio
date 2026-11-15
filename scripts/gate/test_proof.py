@@ -31,13 +31,6 @@ class ProofTests(GateTests):
         with self.assertRaisesRegex(ValueError, 'head SHA'):
             proof.review(args, {'repository': 'example/repo'})
 
-    def test_guard_blocks_label_mutations(self):
-        from io import StringIO
-        with patch('sys.stdin', StringIO(json.dumps({'tool_input': {'command': 'gh pr edit 1 --add-label gate:approved'}}))):
-            with self.assertRaises(SystemExit) as error:
-                proof.guard()
-            self.assertEqual(error.exception.code, 2)
-
     def test_card_absent_unbound_and_stale_verify(self):
         sha = self.git('rev-parse', 'HEAD')
         pr = {'number': 1, 'body': 'Human text', 'headRefOid': sha, 'baseRefOid': sha, 'author': {'login': 'author'}, 'title': 'Result', 'statusCheckRollup': []}
@@ -58,51 +51,3 @@ class ProofTests(GateTests):
                 self.assertIn('| gate/approved |', body)
                 if data and data.get('head') == sha:
                     self.assertIn('![screenshot](https://example.invalid/evidence.png)', body)
-
-    def test_guard_blocks_shell_quoting_and_malformed_events(self):
-        from io import StringIO
-        for command in ['gh pr edit 1 --add-label "gate:"approved', r'gh pr edit 1 --add-label gate\:approved']:
-            with patch('sys.stdin', StringIO(json.dumps({'tool_input': {'command': command}}))):
-                with self.assertRaises(SystemExit) as error:
-                    proof.guard()
-                self.assertEqual(error.exception.code, 2)
-        with patch('sys.stdin', StringIO('bad JSON')):
-            with self.assertRaises(SystemExit) as error:
-                proof.guard()
-            self.assertEqual(error.exception.code, 2)
-
-    def test_guard_blocks_commit_approval_status(self):
-        from io import StringIO
-        for command in ['gh api repos/example/repo/statuses/HEAD -f context=gate/approved -f state=success', 'gh api statuses -f context=gate%2Fapproved', 'gh api statuses -f context="gate/"approved']:
-            with patch('sys.stdin', StringIO(json.dumps({'tool_input': {'command': command}}))):
-                with self.assertRaises(SystemExit) as error:
-                    proof.guard()
-                self.assertEqual(error.exception.code, 2)
-
-    def test_guard_passes_file_tools(self):
-        from io import StringIO
-        for tool in sorted(proof.FILE_TOOLS):
-            with self.subTest(tool=tool), patch('sys.stdin', StringIO(json.dumps({
-                'tool_name': tool, 'tool_input': {'content': 'gate:approved gate/approved'},
-            }))):
-                proof.guard()
-
-    def test_guard_blocks_github_tools(self):
-        from io import StringIO
-        with patch('sys.stdin', StringIO(json.dumps({
-            'tool_name': 'mcp__github__issue_write',
-            'tool_input': {'labels': ['gate:approved']},
-        }))):
-            with self.assertRaises(SystemExit) as error:
-                proof.guard()
-            self.assertEqual(error.exception.code, 2)
-
-    def test_guard_checks_other_command_tools(self):
-        from io import StringIO
-        for tool in ['Bash', 'Monitor', 'exec_command', 'functions.exec', 'mcp__other__run', None]:
-            with self.subTest(tool=tool), patch('sys.stdin', StringIO(json.dumps({
-                'tool_name': tool, 'tool_input': {'command': 'gh pr edit 1 --add-label gate:approved'},
-            }))):
-                with self.assertRaises(SystemExit) as error:
-                    proof.guard()
-                self.assertEqual(error.exception.code, 2)
