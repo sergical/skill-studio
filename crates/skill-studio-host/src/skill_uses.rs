@@ -109,13 +109,25 @@ struct IndexedTranscript {
     /// reparsed from byte 0, so a rewritten file's uses never carry a stale
     /// session or project path.
     #[serde(default)]
-    context: TranscriptContext,
+    context: IndexedContext,
     #[serde(default)]
     observations: Vec<UsageObservation>,
     #[serde(default)]
     compressed_complete: bool,
     #[serde(default)]
     skipped_lines: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct IndexedContext {
+    #[serde(flatten)]
+    transcript: TranscriptContext,
+    #[serde(default)]
+    claude_records: BTreeMap<String, Vec<SkillInvocation>>,
+    #[serde(default)]
+    inherited_lines: u64,
+    #[serde(default)]
+    history_start_ordinal: Option<u64>,
 }
 
 /// How many bytes of a transcript's already-parsed tail are kept for
@@ -220,6 +232,25 @@ struct TranscriptFile<'a> {
     modified: DateTime<Utc>,
 }
 
+fn is_subagent_log(path: &Path) -> bool {
+    path.parent()
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == "subagents")
+}
+
+fn log_session(file: &TranscriptFile<'_>, session: Option<&str>) -> String {
+    match session {
+        None => file.path.to_string_lossy().into_owned(),
+        Some(session) if is_subagent_log(file.path) => {
+            format!(
+                "{session}:subagent:{}",
+                file.path.file_name().unwrap_or_default().to_string_lossy()
+            )
+        }
+        Some(session) => session.to_owned(),
+    }
+}
+
 /// How one [`UseSource`] reads its uses: an append-only transcript, resumed
 /// from a byte offset, or a `SQLite` database, re-queried from a watermark.
 enum UseReader {
@@ -227,8 +258,7 @@ enum UseReader {
     /// offset.
     Transcripts {
         list: fn(&Path) -> SourceListing,
-        parse:
-            fn(&TranscriptFile, &str, &mut TranscriptContext, &mut usize) -> Vec<SkillInvocation>,
+        parse: fn(&TranscriptFile, &str, &mut IndexedContext, &mut usize) -> Vec<SkillInvocation>,
     },
     /// `SQLite` databases, re-queried from a `time_updated` watermark.
     Databases {
@@ -406,17 +436,41 @@ fn list_claude_code_transcripts(home: &Path) -> SourceListing {
     }
 }
 
-/// Adapts [`parse_claude_code_uses_checked`] to the [`UseReader::Transcripts`]
-/// `parse` signature. Claude Code repeats its session id and cwd on every
-/// record, so unlike Codex it needs no [`TranscriptContext`], and it never
-/// needs the file itself.
 fn parse_claude_code_uses_with_context(
-    _file: &TranscriptFile,
+    file: &TranscriptFile,
     text: &str,
-    _context: &mut TranscriptContext,
+    context: &mut IndexedContext,
     invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
-    parse_claude_code_uses_checked(text, invalid)
+    let mut unidentified = Vec::new();
+    for line in text.lines() {
+        let mut uses = parse_claude_code_uses_checked(line, invalid);
+        if uses.is_empty() {
+            continue;
+        }
+        let key = serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .and_then(|record| {
+                let uuid = record
+                    .get("uuid")?
+                    .as_str()
+                    .filter(|uuid| !uuid.is_empty())?;
+                let session = record
+                    .get("sessionId")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                Some(format!("{session}/{uuid}"))
+            });
+        if let Some(key) = key {
+            for use_ in &mut uses {
+                use_.use_session = Some(log_session(file, use_.session.as_deref()));
+            }
+            context.claude_records.entry(key).or_insert(uses);
+        } else {
+            unidentified.extend(uses);
+        }
+    }
+    unidentified
 }
 
 /// Adapts [`parse_codex_uses_checked`] to the [`UseReader::Transcripts`] `parse`
@@ -424,10 +478,46 @@ fn parse_claude_code_uses_with_context(
 fn parse_codex_uses_with_file(
     _file: &TranscriptFile,
     text: &str,
-    context: &mut TranscriptContext,
+    context: &mut IndexedContext,
     invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
-    parse_codex_uses_checked(text, context, invalid)
+    let mut uses = Vec::new();
+    for line in text.lines() {
+        if let Some(start) = context
+            .history_start_ordinal
+            .filter(|_| context.inherited_lines > 0)
+        {
+            let ordinal = serde_json::from_str::<serde_json::Value>(line)
+                .ok()
+                .and_then(|record| record.get("ordinal")?.as_u64());
+            if ordinal.is_some_and(|ordinal| ordinal >= start) {
+                context.inherited_lines = 0;
+            } else {
+                context.inherited_lines -= 1;
+                continue;
+            }
+        }
+        if context.transcript.session.is_none() && line.contains("session_meta") {
+            context.history_start_ordinal = serde_json::from_str::<serde_json::Value>(line)
+                .ok()
+                .and_then(|record| {
+                    record
+                        .get("payload")?
+                        .get("subagent_history_start_ordinal")?
+                        .as_u64()
+                });
+            // The header is ordinal 0, so the copied parent history is the next start - 1 lines.
+            context.inherited_lines = context
+                .history_start_ordinal
+                .map_or(0, |start| start.saturating_sub(1));
+        }
+        uses.extend(parse_codex_uses_checked(
+            line,
+            &mut context.transcript,
+            invalid,
+        ));
+    }
+    uses
 }
 
 fn opencode_root(home: &Path) -> PathBuf {
@@ -573,10 +663,10 @@ fn list_pi_sessions(home: &Path) -> SourceListing {
 fn parse_pi_uses_with_file(
     _file: &TranscriptFile,
     text: &str,
-    context: &mut TranscriptContext,
+    context: &mut IndexedContext,
     invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
-    parse_pi_uses_checked(text, context, invalid)
+    parse_pi_uses_checked(text, &mut context.transcript, invalid)
 }
 
 /// Cursor keeps one directory per opened project here, each holding its own
@@ -701,15 +791,15 @@ fn cursor_project_path(home: &Path, project_dir_name: &str) -> Option<String> {
 fn parse_cursor_uses_with_file(
     file: &TranscriptFile,
     text: &str,
-    context: &mut TranscriptContext,
+    context: &mut IndexedContext,
     invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
-    if context.session.is_none() {
-        context.session = cursor_session_from_path(file.path);
-        context.project_path = cursor_project_dir_from_path(file.home, file.path)
+    if context.transcript.session.is_none() {
+        context.transcript.session = cursor_session_from_path(file.path);
+        context.transcript.project_path = cursor_project_dir_from_path(file.home, file.path)
             .and_then(|name| cursor_project_path(file.home, &name));
     }
-    parse_cursor_uses_checked(text, context, file.modified, invalid)
+    parse_cursor_uses_checked(text, &context.transcript, file.modified, invalid)
 }
 
 /// Grok Build keeps one directory per working folder here, each holding one
@@ -844,22 +934,22 @@ fn grok_forked_at(session_dir: &Path) -> Option<DateTime<Utc>> {
 fn parse_grok_uses_with_file(
     file: &TranscriptFile,
     text: &str,
-    context: &mut TranscriptContext,
+    context: &mut IndexedContext,
     invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
-    if context.session.is_none() {
+    if context.transcript.session.is_none() {
         let session_dir = file.path.parent();
-        context.session = session_dir
+        context.transcript.session = session_dir
             .and_then(|dir| dir.file_name())
             .and_then(|name| name.to_str())
             .map(str::to_string);
-        context.project_path = session_dir
+        context.transcript.project_path = session_dir
             .and_then(|dir| dir.parent())
             .and_then(grok_session_cwd)
             .map(|cwd| cwd.to_string_lossy().into_owned());
-        context.forked_at = session_dir.and_then(grok_forked_at);
+        context.transcript.forked_at = session_dir.and_then(grok_forked_at);
     }
-    parse_grok_uses_checked(text, context, file.modified, invalid)
+    parse_grok_uses_checked(text, &mut context.transcript, file.modified, invalid)
 }
 
 /// Every harness this index reads uses from, in the order they're processed.
@@ -1098,7 +1188,7 @@ pub struct SkillInvocationIndex {
 impl Default for SkillInvocationIndex {
     fn default() -> Self {
         Self {
-            reader_version: 3,
+            reader_version: 6,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: MAX_FILE_BYTES,
@@ -1114,7 +1204,7 @@ impl SkillInvocationIndex {
     #[cfg(test)]
     fn with_budgets(file_bytes: u64, run_bytes: u64) -> Self {
         Self {
-            reader_version: 3,
+            reader_version: 6,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: file_bytes,
@@ -1245,10 +1335,10 @@ impl SkillInvocationIndex {
     /// cached entries. Never panics: unreadable dirs/files/databases are
     /// skipped.
     pub fn refresh(&mut self, home: &Path, sources: &DiscoverySources) -> SkillUseRefreshReport {
-        if self.reader_version != 3 {
+        if self.reader_version != 6 {
             self.files.clear();
             self.databases.clear();
-            self.reader_version = 3;
+            self.reader_version = 6;
         }
         let mut report = SkillUseRefreshReport::default();
         let mut run_budget = self.run_budget;
@@ -1300,12 +1390,7 @@ impl SkillInvocationIndex {
         home: &Path,
         source: &UseSource,
         list: fn(&Path) -> SourceListing,
-        parse: fn(
-            &TranscriptFile,
-            &str,
-            &mut TranscriptContext,
-            &mut usize,
-        ) -> Vec<SkillInvocation>,
+        parse: fn(&TranscriptFile, &str, &mut IndexedContext, &mut usize) -> Vec<SkillInvocation>,
         run_budget: &mut u64,
         report: &mut SkillUseRefreshReport,
     ) {
@@ -1360,10 +1445,10 @@ impl SkillInvocationIndex {
                     // at exactly the old length. Reparse from scratch
                     // rather than trusting a byte-for-byte-identical-
                     // looking cache entry.
-                    (0, Vec::new(), false, TranscriptContext::default())
+                    (0, Vec::new(), false, IndexedContext::default())
                 }
                 Some(existing) if size < existing.parsed_bytes => {
-                    (0, Vec::new(), false, TranscriptContext::default())
+                    (0, Vec::new(), false, IndexedContext::default())
                 }
                 Some(existing) => {
                     let current_tail = read_tail_sample(&path, existing.parsed_bytes);
@@ -1379,10 +1464,10 @@ impl SkillInvocationIndex {
                         // longer match what we parsed last time: this
                         // wasn't a plain append, so the cached uses may
                         // be stale.
-                        (0, Vec::new(), false, TranscriptContext::default())
+                        (0, Vec::new(), false, IndexedContext::default())
                     }
                 }
-                None => (0, Vec::new(), false, TranscriptContext::default()),
+                None => (0, Vec::new(), false, IndexedContext::default()),
             };
 
             if *run_budget == 0 {
@@ -1425,7 +1510,11 @@ impl SkillInvocationIndex {
                 path: &path,
                 modified: modified_utc,
             };
-            uses.extend(parse(&file, &text, &mut context, &mut invalid));
+            let mut parsed = parse(&file, &text, &mut context, &mut invalid);
+            for use_ in &mut parsed {
+                use_.use_session = Some(log_session(&file, use_.session.as_deref()));
+            }
+            uses.extend(parsed);
             if invalid > 0 || gaps > 0 {
                 observations.push(UsageObservation {
                     path: path.clone(),
@@ -1490,12 +1579,7 @@ impl SkillInvocationIndex {
         transcript: &TranscriptFile,
         root: &Path,
         meta: &fs::Metadata,
-        parse: fn(
-            &TranscriptFile,
-            &str,
-            &mut TranscriptContext,
-            &mut usize,
-        ) -> Vec<SkillInvocation>,
+        parse: fn(&TranscriptFile, &str, &mut IndexedContext, &mut usize) -> Vec<SkillInvocation>,
         run_budget: &mut u64,
         report: &mut SkillUseRefreshReport,
     ) {
@@ -1523,7 +1607,7 @@ impl SkillInvocationIndex {
             uses: Vec::new(),
             skipping_line: false,
             tail_sample: Vec::new(),
-            context: TranscriptContext::default(),
+            context: IndexedContext::default(),
             observations: Vec::new(),
             compressed_complete: false,
             skipped_lines: 0,
@@ -1547,9 +1631,11 @@ impl SkillInvocationIndex {
             let (text, consumed, skipping, gaps) =
                 read_transcript_lines(&mut reader, budget, run_budget, entry.skipping_line)?;
             let mut invalid = 0;
-            entry
-                .uses
-                .extend(parse(transcript, &text, &mut entry.context, &mut invalid));
+            let mut parsed = parse(transcript, &text, &mut entry.context, &mut invalid);
+            for use_ in &mut parsed {
+                use_.use_session = Some(log_session(transcript, use_.session.as_deref()));
+            }
+            entry.uses.extend(parsed);
             entry.parsed_bytes += consumed;
             entry.skipping_line = skipping;
             entry.skipped_lines += gaps + invalid as u64;
@@ -1677,9 +1763,19 @@ impl SkillInvocationIndex {
             .filter(move |(row_id, _)| seen_row_ids.insert(row_id.as_str()))
             .flat_map(|(_, uses)| uses.iter())
             .collect();
+        let mut seen_uuids = BTreeSet::new();
+        let claude_uses = self
+            .files
+            .iter()
+            .filter(|(path, _)| !is_subagent_log(path))
+            .chain(self.files.iter().filter(|(path, _)| is_subagent_log(path)))
+            .flat_map(|(_, t)| t.context.claude_records.iter())
+            .filter(move |(key, _)| seen_uuids.insert(key.as_str()))
+            .flat_map(|(_, uses)| uses.iter());
         self.files
             .values()
             .flat_map(|t| t.uses.iter())
+            .chain(claude_uses)
             .chain(database_uses)
     }
 }
@@ -1789,19 +1885,24 @@ fn read_transcript_lines(
         }
         if skipping {
             skipping = false;
+            text.push('\n');
             continue;
         }
         marker |= length > MAX_LINE_BYTES as u64 && could_hold_skill_use(&line);
         if length > MAX_LINE_BYTES as u64 && !marker {
+            text.push('\n');
             continue;
         }
         if length > SKILL_LINE_CAP as u64 {
             gaps += 1;
+            text.push('\n');
             continue;
         }
-        match std::str::from_utf8(&line) {
-            Ok(line) => text.push_str(line),
-            Err(_) => gaps += 1,
+        if let Ok(line) = std::str::from_utf8(&line) {
+            text.push_str(line);
+        } else {
+            gaps += 1;
+            text.push('\n');
         }
     }
     Ok((text, consumed, skipping, gaps))
@@ -1872,6 +1973,30 @@ mod tests {
         index.stats_at(Utc::now(), &filter(known_skills, sources))
     }
 
+    fn usage(
+        home: &Path,
+        skills: &StdBTreeSet<String>,
+        now: DateTime<Utc>,
+    ) -> crate::usage_report::UsageReport {
+        let inventory = skill_studio_core::dto::Inventory {
+            lock_only: Vec::new(),
+            skills: Vec::new(),
+            projects: Vec::new(),
+            completeness: skill_studio_core::dto::Completeness::Complete,
+            observations: Vec::new(),
+            unread_roots: Vec::new(),
+            timings: Vec::new(),
+        };
+        crate::usage_report::SkillUsage::default().report_named(
+            home,
+            &inventory,
+            30,
+            now,
+            &Default::default(),
+            skills,
+        )
+    }
+
     /// The Codex and pi fixtures write fixed 2026-09-16 timestamps, so their stats read the
     /// window from the next day. A wall-clock `now` ages them out of the 30-day window.
     fn stats_on_fixture_day(
@@ -1883,6 +2008,84 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         index.stats_at(now, &filter(known_skills, sources))
+    }
+
+    #[test]
+    fn claude_records_with_one_uuid_in_two_sessions_both_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let dir = home.join(CLAUDE_PROJECTS_ROOT).join("-proj");
+        fs::create_dir_all(&dir).unwrap();
+        for session in ["one", "two"] {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&skill_line("deploy", "2026-09-16T12:00:00Z", "/proj"))
+                    .unwrap();
+            value["uuid"] = "shared".into();
+            value["sessionId"] = session.into();
+            fs::write(
+                dir.join(format!("{session}.jsonl")),
+                value.to_string() + "\n",
+            )
+            .unwrap();
+        }
+        let mut index = SkillInvocationIndex::default();
+        index.refresh(home, &DiscoverySources::default());
+        assert_eq!(
+            index.all_uses().count(),
+            2,
+            "a uuid seen in another session is a different use, not a resumed copy"
+        );
+    }
+
+    #[test]
+    fn resumed_claude_records_count_once_across_files_and_cached_refreshes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let dir = home.join(CLAUDE_PROJECTS_ROOT).join("-proj");
+        fs::create_dir_all(&dir).unwrap();
+        let record = |uuid: &str| {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&skill_line("deploy", "2026-09-16T12:00:00Z", "/proj"))
+                    .unwrap();
+            value["uuid"] = uuid.into();
+            value.to_string() + "\n"
+        };
+        let path = dir.join("a.jsonl");
+        fs::write(&path, record("first").repeat(2)).unwrap();
+        fs::write(dir.join("b.jsonl"), record("first")).unwrap();
+        let sources = DiscoverySources::default();
+        let mut index = SkillInvocationIndex::default();
+        index.refresh(home, &sources);
+        assert_eq!(
+            index.all_uses().count(),
+            1,
+            "resumed and copied UUIDs must count once"
+        );
+        let cache = home.join("cache.json");
+        index.save(&cache).unwrap();
+        let mut index = SkillInvocationIndex::load_or_empty(&cache);
+        let mut content = fs::read_to_string(&path).unwrap();
+        let appended = record("first") + &record("second");
+        content.push_str(&appended);
+        fs::write(&path, content).unwrap();
+        let refresh = index.refresh(home, &sources);
+        assert_eq!(
+            refresh.bytes_read,
+            appended.len() as u64,
+            "resume from the cached offset"
+        );
+        assert_eq!(
+            index.all_uses().count(),
+            2,
+            "cached UUIDs must not count again, but new UUIDs must count"
+        );
+        fs::remove_file(&path).unwrap();
+        index.refresh(home, &sources);
+        assert_eq!(
+            index.all_uses().count(),
+            1,
+            "a surviving copy must still count after the original is deleted"
+        );
     }
 
     #[test]
@@ -2196,6 +2399,7 @@ mod tests {
             }
             assert!(passes < 50, "backlog never drained");
         }
+        assert_eq!(index.all_uses().count(), 20);
         assert_eq!(stats(&index, &known_skills, &sources)[0].total, 20);
     }
 
@@ -2477,6 +2681,48 @@ mod tests {
         index.save(&cache_path).unwrap();
         assert!(cache_path.exists());
         assert!(!cache_path.with_file_name("skill-uses.json.tmp").exists());
+    }
+
+    #[test]
+    fn claude_subagent_read_keeps_native_session_for_desktop_and_separate_usage() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let dir = home.join(CLAUDE_PROJECTS_ROOT).join("p");
+        fs::create_dir_all(dir.join("s1/subagents")).unwrap();
+        let now = Utc::now();
+        let mut parent: serde_json::Value =
+            serde_json::from_str(&skill_line("foo", &now.to_rfc3339(), "/proj")).unwrap();
+        parent["sessionId"] = "s1".into();
+        parent["uuid"] = "parent".into();
+        let child = serde_json::json!({
+            "type": "assistant", "sessionId": "s1", "uuid": "child", "timestamp": now.to_rfc3339(),
+            "message": {"content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "/x/skills/foo/SKILL.md"}}]}
+        });
+        fs::write(dir.join("s1.jsonl"), parent.to_string() + "\n").unwrap();
+        fs::write(
+            dir.join("s1/subagents/sub1.jsonl"),
+            child.to_string() + "\n",
+        )
+        .unwrap();
+        let mut index = SkillInvocationIndex::default();
+        let skills = known(&["foo"]);
+        let sources = DiscoverySources::default();
+        index.refresh(home, &sources);
+        assert_eq!(index.all_uses().count(), 2);
+        assert!(index
+            .all_uses()
+            .all(|use_| use_.session.as_deref() == Some("s1")));
+        assert_eq!(stats(&index, &skills, &sources)[0].total, 1);
+        let report = usage(home, &skills, now);
+        assert_eq!(report.rows[0].recent_uses, 2);
+        assert_eq!(report.rows[0].sessions, 2);
+        let cache = home.join("index.json");
+        index.save(&cache).unwrap();
+        let loaded = SkillInvocationIndex::load_read_only(&cache);
+        assert_eq!(
+            loaded.all_uses().collect::<Vec<_>>(),
+            index.all_uses().collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -2817,6 +3063,110 @@ mod tests {
         }
 
         #[test]
+        fn reads_without_native_session_keep_desktop_events_and_one_usage_session() {
+            for compressed in [false, true] {
+                let tmp = tempfile::tempdir().unwrap();
+                let home = tmp.path();
+                let path = write_rollout(
+                    &home.join(CODEX_SESSIONS_DIR),
+                    "no-header.jsonl",
+                    &[
+                        exec_cat_line("2026-09-16T12:00:00Z", "/x/skills/foo/SKILL.md"),
+                        exec_cat_line("2026-09-16T12:05:00Z", "/x/skills/foo/SKILL.md"),
+                    ],
+                );
+                if compressed {
+                    let text = fs::read(&path).unwrap();
+                    fs::write(
+                        path.with_extension("jsonl.zst"),
+                        zstd::stream::encode_all(text.as_slice(), 1).unwrap(),
+                    )
+                    .unwrap();
+                    fs::remove_file(path).unwrap();
+                }
+                let mut index = SkillInvocationIndex::default();
+                let known_skills = known(&["foo"]);
+                let sources = DiscoverySources::default();
+                index.refresh(home, &sources);
+                assert!(index.all_uses().all(|use_| use_.session.is_none()));
+                assert_eq!(stats(&index, &known_skills, &sources)[0].total, 2);
+                let report = usage(
+                    home,
+                    &known_skills,
+                    DateTime::parse_from_rfc3339("2026-09-17T00:00:00Z")
+                        .unwrap()
+                        .with_timezone(&Utc),
+                );
+                assert_eq!(report.rows[0].recent_uses, 1, "compressed={compressed}");
+                assert_eq!(report.rows[0].sessions, 1, "compressed={compressed}");
+            }
+        }
+
+        #[test]
+        fn forked_codex_history_counts_parent_once_and_keeps_new_child_uses_after_cache_resume() {
+            // Real rollouts number every line; the last case is a child line without one.
+            for (copies_have_ordinals, own_has_ordinal) in
+                [(false, false), (true, true), (true, false)]
+            {
+                let tmp = tempfile::tempdir().unwrap();
+                let home = tmp.path();
+                let dir = home.join(CODEX_SESSIONS_DIR);
+                let parent = vec![
+                    session_meta_line("parent", "/proj"),
+                    skill_block_line("2026-09-16T12:00:00Z", "foo"),
+                    skill_block_line("2026-09-16T12:01:00Z", "foo"),
+                    skill_block_line("2026-09-16T12:02:00Z", "foo"),
+                ];
+                write_rollout(&dir, "parent.jsonl", &parent);
+                let mut header: serde_json::Value =
+                    serde_json::from_str(&session_meta_line("child", "/child")).unwrap();
+                header["payload"]["forked_from_id"] = "parent".into();
+                header["payload"]["parent_thread_id"] = "parent".into();
+                header["payload"]["subagent_history_start_ordinal"] = (parent.len() + 1).into();
+                if copies_have_ordinals {
+                    header["ordinal"] = 0.into();
+                }
+                let path = write_rollout(&dir, "child.jsonl", &[header.to_string()]);
+                let sources = DiscoverySources::default();
+                let mut index = SkillInvocationIndex::default();
+                index.refresh(home, &sources);
+                let cache = home.join("cache.json");
+                index.save(&cache).unwrap();
+                let mut index = SkillInvocationIndex::load_or_empty(&cache);
+                let mut content = fs::read_to_string(&path).unwrap();
+                for (i, line) in parent.iter().enumerate() {
+                    let mut copy: serde_json::Value = serde_json::from_str(line).unwrap();
+                    copy["timestamp"] = "2026-09-16T12:10:00Z".into();
+                    if copies_have_ordinals {
+                        copy["ordinal"] = (i + 1).into();
+                    }
+                    content.push_str(&(copy.to_string() + "\n"));
+                }
+                let mut own: serde_json::Value =
+                    serde_json::from_str(&skill_block_line("2026-09-16T12:11:00Z", "foo")).unwrap();
+                if own_has_ordinal {
+                    own["ordinal"] = (parent.len() + 1).into();
+                }
+                content.push_str(&(own.to_string() + "\n"));
+                fs::write(&path, content).unwrap();
+                index.refresh(home, &sources);
+                let uses: Vec<_> = index.all_uses().collect();
+                assert_eq!(
+                    uses.len(),
+                    4,
+                    "copied parent history must not add three uses"
+                );
+                assert_eq!(
+                    uses.iter()
+                        .filter(|u| u.session.as_deref() == Some("child"))
+                        .count(),
+                    1,
+                    "new child uses must keep the child session"
+                );
+            }
+        }
+
+        #[test]
         fn issue_acceptance_user_and_file_read_uses_are_counted() {
             let tmp = tempfile::tempdir().unwrap();
             let home = tmp.path();
@@ -3038,6 +3388,11 @@ mod tests {
             assert_ne!(
                 first.bytes_read, 0,
                 "sanity: the first pass must have read something"
+            );
+            assert_eq!(
+                index.all_uses().count(),
+                2,
+                "the appended record must still be read"
             );
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
@@ -3342,6 +3697,12 @@ mod tests {
                 stats[0].total, 1,
                 "the same session's file-read dedupe must collapse the subagent copy"
             );
+            assert!(index
+                .all_uses()
+                .all(|use_| use_.session.as_deref() == Some("s1")));
+            let report = usage(home, &known_skills, Utc::now());
+            assert_eq!(report.rows[0].recent_uses, 2);
+            assert_eq!(report.rows[0].sessions, 2);
         }
 
         #[test]

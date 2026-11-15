@@ -1,5 +1,6 @@
 {
   "inventory": {
+    "lock_only": [],
     "skills": [],
     "projects": [],
     "completeness": "complete",

@@ -1,6 +1,8 @@
 {
+  "lock_only": [],
   "skills": [
     {
+      "source": "manual",
       "name": "ghost",
       "description": null,
       "deployments": [
