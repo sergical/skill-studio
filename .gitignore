@@ -44,6 +44,9 @@ lerna-debug.log*
 /docs/perf/real-shaped-profile.folded.txt
 /docs/perf/real-shaped-flamegraph.svg
 
+# Python bytecode from tools/ scripts
+__pycache__/
+
 # Playwright e2e output
 apps/desktop/test-results/
 apps/desktop/playwright-report/

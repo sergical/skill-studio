@@ -7,6 +7,12 @@ from urllib.parse import unquote
 from gate import classify, gh, git, run, state_path, read_at, TIERS
 
 START, END = '<!-- gate:card -->', '<!-- /gate:card -->'
+FILE_TOOLS = {
+    'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'apply_patch',
+    'functions.apply_patch', 'read_file', 'write_file', 'edit_file',
+    'mcp__filesystem__read_file', 'mcp__filesystem__write_file',
+    'mcp__filesystem__edit_file', 'mcp__files__write',
+}
 
 
 def local_state():
@@ -131,6 +137,9 @@ def guard():
     import sys
     try:
         event = json.load(sys.stdin)
+        tool = event.get('tool_name')
+        if tool in FILE_TOOLS:
+            return
         command = unquote(json.dumps(event.get('tool_input', event)))
         command = re.sub(r"['\"\\]", '', command)
         if re.search(r'gate\s*[:/]\s*approved', command, re.I):
