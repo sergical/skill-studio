@@ -158,12 +158,12 @@ impl ProcessSpawner for FakeNpxSpawner {
                     .iter()
                     .find(|(k, _)| k == "VIBE_HOME")
                     .map_or_else(|| cwd.join(".vibe"), |(_, v)| PathBuf::from(v));
-                // skills CLI 1.7.0 ignores `PI_CODING_AGENT_DIR` and always clears `~/.pi/agent/skills`.
+                // skills 1.8.1 clears Antigravity's config folder, independent of pi's home.
                 let mut targets: Vec<PathBuf> = [
                     ".cursor/skills",
                     ".deepagents/agent/skills",
                     ".gemini/skills",
-                    ".pi/agent/skills",
+                    ".gemini/config/skills",
                 ]
                 .iter()
                 .map(|folder| cwd.join(folder).join(&name))
@@ -1607,7 +1607,8 @@ fn cli_remove_matches_the_npx_skills_remove_trace_byte_for_byte_apart_from_times
         "remove_via_cli must call npx exactly once"
     );
     let (args, cwd, env) = &recorded[0];
-    let pinned_args = trace.args.clone();
+    let mut pinned_args = trace.args.clone();
+    pinned_args[0] = skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string();
     assert_eq!(
         args, &pinned_args,
         "remove_via_cli's argv drifted from the recorded skills.sh trace"
@@ -2056,37 +2057,29 @@ fn undo_after_global_skills_sh_remove_restores_every_agent_folder_the_cli_cleare
     );
 }
 
-/// Flow: pi's home is moved with `PI_CODING_AGENT_DIR`, and an old real folder `x` is still in
-/// the default `~/.pi/agent/skills`. The user removes a global skills.sh install of `x`; the CLI
-/// ignores the variable and clears the default folder. The user then undoes the remove.
-/// Expectation: Undo restores the default pi folder byte for byte.
-/// A failure here means the backup looked in the moved home while the CLI deleted elsewhere.
+/// Removing a skills.sh skill also clears Antigravity's 1.8.1 config folder.
+/// Undo must restore that unscanned folder with its local notes.
 #[test]
-fn undo_after_remove_restores_the_default_pi_folder_the_cli_cleared_despite_a_moved_pi_home() {
-    let home = unique_temp_dir("remove_undo_moved_pi_home");
-    std::fs::create_dir_all(home.join("moved-pi/skills")).unwrap();
+fn undo_after_remove_restores_antigravity_config_cleared_by_skills_1_8_1() {
+    let home = unique_temp_dir("remove_undo_antigravity_config");
+    std::fs::create_dir_all(&home).unwrap();
     let spawner = Arc::new(FakeNpxSpawner::new(home.clone()));
     spawner.clear_cli_agent_folders();
-    let mut scope = RuntimeScope::fixture(&home);
-    scope
-        .agent_home_roots
-        .insert(".pi/agent".into(), home.join("moved-pi"));
-    let rt = runtime_with_scope(
-        &scope,
+    let rt = runtime_with(
+        &home,
         Arc::new(RealFs::new()),
         Some(spawner.clone() as Arc<dyn ProcessSpawner>),
-        Arc::new(FakeClock::at(0)),
     );
     let deployment_id = setup_owner_kind(&rt, &home, LifecycleOwnerKind::SkillsSh, "x");
-    let pi_default = home.join(".pi/agent/skills/x");
-    write_skill_md(&pi_default);
-    std::fs::write(pi_default.join("own.txt"), "my own pi notes\n").unwrap();
-    let before = folder_bytes(&pi_default);
+    let antigravity = home.join(".gemini/config/skills/x");
+    write_skill_md(&antigravity);
+    std::fs::write(antigravity.join("own.txt"), "my own Antigravity notes\n").unwrap();
+    let before = folder_bytes(&antigravity);
 
     let outcome = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
     assert!(
-        !pi_default.exists(),
-        "the fake CLI clears the default pi folder"
+        !antigravity.exists(),
+        "the fake CLI clears the Antigravity config folder"
     );
     ops::restore_event(
         &rt,
@@ -2098,7 +2091,11 @@ fn undo_after_remove_restores_the_default_pi_folder_the_cli_cleared_despite_a_mo
     )
     .unwrap();
 
-    assert_eq!(folder_bytes(&pi_default), before, "default pi folder");
+    assert_eq!(
+        folder_bytes(&antigravity),
+        before,
+        "Antigravity config folder"
+    );
 }
 
 /// Flow: a global skills.sh install of `x` and a real folder `x` in `~/.cursor/skills`. The user

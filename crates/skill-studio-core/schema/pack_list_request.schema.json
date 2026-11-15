@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PackListRequest",
+  "description": "Input for `pack_list`.",
+  "type": "object",
+  "properties": {
+    "project_path": {
+      "description": "Only this tracked project. Absent: the home and every tracked project.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "remote": {
+      "description": "Ask each git source for its newest commit and skills. Off by default:\nwithout it the call reads local files only.",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

@@ -29,7 +29,7 @@ fn cli_package(method: InstallMethod) -> Option<&'static str> {
 /// `skill_install_plan.rs`'s `skills_sh_universal_add_args` (`npx skills add
 /// <source> --yes --global [--skill <n>] --agent <id>... [--copy]`, one
 /// `--agent` per requested harness in the CLI's own spelling, `universal`
-/// when none is named; `skills@1.7.0` has no
+/// when none is named; `skills@1.8.1` has no
 /// `--cwd` flag, so a project scope runs the process itself with its cwd set
 /// to the project path instead - PR #101's fix, ported here), and dotagents
 /// from `skill_add.rs`'s `add_via_dotagents` (`npx -y @sentry/dotagents
@@ -275,7 +275,7 @@ mod tests {
                 &none,
                 InstallLinkMode::Link,
                 vec![
-                    "skills@1.7.0",
+                    crate::skills_cli_agents::SKILLS_CLI_PACKAGE,
                     "add",
                     "src",
                     "--yes",
@@ -294,7 +294,7 @@ mod tests {
                 &claude_code,
                 InstallLinkMode::Link,
                 vec![
-                    "skills@1.7.0",
+                    crate::skills_cli_agents::SKILLS_CLI_PACKAGE,
                     "add",
                     "src",
                     "--yes",
@@ -315,7 +315,7 @@ mod tests {
                 &none,
                 InstallLinkMode::Link,
                 vec![
-                    "skills@1.7.0",
+                    crate::skills_cli_agents::SKILLS_CLI_PACKAGE,
                     "add",
                     "src",
                     "--yes",
@@ -333,7 +333,7 @@ mod tests {
                 &claude_code,
                 InstallLinkMode::Link,
                 vec![
-                    "skills@1.7.0",
+                    crate::skills_cli_agents::SKILLS_CLI_PACKAGE,
                     "add",
                     "src",
                     "--yes",
@@ -353,7 +353,7 @@ mod tests {
                 &every_harness,
                 InstallLinkMode::Link,
                 vec![
-                    "skills@1.7.0",
+                    crate::skills_cli_agents::SKILLS_CLI_PACKAGE,
                     "add",
                     "src",
                     "--yes",
@@ -382,7 +382,7 @@ mod tests {
                 &claude_code,
                 InstallLinkMode::Copy,
                 vec![
-                    "skills@1.7.0",
+                    crate::skills_cli_agents::SKILLS_CLI_PACKAGE,
                     "add",
                     "src",
                     "--yes",

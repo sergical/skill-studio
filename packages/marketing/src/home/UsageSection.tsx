@@ -14,7 +14,7 @@ import { useCopyFlash } from "./useCopyFlash";
 import { AGENT_SETUP_PROMPT } from "@skill-studio/lib/agent-setup";
 
 type Mode = "app" | "cli" | "mcp";
-type Tone = "plain" | "muted" | "warn" | "user" | "tool" | "accent";
+type Tone = "plain" | "muted" | "error" | "warn" | "user" | "tool" | "accent";
 interface Line {
   text: string;
   tone?: Tone;
@@ -56,7 +56,7 @@ const scripts = {
   cli: [
     { text: "$ npx skill-studio@latest diagnose", typed: true, pause: 380 },
     { text: "Issues:", tone: "muted" },
-    { text: "  [error] broken link, pdf-tools: the folder it points at is gone", tone: "warn" },
+    { text: "  [error] broken link, pdf-tools: the folder it points at is gone", tone: "error" },
     { text: "  [warning] header can be fixed, motion: name is missing", tone: "warn" },
     { text: "  [warning] copies differ, writing-skills: 2 copies", tone: "warn", pause: 520 },
     { text: "$ npx skill-studio@latest usage", typed: true, pause: 380 },
@@ -316,12 +316,13 @@ const TAB_STEPS = new Map([
 ]);
 
 export function UsageSection() {
-  const [mode, setMode] = useState<Mode>("cli");
+  const [mode, setMode] = useState<Mode>("app");
   const [runId, setRunId] = useState(0);
   // Lives outside the per-run app view so screen readers already know the region when
   // its text arrives.
   const [status, setStatus] = useState("");
   const replayRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const active = modes.find((m) => m.id === mode)!;
 
   const pick = (next: Mode) => {
@@ -329,6 +330,22 @@ export function UsageSection() {
     setRunId((r) => r + 1);
     setStatus("");
   };
+
+  // The first run waits until the panel is on screen, so the demo plays where it can be seen.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        observer.disconnect();
+        setRunId((r) => (r === 0 ? 1 : r));
+      },
+      { threshold: 0.5 },
+    );
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, []);
 
   const onTabKey = (event: KeyboardEvent) => {
     const step = TAB_STEPS.get(event.key);
@@ -374,6 +391,7 @@ export function UsageSection() {
         </div>
 
         <div
+          ref={panelRef}
           id="use-panel"
           role="tabpanel"
           aria-labelledby={`use-tab-${mode}`}
@@ -580,6 +598,7 @@ const styles = stylex.create({
   linePrefix: { whiteSpace: "pre" },
   plain: { color: "oklch(0.93 0.01 290)" },
   muted: { color: "oklch(0.68 0.02 290)" },
+  error: { color: "oklch(0.704 0.191 22.216)" },
   warn: { color: "oklch(0.82 0.13 75)" },
   user: { color: "oklch(0.97 0 0)", fontWeight: 600 },
   tool: { color: "oklch(0.78 0.12 293)" },

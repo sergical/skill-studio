@@ -175,7 +175,11 @@ fn scope_level(scope: &RootScope) -> ScopeLevel {
 /// order: harnesses whose catalog reads the Universal root, plus harnesses
 /// that reach it through a link. A harness with a real copy of its own is
 /// not a reader.
-fn readers(rt: &Runtime, skill: &InstalledSkillDto, deployment: &DeploymentDto) -> Vec<AgentId> {
+pub(crate) fn readers(
+    rt: &Runtime,
+    skill: &InstalledSkillDto,
+    deployment: &DeploymentDto,
+) -> Vec<AgentId> {
     let level = scope_level(&deployment.root.scope);
     let own_deployments = |harness: &AgentId| {
         skill

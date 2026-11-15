@@ -154,6 +154,20 @@ Both compare the doctor listing with MCP.
 `doctor_matches_spaced_names_and_inline_codex_rules_like_codex_instead_of_counting_disabled_skills`
 checks spaced names and inline `config = [...]` rules.
 
+## Installed packs (CLI/MCP-only)
+
+| Flow                                  | Desktop entry | CLI                                                                           | MCP tool    | Flow tests                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------- | ------------- | ----------------------------------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| List installed packs and their skills | CLI/MCP-only  | `skill-studio pack list [--project-path <path>] [--remote] [--json]`          | `pack_list` | `crates/skill-studio-core/tests/pack_list.rs::pack_list_without_remote_runs_no_process_and_no_network_or_panics`; `crates/skill-studio-host/tests/pack_remote.rs::pack_list_remote_finds_a_changed_and_a_new_upstream_skill_or_hides_updates`; `apps/cli/tests/pack.rs::pack_list_gives_the_same_packs_on_cli_and_mcp_or_the_surfaces_drift` |
+| Show one pack                         | CLI/MCP-only  | `skill-studio pack show <source> [--project-path <path>] [--remote] [--json]` | `pack_show` | `apps/cli/tests/pack.rs::pack_show_reports_one_pack_and_names_a_missing_source_on_cli_and_mcp_or_fails_silently`                                                                                                                                                                                                                             |
+
+A pack is one source that ships skills: a skills.sh git source, an npm
+package (`via`), a dotagents source or plugin, or a Claude Code or Codex
+plugin. Without `--remote` the call reads local files only. `--remote` runs
+one `git ls-remote` and one shallow clone per git pack with the user's own git
+credentials. Plugin packs show the agent's own update command; Skill Studio
+does not run it.
+
 ## Skill review dates (CLI/MCP-only)
 
 | Flow                               | Desktop entry | CLI                                                     | MCP tool       | Flow tests                                                                                                                                                                                                                                 |
