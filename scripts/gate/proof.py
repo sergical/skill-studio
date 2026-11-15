@@ -4,12 +4,12 @@ from pathlib import Path
 import re
 import tomllib
 from urllib.parse import unquote
-from gate import classify, gh, git, run, state_path, read_at, TIERS
+from gate import classify, gh, git, pages, run, state_path, read_at, TIERS
 
 START, END = '<!-- gate:card -->', '<!-- /gate:card -->'
 BYPASS_MARK = '<!-- gate:bypass -->'
 PASSING = {'success', 'neutral', 'skipped'}
-MERGE_PAST_CHECKS = re.compile(r'gh\s+pr\s+merge\b[^;&|]*--admin|/pulls/[0-9]+/merge\b|mergePullRequest', re.I)
+MERGE_API = re.compile(r'/pulls/[0-9]+/merge\b|mergePullRequest', re.I)
 
 
 def local_state():
@@ -138,18 +138,35 @@ def guard():
         command = re.sub(r"['\"\\]", '', command)
         if re.search(r'gate\s*[:/]\s*approved', command, re.I):
             raise ValueError('Only a human may grant gate approval')
-        if MERGE_PAST_CHECKS.search(command):
+        if merges_past_checks(command):
             raise ValueError('Only a human may merge past required checks')
     except Exception as error:
         print(str(error), file=sys.stderr)
         raise SystemExit(2)
 
 
-def head_states(repo, sha):
-    states = {s['context']: s['state'] for s in gh(f'repos/{repo}/commits/{sha}/status')['statuses']}
-    runs = gh(f'repos/{repo}/commits/{sha}/check-runs?per_page=100')['check_runs']
-    for check in sorted(runs, key=lambda c: c['id']):
-        states[check['name']] = check['conclusion'] or check['status']
+def merges_past_checks(command):
+    admin_merge = any(re.search(r'\bgh\b', part) and re.search(r'\bmerge\b', part) and '--admin' in part for part in re.split(r'[;&|]', command))
+    return admin_merge or bool(MERGE_API.search(command))
+
+
+def states_at(repo, sha, merged_at):
+    states = {}
+
+    def keep_worst(name, state):
+        if states.get(name, 'success') in PASSING:
+            states[name] = state
+
+    statuses = sorted((s for page in pages(f'repos/{repo}/commits/{sha}/statuses?per_page=100') for s in page), key=lambda s: s['created_at'])
+    latest = {s['context']: s['state'] for s in statuses if s['created_at'] <= merged_at}
+    runs = sorted((c for page in pages(f'repos/{repo}/commits/{sha}/check-runs?per_page=100') for c in page['check_runs']), key=lambda c: c['started_at'] or '')
+    checks = {}
+    for check in runs:
+        if (check['started_at'] or '') <= merged_at:
+            finished = check['completed_at'] and check['completed_at'] <= merged_at
+            checks[check['name']] = check['conclusion'] if finished else 'not finished at merge'
+    for name, state in [*latest.items(), *checks.items()]:
+        keep_worst(name, state)
     return states
 
 
@@ -162,7 +179,7 @@ def bypass(args, cfg):
     pr = gh(f"repos/{repo}/pulls/{merged[0]['number']}")
     rules = gh(f"repos/{repo}/rules/branches/{pr['base']['ref']}")
     required = [c['context'] for r in rules if r['type'] == 'required_status_checks' for c in r['parameters']['required_status_checks']]
-    states = head_states(repo, pr['head']['sha'])
+    states = states_at(repo, pr['head']['sha'], pr['merged_at'])
     red = {name: states.get(name, 'missing') for name in required if states.get(name) not in PASSING}
     if not red:
         print('Required checks were green at merge')
