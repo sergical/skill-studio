@@ -1,7 +1,7 @@
 name: Trusted merge risk
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
 permissions:
   contents: read
 concurrency:
@@ -9,6 +9,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   risk:
+    if: github.event.action != 'edited' || github.event.changes.base
     permissions:
       contents: read
       statuses: write
@@ -27,6 +28,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           auth=$(printf "x-access-token:%s" "$GH_TOKEN" | base64 -w0)
           git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "refs/pull/$PR_NUMBER/head" --no-tags

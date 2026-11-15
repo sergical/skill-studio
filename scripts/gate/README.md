@@ -75,7 +75,7 @@ or private details in an evidence manifest intended for a public PR.
 
 ## Approval and agent guard
 
-`gate:approved` is a human approval trigger. The approval workflow records `gate/approved = success` on the SHA captured by the label event, then removes the label. Risk reads the status list for its exact head SHA, newest first. It ignores entries unless `creator.login` is `github-actions[bot]`. Each candidate must link to an Actions run in this repository. The run must use `.github/workflows/gate-approve.yml` and event `pull_request_target`, and its run name must be `gate:approved <head SHA>`. The approval workflow sets this run name from the label event, and `pull_request_target` always runs the base-branch workflow, so a PR cannot change it. Risk removes any `@ref` suffix from the run path before it checks the path. The newest bot entry that passes these checks decides approval. Its state must be `success`. A new push has no approval status, even when an old label event runs at the same time. Agents use the owner's token, so
+`gate:approved` is a human approval trigger. The approval workflow records `gate/approved = success` on the SHA captured by the label event, then removes the label. Risk reads the status list for its exact head SHA, newest first. It ignores entries unless `creator.login` is `github-actions[bot]`. Each candidate must link to an Actions run in this repository. The run must use `.github/workflows/gate-approve.yml` and event `pull_request_target`, and its run name must be `gate:approved <head SHA>`. Each PR of the run must have the default branch as its base, and the run must start after the last base change of the PR. A branch that an agent makes can hold its own approval workflow, so an approval from another base does not count, also after the PR moves to the default branch. Risk runs again when the base changes. The approval workflow runs only for PRs to the default branch. The approval workflow sets this run name from the label event, and `pull_request_target` always runs the base-branch workflow, so a PR cannot change it. Risk removes any `@ref` suffix from the run path before it checks the path. The newest bot entry that passes these checks decides approval. Its state must be `success`. A new push has no approval status, even when an old label event runs at the same time. Agents use the owner's token, so
 this label is not a technical boundary.
 
 A workflow on any branch also posts as `github-actions[bot]`, and the status
@@ -154,9 +154,10 @@ run PR code with read-only permissions.
 The approval workflow uses `pull_request_target: labeled` with no checkout or PR code execution. Each status links to its source run through `target_url`. It runs independently of the risk workflow, so risk concurrency cannot cancel it. Labels are never read or removed by the risk job. Automatic branch updates produce a new SHA and need fresh human approval. The private-repo fetch uses a one-time auth header.
 
 The approval and risk jobs can start at the same time. Risk can read statuses
-before approval posts its status. Label removal with the Actions token does
-not start another risk run. If this race occurs, a maintainer can change a
-label after approval to run risk again.
+before approval posts its status. So the approval workflow removes the label
+with `GATE_UPDATE_TOKEN`, and the `unlabeled` event runs risk again after the
+approval. Without that secret it uses the Actions token, which starts no
+workflow. Then a maintainer changes a label after approval to run risk again.
 
 Main CI metrics count push runs from this repository and the configured `ci_workflows` only. Historical merge ancestry supports squash and merge commits; rebase-merge history needs a separate base reconstruction and is not supported. `--last` refuses a window with too few PRs; widen `--since`. Main-commit and PR follow-up windows both extend 14 days past the reporting period, and merged PR commits are counted once.
 

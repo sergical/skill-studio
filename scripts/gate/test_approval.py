@@ -6,12 +6,13 @@ import textwrap
 import unittest
 from unittest.mock import Mock
 
-from approval import is_approved
+from approval import is_approved, last_base_change
 from test_gate import GateTests
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / '.github/workflows'
 TRUSTED_RUN = {'path': '.github/workflows/gate-approve.yml', 'event': 'pull_request_target',
-               'display_title': 'gate:approved abc'}
+               'display_title': 'gate:approved abc', 'created_at': '2026-11-15T10:00:00Z',
+               'pull_requests': [{'number': 1, 'base': {'ref': 'main'}}]}
 
 
 def workflow_script(filename, step):
@@ -78,6 +79,8 @@ class ApprovalTests(GateTests):
                 result = fields
             elif method == 'DELETE':
                 result = {}
+            elif endpoint.split('?')[0].endswith('/timeline'):
+                result = [data.get('timeline', [])]
             elif '/actions/runs/' in endpoint:
                 result = data['runs'][endpoint.rsplit('/', 1)[-1]]
             else:
@@ -96,7 +99,7 @@ class ApprovalTests(GateTests):
         self.env = dict(os.environ, PATH=str(Path('bin').resolve()) + os.pathsep + os.environ['PATH'],
                         API_DATABASE=str(self.database), GH_TOKEN='fixture', GITHUB_REPOSITORY='example/repo',
                         GITHUB_SERVER_URL='https://github.com', GITHUB_RUN_ID='10', PR_NUMBER='1',
-                        HEAD_SHA=self.head, BASE_SHA=self.old, AUTHOR='author')
+                        HEAD_SHA=self.head, BASE_SHA=self.old, AUTHOR='author', DEFAULT_BRANCH='main')
         self.commit()
 
     def execute(self, script, **env):
@@ -128,7 +131,8 @@ class ApprovalTests(GateTests):
         self.assertEqual(self.status(self.old, 'gate/approved'), 'success')
         self.assertEqual(self.status(self.head, 'gate/risk'), 'failure')
         self.assertIsNone(self.status(self.head, 'gate/approved'))
-        reads = [c for c in json.loads(self.database.read_text())['calls'] if c['method'] == 'GET']
+        reads = [c for c in json.loads(self.database.read_text())['calls']
+                 if c['method'] == 'GET' and '/statuses' in c['endpoint']]
         self.assertEqual([c['endpoint'] for c in reads], [f'repos/example/repo/commits/{self.head}/statuses?per_page=100'])
         self.assertIn('--paginate', reads[0]['args'])
 
@@ -142,6 +146,15 @@ class ApprovalTests(GateTests):
 
     def test_user_success_is_ignored(self):
         self.seed_statuses([status(creator='user')])
+        risk = self.execute('risk.sh')
+        self.assertEqual(risk.returncode, 1, risk.stderr)
+        self.assertEqual(self.status(self.head, 'gate/risk'), 'failure')
+
+    def test_approval_before_a_base_change_is_ignored(self):
+        self.assertEqual(self.execute('approval.sh').returncode, 0)
+        data = json.loads(self.database.read_text())
+        data['timeline'] = [{'event': 'base_ref_changed', 'created_at': '2026-11-15T11:00:00Z'}]
+        self.database.write_text(json.dumps(data))
         risk = self.execute('risk.sh')
         self.assertEqual(risk.returncode, 1, risk.stderr)
         self.assertEqual(self.status(self.head, 'gate/risk'), 'failure')
@@ -177,6 +190,8 @@ class ApprovalTests(GateTests):
         self.assertIn('ref: ${{ github.event.pull_request.base.sha }}', risk)
         self.assertIn('persist-credentials: false', risk)
         self.assertIn('actions: read', risk)
+        self.assertIn('edited, labeled', risk)
+        self.assertIn("if: github.event.action != 'edited' || github.event.changes.base", risk)
         for text in ['needs:', 'UNIT:', 'CONTRACTS:', 'pull_request.head.ref']:
             self.assertNotIn(text, risk)
         checks = (WORKFLOWS / 'gate.yml').read_text()
@@ -188,7 +203,11 @@ class ApprovalTests(GateTests):
     def test_approval_workflow_is_independent_and_runs_no_pr_code(self):
         approval = (WORKFLOWS / 'gate-approve.yml').read_text()
         self.assertIn('pull_request_target:', approval)
-        self.assertIn("github.event.label.name == 'gate:approved'", approval)
+        self.assertIn("github.event.label.name == 'gate:approved' && github.event.pull_request.base.ref"
+                      " == github.event.repository.default_branch", approval)
+        self.assertIn('GH_TOKEN="$LABEL_TOKEN" gh api --method DELETE', approval)
+        self.assertIn('secrets.GATE_UPDATE_TOKEN', approval)
+        self.assertIn('  pull-requests: write\n', approval)
         self.assertIn('HEAD_SHA: ${{ github.event.pull_request.head.sha }}', approval)
         self.assertNotIn('checkout', approval)
         self.assertNotIn('concurrency:', approval)
@@ -225,6 +244,31 @@ class ApprovalStatusTests(unittest.TestCase):
             with self.subTest(title=title):
                 self.lookup.return_value = dict(TRUSTED_RUN, display_title=title)
                 self.assertFalse(self.approved([status()]))
+
+    def test_run_for_another_base(self):
+        for pulls in [None, [], [{'base': {'ref': 'evil'}}],
+                      [{'base': {'ref': 'main'}}, {'base': {'ref': 'evil'}}], [{}]]:
+            with self.subTest(pulls=pulls):
+                self.lookup.return_value = dict(TRUSTED_RUN, pull_requests=pulls)
+                self.assertFalse(self.approved([status()]))
+
+    def test_run_before_last_base_change(self):
+        entries = [status()]
+        self.assertFalse(is_approved(entries, 'example/repo', 'abc', self.lookup,
+                                     base_changed_at='2026-11-15T10:00:01Z'))
+        self.assertTrue(is_approved(entries, 'example/repo', 'abc', self.lookup,
+                                    base_changed_at='2026-11-15T09:59:59Z'))
+        self.lookup.return_value = dict(TRUSTED_RUN, created_at=None)
+        self.assertFalse(is_approved(entries, 'example/repo', 'abc', self.lookup,
+                                     base_changed_at='2026-11-15T09:59:59Z'))
+
+    def test_last_base_change(self):
+        self.assertIsNone(last_base_change([{'event': 'labeled', 'created_at': '2026-11-15T12:00:00Z'}]))
+        self.assertEqual(last_base_change([
+            {'event': 'base_ref_changed', 'created_at': '2026-11-14T00:00:00Z'},
+            {'event': 'labeled', 'created_at': '2026-11-16T00:00:00Z'},
+            {'event': 'base_ref_changed', 'created_at': '2026-11-15T00:00:00Z'},
+        ]), '2026-11-15T00:00:00Z')
 
     def test_push_run(self):
         self.lookup.return_value = dict(TRUSTED_RUN, event='push')
