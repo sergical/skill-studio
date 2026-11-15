@@ -30,11 +30,12 @@ const questions: ReadonlyArray<{ question: string; answer: ReactNode }> = [
       "Yes. Changes go into a history you can undo. Skill Studio keeps a backup of each skill it removes. To undo a park, unpark the skill.",
   },
   {
-    question: "Does it work with npx skills?",
+    question: "Why not just use npx skills?",
     answer: (
       <>
-        Yes. It installs, updates and removes skills through <Code>npx skills</Code> and reads the
-        lock file. It also works with dotagents.
+        Skill Studio uses <Code>npx skills</Code> and dotagents to install, update and remove
+        skills. It adds what they do not do: one view of every agent's folders, the copies that
+        differ, broken skills, which skills ran, and park with undo.
       </>
     ),
   },

@@ -10,6 +10,9 @@
     "crates/skill-studio-core/schema",
     "crates/skill-studio-core/tests/golden",
     "apps/cli/tests/golden",
-    "fixtures"
+    "fixtures",
+    "tools/agent-bench/prompts",
+    "tools/agent-bench/results",
+    "packages/marketing/src/data"
   ]
 }

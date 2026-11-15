@@ -12,8 +12,10 @@ import { useReducedMotion } from "../use-reduced-motion";
 import { SidecarWalkthrough } from "../walkthrough/SidecarWalkthrough";
 import { ClosingFinale, DITHER_COLORS } from "../home/ClosingFinale";
 import { finaleCtaMarker } from "../home/ClosingFinale.stylex";
+import { BenchmarkSection } from "../home/BenchmarkSection";
 import { FaqSection } from "../home/FaqSection";
 import { homeSectionStyles } from "../home/HomeSection.stylex";
+import { JobsSection } from "../home/JobsSection";
 import { FirstScanSteps } from "../home/FirstScanSteps";
 import { SkillThrow } from "../home/SkillThrow";
 import { UsageSection } from "../home/UsageSection";
@@ -220,6 +222,13 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
         </section>
 
         <section
+          id="jobs"
+          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
+        >
+          <JobsSection />
+        </section>
+
+        <section
           id="how-it-works"
           {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
         >
@@ -235,6 +244,13 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
           {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
         >
           <UsageSection />
+        </section>
+
+        <section
+          id="benchmark"
+          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
+        >
+          <BenchmarkSection />
         </section>
 
         <section
