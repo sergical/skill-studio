@@ -407,11 +407,19 @@ export function PileFrame({
   stageRef,
   ready,
   tidy,
+  parkedCount,
+  onParkCopy,
+  canParkCopy,
+  onParkCopyFocus,
   children,
 }: {
   stageRef: Ref<HTMLDivElement>;
   ready: boolean;
   tidy: boolean;
+  parkedCount: number;
+  onParkCopy: () => void;
+  canParkCopy: boolean;
+  onParkCopyFocus: () => void;
   children: ReactNode;
 }) {
   return (
@@ -419,14 +427,33 @@ export function PileFrame({
       <div ref={stageRef} {...stylex.props(styles.stage, !ready && styles.stageHidden)}>
         {children}
       </div>
-      <p {...stylex.props(styles.visuallyHidden)} aria-live="polite">
-        {tidy ? TIDY_SUMMARY : MESSY_SUMMARY}
+      <button
+        type="button"
+        disabled={!canParkCopy}
+        onClick={onParkCopy}
+        onFocus={onParkCopyFocus}
+        {...stylex.props(styles.parkCopy)}
+      >
+        Park a copy
+      </button>
+      <p {...stylex.props(styles.visuallyHidden)} aria-live="polite" aria-atomic="true">
+        {tidy ? TIDY_SUMMARY : `${MESSY_SUMMARY} ${parkedCount} parked.`}
       </p>
     </div>
   );
 }
 
 const styles = stylex.create({
+  parkCopy: {
+    backgroundColor: siteTokens.surface,
+    color: siteTokens.text,
+    border: `1px solid ${siteTokens.border}`,
+    borderRadius: 6,
+    padding: "8px 12px",
+    cursor: "pointer",
+    ":focus-visible": { outline: `2px solid ${siteTokens.text}`, outlineOffset: 3 },
+    ":disabled": { opacity: 0.5, cursor: "default" },
+  },
   frame: { textAlign: "center", width: "100%" },
   stage: {
     height: { default: 480, "@media (max-width: 600px)": 440 },

@@ -171,6 +171,8 @@ export function SkillThrow() {
   const fxRef = useRef<HTMLDivElement>(null);
   const [collectedCount, setCollectedCount] = useState(0);
   const [ready, setReady] = useState(false);
+  const [parkedCount, setParkedCount] = useState(0);
+  const [copiesRemaining, setCopiesRemaining] = useState(PILE_COUNTS.copies);
   const bodies = useRef<Body[]>([]);
   const mascot = useRef({ s: 1, vs: 0, r: 0, vr: 0, lean: 0, open: false, awake: false });
   const geo = useRef<Geometry | null>(null);
@@ -191,12 +193,16 @@ export function SkillThrow() {
 
   const markCollected = (index: number) => {
     collected.current.add(index);
+    setCopiesRemaining(
+      PILE.filter((chip, index) => chip.state === "copy" && !collected.current.has(index)).length,
+    );
     setCollectedCount(collected.current.size);
   };
 
   const countParked = () => {
     parked.current += 1;
     setCount(countRef, parked.current);
+    setParkedCount(parked.current);
     pulse(drawerRef.current, 1.06);
   };
 
@@ -341,6 +347,31 @@ export function SkillThrow() {
     hitStop(50);
     sendAway(index, { pop: true });
     tick();
+  };
+
+  const parkChip = (index: number) => {
+    const g = geo.current;
+    const body = bodies.current[index];
+    if (!g || !body || collected.current.has(index)) return;
+    if (reduced) {
+      if (!poppable(index)) return;
+      body.mode = "gone";
+      markCollected(index);
+      place(chipRefs.current[index], parkedPose(g));
+      parked.current += 1;
+      setCount(countRef, parked.current);
+      setParkedCount(parked.current);
+      return;
+    }
+    popChip(index);
+  };
+
+  const parkNextCopy = () => {
+    stopAutoTidy();
+    const index = PILE.findIndex(
+      (chip, index) => chip.state === "copy" && !collected.current.has(index),
+    );
+    if (index >= 0) parkChip(index);
   };
 
   const heapTopAt = (g: Geometry, body: Body, self: number) => {
@@ -632,6 +663,7 @@ export function SkillThrow() {
     });
     place(mascotRef.current, g.mascot);
     setCount(countRef, parked.current);
+    setParkedCount(parked.current);
   };
 
   // Skills pile up the way they do on a real machine: a few at first, then whole folders.
@@ -695,9 +727,11 @@ export function SkillThrow() {
 
   const messUp = () => {
     collected.current.clear();
+    setCopiesRemaining(PILE_COUNTS.copies);
     parked.current = 0;
     setCollectedCount(0);
     setCount(countRef, 0);
+    setParkedCount(0);
     resetBodies();
     bodies.current.forEach((body) => {
       body.mode = "gone";
@@ -864,16 +898,7 @@ export function SkillThrow() {
     if (!state.moved) {
       if (body.mode === "held") body.mode = "flying";
       if (cancelled) return;
-      if (reduced) {
-        if (!poppable(state.index)) return;
-        body.mode = "gone";
-        markCollected(state.index);
-        place(chipRefs.current[state.index], parkedPose(g));
-        parked.current += 1;
-        setCount(countRef, parked.current);
-        return;
-      }
-      popChip(state.index);
+      parkChip(state.index);
       return;
     }
     const pointer = cancelled ? { x: 0, y: 0 } : releaseVelocity(state.samples, time);
@@ -904,12 +929,14 @@ export function SkillThrow() {
     if (!g) return;
     if (tidy) {
       collected.current.clear();
+      setCopiesRemaining(PILE_COUNTS.copies);
       parked.current = 0;
       setCollectedCount(0);
       resetBodies();
     } else {
       PILE.forEach((_, index) => collected.current.add(index));
       parked.current = PILE_COUNTS.parked;
+      setCopiesRemaining(0);
       setCollectedCount(PILE.length);
     }
     showMessy(g);
@@ -1006,7 +1033,15 @@ export function SkillThrow() {
         if (!hold.current) repel(null);
       }}
     >
-      <PileFrame stageRef={stageRef} ready={ready} tidy={tidy}>
+      <PileFrame
+        stageRef={stageRef}
+        ready={ready}
+        tidy={tidy}
+        parkedCount={parkedCount}
+        onParkCopy={parkNextCopy}
+        canParkCopy={ready && copiesRemaining > 0}
+        onParkCopyFocus={stopAutoTidy}
+      >
         {PILE.map((chip, index) => (
           <PileChipView
             key={chip.id}
