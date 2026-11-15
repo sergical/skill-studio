@@ -1,7 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-#[allow(dead_code)]
-#[path = "support/test_home.rs"]
-mod test_home;
+use headless::test_home;
 
 #[allow(dead_code)]
 #[path = "support/headless.rs"]

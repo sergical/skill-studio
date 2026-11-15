@@ -1,6 +1,6 @@
 #[allow(dead_code)]
 #[path = "test_home.rs"]
-mod test_home;
+pub mod test_home;
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
