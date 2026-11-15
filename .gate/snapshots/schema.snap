@@ -753,6 +753,31 @@
           }
         ]
       },
+      "CopyStatus": {
+        "description": "How an agent copy compares with the library copy in its scope.",
+        "oneOf": [
+          {
+            "const": "link",
+            "description": "A link that resolves to the library copy.",
+            "type": "string"
+          },
+          {
+            "const": "same",
+            "description": "A real folder with the same files as the library copy.",
+            "type": "string"
+          },
+          {
+            "const": "differs",
+            "description": "A real folder with other files, changed after the last install or\nupdate of the skill, or with no lock entry to compare with.",
+            "type": "string"
+          },
+          {
+            "const": "stale",
+            "description": "A real folder with other files, all older than the last install or\nupdate in the lock file: the copy did not get that update.",
+            "type": "string"
+          }
+        ]
+      },
       "DeploymentDto": {
         "description": "One installed copy or link of a skill.\n\nInvariant: `harness` is an [`AgentId`] or `None` for the universal and\nparked roots; it is never a display string. `plugin` is `Some` exactly\nwhen `root.kind` is [`crate::identity::RootKind::PluginCache`].",
         "properties": {
@@ -774,6 +799,17 @@
           "content_hash": {
             "description": "sha256 over the sorted (relative path, bytes) pairs of the skill\nfolder. Distinct from `content_fingerprint`: a different, whole-folder\nscheme kept for parity with the desktop's `SkillCandidate`.",
             "type": "string"
+          },
+          "copy_status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CopyStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For an agent copy, how it compares with the library copy\n(`.agents/skills`) in the same scope. `None` for the library copy,\na plugin or parked copy, a broken link, or an agent copy with no\nlibrary copy."
           },
           "description_tokens": {
             "description": "Token count of just `\"{name}: {description}\"` - the prompt cost the\nmodel actually pays per turn, as opposed to `skill_md_tokens` which\ncounts the whole file.",
@@ -1088,9 +1124,14 @@
           "name": {
             "$ref": "#/$defs/SkillName",
             "description": "Name."
+          },
+          "source": {
+            "description": "Upstream owner/repo from the owning ledger, plugin@marketplace for a\nplugin skill, or manual.",
+            "type": "string"
           }
         },
         "required": [
+          "source",
           "name",
           "deployments"
         ],
@@ -1102,6 +1143,14 @@
           "completeness": {
             "$ref": "#/$defs/Completeness",
             "description": "Whether every root was read."
+          },
+          "lock_only": {
+            "default": [],
+            "description": "Ledger entries whose skill folder is absent from disk.",
+            "items": {
+              "$ref": "#/$defs/LockOnlySkill"
+            },
+            "type": "array"
           },
           "observations": {
             "description": "Notes about skipped roots and other facts.",
@@ -1292,6 +1341,29 @@
             "type": "string"
           }
         ]
+      },
+      "LockOnlySkill": {
+        "description": "A lock entry with no installed folder.",
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/SkillName",
+            "description": "Ledger key."
+          },
+          "scope": {
+            "$ref": "#/$defs/RootScope",
+            "description": "Scope containing the ledger."
+          },
+          "source": {
+            "description": "Recorded upstream, or manual for an adopted local folder.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "source",
+          "scope"
+        ],
+        "type": "object"
       },
       "NextAction": {
         "description": "What the user can do about an issue.",
@@ -3252,6 +3324,31 @@
           }
         ]
       },
+      "CopyStatus": {
+        "description": "How an agent copy compares with the library copy in its scope.",
+        "oneOf": [
+          {
+            "const": "link",
+            "description": "A link that resolves to the library copy.",
+            "type": "string"
+          },
+          {
+            "const": "same",
+            "description": "A real folder with the same files as the library copy.",
+            "type": "string"
+          },
+          {
+            "const": "differs",
+            "description": "A real folder with other files, changed after the last install or\nupdate of the skill, or with no lock entry to compare with.",
+            "type": "string"
+          },
+          {
+            "const": "stale",
+            "description": "A real folder with other files, all older than the last install or\nupdate in the lock file: the copy did not get that update.",
+            "type": "string"
+          }
+        ]
+      },
       "DeploymentDto": {
         "description": "One installed copy or link of a skill.\n\nInvariant: `harness` is an [`AgentId`] or `None` for the universal and\nparked roots; it is never a display string. `plugin` is `Some` exactly\nwhen `root.kind` is [`crate::identity::RootKind::PluginCache`].",
         "properties": {
@@ -3273,6 +3370,17 @@
           "content_hash": {
             "description": "sha256 over the sorted (relative path, bytes) pairs of the skill\nfolder. Distinct from `content_fingerprint`: a different, whole-folder\nscheme kept for parity with the desktop's `SkillCandidate`.",
             "type": "string"
+          },
+          "copy_status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CopyStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For an agent copy, how it compares with the library copy\n(`.agents/skills`) in the same scope. `None` for the library copy,\na plugin or parked copy, a broken link, or an agent copy with no\nlibrary copy."
           },
           "description_tokens": {
             "description": "Token count of just `\"{name}: {description}\"` - the prompt cost the\nmodel actually pays per turn, as opposed to `skill_md_tokens` which\ncounts the whole file.",
@@ -3587,9 +3695,14 @@
           "name": {
             "$ref": "#/$defs/SkillName",
             "description": "Name."
+          },
+          "source": {
+            "description": "Upstream owner/repo from the owning ledger, plugin@marketplace for a\nplugin skill, or manual.",
+            "type": "string"
           }
         },
         "required": [
+          "source",
           "name",
           "deployments"
         ],
@@ -3644,6 +3757,29 @@
             "type": "string"
           }
         ]
+      },
+      "LockOnlySkill": {
+        "description": "A lock entry with no installed folder.",
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/SkillName",
+            "description": "Ledger key."
+          },
+          "scope": {
+            "$ref": "#/$defs/RootScope",
+            "description": "Scope containing the ledger."
+          },
+          "source": {
+            "description": "Recorded upstream, or manual for an adopted local folder.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "source",
+          "scope"
+        ],
+        "type": "object"
       },
       "Observation": {
         "description": "Something worth telling the caller that is not an error.",
@@ -3988,6 +4124,14 @@
       "completeness": {
         "$ref": "#/$defs/Completeness",
         "description": "Whether every root was read."
+      },
+      "lock_only": {
+        "default": [],
+        "description": "Ledger entries whose skill folder is absent from disk.",
+        "items": {
+          "$ref": "#/$defs/LockOnlySkill"
+        },
+        "type": "array"
       },
       "observations": {
         "description": "Notes about skipped roots and other facts.",
@@ -5738,6 +5882,41 @@
   },
   "crates/skill-studio-core/schema/scan_request.schema.json": {
     "$defs": {
+      "CopyStatus": {
+        "description": "How an agent copy compares with the library copy in its scope.",
+        "oneOf": [
+          {
+            "const": "link",
+            "description": "A link that resolves to the library copy.",
+            "type": "string"
+          },
+          {
+            "const": "same",
+            "description": "A real folder with the same files as the library copy.",
+            "type": "string"
+          },
+          {
+            "const": "differs",
+            "description": "A real folder with other files, changed after the last install or\nupdate of the skill, or with no lock entry to compare with.",
+            "type": "string"
+          },
+          {
+            "const": "stale",
+            "description": "A real folder with other files, all older than the last install or\nupdate in the lock file: the copy did not get that update.",
+            "type": "string"
+          }
+        ]
+      },
+      "ScanRoot": {
+        "description": "A scan root filter.",
+        "oneOf": [
+          {
+            "const": "library",
+            "description": "Skills directly in ~/.agents/skills.",
+            "type": "string"
+          }
+        ]
+      },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
         "type": "string"
@@ -5746,6 +5925,30 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "Request for `scan`.",
     "properties": {
+      "copy_status": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CopyStatus"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Keep only the agent copies with this copy status."
+      },
+      "root": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ScanRoot"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Restrict to the global shared library folder."
+      },
       "skills": {
         "default": [],
         "description": "Restrict to these skill names; empty means all.",
@@ -5753,6 +5956,14 @@
           "$ref": "#/$defs/SkillName"
         },
         "type": "array"
+      },
+      "source": {
+        "default": null,
+        "description": "Restrict to this owner/repo, plugin@marketplace, or manual.",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "timings": {
         "default": false,

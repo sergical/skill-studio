@@ -79,6 +79,7 @@ use rmcp::service::RequestContext;
 use rmcp::transport::stdio;
 use rmcp::{schemars, tool, tool_handler, tool_router, RoleServer, ServerHandler, ServiceExt};
 use serde::Deserialize;
+use skill_studio_core::answers;
 use skill_studio_core::dto::{
     CapabilitiesRequest, DiagnoseConflictRequest, DoctorRequest, FixSkillRequest, HarnessesRequest,
     InstallPreferencesRequest, InstallRequest, ListEventsRequest, ParkRequest, RemoveRequest,
@@ -134,6 +135,31 @@ impl Default for SkillStudioServer {
     }
 }
 
+/// Window and selection for the shared library answer.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct LibraryRequest {
+    /// Include skills outside the shared library.
+    pub all: bool,
+    /// Restrict to owner/repo, plugin@marketplace, or manual.
+    pub source: Option<String>,
+    /// Restrict to these skill names; empty means all.
+    pub skills: Vec<String>,
+    /// Keep rows with this agent copy status.
+    pub copy_status: Option<skill_studio_core::library::LibraryCopyStatus>,
+
+    /// Rolling window in days; defaults to 30.
+    pub days: Option<u32>,
+    /// Inclusive start (YYYY-MM-DD or RFC 3339).
+    pub since: Option<String>,
+    /// Exclusive end (YYYY-MM-DD or RFC 3339).
+    pub until: Option<String>,
+    /// Sort by name (default) or uses descending.
+    pub sort: Option<skill_studio_core::library::LibrarySort>,
+    /// Keep the N most used skills.
+    pub top: Option<usize>,
+}
+
 /// Input for `skill_usage`.
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
@@ -144,6 +170,12 @@ pub struct SkillUsageRequest {
     pub project: Option<std::path::PathBuf>,
     /// How many days back to count uses. Default 30.
     pub days: Option<u32>,
+    /// Count uses from this date (YYYY-MM-DD or RFC 3339) instead of `days`.
+    pub since: Option<String>,
+    /// Count uses before this date (YYYY-MM-DD or RFC 3339).
+    pub until: Option<String>,
+    /// Keep only the N most used skills.
+    pub top: Option<usize>,
 }
 
 /// Runs the MCP server over stdin and stdout until the client disconnects,
@@ -362,7 +394,7 @@ use skill_studio_host::NoGhLookup;
 #[tool_router]
 impl SkillStudioServer {
     #[tool(
-        description = "List every installed skill with its id, location and the agents that see it. Call this first. Other tools take its ids.",
+        description = "Raw file-level detail: ids, paths and deployments. Use library for per-skill answers about counts, uses, agents, modes, sources and copies; use scan when you need file-level detail or an id for a change.",
         annotations(read_only_hint = true)
     )]
     async fn scan(
@@ -372,6 +404,57 @@ impl SkillStudioServer {
     ) -> CallToolResult {
         run_op(Operation::Scan, false, &context, |rt, ctx| {
             ops::scan(rt, ctx, &req)
+        })
+        .await
+    }
+
+    #[tool(
+        description = "One call for library counts, uses per skill, agents, modes, sources and copies. Default: shared library, 30 days; all=true includes outside skills; top selects most used; unsupported modes are omitted.\nUses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.",
+        annotations(read_only_hint = true)
+    )]
+    async fn library(
+        &self,
+        Parameters(req): Parameters<LibraryRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(Operation::Library, false, &context, |rt, ctx| {
+            let bound = |text: &Option<String>| {
+                text.as_deref()
+                    .map(skill_studio_host::parse_usage_time)
+                    .transpose()
+                    .map_err(|message| {
+                        CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+                    })
+            };
+            let request = skill_studio_core::library::LibraryRequest {
+                all: req.all,
+                source: req.source.clone(),
+                skills: req.skills.clone(),
+                copy_status: req.copy_status,
+                days: req.days,
+                since: bound(&req.since)?,
+                until: bound(&req.until)?,
+                sort: req.sort,
+                top: req.top,
+            };
+            skill_studio_host::library_report(
+                rt,
+                ctx,
+                &request,
+                scope::desktop_usage_cache().as_deref(),
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        description = "List only the skills with one copy read as manual and another as automatic, and the agents on each side.",
+        annotations(read_only_hint = true)
+    )]
+    async fn invocation_mismatches(&self, context: RequestContext<RoleServer>) -> CallToolResult {
+        run_op(Operation::Invocation, false, &context, |rt, ctx| {
+            skill_studio_core::ops_invocation::invocation(rt, ctx, &Default::default())
+                .map(|report| answers::invocation_mismatches(&report))
         })
         .await
     }
@@ -546,7 +629,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Show how often each skill was used in the last N days, and which skills were not used. Use it to find skills to park.",
+        description = "History detail by harness, project and trigger, with window and all-time use counts. Use library for a per-skill answer that also includes agents, modes, sources and copies.\nUses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.",
         annotations(read_only_hint = true)
     )]
     async fn skill_usage(
@@ -556,6 +639,24 @@ impl SkillStudioServer {
     ) -> CallToolResult {
         let days = req.days.unwrap_or(skill_studio_host::DEFAULT_USAGE_DAYS);
         run_op(Operation::SkillUsage, false, &context, |rt, ctx| {
+            let bound = |text: &Option<String>| {
+                text.as_deref()
+                    .map(skill_studio_host::parse_usage_time)
+                    .transpose()
+                    .map_err(|message| {
+                        CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+                    })
+            };
+            let filter = skill_studio_host::UsageFilter {
+                harness: req.harness.clone(),
+                projects: req.project.clone().into_iter().collect(),
+                since: bound(&req.since)?,
+                until: bound(&req.until)?,
+                top: req.top,
+            };
+            filter.check_window(chrono::Utc::now()).map_err(|message| {
+                CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+            })?;
             let inventory = ops::scan_for_usage(rt, ctx)?;
             let mut usage = self.usage.lock().unwrap_or_else(PoisonError::into_inner);
             let usage = usage.get_or_insert_with(|| {
@@ -566,10 +667,7 @@ impl SkillStudioServer {
                 &inventory,
                 days,
                 chrono::Utc::now(),
-                &skill_studio_host::UsageFilter {
-                    harness: req.harness.clone(),
-                    projects: req.project.clone().into_iter().collect(),
-                },
+                &filter,
             ))
         })
         .await
@@ -1083,8 +1181,8 @@ impl ServerHandler for SkillStudioServer {
             ))
             .with_instructions(
                 "Skill Studio manages the agent skills on this computer. To tidy up: \
-                 call diagnose to find broken and duplicate skills, and skill_usage to \
-                 find unused ones. Then park the skills you do not need, or remove a \
+                 call library for per-skill counts, uses, agents, modes, sources and copies, \
+                 and diagnose to find broken and duplicate skills. Then park the skills you do not need, or remove a \
                  duplicate copy. Each change returns an event_id. restore_event undoes \
                  a change, and unpark undoes park.",
             )

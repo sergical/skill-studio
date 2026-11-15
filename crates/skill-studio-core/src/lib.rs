@@ -29,6 +29,7 @@
 // out.
 #![forbid(unsafe_code)]
 
+pub mod answers;
 pub mod backup_retention;
 pub mod discovery_sources;
 pub mod doctor;
@@ -79,6 +80,7 @@ pub mod snapshot;
 pub mod timing;
 pub mod tracked_projects;
 pub mod tree_hash;
+pub mod usage_window;
 pub mod yaml;
 
 #[cfg(any(test, feature = "testing"))]
@@ -150,3 +152,6 @@ mod home_free_tests {
         }
     }
 }
+
+/// Compact shared-library answers.
+pub mod library;

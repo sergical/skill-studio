@@ -151,3 +151,28 @@ fn walkdir(dir: &Path) -> Vec<std::path::PathBuf> {
     }
     out
 }
+
+#[test]
+fn review_sessions_use_log_identities_when_native_ids_are_missing() {
+    let home = tempfile::tempdir().unwrap();
+    gamma_with_one_session(home.path());
+    let logs = home.path().join(".claude/projects/work");
+    let parent = logs.join("session.jsonl");
+    let mut record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&parent).unwrap()).unwrap();
+    record.as_object_mut().unwrap().remove("sessionId");
+    let line = record.to_string() + "\n";
+    std::fs::write(&parent, line.repeat(2)).unwrap();
+    assert_eq!(
+        run(home.path(), &["set", "gamma", "2000-01-01"])["status"],
+        "ok"
+    );
+    assert_eq!(run(home.path(), &["due"])["data"]["rows"][0]["sessions"], 1);
+    let child = logs.join("session/subagents");
+    std::fs::create_dir_all(&child).unwrap();
+    record["timestamp"] = (chrono::Utc::now() - chrono::Duration::hours(1))
+        .to_rfc3339()
+        .into();
+    std::fs::write(child.join("child.jsonl"), record.to_string() + "\n").unwrap();
+    assert_eq!(run(home.path(), &["due"])["data"]["rows"][0]["sessions"], 2);
+}

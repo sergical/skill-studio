@@ -17,7 +17,7 @@ use skill_studio_core::discovery_sources::DiscoverySources;
 use skill_studio_core::dto::{Completeness, Inventory};
 use skill_studio_core::identity::RootKind;
 use skill_studio_core::ops::{OpStatus, Outcome};
-use skill_studio_core::skill_uses::{counted_uses, SkillUseFilter};
+use skill_studio_core::skill_uses::{SkillInvocation, SkillTrigger};
 
 use crate::fs::RealFs;
 use crate::skill_uses::SkillInvocationIndex;
@@ -41,17 +41,20 @@ pub fn cli_usage_cache_path(desktop_cache: &Path) -> PathBuf {
 /// One installed skill's uses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkillUsageRow {
-    /// Distinct (harness, session id) pairs in the last `days` days.
+    /// Distinct (harness, normalized session identity) pairs for the standalone review-date report.
+    #[serde(skip_serializing)]
     pub sessions: usize,
     /// Uses in the last `days` days, by trigger.
     pub triggers: BTreeMap<String, u32>,
     /// The skill's name.
     pub skill: String,
-    /// Uses in the last `days` days of the report.
+    /// Uses inside the report window: `since`..`until`, or the last `days`.
     pub recent_uses: u32,
-    /// Uses across all the session history that was read.
+    /// Uses across all the session history that was read, outside the
+    /// window too.
     pub total_uses: u32,
-    /// The most recent use, RFC 3339, or `None` when never used.
+    /// The most recent use at any time, outside the window too, RFC 3339,
+    /// or `None` when never used.
     pub last_used: Option<String>,
     /// Uses in the last `days` days, by agent id.
     pub agents: BTreeMap<String, u32>,
@@ -62,12 +65,14 @@ pub struct SkillUsageRow {
 pub struct UsageReport {
     /// Roots or files whose history was unavailable or skipped.
     pub observations: Vec<crate::skill_uses::UsageObservation>,
-    /// The window, in days, that `recent_uses` and `unused` cover.
-    pub days: u32,
+    /// Window used by the tally.
+    #[serde(flatten)]
+    pub window: skill_studio_core::usage_window::UsageWindow,
     /// Skills not used in the window first, by name; then the rest, most
     /// used first.
     pub rows: Vec<SkillUsageRow>,
     /// Names of the skills with no use in the window, in `rows` order.
+    /// Empty when the caller asked for the top rows only.
     pub unused: Vec<String>,
     /// Set when some session history could not be read, so a skill in
     /// `unused` may still have uses that were not counted, or when the scan
@@ -101,6 +106,38 @@ pub struct UsageFilter {
     pub harness: Option<String>,
     /// Exact recorded project paths, or all projects when empty.
     pub projects: Vec<PathBuf>,
+    /// Start of the window. Replaces `days` before the end when set.
+    pub since: Option<DateTime<Utc>>,
+    /// End of the window, not included. Absent counts up to now and later.
+    pub until: Option<DateTime<Utc>>,
+    /// Keep only this many rows, most used first, and no unused skills.
+    pub top: Option<usize>,
+}
+
+impl UsageFilter {
+    /// Rejects a window that holds no time: `since` at or after `until`, or
+    /// after `now` when there is no `until`. Such a window would report
+    /// every skill as unused.
+    pub fn check_window(&self, now: DateTime<Utc>) -> Result<(), String> {
+        match self.since {
+            Some(since) if since >= self.until.unwrap_or(now) => Err(format!(
+                "the usage window is empty: since {} is not before {}",
+                since.to_rfc3339(),
+                self.until.unwrap_or(now).to_rfc3339()
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Reads a window bound: `YYYY-MM-DD` (start of that day, UTC) or RFC 3339.
+pub fn parse_usage_time(text: &str) -> Result<DateTime<Utc>, String> {
+    if let Ok(day) = chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d") {
+        return Ok(day.and_time(chrono::NaiveTime::MIN).and_utc());
+    }
+    DateTime::parse_from_rfc3339(text)
+        .map(|at| at.with_timezone(&Utc))
+        .map_err(|_| format!("`{text}` is not a date (YYYY-MM-DD) or an RFC 3339 time"))
 }
 
 impl SkillUsage {
@@ -196,40 +233,59 @@ impl SkillUsage {
         }
         observations.sort();
         observations.dedup();
-        let filter = SkillUseFilter {
-            known_skills: installed,
-            sources: &sources,
-        };
-        let cutoff = now - chrono::Duration::days(i64::from(days));
+        let end = selection.until.unwrap_or(now);
+        let cutoff = selection
+            .since
+            .unwrap_or_else(|| end - chrono::Duration::days(i64::from(days)));
         let mut by_skill: BTreeMap<&str, Tally> = installed
             .iter()
             .map(|name| (name.as_str(), Tally::default()))
             .collect();
-        let selected = self.index.all_uses().filter(|u| {
-            selection.harness.as_ref().is_none_or(|h| h == &u.harness)
-                && (selection.projects.is_empty()
-                    || selection.projects.iter().any(|p| {
-                        u.project_path
-                            .as_deref()
-                            .is_some_and(|recorded| Path::new(recorded) == p)
-                    }))
-        });
-        for use_ in counted_uses(selected, &filter) {
+        let selected: Vec<_> = self
+            .index
+            .all_uses()
+            .filter(|u| {
+                selection.harness.as_ref().is_none_or(|h| h == &u.harness)
+                    && (selection.projects.is_empty()
+                        || selection.projects.iter().any(|p| {
+                            u.project_path
+                                .as_deref()
+                                .is_some_and(|recorded| Path::new(recorded) == p)
+                        }))
+            })
+            .collect();
+        for use_ in selected.iter().filter(|u| sources.is_enabled(&u.harness)) {
+            if let Some(tally) =
+                installed_name(&use_.skill, installed).and_then(|name| by_skill.get_mut(name))
+            {
+                if tally.last_used.is_none_or(|last| use_.at > last) {
+                    tally.last_used = Some(use_.at);
+                }
+            }
+        }
+        for use_ in session_uses(selected.iter().copied(), installed, &sources) {
             let Some(tally) =
                 installed_name(&use_.skill, installed).and_then(|name| by_skill.get_mut(name))
             else {
                 continue;
             };
             tally.total += 1;
-            if tally.last_used.is_none_or(|last| use_.at > last) {
-                tally.last_used = Some(use_.at);
-            }
-            if use_.at < cutoff {
+        }
+        for use_ in session_uses(
+            selected
+                .into_iter()
+                .filter(|u| u.at >= cutoff && selection.until.is_none_or(|until| u.at < until)),
+            installed,
+            &sources,
+        ) {
+            let Some(tally) =
+                installed_name(&use_.skill, installed).and_then(|name| by_skill.get_mut(name))
+            else {
                 continue;
-            }
+            };
             tally.recent += 1;
             *tally.agents.entry(use_.harness.clone()).or_insert(0) += 1;
-            if let Some(session) = &use_.session {
+            if let Some(session) = use_.use_session.as_ref().or(use_.session.as_ref()) {
                 tally
                     .sessions
                     .insert((use_.harness.clone(), session.clone()));
@@ -268,20 +324,59 @@ impl SkillUsage {
                 .cmp(&(b.recent_uses > 0))
                 .then(b.recent_uses.cmp(&a.recent_uses))
         });
-        let unused = rows
+        let mut unused: Vec<String> = rows
             .iter()
             .filter(|row| row.recent_uses == 0)
             .map(|row| row.skill.clone())
             .collect();
+        if let Some(top) = selection.top {
+            unused.clear();
+            rows.retain(|row| row.recent_uses > 0);
+            rows.truncate(top);
+        }
 
         UsageReport {
-            days,
+            window: skill_studio_core::usage_window::UsageWindow::new(
+                days,
+                selection.since,
+                selection.until,
+            ),
             rows,
             unused,
             partial: !observations.is_empty(),
             observations,
         }
     }
+}
+
+fn session_uses<'a>(
+    uses: impl IntoIterator<Item = &'a SkillInvocation>,
+    installed: &BTreeSet<String>,
+    sources: &DiscoverySources,
+) -> Vec<&'a SkillInvocation> {
+    let mut kept = Vec::new();
+    let mut by_session: BTreeMap<(&str, &str, &str), &SkillInvocation> = BTreeMap::new();
+    for use_ in uses.into_iter().filter(|u| sources.is_enabled(&u.harness)) {
+        let Some(skill) = installed_name(&use_.skill, installed) else {
+            continue;
+        };
+        let Some(session) = use_.use_session.as_deref().or(use_.session.as_deref()) else {
+            kept.push(use_);
+            continue;
+        };
+        let priority =
+            |u: &SkillInvocation| (u.trigger == SkillTrigger::FileRead, std::cmp::Reverse(u.at));
+        by_session
+            .entry((use_.harness.as_str(), session, skill))
+            .and_modify(|current| {
+                if priority(use_) < priority(current) {
+                    *current = use_;
+                }
+            })
+            .or_insert(use_);
+    }
+    kept.extend(by_session.into_values());
+    kept
 }
 
 #[derive(Default)]
@@ -325,7 +420,7 @@ fn active_skill_names(inventory: &Inventory) -> BTreeSet<String> {
 
 /// The installed name a recorded use counts toward: the name itself, or the
 /// `base` of a plugin-qualified `prefix:base` name, the same rule
-/// `SkillUseFilter` applies.
+/// the desktop's known-skill filter applies.
 fn installed_name<'a>(recorded: &'a str, installed: &BTreeSet<String>) -> Option<&'a str> {
     if installed.contains(recorded) {
         return Some(recorded);
@@ -334,6 +429,42 @@ fn installed_name<'a>(recorded: &'a str, installed: &BTreeSet<String>) -> Option
         .rsplit_once(':')
         .map(|(_, base)| base)
         .filter(|base| installed.contains(*base))
+}
+
+/// Reads history without saving a cache, then builds the shared core library table.
+pub fn library_report(
+    rt: &skill_studio_core::ports::Runtime,
+    ctx: &skill_studio_core::ports::OpContext,
+    request: &skill_studio_core::library::LibraryRequest,
+    cache: Option<&Path>,
+) -> Result<skill_studio_core::library::LibraryReport, skill_studio_core::CoreError> {
+    let filter = UsageFilter {
+        since: request.since,
+        until: request.until,
+        ..Default::default()
+    };
+    let now = rt.ports.clock.now();
+    filter.check_window(now).map_err(|message| {
+        skill_studio_core::CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+    })?;
+    let inventory = skill_studio_core::ops::scan_for_usage(rt, ctx)?;
+    let report = SkillUsage::load_read_only(cache).report_filtered(
+        &rt.scope.home.canonical,
+        &inventory,
+        request.days.unwrap_or(DEFAULT_USAGE_DAYS),
+        now,
+        &filter,
+    );
+    let counts: Vec<_> = report
+        .rows
+        .into_iter()
+        .map(|row| skill_studio_core::library::LibraryUses {
+            name: row.skill,
+            uses: row.recent_uses,
+            agents: row.agents,
+        })
+        .collect();
+    skill_studio_core::library::library(rt, ctx, &inventory, &counts, request, report.partial)
 }
 
 #[cfg(test)]
@@ -373,7 +504,7 @@ mod tests {
     /// One Claude Code transcript line where the model called the Skill tool.
     fn claude_skill_line(skill: &str, at: &str) -> String {
         format!(
-            r#"{{"type":"assistant","timestamp":"{at}","cwd":"/work","message":{{"content":[{{"type":"tool_use","name":"Skill","input":{{"skill":"{skill}"}}}}]}}}}"#
+            r#"{{"type":"assistant","sessionId":"{at}","timestamp":"{at}","cwd":"/work","message":{{"content":[{{"type":"tool_use","name":"Skill","input":{{"skill":"{skill}"}}}}]}}}}"#
         )
     }
 
@@ -432,6 +563,54 @@ mod tests {
             .expect("every installed skill has a row")
     }
 
+    #[test]
+    fn reporting_resumed_history_rebuilds_old_cache_instead_of_returning_double_counts() {
+        let fixture = fixture();
+        let inventory = scan(&fixture.home);
+        let path = fixture.home.join(".claude/projects/-work/resumed.jsonl");
+        let mut record: serde_json::Value =
+            serde_json::from_str(&claude_skill_line("gamma", &days_ago(1))).unwrap();
+        record["uuid"] = "resumed-use".into();
+        record["sessionId"] = "resumed-session".into();
+        fs::write(&path, (record.to_string() + "\n").repeat(2)).unwrap();
+        let cache = fixture.home.join("usage-cache.json");
+        let mut index = SkillInvocationIndex::default();
+        index.refresh_all(&fixture.home, &DiscoverySources::default());
+        index.save(&cache).unwrap();
+        let mut old: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&cache).unwrap()).unwrap();
+        old["reader_version"] = 3.into();
+        for file in old["files"].as_object_mut().unwrap().values_mut() {
+            file["context"]
+                .as_object_mut()
+                .unwrap()
+                .remove("claude_records");
+        }
+        let doubled = skill_studio_core::skill_uses::parse_claude_code_uses(
+            &fs::read_to_string(&path).unwrap(),
+        );
+        old["files"][path.to_str().unwrap()]["uses"] = serde_json::to_value(doubled).unwrap();
+        fs::write(&cache, serde_json::to_string(&old).unwrap()).unwrap();
+        let original = fs::read(&cache).unwrap();
+        let report =
+            SkillUsage::load_read_only(Some(&cache)).report(&fixture.home, &inventory, 30, now());
+        assert_eq!(
+            row(&report, "gamma").total_uses,
+            3,
+            "CLI and MCP must discard stale doubled counts"
+        );
+        assert_eq!(
+            row(&report, "gamma").recent_uses,
+            2,
+            "the resumed use must count once in the recent window"
+        );
+        assert_eq!(
+            fs::read(&cache).unwrap(),
+            original,
+            "read-only reports must leave the desktop cache untouched"
+        );
+    }
+
     /// Flow: report a 30-day window over the fixture home.
     /// Expectation: `gamma` has 1 recent use by claude-code and 2 in total
     /// (the plugin-qualified use folds into it); `idle` has none recent, 1
@@ -446,7 +625,7 @@ mod tests {
 
         let report = SkillUsage::default().report(&fixture.home, &inventory, 30, now());
 
-        assert_eq!(report.days, 30);
+        assert_eq!(report.window.days, Some(30));
         assert!(!report.partial, "absent history is complete: {report:?}");
         let names: Vec<&str> = report.rows.iter().map(|r| r.skill.as_str()).collect();
         assert_eq!(names, ["idle", "gamma"], "{report:?}");
@@ -483,6 +662,117 @@ mod tests {
         assert_eq!(row(&report, "gamma").recent_uses, 2);
         assert_eq!(row(&report, "idle").recent_uses, 1);
         assert_eq!(report.rows[0].skill, "gamma");
+    }
+
+    /// Flow: report the window from 50 to 10 days ago (`since`, `until`).
+    /// Expectation: only `idle`'s 45-day-old use counts; `gamma`'s uses 3
+    /// and 60 days ago fall outside, and the report echoes both bounds.
+    /// Failure means an agent asking about a past month gets uses from
+    /// outside it.
+    #[test]
+    fn a_since_until_window_counts_only_uses_inside_it() {
+        let fixture = fixture();
+        let inventory = scan(&fixture.home);
+        let since = now() - chrono::Duration::days(50);
+        let until = now() - chrono::Duration::days(10);
+        let filter = UsageFilter {
+            since: Some(since),
+            until: Some(until),
+            ..UsageFilter::default()
+        };
+
+        let report =
+            SkillUsage::default().report_filtered(&fixture.home, &inventory, 30, now(), &filter);
+
+        assert_eq!(row(&report, "idle").recent_uses, 1, "{report:?}");
+        assert_eq!(row(&report, "gamma").recent_uses, 0, "{report:?}");
+        assert_eq!(report.unused, ["gamma"]);
+        assert_eq!(report.window.since, Some(since.to_rfc3339()));
+        assert_eq!(report.window.until, Some(until.to_rfc3339()));
+    }
+
+    /// Flow: report the 30 days before a date 50 days ago (`until` only).
+    /// Expectation: the window is days 80 to 50 back, so only `gamma`'s
+    /// 60-day-old use counts, not `idle`'s 45-day-old one.
+    /// Failure means `until` alone still counts back from now.
+    #[test]
+    fn an_until_without_since_counts_the_days_before_it() {
+        let fixture = fixture();
+        let inventory = scan(&fixture.home);
+        let filter = UsageFilter {
+            until: Some(now() - chrono::Duration::days(50)),
+            ..UsageFilter::default()
+        };
+
+        let report =
+            SkillUsage::default().report_filtered(&fixture.home, &inventory, 30, now(), &filter);
+
+        assert_eq!(row(&report, "gamma").recent_uses, 1, "{report:?}");
+        assert_eq!(row(&report, "idle").recent_uses, 0, "{report:?}");
+    }
+
+    /// Flow: report a 90-day window with `top` 1.
+    /// Expectation: one row, `gamma` (2 uses), and no unused names.
+    /// Failure means "my most used skill" still returns every installed
+    /// skill.
+    #[test]
+    fn top_keeps_only_the_most_used_rows() {
+        let fixture = fixture();
+        let inventory = scan(&fixture.home);
+        let filter = UsageFilter {
+            top: Some(1),
+            ..UsageFilter::default()
+        };
+
+        let report =
+            SkillUsage::default().report_filtered(&fixture.home, &inventory, 90, now(), &filter);
+
+        let names: Vec<&str> = report.rows.iter().map(|r| r.skill.as_str()).collect();
+        assert_eq!(names, ["gamma"]);
+        assert!(report.unused.is_empty());
+    }
+
+    /// A window that holds no time is refused; a real one passes.
+    /// Failure means an empty window reports every skill as unused.
+    #[test]
+    fn an_empty_window_is_refused() {
+        let now = parse_usage_time("2026-11-14").unwrap();
+        let at = |text| Some(parse_usage_time(text).unwrap());
+        let window = |since, until| UsageFilter {
+            since,
+            until,
+            ..UsageFilter::default()
+        };
+        assert!(window(at("2026-11-01"), at("2026-10-01"))
+            .check_window(now)
+            .is_err());
+        assert!(window(at("2026-10-01"), at("2026-10-01"))
+            .check_window(now)
+            .is_err());
+        assert!(window(at("2026-11-15"), None).check_window(now).is_err());
+        assert!(window(at("2026-10-01"), at("2026-11-01"))
+            .check_window(now)
+            .is_ok());
+        assert!(window(None, at("2026-10-01")).check_window(now).is_ok());
+    }
+    /// Flow: parse the window bounds a user types.
+    /// Expectation: a bare date is the start of that day in UTC, an RFC 3339
+    /// time keeps its instant, and other text is refused.
+    /// Failure means `--since 2026-09-01` starts at the wrong time or bad
+    /// input counts from the start of history.
+    #[test]
+    fn usage_times_parse_a_date_or_an_rfc3339_time() {
+        assert_eq!(
+            parse_usage_time("2026-09-01").unwrap().to_rfc3339(),
+            "2026-09-01T00:00:00+00:00"
+        );
+        assert_eq!(
+            parse_usage_time("2026-09-01T10:00:00+02:00")
+                .unwrap()
+                .to_rfc3339(),
+            "2026-09-01T08:00:00+00:00"
+        );
+        assert!(parse_usage_time("last week").is_err());
     }
 
     /// Flow: seed from a desktop cache file, then report; separately, seed
@@ -537,5 +827,67 @@ mod tests {
         let report = usage.report(&fixture.home, &inventory, 30, now());
         assert!(report.unused.is_empty(), "{report:?}");
         assert_eq!(row(&report, "idle").recent_uses, 1);
+    }
+    #[test]
+    fn window_counts_a_session_even_when_its_latest_load_is_outside_the_window() {
+        let fixture = fixture();
+        let records: Vec<_> = [60, 3, 1]
+            .into_iter()
+            .map(|days| {
+                let mut record: serde_json::Value =
+                    serde_json::from_str(&claude_skill_line("gamma", &days_ago(days))).unwrap();
+                record["sessionId"] = "shared".into();
+                record.to_string()
+            })
+            .collect();
+        fs::write(
+            fixture.home.join(".claude/projects/-work/session.jsonl"),
+            records.join("\n") + "\n",
+        )
+        .unwrap();
+        let inventory = scan(&fixture.home);
+        let filter = UsageFilter {
+            since: Some(now() - chrono::Duration::days(10)),
+            until: Some(now() - chrono::Duration::days(2)),
+            ..Default::default()
+        };
+        let report =
+            SkillUsage::default().report_filtered(&fixture.home, &inventory, 30, now(), &filter);
+        let gamma = row(&report, "gamma");
+        assert_eq!(gamma.total_uses, 1);
+        assert_eq!(gamma.recent_uses, 1);
+        assert_eq!(gamma.last_used.as_deref(), Some(days_ago(1).as_str()));
+    }
+    #[test]
+    fn usage_counts_each_installed_skill_once_per_session_for_all_triggers() {
+        let installed = BTreeSet::from(["write-tests".to_string()]);
+        let sources = DiscoverySources::default();
+        let uses: Vec<_> = [
+            ("write-tests", "parent", SkillTrigger::Agent),
+            ("plugin:write-tests", "parent", SkillTrigger::User),
+            ("write-tests", "parent", SkillTrigger::FileRead),
+            ("write-tests", "child", SkillTrigger::FileRead),
+            ("removed", "child", SkillTrigger::Agent),
+        ]
+        .into_iter()
+        .map(|(skill, session, trigger)| SkillInvocation {
+            skill: skill.into(),
+            session: Some("parent".into()),
+            use_session: Some(session.into()),
+            harness: "claude-code".into(),
+            at: now(),
+            project_path: None,
+            trigger,
+        })
+        .collect();
+        let counted = session_uses(&uses, &installed, &sources);
+        assert_eq!(counted.len(), 2);
+        assert_eq!(
+            counted
+                .iter()
+                .filter(|u| u.use_session.as_deref() == Some("parent"))
+                .count(),
+            1
+        );
     }
 }

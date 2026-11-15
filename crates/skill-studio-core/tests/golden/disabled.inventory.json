@@ -1,6 +1,8 @@
 {
+  "lock_only": [],
   "skills": [
     {
+      "source": "manual",
       "name": "beta",
       "description": "Helps with beta for fixture-driven tests.",
       "deployments": [
@@ -62,6 +64,7 @@
       ]
     },
     {
+      "source": "manual",
       "name": "epsilon",
       "description": "Helps with epsilon for fixture-driven tests.",
       "deployments": [
@@ -123,6 +126,7 @@
       ]
     },
     {
+      "source": "manual",
       "name": "kappa",
       "description": "Helps with kappa for fixture-driven tests.",
       "deployments": [

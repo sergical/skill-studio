@@ -1,6 +1,8 @@
 {
+  "lock_only": [],
   "skills": [
     {
+      "source": "manual",
       "name": "delta",
       "description": "Helps with delta for fixture-driven tests.",
       "deployments": [
@@ -62,6 +64,7 @@
       ]
     },
     {
+      "source": "manual",
       "name": "epsilon",
       "description": "Helps with epsilon for fixture-driven tests.",
       "deployments": [

@@ -1471,3 +1471,36 @@ fn fixture_scope_refuses_write_without_tree_changes() {
     assert_eq!(complete_folder_tree(&home), before);
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn scan_source_and_library_filters_return_manual_library_skills_or_include_agent_copies() {
+    let home = tempfile::tempdir().unwrap();
+    for root in [".agents", ".codex"] {
+        let dir = home
+            .path()
+            .join(root)
+            .join("skills")
+            .join(root.trim_start_matches('.'));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: test\ndescription: A test skill.\n---\nBody.\n",
+        )
+        .unwrap();
+    }
+    let result = run(&[
+        "scan",
+        "--home",
+        home.path().to_str().unwrap(),
+        "--source",
+        "manual",
+        "--root",
+        "library",
+        "--json",
+    ]);
+    assert_eq!(result.status, 0);
+    let skills = result.json["data"]["skills"].as_array().unwrap();
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0]["name"], "agents");
+    assert_eq!(skills[0]["source"], "manual");
+}

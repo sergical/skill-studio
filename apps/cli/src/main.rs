@@ -22,8 +22,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
+use skill_studio_core::answers;
 use skill_studio_core::dto::{
-    CapabilitiesRequest, HarnessesRequest, InstallFile, InstallLinkMode, InstallMethod,
+    CapabilitiesRequest, CopyStatus, HarnessesRequest, InstallFile, InstallLinkMode, InstallMethod,
     InstallPreferencesRequest, InstallRequest, Inventory, ListEventsRequest, ParkRequest,
     RepairApplyMode, RepairApplyRequest, RepairPreviewRequest, RestoreRequest, ScanRequest,
     UnparkRequest, UpdateRequest,
@@ -74,11 +75,30 @@ impl From<AddMethod> for InstallMethod {
     }
 }
 
+const QUESTIONS: &str = "\
+Common questions:
+  Which library skills did I load most, and where did they come from?
+      skill-studio library --since 2026-10-01 --until 2026-11-16 --sort uses --top 10 --json
+  Library uses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.
+  Fields: count = matching rows after scope and filters, before --top; name = skill; library = shared folder; agents = loads by agent; source null = not installed from a repo; modes = manual/auto; copies = link/same/old/changed.
+  Which skills are installed outside my library too?
+      skill-studio library --all --json
+  Which copies of a pack did not get the last update?
+      skill-studio library --source <owner/repo> --copy-status old --json
+  Which skills did I not use in the last 30 days?
+      skill-studio usage --json
+  Which skills do agents read in different modes?
+      skill-studio invocation --mismatches --json
+  What is broken?
+      skill-studio diagnose --json
+Add --json for one JSON document.";
+
 #[derive(Parser)]
 #[command(
     name = "skill-studio",
     about = "Tidy up your agent skills: find broken, duplicate and unused skills, and clear them out safely, with undo.",
-    version = VERSION
+    version = VERSION,
+    after_help = QUESTIONS
 )]
 struct Cli {
     /// Print how long each step took, to stderr.
@@ -102,11 +122,24 @@ enum Command {
         manual: bool,
         #[arg(long, requires = "skill")]
         auto: bool,
+        /// Only list skills that agents read in different modes.
+        #[arg(long, conflicts_with_all = ["skill", "manual", "auto"])]
+        mismatches: bool,
         #[arg(long)]
         json: bool,
     },
     /// List every skill installed for your agents.
     Scan {
+        /// Only show skills from this owner/repo, plugin@marketplace, or manual.
+        #[arg(long)]
+        source: Option<String>,
+        /// Only show skills in ~/.agents/skills.
+        #[arg(long, value_parser = ["library"])]
+        root: Option<String>,
+        /// Only show agent copies with this status against the library copy:
+        /// link, same, differs or stale (older than the last update).
+        #[arg(long, value_parser = parse_copy_status)]
+        copy_status: Option<CopyStatus>,
         #[command(flatten)]
         scope: ScopeArgs,
         /// Only show this skill. Repeat for more than one.
@@ -146,12 +179,50 @@ enum Command {
         #[command(subcommand)]
         action: ReviewCommand,
     },
+    /// Show library skills, their sources, uses, invocation modes and agent copies.
+    Library {
+        /// Include skills outside ~/.agents/skills.
+        #[arg(long)]
+        all: bool,
+        /// Only show this owner/repo, plugin@marketplace, or manual.
+        #[arg(long)]
+        source: Option<String>,
+        /// Only show this skill. Repeat for more than one.
+        #[arg(long = "skill")]
+        skills: Vec<String>,
+        /// Only show rows with this agent copy status: link, same, old, changed.
+        #[arg(long, value_parser = parse_library_copy_status)]
+        copy_status: Option<skill_studio_core::library::LibraryCopyStatus>,
+
+        #[command(flatten)]
+        scope: ScopeArgs,
+        /// How many days back to count uses.
+        #[arg(long, default_value_t = skill_studio_host::DEFAULT_USAGE_DAYS)]
+        days: u32,
+        /// Count uses from this date (YYYY-MM-DD or RFC 3339).
+        #[arg(long, value_parser = skill_studio_host::parse_usage_time)]
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        /// Count uses before this date (YYYY-MM-DD or RFC 3339).
+        #[arg(long, value_parser = skill_studio_host::parse_usage_time)]
+        until: Option<chrono::DateTime<chrono::Utc>>,
+        /// Order rows by name or uses.
+        #[arg(long, value_parser = ["name", "uses"])]
+        sort: Option<String>,
+        /// Show only the N most used skills.
+        #[arg(long)]
+        top: Option<usize>,
+        /// Print the result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// List, add, update or remove packs: one source that ships skills.
     Pack {
         #[command(subcommand)]
         action: PackCommand,
     },
     /// Show which skills your agents used, and which they never used.
+    ///
+    /// Uses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.
     Usage {
         /// Keep uses from this agent id only.
         #[arg(long, value_name = "AGENT")]
@@ -161,6 +232,15 @@ enum Command {
         /// How many days back to count uses.
         #[arg(long, default_value_t = skill_studio_host::DEFAULT_USAGE_DAYS)]
         days: u32,
+        /// Count uses from this date (YYYY-MM-DD or RFC 3339) instead of --days.
+        #[arg(long, value_parser = skill_studio_host::parse_usage_time)]
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        /// Count uses before this date (YYYY-MM-DD or RFC 3339).
+        #[arg(long, value_parser = skill_studio_host::parse_usage_time)]
+        until: Option<chrono::DateTime<chrono::Utc>>,
+        /// Show only the N most used skills.
+        #[arg(long, value_name = "N")]
+        top: Option<usize>,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -683,11 +763,25 @@ fn main() -> ExitCode {
     let time = cli.time;
     match cli.command {
         Command::Scan {
+            source,
+            root,
+            copy_status,
             scope,
             skills,
             timings,
             json,
-        } => run_scan(&scope, skills, timings, json, time),
+        } => run_scan(
+            &scope,
+            &ScanRequest {
+                source,
+                root: root.map(|_| skill_studio_core::dto::ScanRoot::Library),
+                copy_status,
+                skills: skills.into_iter().map(SkillName).collect(),
+                timings,
+            },
+            json,
+            time,
+        ),
         Command::Diagnose {
             scope,
             skills,
@@ -728,13 +822,57 @@ fn main() -> ExitCode {
         } => run_restore(&scope, event_id, force, json, time),
         Command::Undo { scope, force, json } => run_undo(&scope, force, json, time),
         Command::Review { action } => run_review(action, time),
+        Command::Library {
+            all,
+            source,
+            skills,
+            copy_status,
+            scope,
+            days,
+            since,
+            until,
+            sort,
+            top,
+            json,
+        } => {
+            let request = skill_studio_core::library::LibraryRequest {
+                all,
+                source,
+                skills,
+                copy_status,
+                days: Some(days),
+                since,
+                until,
+                top,
+                sort: sort.map(|value| {
+                    if value == "uses" {
+                        skill_studio_core::library::LibrarySort::Uses
+                    } else {
+                        skill_studio_core::library::LibrarySort::Name
+                    }
+                }),
+            };
+            run_library(&scope, &request, json, time)
+        }
         Command::Pack { action } => run_pack(action, time),
         Command::Usage {
             scope,
             days,
+            since,
+            until,
+            top,
             json,
             harness,
-        } => run_usage(&scope, days, json, time, harness),
+        } => {
+            let filter = skill_studio_host::UsageFilter {
+                harness,
+                projects: scope.project_paths().to_vec(),
+                since,
+                until,
+                top,
+            };
+            run_usage(&scope, days, json, time, &filter)
+        }
         Command::Mcp => unreachable!("handled before telemetry starts"),
         Command::Add {
             scope,
@@ -778,9 +916,16 @@ fn main() -> ExitCode {
         Command::Extras { scope, json } => run_extras(&scope, json, time),
         Command::Invocation {
             scope,
+            mismatches: true,
+            json,
+            ..
+        } => run_invocation_mismatches(&scope, json, time),
+        Command::Invocation {
+            scope,
             skill,
             manual,
             auto,
+            mismatches: false,
             json,
         } => run_invocation(
             &scope,
@@ -1052,33 +1197,41 @@ fn exit_code(status: i32) -> ExitCode {
     ExitCode::from(status.clamp(0, 255) as u8)
 }
 
-fn run_scan(
-    scope: &ScopeArgs,
-    skills: Vec<String>,
-    timings: bool,
-    json: bool,
-    time: bool,
-) -> ExitCode {
+fn parse_library_copy_status(
+    value: &str,
+) -> Result<skill_studio_core::library::LibraryCopyStatus, String> {
+    match value {
+        "old" => Ok(skill_studio_core::library::LibraryCopyStatus::Old),
+        "changed" => Ok(skill_studio_core::library::LibraryCopyStatus::Changed),
+        other => parse_copy_status(other)
+            .map(Into::into)
+            .map_err(|_| "expected link, same, old or changed".into()),
+    }
+}
+
+fn parse_copy_status(value: &str) -> Result<CopyStatus, String> {
+    CopyStatus::ALL
+        .into_iter()
+        .find(|status| status.as_str() == value)
+        .ok_or_else(|| "expected link, same, differs or stale".into())
+}
+
+fn run_scan(scope: &ScopeArgs, req: &ScanRequest, json: bool, time: bool) -> ExitCode {
     let rt = match build_runtime::<skill_studio_core::dto::Inventory>(scope, Operation::Scan, json)
     {
         Ok(rt) => rt,
         Err(code) => return code,
     };
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
-    let req = ScanRequest {
-        skills: skills.into_iter().map(SkillName).collect(),
-        timings,
-    };
-    let result = ops::scan(&rt, &ctx, &req);
+    let result = ops::scan(&rt, &ctx, req);
     let envelope = ResultEnvelope::from_result(Operation::Scan, &rt.scope, &ctx, result);
-    let code = exit_code(envelope.exit_status());
     if json {
         output::print_json(&envelope);
     } else {
         output::print_scan_table(&envelope);
     }
     print_timing(time, envelope.timings.as_ref());
-    code
+    exit_code(envelope.exit_status())
 }
 
 fn run_diagnose(
@@ -1100,6 +1253,7 @@ fn run_diagnose(
     let req = ScanRequest {
         skills: skills.into_iter().map(SkillName).collect(),
         timings,
+        ..Default::default()
     };
     let result = ops::diagnose(&rt, &ctx, &req);
     let envelope = ResultEnvelope::from_result(Operation::Diagnose, &rt.scope, &ctx, result);
@@ -1876,6 +2030,7 @@ fn resolve_target(
         &ScanRequest {
             skills: vec![SkillName(name.to_string())],
             timings: false,
+            ..Default::default()
         },
     )?;
     let Some(skill) = inventory.skills.iter().find(|skill| skill.name.0 == name) else {
@@ -2111,7 +2266,7 @@ fn run_usage(
     days: u32,
     json: bool,
     time: bool,
-    harness: Option<String>,
+    filter: &skill_studio_host::UsageFilter,
 ) -> ExitCode {
     let rt =
         match build_runtime::<skill_studio_host::UsageReport>(scope, Operation::SkillUsage, json) {
@@ -2131,53 +2286,56 @@ fn run_usage(
         started,
     )];
     let scan_start = clock.monotonic();
-    let result = ops::scan_for_usage(&rt, &ctx).map(|inventory| {
-        steps.push(skill_studio_core::timing::step(
-            clock,
-            "installed_scan",
-            scan_start,
-        ));
-        let step_start = clock.monotonic();
-        let mut usage = skill_studio_host::SkillUsage::load_read_only(
-            cli_cache
-                .as_deref()
-                .filter(|path| path.exists())
-                .or(cache.as_deref()),
-        );
-        steps.push(skill_studio_core::timing::step(
-            clock,
-            "usage_cache_load",
-            step_start,
-        ));
-        let step_start = clock.monotonic();
-        let report = usage.report_filtered(
-            &rt.scope.home.canonical,
-            &inventory,
-            days,
-            chrono::Utc::now(),
-            &skill_studio_host::UsageFilter {
-                harness,
-                projects: scope.project_paths().to_vec(),
-            },
-        );
-        steps.push(skill_studio_core::timing::step(
-            clock,
-            "history_refresh_and_tally",
-            step_start,
-        ));
-        let step_start = clock.monotonic();
-        if let Some(path) = cli_cache {
-            if let Err(error) = usage.save_cache(&path) {
-                eprintln!("Could not save usage cache: {error}");
+    let result = filter
+        .check_window(chrono::Utc::now())
+        .map_err(|message| {
+            skill_studio_core::CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+        })
+        .and_then(|()| ops::scan_for_usage(&rt, &ctx))
+        .map(|inventory| {
+            steps.push(skill_studio_core::timing::step(
+                clock,
+                "installed_scan",
+                scan_start,
+            ));
+            let step_start = clock.monotonic();
+            let mut usage = skill_studio_host::SkillUsage::load_read_only(
+                cli_cache
+                    .as_deref()
+                    .filter(|path| path.exists())
+                    .or(cache.as_deref()),
+            );
+            steps.push(skill_studio_core::timing::step(
+                clock,
+                "usage_cache_load",
+                step_start,
+            ));
+            let step_start = clock.monotonic();
+            let report = usage.report_filtered(
+                &rt.scope.home.canonical,
+                &inventory,
+                days,
+                chrono::Utc::now(),
+                filter,
+            );
+            steps.push(skill_studio_core::timing::step(
+                clock,
+                "history_refresh_and_tally",
+                step_start,
+            ));
+            let step_start = clock.monotonic();
+            if let Some(path) = cli_cache {
+                if let Err(error) = usage.save_cache(&path) {
+                    eprintln!("Could not save usage cache: {error}");
+                }
             }
-        }
-        steps.push(skill_studio_core::timing::step(
-            clock,
-            "usage_cache_save",
-            step_start,
-        ));
-        report
-    });
+            steps.push(skill_studio_core::timing::step(
+                clock,
+                "usage_cache_save",
+                step_start,
+            ));
+            report
+        });
     ctx.record_timing(skill_studio_core::timing::op_timing(
         clock,
         "skill_usage",
@@ -2206,6 +2364,7 @@ fn run_outdated(scope: &ScopeArgs, skills: Vec<String>, json: bool, time: bool) 
     let req = ScanRequest {
         skills: skills.into_iter().map(SkillName).collect(),
         timings: false,
+        ..Default::default()
     };
     let gh_bin = rt.ports.tools.as_ref().and_then(|t| t.find_binary("gh"));
     let result = match gh_bin {
@@ -2551,6 +2710,20 @@ fn run_invocation(
     finish(&envelope, json, time, output::print_invocation_table)
 }
 
+fn run_invocation_mismatches(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
+    use skill_studio_core::ops_invocation::{invocation, InvocationRequest};
+    let rt =
+        match build_runtime::<answers::InvocationMismatches>(scope, Operation::Invocation, json) {
+            Ok(rt) => rt,
+            Err(code) => return code,
+        };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = invocation(&rt, &ctx, &InvocationRequest::default())
+        .map(|report| answers::invocation_mismatches(&report));
+    let envelope = ResultEnvelope::from_result(Operation::Invocation, &rt.scope, &ctx, result);
+    finish(&envelope, json, time, output::print_invocation_mismatches)
+}
+
 fn run_pack(action: PackCommand, time: bool) -> ExitCode {
     use skill_studio_core::pack::{PackListRequest, PackReport, PackShowRequest};
     let (source, args) = match action {
@@ -2720,4 +2893,29 @@ fn run_review(action: ReviewCommand, time: bool) -> ExitCode {
         let envelope = ResultEnvelope::from_result(Operation::ReviewDue, &rt.scope, &ctx, result);
         finish(&envelope, json, time, output::print_review_due)
     }
+}
+
+fn run_library(
+    scope: &ScopeArgs,
+    request: &skill_studio_core::library::LibraryRequest,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    let rt = match build_runtime::<skill_studio_core::library::LibraryReport>(
+        scope,
+        Operation::Library,
+        json,
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = skill_studio_host::library_report(
+        &rt,
+        &ctx,
+        request,
+        scope.desktop_usage_cache().as_deref(),
+    );
+    let envelope = ResultEnvelope::from_result(Operation::Library, &rt.scope, &ctx, result);
+    finish(&envelope, json, time, output::print_library)
 }
