@@ -1,6 +1,8 @@
 name: Trusted merge risk
 on:
-  pull_request_target:
+  # The job needs a write token to post the status. It runs only base-branch
+  # code and fetches the PR head as git objects for the diff.
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
     types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
 permissions:
   contents: read
