@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
+import subprocess
 from gate import classify, gh, git, pages, run
 
 
@@ -35,7 +36,7 @@ def collect(cfg, since, until):
         return pr
     # Fetch merge commits before classifying. GitHub's public PR refs keep closed heads reachable.
     run('git', 'fetch', 'origin', cfg['base'].split('/')[-1], '--quiet')
-    missing = [p['mergeCommit']['oid'] for p in prs if __import__('subprocess').run(['git', 'cat-file', '-e', p['mergeCommit']['oid']], capture_output=True).returncode]
+    missing = [p['mergeCommit']['oid'] for p in prs if subprocess.run(['git', 'cat-file', '-e', p['mergeCommit']['oid']], capture_output=True).returncode]
     if missing:
         run('git', 'fetch', 'origin', *missing, '--quiet')
     with ThreadPoolExecutor(max_workers=6) as pool:

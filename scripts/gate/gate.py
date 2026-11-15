@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Configurable merge proof and risk classification. Requires Python 3.11+."""
 import argparse
+from datetime import date
 import fnmatch
 import hashlib
 import json
@@ -200,7 +201,7 @@ def main():
     arguments(sub)
     metric = sub.add_parser('metrics')
     metric.add_argument('--since', required=True)
-    metric.add_argument('--until', default=__import__('datetime').date.today().isoformat())
+    metric.add_argument('--until', default=date.today().isoformat())
     metric.add_argument('--last', type=int)
     args = parser.parse_args()
     if args.command == 'guard':
