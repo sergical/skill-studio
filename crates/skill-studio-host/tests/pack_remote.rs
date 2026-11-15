@@ -167,7 +167,7 @@ fn pack_list_remote_names_a_new_skill_by_its_frontmatter_or_offers_a_name_add_re
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("SKILL.md"),
-        git_pack::skill_body("actual-skill", "v2"),
+        "---\nname: actual-skill\ndescription: Named apart from its folder.\nallowed-tools: [Read, Bash]\n---\nv2\n",
     )
     .unwrap();
     pack.publish("v2");
@@ -198,4 +198,19 @@ fn folder_hash_skips_a_link_loop_like_the_skills_cli_or_drops_the_skill() {
         skills_cli_folder_hash(&RealFs::new(), &skill).unwrap(),
         plain
     );
+}
+
+#[test]
+fn folder_hash_ends_a_loop_between_two_sibling_links_or_drops_the_skill() {
+    let temp = tempfile::tempdir().unwrap();
+    let skill = temp.path().canonicalize().unwrap().join("s");
+    for dir in ["a", "b"] {
+        std::fs::create_dir_all(skill.join(dir)).unwrap();
+        std::fs::write(skill.join(dir).join("note.md"), dir).unwrap();
+    }
+    std::fs::write(skill.join("SKILL.md"), git_pack::skill_body("s", "v1")).unwrap();
+    std::os::unix::fs::symlink("../b", skill.join("a/next")).unwrap();
+    std::os::unix::fs::symlink("../a", skill.join("b/next")).unwrap();
+
+    assert!(skills_cli_folder_hash(&RealFs::new(), &skill).is_ok());
 }

@@ -316,42 +316,46 @@ fn build(
     Ok(PackReport { packs, summary })
 }
 
-/// What makes two spellings of one source the same pack. A git source
-/// drops its scheme, user, port, trailing `/` and `.git`, and case, so
+/// What makes two spellings of one source the same pack. A remote git
+/// source drops its scheme, its user, a trailing `/` and `.git`, so
 /// `owner/repo`, `https://github.com/Owner/repo.git`, and
-/// `git@github.com:owner/repo.git` match. Other sources match as written.
+/// `git@github.com:owner/repo.git` match; case is ignored only on GitHub.
+/// A port stays. Local paths and other kinds match as written.
 fn source_identity(kind: PackKind, source: &str) -> String {
-    if !matches!(kind, PackKind::SkillsSh | PackKind::Dotagents) {
+    let source = source.trim();
+    let local = source.starts_with(['/', '.', '~', '\\'])
+        || source.as_bytes().get(1) == Some(&b':') && source.as_bytes()[0].is_ascii_alphabetic();
+    if !matches!(kind, PackKind::SkillsSh | PackKind::Dotagents) || local {
         return source.to_string();
     }
-    let mut s = source.trim().to_ascii_lowercase();
-    let url = s.contains("://");
-    if let Some((_, rest)) = s.split_once("://") {
-        s = rest.to_string();
-    }
+    let (url, mut s) = match source.split_once("://") {
+        Some((_, rest)) => (true, rest),
+        None => (false, source),
+    };
     if let Some((user, rest)) = s.split_once('@') {
         if !user.contains('/') {
-            s = rest.to_string();
+            s = rest;
         }
     }
-    if let Some((host, rest)) = s.split_once(':') {
-        if !host.contains('/') {
-            let rest = if url {
-                rest.trim_start_matches(|c: char| c.is_ascii_digit())
-            } else {
-                rest
-            };
-            s = format!("{host}/{}", rest.trim_start_matches('/'));
-        }
-    }
-    let s = s.trim_end_matches('/');
-    let s = s.strip_suffix(".git").unwrap_or(s);
-    match s.split_once('/') {
-        Some((owner, repo)) if !owner.contains('.') && !repo.contains('/') => {
-            format!("github.com/{s}")
+    let mut s = match s.split_once(':') {
+        Some((host, rest)) if !url && !host.contains('/') => {
+            format!("{host}/{}", rest.trim_start_matches('/'))
         }
         _ => s.to_string(),
+    };
+    s.truncate(s.trim_end_matches('/').len());
+    if let Some(stripped) = s.strip_suffix(".git") {
+        s = stripped.to_string();
     }
+    if let Some((owner, repo)) = s.split_once('/') {
+        if !owner.contains(['.', ':']) && !repo.contains('/') {
+            s = format!("github.com/{s}");
+        }
+    }
+    if s.to_ascii_lowercase().starts_with("github.com/") {
+        s.make_ascii_lowercase();
+    }
+    s
 }
 
 fn selected_scopes(
@@ -891,12 +895,12 @@ fn read_json<T: for<'de> Deserialize<'de> + Default>(
 /// file's `/`-separated path, a NUL, its byte length, a NUL, and its bytes,
 /// in path order. CRLF reads as LF in text files. `.git`, `__pycache__`,
 /// `__pypackages__`, and `metadata.json` are skipped; a link is followed
-/// only when its target is inside the folder and is not a folder that
-/// contains the link, so a link loop is skipped as the skills CLI skips it.
+/// only when its target is inside the folder, and a folder already open on
+/// the current path is skipped, so a link loop ends.
 pub fn skills_cli_folder_hash(fs: &dyn ScopeFs, dir: &Path) -> Result<String, CoreError> {
     let root = fs.canonicalize(dir).map_err(|e| CoreError::io(dir, e))?;
     let mut files = Vec::new();
-    collect_files(fs, &root, &root, "", &mut files)?;
+    collect_files(fs, &root, &root, "", &mut files, &mut vec![root.clone()])?;
     files.sort_by(|a, b| a.0.cmp(&b.0));
     let mut data = Vec::new();
     for (relative, path) in files {
@@ -928,19 +932,16 @@ fn collect_files(
     dir: &Path,
     prefix: &str,
     files: &mut Vec<(String, PathBuf)>,
+    ancestors: &mut Vec<PathBuf>,
 ) -> Result<(), CoreError> {
     for entry in fs.read_dir(dir).map_err(|e| CoreError::io(dir, e))? {
         let path = dir.join(&entry.name);
         let relative = format!("{prefix}{}", entry.name);
         let kind = if entry.kind == FileKind::Symlink {
             match fs.canonicalize(&path) {
-                Ok(target)
-                    if target.starts_with(root)
-                        && !fs.canonicalize(dir).is_ok_and(|d| d.starts_with(&target)) =>
-                {
-                    fs.symlink_metadata(&target)
-                        .map_or(FileKind::Other, |f| f.kind)
-                }
+                Ok(target) if target.starts_with(root) => fs
+                    .symlink_metadata(&target)
+                    .map_or(FileKind::Other, |f| f.kind),
                 _ => continue,
             }
         } else {
@@ -953,11 +954,43 @@ fn collect_files(
                     ".git" | "__pycache__" | "__pypackages__"
                 ) =>
             {
-                collect_files(fs, root, &path, &format!("{relative}/"), files)?;
+                let real = fs
+                    .canonicalize(&path)
+                    .map_err(|e| CoreError::io(&path, e))?;
+                if !ancestors.contains(&real) {
+                    ancestors.push(real);
+                    collect_files(fs, root, &path, &format!("{relative}/"), files, ancestors)?;
+                    ancestors.pop();
+                }
             }
             FileKind::File if entry.name != "metadata.json" => files.push((relative, path)),
             _ => {}
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{source_identity, PackKind};
+
+    #[test]
+    fn source_identity_joins_only_spellings_of_one_repo_or_merges_distinct_packs() {
+        let same = |a: &str, b: &str| {
+            source_identity(PackKind::SkillsSh, a) == source_identity(PackKind::SkillsSh, b)
+        };
+        assert!(same("owner/repo", "https://github.com/Owner/repo.git/"));
+        assert!(same("owner/repo", "git@github.com:OWNER/repo.git"));
+        assert!(same("123org/repo", "git@github.com:123org/repo"));
+        assert!(!same(
+            "ssh://git@example.com:2222/team/repo.git",
+            "ssh://git@example.com:3333/team/repo.git"
+        ));
+        assert!(!same(
+            "https://gitlab.com/Team/repo",
+            "https://gitlab.com/team/repo"
+        ));
+        assert!(!same("/srv/Skills", "/srv/skills"));
+        assert!(!same("./Skills", "./skills"));
+    }
 }

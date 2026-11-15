@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use skill_studio_core::frontmatter::{parse_frontmatter, FrontmatterParseResult};
+use skill_studio_core::frontmatter::frontmatter_fields;
 use skill_studio_core::pack::{skills_cli_folder_hash, PackRemote, RemotePack, RemoteSkill};
 use skill_studio_core::ports::{CancelToken, ProcessSpawner, ProcessSpec};
 
@@ -138,10 +138,7 @@ fn tree_hashes(ls_tree: &str, root: &str) -> HashMap<String, String> {
 fn skill_name(dir: &Path, folder: &str) -> String {
     std::fs::read_to_string(dir.join("SKILL.md"))
         .ok()
-        .and_then(|text| match parse_frontmatter(&text) {
-            FrontmatterParseResult::Valid(fm) => fm.name,
-            _ => None,
-        })
+        .and_then(|text| frontmatter_fields(&text).remove("name"))
         .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(|| folder.to_string())
 }
