@@ -90,7 +90,7 @@ def card(args, cfg):
     if record.get('head') != sha:
         record = {}
     lines = [START, f"| Intent | {cell(local_state().get('intent', 'not recorded'))} |", '| :-- | :-- |', f"| Result | {cell(args.result or pr['title'])} |", f'| Head | `{sha}` |', f"| Tier | **{risk['tier']}** |", f"| Reasons | {cell('; '.join(r['rule'] + ': ' + r.get('reason', ', '.join(r.get('files', []))) for r in risk['reasons']) or 'no rule matched')} |", f"| Review | {cell(record.get('reviewer', 'unknown'))}: {cell(record.get('verdict', states.get('gate/review', 'not run')))} |", '', '| Check | Status |', '| :-- | :-- |']
-    names = [cfg['check'], *cfg.get('ci_jobs', []), *states, 'gate/risk', 'gate/review']
+    names = [cfg['check'], *cfg.get('ci_jobs', []), *states, 'gate/risk', 'gate/review', 'gate/approved']
     for name in dict.fromkeys(names):
         state = states.get(name, 'not reported')
         mark = '✅' if state == 'success' else '❌' if state in ['failure', 'error', 'cancelled', 'timed_out'] else '⏳'
@@ -133,8 +133,8 @@ def guard():
         event = json.load(sys.stdin)
         command = unquote(json.dumps(event.get('tool_input', event)))
         command = re.sub(r"['\"\\]", '', command)
-        if re.search(r'gate\s*:\s*approved', command, re.I):
-            raise ValueError('Only a human may add gate:approved')
+        if re.search(r'gate\s*[:/]\s*approved', command, re.I):
+            raise ValueError('Only a human may grant gate approval')
     except Exception as error:
         print(str(error), file=sys.stderr)
         raise SystemExit(2)

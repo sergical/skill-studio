@@ -4355,6 +4355,359 @@
     "title": "Map_of_OutdatedRecord",
     "type": "object"
   },
+  "crates/skill-studio-core/schema/pack_list_request.schema.json": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Input for `pack_list`.",
+    "properties": {
+      "project_path": {
+        "default": null,
+        "description": "Only this tracked project. Absent: the home and every tracked project.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "remote": {
+        "default": false,
+        "description": "Ask each git source for its newest commit and skills. Off by default:\nwithout it the call reads local files only.",
+        "type": "boolean"
+      }
+    },
+    "title": "PackListRequest",
+    "type": "object"
+  },
+  "crates/skill-studio-core/schema/pack_report.schema.json": {
+    "$defs": {
+      "Pack": {
+        "description": "One source that ships installed skills.",
+        "properties": {
+          "behind_count": {
+            "description": "Skills behind upstream.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "edited_count": {
+            "description": "Skills with local edits.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "git_url": {
+            "description": "Git URL the remote check uses.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/$defs/PackKind",
+            "description": "The tool that installed it."
+          },
+          "new_upstream": {
+            "description": "Upstream skills that are not installed. Empty without a remote check.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ref_pin": {
+            "description": "Branch, tag, commit, or plugin version the install is pinned to.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remote": {
+            "$ref": "#/$defs/RemoteState",
+            "description": "Remote check result."
+          },
+          "scopes": {
+            "description": "Scopes with at least one skill of this pack.",
+            "items": {
+              "$ref": "#/$defs/RootScope"
+            },
+            "type": "array"
+          },
+          "skills": {
+            "description": "Installed skills, by scope and name.",
+            "items": {
+              "$ref": "#/$defs/PackSkill"
+            },
+            "type": "array"
+          },
+          "source": {
+            "description": "`owner/repo`, git URL, npm package, or `plugin@marketplace`.",
+            "type": "string"
+          },
+          "summary": {
+            "description": "One line for a person or agent.",
+            "type": "string"
+          },
+          "update_commands": {
+            "description": "Commands the owning agent runs to update this pack. Skill Studio does not run them.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "source",
+          "kind",
+          "update_commands",
+          "scopes",
+          "skills",
+          "new_upstream",
+          "edited_count",
+          "behind_count",
+          "remote",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "PackKind": {
+        "description": "The tool that installed a pack.",
+        "oneOf": [
+          {
+            "const": "skills_sh",
+            "description": "`npx skills add` from a git source.",
+            "type": "string"
+          },
+          {
+            "const": "npm",
+            "description": "`npx skills experimental_sync` from an npm package (`via` in `skills-lock.json`).",
+            "type": "string"
+          },
+          {
+            "const": "dotagents",
+            "description": "`npx @sentry/dotagents` skills and plugins.",
+            "type": "string"
+          },
+          {
+            "const": "plugin",
+            "description": "A Claude Code or Codex plugin cache.",
+            "type": "string"
+          }
+        ]
+      },
+      "PackSkill": {
+        "description": "One installed skill of a pack, at one scope.",
+        "properties": {
+          "agents": {
+            "description": "Agents that load this skill at this scope.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "behind": {
+            "description": "Upstream has a different version. Absent: no remote check, or upstream lacks the skill.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "edited": {
+            "description": "The folder differs from the hash its lock recorded. Absent: no hash to compare.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Skill name.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Installed folder, when one is on disk.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "$ref": "#/$defs/RootScope",
+            "description": "Global or one project."
+          }
+        },
+        "required": [
+          "name",
+          "scope",
+          "agents"
+        ],
+        "type": "object"
+      },
+      "ProjectRef": {
+        "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
+        "type": "string"
+      },
+      "RemoteState": {
+        "description": "What the remote check found for one pack.",
+        "oneOf": [
+          {
+            "description": "The call did not ask for a remote check.",
+            "properties": {
+              "state": {
+                "const": "not_checked",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The pack has no git source to check.",
+            "properties": {
+              "state": {
+                "const": "no_git_source",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The pack is pinned to one commit, so upstream cannot move.",
+            "properties": {
+              "state": {
+                "const": "pinned_to_commit",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source answered.",
+            "properties": {
+              "commit": {
+                "description": "Upstream commit the check compared against.",
+                "type": "string"
+              },
+              "state": {
+                "const": "checked",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "commit"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source did not answer.",
+            "properties": {
+              "reason": {
+                "description": "Git's own message.",
+                "type": "string"
+              },
+              "state": {
+                "const": "failed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RootScope": {
+        "description": "Where a root lives.",
+        "oneOf": [
+          {
+            "description": "Under the scope home.",
+            "properties": {
+              "scope": {
+                "const": "global",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Under one tracked project.",
+            "properties": {
+              "project": {
+                "$ref": "#/$defs/ProjectRef"
+              },
+              "scope": {
+                "const": "project",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope",
+              "project"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Result of `pack_list` and `pack_show`.",
+    "properties": {
+      "packs": {
+        "description": "Packs by kind, source, and pin.",
+        "items": {
+          "$ref": "#/$defs/Pack"
+        },
+        "type": "array"
+      },
+      "summary": {
+        "description": "One line for a person or agent.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "packs",
+      "summary"
+    ],
+    "title": "PackReport",
+    "type": "object"
+  },
+  "crates/skill-studio-core/schema/pack_show_request.schema.json": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Input for `pack_show`.",
+    "properties": {
+      "project_path": {
+        "default": null,
+        "description": "Only this tracked project. Absent: the home and every tracked project.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "remote": {
+        "default": false,
+        "description": "Ask the git source for its newest commit and skills.",
+        "type": "boolean"
+      },
+      "source": {
+        "description": "Pack source exactly as `pack_list` reports it.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "source"
+    ],
+    "title": "PackShowRequest",
+    "type": "object"
+  },
   "crates/skill-studio-core/schema/park_outcome.schema.json": {
     "$defs": {
       "DeploymentId": {

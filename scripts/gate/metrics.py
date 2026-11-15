@@ -10,6 +10,7 @@ from gate import classify, gh, git, pages, run
 
 def collect(cfg, since, until):
     repo = cfg['repository']
+    default_branch = gh(f'repos/{repo}')['default_branch']
     cache = Path('.gate/out/history')
     cache.mkdir(parents=True, exist_ok=True)
     def cached(key, loader):
@@ -17,7 +18,7 @@ def collect(cfg, since, until):
         if not path.exists():
             path.write_text(json.dumps(loader()))
         return json.loads(path.read_text())
-    prs = json.loads(run('gh', 'pr', 'list', '--repo', repo, '--state', 'merged', '--limit', '1000', '--json', 'number,title,mergedAt,mergeCommit,headRefOid,author,body', '--search', f'merged:>={since}'))
+    prs = json.loads(run('gh', 'pr', 'list', '--repo', repo, '--state', 'merged', '--base', default_branch, '--limit', '1000', '--json', 'number,title,mergedAt,mergeCommit,headRefOid,author,body', '--search', f'merged:>={since}'))
     if len(prs) == 1000:
         raise ValueError('History exceeds 1000 PRs; narrow --since to avoid a truncated report')
     end = datetime.fromisoformat(until).replace(tzinfo=timezone.utc) + timedelta(days=1)
@@ -35,7 +36,7 @@ def collect(cfg, since, until):
         pr['risk'] = classify(cfg, parent, pr['mergeCommit']['oid'], author=pr['author']['login'])
         return pr
     # Fetch merge commits before classifying. GitHub's public PR refs keep closed heads reachable.
-    run('git', 'fetch', 'origin', cfg['base'].split('/')[-1], '--quiet')
+    run('git', 'fetch', 'origin', default_branch, '--quiet')
     missing = [p['mergeCommit']['oid'] for p in prs if subprocess.run(['git', 'cat-file', '-e', p['mergeCommit']['oid']], capture_output=True).returncode]
     if missing:
         run('git', 'fetch', 'origin', *missing, '--quiet')
@@ -43,7 +44,7 @@ def collect(cfg, since, until):
         details = list(pool.map(detail, prs))
     selected = [p for p in details if datetime.fromisoformat(p['mergedAt'].replace('Z', '+00:00')) < end]
     commits = []
-    for line in git('log', cfg['base'], '--first-parent', f'--since={since}', f'--until={(end + timedelta(days=14)).isoformat()}', '--format=%H%x09%cI%x09%s').splitlines():
+    for line in git('log', f'origin/{default_branch}', '--first-parent', f'--since={since}', f'--until={(end + timedelta(days=14)).isoformat()}', '--format=%H%x09%cI%x09%s').splitlines():
         sha, date, title = line.split('\t', 2)
         if re.search(r'\b(fix|regression|hotfix|revert)\b', title, re.I):
             commits.append({'sha': sha, 'date': date, 'title': title, 'files': git('diff-tree', '--no-commit-id', '--name-only', '-r', sha).splitlines()})
@@ -58,7 +59,7 @@ def collect(cfg, since, until):
         fixes += [c['sha'] for c in commits if related(c['title'], '', c['files'], c['date']) and c['sha'] not in {p['mergeCommit']['oid'] for p in details}]
         if fixes:
             followups[str(pr['number'])] = fixes
-    runs = [r for page in pages(f'repos/{repo}/actions/runs?branch={cfg["base"].split("/")[-1]}&event=push&status=failure&per_page=100&created={since}..{until}') for r in page['workflow_runs'] if r['event'] == 'push' and r['head_repository']['full_name'] == repo and (not cfg.get('ci_workflows') or r['path'].split('@')[0] in cfg['ci_workflows'])]
+    runs = [r for page in pages(f'repos/{repo}/actions/runs?branch={default_branch}&event=push&status=failure&per_page=100&created={since}..{until}') for r in page['workflow_runs'] if r['event'] == 'push' and r['head_repository']['full_name'] == repo and (not cfg.get('ci_workflows') or r['path'].split('@')[0] in cfg['ci_workflows'])]
     n = len(selected)
     stop = [p for p in selected if p['risk']['tier'] == 'stop']
     per_rule = {}

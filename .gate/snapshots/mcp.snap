@@ -594,6 +594,57 @@
   {
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "project_path": {
+          "default": null,
+          "description": "Only this tracked project. Absent: the home and every tracked project.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remote": {
+          "default": false,
+          "description": "Ask each git source for its newest commit and skills. Off by default:\nwithout it the call reads local files only.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "pack_list"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "project_path": {
+          "default": null,
+          "description": "Only this tracked project. Absent: the home and every tracked project.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remote": {
+          "default": false,
+          "description": "Ask the git source for its newest commit and skills.",
+          "type": "boolean"
+        },
+        "source": {
+          "description": "Pack source exactly as `pack_list` reports it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "name": "pack_show"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "deployment_id": {
