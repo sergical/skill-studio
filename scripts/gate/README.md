@@ -103,3 +103,32 @@ No approval label is added by any gate command.
 The guard is a best-effort string match, not a token sandbox. It blocks quoted, escaped and URL-encoded approval labels and fails closed on malformed input, even outside a git checkout.
 
 Verify manifests keep the documented scenarios format. An optional `head` field binds evidence to a commit. A mismatched head shows not run; evidence without a head is rendered as unbound and cannot claim a verified current head.
+## Workflows and metrics
+
+`gate.yml` posts risk for each PR head and reruns for label removal or addition.
+Fork PR tokens cannot write statuses. A maintainer must run classification from
+a trusted checkout and post its result; fork runs fail closed. Do not use
+`pull_request_target` to execute untrusted PR code with a write token.
+
+`gate-update.yml` updates behind PRs that have auto-merge enabled. Supply an
+optional `GATE_UPDATE_TOKEN` secret with contents and pull-request write access
+so update pushes trigger CI. GitHub suppresses most workflows from pushes made
+with the default workflow token. Without that secret, updates can occur but a
+maintainer must trigger checks. Conflicts or head changes fail the job and leave
+the PR for a maintainer. This workflow does not enable auto-merge.
+
+`gate metrics --since 2026-08-01 --until 2026-11-14 --last 250` prints outcomes
+and an optional backtest. It paginates GitHub API data and caches immutable PR
+merge facts in `.gate/out/history`. Delete that cache to refresh it. Rates use
+PRs as the denominator; a PR can match several rules. Behind means the main
+parent immediately before the merge was absent from the PR head. Review proof
+must be success before the merge timestamp. Follow-up fixes use titles and
+shared files or PR references within 14 days; this is a heuristic. Recent PRs
+have an incomplete observation period. Historical CLI and MCP snapshots do not
+exist, so historical contract stop counts are a lower bound. No code can recover
+those outputs from file paths alone. Reports state this limitation.
+
+The privileged risk job checks out base-branch gate code and policy. PR changes
+cannot change their own classification. The first gate PR needs a manual
+bootstrap because base does not yet contain the gate. Unit and contract jobs
+run PR code with read-only permissions.
