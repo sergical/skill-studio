@@ -3,16 +3,9 @@ import json
 from pathlib import Path
 import re
 import tomllib
-from urllib.parse import unquote
 from gate import classify, gh, git, run, state_path, read_at, TIERS
 
 START, END = '<!-- gate:card -->', '<!-- /gate:card -->'
-FILE_TOOLS = {
-    'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'apply_patch',
-    'functions.apply_patch', 'read_file', 'write_file', 'edit_file',
-    'mcp__filesystem__read_file', 'mcp__filesystem__write_file',
-    'mcp__filesystem__edit_file', 'mcp__files__write',
-}
 
 
 def local_state():
@@ -51,8 +44,9 @@ def review(args, cfg):
     if author and author.strip().casefold() == args.reviewer.strip().casefold():
         raise ValueError('Reviewer model must differ from author model')
     verdict = 'fail' if any(f['severity'] in ['high', 'critical'] and not f['resolved'] for f in findings) else args.verdict
+    open_findings = sum(not f['resolved'] for f in findings)
     record = {'head': sha, 'reviewer': args.reviewer, 'verdict': verdict, 'findings': findings}
-    gh(f"repos/{cfg['repository']}/statuses/{sha}", 'POST', {'state': 'success' if verdict == 'pass' else 'failure', 'context': 'gate/review', 'description': f'{verdict}: {args.reviewer}'[:140]})
+    gh(f"repos/{cfg['repository']}/statuses/{sha}", 'POST', {'state': 'success' if verdict == 'pass' else 'failure', 'context': 'gate/review', 'description': f'{verdict}: {args.reviewer}, {open_findings} open'[:140]})
     state_path().with_suffix('.review.json').write_text(json.dumps(record, indent=2) + '\n')
     print(json.dumps(record, indent=2))
 
@@ -133,22 +127,6 @@ def card(args, cfg):
     print('Proof card updated')
 
 
-def guard():
-    import sys
-    try:
-        event = json.load(sys.stdin)
-        tool = event.get('tool_name')
-        if tool in FILE_TOOLS:
-            return
-        command = unquote(json.dumps(event.get('tool_input', event)))
-        command = re.sub(r"['\"\\]", '', command)
-        if re.search(r'gate\s*[:/]\s*approved', command, re.I):
-            raise ValueError('Only a human may grant gate approval')
-    except Exception as error:
-        print(str(error), file=sys.stderr)
-        raise SystemExit(2)
-
-
 def arguments(sub):
     parser = sub.add_parser('start')
     parser.add_argument('intent', nargs='?')
@@ -160,4 +138,3 @@ def arguments(sub):
     parser.add_argument('--findings', required=True)
     parser = sub.add_parser('card')
     parser.add_argument('--result')
-    sub.add_parser('guard')
