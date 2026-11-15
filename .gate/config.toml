@@ -30,11 +30,9 @@ paths = ["**/release.yml", "packages/npm/**", "**/tauri.release.conf.json", "scr
 
 [[rules]]
 id = "gate"
-tier = "stop"
+tier = "show"
 paths = [
   ".github/**",
-  "**/CODEOWNERS",
-  "CODEOWNERS",
   "deny.toml",
   "knip.json",
   "doctor.config.ts",
@@ -56,13 +54,13 @@ paths = ["apps/server/wrangler.jsonc", "**/deploy-server.yml", "**/.env*", ".env
 
 [[rules]]
 id = "public-contract"
-tier = "stop"
+tier = "show"
 paths = [".gate/snapshots/**", "crates/skill-studio-core/schema/*.json"]
 
 [[rules]]
 id = "policy"
 tier = "stop"
-paths = ["LICENSE*", "SECURITY.md", "CODE_OF_CONDUCT.md"]
+paths = ["LICENSE*", "SECURITY.md", "CODE_OF_CONDUCT.md", "CODEOWNERS", "**/CODEOWNERS"]
 
 [[rules]]
 id = "user-files"
@@ -77,6 +75,23 @@ paths = [
   "crates/skill-studio-core/src/ops*",
   "crates/skill-studio-host/src/*",
   "apps/desktop/src-tauri/src/skills/lifecycle*",
+]
+
+[[rules]]
+id = "user-data-writes"
+tier = "stop"
+paths = [
+  "crates/skill-studio-core/src/fsops.rs",
+  "crates/skill-studio-core/src/ops_remove.rs",
+  "crates/skill-studio-core/src/ops_discard.rs",
+  "crates/skill-studio-core/src/ops_update.rs",
+  "crates/skill-studio-core/src/park_move.rs",
+  "crates/skill-studio-core/src/backup_retention.rs",
+  "crates/skill-studio-core/src/journal.rs",
+  "crates/skill-studio-host/src/fs.rs",
+  "apps/desktop/src-tauri/src/skills/skill_fs.rs",
+  "apps/desktop/src-tauri/src/skills/skill_md_write.rs",
+  "apps/desktop/src-tauri/src/skills/skill_independent_copy.rs",
 ]
 
 [[rules]]

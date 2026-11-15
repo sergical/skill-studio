@@ -436,6 +436,12 @@ The shared guard proposed in #531 was not built; #531 was also closed. Before yo
 5. If the change grows past about 500 lines, or a fix needs a fix, stop and
    write a design note in the issue before you continue.
 
+## Merge gate freeze (until 2026-11-22)
+
+The merge gate (`scripts/gate/**`, `.gate/**` and the `gate-*` workflows) is
+frozen. Change it only to fix a merge that is broken now, and say which merge
+in the PR. Write each other gate idea as an issue for after the freeze.
+
 ## Reference docs
 
 - `docs/agent-skill-conventions.md` — agentskills.io spec rules, per-agent discovery paths, invocation control (explicit vs model-invocable), the agent settings that hide a skill (read only; Park is the only off), and the local data sources Skill Studio reads. Check it before researching agent behavior again.
