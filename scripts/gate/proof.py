@@ -70,7 +70,7 @@ def replace_card(body, card):
 
 
 def card(args, cfg):
-    pr = json.loads(run('gh', 'pr', 'view', '--json', 'number,body,headRefOid,baseRefOid,author,title,statusCheckRollup'))
+    pr = json.loads(run('gh', 'pr', 'view', '--json', 'number,body,headRefOid,baseRefOid,author'))
     sha = git('rev-parse', 'HEAD')
     if pr['headRefOid'] != sha:
         raise ValueError('Push the local head before writing its card')
@@ -86,21 +86,12 @@ def card(args, cfg):
                 risk['tier'] = max(risk['tier'], reason['tier'], key=TIERS.index)
     statuses = gh(f"repos/{cfg['repository']}/commits/{sha}/status")['statuses']
     states = {s['context']: s['state'] for s in reversed(statuses)}
-    for check in pr['statusCheckRollup']:
-        name = check.get('name') or check.get('context')
-        states[name] = (check.get('conclusion') or check.get('status') or check.get('state') or 'pending').lower()
     verify_path = Path('.gate/out/verify.json')
     verify = json.loads(verify_path.read_text()) if verify_path.exists() else None
     review_path = state_path().with_suffix('.review.json')
     record = json.loads(review_path.read_text()) if review_path.exists() else {}
     if record.get('head') != sha:
         record = {}
-    lines = [START, f"| Intent | {cell(local_state().get('intent', 'not recorded'))} |", '| :-- | :-- |', f"| Result | {cell(args.result or pr['title'])} |", f'| Head | `{sha}` |', f"| Tier | **{risk['tier']}** |", f"| Reasons | {cell('; '.join(r['rule'] + ': ' + r.get('reason', ', '.join(r.get('files', []))) for r in risk['reasons']) or 'no rule matched')} |", f"| Review | {cell(record.get('reviewer', 'unknown'))}: {cell(record.get('verdict', states.get('gate/review', 'not run')))} |", '', '| Check | Status |', '| :-- | :-- |']
-    names = [cfg['check'], *cfg.get('ci_jobs', []), *states, 'gate/risk', 'gate/review', 'gate/approved']
-    for name in dict.fromkeys(names):
-        state = states.get(name, 'not reported')
-        mark = '✅' if state == 'success' else '❌' if state in ['failure', 'error', 'cancelled', 'timed_out'] else '⏳'
-        lines.append(f'| {cell(name)} | {mark} {cell(state)} |')
     scenarios = verify.get('scenarios', []) if verify else []
     stale = bool(verify and verify.get('head') and verify['head'] != sha)
     if stale:
@@ -110,7 +101,21 @@ def card(args, cfg):
         status = 'not run (stale head)'
     elif scenarios and not verify.get('head'):
         status = 'unbound evidence; reported ' + status
-    lines += [f'| verify | {status} |']
+    state = local_state()
+    verdict = record.get('verdict', states.get('gate/review', 'not run'))
+    reasons = '; '.join(r['rule'] + ': ' + r.get('reason', ', '.join(r.get('files', []))) for r in risk['reasons']) or 'no rule matched'
+    lines = [
+        START,
+        f"<details><summary>Gate record: tier <b>{cell(risk['tier'])}</b> · review {cell(verdict)} · verify {cell(status)}</summary>",
+        '',
+        '| | |',
+        '| :-- | :-- |',
+        f"| Intent | {cell(state.get('intent', 'not recorded'))} |",
+        f'| Head | `{sha}` |',
+        f'| Reasons | {cell(reasons)} |',
+        f"| Review | {cell(record.get('reviewer', 'unknown'))}: {cell(verdict)} |",
+        f"| Writer | {cell(state.get('author_model', 'not recorded'))} |",
+    ]
     if scenarios:
         lines += ['', '| Scenario | Intent | Status | Evidence | Notes |', '| :-- | :-- | :-- | :-- | :-- |']
         for scenario in scenarios:
@@ -127,7 +132,7 @@ def card(args, cfg):
                 else:
                     evidence.append(f"{cell(entry['kind'])}: `{cell(path)}` (local; upload for PR viewing)")
             lines.append('| ' + ' | '.join([cell(scenario['name']), cell(scenario['intent']), cell(scenario['status']), '<br>'.join(evidence), cell(scenario.get('notes', ''))]) + ' |')
-    lines.append(END)
+    lines += ['', '</details>', END]
     body = replace_card(pr['body'], '\n'.join(lines))
     gh(f"repos/{cfg['repository']}/pulls/{pr['number']}", 'PATCH', {'body': body})
     print('Proof card updated')
@@ -158,6 +163,5 @@ def arguments(sub):
     parser.add_argument('--verdict', choices=['pass', 'fail'], required=True)
     parser.add_argument('--reviewer', required=True)
     parser.add_argument('--findings', required=True)
-    parser = sub.add_parser('card')
-    parser.add_argument('--result')
+    sub.add_parser('card')
     sub.add_parser('guard')

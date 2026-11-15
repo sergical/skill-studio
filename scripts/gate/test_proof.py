@@ -40,22 +40,29 @@ class ProofTests(GateTests):
 
     def test_card_absent_unbound_and_stale_verify(self):
         sha = self.git('rev-parse', 'HEAD')
-        pr = {'number': 1, 'body': 'Human text', 'headRefOid': sha, 'baseRefOid': sha, 'author': {'login': 'author'}, 'title': 'Result', 'statusCheckRollup': []}
+        pr = {'number': 1, 'body': 'Human text', 'headRefOid': sha, 'baseRefOid': sha, 'author': {'login': 'author'}}
+        proof.state_path().write_text(json.dumps({'author_model': 'writer-model'}))
         cfg = dict(self.cfg, repository='example/repo', check='npm test', ci_jobs=['test'])
         manifest = Path('.gate/out/verify.json')
         manifest.parent.mkdir(parents=True)
         scenario = {'name': 'Example', 'intent': 'See result', 'status': 'pass', 'evidence': [{'kind': 'screenshot', 'path': 'https://example.invalid/evidence.png'}], 'notes': ''}
-        for data, expected in [(None, 'not run'), ({'scenarios': [scenario]}, 'unbound evidence'), ({'head': 'old', 'scenarios': [scenario]}, 'not run (stale head)'), ({'head': sha, 'scenarios': [scenario]}, '| verify | pass |')]:
+        for data, expected in [(None, 'verify not run'), ({'scenarios': [scenario]}, 'verify unbound evidence'), ({'head': 'old', 'scenarios': [scenario]}, 'verify not run (stale head)'), ({'head': sha, 'scenarios': [scenario]}, 'verify pass')]:
             if data:
                 manifest.write_text(json.dumps(data))
             with patch.object(proof, 'run', return_value=json.dumps(pr)), patch.object(proof, 'gh') as api:
                 api.return_value = {'statuses': []}
-                proof.card(argparse.Namespace(result=None), cfg)
+                proof.card(argparse.Namespace(), cfg)
                 body = api.call_args.args[2]['body']
                 self.assertTrue(body.startswith('Human text'))
-                self.assertIn(expected, body)
-                self.assertIn('| npm test |', body)
-                self.assertIn('| gate/approved |', body)
+                record = body[body.index(proof.START):]
+                summary = record.splitlines()[1]
+                self.assertTrue(summary.startswith('<details><summary>Gate record: tier'))
+                self.assertIn(expected, summary)
+                self.assertIn(f'| Head | `{sha}` |', record)
+                self.assertIn('| Writer | writer-model |', record)
+                self.assertNotIn('| Check |', record)
+                self.assertNotIn('npm test', record)
+                self.assertTrue(record.rstrip().endswith('</details>\n' + proof.END))
                 if data and data.get('head') == sha:
                     self.assertIn('![screenshot](https://example.invalid/evidence.png)', body)
 

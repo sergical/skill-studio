@@ -67,9 +67,11 @@ A deferred finding remains unresolved. Unknown authors are permitted and are not
 proof of model independence. Statuses belong to the head SHA; pushes need a new
 review. Run review-status only after the review is complete.
 
-`gate card --result "One-line result"` replaces only its marked block in the PR
-body. It reads checks from GitHub and `.gate/out/verify.json`. Missing evidence
-shows `verify: not run`. Local evidence paths are listed as local. Upload them
+`gate card` writes the gate record: a collapsed block that shows the tier, the
+review, the verify status, the intent, the head SHA, the risk reasons and the
+writer model. It replaces only its marked block in the PR body, or appends the
+block at the end. GitHub shows the checks, so the card leaves them out. Missing
+evidence shows `verify not run`. Local evidence paths are listed as local. Upload them
 and use HTTPS paths to show images to GitHub reviewers. Never use machine paths
 or private details in an evidence manifest intended for a public PR.
 
@@ -120,7 +122,7 @@ Verify manifests keep the documented scenarios format. An optional `head` field 
 
 `gate.yml` runs `unit` and `contracts` on `pull_request` with read access only. These checks run PR code. They do not control the risk job. After merge, the maintainer must add `unit` and `contracts` to the ruleset as required checks. A passing `gate/risk` alone does not show that these checks passed.
 
-The proof card lists `gate/approved` separately from risk and review. Without a trusted passing approval status on the current SHA, a stop-tier PR fails risk. Do not execute PR code in a workflow that has write access.
+GitHub lists `gate/approved` as a separate status from risk and review. Without a trusted passing approval status on the current SHA, a stop-tier PR fails risk. Do not execute PR code in a workflow that has write access.
 
 `gate-update.yml` updates behind PRs that have auto-merge enabled. Supply an
 optional `GATE_UPDATE_TOKEN` secret with contents and pull-request write access
