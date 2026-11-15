@@ -177,6 +177,8 @@ def main():
     snap = sub.add_parser('snapshots')
     snap.add_argument('--update', action='store_true')
     snap.add_argument('--prepare', action='store_true')
+    from proof import arguments, start, review, card, guard
+    arguments(sub)
     args = parser.parse_args()
     os.chdir(git('rev-parse', '--show-toplevel'))
     cfg = config()
@@ -186,6 +188,14 @@ def main():
         print(json.dumps(result, indent=2) if args.json else result['tier'] + '\n' + '\n'.join(f"- {r['rule']}: {r.get('reason', ', '.join(r.get('files', [])))}" for r in result['reasons']))
     elif args.command == 'snapshots':
         snapshots(cfg, args.update, args.prepare)
+    elif args.command == 'start':
+        start(args)
+    elif args.command == 'review-status':
+        review(args, cfg)
+    elif args.command == 'card':
+        card(args, cfg)
+    elif args.command == 'guard':
+        guard()
 
 
 
