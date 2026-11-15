@@ -37,3 +37,35 @@ class ProofTests(GateTests):
             with self.assertRaises(SystemExit) as error:
                 proof.guard()
             self.assertEqual(error.exception.code, 2)
+
+    def test_card_absent_unbound_and_stale_verify(self):
+        sha = self.git('rev-parse', 'HEAD')
+        pr = {'number': 1, 'body': 'Human text', 'headRefOid': sha, 'baseRefOid': sha, 'author': {'login': 'author'}, 'title': 'Result', 'statusCheckRollup': []}
+        cfg = dict(self.cfg, repository='example/repo', check='npm test', ci_jobs=['test'])
+        manifest = Path('.gate/out/verify.json')
+        manifest.parent.mkdir(parents=True)
+        scenario = {'name': 'Example', 'intent': 'See result', 'status': 'pass', 'evidence': [{'kind': 'screenshot', 'path': 'https://example.invalid/evidence.png'}], 'notes': ''}
+        for data, expected in [(None, 'not run'), ({'scenarios': [scenario]}, 'unbound evidence'), ({'head': 'old', 'scenarios': [scenario]}, 'not run (stale head)'), ({'head': sha, 'scenarios': [scenario]}, '| verify | pass |')]:
+            if data:
+                manifest.write_text(json.dumps(data))
+            with patch.object(proof, 'run', return_value=json.dumps(pr)), patch.object(proof, 'gh') as api:
+                api.return_value = {'statuses': []}
+                proof.card(argparse.Namespace(result=None), cfg)
+                body = api.call_args.args[2]['body']
+                self.assertTrue(body.startswith('Human text'))
+                self.assertIn(expected, body)
+                self.assertIn('| npm test |', body)
+                if data and data.get('head') == sha:
+                    self.assertIn('![screenshot](https://example.invalid/evidence.png)', body)
+
+    def test_guard_blocks_shell_quoting_and_malformed_events(self):
+        from io import StringIO
+        for command in ['gh pr edit 1 --add-label "gate:"approved', r'gh pr edit 1 --add-label gate\:approved']:
+            with patch('sys.stdin', StringIO(json.dumps({'tool_input': {'command': command}}))):
+                with self.assertRaises(SystemExit) as error:
+                    proof.guard()
+                self.assertEqual(error.exception.code, 2)
+        with patch('sys.stdin', StringIO('bad JSON')):
+            with self.assertRaises(SystemExit) as error:
+                proof.guard()
+            self.assertEqual(error.exception.code, 2)

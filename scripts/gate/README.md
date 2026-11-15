@@ -94,3 +94,7 @@ Code, put this hook in local settings, not shared account settings:
 This guard must be installed in the agent host before agent use. The gate does
 not claim to sandbox a token or prevent an agent from bypassing its own hooks.
 No approval label is added by any gate command.
+
+The guard is a best-effort string match, not a token sandbox. It blocks quoted, escaped and URL-encoded approval labels and fails closed on malformed input, even outside a git checkout.
+
+Verify manifests keep the documented scenarios format. An optional `head` field binds evidence to a commit. A mismatched head shows not run; evidence without a head is rendered as unbound and cannot claim a verified current head.

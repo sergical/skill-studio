@@ -199,6 +199,9 @@ def main():
     from proof import arguments, start, review, card, guard
     arguments(sub)
     args = parser.parse_args()
+    if args.command == 'guard':
+        guard()
+        return
     os.chdir(git('rev-parse', '--show-toplevel'))
     cfg = config()
     if args.command == 'risk':
@@ -206,11 +209,13 @@ def main():
         base = git('merge-base', base, args.head)
         policy = read_at(base, '.gate/config.toml')
         result = classify(tomllib.loads(policy) if policy else cfg, base, args.head, args.raise_to, args.reason, args.author)
+        if args.raise_to:
+            state_path().with_suffix('.risk.json').write_text(json.dumps(result))
         print(json.dumps(result, indent=2) if args.json else result['tier'] + '\n' + '\n'.join(f"- {r['rule']}: {r.get('reason', ', '.join(r.get('files', [])))}" for r in result['reasons']))
     elif args.command == 'snapshots':
         snapshots(cfg, args.update, args.prepare)
     elif args.command == 'start':
-        start(args)
+        start(args, cfg)
     elif args.command == 'review-status':
         review(args, cfg)
     elif args.command == 'card':
