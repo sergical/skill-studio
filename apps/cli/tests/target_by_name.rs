@@ -7,8 +7,12 @@
 //! copy acts on it; a name that matches more than one lists them and asks
 //! for `--id`.
 
+#[allow(dead_code)]
+#[path = "support/test_home.rs"]
+mod test_home;
+
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 fn write_skill(root: &Path, name: &str) {
     let dir = root.join(".agents/skills").join(name);
@@ -34,7 +38,7 @@ fn home_and_project() -> (tempfile::TempDir, PathBuf, PathBuf) {
 }
 
 fn run(home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+    test_home::command(env!("CARGO_BIN_EXE_skill-studio"), home)
         .args(args)
         .arg("--home")
         .arg(home)
@@ -320,7 +324,7 @@ fn park_warns_on_stderr_and_in_json_when_the_project_tracks_the_copy() {
     let (_dir, home, project) = home_and_project();
     write_skill(&project, "tracked");
     let repo = |args: &[&str]| {
-        let status = Command::new("git")
+        let status = test_home::command("git", &home)
             .args(args)
             .current_dir(&project)
             .env("HOME", &home)
@@ -372,4 +376,80 @@ fn unpark_by_name_with_no_parked_copy_says_none_can_be_unparked() {
         "{stderr}"
     );
     assert!(home.join(".agents/skills/solo/SKILL.md").exists());
+}
+
+#[test]
+fn inherited_agent_home_overrides_do_not_change_the_selected_library() {
+    const CHILD_HOME: &str = "SKILL_STUDIO_AMBIENT_HOME_TEST";
+    if let Some(home) = std::env::var_os(CHILD_HOME) {
+        let environment = test_home::command("/bin/sh", Path::new(&home))
+            .args(["-c", "test -z \"$CODEX_HOME$CLAUDE_CONFIG_DIR$GROK_HOME$PI_CODING_AGENT_DIR$XDG_CONFIG_HOME$XDG_DATA_HOME$XDG_STATE_HOME$DOTAGENTS_HOME$SKILL_STUDIO_HOME$SKILL_STUDIO_FIXTURE\""])
+            .status().unwrap();
+        assert!(
+            environment.success(),
+            "ambient agent homes reached the child process"
+        );
+        let scan = run(Path::new(&home), &["scan", "--json"]);
+        assert!(scan.status.success());
+        let scan: serde_json::Value = serde_json::from_slice(&scan.stdout).unwrap();
+        let names: Vec<_> = scan["data"]["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|skill| skill["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["solo"]);
+        let parked = run(Path::new(&home), &["park", "solo", "--json"]);
+        assert!(parked.status.success(), "{}", text(&parked.stdout));
+        return;
+    }
+    let fixture = tempfile::tempdir().unwrap();
+    let home = fixture.path().join("home");
+    let foreign = fixture.path().join("foreign");
+    write_skill(&home, "solo");
+    for root in ["skills", "opencode/skills", "agent/skills"] {
+        let skill = foreign.join(root).join("foreign-only");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: foreign-only\ndescription: Foreign fixture\n---\nKeep me.\n",
+        )
+        .unwrap();
+    }
+    let mut child = test_home::command(std::env::current_exe().unwrap(), &home);
+    child
+        .args([
+            "--exact",
+            "inherited_agent_home_overrides_do_not_change_the_selected_library",
+            "--nocapture",
+        ])
+        .env(CHILD_HOME, &home);
+    for key in [
+        "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "GROK_HOME",
+        "PI_CODING_AGENT_DIR",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "DOTAGENTS_HOME",
+        "SKILL_STUDIO_HOME",
+        "SKILL_STUDIO_FIXTURE",
+    ] {
+        child.env(key, &foreign);
+    }
+    let result = child.output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}{}",
+        text(&result.stdout),
+        text(&result.stderr)
+    );
+    assert!(home
+        .join(".agents/skills-parked/universal/solo/SKILL.md")
+        .exists());
+    assert_eq!(
+        std::fs::read_to_string(foreign.join("skills/foreign-only/SKILL.md")).unwrap(),
+        "---\nname: foreign-only\ndescription: Foreign fixture\n---\nKeep me.\n"
+    );
 }

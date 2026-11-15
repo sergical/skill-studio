@@ -6,8 +6,12 @@
 //! `usage` counts each installed skill's uses from agent session history,
 //! lists the never-used ones first, and ends with a summary line.
 
+#[allow(dead_code)]
+#[path = "support/test_home.rs"]
+mod test_home;
+
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 fn write_skill(dir: &Path, name: &str) {
     let skill_dir = dir.join(name);
@@ -51,7 +55,7 @@ fn home() -> (tempfile::TempDir, PathBuf) {
 }
 
 fn run(home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+    test_home::command(env!("CARGO_BIN_EXE_skill-studio"), home)
         .arg("usage")
         .args(args)
         .arg("--home")
@@ -172,7 +176,7 @@ fn usage_filters_history_by_harness_and_project() {
 fn usage_cached_run_keeps_cache_file_instead_of_rewriting_unchanged_history() {
     let (_dir, home) = home();
     let run_cached = || {
-        Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+        test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
             .args(["usage", "--json"])
             .env("HOME", &home)
             .env("SKILL_STUDIO_TELEMETRY", "0")

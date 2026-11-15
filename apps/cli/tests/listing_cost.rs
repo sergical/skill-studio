@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-use std::process::Command;
+#[allow(dead_code)]
+#[path = "support/test_home.rs"]
+mod test_home;
+
 #[allow(dead_code)]
 #[path = "support/headless.rs"]
 mod headless;
@@ -54,7 +57,7 @@ fn doctor_listing_cost_warns_and_names_top_skills_or_counts_manual_and_parked_sk
         }
     }
     let run = || {
-        let out = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+        let out = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), home)
             .args(["doctor", "--fixture", home.to_str().unwrap(), "--json"])
             .env("HOME", home)
             .env("CODEX_HOME", home.join(".codex"))
@@ -162,7 +165,7 @@ fn skill(home: &std::path::Path, path: &str) {
 }
 
 fn report(home: &std::path::Path, command: &str, project: bool) -> serde_json::Value {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_skill-studio"));
+    let mut cmd = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), home);
     cmd.args([command, "--fixture", home.to_str().unwrap(), "--json"])
         .env("HOME", home)
         .env("CODEX_HOME", home.join(".codex"))

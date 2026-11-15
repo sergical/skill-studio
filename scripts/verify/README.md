@@ -56,3 +56,15 @@ Historical revisions can lack today's commands or tests. Record that as a limit;
 do not count a missing command, zero matching tests, or a build failure as proof
 that the historical bug was reproduced. The agent adds 1 to 3 intent scenarios
 and records observations as described in the repository skill.
+
+The HOME guard reads the OS account record with `getent` on Linux and the shell's
+account lookup on macOS. It compares raw paths when the account home is absent.
+Tests require the explicit home-identity refusal, rather than accepting an
+unrelated panic. Every CLI/MCP test launcher clears inherited configuration;
+explicit fixture overrides remain available for environment contract tests.
+
+The health-card check first rejects historical plain-div labels before checking
+the real Settings page. The copy contention scenario runs real CLI split-copy
+and undo commands against a lease held by the test process, checks files and
+history while busy, and retries after release. Existing native desktop tests
+continue to cover the independent-copy command's nested lease behavior.

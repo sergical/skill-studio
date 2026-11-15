@@ -906,7 +906,7 @@ async fn park_then_unpark_on_one_process_puts_the_skill_and_its_link_back() {
 async fn the_park_tool_returns_a_warning_when_git_tracks_the_folder_or_names_the_envelope() {
     let (_home_dir, home) = live_home();
     for args in [&["init", "-q"][..], &["add", ".agents/skills/gamma"][..]] {
-        let status = std::process::Command::new("git")
+        let status = test_home::command("git", &home)
             .args(args)
             .current_dir(&home)
             .env("HOME", &home)
@@ -1734,13 +1734,15 @@ async fn doctor_listing_cost_matches_cli_and_warns_or_loses_the_budget_in_one_ad
     ])
     .await;
     let mcp = call_tool(&client, "doctor", serde_json::json!({})).await;
-    let cli =
-        std::process::Command::new(Path::new(&mcp_bin()).parent().unwrap().join("skill-studio"))
-            .args(["doctor", "--fixture", home_str, "--json"])
-            .env("HOME", home_str)
-            .env("SKILL_STUDIO_TELEMETRY", "0")
-            .output()
-            .unwrap();
+    let cli = test_home::command(
+        Path::new(&mcp_bin()).parent().unwrap().join("skill-studio"),
+        home_str,
+    )
+    .args(["doctor", "--fixture", home_str, "--json"])
+    .env("HOME", home_str)
+    .env("SKILL_STUDIO_TELEMETRY", "0")
+    .output()
+    .unwrap();
     let cli: serde_json::Value = serde_json::from_slice(&cli.stdout).unwrap();
     assert_eq!(normalize(mcp.clone()), normalize(cli));
     let claude = mcp["data"]["listing_cost"]
@@ -1799,8 +1801,9 @@ async fn review_cli_mcp_json_matches_for_set_due_clear_and_unknown_or_one_adapte
             assert_eq!(mcp["data"]["rows"][0]["sessions"], 1);
             assert_eq!(mcp["data"]["partial"], true);
         }
-        let cli = std::process::Command::new(
+        let cli = test_home::command(
             Path::new(&mcp_bin()).parent().unwrap().join("skill-studio"),
+            home_str,
         )
         .arg("review")
         .args(args)

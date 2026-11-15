@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "test_home.rs"]
+mod test_home;
+
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
@@ -14,14 +18,8 @@ thread_local! {
     };
 }
 
-fn command() -> Command {
-    BINARY.with(|directory| {
-        let mut command = Command::new(directory.path().join("skill-studio"));
-        command
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default());
-        command
-    })
+fn command(home: &std::path::Path) -> Command {
+    BINARY.with(|directory| test_home::command(directory.path().join("skill-studio"), home))
 }
 
 pub fn cli(home: &std::path::Path, args: &[&str]) -> Value {
@@ -38,7 +36,7 @@ pub fn cli_request(
     env: &[(String, String)],
     scoped: bool,
 ) -> Value {
-    let mut command = command();
+    let mut command = command(home);
     command.args(args);
     if scoped {
         command.arg("--home").arg(home);
@@ -87,7 +85,7 @@ pub fn mcp_request(
     env: &[(String, String)],
     scoped: bool,
 ) -> Value {
-    let mut command = command();
+    let mut command = command(home);
     if scoped {
         command.env("SKILL_STUDIO_HOME", home);
     }

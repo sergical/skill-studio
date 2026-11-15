@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import time
 import tomllib
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -44,7 +45,7 @@ def main():
             except Exception as error:
                 status, notes = 'fail', str(error)
             # Evidence is portable and contains only fixture state.
-            log = '\n'.join(transcript + [notes]).replace(str(home), '$HOME').replace(str(ROOT), '$REPO')
+            log = '\n'.join(transcript + [notes]).replace(str(home), '$HOME').replace(quote(str(home), safe=''), '$HOME').replace(str(ROOT), '$REPO')
             (out / f'{name}.txt').write_text(log)
         scenarios.append({'name': name, 'intent': intent, 'status': status,
                           'evidence': [{'kind': 'transcript', 'path': f'{name}.txt'}], 'notes': notes.replace(str(home), '$HOME')})
@@ -111,8 +112,16 @@ def main():
                 assert {s['name'] for s in mcp['data']['skills']} == {s['name'] for s in scan['skills']}
                 cli(home, env, log, 'scan')
             finally:
-                server.kill()
-                server.wait(timeout=5)
+                server.stdin.close()
+                try:
+                    server.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    server.terminate()
+                    try:
+                        server.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        server.kill()
+                        server.wait(timeout=5)
 
     def roundtrip(home, env, log):
         source = skill(home, '.agents/skills', 'roundtrip')
@@ -188,11 +197,14 @@ IGNORE
 
     if args.rust_artifacts:
         artifacts = [json.loads(line) for line in args.rust_artifacts.read_text().splitlines() if line.startswith('{')]
-        executables = {row['executable'] for row in artifacts if row.get('reason') == 'compiler-artifact' and row.get('executable') and row.get('profile', {}).get('test') and row['target']['name'] in {'skill_studio_lib', 'skill_studio_host', 'install', 'lease'}}
+        executables = {row['executable'] for row in artifacts if row.get('reason') == 'compiler-artifact' and row.get('executable') and row.get('profile', {}).get('test') and row['target']['name'] in {'skill_studio_lib', 'skill_studio_host', 'install', 'lease', 'write_contention', 'envelope', 'target_by_name'}}
         regressions = [
+            ('home-guard', 'Refuse the OS home by identity, including a missing OS home, and accept a private test home.', 'test_home::setup_'),
+            ('ambient-overrides', 'Ignore inherited agent-home overrides and leave a foreign library untouched.', 'inherited_agent_home_overrides_do_not_change_the_selected_library'),
             ('packaged-shebang', '#301: resolve npx and the node required by its shebang under a minimal PATH.', 'a_packaged_apps_minimal_process_path_still_resolves_a_bare_npx_and_the_node_its_shebang_needs_or_names_which_lookup_starved'),
             ('packaged-path', '#301 → #305: resolve a bare desktop command with a minimal PATH.', 'a_bare_program_outside_the_process_path_runs_through_the_command_runner_or_names_the_spawn_error'),
             ('install-roots', '#345 → #364: write installs under configured roots.', 'per_harness_install_with_a_configured_'),
+            ('copy-undo-contention', '#304: refuse copy and undo without changing files while another process holds the lease, then retry successfully.', 'copy_and_undo_refuse_another_process_lease_then_succeed_after_release'),
             ('lease-two-processes', '#227 → #304: another process must see a held write lease as busy.', 'a_second_process_holding_the_lease_gets_busy'),
             ('lease-undo', '#227 → #304: undo must complete with the command lease held.', 'undo_of_a_done_make_independent_copy_row_restores_the_link_and_removes_copy_ownership'),
             ('lease-copy-undo', '#227 → #304: copy and undo must complete with the command lease held.', 'make_independent_copy_run_the_way_the_command_runs_it_does_not_self_deadlock_on_the_write_lease'),
@@ -218,7 +230,7 @@ IGNORE
             assert result.returncode == 0, result.stdout + result.stderr
         scenario('desktop-affordances', '#200/#211 → #293 and #281 → #331: omit unavailable pack import and misleading Settings health cards.', ui)
         if scenarios[-1]['status'] == 'pass':
-            scenarios[-1]['evidence'].extend([{'kind': 'screenshot', 'path': name} for name in ['add-methods.png', 'settings.png']])
+            scenarios[-1]['evidence'].extend([{'kind': 'screenshot', 'path': name} for name in ['health-card-oracle.png', 'add-methods.png', 'settings.png']])
             (out / 'verify.json').write_text(json.dumps({'scenarios': scenarios}, indent=2) + '\n')
     if not args.cli_only:
         for flag, value in [('--rust-artifacts', args.rust_artifacts), ('--ui-url', args.ui_url)]:
