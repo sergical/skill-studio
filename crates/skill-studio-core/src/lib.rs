@@ -64,6 +64,7 @@ mod ops_remove;
 pub mod ops_split;
 mod ops_update;
 mod ownership;
+pub mod pack;
 mod park_layout;
 mod park_move;
 pub mod ports;

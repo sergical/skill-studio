@@ -226,6 +226,14 @@ fn build_runtime(operation: Operation, with_history: bool) -> Result<Runtime, Co
     Runtime::new(&runtime_scope, ports)
 }
 
+fn pack_remote(rt: &Runtime, remote: bool) -> Option<skill_studio_host::GitPackRemote> {
+    rt.ports
+        .spawner
+        .clone()
+        .filter(|_| remote)
+        .map(skill_studio_host::GitPackRemote::new)
+}
+
 /// The transport-free half of [`run_op`]: builds the `Runtime`, runs the
 /// operation, and returns the envelope, with no `RequestContext` and no
 /// progress notifications. Every tool goes through here, so a test that
@@ -401,6 +409,38 @@ impl SkillStudioServer {
     ) -> CallToolResult {
         run_op(Operation::ReviewDue, false, &context, |rt, ctx| {
             skill_studio_host::review_due_report(rt, ctx, scope::desktop_usage_cache().as_deref())
+        })
+        .await
+    }
+
+    #[tool(
+        description = "List installed packs (one source that ships skills): kind, ref pin, scopes, skills with their agents, and skills edited locally. Reads local files only; set remote to also ask each git source for behind and new upstream skills.",
+        annotations(read_only_hint = true)
+    )]
+    async fn pack_list(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::pack::PackListRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(Operation::PackList, false, &context, |rt, ctx| {
+            let remote = pack_remote(rt, req.remote);
+            ops::pack_list(rt, ctx, &req, remote.as_ref().map(|r| r as _))
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Show the installed packs with one source, as pack_list reports them. Set remote to check the git source.",
+        annotations(read_only_hint = true)
+    )]
+    async fn pack_show(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::pack::PackShowRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(Operation::PackShow, false, &context, |rt, ctx| {
+            let remote = pack_remote(rt, req.remote);
+            ops::pack_show(rt, ctx, &req, remote.as_ref().map(|r| r as _))
         })
         .await
     }
