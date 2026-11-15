@@ -30,7 +30,7 @@ independent rule stops them. Lockfiles remain covered by normal CI.
 ## Adopt in a TypeScript web app
 
 ```sh
-# Copy scripts/gate/ and the two gate workflows into your repo.
+# Copy scripts/gate/ and the gate workflows into your repo.
 mkdir -p .gate
 cat > .gate/config.toml <<'TOML'
 repository = "owner/web-app"
@@ -75,13 +75,14 @@ or private details in an evidence manifest intended for a public PR.
 
 ## Approval and agent guard
 
-`gate:approved` is a human approval trigger. The approval workflow records `gate/approved = success` on the SHA captured by the label event, then removes the label. Risk reads the status list for its exact head SHA, newest first. It ignores entries unless `creator.login` is `github-actions[bot]`. Each candidate must link to an Actions run in this repository. The run must use `.github/workflows/gate-approve.yml` and event `pull_request_target`. Risk removes any `@ref` suffix from the run path before it checks the path. The newest bot entry that passes these checks decides approval. Its state must be `success`. A new push has no approval status, even when an old label event runs at the same time. Agents use the owner's token, so
+`gate:approved` is a human approval trigger. The approval workflow records `gate/approved = success` on the SHA captured by the label event, then removes the label. Risk reads the status list for its exact head SHA, newest first. It ignores entries unless `creator.login` is `github-actions[bot]`. Each candidate must link to an Actions run in this repository. The run must use `.github/workflows/gate-approve.yml` and event `pull_request_target`, and its run name must be `gate:approved <head SHA>`. The approval workflow sets this run name from the label event, and `pull_request_target` always runs the base-branch workflow, so a PR cannot change it. Risk removes any `@ref` suffix from the run path before it checks the path. The newest bot entry that passes these checks decides approval. Its state must be `success`. A new push has no approval status, even when an old label event runs at the same time. Agents use the owner's token, so
 this label is not a technical boundary.
 
-The status writer supplies the run URL. A PR from a branch in this repository
-can add a workflow that posts a forged status with a copied approval run URL.
-The filter can accept that status. The metadata checks verify the referenced
-run, but do not prove that the run posted the status. This replay risk remains.
+A workflow on any branch also posts as `github-actions[bot]`, and the status
+writer chooses the run URL. The run checks stop a copied URL: a run of another
+workflow, of another event, or for another commit does not count. A copied URL
+of a real approval run for the same commit adds nothing, because that commit is
+already approved.
 
 Configure each agent's pre-tool-use hook
 to run `scripts/gate/gate guard` with the tool event JSON on stdin. Exit 2 blocks

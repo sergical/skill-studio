@@ -10,7 +10,8 @@ from approval import is_approved
 from test_gate import GateTests
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / '.github/workflows'
-TRUSTED_RUN = {'path': '.github/workflows/gate-approve.yml', 'event': 'pull_request_target'}
+TRUSTED_RUN = {'path': '.github/workflows/gate-approve.yml', 'event': 'pull_request_target',
+               'display_title': 'gate:approved abc'}
 
 
 def workflow_script(filename, step):
@@ -38,9 +39,10 @@ class ApprovalTests(GateTests):
         self.head = self.git('rev-parse', 'HEAD')
         self.database = Path('api.json').resolve()
         self.database.write_text(json.dumps({'statuses': {}, 'calls': [], 'runs': {
-            '10': TRUSTED_RUN,
-            '20': dict(TRUSTED_RUN, event='push'),
-            '30': dict(TRUSTED_RUN, path='.github/workflows/other.yml'),
+            '10': dict(TRUSTED_RUN, display_title=f'gate:approved {self.head}'),
+            '20': dict(TRUSTED_RUN, event='push', display_title=f'gate:approved {self.head}'),
+            '30': dict(TRUSTED_RUN, path='.github/workflows/other.yml', display_title=f'gate:approved {self.head}'),
+            '40': dict(TRUSTED_RUN, display_title=f'gate:approved {self.old}'),
         }}))
         self.write('approval.sh', workflow_script('gate-approve.yml', 'Record approval and remove trigger'))
         self.write('risk.sh', workflow_script('gate-risk.yml', 'Test and classify'))
@@ -144,6 +146,12 @@ class ApprovalTests(GateTests):
         self.assertEqual(risk.returncode, 1, risk.stderr)
         self.assertEqual(self.status(self.head, 'gate/risk'), 'failure')
 
+    def test_run_url_copied_from_an_old_approval_is_ignored(self):
+        self.seed_statuses([status(run_id='40')])
+        risk = self.execute('risk.sh')
+        self.assertEqual(risk.returncode, 1, risk.stderr)
+        self.assertEqual(self.status(self.head, 'gate/risk'), 'failure')
+
     def test_newest_trusted_status_decides(self):
         self.seed_statuses([status(state='failure'), status()])
         self.assertEqual(self.execute('risk.sh').returncode, 1)
@@ -192,7 +200,7 @@ class ApprovalStatusTests(unittest.TestCase):
         self.lookup = Mock(return_value=TRUSTED_RUN)
 
     def approved(self, entries):
-        return is_approved(entries, 'example/repo', self.lookup)
+        return is_approved(entries, 'example/repo', 'abc', self.lookup)
 
     def test_valid_run(self):
         self.assertTrue(self.approved([status()]))
@@ -211,6 +219,12 @@ class ApprovalStatusTests(unittest.TestCase):
 
     def test_newer_user_failure(self):
         self.assertTrue(self.approved([status(creator='user', state='failure'), status()]))
+
+    def test_run_for_another_commit_or_label(self):
+        for title in ['gate:approved def', 'other abc', 'gate:approved abc extra', None]:
+            with self.subTest(title=title):
+                self.lookup.return_value = dict(TRUSTED_RUN, display_title=title)
+                self.assertFalse(self.approved([status()]))
 
     def test_push_run(self):
         self.lookup.return_value = dict(TRUSTED_RUN, event='push')

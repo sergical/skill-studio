@@ -1,4 +1,5 @@
 name: Approve one gate commit
+run-name: ${{ github.event.label.name }} ${{ github.event.pull_request.head.sha }}
 on:
   pull_request_target:
     types: [labeled]
