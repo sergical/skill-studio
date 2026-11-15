@@ -595,6 +595,60 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "dry_run": {
+          "default": false,
+          "description": "Return the plan and change nothing.",
+          "type": "boolean"
+        },
+        "harnesses": {
+          "default": [],
+          "description": "Agents to install for, in the `skills` CLI's `--agent` spelling.\nEmpty: the shared `.agents/skills` folder only.",
+          "items": {
+            "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "project_path": {
+          "default": null,
+          "description": "Install into this tracked project. Absent: the home.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ref_pin": {
+          "default": null,
+          "description": "Branch, tag, or commit to pin the pack to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skills": {
+          "default": [],
+          "description": "Skills to install. Empty: every skill of the pack that is not\ninstalled yet, which needs git access to list them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "description": "Git source as `npx skills add` takes it: `owner/repo` or a git URL.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "name": "pack_add"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
         "project_path": {
           "default": null,
           "description": "Only this tracked project. Absent: the home and every tracked project.",
@@ -612,6 +666,35 @@
       "type": "object"
     },
     "name": "pack_list"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "dry_run": {
+          "default": false,
+          "description": "Return the plan and change nothing.",
+          "type": "boolean"
+        },
+        "project_path": {
+          "default": null,
+          "description": "Only this tracked project. Absent: the home and every tracked project.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "Pack source as `pack_list` reports it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "name": "pack_remove"
   },
   {
     "inputSchema": {
@@ -641,6 +724,41 @@
       "type": "object"
     },
     "name": "pack_show"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "all": {
+          "default": false,
+          "description": "Update every installed pack.",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "Return the plan and change nothing.",
+          "type": "boolean"
+        },
+        "project_path": {
+          "default": null,
+          "description": "Only this tracked project. Absent: the home and every tracked project.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "default": null,
+          "description": "Pack source as `pack_list` reports it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "pack_update"
   },
   {
     "inputSchema": {
