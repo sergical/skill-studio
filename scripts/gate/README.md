@@ -77,8 +77,8 @@ or private details in an evidence manifest intended for a public PR.
 
 `gate:approved` is the approval trigger. The approval workflow records `gate/approved = success` on the SHA captured by the label event, then removes the label. Risk reads the status list for its exact head SHA, newest first. It ignores entries unless `creator.login` is `github-actions[bot]`. Each candidate must link to an Actions run in this repository. The run must use `.github/workflows/gate-approve.yml` and event `pull_request_target`, and its run name must be `gate:approved <head SHA>`. Each PR of the run must have the default branch as its base, and the run must start after the last base change of the PR. A branch that an agent makes can hold its own approval workflow, so an approval from another base does not count, also after the PR moves to the default branch. Risk runs again when the base changes. The approval workflow runs only for PRs to the default branch. The approval workflow sets this run name from the label event, and `pull_request_target` always runs the base-branch workflow, so a PR cannot change it. Risk removes any `@ref` suffix from the run path before it checks the path. The newest bot entry that passes these checks decides approval. Its state must be `success`. A new push has no approval status, even when an old label event runs at the same time.
 
-An agent adds the label to a **stop** PR when all of these are true for the
-head commit:
+A **stop** PR needs the owner's yes. Ask for it when all of these are true
+for the head commit:
 
 - `gate/review` passes, from a reviewer of a different provider than the
   writer. It fails on an open high or critical finding. Record each finding
@@ -87,8 +87,10 @@ head commit:
   approval exists.
 - The proof card shows this head.
 
-The owner does not approve. Add the label after the last push, because a new
-push has no approval.
+Ask the owner in chat. Give the PR link, what changes for a user, and how to
+undo it. After the owner's yes, add the label, or the owner adds it. Add the
+label after the last push, because a new push has no approval. A **show** PR
+needs no label: it merges when the review and CI pass.
 
 A workflow on any branch also posts as `github-actions[bot]`, and the status
 writer chooses the run URL. The run checks stop a copied URL: a run of another
