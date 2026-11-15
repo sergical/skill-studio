@@ -17,9 +17,12 @@ use std::sync::Arc;
 
 use rmcp::model::{CallToolRequestParams, ProgressNotificationParam, ProgressToken};
 use rmcp::service::{NotificationContext, RunningService};
-use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
+use rmcp::transport::TokioChildProcess;
 use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use skill_studio_core::testing::fixtures;
+
+#[path = "../../cli/tests/support/test_home.rs"]
+mod test_home;
 
 fn complete_folder_tree(root: &Path) -> Vec<(PathBuf, u64, Vec<u8>)> {
     fn walk(root: &Path, path: &Path, entries: &mut Vec<(PathBuf, u64, Vec<u8>)>) {
@@ -100,6 +103,7 @@ fn materialized_fixture(name: &str) -> PathBuf {
 /// can assert "at least one" or "none" without threading a channel through.
 #[derive(Clone, Default)]
 struct CountingClient {
+    home: Arc<test_home::TestHome>,
     count: Arc<AtomicUsize>,
 }
 
@@ -119,13 +123,21 @@ async fn connect(
     env: &[(&str, &str)],
 ) -> (RunningService<RoleClient, CountingClient>, CountingClient) {
     let client = CountingClient::default();
-    let transport =
-        TokioChildProcess::new(tokio::process::Command::new(mcp_bin()).configure(|cmd| {
-            cmd.stderr(Stdio::null());
-            for (key, value) in env {
-                cmd.env(key, value);
-            }
-        }))
+    let mut command = client.home.command(mcp_bin());
+    command.stderr(Stdio::null());
+    if let Some((_, home)) = env.iter().find(|(key, home)| {
+        matches!(*key, "SKILL_STUDIO_HOME" | "SKILL_STUDIO_FIXTURE") && Path::new(home).exists()
+    }) {
+        test_home::assert_temporary_home(Path::new(home));
+        command.env("HOME", home);
+    }
+    for (key, value) in env {
+        if *key == "HOME" {
+            test_home::assert_temporary_home(Path::new(value));
+        }
+        command.env(key, value);
+    }
+    let transport = TokioChildProcess::new(tokio::process::Command::from(command))
         .expect("spawn skill-studio-mcp");
     let running = client
         .clone()
@@ -283,7 +295,9 @@ fn no_progress_token_yields_no_notification() {
     use std::io::{BufRead, Write};
 
     let home = materialized_fixture("basic");
-    let mut child = std::process::Command::new(mcp_bin())
+    let test_home = test_home::TestHome::default();
+    let mut child = test_home
+        .command(mcp_bin())
         .env("SKILL_STUDIO_FIXTURE", home.to_str().unwrap())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -478,7 +492,9 @@ async fn skill_studio_home_env_var_applies_the_saved_discovery_switches() {
 
 /// Runs `skill-studio` (the CLI) and returns its parsed stdout envelope.
 fn run_cli(args: &[&str]) -> serde_json::Value {
-    let output = std::process::Command::new(cli_bin())
+    let test_home = test_home::TestHome::default();
+    let output = test_home
+        .command(cli_bin())
         .args(args)
         .output()
         .expect("run skill-studio");
@@ -501,7 +517,9 @@ fn run_cli(args: &[&str]) -> serde_json::Value {
 async fn watch_and_a_fresh_mcp_scan_agree_after_a_cli_mutation() {
     let home = materialized_fixture("manual_repairable_frontmatter");
 
-    let mut watch = std::process::Command::new(cli_bin())
+    let test_home = test_home::TestHome::default();
+    let mut watch = test_home
+        .command(cli_bin())
         .args(["watch", "--json", "--fixture", home.to_str().unwrap()])
         .stdout(Stdio::piped())
         .spawn()
