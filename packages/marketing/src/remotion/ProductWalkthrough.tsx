@@ -220,8 +220,8 @@ function MapStory({ format, theme }: StoryProps) {
               { frame: 160, centerX: 520, centerY: 665, cropWidth: 500 },
               { frame: 205, centerX: 520, centerY: 665, cropWidth: 500 },
               { frame: 240, centerX: 520, centerY: 330, cropWidth: 500 },
-              { frame: 263, centerX: 520, centerY: 330, cropWidth: 500 },
-              { frame: 264, centerX: 400, centerY: 500, cropWidth: 800 },
+              { frame: 259, centerX: 520, centerY: 330, cropWidth: 500 },
+              { frame: 260, centerX: 400, centerY: 500, cropWidth: 800 },
               { frame: 290, centerX: 400, centerY: 500, cropWidth: 800 },
               { frame: 315, centerX: 225, centerY: 525, cropWidth: 440 },
               { frame: 355, centerX: 225, centerY: 525, cropWidth: 440 },
@@ -248,7 +248,7 @@ function MapStory({ format, theme }: StoryProps) {
           startY: mobile ? 700 : 680,
           to: 115,
           x: 299,
-          y: 600,
+          y: 590,
         },
         {
           from: 234,
@@ -256,7 +256,7 @@ function MapStory({ format, theme }: StoryProps) {
           startY: 330,
           to: 259,
           x: mobile ? 688 : 636,
-          y: 258,
+          y: 246,
         },
       ]}
     />
@@ -294,7 +294,7 @@ function RepairStory({ format, theme }: StoryProps) {
               { frame: 155, centerX: 640, centerY: 485, cropWidth: 800 },
             ]
       }
-      pointers={[{ from: 121, startX: 475, startY: 820, to: 150, x: 316, y: mobile ? 894 : 930 }]}
+      pointers={[{ from: 121, startX: 475, startY: 820, to: 150, x: 316, y: mobile ? 877 : 912 }]}
     />
   );
 }
