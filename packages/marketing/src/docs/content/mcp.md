@@ -2,87 +2,37 @@
 
 Connect Skill Studio to your agent. Then you can ask the agent to check, fix and park your skills.
 
-The server runs with `npx skill-studio mcp`. It needs Node.js and macOS.
+The server is the stdio command `{{mcp-server-command}}`, named `skill-studio`. It needs Node.js and macOS. The first start downloads the package.
 
-## Add to Claude Code
+## Let your agent set it up
 
-```sh
-claude mcp add --transport stdio skill-studio -- npx -y skill-studio mcp
-```
+Copy this prompt into your agent. It adds the server, checks your skills without changing anything, and tells you what to try next.
 
-To share the server with a project, add it to `.mcp.json` in the project folder:
+<!-- setup-prompt -->
 
-```json
-{
-  "mcpServers": {
-    "skill-studio": {
-      "command": "npx",
-      "args": ["-y", "skill-studio", "mcp"]
-    }
-  }
-}
-```
+The Skill Studio app can do this too: open **Settings**, then **Connect your agents**.
 
-## Add to other agents
+## Add it yourself
 
-### Codex
+Each command adds the server for your user, so it works in every project. Restart the agent after you add the server.
 
-```sh
-codex mcp add skill-studio -- npx -y skill-studio mcp
-```
+<!-- agent-setups -->
 
-Or add it to `~/.codex/config.toml`:
+### Any other agent
 
-```toml
-[mcp_servers.skill-studio]
-command = "npx"
-args = ["-y", "skill-studio", "mcp"]
-startup_timeout_sec = 30
-```
-
-The first start downloads the package, which can take longer than the default 10 seconds. `startup_timeout_sec = 30` gives it more time.
-
-### Cursor
-
-Add it to `.cursor/mcp.json` in your project, or to `~/.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "skill-studio": {
-      "command": "npx",
-      "args": ["-y", "skill-studio", "mcp"]
-    }
-  }
-}
-```
-
-### OpenCode
-
-Add it to `opencode.json` in your project, or to `~/.config/opencode/opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "skill-studio": {
-      "type": "local",
-      "command": ["npx", "-y", "skill-studio", "mcp"],
-      "enabled": true
-    }
-  }
-}
-```
+Add a stdio MCP server named `skill-studio` with the command `npx` and the arguments `-y skill-studio@latest mcp`.
 
 ## What your agent can do
 
 - List your skills and find problems.
-- Find unused skills.
+- Find unused skills, and skills that are past their review date.
 - Find skills that have copies with different content.
+- Check how much of each agent's skill listing budget your skills use.
 - Fix broken skills.
-- Park and unpark skills.
+- Park and unpark skills. Parking turns a skill off for every agent.
+- Turn a skill off for one agent only. The agent checks first, then splits the shared skill and parks one copy.
+- Set whether a skill runs only when you ask for it, or when the model picks it too.
 - Remove a duplicate copy.
-- Turn a skill off for all agents by parking it. Turning it off for one agent only is coming.
 - Install skills, find skills that have a newer version, and update them.
 - List past changes and restore one.
 
@@ -96,4 +46,4 @@ Find my unused and broken skills and park the ones I don't need.
 
 ## Undo
 
-Each change that your agent makes goes into the same history that the app shows. To undo a change, open **Activity** in the app and select **Restore**, or run `npx skill-studio undo`. To undo a park, unpark the skill.
+Each change that your agent makes goes into the same history that the app shows. To undo a change, open **Activity** in the app and select **Restore**, or run `npx skill-studio@latest undo`. To undo a park, unpark the skill.

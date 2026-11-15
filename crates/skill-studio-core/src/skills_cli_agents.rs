@@ -1,4 +1,4 @@
-//! The agent skills folders skills CLI 1.7.0 clears on `npx skills remove <name>`.
+//! The agent skills folders skills CLI 1.8.1 clears on `npx skills remove <name>`.
 //!
 //! The CLI runs `rm -rf <agent skills folder>/<name>` for every agent it knows, installed or
 //! not. `ops::remove` backs up each of these before the CLI runs, so Undo can bring back a
@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use crate::identity::RootScope;
 
 /// Pinned CLI whose install, update, and removal behavior this crate supports.
-pub const SKILLS_CLI_PACKAGE: &str = "skills@1.7.0";
+pub const SKILLS_CLI_PACKAGE: &str = "skills@1.8.1";
 
-/// From skills CLI 1.7.0 `dist/cli.mjs`, the `agents` table. Folders the CLI reads from an env
+/// From skills CLI 1.8.1 `dist/cli.mjs`, the `agents` table. Folders the CLI reads from an env
 /// var (see [`cli_env_pins`]) are listed at their default location: `ops::remove` pins those
 /// vars when it runs the CLI, so the CLI deletes where this table says.
 ///
@@ -27,12 +27,12 @@ const AGENTS: &[(&str, Option<&str>, &str)] = &[
     ("amp", Some(".config/agents/skills"), ".agents/skills"),
     (
         "antigravity",
-        Some(".gemini/antigravity/skills"),
+        Some(".gemini/config/skills"),
         ".agents/skills",
     ),
     (
         "antigravity-cli",
-        Some(".gemini/antigravity-cli/skills"),
+        Some(".gemini/config/skills"),
         ".agents/skills",
     ),
     ("astrbot", Some(".astrbot/data/skills"), "data/skills"),
@@ -58,7 +58,7 @@ const AGENTS: &[(&str, Option<&str>, &str)] = &[
         Some(".codestudio/skills"),
         ".codestudio/skills",
     ),
-    ("codex", Some(".codex/skills"), ".agents/skills"),
+    ("codex", Some(".agents/skills"), ".agents/skills"),
     (
         "command-code",
         Some(".commandcode/skills"),
@@ -79,7 +79,7 @@ const AGENTS: &[(&str, Option<&str>, &str)] = &[
     ("eve", None, "agent/skills"),
     ("firebender", Some(".firebender/skills"), ".agents/skills"),
     ("forgecode", Some(".forge/skills"), ".forge/skills"),
-    ("fx", Some(".fx/skills"), ".fx/skills"),
+    ("fx", Some(".agents/skills"), ".agents/skills"),
     ("gemini-cli", Some(".gemini/skills"), ".agents/skills"),
     ("github-copilot", Some(".copilot/skills"), ".agents/skills"),
     ("goose", Some(".config/goose/skills"), ".goose/skills"),
@@ -116,7 +116,7 @@ const AGENTS: &[(&str, Option<&str>, &str)] = &[
     ),
     ("openhands", Some(".openhands/skills"), ".openhands/skills"),
     ("ona", Some(".ona/skills"), ".ona/skills"),
-    ("pi", Some(".pi/agent/skills"), ".pi/skills"),
+    ("pi", Some(".agents/skills"), ".agents/skills"),
     (
         "posit-assistant",
         Some(".posit/assistant/skills"),
@@ -159,7 +159,7 @@ const AGENTS: &[(&str, Option<&str>, &str)] = &[
     ("openclaw", Some(".moltbot/skills"), "skills"),
 ];
 
-/// The env vars skills CLI 1.7.0 reads agent skills folders from, each set to the folder this
+/// The env vars skills CLI 1.8.1 reads agent skills folders from, each set to the folder this
 /// table assumes: the default under `home`, and Codex's own directory as the adapter resolved
 /// it (`codex_home`). `ops::remove` hands these to the CLI, replacing whatever the process
 /// inherited, so a `VIBE_HOME` or `XDG_CONFIG_HOME` the user set cannot send the CLI's
@@ -173,6 +173,8 @@ pub fn cli_env_pins(home: &Path, codex_home: &Path) -> Vec<(String, String)> {
         ("HERMES_HOME", home.join(".hermes")),
         ("AUTOHAND_HOME", home.join(".autohand")),
         ("GROK_HOME", home.join(".grok")),
+        ("REASONIX_HOME", home.join(".reasonix")),
+        ("SARVAM_HOME", home.join(".sarvam")),
     ]
     .into_iter()
     .map(|(name, folder)| (name.to_string(), folder.display().to_string()))
@@ -214,14 +216,13 @@ pub(crate) fn cli_environment(scope: &crate::scope::NormalizedScope) -> Vec<(Str
 /// in `home`, so an agent with no global folder resolves under `home`.
 pub fn cli_removal_targets(
     home: &Path,
-    codex_home: &Path,
+    _codex_home: &Path,
     scope: &RootScope,
     name: &str,
 ) -> Vec<PathBuf> {
     let mut targets: Vec<PathBuf> = Vec::new();
-    for &(agent, global, project_folder) in AGENTS {
+    for &(_, global, project_folder) in AGENTS {
         let folder = match scope {
-            RootScope::Global if agent == "codex" => codex_home.join("skills"),
             RootScope::Global => home.join(global.unwrap_or(project_folder)),
             RootScope::Project(project) => project.0.join(project_folder),
         };

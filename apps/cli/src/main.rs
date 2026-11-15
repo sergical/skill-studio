@@ -146,6 +146,11 @@ enum Command {
         #[command(subcommand)]
         action: ReviewCommand,
     },
+    /// List, add, update or remove packs: one source that ships skills.
+    Pack {
+        #[command(subcommand)]
+        action: PackCommand,
+    },
     /// Show which skills your agents used, and which they never used.
     Usage {
         /// Keep uses from this agent id only.
@@ -549,6 +554,86 @@ enum ReviewCommand {
     },
 }
 
+#[derive(clap::Subcommand)]
+enum PackCommand {
+    /// List every installed pack. Reads local files only unless --remote is given.
+    List {
+        #[command(flatten)]
+        args: PackArgs,
+    },
+    /// Show the packs with one source, as pack list prints it.
+    Show {
+        source: String,
+        #[command(flatten)]
+        args: PackArgs,
+    },
+    /// Install the skills of one git pack with npx skills add.
+    Add {
+        /// owner/repo or a git URL.
+        source: String,
+        /// Skill to install. Repeat for more than one. Default: every skill
+        /// of the pack that is not installed yet, read with git.
+        #[arg(long = "skill", value_name = "SKILL")]
+        skills: Vec<String>,
+        /// Branch, tag or commit to pin the pack to.
+        #[arg(long = "ref", value_name = "REF")]
+        ref_pin: Option<String>,
+        /// Agent to install for, as in add. Repeat for more than one.
+        /// Default: universal (the shared folder).
+        #[arg(long = "agent", alias = "harness", value_name = "AGENT")]
+        harnesses: Vec<String>,
+        #[command(flatten)]
+        args: PackWriteArgs,
+    },
+    /// Update the skills of one pack, or of every pack with --all. Skips
+    /// skills with local edits.
+    Update {
+        /// Pack source, as pack list prints it.
+        #[arg(required_unless_present = "all")]
+        source: Option<String>,
+        /// Update every installed pack.
+        #[arg(long, conflicts_with = "source")]
+        all: bool,
+        #[command(flatten)]
+        args: PackWriteArgs,
+    },
+    /// Remove the skills of one pack. Skips skills with local edits.
+    Remove {
+        /// Pack source, as pack list prints it.
+        source: String,
+        #[command(flatten)]
+        args: PackWriteArgs,
+    },
+}
+
+#[derive(clap::Args)]
+struct PackWriteArgs {
+    #[command(flatten)]
+    scope: ScopeArgs,
+    /// Only this project. For add: install into this project.
+    #[arg(long)]
+    project_path: Option<PathBuf>,
+    /// Print the plan and change nothing.
+    #[arg(long)]
+    dry_run: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
+struct PackArgs {
+    #[command(flatten)]
+    scope: ScopeArgs,
+    /// Only this project.
+    #[arg(long)]
+    project_path: Option<PathBuf>,
+    /// Ask each git source for its newest commit and skills.
+    #[arg(long)]
+    remote: bool,
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(clap::Args)]
 struct ReviewArgs {
     #[command(flatten)]
@@ -643,6 +728,7 @@ fn main() -> ExitCode {
         } => run_restore(&scope, event_id, force, json, time),
         Command::Undo { scope, force, json } => run_undo(&scope, force, json, time),
         Command::Review { action } => run_review(action, time),
+        Command::Pack { action } => run_pack(action, time),
         Command::Usage {
             scope,
             days,
@@ -881,7 +967,18 @@ fn build_runtime<T: ops::Outcome + serde::Serialize>(
     operation: Operation,
     json: bool,
 ) -> Result<Runtime, ExitCode> {
-    let (runtime_scope, lease_root) = scope.resolve();
+    build_runtime_with_project::<T>(scope, operation, json, None)
+}
+
+/// Like [`build_runtime`], but folds `extra_project` into the scope so a
+/// read of an untracked project stays inside the scope.
+fn build_runtime_with_project<T: ops::Outcome + serde::Serialize>(
+    scope: &ScopeArgs,
+    operation: Operation,
+    json: bool,
+    extra_project: Option<&std::path::Path>,
+) -> Result<Runtime, ExitCode> {
+    let (runtime_scope, lease_root) = scope.resolve_with_extra_project(extra_project);
     let catalog = Arc::new(HarnessCatalog::builtin());
     let mut ports = skill_studio_host::default_ports_with_discovery(lease_root, catalog);
     ports.discovery = Some(Arc::new(
@@ -2452,6 +2549,141 @@ fn run_invocation(
     let result = invocation(&rt, &ctx, &req);
     let envelope = ResultEnvelope::from_result(Operation::Invocation, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_invocation_table)
+}
+
+fn run_pack(action: PackCommand, time: bool) -> ExitCode {
+    use skill_studio_core::pack::{PackListRequest, PackReport, PackShowRequest};
+    let (source, args) = match action {
+        PackCommand::List { args } => (None, args),
+        PackCommand::Show { source, args } => (Some(source), args),
+        write => return run_pack_action(write, time),
+    };
+    let operation = if source.is_some() {
+        Operation::PackShow
+    } else {
+        Operation::PackList
+    };
+    let rt = match build_runtime_with_project::<PackReport>(
+        &args.scope,
+        operation,
+        args.json,
+        args.project_path.as_deref(),
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let remote = rt
+        .ports
+        .spawner
+        .clone()
+        .filter(|_| args.remote)
+        .map(skill_studio_host::GitPackRemote::new);
+    let remote = remote
+        .as_ref()
+        .map(|r| r as &dyn skill_studio_core::pack::PackRemote);
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = match source {
+        Some(source) => ops::pack_show(
+            &rt,
+            &ctx,
+            &PackShowRequest {
+                source,
+                project_path: args.project_path,
+                remote: args.remote,
+            },
+            remote,
+        ),
+        None => ops::pack_list(
+            &rt,
+            &ctx,
+            &PackListRequest {
+                project_path: args.project_path,
+                remote: args.remote,
+            },
+            remote,
+        ),
+    };
+    let envelope = ResultEnvelope::from_result(operation, &rt.scope, &ctx, result);
+    finish(&envelope, args.json, time, output::print_packs)
+}
+
+fn run_pack_action(action: PackCommand, time: bool) -> ExitCode {
+    use skill_studio_core::pack_action::{
+        PackActionReport, PackAddRequest, PackRemoveRequest, PackUpdateRequest,
+    };
+    let (operation, args) = match &action {
+        PackCommand::Add { args, .. } => (Operation::PackAdd, args),
+        PackCommand::Update { args, .. } => (Operation::PackUpdate, args),
+        PackCommand::Remove { args, .. } => (Operation::PackRemove, args),
+        PackCommand::List { .. } | PackCommand::Show { .. } => unreachable!("read commands"),
+    };
+    let rt = match build_runtime_write_with_project::<PackActionReport>(
+        &args.scope,
+        operation,
+        args.json,
+        args.project_path.as_deref(),
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let (project_path, dry_run, json) = (args.project_path.clone(), args.dry_run, args.json);
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = match action {
+        PackCommand::Add {
+            source,
+            skills,
+            ref_pin,
+            harnesses,
+            ..
+        } => harnesses
+            .iter()
+            .map(|h| AgentId::parse_harness(h))
+            .collect::<Result<Vec<_>, _>>()
+            .and_then(|harnesses| {
+                let remote = rt
+                    .ports
+                    .spawner
+                    .clone()
+                    .map(skill_studio_host::GitPackRemote::new);
+                ops::pack_add(
+                    &rt,
+                    &ctx,
+                    &PackAddRequest {
+                        source,
+                        skills,
+                        ref_pin,
+                        harnesses,
+                        project_path,
+                        dry_run,
+                    },
+                    remote
+                        .as_ref()
+                        .map(|r| r as &dyn skill_studio_core::pack::PackRemote),
+                )
+            }),
+        PackCommand::Update { source, all, .. } => ops::pack_update(
+            &rt,
+            &ctx,
+            &PackUpdateRequest {
+                source,
+                all,
+                project_path,
+                dry_run,
+            },
+        ),
+        PackCommand::Remove { source, .. } => ops::pack_remove(
+            &rt,
+            &ctx,
+            &PackRemoveRequest {
+                source,
+                project_path,
+                dry_run,
+            },
+        ),
+        PackCommand::List { .. } | PackCommand::Show { .. } => unreachable!("read commands"),
+    };
+    let envelope = ResultEnvelope::from_result(operation, &rt.scope, &ctx, result);
+    finish(&envelope, json, time, output::print_pack_action)
 }
 
 fn run_review(action: ReviewCommand, time: bool) -> ExitCode {

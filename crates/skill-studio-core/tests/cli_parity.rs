@@ -530,7 +530,7 @@ impl TraceCtx {
         let (mut expected_args, cwd_label) = load_command(&self.dir);
         // The traces record skills CLI 1.7.0 with a bare package name.
         if expected_args.first().is_some_and(|a| a == "skills") {
-            expected_args[0] = "skills@1.7.0".to_string();
+            expected_args[0] = skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string();
         }
         // Any `$PROJECT`/`$LOCAL_SKILL_DIR` placeholder left in a recorded
         // argv token (e.g. the source argv for a local-folder install) is
@@ -692,7 +692,7 @@ fn cli_add_skillssh_slug_global_matches_the_recorded_trace_or_names_the_divergin
 // ---------------------------------------------------------------------------
 // Trace 03: add a local folder, project scope. PR #296 (`origin/main` commit
 // a044254) set the process cwd to the project path for a project-scope
-// SkillsSh install instead of pushing a `--cwd` argv token `skills@1.7.0`'s
+// SkillsSh install instead of pushing a `--cwd` argv token `skills@1.8.1`'s
 // `add` silently ignores - `ops::install` now writes to the same place the
 // real CLI does, and this trace asserts full argv/cwd/tree parity like every
 // other trace, with no KNOWN_DIVERGENCES entry.

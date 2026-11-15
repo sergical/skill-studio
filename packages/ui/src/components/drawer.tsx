@@ -60,27 +60,29 @@ function DrawerContent({
   return (
     <DrawerPortal>
       <DrawerBackdrop />
-      <DrawerPrimitive.Popup
-        data-slot="drawer-content"
-        className={cn(
-          "fixed z-[var(--z-modal,50)] flex flex-col bg-popover text-popover-foreground outline-none ease-(--ease-drawer) data-open:duration-[240ms] data-closed:duration-[180ms] data-open:animate-in data-closed:animate-out",
-          SIDE_CLASSES[side],
-          className,
-        )}
-        {...props}
-      >
-        {side === "bottom" && <div className="mx-auto mt-2 h-1.5 w-12 rounded-full bg-muted" />}
-        {children}
-        {showCloseButton && (
-          <DrawerPrimitive.Close
-            data-slot="drawer-close"
-            render={<Button variant="ghost" className="absolute top-2 right-2" size="icon-sm" />}
-          >
-            <XIcon />
-            <span className="sr-only">Close</span>
-          </DrawerPrimitive.Close>
-        )}
-      </DrawerPrimitive.Popup>
+      <DrawerPrimitive.Viewport data-slot="drawer-viewport">
+        <DrawerPrimitive.Popup
+          data-slot="drawer-content"
+          className={cn(
+            "fixed z-[var(--z-modal,50)] flex flex-col bg-popover text-popover-foreground outline-none ease-(--ease-drawer) data-open:duration-[240ms] data-closed:duration-[180ms] data-open:animate-in data-closed:animate-out",
+            SIDE_CLASSES[side],
+            className,
+          )}
+          {...props}
+        >
+          {side === "bottom" && <div className="mx-auto mt-2 h-1.5 w-12 rounded-full bg-muted" />}
+          {children}
+          {showCloseButton && (
+            <DrawerPrimitive.Close
+              data-slot="drawer-close"
+              render={<Button variant="ghost" className="absolute top-2 right-2" size="icon-sm" />}
+            >
+              <XIcon />
+              <span className="sr-only">Close</span>
+            </DrawerPrimitive.Close>
+          )}
+        </DrawerPrimitive.Popup>
+      </DrawerPrimitive.Viewport>
     </DrawerPortal>
   );
 }

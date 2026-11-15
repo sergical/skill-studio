@@ -301,6 +301,23 @@ describe("driftingCopies", () => {
     expect(driftingCopies({ truth, links: [], copies: [copy], broken: [] })).toEqual([]);
   });
 
+  it("keeps the global Universal folder as truth and compares a project one as a copy", () => {
+    const skill = fixtureSkill({
+      deployments: [
+        fixtureDeployment({
+          agent: "shared",
+          scope: "project",
+          project_path: "/src/web",
+          content_hash: "bbb",
+        }),
+        fixtureDeployment({ agent: "shared", scope: "global", content_hash: "aaa" }),
+      ],
+    });
+    const summary = locationSummary(skill);
+    expect(summary.truth?.scope).toBe("global");
+    expect(driftingCopies(summary).map((d) => d.scope)).toEqual(["project"]);
+  });
+
   it("flags a copy whose content hash differs from the truth's", () => {
     const truth = fixtureDeployment({ agent: "shared", content_hash: "abc" });
     const copy = fixtureDeployment({ agent: "Codex", content_hash: "xyz" });

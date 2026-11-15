@@ -36,6 +36,7 @@ mod history;
 mod ids;
 mod lease;
 mod opencode_db;
+mod pack_remote;
 mod probe_cache;
 mod sink;
 mod skill_uses;
@@ -71,6 +72,7 @@ pub use history::{
 pub use ids::UlidIds;
 pub use lease::FileLease;
 pub use opencode_db::opencode_databases;
+pub use pack_remote::GitPackRemote;
 pub use sink::NoopSink;
 pub use skill_uses::{
     is_skill_use_change, is_skill_use_change_with_databases, skill_use_watch_paths,

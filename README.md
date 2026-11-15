@@ -2,7 +2,7 @@
 
 Tidy up your agent skills. Skill Studio finds broken, duplicate, and unused
 skills across Claude Code, Codex, OpenCode, pi, Cursor, and Grok Build. Then it
-helps you fix or park them, and you can undo every change.
+helps you fix or park them, and you can undo most changes.
 
 It comes as a macOS app, a CLI, and an MCP server. All three use the same Rust
 core.
@@ -24,12 +24,14 @@ core.
 - **Fix them.** Preview a frontmatter repair before you apply it, or edit
   `SKILL.md` in the app or in your editor.
 - **Park a skill.** Parking moves a skill out of the folders that agents read,
-  so it is off for every agent. Unpark puts it back.
+  so it is off for every agent. Unpark puts it back. To turn a shared skill off
+  for one agent only, Skill Studio splits it into one copy per agent and parks
+  the copy of that agent.
 - **Install and update.** Search the [skills.sh](https://skills.sh) store,
   install a skill to global or project scope, update one skill or all of them,
   and remove skills you do not need.
-- **Undo.** The Activity view records every change. You can restore any of
-  them.
+- **Undo.** The Activity view records every change. You can restore most of
+  them. To reverse a park, unpark the skill.
 - **Manage plugins.** Enable, update, or uninstall the Claude Code and Codex
   plugins that ship skills.
 
@@ -50,7 +52,7 @@ the first screen.
 
 ```bash
 # Run once
-npx skill-studio diagnose
+npx skill-studio@latest diagnose
 
 # Or install it
 npm install -g skill-studio
@@ -63,7 +65,11 @@ npm install -g skill-studio
 | `conflicts`           | Find copies of the same skill that do not match |
 | `usage`               | Show how often each skill is used               |
 | `fix`                 | Repair broken frontmatter                       |
+| `doctor`              | Check skill listing budgets for each agent      |
 | `park` / `unpark`     | Turn a skill off or on for every agent          |
+| `turn-off`            | Turn a shared skill off for one agent           |
+| `invocation`          | Check or set how a skill can start              |
+| `review`              | Set and list skill review dates                 |
 | `add`                 | Install a skill                                 |
 | `outdated` / `update` | Find and apply skill updates                    |
 | `remove`              | Remove a skill                                  |
@@ -76,17 +82,31 @@ See the [CLI docs](https://useskillstudio.com/docs/cli/).
 ### MCP server
 
 Connect Skill Studio to your agent. Then you can ask the agent to check, fix,
-and park your skills.
+and park your skills. The quickest way: in the app, open Settings → Connect
+your agents. Or copy the setup prompt from the
+[MCP docs](https://useskillstudio.com/docs/mcp/) and paste it into your agent.
+
+To add it yourself:
 
 ```bash
 # Claude Code
-claude mcp add --transport stdio skill-studio -- npx -y skill-studio mcp
+claude mcp add --scope user --transport stdio skill-studio -- npx -y skill-studio@latest mcp
 
 # Codex
-codex mcp add skill-studio -- npx -y skill-studio mcp
+codex mcp add skill-studio -- npx -y skill-studio@latest mcp
+
+# OpenCode
+opencode mcp add --global skill-studio -- npx -y skill-studio@latest mcp
+
+# pi
+pi mcp add skill-studio -- npx -y skill-studio@latest mcp
+
+# Grok Build
+grok mcp add skill-studio -- npx -y skill-studio@latest mcp
 ```
 
-See the [MCP docs](https://useskillstudio.com/docs/mcp/) for other agents.
+Cursor, VS Code, Gemini CLI, Claude Desktop and other clients: see the
+[MCP docs](https://useskillstudio.com/docs/mcp/).
 
 ## Development
 

@@ -63,6 +63,14 @@ Skill Studio installs skills with the `npx skills` command, so the skills stay i
 - It sends anonymous crash reports. They do not include skill names, files or paths.
 - To turn crash reports off, open **Settings**, then **Telemetry**. You can also turn them off on the first screen.
 
+## Connect your agent
+
+Let your agent check and tidy its own skills. Copy this prompt into it:
+
+<!-- setup-prompt -->
+
+To add the server by hand, or from the app, see [MCP server](/docs/mcp/).
+
 ## Next steps
 
 - [Use the CLI](/docs/cli/) to check and fix skills from the terminal.

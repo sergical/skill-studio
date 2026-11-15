@@ -1,11 +1,12 @@
 // ============================================================================
-// Skill Studio - useSkillListAct's reportFixOutcome tests
+// Skill Studio - useSkillListAct tests: fix outcomes and acts held in place
 // ============================================================================
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InstalledSkill } from "@skill-studio/lib";
 
-import { reportFixOutcome, type FixSkillDeps } from "./useSkillListAct";
+import { useAppStore } from "../../store/appStore";
+import { actInPlace, pastTenseOf, reportFixOutcome, type FixSkillDeps } from "./useSkillListAct";
 
 function fixtureSkill(overrides: Partial<InstalledSkill> = {}): InstalledSkill {
   return {
@@ -117,5 +118,58 @@ describe("reportFixOutcome", () => {
 
     expect(openDetail).toHaveBeenCalledOnce();
     expect(addToast).not.toHaveBeenCalled();
+  });
+});
+
+describe("actInPlace", () => {
+  afterEach(() => useAppStore.getState().clearRowActs());
+  const acts = () => useAppStore.getState().rowActs;
+
+  it("holds the row while the act runs and leaves its past tense after, or the row would jump back mid-act", async () => {
+    let finish!: (ok: boolean) => void;
+    const running = actInPlace(
+      ["a"],
+      "Updated",
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+    expect(acts().get("a")).toBeNull();
+    finish(true);
+    expect(await running).toBe(true);
+    expect(acts().get("a")).toBe("Updated");
+  });
+
+  it("releases the row when the act fails or throws, or a failed row would claim it was done", async () => {
+    expect(await actInPlace(["a"], "Parked", async () => false)).toBe(false);
+    expect(await actInPlace(["b"], "Parked", () => Promise.reject(new Error("boom")))).toBe(false);
+    expect(acts().has("a") || acts().has("b")).toBe(false);
+  });
+
+  it("drops a second act on a row that is still running, or two updates would race on one folder", async () => {
+    let finish!: (ok: boolean) => void;
+    const first = actInPlace(["a"], "Updated", () => new Promise((resolve) => (finish = resolve)));
+    const second = vi.fn(async () => true);
+    expect(await actInPlace(["a", "b"], "Parked", second)).toBe(false);
+    expect(second).not.toHaveBeenCalled();
+    expect(acts().has("b")).toBe(false);
+    finish(true);
+    await first;
+  });
+
+  it("keeps a running act and drops a finished one when the view changes, or a done row would say Updated forever", async () => {
+    await actInPlace(["done"], "Updated", async () => true);
+    void actInPlace(["busy"], "Updated", () => new Promise(() => {}));
+    useAppStore.getState().setActiveView({ kind: "skills" });
+    expect([...acts()]).toEqual([["busy", null]]);
+  });
+
+  it("names the past tense only for verbs that act in place, so Open and Compare never hold a row", () => {
+    expect(["Park", "Unpark", "Fix", "Update"].map(pastTenseOf)).toEqual([
+      "Parked",
+      "Unparked",
+      "Fixed",
+      "Updated",
+    ]);
+    expect(pastTenseOf("Compare")).toBeNull();
+    expect(pastTenseOf("Open")).toBeNull();
   });
 });

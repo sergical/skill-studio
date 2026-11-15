@@ -1,7 +1,6 @@
 // ============================================================================
-// SkillRowCells - the shared cell vocabulary for a Stack row: the row frame,
-// the name/invocation cell, the token pair cell, the selection checkbox
-// gutter, and the leading (state glyph) and trailing (Ellipsis menu) cells.
+// SkillRowCells - the shared cells of a skill row on Home and Skills: the row
+// slot (state icon or checkbox), the name, and the note (reason and tokens).
 // ============================================================================
 
 import type { ComponentProps, ReactNode } from "react";
@@ -9,7 +8,6 @@ import {
   CircleAlert,
   CircleArrowDown,
   CirclePause,
-  Ellipsis,
   OctagonAlert,
   Sparkles,
   TriangleAlert,
@@ -19,18 +17,7 @@ import { formatTokens } from "@skill-studio/lib";
 import type { InstalledSkill } from "@skill-studio/lib";
 import { CheckboxControl } from "../ui/CheckboxControl";
 import { RichTooltip } from "../ui/RichTooltip";
-import { fixesFor, isDecision } from "./skill-row-state";
 import type { RowLevel, RowState } from "./skill-row-state";
-
-/** The shared hit box: bigger than the 14px glyph so the button is easy to land a click on. Sized
- * by the `--glyph-hit` CSS variable the row column template sets. */
-const HIT_CLASS =
-  "relative inline-flex size-(--glyph-hit) shrink-0 items-center justify-center rounded-sm transition-colors duration-150 hover:bg-bg-tertiary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent data-[popup-open]:bg-bg-tertiary";
-import { SkillRowMenu } from "./SkillRowMenu";
-
-/** One row's frame: 32px, hairline below, no radius of its own. */
-export const ROW_CLASS =
-  "group grid h-8 w-full min-w-0 items-center rounded-none border-0 border-b border-border-subtle text-left last:border-b-0";
 
 const LEVEL_TEXT = {
   error: "text-error",
@@ -39,11 +26,12 @@ const LEVEL_TEXT = {
   muted: "text-text-tertiary",
 } satisfies Record<RowLevel, string>;
 
-function glyphFor(state: RowState, size = 14): ReactNode {
+function glyphFor(state: RowState, size: number): ReactNode {
   switch (state.kind) {
     case "violation":
       return <OctagonAlert size={size} aria-hidden />;
     case "rollup":
+    case "issue":
       return state.level === "error" ? (
         <CircleAlert size={size} aria-hidden />
       ) : (
@@ -53,27 +41,17 @@ function glyphFor(state: RowState, size = 14): ReactNode {
       return <CircleArrowDown size={size} aria-hidden />;
     case "parked":
       return <CirclePause size={size} aria-hidden />;
-    case "issue":
-      return state.level === "error" ? (
-        <CircleAlert size={size} aria-hidden />
-      ) : (
-        <TriangleAlert size={size} aria-hidden />
-      );
   }
 }
 
-/** The state glyph's tooltip: the label in its level colour, the detail line when there is one,
- * and a hint that the glyph opens a menu of fixes - only when it has any (Home's "issue" kind has
- * no menu, so its glyph is a plain fact, not a click target). */
-function StateTooltip({ state }: { state: RowState }) {
+/** The state icon in its level colour, with an `sr-only` label so the state reads without
+ * sight of the colour. */
+export function RowGlyph({ state, size: sizeProp }: { state: RowState; size?: number }) {
   return (
-    <div className="flex flex-col gap-0.5">
-      <span className={`font-medium ${LEVEL_TEXT[state.level]}`}>{state.label}</span>
-      {state.detail && <span className="text-text-secondary">{state.detail}</span>}
-      {fixesFor(state).length > 0 && (
-        <span className="text-caption text-text-tertiary">Click for actions</span>
-      )}
-    </div>
+    <span className={`inline-flex items-center ${LEVEL_TEXT[state.level]}`}>
+      {glyphFor(state, sizeProp ?? 14)}
+      <span className="sr-only">{state.label}</span>
+    </span>
   );
 }
 
@@ -106,8 +84,7 @@ const INVOCATION_HEADER = {
 } satisfies Record<"user-only" | "model-only", string>;
 
 /** Whether a skill is user-invoked only or model-invoked only; "both" needs no mark, so this
- * renders nothing for the common case and the row stays quiet. The tooltip is one line - no
- * per-harness control table, no invoke syntax. */
+ * renders nothing for the common case and the row stays quiet. */
 function InvocationMark({ skill }: { skill: InstalledSkill }) {
   if (skill.invocation === "both") return null;
   const header = INVOCATION_HEADER[skill.invocation];
@@ -124,8 +101,7 @@ function InvocationMark({ skill }: { skill: InstalledSkill }) {
   );
 }
 
-/** The skill's name: a truncated label plus its `InvocationMark`. Descriptions live in the
- * detail panel, not the row. */
+/** The skill's name: a truncated label plus its `InvocationMark`. */
 export function SkillNameCell({ skill }: { skill: InstalledSkill }) {
   return (
     <span className="flex min-w-0 items-center gap-1.5">
@@ -135,14 +111,12 @@ export function SkillNameCell({ skill }: { skill: InstalledSkill }) {
   );
 }
 
-/** Both token numbers for one skill: the prompt cost first (the "name: description" line every
- * harness loads on every turn), then the full SKILL.md count, which is the one "Largest" sorts
- * by and so the one that reads bold. */
-export function TokenPairCell({ skill }: { skill: InstalledSkill }) {
+/** Both token numbers for one skill: the prompt cost first, then the full SKILL.md count. */
+function TokenPairCell({ skill }: { skill: InstalledSkill }) {
   const promptText = skill.description_tokens > 0 ? formatTokens(skill.description_tokens) : "–";
   return (
     <RichTooltip content={<TokensTooltip skill={skill} />}>
-      <span className="inline-flex items-baseline justify-end gap-1.5 tabular-nums text-small">
+      <span className="inline-flex shrink-0 items-baseline justify-end gap-1.5 tabular-nums text-small">
         <span className="text-text-tertiary">{promptText}</span>
         <span className="text-text-primary">{formatTokens(skill.skill_md_tokens)}</span>
       </span>
@@ -152,112 +126,50 @@ export function TokenPairCell({ skill }: { skill: InstalledSkill }) {
 
 type CheckboxChange = ComponentProps<typeof CheckboxControl>["onCheckedChange"];
 
-/** The state glyph, tooltipped, with an always-present `sr-only` name so the severity reads
- * without a hover even though the icon itself is `aria-hidden`. `null` when the skill has
- * nothing to say - the caller's cell renders empty rather than a placeholder. */
-export function RowGlyph({ state, size: sizeProp }: { state: RowState | null; size?: number }) {
-  const size = sizeProp ?? 14;
-  if (!state) return null;
-  return (
-    <RichTooltip content={<StateTooltip state={state} />}>
-      <span className={`inline-flex items-center gap-1 ${LEVEL_TEXT[state.level]}`}>
-        {glyphFor(state, size)}
-        <span className="sr-only">{state.label}</span>
-      </span>
-    </RichTooltip>
-  );
-}
-
-interface LeadingCellProps {
+interface SlotCellProps {
   skill: InstalledSkill;
   state: RowState | null;
-  glyphSize: number;
-  onOpen: () => void;
-  onAct: (label: string) => void;
-}
-
-/** The row's leading cell: the decision-state glyph behind a fixes menu, or nothing - the
- * hover-only Ellipsis lives in `TrailingMenuCell` instead, since selection now has its own
- * gutter column. */
-export function LeadingCell({ skill, state, glyphSize, onOpen, onAct }: LeadingCellProps) {
-  if (!isDecision(state)) return null;
-  return (
-    <SkillRowMenu
-      skill={skill}
-      state={state}
-      trigger={<RowGlyph state={state} size={glyphSize} />}
-      triggerClassName={HIT_CLASS}
-      triggerAriaLabel={state?.label}
-      onOpen={onOpen}
-      onAct={onAct}
-    />
-  );
-}
-
-interface TrailingMenuCellProps {
-  skill: InstalledSkill;
-  state: RowState | null;
-  glyphSize: number;
-  visible: boolean;
-  onOpen: () => void;
-  onAct: (label: string) => void;
-  onOpenChange?: (open: boolean) => void;
-  onToggleSelect?: () => void;
-}
-
-/** The row's trailing Ellipsis menu: revealed on row hover/focus-within, or held visible while
- * the row is checked (`visible`) or its own popup is open. No opacity transition. */
-export function TrailingMenuCell({
-  skill,
-  state,
-  glyphSize,
-  visible,
-  onOpen,
-  onAct,
-  onOpenChange,
-  onToggleSelect,
-}: TrailingMenuCellProps) {
-  return (
-    <SkillRowMenu
-      skill={skill}
-      state={state}
-      trigger={<Ellipsis size={glyphSize} aria-hidden />}
-      triggerClassName={`${HIT_CLASS} text-text-tertiary data-[popup-open]:opacity-100 ${
-        visible ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-      }`}
-      triggerAriaLabel={`Actions · ${skill.name}`}
-      onOpen={onOpen}
-      onAct={onAct}
-      onOpenChange={onOpenChange}
-      onToggleSelect={onToggleSelect}
-    />
-  );
-}
-
-interface SelectionCellProps {
-  skill: InstalledSkill;
   checked: boolean;
-  visible: boolean;
+  /** Whether any row on the page is checked: a row with no state then shows its checkbox. */
+  hasSelection: boolean;
   onCheckedChange: CheckboxChange;
 }
 
-/** The 20px checkbox gutter: `opacity-0` until the row is hovered, focus-within, checked, or any
- * row in the table is checked (`visible`). No transition. */
-export function SelectionCell({ skill, checked, visible, onCheckedChange }: SelectionCellProps) {
+/** The row's first cell: the state icon at rest, the selection checkbox in the same place on
+ * hover, focus, or once checked. */
+export function SlotCell({ skill, state, checked, hasSelection, onCheckedChange }: SlotCellProps) {
+  const checkboxShown = checked || (hasSelection && state === null);
   return (
-    <span
-      className={`inline-flex w-5 shrink-0 items-center justify-center ${
-        checked || visible
-          ? "opacity-100"
-          : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-      }`}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <CheckboxControl
-        checked={checked}
-        onCheckedChange={onCheckedChange}
-        ariaLabel={`Select ${skill.name}`}
-      />
+    <span className="relative inline-flex size-3.5 items-center justify-center">
+      {state && !checkboxShown && (
+        <span className="pointer-events-none absolute inset-0 inline-flex items-center justify-center group-hover/row:opacity-0 group-focus-within/row:opacity-0">
+          <RowGlyph state={state} />
+        </span>
+      )}
+      <span
+        className={`inline-flex items-center justify-center ${
+          checkboxShown
+            ? ""
+            : "opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100"
+        }`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <CheckboxControl
+          checked={checked}
+          onCheckedChange={onCheckedChange}
+          ariaLabel={`Select ${skill.name}`}
+        />
+      </span>
+    </span>
+  );
+}
+
+/** The row's note: why the row is here, then its token pair at the right edge. */
+export function NoteCell({ skill, note }: { skill: InstalledSkill; note?: ReactNode }) {
+  return (
+    <span className="flex min-w-0 items-center justify-between gap-2">
+      <span className="min-w-0 truncate text-small text-text-secondary select-text">{note}</span>
+      <TokenPairCell skill={skill} />
     </span>
   );
 }

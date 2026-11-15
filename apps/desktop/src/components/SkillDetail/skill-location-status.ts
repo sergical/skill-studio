@@ -12,6 +12,7 @@ import {
   describeSpecViolations,
   deploymentLabelFromAgentId,
   deploymentLinkKind,
+  driftReference,
   driftingCopies,
   findLeftBehindPairs,
   homeRelativePath,
@@ -38,6 +39,8 @@ export type StatusLevel = "error" | "warning" | "off";
 interface RollupResult {
   level: StatusLevel | null;
   tip: string;
+  /** Status word of the condition that set `level`, e.g. "Broken link". */
+  status: string | null;
 }
 
 const RANK = { error: 3, warning: 2, off: 1 } satisfies Record<StatusLevel, number>;
@@ -270,33 +273,40 @@ function harnessId(agent: string): AgentId | null {
 }
 
 /** "Missing description", "Missing name", etc, folded into the fixed sentence shapes from status-spec.md §5. */
-function specCondition(violations: string[], path: string): Condition | null {
+function specCondition(violations: string[], deployment: Deployment): Condition | null {
   const relevant = violations.filter((v) => specViolationSeverity(v) !== "note");
   if (relevant.length === 0) return null;
   const blocking = relevant.some(isBlockingSpecViolation);
   const sentence = describeSpecViolations(relevant);
-  const editAndReveal: MenuEntry[] = [
-    { label: "Edit SKILL.md", action: { kind: "edit-skill-md", path } },
-    { label: "Reveal in Finder", action: { kind: "reveal", path, label: "the copy" } },
-  ];
+  const { path } = deployment;
+  const reveal: MenuEntry = {
+    label: "Reveal in Finder",
+    action: { kind: "reveal", path, label: "the copy" },
+  };
+  const menu: MenuEntry[] = deployment.plugin
+    ? [reveal]
+    : [{ label: "Edit SKILL.md", action: { kind: "edit-skill-md", path } }, reveal];
+  const fix = deployment.plugin
+    ? `Managed by ${deployment.plugin.name}. Ask the plugin author to fix it.`
+    : "Edit SKILL.md.";
   return blocking
     ? {
         level: "error",
-        status: "Skipped by some agents",
+        status: "Spec violation",
         phrase: "skipped by some agents",
         plural: "skipped by some agents",
         what: `SKILL.md: ${sentence}`,
-        fix: "Edit SKILL.md.",
-        menu: editAndReveal,
+        fix,
+        menu,
       }
     : {
         level: "warning",
-        status: "To check",
+        status: "Spec warning",
         phrase: "to check",
         plural: "to check",
         what: `SKILL.md: ${sentence} The skill still loads.`,
-        fix: "Edit SKILL.md.",
-        menu: [editAndReveal[0]],
+        fix,
+        menu: [menu[0]],
       };
 }
 
@@ -425,7 +435,7 @@ function parkedStillInDotagentsCondition(deployment: Deployment): Condition {
 function leftBehindCondition(pair: LeftBehindPair): Condition {
   return {
     level: "error",
-    status: "Left behind",
+    status: "Parked copy left behind",
     phrase: "parked copy left behind",
     plural: "parked copies left behind",
     what: "A live copy came back where this copy was parked.",
@@ -438,26 +448,36 @@ function leftBehindCondition(pair: LeftBehindPair): Condition {
 }
 
 interface GroupContext {
-  anyShared: boolean;
-  otherScopeLabel: string | undefined;
+  scopeKey: string;
+  driftReference: Deployment | null;
   driftSet: Set<Deployment>;
 }
 
+/** The copy a drifted copy differs from, named from the drifted copy's own scope block. */
+function driftReferenceName(reference: Deployment | null, ctx: GroupContext): string {
+  if (!reference) return "the other copies";
+  const sameScope = scopeKeyOf(reference) === ctx.scopeKey;
+  const where = sameScope ? "" : ` in ${scopeLabelOf(scopeKeyOf(reference))}`;
+  return reference.agent === "shared"
+    ? `the Universal folder${where}`
+    : `the ${harnessLabelFromAgent(reference.agent)} copy${where}`;
+}
+
 function driftCondition(deployment: Deployment, ctx: GroupContext): Condition {
-  const what = ctx.anyShared
-    ? "This copy differs from the Universal folder."
-    : `This copy differs from the copy in ${ctx.otherScopeLabel ?? "another scope"}.`;
+  const reference = ctx.driftReference;
+  const what = `This copy differs from ${driftReferenceName(reference, ctx)}.`;
   const label = harnessLabelFromAgent(deployment.agent);
   return {
     level: "warning",
-    status: "Differs",
-    phrase: "differs",
-    plural: "differ",
+    status: "Copies differ",
+    phrase: "copy differs",
+    plural: "copies differ",
     what,
     fix: "Compare copies to see the changes.",
     menu: [
       {
-        label: ctx.anyShared ? "Compare with the Universal folder…" : "Compare copies…",
+        label:
+          reference?.agent === "shared" ? "Compare with the Universal folder…" : "Compare copies…",
         action: { kind: "compare" },
       },
       { label: "Reveal in Finder", action: { kind: "reveal", path: deployment.path, label } },
@@ -503,7 +523,7 @@ function deploymentConditions(deployment: Deployment, ctx: GroupContext): Condit
   }
 
   const violations = deployment.spec_violations ?? [];
-  const spec = specCondition(violations, deployment.path);
+  const spec = specCondition(violations, deployment);
   if (spec) out.push(spec);
 
   if (ctx.driftSet.has(deployment)) out.push(driftCondition(deployment, ctx));
@@ -515,11 +535,12 @@ function deploymentConditions(deployment: Deployment, ctx: GroupContext): Condit
   return out.sort((a, b) => RANK[b.level] - RANK[a.level]);
 }
 
-function sharedConditions(shared: Deployment): Condition[] {
+function sharedConditions(shared: Deployment, ctx: GroupContext): Condition[] {
   const out: Condition[] = [];
   const violations = shared.spec_violations ?? [];
-  const spec = specCondition(violations, shared.path);
+  const spec = specCondition(violations, shared);
   if (spec) out.push(spec);
+  if (ctx.driftSet.has(shared)) out.push(driftCondition(shared, ctx));
   return out.sort((a, b) => RANK[b.level] - RANK[a.level]);
 }
 
@@ -605,16 +626,11 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
     const isGlobal = key === "";
     const sharedDeployment =
       deployments.find((d) => deploymentLinkKind(d) === "shared-root") ?? null;
-    const otherKey = keys.find((k) => k !== key);
-    const ctx: GroupContext = {
-      anyShared: summary.truth != null,
-      otherScopeLabel: otherKey !== undefined ? scopeLabelOf(otherKey) : undefined,
-      driftSet,
-    };
+    const ctx: GroupContext = { scopeKey: key, driftReference: driftReference(summary), driftSet };
 
     const shared: LocationRow | null = sharedDeployment
       ? (() => {
-          const conditions = sharedConditions(sharedDeployment);
+          const conditions = sharedConditions(sharedDeployment, ctx);
           return {
             kind: "shared",
             harness: "shared",
@@ -818,7 +834,7 @@ function counted(sorted: LabeledCondition[]): string {
 function rollup(entries: LabeledCondition[], allOff: boolean): RollupResult {
   const sorted = [...entries].sort((a, b) => RANK[b.condition.level] - RANK[a.condition.level]);
   const active = sorted.filter((e) => e.condition.level !== "off");
-  if (!active.length && !allOff) return { level: null, tip: "" };
+  if (!active.length && !allOff) return { level: null, tip: "", status: null };
   const level = active.length ? active[0].condition.level : "off";
   const head = sorted.find((e) => e.condition.headline);
   const lines: string[] = [];
@@ -828,7 +844,11 @@ function rollup(entries: LabeledCondition[], allOff: boolean): RollupResult {
     if (e === head) continue;
     lines.push(e.label ? `${e.label}: ${e.condition.what}` : e.condition.what);
   }
-  return { level, tip: lines.filter(Boolean).join("\n") };
+  return {
+    level,
+    tip: lines.filter(Boolean).join("\n"),
+    status: active[0]?.condition.status ?? null,
+  };
 }
 
 /** The whole card's rollup, for the skill-page header/sidebar dot. Lock-only (no deployments at all) short-circuits to its own fixed condition. */
@@ -837,6 +857,7 @@ export function skillRollup(skill: InstalledSkill, groups: ScopeGroup[]): Rollup
     return {
       level: "warning",
       tip: "Listed in the lock file, but no folder was found.\nInstall again or remove the entry.",
+      status: null,
     };
   }
   const entries: LabeledCondition[] = groups.flatMap((g) => {
@@ -860,7 +881,9 @@ export const INVOCATION_POLICY_OPTIONS: { value: InvocationPolicy; label: string
 
 /** True when any row across `groups` has drifted from its scope's canonical copy - `SkillLocationsCard`'s title link and the properties rail's Location warning glyph both key off this. */
 export function scopeGroupsHaveDrift(groups: ScopeGroup[]): boolean {
-  return groups.some((g) => g.rows.some((r) => r.conditions.some((c) => c.status === "Differs")));
+  return groups.some((g) =>
+    g.rows.some((r) => r.conditions.some((c) => c.status === "Copies differ")),
+  );
 }
 
 /** The card title's one right-aligned action link, precedence per status-spec.md §2: compare > install-again. Update stays in the page header: here it read as updating the locations. Turning a parked copy on is its own row's "Turn on". */

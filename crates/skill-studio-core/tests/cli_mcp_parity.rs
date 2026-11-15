@@ -86,6 +86,26 @@ const CLI_SUBCOMMANDS: &[SurfaceName] = &[
         surface: "review",
     },
     SurfaceName {
+        op: "pack_list",
+        surface: "pack",
+    },
+    SurfaceName {
+        op: "pack_show",
+        surface: "pack",
+    },
+    SurfaceName {
+        op: "pack_add",
+        surface: "pack",
+    },
+    SurfaceName {
+        op: "pack_update",
+        surface: "pack",
+    },
+    SurfaceName {
+        op: "pack_remove",
+        surface: "pack",
+    },
+    SurfaceName {
         op: "scan_for_usage",
         surface: "usage",
     },

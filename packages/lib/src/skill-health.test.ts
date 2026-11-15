@@ -176,7 +176,9 @@ describe("findDuplicateSkills", () => {
     });
     const issues = findDuplicateSkills([skill]);
     expect(issues).toHaveLength(1);
-    expect(issues[0].detail).toBe("Global · Cursor differs from Global · Universal folder");
+    expect(issues[0].detail).toBe(
+      "1 copy differs: Global · Cursor, from Global · Universal folder",
+    );
   });
 
   it("uses a plural verb when more than one copy differs", () => {
@@ -191,19 +193,51 @@ describe("findDuplicateSkills", () => {
     });
     const issues = findDuplicateSkills([skill]);
     expect(issues[0].detail).toBe(
-      "Global \u00b7 Cursor; Global \u00b7 Codex differ from Global \u00b7 Universal folder",
+      "2 copies differ: Global · Cursor; Global · Codex, from Global · Universal folder",
     );
   });
 
-  it("lists every copy when there is no strict majority", () => {
+  it("measures every copy against the Universal folder even when it holds no majority", () => {
     const skill = fixtureSkill({
       deployments: [
         fixtureDeployment({ agent: "shared", scope: "global", content_hash: "aaa" }),
         fixtureDeployment({ agent: "Cursor", scope: "global", content_hash: "bbb" }),
+        fixtureDeployment({ agent: "Codex", scope: "global", content_hash: "bbb" }),
       ],
     });
     const issues = findDuplicateSkills([skill]);
-    expect(issues[0].detail).toBe("2 copies differ: Global · Universal folder; Global · Cursor");
+    expect(issues[0].detail).toBe(
+      "2 copies differ: Global · Cursor; Global · Codex, from Global · Universal folder",
+    );
+  });
+
+  it("names the same differing copies the Skills list counts when two scopes each have a Universal folder", () => {
+    const skill = fixtureSkill({
+      deployments: [
+        fixtureDeployment({
+          agent: "shared",
+          scope: "project",
+          project_path: "/src/web",
+          content_hash: "bbb",
+        }),
+        fixtureDeployment({ agent: "shared", scope: "global", content_hash: "aaa" }),
+      ],
+    });
+    const issues = findDuplicateSkills([skill]);
+    expect(issues[0].detail).toBe(
+      "1 copy differs: web · Universal folder, from Global · Universal folder",
+    );
+    expect(issues[0].detail).not.toMatch(/copies differ/);
+  });
+
+  it("ignores a parked copy, which no agent reads", () => {
+    const skill = fixtureSkill({
+      deployments: [
+        fixtureDeployment({ agent: "shared", scope: "global", content_hash: "aaa" }),
+        fixtureDeployment({ agent: "Cursor", scope: "parked", content_hash: "bbb" }),
+      ],
+    });
+    expect(findDuplicateSkills([skill])).toEqual([]);
   });
 });
 

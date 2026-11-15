@@ -4,7 +4,8 @@
 
 import { describe, expect, it } from "vitest";
 import type { Deployment, InstalledSkill } from "@skill-studio/lib";
-import { fixesFor, rowGroup, rowState } from "./skill-row-state";
+import { buildScopeGroups, skillRollup } from "../SkillDetail/skill-location-status";
+import { rowGroup, rowState } from "./skill-row-state";
 
 function fixtureDeployment(overrides: Partial<Deployment> = {}): Deployment {
   return {
@@ -73,7 +74,6 @@ describe("rowState", () => {
     expect(state?.kind).toBe("violation");
     expect(state?.level).toBe("error");
     expect(state?.action).toBe("Fix");
-    expect(fixesFor(state!)).toEqual(["Fix"]);
   });
 
   it("keeps a notes-only skill Healthy, or a harmless length note would crowd Needs attention", () => {
@@ -94,5 +94,65 @@ describe("rowState", () => {
     });
     expect(rowState(skill)?.level).toBe("warning");
     expect(rowGroup(skill)).toBe("attention");
+  });
+});
+
+describe("rowState rollup note", () => {
+  it("shows the counted rollup as a phrase, or the row note reads 'inside: · …'", () => {
+    const skill = fixtureSkill({
+      deployments: [
+        fixtureDeployment({ is_symlink: true, symlink_is_broken: true }),
+        fixtureDeployment({
+          id: "dep:v1/global/codex/find-bugs",
+          agent: "codex",
+          destination: "per-harness",
+          path: "/home/.codex/skills/find-bugs",
+          content_hash: "def",
+        }),
+      ],
+    });
+    const tip = skillRollup(skill, buildScopeGroups(skill)).tip;
+    expect(tip.split("\n")[0]).toMatch(/inside:$/);
+    const label = rowState(skill)?.label ?? "";
+    expect(label).not.toBe("");
+    expect(label).not.toMatch(/:$/);
+  });
+});
+
+describe("rowState fix button", () => {
+  it("shows no fix button for a left-behind copy, whose choice lives on the page the row click opens", () => {
+    const skill = fixtureSkill({
+      deployments: [
+        fixtureDeployment(),
+        fixtureDeployment({
+          id: "dep:v1/parked/find-bugs",
+          scope: "parked",
+          agent: "parked",
+          path: "/home/.agents/skills-parked/universal/find-bugs",
+          parked_origin: { kind: "universal", scope: "global", project_path: null },
+        }),
+      ],
+    });
+    const state = rowState(skill);
+    expect(state?.level).toBe("error");
+    expect(state?.action).toBeNull();
+  });
+
+  it("names the copy in a drift note, or the row reads '1 differs'", () => {
+    const skill = fixtureSkill({
+      deployments: [
+        fixtureDeployment(),
+        fixtureDeployment({
+          id: "dep:v1/global/codex/find-bugs",
+          agent: "codex",
+          destination: "per-harness",
+          path: "/home/.codex/skills/find-bugs",
+          content_hash: "def",
+        }),
+      ],
+    });
+    const state = rowState(skill);
+    expect(state?.label).toBe("1 copy differs");
+    expect(state?.action).toBe("Compare");
   });
 });

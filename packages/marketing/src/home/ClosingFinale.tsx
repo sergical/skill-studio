@@ -20,7 +20,7 @@ const WORDMARK_CROP = 0.28;
 const DITHER_SPEED = 0.35;
 
 // Same colours as the desktop app's welcome screen (apps/desktop FirstRunScreen).
-const DITHER_COLORS = {
+export const DITHER_COLORS = {
   dark: { back: "#150b2e", front: "#5a45c4" },
   light: { back: "#e4dcff", front: "#5a45c4" },
 } as const;
@@ -177,13 +177,13 @@ const styles = stylex.create({
     position: "relative",
     // The glow swells toward the download button while it is hovered.
     "--finale-glow-alpha": {
-      default: 0.3,
+      default: 0.18,
       "@media (hover: hover) and (pointer: fine)": {
         [stylex.when.descendant(":hover", finaleCtaMarker)]: 0.6,
       },
     },
     "--finale-glow-reach": {
-      default: "60%",
+      default: "40%",
       "@media (hover: hover) and (pointer: fine)": {
         [stylex.when.descendant(":hover", finaleCtaMarker)]: "95%",
       },

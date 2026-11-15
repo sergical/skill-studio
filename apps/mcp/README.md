@@ -48,7 +48,7 @@ that happens, mirroring `apps/cli/src/scope.rs`'s flag-driven version.
 
 | Variable               | Effect                                                                                                               |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `SKILL_STUDIO_FIXTURE` | Fixture scope rooted at this directory. Lease root: `<dir>/.history/leases`.                                         |
+| `SKILL_STUDIO_FIXTURE` | Fixture scope rooted at this directory. Lease root: `<dir>/.skill-studio/leases`.                                    |
 | `SKILL_STUDIO_HOME`    | Live scope rooted at this directory instead of the real home. Lease root: `<dir>/.skill-studio/leases`.              |
 | `SKILL_STUDIO_PROJECT` | A `PATH`-style list of explicit project directories (`:` on Unix, `;` on Windows). Optional with either scope above. |
 
@@ -59,7 +59,7 @@ data root — the same rule `apps/cli/src/scope.rs::data_root` uses.
 ## Example client configuration
 
 Users run the published server through the CLI package:
-`npx -y skill-studio mcp` (see `packages/npm/skill-studio/README.md` for
+`npx -y skill-studio@latest mcp` (see `packages/npm/skill-studio/README.md` for
 each agent's setup). For a local build, point the client at the binary:
 
 ```json

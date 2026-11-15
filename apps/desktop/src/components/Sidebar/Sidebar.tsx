@@ -64,6 +64,8 @@ function useSidebarRescan(
 
   const handleRefresh = async () => {
     if (spinning) return;
+    // A sync asks for the lists as they are now, so rows held after an act take their new place.
+    useAppStore.getState().clearRowActs();
     setPendingRescanSnapshotRevision(snapshotRevision ?? 0);
     try {
       await requestRescan();
@@ -221,7 +223,7 @@ function SidebarFooter({
           aria-label={spinning ? "Syncing installed skills" : "Sync installed skills"}
         >
           <RefreshCw size={13} className={spinning ? "animate-spin" : ""} />
-          <span className="whitespace-nowrap">{spinning ? "Syncing…" : "Sync"}</span>
+          <span className="whitespace-nowrap">Sync</span>
         </Button>
       </TooltipControl>
       <div className="flex items-center gap-0.5">
@@ -293,8 +295,8 @@ export function Sidebar({ snapshot, emittedSnapshotRevision, requestRescan }: Si
   const requestSkillSearchFocus = useAppStore((state) => state.requestSkillSearchFocus);
 
   const own = ownSkillsView(snapshot?.skills ?? []);
-  const skillsCount = own.length;
   const parkedCount = own.filter((s) => s.parked).length;
+  const skillsCount = own.length - parkedCount;
   const pluginCount = pluginSkillsView(snapshot?.skills ?? []).length;
   // Parked is a sub-section of the skills list, so the Skills row is only
   // "current" when that partition isn't selected. Plugin skills are their

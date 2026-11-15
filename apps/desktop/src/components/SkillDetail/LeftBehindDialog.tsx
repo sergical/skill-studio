@@ -90,15 +90,10 @@ export function LeftBehindDialog({
           <AlertDialogAction
             variant="destructive"
             onClick={handleConfirm}
-            disabled={isWorking || isChecking || blockedReason !== null}
+            busy={isWorking || isChecking}
+            disabled={blockedReason !== null}
           >
-            {isWorking
-              ? "Deleting…"
-              : isChecking
-                ? "Checking git…"
-                : keepLive
-                  ? "Keep live"
-                  : "Keep parked"}
+            {keepLive ? "Keep live" : "Keep parked"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

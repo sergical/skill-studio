@@ -180,6 +180,10 @@ pnpm run doctor
 pnpm run check
 ```
 
+### Versions
+
+The app, CLI, MCP server, npm packages and workspace packages share one version, taken from `[workspace.package]` in the root `Cargo.toml`. Change it only with `pnpm run version:set <major.minor.patch>`, which writes every manifest and `Cargo.lock`. `pnpm run versions:check` fails on drift; CI runs it on every PR, and `release.yml` runs it against the tag.
+
 ## Tech Stack
 
 | Layer       | Technology                                                      |
@@ -402,6 +406,14 @@ Enabled in `apps/desktop/tsconfig.json`:
 
 - Rust: `cargo test` in `apps/desktop/src-tauri`, tests live in colocated `#[cfg(test)]` modules
 - Frontend: Vitest is configured; run `pnpm run test`
+- End to end: `pnpm --filter skill-studio run test:e2e` runs the whole app on
+  the dev harness (`src/dev/harness`) in WebKit (the Tauri engine on macOS)
+  and Chromium, with real key presses and clicks. Specs live in
+  `apps/desktop/e2e/*.e2e.ts`. A change to keyboard shortcuts, focus, menus,
+  dialogs, or any behavior that crosses components adds or updates a spec
+  there, and the spec must fail without the change. Component tests that set
+  the store directly do not prove these flows: a window key handler in
+  another component broke ⌘K while they all passed.
 
 ## Before you implement an issue
 

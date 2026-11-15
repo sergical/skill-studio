@@ -9,11 +9,12 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p e2e",
     "test": "vitest run",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "types:generate": "node scripts/generate-types.mjs",
-    "types:check": "node scripts/generate-types.mjs --check"
+    "types:check": "node scripts/generate-types.mjs --check",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "@babel/core": "^8.1.0",
+    "@playwright/test": "^1.65.0",
     "@rolldown/plugin-babel": "^0.3.1",
     "@stylexjs/stylex": "0.19.1",
     "@stylexjs/unplugin": "0.19.1",
@@ -44,6 +46,7 @@
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.8",
     "@types/babel__core": "^7.20.5",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",

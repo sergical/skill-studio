@@ -137,6 +137,13 @@ async function openedEditor() {
 }
 
 describe("SkillPage editor entry points", () => {
+  /** Edit sits disabled until SKILL.md has loaded. */
+  async function enabledEditButton() {
+    const edit = await screen.findByRole("button", { name: "Edit" });
+    await waitFor(() => expect(edit.hasAttribute("disabled")).toBe(false));
+    return edit;
+  }
+
   const initialState = useAppStore.getState();
 
   beforeEach(() => {
@@ -150,7 +157,7 @@ describe("SkillPage editor entry points", () => {
 
   it("clicking_Edit_on_a_skill_with_broken_YAML_marks_the_error_line_in_red_and_puts_the_caret_on_it_so_the_user_lands_on_the_mistake_instead_of_the_top_of_the_file", async () => {
     renderPage(BROKEN_SKILL_MD, [YAML_VIOLATION]);
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    await userEvent.click(await enabledEditButton());
 
     const editor = await openedEditor();
     const { start } = lineOffsets(BROKEN_SKILL_MD, 3);
@@ -172,7 +179,7 @@ describe("SkillPage editor entry points", () => {
 
   it("typing_on_the_marked_line_clears_the_red_mark_so_a_line_the_user_is_fixing_is_not_still_flagged_as_broken", async () => {
     renderPage(BROKEN_SKILL_MD, [YAML_VIOLATION]);
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    await userEvent.click(await enabledEditButton());
     const editor = await openedEditor();
     await waitFor(() => expect(editor.selectionStart).toBe(lineOffsets(BROKEN_SKILL_MD, 3).start));
 
@@ -183,7 +190,7 @@ describe("SkillPage editor entry points", () => {
 
   it("fixing_the_YAML_on_another_frontmatter_line_clears_the_red_mark_so_a_fixed_file_is_not_still_flagged_as_broken", async () => {
     renderPage(BROKEN_SKILL_MD, [YAML_VIOLATION]);
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    await userEvent.click(await enabledEditButton());
     const editor = await openedEditor();
     await waitFor(() => expect(editor.selectionStart).toBe(lineOffsets(BROKEN_SKILL_MD, 3).start));
     const lineTwoEnd = lineOffsets(BROKEN_SKILL_MD, 2).end;
@@ -197,7 +204,7 @@ describe("SkillPage editor entry points", () => {
 
   it("editing_the_body_keeps_the_red_mark_and_the_textarea_names_the_error_so_a_screen_reader_user_hears_which_line_is_broken", async () => {
     renderPage(BROKEN_SKILL_MD, [YAML_VIOLATION]);
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    await userEvent.click(await enabledEditButton());
     const editor = await openedEditor();
     await waitFor(() => expect(editor.selectionStart).toBe(lineOffsets(BROKEN_SKILL_MD, 3).start));
     const end = BROKEN_SKILL_MD.length;
@@ -214,7 +221,7 @@ describe("SkillPage editor entry points", () => {
 
   it("clicking_Edit_on_a_skill_without_a_YAML_error_shows_no_red_mark_so_the_editor_does_not_flag_a_line_that_is_fine", async () => {
     renderPage(CLEAN_SKILL_MD, []);
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    await userEvent.click(await enabledEditButton());
 
     await openedEditor();
     expect(screen.queryByText(/breaks the YAML frontmatter/)).toBeNull();
@@ -223,7 +230,7 @@ describe("SkillPage editor entry points", () => {
     const user = userEvent.setup();
     useAppStore.getState().openSkill("find-bugs");
     renderPage(CLEAN_SKILL_MD, []);
-    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    await user.click(await enabledEditButton());
     await user.type(await openedEditor(), " changed");
     act(() => useAppStore.getState().goBack());
     expect(await screen.findByRole("alertdialog")).toBeTruthy();

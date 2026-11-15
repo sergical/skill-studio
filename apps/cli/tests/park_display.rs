@@ -1,5 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+#[allow(dead_code)]
+#[path = "support/test_home.rs"]
+mod test_home;
+
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -9,7 +13,7 @@ use std::process::{Command, Stdio};
 mod fixture;
 
 fn command(home: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_skill-studio"));
+    let mut cmd = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), home);
     cmd.env("HOME", home)
         .env("SKILL_STUDIO_HOME", home)
         .env("PATH", fixture::path_with_fake_dotagents(home));

@@ -6,7 +6,7 @@ import { WalkthroughVideo } from "./WalkthroughVideo";
 import { walkthroughStyles as s } from "./Walkthrough.stylex";
 import { homeSectionStyles } from "../home/HomeSection.stylex";
 
-export function SidecarWalkthrough({ theme }: WalkthroughProps) {
+export function SidecarWalkthrough({ theme, title = "How it works." }: WalkthroughProps) {
   const [selection, setSelection] = useState({ index: 0, animate: false });
   const list = useRef<HTMLDivElement>(null);
   const previousPositions = useRef<number[]>([]);
@@ -74,7 +74,7 @@ export function SidecarWalkthrough({ theme }: WalkthroughProps) {
 
   return (
     <div data-walkthrough="sidecar">
-      <h2 {...stylex.props(homeSectionStyles.title)}>How it works.</h2>
+      <h2 {...stylex.props(homeSectionStyles.title)}>{title}</h2>
       <div {...stylex.props(homeSectionStyles.columns)}>
         <div ref={list} {...stylex.props(s.sidecarList)}>
           {chapters.map((chapter, index) => (

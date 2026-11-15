@@ -25,18 +25,20 @@ export function GroupHead({
   groupId?: string;
 }) {
   return (
-    <div className="sticky top-0 z-1 flex h-7 w-full items-center gap-2 rounded-sm bg-bg-secondary px-3">
+    <div className="sticky top-0 z-1 flex h-7 w-full items-center gap-3 rounded-sm bg-bg-secondary px-3">
       <CollapsibleTrigger
         data-group-header={groupId}
-        className="group/head flex h-full flex-1 items-center gap-2 text-left text-small font-medium text-text-secondary"
+        className="group/head flex h-full flex-1 items-center gap-3 text-left text-small font-medium text-text-secondary"
         aria-label={`${label}, ${count} skill${count === 1 ? "" : "s"}`}
       >
         <ChevronDown
           className="size-3.5 shrink-0 -rotate-90 text-text-tertiary transition-transform motion-reduce:transition-none group-data-panel-open/head:rotate-0"
           aria-hidden
         />
-        {label}
-        <span className="font-normal text-text-tertiary tabular-nums">{count}</span>
+        <span className="flex items-center gap-2">
+          {label}
+          <span className="font-normal text-text-tertiary tabular-nums">{count}</span>
+        </span>
       </CollapsibleTrigger>
       {extra}
     </div>

@@ -63,8 +63,8 @@ export function MakeIndependentCopyDialog({
           <Button variant="outline" onClick={onClose} disabled={isCopying}>
             Cancel
           </Button>
-          <Button onClick={handleCopy} disabled={isCopying}>
-            {isCopying ? "Copying…" : "Make independent copy"}
+          <Button onClick={handleCopy} busy={isCopying}>
+            Make independent copy
           </Button>
         </DialogFooter>
       </DialogContent>

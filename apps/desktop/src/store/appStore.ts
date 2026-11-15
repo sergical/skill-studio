@@ -200,6 +200,19 @@ interface AppState {
   toggleSkillSelection: (path: string) => void;
   clearSkillSelection: () => void;
   selectSkills: (paths: string[]) => void;
+
+  // === Rows the user acted on ===
+  // A list keeps these rows where they were until the user leaves the view, syncs, or asks for a
+  // new order (filter, sort), so an action never moves rows under the cursor. `null` = the action
+  // runs; a string = the past-tense verb it finished with ("Updated"). Leaving or clearing forgets
+  // the finished ones; a running action stays until it settles.
+  rowActs: ReadonlyMap<string, string | null>;
+  /** Holds the rows that no action is running on and returns their names; a running row stays
+   * with its own action, so each action settles or releases only the rows it holds. */
+  holdSkills: (names: readonly string[]) => string[];
+  settleSkills: (names: readonly string[], verb: string) => void;
+  releaseSkills: (names: readonly string[]) => void;
+  clearRowActs: () => void;
 }
 
 // ============================================================================
@@ -260,6 +273,7 @@ function navigateHistory(
       activeView: result.view,
       navHistory: result.history,
       selectedSkillPaths: new Set(),
+      rowActs: runningActs(get().rowActs),
       // Leaving a skill page for a list restores that list's row cursor, as Escape does.
       lastClosedSkillName: left.kind === "skill" && result.view.kind !== "skill" ? left.name : null,
     });
@@ -285,6 +299,12 @@ const initialTheme = loadStoredTheme();
 // Store Creation
 // ============================================================================
 
+/** `rowActs` without the finished acts; the same map when every act is still running. */
+function runningActs(acts: ReadonlyMap<string, string | null>): ReadonlyMap<string, string | null> {
+  if ([...acts.values()].every((act) => act === null)) return acts;
+  return new Map([...acts].filter(([, act]) => act === null));
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   harnessDetection: { report: null, choice: null, error: null, saving: false },
   setHarnessDetection: (update) =>
@@ -304,6 +324,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         historyDefaults(state),
       ),
       selectedSkillPaths: new Set(),
+      rowActs: runningActs(state.rowActs),
       lastClosedSkillName: null,
     })),
   openSkill: (name, deploymentPath, intent) => {
@@ -319,6 +340,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         historyDefaults(state),
       ),
       selectedSkillPaths: new Set(),
+      rowActs: runningActs(state.rowActs),
       // A fresh open resolves the default copy again; only back/forward keep the pin.
       pinnedDeployment: { skillName: undefined, path: undefined },
     }));
@@ -334,6 +356,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           current.from,
           historyDefaults(state),
         ),
+        rowActs: runningActs(state.rowActs),
         lastClosedSkillName: current.name,
       }));
     }
@@ -454,6 +477,30 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   clearSkillSelection: () => set({ selectedSkillPaths: new Set() }),
   selectSkills: (paths) => set({ selectedSkillPaths: new Set(paths) }),
+
+  rowActs: new Map(),
+  holdSkills: (names) => {
+    const { rowActs } = get();
+    const free = names.filter((name) => rowActs.get(name) !== null);
+    const next = new Map(rowActs);
+    for (const name of free) next.set(name, null);
+    set({ rowActs: next });
+    return free;
+  },
+  settleSkills: (names, verb) => {
+    const next = new Map(get().rowActs);
+    for (const name of names) if (next.has(name)) next.set(name, verb);
+    set({ rowActs: next });
+  },
+  releaseSkills: (names) => {
+    const next = new Map(get().rowActs);
+    for (const name of names) next.delete(name);
+    set({ rowActs: next });
+  },
+  clearRowActs: () => {
+    const rowActs = runningActs(get().rowActs);
+    if (rowActs !== get().rowActs) set({ rowActs });
+  },
 }));
 
 // Wires the live OS-follow listener when the stored preference is "system".

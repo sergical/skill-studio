@@ -2,7 +2,8 @@
 // SkillLocationRow - one harness/reader row inside a scope's drawer: an
 // identity icon carrying the row's one status dot, its name and path, a
 // facts-only chip, an on/off switch (off = parked; disabled for an always-on
-// reader), and the ⋯ menu. Status never lives in the name or the chip - see status-spec.md §1.
+// reader), and the ⋯ menu. An error or warning also names its status word in
+// the caption column, so the state reads without the dot's colour or tooltip.
 // ============================================================================
 
 import { Link2, Puzzle } from "lucide-react";
@@ -19,6 +20,22 @@ import {
 } from "./SkillLocationRowButtons";
 import { parkActionFor, rowMenu, tipLines } from "./skill-location-status";
 import type { LocationAction, LocationRow } from "./skill-location-status";
+
+const STATUS_TEXT = { error: "text-error", warning: "text-warning" } as const;
+
+/** The row's relationship caption, led by the top condition's status word when it is an error or
+ * a warning, e.g. "Broken link". */
+function RowCaption({ row }: { row: LocationRow }) {
+  const top = row.conditions[0];
+  const level = top?.level === "error" || top?.level === "warning" ? top.level : null;
+  return (
+    <span className="truncate text-caption text-text-tertiary">
+      {level && <span className={STATUS_TEXT[level]}>{top.status}</span>}
+      {level && row.caption && " · "}
+      {row.caption}
+    </span>
+  );
+}
 
 /** The label tooltip: just the row's path, or the path plus its symlink target for a link row. */
 function labelTipFor(row: LocationRow) {
@@ -129,7 +146,7 @@ export function SkillLocationRow({
             )}
           </span>
         </TooltipControl>
-        <span className="truncate text-caption text-text-tertiary">{row.caption}</span>
+        <RowCaption row={row} />
       </span>
       <span className="flex shrink-0 items-center gap-1">
         {hasButton ? (

@@ -10,9 +10,11 @@ import { AppWindow, Check, Copy, Plug, RotateCcw, Terminal, type LucideIcon } fr
 import { siteTokens } from "../SiteTheme.stylex";
 import { CLI_DOCS_URL, DOWNLOAD_URL, MCP_DOCS_URL } from "../site-links";
 import { homeSectionStyles } from "./HomeSection.stylex";
+import { useCopyFlash } from "./useCopyFlash";
+import { AGENT_SETUP_PROMPT } from "@skill-studio/lib/agent-setup";
 
 type Mode = "app" | "cli" | "mcp";
-type Tone = "plain" | "muted" | "warn" | "user" | "tool" | "accent";
+type Tone = "plain" | "muted" | "error" | "warn" | "user" | "tool" | "accent";
 interface Line {
   text: string;
   tone?: Tone;
@@ -52,12 +54,12 @@ const modes: ReadonlyArray<{
 
 const scripts = {
   cli: [
-    { text: "$ npx skill-studio diagnose", typed: true, pause: 380 },
+    { text: "$ npx skill-studio@latest diagnose", typed: true, pause: 380 },
     { text: "Issues:", tone: "muted" },
-    { text: "  [error] broken link, pdf-tools: the folder it points at is gone", tone: "warn" },
+    { text: "  [error] broken link, pdf-tools: the folder it points at is gone", tone: "error" },
     { text: "  [warning] header can be fixed, motion: name is missing", tone: "warn" },
     { text: "  [warning] copies differ, writing-skills: 2 copies", tone: "warn", pause: 520 },
-    { text: "$ npx skill-studio usage", typed: true, pause: 380 },
+    { text: "$ npx skill-studio@latest usage", typed: true, pause: 380 },
     { text: "Not used in the last 30 days:", tone: "muted" },
     { text: "  release-notes      last used never" },
     { text: "  deploy-preview     last used never" },
@@ -81,10 +83,25 @@ const scripts = {
   ],
 } satisfies Record<Exclude<Mode, "app">, ReadonlyArray<Line>>;
 
+// The MCP tab copies the setup prompt, not one agent's command: the visitor's own agent
+// picks its line, adds the server and runs a first check.
 const commands = {
-  cli: { text: "npx skill-studio diagnose", docs: CLI_DOCS_URL },
-  mcp: { text: "claude mcp add skill-studio -- npx -y skill-studio mcp", docs: MCP_DOCS_URL },
-} satisfies Record<Exclude<Mode, "app">, { text: string; docs: string }>;
+  cli: {
+    text: "npx skill-studio@latest diagnose",
+    copy: "npx skill-studio@latest diagnose",
+    label: "Copy command",
+    docs: CLI_DOCS_URL,
+  },
+  mcp: {
+    text: "Paste into your agent: “Set up Skill Studio for me…”",
+    copy: AGENT_SETUP_PROMPT,
+    label: "Copy setup prompt",
+    docs: MCP_DOCS_URL,
+  },
+} satisfies Record<
+  Exclude<Mode, "app">,
+  { text: string; copy: string; label: string; docs: string }
+>;
 
 function prefersReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -138,28 +155,55 @@ function useScript(lines: ReadonlyArray<Line>, runId: number) {
 // under its own first word instead of back to the left edge.
 const LINE_PREFIX = /^\s*(?:[●⎿›$] |\[\w+\] )?/;
 
+function ScriptLine({ line, text, typing }: { line: Line; text: string; typing: boolean }) {
+  const indent = LINE_PREFIX.exec(line.text)?.[0].length ?? 0;
+  return (
+    <div {...stylex.props(styles.line, styles[line.tone ?? "plain"])}>
+      <span {...stylex.props(styles.linePrefix)}>{text.slice(0, indent)}</span>
+      <span>
+        {text.slice(indent)}
+        {typing && <span {...stylex.props(styles.caret)} />}
+      </span>
+    </div>
+  );
+}
+
 function ScriptView({ lines, runId }: { lines: ReadonlyArray<Line>; runId: number }) {
   const { shown, chars } = useScript(lines, runId);
   return (
-    <pre {...stylex.props(styles.screen)}>
+    <pre {...stylex.props(styles.screen, styles.stackLayer)}>
       {lines.slice(0, shown).map((line, i) => {
         const current = i === shown - 1;
-        const text = current && line.typed ? line.text.slice(0, chars) : line.text;
-        const typing = current && line.typed && chars < line.text.length;
-        const indent = LINE_PREFIX.exec(line.text)?.[0].length ?? 0;
         return (
-          <div key={i} {...stylex.props(styles.line, styles[line.tone ?? "plain"])}>
-            <span {...stylex.props(styles.linePrefix)}>{text.slice(0, indent)}</span>
-            <span>
-              {text.slice(indent)}
-              {typing && <span {...stylex.props(styles.caret)} />}
-            </span>
-          </div>
+          <ScriptLine
+            key={i}
+            line={line}
+            text={current && line.typed ? line.text.slice(0, chars) : line.text}
+            typing={current && !!line.typed && chars < line.text.length}
+          />
         );
       })}
       {shown >= lines.length && <span {...stylex.props(styles.caret, styles.caretIdle)} />}
     </pre>
   );
+}
+
+// Every finished script, invisible in the same grid cell as the visible view, sets the
+// window height: wrapped lines never clip, and the window keeps one height while a
+// script types and when the tab changes.
+function ScreenSizer() {
+  return Object.values(scripts).map((lines, s) => (
+    <pre
+      key={s}
+      aria-hidden="true"
+      {...stylex.props(styles.screen, styles.stackLayer, styles.stackHidden)}
+    >
+      {lines.map((line, i) => (
+        <ScriptLine key={i} line={line} text={line.text} typing={false} />
+      ))}
+      <span {...stylex.props(styles.caret)} />
+    </pre>
+  ));
 }
 
 const appRows = [
@@ -203,7 +247,7 @@ function AppView({ runId, announce, undoFocusRef }: AppViewProps) {
   }, [runId]);
 
   return (
-    <div {...stylex.props(styles.app)}>
+    <div {...stylex.props(styles.stackLayer, styles.app)}>
       <div {...stylex.props(styles.appHead)}>
         <span>Not used in 30 days</span>
         <span {...stylex.props(styles.appCount)}>{unusedCount - parked} to review</span>
@@ -247,26 +291,15 @@ function AppView({ runId, announce, undoFocusRef }: AppViewProps) {
   );
 }
 
-function CopyCommand({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef(0);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+function CopyCommand({ text, copy, label }: { text: string; copy: string; label: string }) {
+  const { copied, copy: copyText } = useCopyFlash();
   return (
     <div {...stylex.props(styles.command)}>
       <code {...stylex.props(homeSectionStyles.code, styles.commandText)}>{text}</code>
       <button
         type="button"
-        aria-label={copied ? "Copied" : "Copy command"}
-        onClick={() => {
-          void navigator.clipboard?.writeText(text).then(
-            () => {
-              setCopied(true);
-              window.clearTimeout(timer.current);
-              timer.current = window.setTimeout(() => setCopied(false), 1500);
-            },
-            () => setCopied(false),
-          );
-        }}
+        aria-label={copied ? "Copied" : label}
+        onClick={() => copyText(copy)}
         {...stylex.props(styles.copyButton)}
       >
         {copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
@@ -283,12 +316,13 @@ const TAB_STEPS = new Map([
 ]);
 
 export function UsageSection() {
-  const [mode, setMode] = useState<Mode>("cli");
+  const [mode, setMode] = useState<Mode>("app");
   const [runId, setRunId] = useState(0);
   // Lives outside the per-run app view so screen readers already know the region when
   // its text arrives.
   const [status, setStatus] = useState("");
   const replayRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const active = modes.find((m) => m.id === mode)!;
 
   const pick = (next: Mode) => {
@@ -296,6 +330,22 @@ export function UsageSection() {
     setRunId((r) => r + 1);
     setStatus("");
   };
+
+  // The first run waits until the panel is on screen, so the demo plays where it can be seen.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        observer.disconnect();
+        setRunId((r) => (r === 0 ? 1 : r));
+      },
+      { threshold: 0.5 },
+    );
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, []);
 
   const onTabKey = (event: KeyboardEvent) => {
     const step = TAB_STEPS.get(event.key);
@@ -341,6 +391,7 @@ export function UsageSection() {
         </div>
 
         <div
+          ref={panelRef}
           id="use-panel"
           role="tabpanel"
           aria-labelledby={`use-tab-${mode}`}
@@ -364,36 +415,51 @@ export function UsageSection() {
                 Replay
               </button>
             </div>
-            {mode === "app" ? (
-              <AppView
-                key={`app-${runId}`}
-                runId={runId}
-                announce={setStatus}
-                undoFocusRef={replayRef}
-              />
-            ) : (
-              <ScriptView key={mode} lines={scripts[mode]} runId={runId} />
-            )}
+            <div {...stylex.props(styles.stack)}>
+              <ScreenSizer />
+              {mode === "app" ? (
+                <AppView
+                  key={`app-${runId}`}
+                  runId={runId}
+                  announce={setStatus}
+                  undoFocusRef={replayRef}
+                />
+              ) : (
+                <ScriptView key={mode} lines={scripts[mode]} runId={runId} />
+              )}
+            </div>
           </div>
           <p role="status" {...stylex.props(styles.visuallyHidden)}>
             {status}
           </p>
 
-          <div {...stylex.props(styles.footer)}>
-            {mode === "app" ? (
-              <a href={DOWNLOAD_URL} {...stylex.props(homeSectionStyles.textLink)}>
-                Download for macOS
-                <span aria-hidden="true">→</span>
-              </a>
-            ) : (
-              <>
-                <CopyCommand key={mode} text={commands[mode].text} />
-                <a href={commands[mode].docs} {...stylex.props(homeSectionStyles.textLink)}>
-                  {mode === "cli" ? "CLI docs" : "MCP docs"}
-                  <span aria-hidden="true">→</span>
-                </a>
-              </>
-            )}
+          {/* Every footer shares one grid cell, so the tallest sets the height for all tabs. */}
+          <div {...stylex.props(styles.stack)}>
+            {modes.map(({ id }) => (
+              <div
+                key={id}
+                {...stylex.props(
+                  styles.footer,
+                  styles.stackLayer,
+                  id !== mode && styles.stackHidden,
+                )}
+              >
+                {id === "app" ? (
+                  <a href={DOWNLOAD_URL} {...stylex.props(homeSectionStyles.textLink)}>
+                    Download for macOS
+                    <span aria-hidden="true">→</span>
+                  </a>
+                ) : (
+                  <>
+                    <CopyCommand {...commands[id]} />
+                    <a href={commands[id].docs} {...stylex.props(homeSectionStyles.textLink)}>
+                      {id === "cli" ? "CLI docs" : "MCP docs"}
+                      <span aria-hidden="true">→</span>
+                    </a>
+                  </>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -507,22 +573,24 @@ const styles = stylex.create({
   screen: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: 13,
-    height: 340,
     lineHeight: 1.75,
     margin: 0,
-    overflowX: "auto",
+    minHeight: 340,
     padding: "16px 20px",
     "@media (max-width: 600px)": {
       fontSize: 11.5,
-      height: 320,
       lineHeight: 1.55,
+      minHeight: 320,
       padding: "12px 14px",
     },
   },
+  stack: { display: "grid" },
+  stackLayer: { gridArea: "1 / 1", minWidth: 0 },
+  stackHidden: { visibility: "hidden" },
   line: {
     display: "grid",
     gridTemplateColumns: "auto minmax(0, 1fr)",
-    whiteSpace: { default: "pre", "@media (max-width: 600px)": "pre-wrap" },
+    whiteSpace: "pre-wrap",
     "@media (max-width: 600px)": { paddingBottom: 3 },
   },
   // pre-wrap lets a run of spaces hang at the end of a line with no width, so an
@@ -530,6 +598,7 @@ const styles = stylex.create({
   linePrefix: { whiteSpace: "pre" },
   plain: { color: "oklch(0.93 0.01 290)" },
   muted: { color: "oklch(0.68 0.02 290)" },
+  error: { color: "oklch(0.704 0.191 22.216)" },
   warn: { color: "oklch(0.82 0.13 75)" },
   user: { color: "oklch(0.97 0 0)", fontWeight: 600 },
   tool: { color: "oklch(0.78 0.12 293)" },
@@ -552,10 +621,9 @@ const styles = stylex.create({
   app: {
     backgroundColor: siteTokens.surface,
     color: siteTokens.text,
-    height: 340,
+    minHeight: { default: 340, "@media (max-width: 600px)": 320 },
     padding: "14px 16px",
     position: "relative",
-    "@media (max-width: 600px)": { height: 320 },
   },
   appHead: {
     alignItems: "center",
@@ -641,7 +709,13 @@ const styles = stylex.create({
     ":focus-visible": { outline: "2px solid currentColor", outlineOffset: 2 },
     ":active": { transform: "scale(.96)" },
   },
-  footer: { alignItems: "center", display: "flex", flexWrap: "wrap", gap: 16 },
+  footer: {
+    alignContent: "start",
+    alignItems: "center",
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 16,
+  },
   command: {
     alignItems: "center",
     backgroundColor: siteTokens.surface,

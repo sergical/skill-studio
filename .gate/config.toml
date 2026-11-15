@@ -1,0 +1,133 @@
+ci_workflows = [
+  ".github/workflows/rust.yml",
+  ".github/workflows/web.yml",
+  ".github/workflows/performance.yml",
+]
+issue_patterns = [
+  'https://github\.com/[^/]+/[^/]+/issues/[0-9]+/?',
+  'https://[^/]*sentry\.io/.*issues/[0-9]+/?(?:\?.*)?',
+]
+prepare_linux = [
+  [
+    "sh",
+    "-c",
+    "sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev && mkdir -p apps/desktop/dist && cargo build --workspace --all-features --bins",
+  ],
+]
+base = "origin/main"
+repository = "sergical/skill-studio"
+check = "pnpm run check"
+version_files = ["**/package.json", "package.json", "**/Cargo.toml", "Cargo.toml", "**/tauri*.json"]
+dependency_files = ["**/package.json", "package.json", "**/Cargo.toml", "Cargo.toml"]
+patch_bots = ["dependabot[bot]", "app/dependabot"]
+ci_jobs = ["test", "host-macos", "check", "e2e"]
+
+[[rules]]
+id = "release"
+tier = "stop"
+paths = ["**/release.yml", "packages/npm/**", "**/tauri.release.conf.json", "scripts/release/**"]
+
+[[rules]]
+id = "gate"
+tier = "stop"
+paths = [
+  ".github/**",
+  "**/CODEOWNERS",
+  "CODEOWNERS",
+  "deny.toml",
+  "knip.json",
+  "doctor.config.ts",
+  ".gate/**",
+  "scripts/gate/**",
+  "*lint*",
+  "**/*lint*",
+  "*test*config*",
+  "**/*test*config*",
+  "*playwright*",
+  "**/*playwright*",
+  ".oxfmtrc.json",
+]
+
+[[rules]]
+id = "deploy-secrets"
+tier = "stop"
+paths = ["apps/server/wrangler.jsonc", "**/deploy-server.yml", "**/.env*", ".env*"]
+
+[[rules]]
+id = "public-contract"
+tier = "stop"
+paths = [".gate/snapshots/**", "crates/skill-studio-core/schema/*.json"]
+
+[[rules]]
+id = "policy"
+tier = "stop"
+paths = ["LICENSE*", "SECURITY.md", "CODE_OF_CONDUCT.md"]
+
+[[rules]]
+id = "user-files"
+tier = "show"
+paths = [
+  "**/*park*",
+  "**/*remove*",
+  "**/*install*",
+  "**/*fix*",
+  "**/*repair*",
+  "**/*deploy*",
+  "crates/skill-studio-core/src/ops*",
+  "crates/skill-studio-host/src/*",
+  "apps/desktop/src-tauri/src/skills/lifecycle*",
+]
+
+[[rules]]
+id = "content"
+tier = "show"
+paths = ["packages/marketing/**", "README*", "**/README*", "docs/**"]
+
+[[contracts]]
+kind = "cli"
+env = { COLUMNS = "80", NO_COLOR = "1" }
+command = ["target/debug/skill-studio"]
+snapshot = ".gate/snapshots/cli.snap"
+extra_commands = [
+  [
+    "split",
+  ],
+  [
+    "capabilities",
+  ],
+  [
+    "harnesses",
+  ],
+  [
+    "preview-repair",
+  ],
+  [
+    "apply-repair",
+  ],
+  [
+    "install-preferences",
+  ],
+  [
+    "sweep-quarantine",
+  ],
+  [
+    "schema",
+  ],
+  [
+    "health",
+  ],
+  [
+    "watch",
+  ],
+]
+
+[[contracts]]
+kind = "mcp"
+env = { SKILL_STUDIO_MCP_DEV_TOOLS = "0" }
+command = ["target/debug/skill-studio-mcp"]
+snapshot = ".gate/snapshots/mcp.snap"
+
+[[contracts]]
+kind = "files"
+glob = "crates/skill-studio-core/schema/*.json"
+snapshot = ".gate/snapshots/schema.snap"

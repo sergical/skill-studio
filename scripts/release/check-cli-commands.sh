@@ -24,6 +24,8 @@ probes=(
   "usage --help"
   "park some-skill --help"
   "unpark some-skill --help"
+  "turn-off some-skill --help"
+  "doctor --help"
   "undo --help"
   "mcp --help"
 )

@@ -153,7 +153,7 @@ function FolderRow({
         </p>
       </div>
       <Button
-        variant="ghost"
+        variant="outline"
         size="sm"
         className="shrink-0"
         aria-label={`${isDiscovered ? "Stop tracking" : "Remove"} ${displayPath}`}
@@ -384,7 +384,7 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
 
   return (
     <SettingsCard
-      icon={<FolderOpen size={15} className="text-text-tertiary" />}
+      icon={FolderOpen}
       title="Project folders"
       description="Skill Studio finds project folders in the history of the agents below and shows the skills inside them. Add a folder it missed, or stop tracking one you don't need."
       action={
@@ -421,7 +421,7 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
             return (
               <label
                 key={source.harness}
-                className="flex h-8 cursor-pointer items-center gap-2 text-body text-text-secondary"
+                className="flex h-9 cursor-pointer items-center gap-2 px-2 text-body text-text-secondary"
               >
                 <HarnessIcon harness={harnessId} size={14} />
                 <span className="flex-1">{label}</span>

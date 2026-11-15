@@ -84,6 +84,19 @@ pub fn desktop_usage_cache() -> Option<PathBuf> {
     dirs::data_dir().map(|dir| skill_studio_host::desktop_usage_cache_path(&dir))
 }
 
+/// Adds a project the tool call names, as the CLI's `--project-path` does:
+/// the call then sees that project even when discovery does not list it.
+pub fn add_project(scope: &mut RuntimeScope, project: &Path) {
+    match &mut scope.projects {
+        ProjectSelection::Explicit { paths } => paths.push(project.to_path_buf()),
+        ProjectSelection::Discover { .. } => {
+            scope.projects = ProjectSelection::Explicit {
+                paths: vec![project.to_path_buf()],
+            };
+        }
+    }
+}
+
 /// `SKILL_STUDIO_PROJECT` is a `PATH`-style list of project directories,
 /// split with the platform's path-list separator (`:` on Unix, `;` on
 /// Windows) via [`std::env::split_paths`].

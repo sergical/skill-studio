@@ -263,10 +263,11 @@ export function SkillMarkdownEditor({
           <Button
             size="sm"
             onClick={() => onSave(contentForSave(content, initialContent))}
-            disabled={isSaving || !isDirty}
+            busy={isSaving}
+            disabled={!isDirty}
           >
             <Save size={14} />
-            {isSaving ? "Saving…" : saveLabel}
+            {saveLabel}
           </Button>
         </div>
       </div>

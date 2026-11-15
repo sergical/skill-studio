@@ -1,23 +1,18 @@
 // ============================================================================
-// SkillListRow - One row of SkillListTable: the state glyph, name, disk
-// location, harness stack, and token pair for one skill, absolutely
-// positioned within its group by the caller's virtualizer.
+// SkillListRow - One row of SkillListTable: the slot, name, disk location,
+// harness stack, note, and fix for one skill, absolutely positioned within
+// its group by the caller's virtualizer.
 // ============================================================================
 
 import type { CSSProperties } from "react";
-import { Loader2 } from "lucide-react";
 import type { InstalledSkill } from "@skill-studio/lib";
+import { useAppStore } from "../../store/appStore";
 import { HarnessStack } from "./HarnessStack";
-import {
-  LeadingCell,
-  ROW_CLASS,
-  SelectionCell,
-  SkillNameCell,
-  TokenPairCell,
-  TrailingMenuCell,
-} from "./SkillRowCells";
-import { selectedRowClass } from "./skill-row-format";
+import { RowFixButton } from "./RowFixButton";
+import { NoteCell, SkillNameCell, SlotCell } from "./SkillRowCells";
+import { ROW_CLASS, SKILL_ROW_GRID, selectedRowClass } from "./skill-row-format";
 import { SkillLocationCell } from "./SkillLocationCell";
+import { rowClickOpensSkill } from "./skill-row-click";
 import { DEFAULT_HARNESS_LIST, whereFacts } from "./skill-row-state";
 import type { RowState } from "./skill-row-state";
 
@@ -29,24 +24,17 @@ interface SkillListRowProps {
   style: CSSProperties;
   state: RowState | null;
   checked: boolean;
-  /** Whether any row in the table is checked, for the always-visible selection gutter. */
+  /** Whether any row in the table is checked. */
   hasSelection: boolean;
   /** Whether this row is the skill currently open in the detail panel. */
   isOpenSkill: boolean;
   tabIndex: number;
-  glyphSize: number;
   rowRef: (el: HTMLDivElement | null) => void;
   onOpen: () => void;
-  /** What the row is doing now ("Parking…"), or undefined when idle. */
-  busyLabel?: string;
-  onAct: (label: string) => void;
+  onAct: (label: string, skill: InstalledSkill) => void;
   onCheckedChange: (shiftKey: boolean) => void;
-  onMenuOpenChange: (open: boolean) => void;
 }
 
-/** One skill row - `index` is its position in the grouped `rows` array, for shift-click and
- * `aria-rowindex`; `useRowCursor` (via `skill.name`) drives the roving `tabIndex` instead.
- * `style` is the virtualizer's absolute positioning within the row's group container. */
 export function SkillListRow({
   skill,
   index,
@@ -56,60 +44,45 @@ export function SkillListRow({
   hasSelection,
   isOpenSkill,
   tabIndex,
-  glyphSize,
   rowRef,
   onOpen,
-  busyLabel,
   onAct,
   onCheckedChange,
-  onMenuOpenChange,
 }: SkillListRowProps) {
+  const note = state ? [state.label, state.detail].filter(Boolean).join(" · ") : undefined;
+  const busy = useAppStore((s) => s.rowActs.get(skill.name) === null);
   return (
     <div
       ref={rowRef}
       role="row"
       aria-rowindex={index + 1}
       aria-selected={checked}
-      aria-busy={busyLabel !== undefined}
+      aria-busy={busy}
       tabIndex={tabIndex}
       style={style}
       // `scroll-mt-7` (28px, `HEADER_HEIGHT`) keeps a row scrolled to by `scrollIntoView` from
       // surfacing under its group's sticky header.
-      className={`${ROW_CLASS} scroll-mt-7 gap-x-3 px-3 [grid-template-columns:20px_var(--glyph-hit)_minmax(0,1fr)_160px_148px_104px] hover:bg-bg-secondary focus-visible:outline-2 focus-visible:outline-accent -outline-offset-2 ${selectedRowClass(
+      className={`${ROW_CLASS} ${SKILL_ROW_GRID} scroll-mt-7 hover:bg-bg-secondary focus-visible:outline-2 focus-visible:outline-accent -outline-offset-2 ${selectedRowClass(
         isOpenSkill,
       )} ${skill.parked ? "text-text-tertiary" : ""}`}
-      onClick={onOpen}
+      onClick={(e) => {
+        // SAFETY: a click's target is always an Element; browsers retarget clicks on text
+        // to the parent element.
+        if (rowClickOpensSkill(e.currentTarget, e.target as Element)) onOpen();
+      }}
     >
-      <div role="gridcell" className="contents">
-        <SelectionCell
+      <div role="gridcell" className="flex items-center justify-center">
+        <SlotCell
           skill={skill}
+          state={state}
           checked={checked}
-          visible={hasSelection}
+          hasSelection={hasSelection}
           onCheckedChange={(_checked, eventDetails) => {
             // SAFETY: the underlying event is a pointer or keyboard event, both of which carry `shiftKey`.
             const shiftKey = (eventDetails.event as MouseEvent | KeyboardEvent).shiftKey;
             onCheckedChange(shiftKey);
           }}
         />
-      </div>
-      {/* Not `contents`: `LeadingCell` renders nothing for a healthy row, and a `contents`
-          wrapper around no children drops out of the grid, shifting every column after it. */}
-      <div role="gridcell" className="flex items-center justify-center">
-        {busyLabel ? (
-          <Loader2
-            size={glyphSize}
-            className="animate-spin text-text-tertiary motion-reduce:animate-none"
-            aria-label={busyLabel}
-          />
-        ) : (
-          <LeadingCell
-            skill={skill}
-            state={state}
-            glyphSize={glyphSize}
-            onOpen={onOpen}
-            onAct={onAct}
-          />
-        )}
       </div>
       <div role="gridcell" className="contents">
         <SkillNameCell skill={skill} />
@@ -120,18 +93,11 @@ export function SkillListRow({
       <div role="gridcell" className="contents">
         <HarnessStack skill={skill} harnessList={DEFAULT_HARNESS_LIST} />
       </div>
-      <div role="gridcell" className="flex items-center justify-end gap-1">
-        <TokenPairCell skill={skill} />
-        <TrailingMenuCell
-          skill={skill}
-          state={state}
-          glyphSize={glyphSize}
-          visible={checked}
-          onOpen={onOpen}
-          onAct={onAct}
-          onOpenChange={onMenuOpenChange}
-          onToggleSelect={() => onCheckedChange(false)}
-        />
+      <div role="gridcell" className="contents">
+        <NoteCell skill={skill} note={note} />
+      </div>
+      <div role="gridcell" className="flex min-w-0 justify-end">
+        <RowFixButton skill={skill} label={state?.action ?? null} onAct={onAct} />
       </div>
     </div>
   );

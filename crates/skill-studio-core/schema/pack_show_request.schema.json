@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PackShowRequest",
+  "description": "Input for `pack_show`.",
+  "type": "object",
+  "properties": {
+    "source": {
+      "description": "Pack source exactly as `pack_list` reports it.",
+      "type": "string"
+    },
+    "project_path": {
+      "description": "Only this tracked project. Absent: the home and every tracked project.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "remote": {
+      "description": "Ask the git source for its newest commit and skills.",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "source"
+  ]
+}

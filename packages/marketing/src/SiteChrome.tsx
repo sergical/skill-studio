@@ -3,6 +3,7 @@
 // Header and footer shared by the homepage, the docs and the 404 page
 // ============================================================================
 
+import type { ReactNode } from "react";
 import * as stylex from "@stylexjs/stylex";
 import { Moon, Sun } from "lucide-react";
 
@@ -16,11 +17,19 @@ interface SiteHeaderProps {
   page: SitePage;
   /** The homepage has its own toggle inside the product demo. */
   showThemeToggle?: boolean;
+  /** Keeps the header, and its call to action, on screen while the page scrolls. */
+  sticky?: boolean;
+  cta?: ReactNode;
 }
 
-export function SiteHeader({ page, showThemeToggle = false }: SiteHeaderProps) {
-  return (
-    <header {...stylex.props(siteLayout.container, styles.header)}>
+export function SiteHeader({
+  page,
+  showThemeToggle = false,
+  sticky = false,
+  cta,
+}: SiteHeaderProps) {
+  const header = (
+    <header {...stylex.props(siteLayout.container, styles.header, sticky && styles.headerSticky)}>
       <LogoLockup href={page === "home" ? "#top" : "/"} compact />
       <div {...stylex.props(styles.headerEnd)}>
         <nav {...stylex.props(styles.nav)} aria-label="Main navigation">
@@ -34,9 +43,11 @@ export function SiteHeader({ page, showThemeToggle = false }: SiteHeaderProps) {
           >
             Docs
           </a>
-          <a href="/#download" {...stylex.props(styles.navLink)}>
-            Download
-          </a>
+          {!cta && (
+            <a href="/#download" {...stylex.props(styles.navLink)}>
+              Download
+            </a>
+          )}
         </nav>
         <a
           href={GITHUB_REPOSITORY_URL}
@@ -48,9 +59,11 @@ export function SiteHeader({ page, showThemeToggle = false }: SiteHeaderProps) {
           <GitHubMark />
         </a>
         {showThemeToggle && <ThemeToggle />}
+        {cta}
       </div>
     </header>
   );
+  return sticky ? <div {...stylex.props(styles.stickyBar)}>{header}</div> : header;
 }
 
 // lucide-react dropped its brand icons, so the GitHub mark is drawn here.
@@ -133,11 +146,27 @@ const styles = stylex.create({
     paddingBlock: 22,
     "@media (max-width: 700px)": { paddingBlock: 16 },
   },
+  headerSticky: { paddingBlock: 12, "@media (max-width: 700px)": { paddingBlock: 10 } },
+  stickyBar: {
+    backdropFilter: "blur(14px) saturate(1.4)",
+    backgroundColor: `color-mix(in oklch, ${siteTokens.background} 78%, transparent)`,
+    borderBottomColor: siteTokens.border,
+    borderBottomStyle: "solid",
+    borderBottomWidth: 1,
+    position: "sticky",
+    top: 0,
+    zIndex: 40,
+  },
   headerEnd: { alignItems: "center", display: "flex", gap: 26 },
   nav: { display: "flex", gap: 26, "@media (max-width: 700px)": { display: "none" } },
   navLink: {
+    alignItems: "center",
     color: siteTokens.muted,
+    display: "inline-flex",
     fontSize: 14,
+    margin: "-12px -8px",
+    minHeight: 44,
+    padding: "0 8px",
     textDecoration: "none",
     transition: "color 150ms ease-out",
     ":hover": { color: siteTokens.text },

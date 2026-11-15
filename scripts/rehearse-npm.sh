@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Rehearses the npm release of the CLI on this Mac, without publishing.
 #
-# Usage: scripts/rehearse-npm.sh <path to a built skill-studio binary>
+# Usage: scripts/rehearse-npm.sh <path to a built skill-studio binary> [release version]
 #
 # Copies the three packages under packages/npm to a temp dir, puts the binary
 # into the platform package for this Mac's CPU, packs all three, checks that
@@ -12,8 +12,8 @@
 # child. Nothing touches the real HOME, ~/.npm or the global npm prefix.
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-  echo "usage: $0 <path to skill-studio binary>" >&2
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  echo "usage: $0 <path to skill-studio binary> [release version]" >&2
   exit 1
 fi
 
@@ -41,11 +41,28 @@ mkdir -p "$work/src/$platform/bin"
 cp "$binary" "$work/src/$platform/bin/skill-studio"
 chmod 755 "$work/src/$platform/bin/skill-studio"
 
+runtime_node="$(node -p 'process.execPath')"
+export PATH="$(dirname "$runtime_node"):$PATH"
 export HOME="$work/home"
 export npm_config_cache="$work/npm-cache"
 export npm_config_prefix="$work/prefix"
 export npm_config_update_notifier=false
 mkdir -p "$HOME" "$work/packs"
+
+if [[ $# -eq 2 ]]; then
+  for package in cli-darwin-arm64 cli-darwin-x64 skill-studio; do
+    node -e '
+      const fs = require("node:fs");
+      const [path, version] = process.argv.slice(1);
+      const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+      manifest.version = version;
+      if (manifest.optionalDependencies) {
+        manifest.optionalDependencies = Object.fromEntries(Object.keys(manifest.optionalDependencies).map(name => [name, version]));
+      }
+      fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+    ' "$work/src/$package/package.json" "$2"
+  done
+fi
 
 for package in cli-darwin-arm64 cli-darwin-x64 skill-studio; do
   (cd "$work/packs" && npm pack "$work/src/$package" --silent > /dev/null)
@@ -72,6 +89,9 @@ check_executable "$main_tgz" bin/skill-studio.js
 npm install --global --omit=optional --no-audit --no-fund --silent "$platform_tgz" "$main_tgz"
 
 cli="$npm_config_prefix/bin/skill-studio"
+python3 "$repo_root/scripts/verify/run.py" --cli-only --binary "$cli" \
+  --path "$(dirname "$runtime_node"):/usr/bin:/bin" \
+  --out "$repo_root/.gate/out/npm-smoke"
 if ! "$cli" --help > "$work/help.txt"; then
   echo "FAIL: skill-studio --help exited with an error" >&2
   exit 1

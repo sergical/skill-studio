@@ -74,7 +74,8 @@ export function SkillsView({
   // Home counts plugin-only skills with an update, so the update filter lists them too.
   const listedSkills =
     filter.update === "available" ? ownSkillsWithPluginUpdates(allSkills) : baseSkills;
-  const rows = applySkillListFilter(listedSkills, filter, issues, snapshot?.invocations);
+  const matches = applySkillListFilter(listedSkills, filter, issues, snapshot?.invocations);
+  const listedByName = new Map(listedSkills.map((skill) => [skill.name, skill]));
 
   /** Adds a project via the shared hook, then switches the scope to it. */
   const handleAddProject = async () => {
@@ -82,9 +83,11 @@ export function SkillsView({
     if (added) setSkillListFilter({ scope: { project: added } });
   };
 
+  const title = filter.scope === "parked" ? "Parked" : "Skills";
+
   if (!snapshot) {
     return (
-      <PageShell title="Skills">
+      <PageShell title={title}>
         <FirstScanState isLoading={isLoading} error={error} onRetry={onRetry} />
       </PageShell>
     );
@@ -92,7 +95,7 @@ export function SkillsView({
 
   return (
     <PageShell
-      title="Skills"
+      title={title}
       toolbar={
         <SkillListFilterBar
           filter={filter}
@@ -102,7 +105,7 @@ export function SkillsView({
           onRemoveProject={stopTracking}
           showCoverage={showCoverage}
           onToggleCoverage={setShowCoverage}
-          resultCount={rows.length}
+          resultCount={matches.length}
           sort={sort}
           onSortChange={setSort}
           snapshot={snapshot}
@@ -123,13 +126,13 @@ export function SkillsView({
       )}
       {showCoverage ? (
         <SkillCoverageMatrix
-          skills={rows}
+          skills={matches}
           onSelectSkill={onSelectSkill}
           deploymentPathForSkill={(skill) => deploymentForScope(skill, filter.scope)}
         />
       ) : (
         <SkillListTable
-          skills={rows}
+          skills={matches}
           stats={snapshot?.invocations ?? []}
           sort={sort}
           onSelectSkill={onSelectSkill}
@@ -140,6 +143,8 @@ export function SkillsView({
           hasAnySkills={baseSkills.length > 0}
           onClearFilters={resetSkillListFilter}
           onAddSkill={() => openAddSkillSheet()}
+          resetKey={JSON.stringify(filter)}
+          latestSkill={(name) => listedByName.get(name)}
         />
       )}
     </PageShell>

@@ -78,9 +78,22 @@ const addRequestSchema = z
         url: z.string().nullable(),
       })
       .passthrough(),
+    skills: z.array(z.object({ name: z.string() }).passthrough()).optional(),
   })
   .passthrough();
 type AddRequestLike = z.infer<typeof addRequestSchema>;
+
+const SOURCE_KIND_BY_METHOD = {
+  dotagents: "dotagents",
+  "skills-sh": "skills-sh",
+  copy: "manual",
+} as const satisfies Record<AddRequestLike["method"], InstalledSkill["source_kind"]>;
+
+const OWNER_KIND_BY_METHOD = {
+  dotagents: "dotagents",
+  "skills-sh": "skills-sh",
+  copy: "copy",
+} as const satisfies Record<AddRequestLike["method"], Deployment["owner_kind"]>;
 
 type ObjectInvokeArgs = Exclude<InvokeArgs, number[] | ArrayBuffer | Uint8Array>;
 
@@ -133,7 +146,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
       apps.push({ app_name: editorPreference, label: fileName.replace(/\.app$/, "") });
     }
     return {
-      automatic_label: "Cursor (first found)",
+      automatic_label: "Automatic (Cursor)",
       apps,
       terminal: { app_name: "$EDITOR", label: "nvim" },
       selected: editorPreference,
@@ -282,6 +295,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         scope: isProject ? "project" : "global",
         project_path: project ?? undefined,
         path: base,
+        owner_kind: OWNER_KIND_BY_METHOD[request.method],
         content_hash: `${name}-v1`,
       }),
       deployment({
@@ -294,6 +308,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         is_symlink: true,
         symlink_target: base,
         resolved_path: base,
+        owner_kind: OWNER_KIND_BY_METHOD[request.method],
         content_hash: `${name}-v1`,
       }),
     ];
@@ -304,6 +319,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     return skill({
       name,
       source: request.source.repo ?? request.source.url ?? "manual",
+      source_kind: SOURCE_KIND_BY_METHOD[request.method],
       description,
       installed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -313,11 +329,18 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
   }
 
   mockWindows("main");
+  // `?latency=<ms>` holds every answer that long, so busy states show as they do with real disk work.
+  const latency = Number(new URLSearchParams(location.search).get("latency") ?? 0);
   mockIPC(
     async (command, rawPayload) => {
+      if (latency > 0) await new Promise((resolve) => setTimeout(resolve, latency));
       const payload = isObjectInvokeArgs(rawPayload) ? rawPayload : {};
       switch (command) {
         case "check_skill_updates_now":
+          currentSnapshot = {
+            ...currentSnapshot,
+            update_check: { ...currentSnapshot.update_check, checked_at: new Date().toISOString() },
+          };
           return currentSnapshot.update_check;
         case "get_background_status":
           return { revision: 0, tasks: [] };
@@ -385,7 +408,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           return {
             harnesses: DISCOVERY_HARNESSES.map((id) => ({
               id,
-              display_name: id,
+              display_name: deploymentLabelFromAgentId(id),
               state: discoverySources.get(id) ? "configured" : "not_found",
               executable: null,
               executable_on_path: null,
@@ -787,7 +810,10 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         case "start_add_skills_operation": {
           const request = addRequestSchema.parse(payload.request);
           const name =
-            request.source.skillName ?? request.source.repo?.split("/").pop() ?? "added-skill";
+            request.skills?.[0]?.name ??
+            request.source.skillName ??
+            request.source.repo?.split("/").pop() ??
+            "added-skill";
           const added = buildAddedSkill(
             request,
             name,

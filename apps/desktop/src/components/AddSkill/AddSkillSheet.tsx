@@ -247,7 +247,7 @@ function SourceField({
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onEnter}
         onBlur={() => setTouched(true)}
-        placeholder="owner/repo, a GitHub URL, a skills.sh URL, or a local path"
+        placeholder="owner/repo, a URL, or a local path"
         spellCheck={false}
         autoCorrect="off"
         autoCapitalize="off"
@@ -974,9 +974,10 @@ function SubmitFooter({
         <Button
           className="h-(--control-height) rounded-md bg-accent-solid px-3.5 text-body font-medium text-text-on-accent hover:bg-accent-solid-hover"
           onClick={onSubmit}
+          busy={inProgress}
           disabled={!isValid || isSubmitting}
         >
-          {inProgress ? "Adding…" : submitLabel}
+          {submitLabel}
         </Button>
       </div>
     </div>

@@ -46,3 +46,10 @@ lerna-debug.log*
 
 # Python bytecode from tools/ scripts
 __pycache__/
+
+# Playwright e2e output
+apps/desktop/test-results/
+apps/desktop/playwright-report/
+
+# Verification evidence, read by the gate task.
+/.gate/out/

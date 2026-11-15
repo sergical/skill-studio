@@ -63,9 +63,10 @@ export function UninstallPluginDialog({
           <AlertDialogAction
             variant="destructive"
             onClick={handleUninstall}
-            disabled={isRemoving || !deployment.plugin}
+            busy={isRemoving}
+            disabled={!deployment.plugin}
           >
-            {isRemoving ? "Uninstalling…" : "Uninstall"}
+            Uninstall
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

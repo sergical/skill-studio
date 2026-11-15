@@ -11,16 +11,31 @@ core, so the CLI, the desktop app, and the MCP server agree.
 `skill-studio --help` lists these:
 
 ```
-skill-studio scan       [--home <dir>] [--project <dir>]... [--skill <name>]... [--json]
-skill-studio diagnose   (same flags)
-skill-studio usage      [--days <n>] [--json]
-skill-studio park       <skill> | --id <id>
-skill-studio unpark     <skill> | --id <id>
-skill-studio remove     <skill> | --id <id>
-skill-studio enable     <skill> | --id <id>   (same as unpark)
-skill-studio disable    <skill> | --id <id>   (same as park)
-skill-studio mcp
+invocation  Check invocation across copies, or set every copy of a skill
+scan        List every skill installed for your agents
+diagnose    Find broken skills and say what is wrong with each
+conflicts   Find skills that have different copies in different places
+review      Set, clear, or list skill review dates
+usage       Show which skills your agents used, and which they never used
+park        Turn a skill off for all agents
+turn-off    Split a shared skill and park one agent's copy
+unpark      Turn a parked skill on again
+enable      Same as `unpark`
+disable     Same as `park`
+remove      Remove a skill
+fix         Repair a skill's problems and list the ones it cannot repair
+undo        Reverse your last change
+events      List your past changes, newest first (alias: history)
+restore     Reverse one change from your history
+add         Install a skill for one or more agents
+outdated    List skills that have an update
+update      Update installed skills
+mcp         Start the MCP server
+extras      List hook events, MCP server names, and instruction file paths
+doctor      Check skill state and model listing budgets
 ```
+
+Run `skill-studio <command> --help` for each command's flags.
 
 - `park`, `unpark` and `remove` take a skill name. When the name matches
   more than one copy, the command lists each copy's path and id and exits 2;
@@ -62,7 +77,7 @@ skill-studio schema       [--out <dir>]
 
 - `--fixture <dir>` scans an in-memory-shaped fixture directory instead of
   the real machine (`RuntimeScope::fixture`); its lease root is
-  `<dir>/.history/leases`.
+  `<dir>/.skill-studio/leases`.
 - Without `--fixture`, the scope is `Live`, rooted at `--home` or the host's
   home directory. Its lease root is `<data_root>/leases`, where
   `data_root` is `$XDG_DATA_HOME/skill-studio` or
@@ -88,7 +103,7 @@ bare. Every invocation carries a fresh ULID `correlation_id`.
 | Exit | Meaning                                                                                                                                                |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 0    | `status: "ok"`, no issues (`scan`, or `diagnose` with no issues).                                                                                      |
-| 1    | `status: "ok"`, but `diagnose` found an issue at `Warning` severity or above.                                                                          |
+| 1    | `status: "ok"`, but the result has a problem: `diagnose` (`Warning` or above), `conflicts`, `doctor`, `fix` (unrepaired items) or `update` (errors).   |
 | 2    | `status: "error"`, a request- or scope-shaped error (`invalid_request`, `invalid_scope`, `ambiguous_target`, `unsupported`, `execution_failed`, `io`). |
 | 3    | `status: "error"`, a concurrency conflict (`scope_busy`, `stale_proposal`, `drift_conflict`, `ownership_changed`, `already_reverted`).                 |
 | 4    | `status: "partial"` — some scope roots were not read in the read-timeout budget; see `data.observations`.                                              |

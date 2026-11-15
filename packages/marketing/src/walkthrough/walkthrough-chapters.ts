@@ -23,4 +23,5 @@ export const chapters = [
 
 export interface WalkthroughProps {
   theme: "dark" | "light";
+  title?: string;
 }

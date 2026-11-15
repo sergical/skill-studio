@@ -1,23 +1,27 @@
 import * as stylex from "@stylexjs/stylex";
-import { BookOpen } from "lucide-react";
+import { Dithering } from "@paper-design/shaders-react";
+import { Check, Copy, Download } from "lucide-react";
+import { AGENT_SETUP_PROMPT } from "@skill-studio/lib/agent-setup";
 
 import { AgentIcon, type AgentId } from "../AgentIcon";
 import { ProductMock, type ThemeToggleOrigin } from "../ProductMock";
 import { Arrow } from "../MarketingBrand";
 import { SiteFooter, SiteHeader, siteLayout } from "../SiteChrome";
 import { lightSiteTheme, siteTokens, type SiteTheme } from "../SiteTheme.stylex";
+import { useReducedMotion } from "../use-reduced-motion";
 import { SidecarWalkthrough } from "../walkthrough/SidecarWalkthrough";
-import { ClosingFinale } from "../home/ClosingFinale";
+import { ClosingFinale, DITHER_COLORS } from "../home/ClosingFinale";
 import { finaleCtaMarker } from "../home/ClosingFinale.stylex";
 import { BenchmarkSection } from "../home/BenchmarkSection";
 import { FaqSection } from "../home/FaqSection";
 import { homeSectionStyles } from "../home/HomeSection.stylex";
 import { JobsSection } from "../home/JobsSection";
-import { MascotStage } from "../home/MascotStage";
+import { FirstScanSteps } from "../home/FirstScanSteps";
+import { SkillThrow } from "../home/SkillThrow";
 import { UsageSection } from "../home/UsageSection";
+import { useCopyFlash } from "../home/useCopyFlash";
 import {
   CLI_DOCS_URL,
-  DOCS_URL,
   DOWNLOAD_INTEL_URL,
   DOWNLOAD_URL,
   MCP_DOCS_URL,
@@ -103,38 +107,89 @@ function TrustLine() {
   );
 }
 
+function HeaderDownload() {
+  return (
+    <>
+      <a href={DOWNLOAD_URL} {...stylex.props(styles.headerCta, styles.pointerOnly)}>
+        <Download aria-hidden="true" size={15} />
+        Download
+      </a>
+      <a href="#use-it" {...stylex.props(styles.headerCta, styles.touchOnly)}>
+        Get it
+      </a>
+    </>
+  );
+}
+
+function TopDither({ theme }: { theme: SiteTheme }) {
+  const reducedMotion = useReducedMotion();
+  return (
+    <div aria-hidden="true" {...stylex.props(styles.topDither)}>
+      <Dithering
+        width="100%"
+        height="100%"
+        colorBack="#00000000"
+        colorFront={DITHER_COLORS[theme].front}
+        // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- Paper Shaders' own prop name
+        shape="warp"
+        type="4x4"
+        size={3}
+        scale={0.8}
+        speed={reducedMotion ? 0 : 0.35}
+      />
+    </div>
+  );
+}
+
+// Copies the prompt that has the visitor's own agent add the MCP server and check their skills.
+function CopyAgentPromptButton() {
+  const { copied, copy } = useCopyFlash();
+  return (
+    <button
+      type="button"
+      onClick={() => copy(AGENT_SETUP_PROMPT)}
+      {...stylex.props(styles.sourceLink)}
+    >
+      {copied ? <Check aria-hidden="true" size={18} /> : <Copy aria-hidden="true" size={18} />}
+      <span aria-live="polite">
+        {copied ? "Copied. Paste it into your agent" : "Copy agent prompt"}
+      </span>
+    </button>
+  );
+}
+
 export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
   return (
     <div id="top" {...stylex.props(siteLayout.page, theme === "light" && lightSiteTheme)}>
-      <SiteHeader page="home" />
+      <SiteHeader page="home" sticky cta={<HeaderDownload />} />
 
       <main>
-        <section {...stylex.props(siteLayout.container, styles.hero)}>
-          <div {...stylex.props(styles.copy)}>
-            <h1 {...stylex.props(styles.title)}>Every agent skill, in one place.</h1>
-            <p {...stylex.props(styles.lede)}>
-              Claude Code, Codex, Cursor and the rest each keep their own skill folders. See what
-              you have, update your skill packs, fix broken skills and park the ones you never use.
-              With undo.
-            </p>
-            <div {...stylex.props(styles.actions)}>
-              <DownloadButton theme={theme} />
-              <a href={DOCS_URL} {...stylex.props(styles.sourceLink)}>
-                <BookOpen aria-hidden="true" size={18} />
-                <span>Read the docs</span>
-              </a>
+        <div {...stylex.props(styles.heroWrap)}>
+          <TopDither theme={theme} />
+          <section {...stylex.props(siteLayout.container, styles.hero)}>
+            <div {...stylex.props(styles.copy)}>
+              <h1 {...stylex.props(styles.title)}>Find every skill your agents load.</h1>
+              <p {...stylex.props(styles.lede)}>
+                Skills pile up in your home folder, in every project and inside plugins. See them in
+                one list, fix the broken ones and park the rest, with undo.
+              </p>
+              <div {...stylex.props(styles.actions)}>
+                <DownloadButton theme={theme} />
+                <CopyAgentPromptButton />
+              </div>
+              <TrustLine />
             </div>
-            <TrustLine />
-          </div>
+            <div {...stylex.props(styles.visual)}>
+              <SkillThrow />
+            </div>
+          </section>
+        </div>
 
-          <MascotStage />
-        </section>
-
-        <section id="product" {...stylex.props(siteLayout.container, styles.productSection)}>
-          <div {...stylex.props(styles.productWrap)}>
-            <div {...stylex.props(styles.productHalo)} aria-hidden="true" />
-            <ProductMock theme={theme} onToggleTheme={onToggleTheme} />
-          </div>
+        <section
+          id="product"
+          {...stylex.props(siteLayout.container, styles.product, styles.anchor)}
+        >
+          <ProductMock theme={theme} onToggleTheme={onToggleTheme} />
         </section>
 
         <section {...stylex.props(styles.agentProof)} aria-label="Supported agents">
@@ -166,23 +221,42 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
           </div>
         </section>
 
-        <section id="jobs" {...stylex.props(siteLayout.container, homeSectionStyles.section)}>
+        <section
+          id="jobs"
+          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
+        >
           <JobsSection />
         </section>
 
-        <section id="how-it-works" {...stylex.props(siteLayout.container, styles.importSection)}>
-          <SidecarWalkthrough theme={theme} />
+        <section
+          id="how-it-works"
+          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
+        >
+          <FirstScanSteps />
         </section>
 
-        <section id="use-it" {...stylex.props(siteLayout.container, homeSectionStyles.section)}>
+        <section {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}>
+          <SidecarWalkthrough theme={theme} title="Then, day to day." />
+        </section>
+
+        <section
+          id="use-it"
+          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
+        >
           <UsageSection />
         </section>
 
-        <section id="benchmark" {...stylex.props(siteLayout.container, homeSectionStyles.section)}>
+        <section
+          id="benchmark"
+          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
+        >
           <BenchmarkSection />
         </section>
 
-        <section id="faq" {...stylex.props(siteLayout.container, homeSectionStyles.section)}>
+        <section
+          id="faq"
+          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
+        >
           <FaqSection />
         </section>
       </main>
@@ -191,20 +265,20 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
         <section
           id="download"
           aria-labelledby="download-title"
-          {...stylex.props(siteLayout.container, styles.closingSection)}
+          {...stylex.props(siteLayout.container, styles.closingSection, styles.anchor)}
         >
           <img
-            src="/skill-studio-logo.png"
+            src="/skill-studio-logo-512.webp"
             alt=""
             width={96}
             height={96}
             {...stylex.props(styles.closingMascot)}
           />
           <h2 id="download-title" {...stylex.props(styles.closingTitle)}>
-            Stop managing skills by hand.
+            See what your agents load.
           </h2>
           <p {...stylex.props(styles.closingCopy)}>
-            Updates, broken skills, extra copies and unused skills, for every agent, in one app.
+            Keep the skills your agents use and park the rest. Undo any time.
           </p>
           <DownloadButton theme={theme} inFinale />
           <TrustLine />
@@ -216,14 +290,27 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
 }
 
 const styles = stylex.create({
+  anchor: { scrollMarginTop: 72 },
+  heroWrap: { isolation: "isolate", position: "relative" },
+  topDither: {
+    height: 640,
+    insetInline: 0,
+    maskImage: "radial-gradient(ellipse 70% 80% at 70% 0%, black 10%, transparent 72%)",
+    opacity: 0.45,
+    pointerEvents: "none",
+    position: "absolute",
+    top: -64,
+    zIndex: -1,
+  },
   hero: {
     alignItems: "center",
     display: "grid",
     gap: "clamp(32px,4vw,64px)",
     gridTemplateColumns: "minmax(0,.9fr) minmax(0,1.1fr)",
-    paddingBlock: "40px 88px",
+    minHeight: 460,
+    paddingBlock: "36px 48px",
     "@media (max-width: 1080px)": { gridTemplateColumns: "1fr", justifyItems: "center" },
-    "@media (max-width: 600px)": { gap: 20, paddingBlock: "28px 56px" },
+    "@media (max-width: 600px)": { gap: 28, paddingBlock: "28px 40px" },
   },
   copy: {
     maxWidth: 560,
@@ -236,22 +323,49 @@ const styles = stylex.create({
     },
   },
   title: {
-    fontSize: "clamp(48px,6vw,88px)",
-    fontWeight: 720,
-    letterSpacing: "-.04em",
-    lineHeight: 0.95,
+    fontSize: "clamp(44px,5.4vw,80px)",
+    fontWeight: 700,
+    letterSpacing: "-.025em",
+    lineHeight: 1,
     margin: 0,
     textWrap: "balance",
-    "@media (max-width: 1080px)": { maxWidth: "12ch" },
   },
   lede: {
     color: siteTokens.muted,
     fontSize: 18,
     lineHeight: 1.6,
-    margin: "26px 0 30px",
+    margin: "24px 0 30px",
     maxWidth: "46ch",
     textWrap: "pretty",
-    "@media (max-width: 600px)": { maxWidth: "34ch" },
+    "@media (max-width: 600px)": { fontSize: 16 },
+  },
+  visual: {
+    minWidth: 0,
+    position: "relative",
+    width: "100%",
+    "@media (max-width: 1080px)": { maxWidth: 680 },
+  },
+  product: {
+    paddingBottom: 96,
+    position: "relative",
+    zIndex: 1,
+    "@media (max-width: 600px)": { paddingBottom: 64 },
+  },
+  headerCta: {
+    alignItems: "center",
+    backgroundColor: { default: siteTokens.accent, ":hover": siteTokens.accentHover },
+    borderRadius: 8,
+    color: siteTokens.accentText,
+    fontSize: 13,
+    fontWeight: 640,
+    gap: 7,
+    height: 36,
+    paddingInline: 14,
+    position: "relative",
+    textDecoration: "none",
+    transition: "background-color 150ms ease-out, transform 150ms ease-out",
+    ":active": { transform: "scale(.96)" },
+    "::before": { content: '""', inset: "-4px 0", position: "absolute" },
   },
   actions: {
     alignItems: "center",
@@ -267,7 +381,16 @@ const styles = stylex.create({
     margin: "14px 0 0",
     textWrap: "balance",
   },
-  inlineLink: { fontSize: "inherit", minHeight: "auto" },
+  inlineLink: {
+    fontSize: "inherit",
+    minHeight: "auto",
+    textDecorationColor: siteTokens.border,
+    textDecorationLine: "underline",
+    textDecorationThickness: 1,
+    textUnderlineOffset: 3,
+    transition: "color 150ms ease-out, text-decoration-color 150ms ease-out",
+    ":hover": { color: siteTokens.accent, textDecorationColor: "currentColor" },
+  },
   pointerOnly: { display: { default: "inline-flex", [TOUCH_DEVICE]: "none" } },
   touchOnly: { display: { default: "none", [TOUCH_DEVICE]: "inline-flex" } },
   pointerOnlyBlock: { display: { default: "block", [TOUCH_DEVICE]: "none" } },
@@ -327,6 +450,9 @@ const styles = stylex.create({
   },
   sourceLink: {
     alignItems: "center",
+    backgroundColor: "transparent",
+    cursor: "pointer",
+    fontFamily: "inherit",
     borderColor: siteTokens.border,
     borderRadius: 10,
     borderStyle: "solid",
@@ -344,18 +470,7 @@ const styles = stylex.create({
       "background-color 150ms ease-out, border-color 150ms ease-out, transform 150ms ease-out",
     ":hover": { backgroundColor: siteTokens.surface, borderColor: siteTokens.muted },
     ":active": { transform: "scale(.96)" },
-    "@media (max-width: 600px)": { minHeight: 48 },
-  },
-  productSection: { paddingBottom: 96, "@media (max-width: 600px)": { paddingBottom: 64 } },
-  productWrap: { marginInline: "auto", maxWidth: 1100, position: "relative" },
-  productHalo: {
-    backgroundColor: siteTokens.accentSoft,
-    borderRadius: "50%",
-    filter: "blur(55px)",
-    inset: "8% 4%",
-    opacity: 0.62,
-    pointerEvents: "none",
-    position: "absolute",
+    "@media (max-width: 600px)": { minHeight: 48, width: "100%" },
   },
   agentProof: {
     alignItems: "center",
@@ -431,10 +546,6 @@ const styles = stylex.create({
     position: "absolute",
     whiteSpace: "nowrap",
     width: 1,
-  },
-  importSection: {
-    paddingBlock: "124px 24px",
-    "@media (max-width: 600px)": { paddingBlock: "86px 24px" },
   },
   closingSection: {
     alignItems: "center",
