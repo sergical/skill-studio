@@ -369,7 +369,10 @@ export function SkillThrow() {
   const parkNextCopy = () => {
     stopAutoTidy();
     const index = PILE.findIndex(
-      (chip, index) => chip.state === "copy" && !collected.current.has(index),
+      (chip, index) =>
+        chip.state === "copy" &&
+        !collected.current.has(index) &&
+        bodies.current[index]?.mode !== "gone",
     );
     if (index >= 0) parkChip(index);
   };

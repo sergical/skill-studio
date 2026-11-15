@@ -429,10 +429,10 @@ export function PileFrame({
       </div>
       <button
         type="button"
-        disabled={!canParkCopy}
+        aria-disabled={!canParkCopy}
         onClick={onParkCopy}
         onFocus={onParkCopyFocus}
-        {...stylex.props(styles.parkCopy)}
+        {...stylex.props(styles.parkCopy, !canParkCopy && styles.parkCopyDone)}
       >
         Park a copy
       </button>
@@ -452,8 +452,8 @@ const styles = stylex.create({
     padding: "8px 12px",
     cursor: "pointer",
     ":focus-visible": { outline: `2px solid ${siteTokens.text}`, outlineOffset: 3 },
-    ":disabled": { opacity: 0.5, cursor: "default" },
   },
+  parkCopyDone: { opacity: 0.5, cursor: "default" },
   frame: { textAlign: "center", width: "100%" },
   stage: {
     height: { default: 480, "@media (max-width: 600px)": 440 },

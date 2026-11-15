@@ -107,7 +107,11 @@ describe("single-copy parking", () => {
       expect(live?.textContent).toContain(`${count} parked.`);
       expect(document.activeElement).toBe(button);
     }
-    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.hasAttribute("disabled")).toBe(false);
+    await user.keyboard("{Enter}");
+    expect(live?.textContent).toContain(`${PILE_COUNTS.copies} parked.`);
+    expect(document.activeElement).toBe(button);
     expect(animate).not.toHaveBeenCalled();
     const chips = [...container.querySelectorAll('span[aria-hidden="true"]')];
     expect(
