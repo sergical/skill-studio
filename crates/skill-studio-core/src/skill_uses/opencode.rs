@@ -95,6 +95,7 @@ pub fn parse_opencode_message(row: &OpenCodeMessageRow) -> Vec<SkillInvocation> 
                 at,
                 project_path,
                 session: Some(row.session_id.to_string()),
+                use_session: None,
             }]
         }
         "assistant" => {
@@ -134,6 +135,7 @@ pub fn parse_opencode_message(row: &OpenCodeMessageRow) -> Vec<SkillInvocation> 
                         at,
                         project_path: project_path.clone(),
                         session: Some(row.session_id.to_string()),
+                        use_session: None,
                     }
                 } else {
                     let path = input
@@ -149,6 +151,7 @@ pub fn parse_opencode_message(row: &OpenCodeMessageRow) -> Vec<SkillInvocation> 
                         at,
                         project_path: project_path.clone(),
                         session: Some(row.session_id.to_string()),
+                        use_session: None,
                     }
                 };
                 out.push(use_);
@@ -208,6 +211,7 @@ pub fn parse_opencode_part(row: &OpenCodePartRow) -> Vec<SkillInvocation> {
         at,
         project_path: project_path(row.directory),
         session: Some(row.session_id.to_string()),
+        use_session: None,
     }]
 }
 

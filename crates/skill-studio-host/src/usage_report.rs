@@ -285,7 +285,7 @@ impl SkillUsage {
             };
             tally.recent += 1;
             *tally.agents.entry(use_.harness.clone()).or_insert(0) += 1;
-            if let Some(session) = &use_.session {
+            if let Some(session) = use_.use_session.as_ref().or(use_.session.as_ref()) {
                 tally
                     .sessions
                     .insert((use_.harness.clone(), session.clone()));
@@ -360,7 +360,7 @@ fn session_uses<'a>(
         let Some(skill) = installed_name(&use_.skill, installed) else {
             continue;
         };
-        let Some(session) = use_.session.as_deref() else {
+        let Some(session) = use_.use_session.as_deref().or(use_.session.as_deref()) else {
             kept.push(use_);
             continue;
         };
@@ -872,7 +872,8 @@ mod tests {
         .into_iter()
         .map(|(skill, session, trigger)| SkillInvocation {
             skill: skill.into(),
-            session: Some(session.into()),
+            session: Some("parent".into()),
+            use_session: Some(session.into()),
             harness: "claude-code".into(),
             at: now(),
             project_path: None,
@@ -884,7 +885,7 @@ mod tests {
         assert_eq!(
             counted
                 .iter()
-                .filter(|u| u.session.as_deref() == Some("parent"))
+                .filter(|u| u.use_session.as_deref() == Some("parent"))
                 .count(),
             1
         );

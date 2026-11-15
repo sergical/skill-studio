@@ -127,6 +127,9 @@ pub struct SkillInvocation {
     /// harness records one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// Session identity for CLI/MCP usage; desktop counts use the native session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_session: Option<String>,
 }
 
 /// Use counts by [`SkillTrigger`], over a rolling window.
@@ -539,6 +542,7 @@ fn push_use(
         at,
         project_path: context.project_path.clone(),
         session: context.session.clone(),
+        use_session: None,
     });
 }
 
@@ -756,6 +760,7 @@ mod tests {
             at: Utc::now(),
             project_path: None,
             session: None,
+            use_session: None,
         };
         let unknown_agent_use = SkillInvocation {
             skill: "mystery".to_string(),
@@ -764,6 +769,7 @@ mod tests {
             at: Utc::now(),
             project_path: None,
             session: None,
+            use_session: None,
         };
         let known_plugin_use = SkillInvocation {
             skill: "plugin:deploy".to_string(),
@@ -772,6 +778,7 @@ mod tests {
             at: Utc::now(),
             project_path: None,
             session: None,
+            use_session: None,
         };
         let uses = [clear, unknown_agent_use.clone(), known_plugin_use.clone()];
         let stats = skill_stats(&uses, &filter(&known_skills, &sources), Utc::now());
@@ -791,6 +798,7 @@ mod tests {
             at: Utc::now(),
             project_path: None,
             session: None,
+            use_session: None,
         };
         let stats = skill_stats(&[use_], &filter(&known_skills, &sources), Utc::now());
         assert!(stats.is_empty());
@@ -804,6 +812,7 @@ mod tests {
             at,
             project_path: None,
             session: session.map(std::string::ToString::to_string),
+            use_session: None,
         }
     }
 
@@ -815,6 +824,7 @@ mod tests {
             at,
             project_path: None,
             session: session.map(std::string::ToString::to_string),
+            use_session: None,
         }
     }
 
@@ -976,6 +986,7 @@ mod tests {
                 at: now,
                 project_path: Some("/proj-a".to_string()),
                 session: None,
+                use_session: None,
             },
             SkillInvocation {
                 skill: "write-tests".to_string(),
@@ -984,6 +995,7 @@ mod tests {
                 at: now,
                 project_path: Some("/proj-b".to_string()),
                 session: None,
+                use_session: None,
             },
             SkillInvocation {
                 skill: "write-tests".to_string(),
@@ -992,6 +1004,7 @@ mod tests {
                 at: old,
                 project_path: Some("/proj-a".to_string()),
                 session: None,
+                use_session: None,
             },
         ];
         let stats = skill_stats(&uses, &filter(&known_skills, &sources), now);

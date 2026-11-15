@@ -463,7 +463,7 @@ fn parse_claude_code_uses_with_context(
             });
         if let Some(key) = key {
             for use_ in &mut uses {
-                use_.session = Some(log_session(file, use_.session.as_deref()));
+                use_.use_session = Some(log_session(file, use_.session.as_deref()));
             }
             context.claude_records.entry(key).or_insert(uses);
         } else {
@@ -1188,7 +1188,7 @@ pub struct SkillInvocationIndex {
 impl Default for SkillInvocationIndex {
     fn default() -> Self {
         Self {
-            reader_version: 5,
+            reader_version: 6,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: MAX_FILE_BYTES,
@@ -1204,7 +1204,7 @@ impl SkillInvocationIndex {
     #[cfg(test)]
     fn with_budgets(file_bytes: u64, run_bytes: u64) -> Self {
         Self {
-            reader_version: 5,
+            reader_version: 6,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: file_bytes,
@@ -1335,10 +1335,10 @@ impl SkillInvocationIndex {
     /// cached entries. Never panics: unreadable dirs/files/databases are
     /// skipped.
     pub fn refresh(&mut self, home: &Path, sources: &DiscoverySources) -> SkillUseRefreshReport {
-        if self.reader_version != 5 {
+        if self.reader_version != 6 {
             self.files.clear();
             self.databases.clear();
-            self.reader_version = 5;
+            self.reader_version = 6;
         }
         let mut report = SkillUseRefreshReport::default();
         let mut run_budget = self.run_budget;
@@ -1512,7 +1512,7 @@ impl SkillInvocationIndex {
             };
             let mut parsed = parse(&file, &text, &mut context, &mut invalid);
             for use_ in &mut parsed {
-                use_.session = Some(log_session(&file, use_.session.as_deref()));
+                use_.use_session = Some(log_session(&file, use_.session.as_deref()));
             }
             uses.extend(parsed);
             if invalid > 0 || gaps > 0 {
@@ -1631,9 +1631,11 @@ impl SkillInvocationIndex {
             let (text, consumed, skipping, gaps) =
                 read_transcript_lines(&mut reader, budget, run_budget, entry.skipping_line)?;
             let mut invalid = 0;
-            entry
-                .uses
-                .extend(parse(transcript, &text, &mut entry.context, &mut invalid));
+            let mut parsed = parse(transcript, &text, &mut entry.context, &mut invalid);
+            for use_ in &mut parsed {
+                use_.use_session = Some(log_session(transcript, use_.session.as_deref()));
+            }
+            entry.uses.extend(parsed);
             entry.parsed_bytes += consumed;
             entry.skipping_line = skipping;
             entry.skipped_lines += gaps + invalid as u64;
@@ -1971,6 +1973,30 @@ mod tests {
         index.stats_at(Utc::now(), &filter(known_skills, sources))
     }
 
+    fn usage(
+        home: &Path,
+        skills: &StdBTreeSet<String>,
+        now: DateTime<Utc>,
+    ) -> crate::usage_report::UsageReport {
+        let inventory = skill_studio_core::dto::Inventory {
+            lock_only: Vec::new(),
+            skills: Vec::new(),
+            projects: Vec::new(),
+            completeness: skill_studio_core::dto::Completeness::Complete,
+            observations: Vec::new(),
+            unread_roots: Vec::new(),
+            timings: Vec::new(),
+        };
+        crate::usage_report::SkillUsage::default().report_named(
+            home,
+            &inventory,
+            30,
+            now,
+            &Default::default(),
+            skills,
+        )
+    }
+
     /// The Codex and pi fixtures write fixed 2026-09-16 timestamps, so their stats read the
     /// window from the next day. A wall-clock `now` ages them out of the 30-day window.
     fn stats_on_fixture_day(
@@ -2170,17 +2196,16 @@ mod tests {
         let home = session_dir.path();
         let dir = home.join(CLAUDE_PROJECTS_ROOT).join("-p");
         fs::create_dir_all(&dir).unwrap();
-        for (name, at, project) in [
-            ("a", &recent, "/proj-a"),
-            ("b", &recent, "/proj-b"),
-            ("old", &old, "/proj-a"),
-        ] {
-            fs::write(
-                dir.join(format!("{name}.jsonl")),
-                skill_line("write-tests", at, project) + "\n",
-            )
-            .unwrap();
-        }
+        fs::write(
+            dir.join("session.jsonl"),
+            format!(
+                "{}\n{}\n{}\n",
+                skill_line("write-tests", &recent, "/proj-a"),
+                skill_line("write-tests", &recent, "/proj-b"),
+                skill_line("write-tests", &old, "/proj-a"),
+            ),
+        )
+        .unwrap();
 
         let known_skills = known(&["write-tests"]);
         let sources = DiscoverySources::default();
@@ -2363,7 +2388,7 @@ mod tests {
         let sources = DiscoverySources::default();
         let first = index.refresh(home, &sources);
         assert!(first.incomplete);
-        assert!(index.all_uses().count() < 20);
+        assert!(stats(&index, &known_skills, &sources)[0].total < 20);
 
         let mut passes = 0;
         loop {
@@ -2656,6 +2681,48 @@ mod tests {
         index.save(&cache_path).unwrap();
         assert!(cache_path.exists());
         assert!(!cache_path.with_file_name("skill-uses.json.tmp").exists());
+    }
+
+    #[test]
+    fn claude_subagent_read_keeps_native_session_for_desktop_and_separate_usage() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let dir = home.join(CLAUDE_PROJECTS_ROOT).join("p");
+        fs::create_dir_all(dir.join("s1/subagents")).unwrap();
+        let now = Utc::now();
+        let mut parent: serde_json::Value =
+            serde_json::from_str(&skill_line("foo", &now.to_rfc3339(), "/proj")).unwrap();
+        parent["sessionId"] = "s1".into();
+        parent["uuid"] = "parent".into();
+        let child = serde_json::json!({
+            "type": "assistant", "sessionId": "s1", "uuid": "child", "timestamp": now.to_rfc3339(),
+            "message": {"content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "/x/skills/foo/SKILL.md"}}]}
+        });
+        fs::write(dir.join("s1.jsonl"), parent.to_string() + "\n").unwrap();
+        fs::write(
+            dir.join("s1/subagents/sub1.jsonl"),
+            child.to_string() + "\n",
+        )
+        .unwrap();
+        let mut index = SkillInvocationIndex::default();
+        let skills = known(&["foo"]);
+        let sources = DiscoverySources::default();
+        index.refresh(home, &sources);
+        assert_eq!(index.all_uses().count(), 2);
+        assert!(index
+            .all_uses()
+            .all(|use_| use_.session.as_deref() == Some("s1")));
+        assert_eq!(stats(&index, &skills, &sources)[0].total, 1);
+        let report = usage(home, &skills, now);
+        assert_eq!(report.rows[0].recent_uses, 2);
+        assert_eq!(report.rows[0].sessions, 2);
+        let cache = home.join("index.json");
+        index.save(&cache).unwrap();
+        let loaded = SkillInvocationIndex::load_read_only(&cache);
+        assert_eq!(
+            loaded.all_uses().collect::<Vec<_>>(),
+            index.all_uses().collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -2996,6 +3063,46 @@ mod tests {
         }
 
         #[test]
+        fn reads_without_native_session_keep_desktop_events_and_one_usage_session() {
+            for compressed in [false, true] {
+                let tmp = tempfile::tempdir().unwrap();
+                let home = tmp.path();
+                let path = write_rollout(
+                    &home.join(CODEX_SESSIONS_DIR),
+                    "no-header.jsonl",
+                    &[
+                        exec_cat_line("2026-09-16T12:00:00Z", "/x/skills/foo/SKILL.md"),
+                        exec_cat_line("2026-09-16T12:05:00Z", "/x/skills/foo/SKILL.md"),
+                    ],
+                );
+                if compressed {
+                    let text = fs::read(&path).unwrap();
+                    fs::write(
+                        path.with_extension("jsonl.zst"),
+                        zstd::stream::encode_all(text.as_slice(), 1).unwrap(),
+                    )
+                    .unwrap();
+                    fs::remove_file(path).unwrap();
+                }
+                let mut index = SkillInvocationIndex::default();
+                let known_skills = known(&["foo"]);
+                let sources = DiscoverySources::default();
+                index.refresh(home, &sources);
+                assert!(index.all_uses().all(|use_| use_.session.is_none()));
+                assert_eq!(stats(&index, &known_skills, &sources)[0].total, 2);
+                let report = usage(
+                    home,
+                    &known_skills,
+                    DateTime::parse_from_rfc3339("2026-09-17T00:00:00Z")
+                        .unwrap()
+                        .with_timezone(&Utc),
+                );
+                assert_eq!(report.rows[0].recent_uses, 1, "compressed={compressed}");
+                assert_eq!(report.rows[0].sessions, 1, "compressed={compressed}");
+            }
+        }
+
+        #[test]
         fn forked_codex_history_counts_parent_once_and_keeps_new_child_uses_after_cache_resume() {
             // Real rollouts number every line; the last case is a child line without one.
             for (copies_have_ordinals, own_has_ordinal) in
@@ -3291,7 +3398,7 @@ mod tests {
             assert_eq!(stats.len(), 1);
             assert_eq!(
                 stats[0].total, 2,
-                "the appended skill load must remain visible in desktop stats"
+                "the missed use: the appended skill use was not counted"
             );
         }
 
@@ -3557,7 +3664,7 @@ mod tests {
         }
 
         #[test]
-        fn a_subagent_file_counts_as_its_own_session() {
+        fn a_subagent_file_shares_its_parents_session_and_dedupes_with_it() {
             let tmp = tempfile::tempdir().unwrap();
             let home = tmp.path();
             let project_folder = home.join("proj");
@@ -3586,7 +3693,16 @@ mod tests {
             index.refresh(home, &sources);
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
-            assert_eq!(stats[0].total, 2, "each sub-agent log is its own session");
+            assert_eq!(
+                stats[0].total, 1,
+                "the same session's file-read dedupe must collapse the subagent copy"
+            );
+            assert!(index
+                .all_uses()
+                .all(|use_| use_.session.as_deref() == Some("s1")));
+            let report = usage(home, &known_skills, Utc::now());
+            assert_eq!(report.rows[0].recent_uses, 2);
+            assert_eq!(report.rows[0].sessions, 2);
         }
 
         #[test]
