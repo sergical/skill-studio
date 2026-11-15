@@ -16,5 +16,5 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f context=gate/approved -f state=success -f description="Human approval for this commit"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f context=gate/approved -f state=success -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" -f description="Human approval for this commit"
           gh api --method DELETE "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels/gate%3Aapproved"

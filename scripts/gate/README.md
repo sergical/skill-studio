@@ -75,8 +75,15 @@ or private details in an evidence manifest intended for a public PR.
 
 ## Approval and agent guard
 
-`gate:approved` is a human approval trigger. The approval workflow records `gate/approved = success` on the SHA captured by the label event, then removes the label. Risk reads the status list for its exact head SHA, newest first. It ignores entries unless `creator.login` is `github-actions[bot]`. The newest bot entry for `gate/approved` decides approval. Its state must be `success`. A new push has no approval status, even when an old label event runs at the same time. Agents use the owner's token, so
-this label is not a technical boundary. Configure each agent's pre-tool-use hook
+`gate:approved` is a human approval trigger. The approval workflow records `gate/approved = success` on the SHA captured by the label event, then removes the label. Risk reads the status list for its exact head SHA, newest first. It ignores entries unless `creator.login` is `github-actions[bot]`. Each candidate must link to an Actions run in this repository. The run must use `.github/workflows/gate-approve.yml` and event `pull_request_target`. Risk removes any `@ref` suffix from the run path before it checks the path. The newest bot entry that passes these checks decides approval. Its state must be `success`. A new push has no approval status, even when an old label event runs at the same time. Agents use the owner's token, so
+this label is not a technical boundary.
+
+The status writer supplies the run URL. A PR from a branch in this repository
+can add a workflow that posts a forged status with a copied approval run URL.
+The filter can accept that status. The metadata checks verify the referenced
+run, but do not prove that the run posted the status. This replay risk remains.
+
+Configure each agent's pre-tool-use hook
 to run `scripts/gate/gate guard` with the tool event JSON on stdin. Exit 2 blocks
 commands containing the approval label or `gate/approved` status, including URL-encoded separators. For Claude
 Code, put this hook in local settings, not shared account settings:
@@ -86,7 +93,7 @@ Code, put this hook in local settings, not shared account settings:
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|mcp__github__.*",
+        "matcher": ".*",
         "hooks": [
           { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/gate/gate guard" }
         ]
@@ -96,7 +103,7 @@ Code, put this hook in local settings, not shared account settings:
 }
 ```
 
-The hook runs only for the shell tool and GitHub MCP tools. The guard lets other named tools pass, so agents can edit code and docs. Events without a tool name use the shell check.
+The hook runs for every tool. The guard skips only named file tools, such as `Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, and `apply_patch`. Agents can edit code and docs. The guard checks shell tools, `Monitor`, GitHub tools, unknown tools, and events without a tool name.
 
 This guard must be installed in the agent host before agent use. The gate does
 not claim to sandbox a token or prevent an agent from bypassing its own hooks.
@@ -108,10 +115,11 @@ Verify manifests keep the documented scenarios format. An optional `head` field 
 
 ## Workflows and metrics
 
-`gate.yml` posts risk for each PR head and reruns for label removal or addition. The proof card lists `gate/approved` separately from risk and review. Without a passing approval status on the current SHA, a stop-tier PR fails risk.
-Fork PR tokens cannot write statuses. A maintainer must run classification from
-a trusted checkout and post its result; fork runs fail closed. Do not use
-`pull_request_target` to execute untrusted PR code with a write token.
+`gate-risk.yml` runs the `risk` job on `pull_request_target`. GitHub uses base-branch YAML for this event. The job checks out the base SHA without stored credentials. It fetches the PR head as git objects and runs only base-branch scripts. It posts `gate/risk` for that head and runs again when a human changes a label. It has read access to Actions runs to check the source of approval.
+
+`gate.yml` runs `unit` and `contracts` on `pull_request` with read access only. These checks run PR code. They do not control the risk job. After merge, the maintainer must add `unit` and `contracts` to the ruleset as required checks. A passing `gate/risk` alone does not show that these checks passed.
+
+The proof card lists `gate/approved` separately from risk and review. Without a trusted passing approval status on the current SHA, a stop-tier PR fails risk. Do not execute PR code in a workflow that has write access.
 
 `gate-update.yml` updates behind PRs that have auto-merge enabled. Supply an
 optional `GATE_UPDATE_TOKEN` secret with contents and pull-request write access
@@ -120,7 +128,7 @@ with the default workflow token. Without that secret, updates can occur but a
 maintainer must trigger checks. Conflicts or head changes fail the job and leave
 the PR for a maintainer. This workflow does not enable auto-merge.
 
-`gate-metrics.yml` runs on day 1 of each month and on manual dispatch. It reports the previous calendar month in the Actions job summary. It has read access and does not write to the repository.
+`gate-metrics.yml` runs on day 1 of each month and on manual dispatch. It reports the previous calendar month in the Actions job summary. It has read access to contents, pull requests, Actions runs, and commit statuses. It does not write to the repository.
 
 `gate metrics --since 2026-08-01 --until 2026-11-14 --last 250` prints outcomes
 and an optional backtest. Only PRs merged into the repository's default branch are selected; the branch name comes from GitHub repository metadata. It paginates GitHub API data and caches immutable PR
@@ -135,11 +143,19 @@ those outputs from file paths alone. Reports state this limitation.
 
 The privileged risk job checks out base-branch gate code and policy. PR changes
 cannot change their own classification. If the base commit has no approval helper, risk treats approval as absent.
-This keeps stop-tier changes blocked during rollout. The first gate PR needs
+This keeps stop-tier changes blocked during rollout. The move to
+`gate-risk.yml` also needs a maintainer rollout. The new workflow must be on
+the base branch before it can run. This PR cannot post its own trusted risk
+status before that installation. The first gate PR needs
 a manual bootstrap because base does not yet contain the gate. Unit and contract jobs
 run PR code with read-only permissions.
 
-The approval workflow uses `pull_request_target: labeled` with no checkout or PR code execution. It runs independently of the risk workflow, so risk concurrency cannot cancel it. Labels are never read or removed by the risk job. Automatic branch updates produce a new SHA and need fresh human approval. Risk waits for unit and contract checks; a stale contract therefore fails gate/risk even when no stop rule matched. The private-repo fetch uses a one-time auth header.
+The approval workflow uses `pull_request_target: labeled` with no checkout or PR code execution. Each status links to its source run through `target_url`. It runs independently of the risk workflow, so risk concurrency cannot cancel it. Labels are never read or removed by the risk job. Automatic branch updates produce a new SHA and need fresh human approval. The private-repo fetch uses a one-time auth header.
+
+The approval and risk jobs can start at the same time. Risk can read statuses
+before approval posts its status. Label removal with the Actions token does
+not start another risk run. If this race occurs, a maintainer can change a
+label after approval to run risk again.
 
 Main CI metrics count push runs from this repository and the configured `ci_workflows` only. Historical merge ancestry supports squash and merge commits; rebase-merge history needs a separate base reconstruction and is not supported. `--last` refuses a window with too few PRs; widen `--since`. Main-commit and PR follow-up windows both extend 14 days past the reporting period, and merged PR commits are counted once.
 
