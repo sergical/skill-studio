@@ -14,6 +14,8 @@ class ProofTests(GateTests):
         self.assertEqual(proof.replace_card(body, new), f'Human intro\n\nHuman end\n\n{new}\n')
         self.assertEqual(proof.replace_card('<!-- gate:card -->old<!-- /gate:card -->\n\nHuman text', new), f'Human text\n\n{new}\n')
         self.assertEqual(proof.replace_card('Human text\n\n' + new + '\n', new), f'Human text\n\n{new}\n')
+        code = '    print("example")\r\n    print("next")'
+        self.assertEqual(proof.replace_card(f'<!-- gate:card -->old<!-- /gate:card -->\r\n\r\n{code}', new), f'{code}\n\n{new}\n')
         with self.assertRaises(ValueError):
             proof.replace_card('<!-- gate:card -->', 'new')
 

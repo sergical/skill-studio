@@ -65,8 +65,8 @@ def replace_card(body, card):
     if START in body or END in body:
         if body.count(START) != 1 or body.count(END) != 1 or body.index(START) > body.index(END):
             raise ValueError('Malformed gate card markers')
-        body = body[:body.index(START)].rstrip() + '\n\n' + body[body.index(END) + len(END):].lstrip()
-    return body.strip() + '\n\n' + card + '\n'
+        body = body[:body.index(START)].rstrip() + '\n\n' + body[body.index(END) + len(END):].lstrip('\r\n')
+    return body.lstrip('\r\n').rstrip() + '\n\n' + card + '\n'
 
 
 def card(args, cfg):
