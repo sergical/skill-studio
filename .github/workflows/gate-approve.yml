@@ -1,7 +1,9 @@
 name: Approve one gate commit
 run-name: ${{ github.event.label.name }} ${{ github.event.pull_request.head.sha }}
 on:
-  pull_request_target:
+  # Fork PRs need a write token to post the status. No step checks out or
+  # runs PR code; the job uses only the event's head SHA and PR number.
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
     types: [labeled]
 permissions:
   statuses: write

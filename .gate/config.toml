@@ -2,6 +2,7 @@ ci_workflows = [
   ".github/workflows/rust.yml",
   ".github/workflows/web.yml",
   ".github/workflows/performance.yml",
+  ".github/workflows/zizmor.yml",
 ]
 issue_patterns = [
   'https://github\.com/[^/]+/[^/]+/issues/[0-9]+/?',
@@ -20,7 +21,7 @@ check = "pnpm run check"
 version_files = ["**/package.json", "package.json", "**/Cargo.toml", "Cargo.toml", "**/tauri*.json"]
 dependency_files = ["**/package.json", "package.json", "**/Cargo.toml", "Cargo.toml"]
 patch_bots = ["dependabot[bot]", "app/dependabot"]
-ci_jobs = ["test", "host-macos", "check", "e2e"]
+ci_jobs = ["test", "host-macos", "check", "zizmor"]
 
 [[rules]]
 id = "release"
