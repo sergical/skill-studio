@@ -41,6 +41,8 @@ mkdir -p "$work/src/$platform/bin"
 cp "$binary" "$work/src/$platform/bin/skill-studio"
 chmod 755 "$work/src/$platform/bin/skill-studio"
 
+runtime_node="$(node -p 'process.execPath')"
+export PATH="$(dirname "$runtime_node"):$PATH"
 export HOME="$work/home"
 export npm_config_cache="$work/npm-cache"
 export npm_config_prefix="$work/prefix"
@@ -72,6 +74,9 @@ check_executable "$main_tgz" bin/skill-studio.js
 npm install --global --omit=optional --no-audit --no-fund --silent "$platform_tgz" "$main_tgz"
 
 cli="$npm_config_prefix/bin/skill-studio"
+python3 "$repo_root/scripts/verify/run.py" --cli-only --binary "$cli" \
+  --path "$(dirname "$runtime_node"):/usr/bin:/bin" \
+  --out "$repo_root/.gate/out/npm-smoke"
 if ! "$cli" --help > "$work/help.txt"; then
   echo "FAIL: skill-studio --help exited with an error" >&2
   exit 1
