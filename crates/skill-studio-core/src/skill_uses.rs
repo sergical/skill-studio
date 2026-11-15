@@ -127,6 +127,9 @@ pub struct SkillInvocation {
     /// harness records one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// Session identity for CLI/MCP usage; desktop counts use the native session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_session: Option<String>,
 }
 
 /// Use counts by [`SkillTrigger`], over a rolling window.
@@ -539,6 +542,7 @@ fn push_use(
         at,
         project_path: context.project_path.clone(),
         session: context.session.clone(),
+        use_session: None,
     });
 }
 
@@ -756,6 +760,7 @@ mod tests {
             at: Utc::now(),
             project_path: None,
             session: None,
+            use_session: None,
         };
         let unknown_agent_use = SkillInvocation {
             skill: "mystery".to_string(),
@@ -764,6 +769,7 @@ mod tests {
             at: Utc::now(),
             project_path: None,
             session: None,
+            use_session: None,
         };
         let known_plugin_use = SkillInvocation {
             skill: "plugin:deploy".to_string(),
@@ -772,6 +778,7 @@ mod tests {
             at: Utc::now(),
             project_path: None,
             session: None,
+            use_session: None,
         };
         let uses = [clear, unknown_agent_use.clone(), known_plugin_use.clone()];
         let stats = skill_stats(&uses, &filter(&known_skills, &sources), Utc::now());
@@ -791,6 +798,7 @@ mod tests {
             at: Utc::now(),
             project_path: None,
             session: None,
+            use_session: None,
         };
         let stats = skill_stats(&[use_], &filter(&known_skills, &sources), Utc::now());
         assert!(stats.is_empty());
@@ -804,6 +812,7 @@ mod tests {
             at,
             project_path: None,
             session: session.map(std::string::ToString::to_string),
+            use_session: None,
         }
     }
 
@@ -815,7 +824,72 @@ mod tests {
             at,
             project_path: None,
             session: session.map(std::string::ToString::to_string),
+            use_session: None,
         }
+    }
+
+    #[test]
+    fn desktop_tool_load_keeps_baseline_precedence_over_later_file_read() {
+        let now = DateTime::parse_from_rfc3339("2026-11-16T12:00:00Z")
+            .unwrap()
+            .to_utc();
+        let old = now - chrono::Duration::days(40);
+        let recent = now - chrono::Duration::days(2);
+        let known_skills = known(&["write-tests"]);
+        let sources = DiscoverySources::default();
+        let uses = [
+            agent_use("write-tests", Some("resumed"), old),
+            file_read_use("write-tests", Some("resumed"), recent),
+        ];
+        let stats = skill_stats(&uses, &filter(&known_skills, &sources), now);
+        assert_eq!(stats[0].last_30_days, 0);
+        assert_eq!(stats[0].last_used, Some(old.to_rfc3339()));
+        assert_eq!(
+            stats[0].by_day.get(&old.format("%Y-%m-%d").to_string()),
+            Some(&1)
+        );
+        assert!(!stats[0]
+            .by_day
+            .contains_key(&recent.format("%Y-%m-%d").to_string()));
+        assert_eq!(stats[0].by_hour.len(), 1);
+        assert!(
+            skill_heatmap(&uses, &filter(&known_skills, &sources), 30, now)
+                .days
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn desktop_multiday_tool_loads_keep_each_day_and_hour() {
+        let now = DateTime::parse_from_rfc3339("2026-11-16T12:00:00Z")
+            .unwrap()
+            .to_utc();
+        let known_skills = known(&["write-tests"]);
+        let sources = DiscoverySources::default();
+        let uses: Vec<_> = [40, 3, 2]
+            .into_iter()
+            .map(|days| {
+                agent_use(
+                    "write-tests",
+                    Some("resumed"),
+                    now - chrono::Duration::days(days),
+                )
+            })
+            .collect();
+        let stats = skill_stats(&uses, &filter(&known_skills, &sources), now);
+        assert_eq!(stats[0].total, 3);
+        assert_eq!(stats[0].last_30_days, 2);
+        assert_eq!(
+            stats[0].last_used,
+            Some((now - chrono::Duration::days(2)).to_rfc3339())
+        );
+        assert_eq!(stats[0].by_day.len(), 3);
+        assert!(stats[0].by_day.values().all(|count| *count == 1));
+        assert_eq!(stats[0].by_hour.len(), 3);
+        assert!(stats[0].by_hour.iter().all(|hour| hour.count == 1));
+        let heatmap = skill_heatmap(&uses, &filter(&known_skills, &sources), 30, now);
+        assert_eq!(heatmap.days.len(), 2);
+        assert!(heatmap.days.values().all(|count| *count == 1));
     }
 
     #[test]
@@ -912,6 +986,7 @@ mod tests {
                 at: now,
                 project_path: Some("/proj-a".to_string()),
                 session: None,
+                use_session: None,
             },
             SkillInvocation {
                 skill: "write-tests".to_string(),
@@ -920,6 +995,7 @@ mod tests {
                 at: now,
                 project_path: Some("/proj-b".to_string()),
                 session: None,
+                use_session: None,
             },
             SkillInvocation {
                 skill: "write-tests".to_string(),
@@ -928,6 +1004,7 @@ mod tests {
                 at: old,
                 project_path: Some("/proj-a".to_string()),
                 session: None,
+                use_session: None,
             },
         ];
         let stats = skill_stats(&uses, &filter(&known_skills, &sources), now);

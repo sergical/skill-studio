@@ -1268,6 +1268,10 @@ export interface SkillInvocation {
    * harness records one.
    */
   session?: string | null;
+  /**
+   * Session identity for CLI/MCP usage; desktop counts use the native session.
+   */
+  use_session?: string | null;
 }
 /**
  * Update or remove one deployment, or every deployment of one owner.

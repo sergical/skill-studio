@@ -109,6 +109,7 @@ fn find_bugs_record(fs: Arc<dyn ScopeFs>, tree: &dyn SourceTreeLookup) -> Outdat
     let req = ScanRequest {
         skills: Vec::new(),
         timings: false,
+        ..Default::default()
     };
     let mut result = ops::outdated(
         &rt,

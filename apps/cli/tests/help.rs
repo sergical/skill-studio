@@ -17,6 +17,7 @@ const USER_COMMANDS: &[&str] = &[
     "diagnose",
     "conflicts",
     "usage",
+    "library",
     "park",
     "unpark",
     "enable",
@@ -125,5 +126,85 @@ fn help_text_uses_no_internal_words() {
             !text.contains("--fixture"),
             "`{command} --help` shows --fixture:\n{text}"
         );
+    }
+}
+
+/// Flow: run each example command under "Common questions" in the top-level
+/// help on an empty home.
+/// Expectation: each one parses and exits 0.
+/// A failure means the help points users and agents at a command that does
+/// not run.
+#[test]
+fn every_common_question_example_runs() {
+    let text = help(&[]);
+    let examples: Vec<&str> = text
+        .lines()
+        .skip_while(|line| !line.starts_with("Common questions:"))
+        .filter_map(|line| line.trim().strip_prefix("skill-studio "))
+        .collect();
+    assert!(examples.len() >= 5, "no examples in the help:\n{text}");
+    let home = tempfile::tempdir().unwrap();
+    for example in examples {
+        let args: Vec<&str> = example
+            .split_whitespace()
+            .map(|arg| {
+                if arg == "<owner/repo>" {
+                    "acme/pack"
+                } else {
+                    arg
+                }
+            })
+            .collect();
+        let output = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), home.path())
+            .args(&args)
+            .arg("--home")
+            .arg(home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "`skill-studio {example}` failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn common_questions_teach_library_without_more_help_calls() {
+    let text = help(&[]);
+    let questions = text.split("Common questions:").nth(1).unwrap();
+    let example = questions
+        .lines()
+        .find(|line| line.trim().starts_with("skill-studio "))
+        .unwrap();
+    assert_eq!(
+        example.trim(),
+        "skill-studio library --since 2026-10-01 --until 2026-11-16 --sort uses --top 10 --json"
+    );
+    for field in [
+        "count = matching rows after scope and filters, before --top",
+        "name = skill",
+        "library = shared folder",
+        "uses = loads in the window, once per session",
+        "a sub-agent log is its own session",
+        "resumed or forked session copies and names no longer in the library do not count",
+        "agents = loads by agent",
+        "source null = not installed from a repo",
+        "modes = manual/auto",
+        "copies = link/same/old/changed",
+    ] {
+        assert!(questions.contains(field), "{text}");
+    }
+}
+
+#[test]
+fn usage_help_states_the_session_counting_rule() {
+    let text = help(&["usage"]);
+    for phrase in [
+        "Uses = loads in the window, once per session",
+        "a sub-agent log is its own session",
+        "resumed or forked session copies and names no longer in the library do not count",
+    ] {
+        assert!(text.contains(phrase), "{text}");
     }
 }

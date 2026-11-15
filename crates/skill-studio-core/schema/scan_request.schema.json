@@ -4,6 +4,26 @@
   "description": "Request for `scan`.",
   "type": "object",
   "properties": {
+    "source": {
+      "description": "Restrict to this owner/repo, plugin@marketplace, or manual.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "root": {
+      "description": "Restrict to the global shared library folder.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ScanRoot"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "skills": {
       "description": "Restrict to these skill names; empty means all.",
       "type": "array",
@@ -12,6 +32,18 @@
       },
       "default": []
     },
+    "copy_status": {
+      "description": "Keep only the agent copies with this copy status.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CopyStatus"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "timings": {
       "description": "Include per-phase timings.",
       "type": "boolean",
@@ -19,9 +51,44 @@
     }
   },
   "$defs": {
+    "ScanRoot": {
+      "description": "A scan root filter.",
+      "oneOf": [
+        {
+          "description": "Skills directly in ~/.agents/skills.",
+          "type": "string",
+          "const": "library"
+        }
+      ]
+    },
     "SkillName": {
       "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
       "type": "string"
+    },
+    "CopyStatus": {
+      "description": "How an agent copy compares with the library copy in its scope.",
+      "oneOf": [
+        {
+          "description": "A link that resolves to the library copy.",
+          "type": "string",
+          "const": "link"
+        },
+        {
+          "description": "A real folder with the same files as the library copy.",
+          "type": "string",
+          "const": "same"
+        },
+        {
+          "description": "A real folder with other files, changed after the last install or\nupdate of the skill, or with no lock entry to compare with.",
+          "type": "string",
+          "const": "differs"
+        },
+        {
+          "description": "A real folder with other files, all older than the last install or\nupdate in the lock file: the copy did not get that update.",
+          "type": "string",
+          "const": "stale"
+        }
+      ]
     }
   }
 }

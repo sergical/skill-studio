@@ -1,6 +1,8 @@
 {
+  "lock_only": [],
   "skills": [
     {
+      "source": "manual",
       "name": "UpperCase",
       "description": "Has an uppercase name, which the spec forbids.",
       "deployments": [
@@ -64,6 +66,7 @@
       ]
     },
     {
+      "source": "manual",
       "name": "zeta-bad",
       "description": null,
       "deployments": [

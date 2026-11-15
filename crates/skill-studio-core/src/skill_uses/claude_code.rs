@@ -60,6 +60,7 @@ pub fn parse_claude_code_uses_checked(text: &str, invalid: &mut usize) -> Vec<Sk
                 at,
                 project_path: project_path.clone(),
                 session: session.clone(),
+                use_session: None,
             });
         };
 
