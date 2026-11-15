@@ -181,6 +181,7 @@ fn common_questions_teach_library_without_more_help_calls() {
         "skill-studio library --since 2026-10-01 --until 2026-11-16 --sort uses --top 10 --json"
     );
     for field in [
+        "count = matching rows after scope and filters, before --top",
         "name = skill",
         "library = shared folder",
         "uses = loads in the window, once per session",
@@ -192,5 +193,17 @@ fn common_questions_teach_library_without_more_help_calls() {
         "copies = link/same/old/changed",
     ] {
         assert!(questions.contains(field), "{text}");
+    }
+}
+
+#[test]
+fn usage_help_states_the_session_counting_rule() {
+    let text = help(&["usage"]);
+    for phrase in [
+        "Uses = loads in the window, once per session",
+        "a sub-agent log is its own session",
+        "resumed or forked session copies and names no longer in the library do not count",
+    ] {
+        assert!(text.contains(phrase), "{text}");
     }
 }

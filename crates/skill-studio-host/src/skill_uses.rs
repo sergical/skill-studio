@@ -2375,7 +2375,7 @@ mod tests {
             assert!(passes < 50, "backlog never drained");
         }
         assert_eq!(index.all_uses().count(), 20);
-        assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+        assert_eq!(stats(&index, &known_skills, &sources)[0].total, 20);
     }
 
     #[test]
@@ -3290,8 +3290,8 @@ mod tests {
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
             assert_eq!(
-                stats[0].total, 1,
-                "an appended load in the same session must not count twice"
+                stats[0].total, 2,
+                "the appended skill load must remain visible in desktop stats"
             );
         }
 

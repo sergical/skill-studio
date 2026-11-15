@@ -1197,6 +1197,16 @@ async fn tools_list_publishes_hints_and_an_undo_for_every_write() {
     expected.sort_unstable();
     assert_eq!(listed, expected, "dev tools leaked or a tool went missing");
 
+    let library_rule = tools
+        .iter()
+        .find(|tool| tool.name == "library")
+        .unwrap()
+        .description
+        .as_deref()
+        .unwrap()
+        .lines()
+        .last()
+        .unwrap();
     for tool in &tools {
         let name = tool.name.as_ref();
         let annotations = tool
@@ -1220,6 +1230,8 @@ async fn tools_list_publishes_hints_and_an_undo_for_every_write() {
                 assert!(description.contains(phrase), "{description}");
             }
             assert_eq!(description.lines().count(), 2);
+        } else if name == "skill_usage" {
+            assert_eq!(description.lines().last(), Some(library_rule));
         } else if name == "scan" {
             assert!(
                 description.contains("Raw file-level detail")

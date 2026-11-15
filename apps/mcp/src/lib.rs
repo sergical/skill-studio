@@ -489,7 +489,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "History detail by harness, project and trigger, with window and all-time use counts. Use library for a per-skill answer that also includes agents, modes, sources and copies.",
+        description = "History detail by harness, project and trigger, with window and all-time use counts. Use library for a per-skill answer that also includes agents, modes, sources and copies.\nUses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.",
         annotations(read_only_hint = true)
     )]
     async fn skill_usage(

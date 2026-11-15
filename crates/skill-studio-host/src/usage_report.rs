@@ -17,7 +17,7 @@ use skill_studio_core::discovery_sources::DiscoverySources;
 use skill_studio_core::dto::{Completeness, Inventory};
 use skill_studio_core::identity::RootKind;
 use skill_studio_core::ops::{OpStatus, Outcome};
-use skill_studio_core::skill_uses::{counted_uses, SkillUseFilter};
+use skill_studio_core::skill_uses::{SkillInvocation, SkillTrigger};
 
 use crate::fs::RealFs;
 use crate::skill_uses::SkillInvocationIndex;
@@ -41,7 +41,7 @@ pub fn cli_usage_cache_path(desktop_cache: &Path) -> PathBuf {
 /// One installed skill's uses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkillUsageRow {
-    /// Distinct (harness, session id) pairs for the standalone review-date report.
+    /// Distinct (harness, normalized session identity) pairs for the standalone review-date report.
     #[serde(skip_serializing)]
     pub sessions: usize,
     /// Uses in the last `days` days, by trigger.
@@ -233,10 +233,6 @@ impl SkillUsage {
         }
         observations.sort();
         observations.dedup();
-        let filter = SkillUseFilter {
-            known_skills: installed,
-            sources: &sources,
-        };
         let end = selection.until.unwrap_or(now);
         let cutoff = selection
             .since
@@ -267,7 +263,7 @@ impl SkillUsage {
                 }
             }
         }
-        for use_ in counted_uses(selected.iter().copied(), &filter) {
+        for use_ in session_uses(selected.iter().copied(), installed, &sources) {
             let Some(tally) =
                 installed_name(&use_.skill, installed).and_then(|name| by_skill.get_mut(name))
             else {
@@ -275,11 +271,12 @@ impl SkillUsage {
             };
             tally.total += 1;
         }
-        for use_ in counted_uses(
+        for use_ in session_uses(
             selected
                 .into_iter()
                 .filter(|u| u.at >= cutoff && selection.until.is_none_or(|until| u.at < until)),
-            &filter,
+            installed,
+            &sources,
         ) {
             let Some(tally) =
                 installed_name(&use_.skill, installed).and_then(|name| by_skill.get_mut(name))
@@ -352,6 +349,36 @@ impl SkillUsage {
     }
 }
 
+fn session_uses<'a>(
+    uses: impl IntoIterator<Item = &'a SkillInvocation>,
+    installed: &BTreeSet<String>,
+    sources: &DiscoverySources,
+) -> Vec<&'a SkillInvocation> {
+    let mut kept = Vec::new();
+    let mut by_session: BTreeMap<(&str, &str, &str), &SkillInvocation> = BTreeMap::new();
+    for use_ in uses.into_iter().filter(|u| sources.is_enabled(&u.harness)) {
+        let Some(skill) = installed_name(&use_.skill, installed) else {
+            continue;
+        };
+        let Some(session) = use_.session.as_deref() else {
+            kept.push(use_);
+            continue;
+        };
+        let priority =
+            |u: &SkillInvocation| (u.trigger == SkillTrigger::FileRead, std::cmp::Reverse(u.at));
+        by_session
+            .entry((use_.harness.as_str(), session, skill))
+            .and_modify(|current| {
+                if priority(use_) < priority(current) {
+                    *current = use_;
+                }
+            })
+            .or_insert(use_);
+    }
+    kept.extend(by_session.into_values());
+    kept
+}
+
 #[derive(Default)]
 struct Tally {
     sessions: BTreeSet<(String, String)>,
@@ -393,7 +420,7 @@ fn active_skill_names(inventory: &Inventory) -> BTreeSet<String> {
 
 /// The installed name a recorded use counts toward: the name itself, or the
 /// `base` of a plugin-qualified `prefix:base` name, the same rule
-/// `SkillUseFilter` applies.
+/// the desktop's known-skill filter applies.
 fn installed_name<'a>(recorded: &'a str, installed: &BTreeSet<String>) -> Option<&'a str> {
     if installed.contains(recorded) {
         return Some(recorded);
@@ -830,5 +857,36 @@ mod tests {
         assert_eq!(gamma.total_uses, 1);
         assert_eq!(gamma.recent_uses, 1);
         assert_eq!(gamma.last_used.as_deref(), Some(days_ago(1).as_str()));
+    }
+    #[test]
+    fn usage_counts_each_installed_skill_once_per_session_for_all_triggers() {
+        let installed = BTreeSet::from(["write-tests".to_string()]);
+        let sources = DiscoverySources::default();
+        let uses: Vec<_> = [
+            ("write-tests", "parent", SkillTrigger::Agent),
+            ("plugin:write-tests", "parent", SkillTrigger::User),
+            ("write-tests", "parent", SkillTrigger::FileRead),
+            ("write-tests", "child", SkillTrigger::FileRead),
+            ("removed", "child", SkillTrigger::Agent),
+        ]
+        .into_iter()
+        .map(|(skill, session, trigger)| SkillInvocation {
+            skill: skill.into(),
+            session: Some(session.into()),
+            harness: "claude-code".into(),
+            at: now(),
+            project_path: None,
+            trigger,
+        })
+        .collect();
+        let counted = session_uses(&uses, &installed, &sources);
+        assert_eq!(counted.len(), 2);
+        assert_eq!(
+            counted
+                .iter()
+                .filter(|u| u.session.as_deref() == Some("parent"))
+                .count(),
+            1
+        );
     }
 }

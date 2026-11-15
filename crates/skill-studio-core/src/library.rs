@@ -60,7 +60,7 @@ pub struct LibraryUses {
 /// Shared library table, before or after row selection.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LibraryReport {
-    /// Number of real library skills, before top selection.
+    /// Number of matching skill rows after scope and filters, before top selection.
     pub count: usize,
     /// Number used in the window, before top selection.
     pub used: usize,
@@ -73,7 +73,7 @@ pub struct LibraryReport {
     pub partial: bool,
 }
 
-/// One real folder in the home's shared skill library.
+/// One named skill in the selected scope.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LibraryRow {
     /// A real folder exists in the home's shared library.
