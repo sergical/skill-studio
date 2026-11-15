@@ -4,7 +4,7 @@ The user's home folder is `{home}`. Below, `~` means that folder. The user's age
 
 Rules: read-only. Change no files and no settings. Do not park, remove, fix, install, update, split or set anything. Today is {today}. "Last 45 days" means {window_start} to {today}.
 
-A use is one time a skill was loaded in a session: the user invoked it, the model invoked it with a skill tool, or the agent read its SKILL.md. Several reads of one SKILL.md in one session, or a read right after an invocation in the same session, are part of one use. A skill named only in text, a skill list, or history that a resumed or forked session copied is not a use. Uses logged under a name not in the library now do not count.
+A use is one time a skill was loaded in a session: the user invoked it, the model invoked it with a skill tool, or the agent read its SKILL.md. Several reads of one SKILL.md in one session, or a read right after an invocation in the same session, are part of one use. A sub-agent has its own log file and is its own session, so its load is a separate use. A skill named only in text, a skill list, or history that a resumed or forked session copied is not a use. Uses logged under a name not in the library now do not count.
 
 Q1. How many skills are in the shared skill library `~/.agents/skills`? Count only real skill folders.
 Q2. How many of those library skills were used at least once in the last 45 days, by any agent (Claude Code, Codex, OpenCode, pi, Cursor)?

@@ -21,25 +21,40 @@ Isolation rules (checked by hand, see METHODOLOGY.md):
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-# MCP tools that only read. `invocation` also writes when it gets a policy;
-# the prompt forbids that, the fixture is read-only and the hash check
-# catches any change.
-MCP_READ_TOOLS = [
-    "scan", "diagnose", "diagnose_conflict", "doctor", "extras", "list_events",
-    "outdated", "preview_frontmatter_repair", "review_due", "skill_usage",
-    "turn_off_check", "invocation",
-]
-MCP_WRITE_TOOLS = [
-    "add", "apply_frontmatter_repair", "fix", "park", "remove", "restore_event",
-    "review_clear", "review_set", "split", "turn_off_for_agent", "unpark",
-    "update", "update_all",
-]
+# `invocation` also writes when it gets a policy; the prompt forbids that,
+# the fixture is read-only and the hash check catches any change.
+MCP_ALSO_ALLOWED = {"invocation"}
+
+
+@functools.cache
+def mcp_tools(skill_studio: Path) -> tuple[list[str], list[str]]:
+    """(allowed, denied) tool names from the server's own read-only hints, so the list cannot go stale."""
+    requests = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "agent-bench", "version": "1"}}},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+    ]
+    with tempfile.TemporaryDirectory() as home:
+        out = subprocess.run(
+            [str(skill_studio), "mcp"],
+            input="".join(json.dumps(r) + "\n" for r in requests),
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "SKILL_STUDIO_HOME": home, "SKILL_STUDIO_TELEMETRY": "0"},
+        ).stdout
+    tools = next(m["result"]["tools"] for m in map(json.loads, out.splitlines()) if m.get("id") == 2)
+    allowed = [t["name"] for t in tools if (t.get("annotations") or {}).get("readOnlyHint") or t["name"] in MCP_ALSO_ALLOWED]
+    return allowed, [t["name"] for t in tools if t["name"] not in allowed]
+
+
 SHELL_TOOLS_CLAUDE = ["Bash", "Read", "Glob", "Grep"]
 DENIED_CLAUDE = ["Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch"]
 
@@ -128,8 +143,9 @@ def claude_command(run: Run):
     config_path = run.runtime / "mcp.json"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(config))
-    allowed = SHELL_TOOLS_CLAUDE + ([f"mcp__skill-studio__{t}" for t in MCP_READ_TOOLS] if run.method == "mcp" else [])
-    denied = DENIED_CLAUDE + [f"mcp__skill-studio__{t}" for t in MCP_WRITE_TOOLS]
+    read_tools, write_tools = mcp_tools(run.skill_studio)
+    allowed = SHELL_TOOLS_CLAUDE + ([f"mcp__skill-studio__{t}" for t in read_tools] if run.method == "mcp" else [])
+    denied = DENIED_CLAUDE + [f"mcp__skill-studio__{t}" for t in write_tools]
     argv = [
         which("claude"), "-p", run.prompt, "--model", run.model,
         "--output-format", "stream-json", "--verbose", "--no-session-persistence",
@@ -199,7 +215,7 @@ def codex_command(run: Run):
             "-c", f"mcp_servers.skill-studio.command={json.dumps(server['command'])}",
             "-c", 'mcp_servers.skill-studio.args=["mcp"]',
             "-c", "mcp_servers.skill-studio.env={" + ",".join(f"{k}={json.dumps(v)}" for k, v in server["env"].items()) + "}",
-            "-c", f"mcp_servers.skill-studio.enabled_tools={json.dumps(MCP_READ_TOOLS)}",
+            "-c", f"mcp_servers.skill-studio.enabled_tools={json.dumps(mcp_tools(run.skill_studio)[0])}",
             # `invocation` has no read-only hint, and `codex exec` never asks, so it would always fail.
             "-c", 'mcp_servers.skill-studio.tools.invocation.approval_mode="approve"',
         ]
@@ -252,7 +268,7 @@ def opencode_command(run: Run):
         server = mcp_server(run)
         # Code Mode (the default) wraps every MCP tool in one `execute` tool, which the per-tool deny list below cannot reach.
         config["mcp"] = {"skill-studio": {"type": "local", "command": [server["command"], *server["args"]], "environment": server["env"], "enabled": True, "codemode": False}}
-        config["tools"] = {f"skill-studio_{t}": False for t in MCP_WRITE_TOOLS}
+        config["tools"] = {f"skill-studio_{t}": False for t in mcp_tools(run.skill_studio)[1]}
     argv = [which("opencode"), "run", "--format", "json", "-m", f"openrouter/{run.model}", run.prompt]
     env = base_env(run)
     env.update(
@@ -306,7 +322,7 @@ def pi_command(run: Run):
         server = {**mcp_server(run), "exposure": "direct"}
         # pi turns "-" in a server name into "_" in its tool names.
         (agent_dir / "mcp.json").write_text(json.dumps({"mcpServers": {"skill_studio": server}}))
-        tools += [f"mcp__skill_studio__{t}" for t in MCP_READ_TOOLS]
+        tools += [f"mcp__skill_studio__{t}" for t in mcp_tools(run.skill_studio)[0]]
         argv += ["-e", "builtin:mcp"]
     else:
         argv.append("--no-mcp")

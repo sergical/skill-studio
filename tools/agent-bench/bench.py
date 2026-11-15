@@ -42,8 +42,21 @@ MARKETING = REPO / "packages" / "marketing" / "src" / "data" / "agent-benchmark.
 # Agent installs live in these folders, so their paths in the output are expected.
 AGENT_INSTALL_DIRS = {".volta", ".vite-plus"}
 REAL_HOME_PATH = re.compile(re.escape(f"{Path.home()}/") + r"([^/\"'\s\\]+)")
+PATH_REST = re.compile(r"[^\"'\s\\]*")
 TIMEOUT_S = 900
 WRITE_LOCK = threading.Lock()
+
+
+def reads_real_home(text: str, workdir: Path) -> bool:
+    # A path toward the run folder can be cut short by the agent's own `head -c`.
+    run_root = str(workdir.resolve())
+    for match in REAL_HOME_PATH.finditer(text):
+        if match.group(1) in AGENT_INSTALL_DIRS:
+            continue
+        path = match.group(0) + PATH_REST.match(text, match.end()).group(0)
+        if not (path.startswith(run_root) or run_root.startswith(path)):
+            return True
+    return False
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -77,10 +90,10 @@ def run_id_for(cell: dict, rep: int) -> str:
     return base if cell["task"] == "usage" else f"{cell['task']}--{base}"
 
 
-def prompt_for(task: str, method: str, home: Path, truth: dict) -> str:
-    text = (BENCH / "prompts" / TASK_PROMPTS[task]).read_text()
+def prompt_for(task: str, method: str, home: Path, truth: dict, prompts: Path) -> str:
+    text = (prompts / TASK_PROMPTS[task]).read_text()
     text = text.replace("{home}", str(home)).replace("{today}", truth["today"]).replace("{window_start}", truth["window_start"])
-    return text + "\n" + (BENCH / "prompts" / f"method_{method}.md").read_text()
+    return text + "\n" + (prompts / f"method_{method}.md").read_text()
 
 
 # ----------------------------------------------------------------------------
@@ -240,7 +253,7 @@ def run_once(cell: dict, rep: int, args, prices: dict) -> dict:
     cwd.mkdir(parents=True, exist_ok=True)
     run = Run(
         harness=cell["harness"], model=cell["model"], method=cell["method"],
-        prompt=prompt_for(task, cell["method"], home, truth), cwd=cwd, runtime=root / "rt",
+        prompt=prompt_for(task, cell["method"], home, truth, args.prompts), cwd=cwd, runtime=root / "rt",
         home=home, skill_studio=args.skill_studio, wrapper_dir=root / "bin",
     )
     command, parse = ADAPTERS[cell["harness"]]
@@ -265,7 +278,7 @@ def run_once(cell: dict, rep: int, args, prices: dict) -> dict:
     if parsed["cost_usd"] is None:
         parsed["cost_usd"] = estimate_cost(cell, parsed["tokens"], prices)
     answer = extract_answer(parsed["answer"])
-    if any(m.group(1) not in AGENT_INSTALL_DIRS for m in REAL_HOME_PATH.finditer(stdout)):
+    if reads_real_home(stdout, args.workdir):
         error, answer = "read the real home", None
     intact = fixture.fixture_hash(home) == truth["fixture_hash"]
     record = {
@@ -457,6 +470,7 @@ def main() -> None:
     run.add_argument("--model", action="append")
     run.add_argument("--workdir", type=Path, default=Path("/tmp/skill-studio-bench"))
     run.add_argument("--skill-studio", type=Path, default=REPO / "target" / "debug" / "skill-studio")
+    run.add_argument("--prompts", type=Path, default=BENCH / "prompts", help="folder with the task and method prompts")
     run.add_argument("--retry-errors", action="store_true", help="run again the runs that ended in an error")
     run.add_argument("--dry-run", action="store_true")
     report = sub.add_parser("report", help="aggregate the results file")
