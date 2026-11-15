@@ -53,7 +53,7 @@ fn invocation_mismatches_list_only_the_skills_that_disagree() {
 
 fn claude_skill_line(skill: &str, at: &str) -> String {
     format!(
-        r#"{{"type":"assistant","timestamp":"{at}","cwd":"/work","message":{{"content":[{{"type":"tool_use","name":"Skill","input":{{"skill":"{skill}"}}}}]}}}}"#
+        r#"{{"type":"assistant","sessionId":"{at}","timestamp":"{at}","cwd":"/work","message":{{"content":[{{"type":"tool_use","name":"Skill","input":{{"skill":"{skill}"}}}}]}}}}"#
     )
 }
 

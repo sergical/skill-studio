@@ -92,8 +92,8 @@ fn library_matches_usage_scan_and_mcp() {
     assert_eq!(data["rows"][0]["source"], "fixture/pack");
     assert!(data["rows"][1]["source"].is_null());
     assert!(data["rows"][0].get("sessions").is_none());
-    assert_eq!(data["rows"][0]["uses"], 2);
-    assert_eq!(data["rows"][0]["agents"]["claude-code"], 2);
+    assert_eq!(data["rows"][0]["uses"], 1);
+    assert_eq!(data["rows"][0]["agents"]["claude-code"], 1);
     assert_eq!(data["rows"][0]["modes"]["codex"], "auto");
     assert_eq!(data["rows"][0]["modes"]["claude-code"], "manual");
     assert_eq!(data["rows"][0]["copies"]["claude-code"], "link");

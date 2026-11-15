@@ -198,9 +198,11 @@ Claude Code adds an `isMeta` user message that starts with
 call. It is part of the same use; do not count it again.
 
 CLI `usage` and MCP `skill_usage` report `recent_uses` for the requested day
-window, plus `total_uses`, `sessions`, `last_used`, and `triggers` across all
-selected history. Sessions are distinct `(harness, session id)` pairs. Records
-without a session id do not add a session. Trigger keys are `user`, `agent`,
+window and windowed `triggers`, plus `total_uses` and `last_used` across selected
+history.
+Usage rows do not expose a separate session count. The review-date report keeps
+its standalone distinct `(harness, session id)` count; records without a session
+id do not add a session there. Trigger keys are `user`, `agent`,
 `file_read`, and `unknown`. The current readers emit only triggers with direct
 evidence, so `unknown` is zero. A mention of a skill is not evidence of use.
 The table above states which signals each reader accepts. In particular, pi

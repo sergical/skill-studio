@@ -431,8 +431,8 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
                 last_used(row),
             );
             println!(
-                "    {} sessions, triggers {:?}; {} uses all time",
-                row.sessions, row.triggers, row.total_uses
+                "    triggers {:?}; {} uses all time",
+                row.triggers, row.total_uses
             );
         }
     }

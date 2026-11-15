@@ -358,7 +358,7 @@ use skill_studio_host::NoGhLookup;
 #[tool_router]
 impl SkillStudioServer {
     #[tool(
-        description = "List every installed skill with its id, location and the agents that see it. Call this first. Other tools take its ids.",
+        description = "Raw file-level detail: ids, paths and deployments. Use library for per-skill answers about counts, uses, agents, modes, sources and copies; use scan when you need file-level detail or an id for a change.",
         annotations(read_only_hint = true)
     )]
     async fn scan(
@@ -373,7 +373,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "One row per shared-library skill (all=true also includes outside skills with library=false): repository source, uses and agents in the window, verified invocation modes, and agent copies (link, same, old, changed). Defaults to 30 days. Top selects the most used skills. Unsupported invocation modes are omitted.",
+        description = "One call for library counts, uses per skill, agents, modes, sources and copies. Default: shared library, 30 days; all=true includes outside skills; top selects most used; unsupported modes are omitted.\nUses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.",
         annotations(read_only_hint = true)
     )]
     async fn library(
@@ -489,7 +489,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Show how often each skill was used in the last N days, and which skills were not used. Use it to find skills to park.",
+        description = "History detail by harness, project and trigger, with window and all-time use counts. Use library for a per-skill answer that also includes agents, modes, sources and copies.",
         annotations(read_only_hint = true)
     )]
     async fn skill_usage(
@@ -1041,8 +1041,8 @@ impl ServerHandler for SkillStudioServer {
             ))
             .with_instructions(
                 "Skill Studio manages the agent skills on this computer. To tidy up: \
-                 call diagnose to find broken and duplicate skills, and skill_usage to \
-                 find unused ones. Then park the skills you do not need, or remove a \
+                 call library for per-skill counts, uses, agents, modes, sources and copies, \
+                 and diagnose to find broken and duplicate skills. Then park the skills you do not need, or remove a \
                  duplicate copy. Each change returns an event_id. restore_event undoes \
                  a change, and unpark undoes park.",
             )

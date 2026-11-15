@@ -1014,7 +1014,8 @@ async fn remove_then_restore_event_puts_the_copy_back() {
 /// Flow: write a Claude Code transcript under the live home where the model
 /// called the Skill tool for `gamma` yesterday, then call `skill_usage`
 /// with no input.
-/// Expectation: `gamma` has 1 recent use by claude-code, and `manual-only`,
+/// The sub-agent log shares its parent's session id but records another load.
+/// Expectation: `gamma` has 2 recent uses by claude-code, and `manual-only`,
 /// never used, is the only name in `unused`.
 /// A failure here means an agent asking "what can I park?" gets the wrong
 /// list.
@@ -1030,6 +1031,7 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
             "{}\n",
             serde_json::json!({
                 "type": "assistant",
+                "uuid": "parent-load",
                 "timestamp": yesterday,
                 "cwd": "/work",
                 "sessionId": "mcp-session",
@@ -1043,6 +1045,33 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
     )
     .unwrap();
 
+    let parent = transcript_dir.join("session.jsonl");
+    let original = std::fs::read_to_string(&parent).unwrap();
+    std::fs::write(parent, original.repeat(2)).unwrap();
+    let subagents = transcript_dir.join("session/subagents");
+    std::fs::create_dir_all(&subagents).unwrap();
+    std::fs::write(
+        subagents.join("agent-log.jsonl"),
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "type":"assistant", "uuid":"subagent-load", "timestamp":yesterday,
+                "cwd":"/work", "sessionId":"mcp-session", "message":{"content":[{
+                    "type":"tool_use", "name":"Read", "input":{"file_path":home.join(".agents/skills/gamma/SKILL.md")}
+                }]}
+            })
+        ),
+    )
+    .unwrap();
+    let child = subagents.join("agent-log.jsonl");
+    let child_load = std::fs::read_to_string(&child).unwrap();
+    std::fs::write(&child, original.clone() + &child_load).unwrap();
+    std::fs::write(subagents.join("copied-parent.jsonl"), &original).unwrap();
+    std::fs::rename(
+        transcript_dir.join("session.jsonl"),
+        transcript_dir.join("z-resumed-parent.jsonl"),
+    )
+    .unwrap();
     let (client, _) = connect(&[("SKILL_STUDIO_HOME", home.to_str().unwrap())]).await;
     let envelope = call_tool(&client, "skill_usage", serde_json::json!({})).await;
     let filtered = call_tool(
@@ -1077,7 +1106,7 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|r| r["skill"] == "gamma" && r["total_uses"] == 1),
+            .any(|r| r["skill"] == "gamma" && r["total_uses"] == 2),
         "{matched}"
     );
     assert!(
@@ -1104,10 +1133,11 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
         .iter()
         .find(|row| row["skill"] == "gamma")
         .unwrap_or_else(|| panic!("gamma has no row: {data:?}"));
-    assert_eq!(gamma["recent_uses"], 1, "{gamma:?}");
-    assert_eq!(gamma["agents"]["claude-code"], 1, "{gamma:?}");
-    assert_eq!(gamma["sessions"], 1, "{gamma}");
+    assert_eq!(gamma["recent_uses"], 2, "{gamma:?}");
+    assert_eq!(gamma["agents"]["claude-code"], 2, "{gamma:?}");
+    assert!(gamma.get("sessions").is_none(), "{gamma}");
     assert_eq!(gamma["triggers"]["agent"], 1, "{gamma}");
+    assert_eq!(gamma["triggers"]["file_read"], 1, "{gamma}");
     assert!(
         data["observations"].as_array().unwrap().is_empty(),
         "{data}"
@@ -1174,6 +1204,30 @@ async fn tools_list_publishes_hints_and_an_undo_for_every_write() {
             .as_ref()
             .unwrap_or_else(|| panic!("{name} has no annotations"));
         let description = tool.description.as_deref().unwrap_or_default();
+        if name == "library" {
+            for phrase in [
+                "One call",
+                "counts",
+                "uses per skill",
+                "agents",
+                "modes",
+                "sources",
+                "copies",
+                "once per session",
+                "a sub-agent log is its own session",
+                "resumed or forked session copies and names no longer in the library do not count",
+            ] {
+                assert!(description.contains(phrase), "{description}");
+            }
+            assert_eq!(description.lines().count(), 2);
+        } else if name == "scan" {
+            assert!(
+                description.contains("Raw file-level detail")
+                    && description.contains("Use library for per-skill answers"),
+                "{description}"
+            );
+            assert!(!description.contains("Call this first"));
+        }
         if READ_TOOLS.contains(&name) {
             assert_eq!(annotations.read_only_hint, Some(true), "{name}");
         } else {

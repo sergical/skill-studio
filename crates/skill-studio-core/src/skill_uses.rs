@@ -123,8 +123,7 @@ pub struct SkillInvocation {
     pub at: DateTime<Utc>,
     /// The project directory the use happened in, if the harness recorded one.
     pub project_path: Option<String>,
-    /// The harness's own session id, used to dedupe file reads. Not every
-    /// harness records one.
+    /// Session identity, including the sub-agent log when applicable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
 }
@@ -195,8 +194,7 @@ pub struct InvocationHeatmap {
 
 /// Which recorded uses count toward [`skill_stats`] and [`skill_heatmap`].
 pub struct SkillUseFilter<'a> {
-    /// Installed skill names; a `User` or `FileRead` use whose skill isn't
-    /// here (or isn't the `base` of a `prefix:base` name here) is dropped.
+    /// Installed skill names; uses outside this set (or its plugin base names) are dropped.
     pub known_skills: &'a BTreeSet<String>,
     /// Per-harness switches; a use whose harness is switched off is dropped.
     pub sources: &'a DiscoverySources,
@@ -215,58 +213,44 @@ fn is_known_skill(skill: &str, known_skills: &BTreeSet<String>) -> bool {
 }
 
 /// The subset of `uses` that count under `filter`, applying the enabled-harness,
-/// known-skill, and file-read-dedupe rules shared by [`skill_stats`] and
+/// known-skill, and per-session dedupe rules shared by [`skill_stats`] and
 /// [`skill_heatmap`]. Public for callers that need a window other than the
 /// fixed ones `skill_stats` computes.
 pub fn counted_uses<'a>(
     uses: impl IntoIterator<Item = &'a SkillInvocation>,
     filter: &SkillUseFilter,
 ) -> Vec<&'a SkillInvocation> {
-    let candidates: Vec<&SkillInvocation> = uses
+    let mut kept = Vec::new();
+    let mut by_session: BTreeMap<(&str, &str, &str), &SkillInvocation> = BTreeMap::new();
+    for use_ in uses
         .into_iter()
-        .filter(|use_| filter.sources.is_enabled(&use_.harness))
-        .filter(|use_| {
-            use_.trigger == SkillTrigger::Agent || is_known_skill(&use_.skill, filter.known_skills)
-        })
-        .collect();
-
-    let (file_reads, mut kept): (Vec<&SkillInvocation>, Vec<&SkillInvocation>) = candidates
-        .into_iter()
-        .partition(|use_| use_.trigger == SkillTrigger::FileRead);
-
-    // File-read dedupe: keyed by (harness, session, skill). Drop a
-    // `FileRead` when a counted `User` or `Agent` use shares its key.
-    let non_file_read_keys: BTreeSet<(&str, &str, &str)> = kept
-        .iter()
-        .filter_map(|use_| {
-            use_.session
-                .as_deref()
-                .map(|session| (use_.harness.as_str(), session, use_.skill.as_str()))
-        })
-        .collect();
-
-    // Among the remaining file reads, keep only the earliest per key. A
-    // `FileRead` with `session: None` is never deduped against anything.
-    let mut earliest_file_read: BTreeMap<(&str, &str, &str), &SkillInvocation> = BTreeMap::new();
-    for use_ in &file_reads {
+        .filter(|u| filter.sources.is_enabled(&u.harness))
+        .filter(|u| is_known_skill(&u.skill, filter.known_skills))
+    {
         let Some(session) = use_.session.as_deref() else {
             kept.push(use_);
             continue;
         };
-        let key = (use_.harness.as_str(), session, use_.skill.as_str());
-        if non_file_read_keys.contains(&key) {
-            continue;
-        }
-        earliest_file_read
+        let skill = if filter.known_skills.contains(&use_.skill) {
+            use_.skill.as_str()
+        } else {
+            use_.skill
+                .rsplit_once(':')
+                .map_or(use_.skill.as_str(), |(_, base)| base)
+        };
+        let key = (use_.harness.as_str(), session, skill);
+        let priority =
+            |u: &SkillInvocation| (u.trigger == SkillTrigger::FileRead, std::cmp::Reverse(u.at));
+        by_session
             .entry(key)
-            .and_modify(|earliest| {
-                if use_.at < earliest.at {
-                    *earliest = use_;
+            .and_modify(|current| {
+                if priority(use_) < priority(current) {
+                    *current = use_;
                 }
             })
             .or_insert(use_);
     }
-    kept.extend(earliest_file_read.into_values());
+    kept.extend(by_session.into_values());
 
     kept
 }
@@ -746,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_unknown_command_is_dropped_but_unknown_agent_use_is_kept() {
+    fn unknown_commands_and_agent_uses_are_dropped() {
         let known_skills = known(&["deploy"]);
         let sources = DiscoverySources::default();
         let clear = SkillInvocation {
@@ -776,7 +760,7 @@ mod tests {
         let uses = [clear, unknown_agent_use.clone(), known_plugin_use.clone()];
         let stats = skill_stats(&uses, &filter(&known_skills, &sources), Utc::now());
         let names: BTreeSet<&str> = stats.iter().map(|s| s.skill.as_str()).collect();
-        assert_eq!(names, BTreeSet::from(["mystery", "plugin:deploy"]));
+        assert_eq!(names, BTreeSet::from(["plugin:deploy"]));
     }
 
     #[test]
@@ -816,6 +800,31 @@ mod tests {
             project_path: None,
             session: session.map(std::string::ToString::to_string),
         }
+    }
+
+    #[test]
+    fn all_triggers_share_one_use_per_installed_skill_and_session() {
+        let known_skills = known(&["write-tests"]);
+        let sources = DiscoverySources::default();
+        let now = Utc::now();
+        let mut typed = agent_use("plugin:write-tests", Some("parent"), now);
+        typed.trigger = SkillTrigger::User;
+        let uses = [
+            agent_use("write-tests", Some("parent"), now),
+            typed,
+            file_read_use("write-tests", Some("parent"), now),
+            file_read_use("write-tests", Some("child"), now),
+            agent_use("removed", Some("child"), now),
+        ];
+        let counted = counted_uses(&uses, &filter(&known_skills, &sources));
+        assert_eq!(counted.len(), 2);
+        assert_eq!(
+            counted
+                .iter()
+                .filter(|u| u.session.as_deref() == Some("parent"))
+                .count(),
+            1
+        );
     }
 
     #[test]

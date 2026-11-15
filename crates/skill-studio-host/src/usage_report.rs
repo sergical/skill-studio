@@ -41,7 +41,8 @@ pub fn cli_usage_cache_path(desktop_cache: &Path) -> PathBuf {
 /// One installed skill's uses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkillUsageRow {
-    /// Distinct (harness, session id) pairs in the last `days` days.
+    /// Distinct (harness, session id) pairs for the standalone review-date report.
+    #[serde(skip_serializing)]
     pub sessions: usize,
     /// Uses in the last `days` days, by trigger.
     pub triggers: BTreeMap<String, u32>,
@@ -244,28 +245,47 @@ impl SkillUsage {
             .iter()
             .map(|name| (name.as_str(), Tally::default()))
             .collect();
-        let selected = self.index.all_uses().filter(|u| {
-            selection.harness.as_ref().is_none_or(|h| h == &u.harness)
-                && (selection.projects.is_empty()
-                    || selection.projects.iter().any(|p| {
-                        u.project_path
-                            .as_deref()
-                            .is_some_and(|recorded| Path::new(recorded) == p)
-                    }))
-        });
-        for use_ in counted_uses(selected, &filter) {
+        let selected: Vec<_> = self
+            .index
+            .all_uses()
+            .filter(|u| {
+                selection.harness.as_ref().is_none_or(|h| h == &u.harness)
+                    && (selection.projects.is_empty()
+                        || selection.projects.iter().any(|p| {
+                            u.project_path
+                                .as_deref()
+                                .is_some_and(|recorded| Path::new(recorded) == p)
+                        }))
+            })
+            .collect();
+        for use_ in selected.iter().filter(|u| sources.is_enabled(&u.harness)) {
+            if let Some(tally) =
+                installed_name(&use_.skill, installed).and_then(|name| by_skill.get_mut(name))
+            {
+                if tally.last_used.is_none_or(|last| use_.at > last) {
+                    tally.last_used = Some(use_.at);
+                }
+            }
+        }
+        for use_ in counted_uses(selected.iter().copied(), &filter) {
             let Some(tally) =
                 installed_name(&use_.skill, installed).and_then(|name| by_skill.get_mut(name))
             else {
                 continue;
             };
             tally.total += 1;
-            if tally.last_used.is_none_or(|last| use_.at > last) {
-                tally.last_used = Some(use_.at);
-            }
-            if use_.at < cutoff || selection.until.is_some_and(|until| use_.at >= until) {
+        }
+        for use_ in counted_uses(
+            selected
+                .into_iter()
+                .filter(|u| u.at >= cutoff && selection.until.is_none_or(|until| u.at < until)),
+            &filter,
+        ) {
+            let Some(tally) =
+                installed_name(&use_.skill, installed).and_then(|name| by_skill.get_mut(name))
+            else {
                 continue;
-            }
+            };
             tally.recent += 1;
             *tally.agents.entry(use_.harness.clone()).or_insert(0) += 1;
             if let Some(session) = &use_.session {
@@ -457,7 +477,7 @@ mod tests {
     /// One Claude Code transcript line where the model called the Skill tool.
     fn claude_skill_line(skill: &str, at: &str) -> String {
         format!(
-            r#"{{"type":"assistant","timestamp":"{at}","cwd":"/work","message":{{"content":[{{"type":"tool_use","name":"Skill","input":{{"skill":"{skill}"}}}}]}}}}"#
+            r#"{{"type":"assistant","sessionId":"{at}","timestamp":"{at}","cwd":"/work","message":{{"content":[{{"type":"tool_use","name":"Skill","input":{{"skill":"{skill}"}}}}]}}}}"#
         )
     }
 
@@ -780,5 +800,35 @@ mod tests {
         let report = usage.report(&fixture.home, &inventory, 30, now());
         assert!(report.unused.is_empty(), "{report:?}");
         assert_eq!(row(&report, "idle").recent_uses, 1);
+    }
+    #[test]
+    fn window_counts_a_session_even_when_its_latest_load_is_outside_the_window() {
+        let fixture = fixture();
+        let records: Vec<_> = [60, 3, 1]
+            .into_iter()
+            .map(|days| {
+                let mut record: serde_json::Value =
+                    serde_json::from_str(&claude_skill_line("gamma", &days_ago(days))).unwrap();
+                record["sessionId"] = "shared".into();
+                record.to_string()
+            })
+            .collect();
+        fs::write(
+            fixture.home.join(".claude/projects/-work/session.jsonl"),
+            records.join("\n") + "\n",
+        )
+        .unwrap();
+        let inventory = scan(&fixture.home);
+        let filter = UsageFilter {
+            since: Some(now() - chrono::Duration::days(10)),
+            until: Some(now() - chrono::Duration::days(2)),
+            ..Default::default()
+        };
+        let report =
+            SkillUsage::default().report_filtered(&fixture.home, &inventory, 30, now(), &filter);
+        let gamma = row(&report, "gamma");
+        assert_eq!(gamma.total_uses, 1);
+        assert_eq!(gamma.recent_uses, 1);
+        assert_eq!(gamma.last_used.as_deref(), Some(days_ago(1).as_str()));
     }
 }

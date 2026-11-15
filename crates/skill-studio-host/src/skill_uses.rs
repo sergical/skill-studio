@@ -232,6 +232,25 @@ struct TranscriptFile<'a> {
     modified: DateTime<Utc>,
 }
 
+fn is_subagent_log(path: &Path) -> bool {
+    path.parent()
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == "subagents")
+}
+
+fn log_session(file: &TranscriptFile<'_>, session: Option<&str>) -> String {
+    match session {
+        None => file.path.to_string_lossy().into_owned(),
+        Some(session) if is_subagent_log(file.path) => {
+            format!(
+                "{session}:subagent:{}",
+                file.path.file_name().unwrap_or_default().to_string_lossy()
+            )
+        }
+        Some(session) => session.to_owned(),
+    }
+}
+
 /// How one [`UseSource`] reads its uses: an append-only transcript, resumed
 /// from a byte offset, or a `SQLite` database, re-queried from a watermark.
 enum UseReader {
@@ -418,14 +437,14 @@ fn list_claude_code_transcripts(home: &Path) -> SourceListing {
 }
 
 fn parse_claude_code_uses_with_context(
-    _file: &TranscriptFile,
+    file: &TranscriptFile,
     text: &str,
     context: &mut IndexedContext,
     invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
     let mut unidentified = Vec::new();
     for line in text.lines() {
-        let uses = parse_claude_code_uses_checked(line, invalid);
+        let mut uses = parse_claude_code_uses_checked(line, invalid);
         if uses.is_empty() {
             continue;
         }
@@ -443,6 +462,9 @@ fn parse_claude_code_uses_with_context(
                 Some(format!("{session}/{uuid}"))
             });
         if let Some(key) = key {
+            for use_ in &mut uses {
+                use_.session = Some(log_session(file, use_.session.as_deref()));
+            }
             context.claude_records.entry(key).or_insert(uses);
         } else {
             unidentified.extend(uses);
@@ -1166,7 +1188,7 @@ pub struct SkillInvocationIndex {
 impl Default for SkillInvocationIndex {
     fn default() -> Self {
         Self {
-            reader_version: 4,
+            reader_version: 5,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: MAX_FILE_BYTES,
@@ -1182,7 +1204,7 @@ impl SkillInvocationIndex {
     #[cfg(test)]
     fn with_budgets(file_bytes: u64, run_bytes: u64) -> Self {
         Self {
-            reader_version: 4,
+            reader_version: 5,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: file_bytes,
@@ -1313,10 +1335,10 @@ impl SkillInvocationIndex {
     /// cached entries. Never panics: unreadable dirs/files/databases are
     /// skipped.
     pub fn refresh(&mut self, home: &Path, sources: &DiscoverySources) -> SkillUseRefreshReport {
-        if self.reader_version != 4 {
+        if self.reader_version != 5 {
             self.files.clear();
             self.databases.clear();
-            self.reader_version = 4;
+            self.reader_version = 5;
         }
         let mut report = SkillUseRefreshReport::default();
         let mut run_budget = self.run_budget;
@@ -1488,7 +1510,11 @@ impl SkillInvocationIndex {
                 path: &path,
                 modified: modified_utc,
             };
-            uses.extend(parse(&file, &text, &mut context, &mut invalid));
+            let mut parsed = parse(&file, &text, &mut context, &mut invalid);
+            for use_ in &mut parsed {
+                use_.session = Some(log_session(&file, use_.session.as_deref()));
+            }
+            uses.extend(parsed);
             if invalid > 0 || gaps > 0 {
                 observations.push(UsageObservation {
                     path: path.clone(),
@@ -1738,8 +1764,10 @@ impl SkillInvocationIndex {
         let mut seen_uuids = BTreeSet::new();
         let claude_uses = self
             .files
-            .values()
-            .flat_map(|t| t.context.claude_records.iter())
+            .iter()
+            .filter(|(path, _)| !is_subagent_log(path))
+            .chain(self.files.iter().filter(|(path, _)| is_subagent_log(path)))
+            .flat_map(|(_, t)| t.context.claude_records.iter())
             .filter(move |(key, _)| seen_uuids.insert(key.as_str()))
             .flat_map(|(_, uses)| uses.iter());
         self.files
@@ -2142,16 +2170,17 @@ mod tests {
         let home = session_dir.path();
         let dir = home.join(CLAUDE_PROJECTS_ROOT).join("-p");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("session.jsonl"),
-            format!(
-                "{}\n{}\n{}\n",
-                skill_line("write-tests", &recent, "/proj-a"),
-                skill_line("write-tests", &recent, "/proj-b"),
-                skill_line("write-tests", &old, "/proj-a"),
-            ),
-        )
-        .unwrap();
+        for (name, at, project) in [
+            ("a", &recent, "/proj-a"),
+            ("b", &recent, "/proj-b"),
+            ("old", &old, "/proj-a"),
+        ] {
+            fs::write(
+                dir.join(format!("{name}.jsonl")),
+                skill_line("write-tests", at, project) + "\n",
+            )
+            .unwrap();
+        }
 
         let known_skills = known(&["write-tests"]);
         let sources = DiscoverySources::default();
@@ -2334,7 +2363,7 @@ mod tests {
         let sources = DiscoverySources::default();
         let first = index.refresh(home, &sources);
         assert!(first.incomplete);
-        assert!(stats(&index, &known_skills, &sources)[0].total < 20);
+        assert!(index.all_uses().count() < 20);
 
         let mut passes = 0;
         loop {
@@ -2345,7 +2374,8 @@ mod tests {
             }
             assert!(passes < 50, "backlog never drained");
         }
-        assert_eq!(stats(&index, &known_skills, &sources)[0].total, 20);
+        assert_eq!(index.all_uses().count(), 20);
+        assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
     }
 
     #[test]
@@ -3252,11 +3282,16 @@ mod tests {
                 first.bytes_read, 0,
                 "sanity: the first pass must have read something"
             );
+            assert_eq!(
+                index.all_uses().count(),
+                2,
+                "the appended record must still be read"
+            );
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
             assert_eq!(
-                stats[0].total, 2,
-                "the missed use: the appended skill use was not counted"
+                stats[0].total, 1,
+                "an appended load in the same session must not count twice"
             );
         }
 
@@ -3522,7 +3557,7 @@ mod tests {
         }
 
         #[test]
-        fn a_subagent_file_shares_its_parents_session_and_dedupes_with_it() {
+        fn a_subagent_file_counts_as_its_own_session() {
             let tmp = tempfile::tempdir().unwrap();
             let home = tmp.path();
             let project_folder = home.join("proj");
@@ -3551,10 +3586,7 @@ mod tests {
             index.refresh(home, &sources);
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
-            assert_eq!(
-                stats[0].total, 1,
-                "the same session's file-read dedupe must collapse the subagent copy"
-            );
+            assert_eq!(stats[0].total, 2, "each sub-agent log is its own session");
         }
 
         #[test]

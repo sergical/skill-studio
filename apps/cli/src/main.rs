@@ -79,7 +79,8 @@ const QUESTIONS: &str = "\
 Common questions:
   Which library skills did I load most, and where did they come from?
       skill-studio library --since 2026-10-01 --until 2026-11-16 --sort uses --top 10 --json
-  Rows: name = skill; library = shared folder; uses = loads in the window, counted once per session; agents = loads by agent; source null = not installed from a repo; modes = manual/auto; copies = link/same/old/changed.
+  Library uses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.
+  Rows: name = skill; library = shared folder; agents = loads by agent; source null = not installed from a repo; modes = manual/auto; copies = link/same/old/changed.
   Which skills are installed outside my library too?
       skill-studio library --all --json
   Which copies of a pack did not get the last update?

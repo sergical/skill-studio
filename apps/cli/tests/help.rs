@@ -183,7 +183,9 @@ fn common_questions_teach_library_without_more_help_calls() {
     for field in [
         "name = skill",
         "library = shared folder",
-        "uses = loads in the window, counted once per session",
+        "uses = loads in the window, once per session",
+        "a sub-agent log is its own session",
+        "resumed or forked session copies and names no longer in the library do not count",
         "agents = loads by agent",
         "source null = not installed from a repo",
         "modes = manual/auto",
