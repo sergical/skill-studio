@@ -172,10 +172,14 @@ credentials. Plugin packs show the agent's own update command; Skill Studio
 does not run it.
 
 `pack add`, `pack update` and `pack remove` plan first; `--dry-run` prints the
-plan and changes nothing. A real run gives each skill to `add`, `update` or
-`remove`, so the tool that installed it writes the files, and each skill gets
-its own event to undo with `restore`. Update and remove skip plugin and npm
-packs, and skills with local edits, which the owner tool would overwrite.
+plan and changes nothing. `pack add` without `--skill` reads the source with
+git to list its skills, also on a dry run. A real run gives each skill to
+`add`, `update` or `remove`, so the tool that installed it writes the files,
+and each skill gets its own event to undo with `restore`. One exception:
+`dotagents install` refreshes every declared skill in its scope, so the
+dotagents skills of one scope share one event, and restoring it undoes all of
+them. Update and remove skip plugin and npm packs, and skills with local
+edits, which the owner tool would overwrite.
 
 ## Skill review dates (CLI/MCP-only)
 

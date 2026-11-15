@@ -508,7 +508,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Update the skills of one pack (source as pack_list reports it), or of every pack with all, through the tool that installed them. Skips plugin and npm packs, and skills with local edits. Set dry_run to get the plan only. Undo one skill with restore_event and its event_id.",
+        description = "Update the skills of one pack (source as pack_list reports it), or of every pack with all, through the tool that installed them. Skips plugin and npm packs, and skills with local edits. Set dry_run to get the plan only. Undo one skill with restore_event and its event_id; dotagents refreshes every declared skill in a scope, so those skills share one event_id.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn pack_update(
