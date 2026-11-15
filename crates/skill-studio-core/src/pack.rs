@@ -202,6 +202,7 @@ pub fn pack_list(
             req.remote,
             remote,
         )
+        .map(|(report, _)| report)
     })
 }
 
@@ -213,7 +214,7 @@ pub fn pack_show(
     remote: Option<&dyn PackRemote>,
 ) -> Result<PackReport, CoreError> {
     rt.run(Operation::PackShow, ctx, || {
-        let report = build(
+        let (report, _) = build(
             rt,
             ctx,
             req.project_path.as_deref(),
@@ -222,16 +223,17 @@ pub fn pack_show(
             remote,
         )?;
         if report.packs.is_empty() {
-            return Err(CoreError::new(
-                ErrorCode::AmbiguousTarget,
-                format!(
-                    "no installed pack has source {}; pack list shows the sources",
-                    req.source
-                ),
-            ));
+            return Err(no_pack(&req.source));
         }
         Ok(report)
     })
+}
+
+pub(crate) fn no_pack(source: &str) -> CoreError {
+    CoreError::new(
+        ErrorCode::AmbiguousTarget,
+        format!("no installed pack has source {source}; pack list shows the sources"),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -254,14 +256,15 @@ struct Entry {
     edited: Option<bool>,
 }
 
-fn build(
+/// The packs and the scan they came from.
+pub(crate) fn build(
     rt: &Runtime,
     ctx: &OpContext,
     project_path: Option<&Path>,
     source: Option<&str>,
     want_remote: bool,
     remote: Option<&dyn PackRemote>,
-) -> Result<PackReport, CoreError> {
+) -> Result<(PackReport, Inventory), CoreError> {
     let remote = match (want_remote, remote) {
         (false, _) => None,
         (true, Some(remote)) => Some(remote),
@@ -272,12 +275,7 @@ fn build(
             ))
         }
     };
-    ctx.checkpoint()?;
-    let inventory = {
-        let _folder_guard = rt.ports.history.guard_read_data_folder()?;
-        let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
-        crate::ops::scan_inner(rt, ctx, &ScanRequest::default())?
-    };
+    let inventory = scan(rt, ctx)?;
     let fs = ScopedReads::new(rt.ports.fs.as_ref(), &rt.scope);
     let mut entries = Vec::new();
     for (scope, root) in selected_scopes(rt, project_path)? {
@@ -313,7 +311,14 @@ fn build(
         packs.push(pack(&fs, key, entries, remote, ctx.cancel.as_ref()));
     }
     let summary = report_summary(&packs, want_remote);
-    Ok(PackReport { packs, summary })
+    Ok((PackReport { packs, summary }, inventory))
+}
+
+pub(crate) fn scan(rt: &Runtime, ctx: &OpContext) -> Result<Inventory, CoreError> {
+    ctx.checkpoint()?;
+    let _folder_guard = rt.ports.history.guard_read_data_folder()?;
+    let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
+    crate::ops::scan_inner(rt, ctx, &ScanRequest::default())
 }
 
 /// What makes two spellings of one source the same pack. A remote git
@@ -358,7 +363,7 @@ fn source_identity(kind: PackKind, source: &str) -> String {
     s
 }
 
-fn selected_scopes(
+pub(crate) fn selected_scopes(
     rt: &Runtime,
     project_path: Option<&Path>,
 ) -> Result<Vec<(RootScope, Option<PathBuf>)>, CoreError> {
@@ -794,7 +799,7 @@ fn pack(
     }
 }
 
-fn plural(count: usize, one: &str) -> String {
+pub(crate) fn plural(count: usize, one: &str) -> String {
     if count == 1 {
         format!("1 {one}")
     } else {

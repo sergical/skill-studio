@@ -1163,12 +1163,16 @@ const WRITE_TOOLS: &[&str] = &[
     "unpark",
     "review_set",
     "review_clear",
+    "pack_add",
+    "pack_update",
+    "pack_remove",
 ];
 
 /// Flow: list tools with the default environment.
 /// Expectation: exactly the read and write tools above; each read tool has
 /// `readOnlyHint: true`; each write tool has `readOnlyHint: false` and a
-/// description that says how to undo it; only `remove` is destructive.
+/// description that says how to undo it; only `remove` and `pack_remove`
+/// are destructive.
 /// A failure here means a client may auto-approve a write, warn on a read,
 /// or show an agent a write with no way back.
 #[tokio::test]
@@ -1201,7 +1205,7 @@ async fn tools_list_publishes_hints_and_an_undo_for_every_write() {
             );
             assert_eq!(
                 annotations.destructive_hint,
-                Some(name == "remove"),
+                Some(matches!(name, "remove" | "pack_remove")),
                 "{name}'s destructive hint"
             );
         }

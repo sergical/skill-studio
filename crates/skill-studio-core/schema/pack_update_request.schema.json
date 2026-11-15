@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PackUpdateRequest",
+  "description": "Input for `pack_update`. Give `source` or `all`, not both.",
+  "type": "object",
+  "properties": {
+    "source": {
+      "description": "Pack source as `pack_list` reports it.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "all": {
+      "description": "Update every installed pack.",
+      "type": "boolean",
+      "default": false
+    },
+    "project_path": {
+      "description": "Only this tracked project. Absent: the home and every tracked project.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "dry_run": {
+      "description": "Return the plan and change nothing.",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

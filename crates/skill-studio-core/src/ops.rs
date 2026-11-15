@@ -142,6 +142,12 @@ pub enum Operation {
     PackList,
     /// Show the packs with one source.
     PackShow,
+    /// Install the skills of one pack.
+    PackAdd,
+    /// Update the skills of one pack or every pack.
+    PackUpdate,
+    /// Remove the skills of one pack.
+    PackRemove,
 }
 
 /// Outcome status of one call.
@@ -5664,6 +5670,7 @@ pub use crate::ops_split::split;
 pub use crate::ops_update::{update, update_all, update_split_copies};
 /// Pack read operations shared by CLI and MCP.
 pub use crate::pack::{pack_list, pack_show};
+pub use crate::pack_action::{pack_add, pack_remove, pack_update};
 
 /// Moves one real copy's directory into the parked root, in the slot for
 /// where it came from ([`crate::park_layout`]).
@@ -8430,6 +8437,9 @@ mod tests {
                 Operation::ReviewDue,
                 Operation::PackList,
                 Operation::PackShow,
+                Operation::PackAdd,
+                Operation::PackUpdate,
+                Operation::PackRemove,
             ];
             for operation in all {
                 let expected = match operation {
@@ -8462,6 +8472,9 @@ mod tests {
                     Operation::ReviewDue => "review_due",
                     Operation::PackList => "pack_list",
                     Operation::PackShow => "pack_show",
+                    Operation::PackAdd => "pack_add",
+                    Operation::PackUpdate => "pack_update",
+                    Operation::PackRemove => "pack_remove",
                 };
                 let value = serde_json::to_value(operation).unwrap();
                 assert_eq!(
