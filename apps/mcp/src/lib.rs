@@ -135,6 +135,22 @@ impl Default for SkillStudioServer {
     }
 }
 
+/// Window and selection for the shared library answer.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct LibraryRequest {
+    /// Rolling window in days; defaults to 30.
+    pub days: Option<u32>,
+    /// Inclusive start (YYYY-MM-DD or RFC 3339).
+    pub since: Option<String>,
+    /// Exclusive end (YYYY-MM-DD or RFC 3339).
+    pub until: Option<String>,
+    /// Sort by name (default) or uses descending.
+    pub sort: Option<skill_studio_core::library::LibrarySort>,
+    /// Keep the N most used skills.
+    pub top: Option<usize>,
+}
+
 /// Input for `skill_usage`.
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
@@ -358,6 +374,41 @@ impl SkillStudioServer {
     ) -> CallToolResult {
         run_op(Operation::Scan, false, &context, |rt, ctx| {
             ops::scan(rt, ctx, &req).map(|inventory| answers::summarize_scan(&inventory))
+        })
+        .await
+    }
+
+    #[tool(
+        description = "One row per real shared-library skill: repository source, uses and agents in the window, verified invocation modes, and agent copies (link, same, old, changed). Defaults to 30 days. Top selects the most used skills. Unsupported invocation modes are omitted.",
+        annotations(read_only_hint = true)
+    )]
+    async fn library(
+        &self,
+        Parameters(req): Parameters<LibraryRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(Operation::Library, false, &context, |rt, ctx| {
+            let bound = |text: &Option<String>| {
+                text.as_deref()
+                    .map(skill_studio_host::parse_usage_time)
+                    .transpose()
+                    .map_err(|message| {
+                        CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+                    })
+            };
+            let request = skill_studio_core::library::LibraryRequest {
+                days: req.days,
+                since: bound(&req.since)?,
+                until: bound(&req.until)?,
+                sort: req.sort,
+                top: req.top,
+            };
+            skill_studio_host::library_report(
+                rt,
+                ctx,
+                &request,
+                scope::desktop_usage_cache().as_deref(),
+            )
         })
         .await
     }

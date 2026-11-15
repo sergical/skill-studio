@@ -16,6 +16,7 @@ const USER_COMMANDS: &[&str] = &[
     "diagnose",
     "conflicts",
     "usage",
+    "library",
     "park",
     "unpark",
     "enable",

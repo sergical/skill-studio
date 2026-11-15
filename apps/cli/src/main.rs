@@ -77,6 +77,8 @@ impl From<AddMethod> for InstallMethod {
 
 const QUESTIONS: &str = "\
 Common questions:
+  What is in my shared library, where is it from, and how is it used?
+      skill-studio library
   Which skills do I have, and which agents read them?
       skill-studio scan --short
   Which copies of a pack did not get the last update?
@@ -179,6 +181,29 @@ enum Command {
     Review {
         #[command(subcommand)]
         action: ReviewCommand,
+    },
+    /// Show library skills, their sources, uses, invocation modes and agent copies.
+    Library {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        /// How many days back to count uses.
+        #[arg(long, default_value_t = skill_studio_host::DEFAULT_USAGE_DAYS)]
+        days: u32,
+        /// Count uses from this date (YYYY-MM-DD or RFC 3339).
+        #[arg(long, value_parser = skill_studio_host::parse_usage_time)]
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        /// Count uses before this date (YYYY-MM-DD or RFC 3339).
+        #[arg(long, value_parser = skill_studio_host::parse_usage_time)]
+        until: Option<chrono::DateTime<chrono::Utc>>,
+        /// Order rows by name or uses.
+        #[arg(long, value_parser = ["name", "uses"])]
+        sort: Option<String>,
+        /// Show only the N most used skills.
+        #[arg(long)]
+        top: Option<usize>,
+        /// Print the result as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Show which skills your agents used, and which they never used.
     Usage {
@@ -701,6 +726,30 @@ fn main() -> ExitCode {
         } => run_restore(&scope, event_id, force, json, time),
         Command::Undo { scope, force, json } => run_undo(&scope, force, json, time),
         Command::Review { action } => run_review(action, time),
+        Command::Library {
+            scope,
+            days,
+            since,
+            until,
+            sort,
+            top,
+            json,
+        } => {
+            let request = skill_studio_core::library::LibraryRequest {
+                days: Some(days),
+                since,
+                until,
+                top,
+                sort: sort.map(|value| {
+                    if value == "uses" {
+                        skill_studio_core::library::LibrarySort::Uses
+                    } else {
+                        skill_studio_core::library::LibrarySort::Name
+                    }
+                }),
+            };
+            run_library(&scope, &request, json, time)
+        }
         Command::Usage {
             scope,
             days,
@@ -2601,4 +2650,29 @@ fn run_review(action: ReviewCommand, time: bool) -> ExitCode {
         let envelope = ResultEnvelope::from_result(Operation::ReviewDue, &rt.scope, &ctx, result);
         finish(&envelope, json, time, output::print_review_due)
     }
+}
+
+fn run_library(
+    scope: &ScopeArgs,
+    request: &skill_studio_core::library::LibraryRequest,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    let rt = match build_runtime::<skill_studio_core::library::LibraryReport>(
+        scope,
+        Operation::Library,
+        json,
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = skill_studio_host::library_report(
+        &rt,
+        &ctx,
+        request,
+        scope.desktop_usage_cache().as_deref(),
+    );
+    let envelope = ResultEnvelope::from_result(Operation::Library, &rt.scope, &ctx, result);
+    finish(&envelope, json, time, output::print_library)
 }

@@ -130,6 +130,8 @@ pub enum Operation {
     /// it: the host crate's `usage_report` reads agent session history,
     /// which the core never touches.
     SkillUsage,
+    /// Shared library sources, uses, invocation modes and agent copies.
+    Library,
     /// Names and paths of non-skill agent configuration.
     Extras,
     /// Check or set skill invocation across harnesses.
@@ -8604,6 +8606,7 @@ mod tests {
                 Operation::Split,
                 Operation::TurnOffForAgent,
                 Operation::SkillUsage,
+                Operation::Library,
                 Operation::Extras,
                 Operation::Review,
                 Operation::ReviewDue,
@@ -8633,6 +8636,7 @@ mod tests {
                     Operation::Split => "split",
                     Operation::TurnOffForAgent => "turn_off_for_agent",
                     Operation::SkillUsage => "skill_usage",
+                    Operation::Library => "library",
                     Operation::Extras => "extras",
                     Operation::Invocation => "invocation",
                     Operation::Review => "review",

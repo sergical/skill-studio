@@ -387,6 +387,42 @@ fn installed_name<'a>(recorded: &'a str, installed: &BTreeSet<String>) -> Option
         .filter(|base| installed.contains(*base))
 }
 
+/// Reads history without saving a cache, then builds the shared core library table.
+pub fn library_report(
+    rt: &skill_studio_core::ports::Runtime,
+    ctx: &skill_studio_core::ports::OpContext,
+    request: &skill_studio_core::library::LibraryRequest,
+    cache: Option<&Path>,
+) -> Result<skill_studio_core::library::LibraryReport, skill_studio_core::CoreError> {
+    let filter = UsageFilter {
+        since: request.since,
+        until: request.until,
+        ..Default::default()
+    };
+    let now = rt.ports.clock.now();
+    filter.check_window(now).map_err(|message| {
+        skill_studio_core::CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+    })?;
+    let inventory = skill_studio_core::ops::scan_for_usage(rt, ctx)?;
+    let report = SkillUsage::load_read_only(cache).report_filtered(
+        &rt.scope.home.canonical,
+        &inventory,
+        request.days.unwrap_or(DEFAULT_USAGE_DAYS),
+        now,
+        &filter,
+    );
+    let counts: Vec<_> = report
+        .rows
+        .into_iter()
+        .map(|row| skill_studio_core::library::LibraryUses {
+            name: row.skill,
+            uses: row.recent_uses,
+            agents: row.agents,
+        })
+        .collect();
+    skill_studio_core::library::library(rt, ctx, &inventory, &counts, request, report.partial)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

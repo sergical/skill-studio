@@ -1028,3 +1028,33 @@ pub fn print_review_due(envelope: &ResultEnvelope<skill_studio_core::review::Rev
         }
     }
 }
+
+pub fn print_library(envelope: &ResultEnvelope<skill_studio_core::library::LibraryReport>) {
+    print_errors(envelope);
+    let Some(report) = &envelope.data else {
+        return;
+    };
+    println!(
+        "Library: {} skills, {} used; days={}, since={}, until={}",
+        report.count,
+        report.used,
+        report.days,
+        report.since.as_deref().unwrap_or("rolling"),
+        report.until.as_deref().unwrap_or("now")
+    );
+    println!("NAME  SOURCE  USES  AGENTS  MODES  COPIES");
+    for row in &report.rows {
+        println!(
+            "{}  {}  {}  {}  {}  {}",
+            row.name,
+            row.source.as_deref().unwrap_or("-"),
+            row.uses,
+            serde_json::json!(row.agents),
+            serde_json::json!(row.modes),
+            serde_json::json!(row.copies)
+        );
+    }
+    if report.partial {
+        println!("Partial: some skills or history could not be read.");
+    }
+}

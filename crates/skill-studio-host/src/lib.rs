@@ -85,3 +85,5 @@ pub use usage_report::{
 
 mod review;
 pub use review::review_due_report;
+
+pub use usage_report::library_report;

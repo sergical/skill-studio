@@ -766,6 +766,7 @@ async fn tools_that_need_no_input_accept_an_empty_argument_object() {
         "capabilities",
         "list_events",
         "skill_usage",
+        "library",
         "diagnose_conflict",
         "doctor",
     ];
@@ -1128,6 +1129,7 @@ const READ_TOOLS: &[&str] = &[
     "outdated",
     "review_due",
     "scan_summary",
+    "library",
     "invocation_mismatches",
 ];
 const WRITE_TOOLS: &[&str] = &[
@@ -1826,4 +1828,21 @@ async fn fixture_scope_refuses_write_without_tree_changes() {
     client.cancel().await.unwrap();
     assert_eq!(complete_folder_tree(&home), before);
     std::fs::remove_dir_all(home).unwrap();
+}
+
+#[tokio::test]
+async fn library_reads_without_changing_the_fixture_home() {
+    let (_dir, home) = live_home();
+    let (client, _) = connect(&[
+        ("HOME", home.to_str().unwrap()),
+        ("SKILL_STUDIO_HOME", home.to_str().unwrap()),
+        ("SKILL_STUDIO_TELEMETRY", "0"),
+    ])
+    .await;
+    call_scan(&client, None).await;
+    let before = complete_folder_tree(&home);
+    let result = call_tool(&client, "library", serde_json::json!({})).await;
+    client.cancel().await.unwrap();
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(before, complete_folder_tree(&home));
 }

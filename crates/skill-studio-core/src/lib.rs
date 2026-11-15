@@ -149,3 +149,6 @@ mod home_free_tests {
         }
     }
 }
+
+/// Compact shared-library answers.
+pub mod library;

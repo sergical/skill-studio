@@ -268,87 +268,7 @@ pub fn invocation(
         for skill in inventory.skills {
             let mut rows = Vec::new();
             for d in skill.deployments {
-                let manual = d
-                    .frontmatter
-                    .as_ref()
-                    .is_some_and(|f| f.disable_model_invocation == Some(true));
-                let opencode_manual = d
-                    .frontmatter
-                    .as_ref()
-                    .and_then(|f| f.metadata.as_ref())
-                    .and_then(|m| m.get("opencode/autoinvoke"))
-                    .and_then(|v| match v {
-                        crate::yaml::Value::Bool(b) => Some(*b),
-                        crate::yaml::Value::U64(n @ (0 | 1)) => Some(*n == 1),
-                        crate::yaml::Value::I64(n @ (0 | 1)) => Some(*n == 1),
-                        _ => None,
-                    })
-                    .map_or(manual, |auto| !auto);
-                let bytes = match rt.ports.fs.read_capped(
-                    &d.path.join("agents/openai.yaml"),
-                    crate::ops::SKILL_MD_MAX_BYTES,
-                ) {
-                    Ok(bytes) => bytes,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-                    Err(e) => return Err(CoreError::io(&d.path, e)),
-                };
-                let text = String::from_utf8_lossy(&bytes);
-                let codex: serde_json::Value = if text.trim().is_empty() {
-                    serde_json::Value::Null
-                } else {
-                    crate::yaml::from_str(&text).map_err(|e| {
-                        CoreError::new(ErrorCode::InvalidRequest, e.to_string()).at(&d.path)
-                    })?
-                };
-                let codex_manual = codex
-                    .get("policy")
-                    .and_then(|p| p.get("allow_implicit_invocation"))
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(false);
-                let harnesses = d.harness.clone().map_or_else(
-                    || {
-                        rt.ports
-                            .catalog
-                            .facts
-                            .iter()
-                            .filter(|facts| facts.reads_universal_root.is_yes())
-                            .map(|h| h.id.clone())
-                            .collect()
-                    },
-                    |h| vec![h],
-                );
-                for harness in harnesses {
-                    let mode = match harness.as_str() {
-                        AgentId::CLAUDE_CODE | AgentId::PI | AgentId::CURSOR => {
-                            if manual {
-                                InvocationMode::Manual
-                            } else {
-                                InvocationMode::Auto
-                            }
-                        }
-                        AgentId::OPEN_CODE => {
-                            if opencode_manual {
-                                InvocationMode::Manual
-                            } else {
-                                InvocationMode::Auto
-                            }
-                        }
-                        AgentId::CODEX => {
-                            if codex_manual {
-                                InvocationMode::Manual
-                            } else {
-                                InvocationMode::Auto
-                            }
-                        }
-                        _ => InvocationMode::Unsupported,
-                    };
-                    rows.push(InvocationDeployment {
-                        deployment_id: d.id.clone(),
-                        harness,
-                        path: d.path.clone(),
-                        mode,
-                    });
-                }
+                rows.extend(deployment_invocation(rt, &d)?);
             }
             let reads = |mode| rows.iter().any(|row| row.mode == mode);
             report.skills.push(SkillInvocationReport {
@@ -359,6 +279,94 @@ pub fn invocation(
         }
         Ok(report)
     })
+}
+
+pub(crate) fn deployment_invocation(
+    rt: &Runtime,
+    d: &crate::dto::DeploymentDto,
+) -> Result<Vec<InvocationDeployment>, CoreError> {
+    let mut rows = Vec::new();
+    let manual = d
+        .frontmatter
+        .as_ref()
+        .is_some_and(|f| f.disable_model_invocation == Some(true));
+    let opencode_manual = d
+        .frontmatter
+        .as_ref()
+        .and_then(|f| f.metadata.as_ref())
+        .and_then(|m| m.get("opencode/autoinvoke"))
+        .and_then(|v| match v {
+            crate::yaml::Value::Bool(b) => Some(*b),
+            crate::yaml::Value::U64(n @ (0 | 1)) => Some(*n == 1),
+            crate::yaml::Value::I64(n @ (0 | 1)) => Some(*n == 1),
+            _ => None,
+        })
+        .map_or(manual, |auto| !auto);
+    let bytes = match rt.ports.fs.read_capped(
+        &d.path.join("agents/openai.yaml"),
+        crate::ops::SKILL_MD_MAX_BYTES,
+    ) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(CoreError::io(&d.path, e)),
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let codex: serde_json::Value = if text.trim().is_empty() {
+        serde_json::Value::Null
+    } else {
+        crate::yaml::from_str(&text)
+            .map_err(|e| CoreError::new(ErrorCode::InvalidRequest, e.to_string()).at(&d.path))?
+    };
+    let codex_manual = codex
+        .get("policy")
+        .and_then(|p| p.get("allow_implicit_invocation"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(false);
+    let harnesses = d.harness.clone().map_or_else(
+        || {
+            rt.ports
+                .catalog
+                .facts
+                .iter()
+                .filter(|facts| facts.reads_universal_root.is_yes())
+                .map(|h| h.id.clone())
+                .collect()
+        },
+        |h| vec![h],
+    );
+    for harness in harnesses {
+        let mode = match harness.as_str() {
+            AgentId::CLAUDE_CODE | AgentId::PI | AgentId::CURSOR => {
+                if manual {
+                    InvocationMode::Manual
+                } else {
+                    InvocationMode::Auto
+                }
+            }
+            AgentId::OPEN_CODE => {
+                if opencode_manual {
+                    InvocationMode::Manual
+                } else {
+                    InvocationMode::Auto
+                }
+            }
+            AgentId::CODEX => {
+                if codex_manual {
+                    InvocationMode::Manual
+                } else {
+                    InvocationMode::Auto
+                }
+            }
+            _ => InvocationMode::Unsupported,
+        };
+        rows.push(InvocationDeployment {
+            deployment_id: d.id.clone(),
+            harness,
+            path: d.path.clone(),
+            mode,
+        });
+    }
+    Ok(rows)
 }
 
 fn is_link(d: &crate::dto::DeploymentDto) -> bool {
