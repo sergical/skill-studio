@@ -180,8 +180,15 @@ pub fn run_stdio() -> anyhow::Result<()> {
 /// Builds the `Runtime` with a history version guard before read leases.
 /// Discovery is enabled outside fixture mode. Matches
 /// `apps/cli/src/main.rs::build_runtime`.
-fn build_runtime(operation: Operation, with_history: bool) -> Result<Runtime, CoreError> {
-    let (runtime_scope, lease_root) = scope::resolve();
+fn build_runtime(
+    operation: Operation,
+    with_history: bool,
+    extra_project: Option<&std::path::Path>,
+) -> Result<Runtime, CoreError> {
+    let (mut runtime_scope, lease_root) = scope::resolve();
+    if let Some(project) = extra_project {
+        scope::add_project(&mut runtime_scope, project);
+    }
     if with_history
         && !matches!(operation, Operation::ListEvents | Operation::Outdated)
         && runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture
@@ -245,8 +252,19 @@ pub fn run_op_envelope<T: Outcome + serde::Serialize>(
     with_history: bool,
     call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
 ) -> ResultEnvelope<T> {
+    run_op_envelope_in_project(operation, with_history, None, call)
+}
+
+/// [`run_op_envelope`] for a tool call that names a project, which the
+/// runtime then includes even when discovery does not list it.
+pub fn run_op_envelope_in_project<T: Outcome + serde::Serialize>(
+    operation: Operation,
+    with_history: bool,
+    project: Option<&std::path::Path>,
+    call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
+) -> ResultEnvelope<T> {
     let correlation_id = CorrelationId(ulid::Ulid::generate().to_string());
-    match build_runtime(operation, with_history) {
+    match build_runtime(operation, with_history, project) {
         Ok(rt) => {
             let ctx = OpContext::uncancellable(correlation_id);
             let result = call(&rt, &ctx);
@@ -268,6 +286,16 @@ async fn run_op<T: Outcome + serde::Serialize>(
     context: &RequestContext<RoleServer>,
     call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
 ) -> CallToolResult {
+    run_op_in_project(operation, with_history, None, context, call).await
+}
+
+async fn run_op_in_project<T: Outcome + serde::Serialize>(
+    operation: Operation,
+    with_history: bool,
+    project: Option<&std::path::Path>,
+    context: &RequestContext<RoleServer>,
+    call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
+) -> CallToolResult {
     let progress_token = context.meta.get_progress_token();
     if let Some(token) = &progress_token {
         let _ = context
@@ -276,7 +304,7 @@ async fn run_op<T: Outcome + serde::Serialize>(
             .await;
     }
 
-    let envelope = run_op_envelope(operation, with_history, call);
+    let envelope = run_op_envelope_in_project(operation, with_history, project, call);
 
     if let Some(token) = &progress_token {
         let _ = context
@@ -422,10 +450,16 @@ impl SkillStudioServer {
         Parameters(req): Parameters<skill_studio_core::pack::PackListRequest>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op(Operation::PackList, false, &context, |rt, ctx| {
-            let remote = pack_remote(rt, req.remote);
-            ops::pack_list(rt, ctx, &req, remote.as_ref().map(|r| r as _))
-        })
+        run_op_in_project(
+            Operation::PackList,
+            false,
+            req.project_path.as_deref(),
+            &context,
+            |rt, ctx| {
+                let remote = pack_remote(rt, req.remote);
+                ops::pack_list(rt, ctx, &req, remote.as_ref().map(|r| r as _))
+            },
+        )
         .await
     }
 
@@ -438,10 +472,16 @@ impl SkillStudioServer {
         Parameters(req): Parameters<skill_studio_core::pack::PackShowRequest>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op(Operation::PackShow, false, &context, |rt, ctx| {
-            let remote = pack_remote(rt, req.remote);
-            ops::pack_show(rt, ctx, &req, remote.as_ref().map(|r| r as _))
-        })
+        run_op_in_project(
+            Operation::PackShow,
+            false,
+            req.project_path.as_deref(),
+            &context,
+            |rt, ctx| {
+                let remote = pack_remote(rt, req.remote);
+                ops::pack_show(rt, ctx, &req, remote.as_ref().map(|r| r as _))
+            },
+        )
         .await
     }
 

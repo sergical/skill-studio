@@ -34,12 +34,10 @@ fn pack_list_gives_the_same_packs_on_cli_and_mcp_or_the_surfaces_drift() {
     let project = project.to_str().unwrap();
 
     let cli = headless::cli(home.path(), &["pack", "list", "--project-path", project]);
-    let env = vec![("SKILL_STUDIO_PROJECT".to_string(), project.to_string())];
-    let mcp = headless::mcp_with_env(
+    let mcp = headless::mcp(
         home.path(),
         "pack_list",
         &json!({ "project_path": project }),
-        &env,
     );
     let mcp = &mcp["result"]["structuredContent"];
 

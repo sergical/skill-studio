@@ -2,12 +2,13 @@
 //! for the commit, then one shallow clone into a temp folder that is
 //! removed after its skill folders are hashed. Git uses the user's own
 //! credential helper or SSH keys; nothing is stored.
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use skill_studio_core::frontmatter::{parse_frontmatter, FrontmatterParseResult};
 use skill_studio_core::pack::{skills_cli_folder_hash, PackRemote, RemotePack, RemoteSkill};
 use skill_studio_core::ports::{CancelToken, ProcessSpawner, ProcessSpec};
-use skill_studio_core::tree_hash::tree_hash_ignoring_junk;
 
 use crate::RealFs;
 
@@ -66,10 +67,25 @@ impl PackRemote for GitPackRemote {
             args.extend(["--branch", git_ref]);
         }
         args.extend(["--", url, &dir_arg]);
-        let skills = self.git(&args, cancel).map(|_| {
+        let skills = self.git(&args, cancel).and_then(|_| {
+            let trees = self.git(
+                &[
+                    "-C",
+                    &dir_arg,
+                    "ls-tree",
+                    "-r",
+                    "-d",
+                    "-z",
+                    "--full-tree",
+                    "HEAD",
+                ],
+                cancel,
+            )?;
+            let root = self.git(&["-C", &dir_arg, "rev-parse", "HEAD^{tree}"], cancel)?;
+            let trees = tree_hashes(&trees, root.trim());
             let mut skills = Vec::new();
-            skill_folders(&dir, "", url_stem(url), 0, &mut skills);
-            skills
+            skill_folders(&dir, "", url_stem(url), 0, &trees, &mut skills);
+            Ok(skills)
         });
         let _ = std::fs::remove_dir_all(&dir);
         Ok(RemotePack {
@@ -99,16 +115,54 @@ fn url_stem(url: &str) -> &str {
     tail.strip_suffix(".git").unwrap_or(tail)
 }
 
-fn skill_folders(dir: &Path, relative: &str, name: &str, depth: usize, out: &mut Vec<RemoteSkill>) {
+/// Each directory's git tree SHA by its `/`-separated path, `""` for the
+/// root: the hash GitHub reports and the skills CLI records as
+/// `skillFolderHash`, committed junk files included.
+fn tree_hashes(ls_tree: &str, root: &str) -> HashMap<String, String> {
+    let mut trees: HashMap<String, String> = ls_tree
+        .split('\0')
+        .filter_map(|line| {
+            let (meta, path) = line.split_once('\t')?;
+            Some((
+                path.to_string(),
+                meta.split_whitespace().nth(2)?.to_string(),
+            ))
+        })
+        .collect();
+    trees.insert(String::new(), root.to_string());
+    trees
+}
+
+/// The skill name the skills CLI installs a folder under: its `SKILL.md`
+/// frontmatter `name`, else the folder name.
+fn skill_name(dir: &Path, folder: &str) -> String {
+    std::fs::read_to_string(dir.join("SKILL.md"))
+        .ok()
+        .and_then(|text| match parse_frontmatter(&text) {
+            FrontmatterParseResult::Valid(fm) => fm.name,
+            _ => None,
+        })
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| folder.to_string())
+}
+
+fn skill_folders(
+    dir: &Path,
+    relative: &str,
+    folder: &str,
+    depth: usize,
+    trees: &HashMap<String, String>,
+    out: &mut Vec<RemoteSkill>,
+) {
     if dir.join("SKILL.md").is_file() {
-        if let (Ok(tree_hash), Ok(folder_hash)) = (
-            tree_hash_ignoring_junk(&RealFs::new(), dir),
+        if let (Some(tree_hash), Ok(folder_hash)) = (
+            trees.get(relative),
             skills_cli_folder_hash(&RealFs::new(), dir),
         ) {
             out.push(RemoteSkill {
                 dir: relative.to_string(),
-                name: name.to_string(),
-                tree_hash,
+                name: skill_name(dir, folder),
+                tree_hash: tree_hash.clone(),
                 folder_hash,
             });
         }
@@ -133,6 +187,13 @@ fn skill_folders(dir: &Path, relative: &str, name: &str, depth: usize, out: &mut
         } else {
             format!("{relative}/{child}")
         };
-        skill_folders(&dir.join(&child), &child_relative, &child, depth + 1, out);
+        skill_folders(
+            &dir.join(&child),
+            &child_relative,
+            &child,
+            depth + 1,
+            trees,
+            out,
+        );
     }
 }

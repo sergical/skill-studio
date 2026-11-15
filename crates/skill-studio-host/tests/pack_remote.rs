@@ -8,10 +8,9 @@ use std::sync::Arc;
 use git_pack::GitPack;
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::CorrelationId;
-use skill_studio_core::pack::{Pack, PackListRequest, RemoteState};
+use skill_studio_core::pack::{skills_cli_folder_hash, Pack, PackListRequest, RemoteState};
 use skill_studio_core::ports::{OpContext, Runtime};
 use skill_studio_core::scope::ProjectSelection;
-use skill_studio_core::tree_hash::tree_hash_ignoring_junk;
 use skill_studio_core::{ops, RuntimeScope};
 use skill_studio_host::{GitPackRemote, RealFs, RealProcessSpawner};
 
@@ -21,7 +20,12 @@ fn install(home: &Path, pack: &GitPack, names: &[&str]) {
         let dir = home.join(".agents/skills").join(name);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("SKILL.md"), git_pack::skill_body(name, "v1")).unwrap();
-        let hash = tree_hash_ignoring_junk(&RealFs::new(), &dir).unwrap();
+        let hash = git_pack::run(
+            std::process::Command::new("git")
+                .current_dir(&pack.work)
+                .args(["rev-parse", &format!("HEAD:skills/{name}")]),
+        );
+        let hash = String::from_utf8(hash).unwrap().trim().to_string();
         rows.push(format!(
             r#""{name}":{{"source":"owner/pack","sourceType":"git","sourceUrl":"{url}","skillPath":"skills/{name}/SKILL.md","skillFolderHash":"{hash}","installedAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}}"#,
             url = pack.url
@@ -130,4 +134,68 @@ fn pack_list_remote_reports_an_unreachable_source_as_failed_or_drops_the_pack() 
         failed.remote
     );
     assert_eq!(failed.skills.len(), 1);
+}
+
+#[test]
+fn pack_list_remote_counts_committed_junk_like_github_or_reports_a_false_update() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().canonicalize().unwrap().join("home");
+    let pack = GitPack::new(&temp.path().join("git"));
+    let cache = pack.work.join("skills/a/__pycache__");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("x.pyc"), b"bytecode").unwrap();
+    pack.publish("v1-junk");
+    install(&home, &pack, &["a"]);
+
+    let checked = list(&home, true);
+
+    assert!(
+        matches!(checked.remote, RemoteState::Checked { .. }),
+        "{:?}",
+        checked.remote
+    );
+    assert_eq!(checked.skills[0].behind, Some(false), "{checked:#?}");
+}
+
+#[test]
+fn pack_list_remote_names_a_new_skill_by_its_frontmatter_or_offers_a_name_add_rejects() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().canonicalize().unwrap().join("home");
+    let pack = GitPack::new(&temp.path().join("git"));
+    install(&home, &pack, &["a"]);
+    let dir = pack.work.join("skills/folder-name");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        git_pack::skill_body("actual-skill", "v2"),
+    )
+    .unwrap();
+    pack.publish("v2");
+
+    let checked = list(&home, true);
+
+    assert!(
+        checked.new_upstream.contains(&"actual-skill".to_string()),
+        "{checked:#?}"
+    );
+    assert!(
+        !checked.new_upstream.contains(&"folder-name".to_string()),
+        "{checked:#?}"
+    );
+}
+
+#[test]
+fn folder_hash_skips_a_link_loop_like_the_skills_cli_or_drops_the_skill() {
+    let temp = tempfile::tempdir().unwrap();
+    let skill = temp.path().canonicalize().unwrap().join("s");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), git_pack::skill_body("s", "v1")).unwrap();
+    let plain = skills_cli_folder_hash(&RealFs::new(), &skill).unwrap();
+
+    std::os::unix::fs::symlink(".", skill.join("loop")).unwrap();
+
+    assert_eq!(
+        skills_cli_folder_hash(&RealFs::new(), &skill).unwrap(),
+        plain
+    );
 }

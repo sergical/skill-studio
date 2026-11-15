@@ -158,9 +158,9 @@ impl Outcome for PackReport {
 pub struct RemoteSkill {
     /// Folder relative to the repository root, `/`-separated, `""` for the root.
     pub dir: String,
-    /// Folder name.
+    /// Skill name: the `SKILL.md` frontmatter `name`, else the folder name.
     pub name: String,
-    /// [`crate::tree_hash::tree_hash_ignoring_junk`] of the folder.
+    /// Git tree SHA of the folder, as GitHub reports it.
     pub tree_hash: String,
     /// [`skills_cli_folder_hash`] of the folder.
     pub folder_hash: String,
@@ -291,19 +291,67 @@ fn build(
         }
         plugin_entries(&inventory, &scope, &mut entries);
     }
-    let mut grouped: BTreeMap<PackKey, Vec<Entry>> = BTreeMap::new();
+    let mut grouped: BTreeMap<PackKey, (PackKey, Vec<Entry>)> = BTreeMap::new();
     for entry in entries {
-        if source.is_none_or(|source| source == entry.key.source) {
-            grouped.entry(entry.key.clone()).or_default().push(entry);
+        let identity = PackKey {
+            source: source_identity(entry.key.kind, &entry.key.source),
+            ..entry.key.clone()
+        };
+        if source.is_none_or(|wanted| source_identity(entry.key.kind, wanted) == identity.source) {
+            let (shown, members) = grouped
+                .entry(identity)
+                .or_insert_with(|| (entry.key.clone(), Vec::new()));
+            if entry.key.source.len() < shown.source.len() {
+                shown.source.clone_from(&entry.key.source);
+            }
+            members.push(entry);
         }
     }
     let mut packs = Vec::new();
-    for (key, entries) in grouped {
+    for (key, entries) in grouped.into_values() {
         ctx.checkpoint()?;
         packs.push(pack(&fs, key, entries, remote, ctx.cancel.as_ref()));
     }
     let summary = report_summary(&packs, want_remote);
     Ok(PackReport { packs, summary })
+}
+
+/// What makes two spellings of one source the same pack. A git source
+/// drops its scheme, user, port, trailing `/` and `.git`, and case, so
+/// `owner/repo`, `https://github.com/Owner/repo.git`, and
+/// `git@github.com:owner/repo.git` match. Other sources match as written.
+fn source_identity(kind: PackKind, source: &str) -> String {
+    if !matches!(kind, PackKind::SkillsSh | PackKind::Dotagents) {
+        return source.to_string();
+    }
+    let mut s = source.trim().to_ascii_lowercase();
+    let url = s.contains("://");
+    if let Some((_, rest)) = s.split_once("://") {
+        s = rest.to_string();
+    }
+    if let Some((user, rest)) = s.split_once('@') {
+        if !user.contains('/') {
+            s = rest.to_string();
+        }
+    }
+    if let Some((host, rest)) = s.split_once(':') {
+        if !host.contains('/') {
+            let rest = if url {
+                rest.trim_start_matches(|c: char| c.is_ascii_digit())
+            } else {
+                rest
+            };
+            s = format!("{host}/{}", rest.trim_start_matches('/'));
+        }
+    }
+    let s = s.trim_end_matches('/');
+    let s = s.strip_suffix(".git").unwrap_or(s);
+    match s.split_once('/') {
+        Some((owner, repo)) if !owner.contains('.') && !repo.contains('/') => {
+            format!("github.com/{s}")
+        }
+        _ => s.to_string(),
+    }
 }
 
 fn selected_scopes(
@@ -843,7 +891,8 @@ fn read_json<T: for<'de> Deserialize<'de> + Default>(
 /// file's `/`-separated path, a NUL, its byte length, a NUL, and its bytes,
 /// in path order. CRLF reads as LF in text files. `.git`, `__pycache__`,
 /// `__pypackages__`, and `metadata.json` are skipped; a link is followed
-/// only when its target is inside the folder.
+/// only when its target is inside the folder and is not a folder that
+/// contains the link, so a link loop is skipped as the skills CLI skips it.
 pub fn skills_cli_folder_hash(fs: &dyn ScopeFs, dir: &Path) -> Result<String, CoreError> {
     let root = fs.canonicalize(dir).map_err(|e| CoreError::io(dir, e))?;
     let mut files = Vec::new();
@@ -885,9 +934,13 @@ fn collect_files(
         let relative = format!("{prefix}{}", entry.name);
         let kind = if entry.kind == FileKind::Symlink {
             match fs.canonicalize(&path) {
-                Ok(target) if target.starts_with(root) => fs
-                    .symlink_metadata(&target)
-                    .map_or(FileKind::Other, |f| f.kind),
+                Ok(target)
+                    if target.starts_with(root)
+                        && !fs.canonicalize(dir).is_ok_and(|d| d.starts_with(&target)) =>
+                {
+                    fs.symlink_metadata(&target)
+                        .map_or(FileKind::Other, |f| f.kind)
+                }
                 _ => continue,
             }
         } else {

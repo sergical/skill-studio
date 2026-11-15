@@ -44,6 +44,7 @@ fn runtime() -> Runtime {
         "/home/.agents/skills/tracked",
         "/home/proj/.agents/skills/pinned",
         "/home/proj/.agents/skills/from-npm",
+        "/home/proj/.agents/skills/over-ssh",
         "/home/proj/.agents/skills/dotty",
         "/home/proj/.agents/plugins/tools/skills/hammer",
         "/home/.claude/plugins/cache/vendor-1/plugin-1/1.0.0/skills/plugged",
@@ -53,7 +54,8 @@ fn runtime() -> Runtime {
     let project_lock = format!(
         r#"{{"version":1,"skills":{{
             "pinned":{{"source":"owner/pinned","sourceType":"github","ref":"v1.2","skillPath":"skills/pinned/SKILL.md","computedHash":"{clean}"}},
-            "from-npm":{{"source":"node_modules/@acme/skills","sourceType":"node_modules","via":"@acme/skills","computedHash":"{clean}"}}
+            "from-npm":{{"source":"node_modules/@acme/skills","sourceType":"node_modules","via":"@acme/skills","computedHash":"{clean}"}},
+            "over-ssh":{{"source":"git@github.com:Owner/repo.git","sourceType":"git","sourceUrl":"git@github.com:Owner/repo.git","skillPath":"skills/over-ssh/SKILL.md","computedHash":"{clean}"}}
         }}}}"#,
         clean = clean_hash()
     );
@@ -229,4 +231,27 @@ fn pack_show_finds_one_source_or_names_the_missing_pack() {
         "{}",
         missing.message
     );
+}
+
+#[test]
+fn pack_list_joins_two_spellings_of_one_repo_into_one_pack_or_checks_it_twice() {
+    let report = list(None);
+    let repo = pack(&report, "owner/repo");
+    let names: Vec<_> = repo.skills.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["tracked", "over-ssh"], "{repo:#?}");
+    assert_eq!(repo.scopes.len(), 2, "{repo:#?}");
+    assert!(report.packs.iter().all(|p| !p.source.starts_with("git@")));
+
+    let shown = ops::pack_show(
+        &runtime(),
+        &ctx(),
+        &PackShowRequest {
+            source: "https://github.com/OWNER/repo.git/".into(),
+            ..PackShowRequest::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(shown.packs.len(), 1);
+    assert_eq!(shown.packs[0].skills.len(), 2);
 }
