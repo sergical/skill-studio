@@ -192,6 +192,8 @@ class ApprovalTests(GateTests):
         self.assertIn('actions: read', risk)
         self.assertIn('edited, labeled', risk)
         self.assertIn("if: github.event.action != 'edited' || github.event.changes.base", risk)
+        # A body edit skips the job; in the shared group it would cancel the push's risk run.
+        self.assertIn("group: gate-risk-${{ github.event.pull_request.number }}-${{ (github.event.action == 'edited' && !github.event.changes.base) && github.run_id || 'risk' }}", risk)
         for text in ['needs:', 'UNIT:', 'CONTRACTS:', 'pull_request.head.ref']:
             self.assertNotIn(text, risk)
         checks = (WORKFLOWS / 'gate.yml').read_text()
