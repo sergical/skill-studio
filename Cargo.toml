@@ -2,6 +2,9 @@
 members = ["crates/*", "apps/desktop/src-tauri", "apps/cli", "apps/mcp"]
 resolver = "2"
 
+[workspace.package]
+version = "0.2.0"
+
 # `preserve_order` swaps `serde_json::Map`'s backing store for an
 # `indexmap::IndexMap`, so a parsed JSON object round-trips through this
 # workspace in the document's own key order instead of sorted (`BTreeMap`)

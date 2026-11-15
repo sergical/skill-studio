@@ -1,6 +1,6 @@
 [package]
 name = "skill-studio"
-version = "0.2.0"
+version.workspace = true
 description = "Manage coding assistant configurations"
 authors = ["you"]
 edition = "2021"

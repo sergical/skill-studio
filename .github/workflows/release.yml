@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: ./scripts/release/check-version-matches-tag.sh "${{ github.ref_name }}"
+      - run: node scripts/release/check-versions.mjs "${{ github.ref_name }}"
       - name: Require SKILL_STUDIO_SERVER_URL for release builds
         # The released binary's skills.sh backend is compiled in from this
         # repository variable (see `default_server_url` in
@@ -114,7 +114,7 @@ jobs:
         # A pre-release tag's base version (e.g. "0.1.0" from
         # "v0.1.0-rc.1") is what CHANGELOG.md and the committed
         # tauri.conf.json/package.json versions carry - see
-        # check-version-matches-tag.sh. The full tag version is what the
+        # check-versions.mjs. The full tag version is what the
         # built app itself reports, stamped in below via
         # tauri.release.conf.json so rc.1 < rc.2 < 0.1.0 in semver for the
         # updater. A plain "vX.Y.Z" tag has no suffix, so full == base.
