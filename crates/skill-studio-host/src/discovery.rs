@@ -47,9 +47,13 @@ fn agent_home_override(home: &Path, relative: &str) -> Option<PathBuf> {
         ".claude" => "CLAUDE_CONFIG_DIR",
         ".pi/agent" => "PI_CODING_AGENT_DIR",
         ".grok" => "GROK_HOME",
+        skill_studio_core::pack::SKILLS_CLI_STATE_ROOT => "XDG_STATE_HOME",
         _ => return None,
     };
     let path = PathBuf::from(std::env::var_os(variable).filter(|v| !v.is_empty())?);
+    if relative == skill_studio_core::pack::SKILLS_CLI_STATE_ROOT {
+        return Some(path.join("skills"));
+    }
     if relative == ".pi/agent" {
         if let Ok(rest) = path.strip_prefix("~") {
             return Some(home.join(rest));
@@ -82,7 +86,12 @@ pub fn resolve_agent_homes(
     mut scope: skill_studio_core::RuntimeScope,
 ) -> skill_studio_core::RuntimeScope {
     if scope.kind == skill_studio_core::scope::ScopeKind::Live {
-        for relative in [".claude", ".pi/agent", ".grok"] {
+        for relative in [
+            ".claude",
+            ".pi/agent",
+            ".grok",
+            skill_studio_core::pack::SKILLS_CLI_STATE_ROOT,
+        ] {
             if let Some(root) = agent_home_override(&scope.home_root, relative) {
                 scope.agent_home_roots.insert(relative.into(), root);
             }

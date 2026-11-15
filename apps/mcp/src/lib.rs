@@ -180,8 +180,15 @@ pub fn run_stdio() -> anyhow::Result<()> {
 /// Builds the `Runtime` with a history version guard before read leases.
 /// Discovery is enabled outside fixture mode. Matches
 /// `apps/cli/src/main.rs::build_runtime`.
-fn build_runtime(operation: Operation, with_history: bool) -> Result<Runtime, CoreError> {
-    let (runtime_scope, lease_root) = scope::resolve();
+fn build_runtime(
+    operation: Operation,
+    with_history: bool,
+    extra_project: Option<&std::path::Path>,
+) -> Result<Runtime, CoreError> {
+    let (mut runtime_scope, lease_root) = scope::resolve();
+    if let Some(project) = extra_project {
+        scope::add_project(&mut runtime_scope, project);
+    }
     if with_history
         && !matches!(operation, Operation::ListEvents | Operation::Outdated)
         && runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture
@@ -226,6 +233,14 @@ fn build_runtime(operation: Operation, with_history: bool) -> Result<Runtime, Co
     Runtime::new(&runtime_scope, ports)
 }
 
+fn pack_remote(rt: &Runtime, remote: bool) -> Option<skill_studio_host::GitPackRemote> {
+    rt.ports
+        .spawner
+        .clone()
+        .filter(|_| remote)
+        .map(skill_studio_host::GitPackRemote::new)
+}
+
 /// The transport-free half of [`run_op`]: builds the `Runtime`, runs the
 /// operation, and returns the envelope, with no `RequestContext` and no
 /// progress notifications. Every tool goes through here, so a test that
@@ -237,8 +252,19 @@ pub fn run_op_envelope<T: Outcome + serde::Serialize>(
     with_history: bool,
     call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
 ) -> ResultEnvelope<T> {
+    run_op_envelope_in_project(operation, with_history, None, call)
+}
+
+/// [`run_op_envelope`] for a tool call that names a project, which the
+/// runtime then includes even when discovery does not list it.
+pub fn run_op_envelope_in_project<T: Outcome + serde::Serialize>(
+    operation: Operation,
+    with_history: bool,
+    project: Option<&std::path::Path>,
+    call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
+) -> ResultEnvelope<T> {
     let correlation_id = CorrelationId(ulid::Ulid::generate().to_string());
-    match build_runtime(operation, with_history) {
+    match build_runtime(operation, with_history, project) {
         Ok(rt) => {
             let ctx = OpContext::uncancellable(correlation_id);
             let result = call(&rt, &ctx);
@@ -260,6 +286,16 @@ async fn run_op<T: Outcome + serde::Serialize>(
     context: &RequestContext<RoleServer>,
     call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
 ) -> CallToolResult {
+    run_op_in_project(operation, with_history, None, context, call).await
+}
+
+async fn run_op_in_project<T: Outcome + serde::Serialize>(
+    operation: Operation,
+    with_history: bool,
+    project: Option<&std::path::Path>,
+    context: &RequestContext<RoleServer>,
+    call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
+) -> CallToolResult {
     let progress_token = context.meta.get_progress_token();
     if let Some(token) = &progress_token {
         let _ = context
@@ -268,7 +304,7 @@ async fn run_op<T: Outcome + serde::Serialize>(
             .await;
     }
 
-    let envelope = run_op_envelope(operation, with_history, call);
+    let envelope = run_op_envelope_in_project(operation, with_history, project, call);
 
     if let Some(token) = &progress_token {
         let _ = context
@@ -402,6 +438,50 @@ impl SkillStudioServer {
         run_op(Operation::ReviewDue, false, &context, |rt, ctx| {
             skill_studio_host::review_due_report(rt, ctx, scope::desktop_usage_cache().as_deref())
         })
+        .await
+    }
+
+    #[tool(
+        description = "List installed packs (one source that ships skills): kind, ref pin, scopes, skills with their agents, and skills edited locally. Reads local files only; set remote to also ask each git source for behind and new upstream skills.",
+        annotations(read_only_hint = true)
+    )]
+    async fn pack_list(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::pack::PackListRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op_in_project(
+            Operation::PackList,
+            false,
+            req.project_path.as_deref(),
+            &context,
+            |rt, ctx| {
+                let remote = pack_remote(rt, req.remote);
+                ops::pack_list(rt, ctx, &req, remote.as_ref().map(|r| r as _))
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Show the installed packs with one source, as pack_list reports them. Set remote to check the git source.",
+        annotations(read_only_hint = true)
+    )]
+    async fn pack_show(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::pack::PackShowRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op_in_project(
+            Operation::PackShow,
+            false,
+            req.project_path.as_deref(),
+            &context,
+            |rt, ctx| {
+                let remote = pack_remote(rt, req.remote);
+                ops::pack_show(rt, ctx, &req, remote.as_ref().map(|r| r as _))
+            },
+        )
         .await
     }
 
