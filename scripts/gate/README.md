@@ -85,7 +85,12 @@ Code, put this hook in local settings, not shared account settings:
 {
   "hooks": {
     "PreToolUse": [
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "scripts/gate/gate guard" }] }
+      {
+        "matcher": ".*",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/gate/gate guard" }
+        ]
+      }
     ]
   }
 }
