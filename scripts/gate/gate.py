@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Configurable merge proof and risk classification. Requires Python 3.11+."""
 import argparse
+from datetime import date
 import fnmatch
 import hashlib
 import json
@@ -198,6 +199,10 @@ def main():
     snap.add_argument('--prepare', action='store_true')
     from proof import arguments, start, review, card, guard
     arguments(sub)
+    metric = sub.add_parser('metrics')
+    metric.add_argument('--since', required=True)
+    metric.add_argument('--until', default=date.today().isoformat())
+    metric.add_argument('--last', type=int)
     args = parser.parse_args()
     if args.command == 'guard':
         guard()
@@ -222,7 +227,9 @@ def main():
         card(args, cfg)
     elif args.command == 'guard':
         guard()
-
+    elif args.command == 'metrics':
+        from metrics import metrics
+        metrics(args, cfg)
 
 
 if __name__ == '__main__':

@@ -55,6 +55,7 @@ class ProofTests(GateTests):
                 self.assertTrue(body.startswith('Human text'))
                 self.assertIn(expected, body)
                 self.assertIn('| npm test |', body)
+                self.assertIn('| gate/approved |', body)
                 if data and data.get('head') == sha:
                     self.assertIn('![screenshot](https://example.invalid/evidence.png)', body)
 
@@ -69,3 +70,11 @@ class ProofTests(GateTests):
             with self.assertRaises(SystemExit) as error:
                 proof.guard()
             self.assertEqual(error.exception.code, 2)
+
+    def test_guard_blocks_commit_approval_status(self):
+        from io import StringIO
+        for command in ['gh api repos/example/repo/statuses/HEAD -f context=gate/approved -f state=success', 'gh api statuses -f context=gate%2Fapproved', 'gh api statuses -f context="gate/"approved']:
+            with patch('sys.stdin', StringIO(json.dumps({'tool_input': {'command': command}}))):
+                with self.assertRaises(SystemExit) as error:
+                    proof.guard()
+                self.assertEqual(error.exception.code, 2)
