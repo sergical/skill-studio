@@ -6,7 +6,8 @@
 //! `skill-studio --version` prints the crate version and the build commit
 //! hash on one line, so a bug report can quote a single line.
 
-use std::process::Command;
+#[path = "support/test_home.rs"]
+mod test_home;
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_skill-studio")
@@ -14,7 +15,9 @@ fn bin() -> &'static str {
 
 #[test]
 fn cli_version_prints_version_and_commit_hash_in_one_line() {
-    let output = Command::new(bin())
+    let home = test_home::TestHome::default();
+    let output = home
+        .command(bin())
         .arg("--version")
         .output()
         .expect("skill-studio --version should run");

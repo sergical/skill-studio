@@ -3,11 +3,15 @@
 #[path = "support/undo_fixtures.rs"]
 mod undo_fixtures;
 
+#[allow(dead_code)]
+#[path = "support/test_home.rs"]
+mod test_home;
+
 use serde_json::Value;
 use std::path::Path;
 
 fn cli(home: &Path, arguments: &[&str]) -> Value {
-    let output = std::process::Command::new(undo_fixtures::cli_binary())
+    let output = test_home::command(undo_fixtures::cli_binary(), home)
         .args(arguments)
         .args(["--home", home.to_str().unwrap(), "--json"])
         .env("HOME", home)
@@ -104,7 +108,7 @@ fn cli_history_and_restore_report_backup_expired_or_offer_a_missing_backup() {
         .unwrap();
     assert_eq!(row["restore"]["restorable"], "backup_expired");
     for arguments in [vec!["history"], vec!["restore", "--event-id", &expired.0]] {
-        let output = std::process::Command::new(undo_fixtures::cli_binary())
+        let output = test_home::command(undo_fixtures::cli_binary(), home.path())
             .args(arguments)
             .args(["--home", home.path().to_str().unwrap()])
             .env("HOME", home.path())
