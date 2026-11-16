@@ -248,7 +248,7 @@ function App() {
       main = <SettingsView snapshot={snapshot} />;
       break;
     case "packs":
-      main = <PacksView snapshotRevision={snapshot?.revision} />;
+      main = <PacksView />;
       break;
     case "skill": {
       // Opened from Learn or Settings: neither keeps a list worth reviving, so the

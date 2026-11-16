@@ -21,40 +21,44 @@ const plan = report([{ state: "planned" }, { state: "skipped", reason: "has loca
 const allSkipped = report([{ state: "skipped", reason: "a plugin" }]);
 const result = { ...report([{ state: "done", event_id: "evt" }]), dry_run: false };
 
-const STATES: Record<string, PackPlanState> = {
-  planning: { phase: "planning" },
-  planned: { phase: "planned", plan },
-  "planned (nothing to run)": { phase: "planned", plan: allSkipped },
-  running: { phase: "running", plan },
-  done: { phase: "done", result },
-  failed: { phase: "failed", message: "boom" },
-};
+interface MoveCase {
+  from: string;
+  state: PackPlanState;
+  /** Every legal move from `state`; each event not listed must be refused. */
+  legal: Partial<Record<PackPlanEvent["type"], PackPlanState["phase"]>>;
+}
 
-const EVENTS: Record<PackPlanEvent["type"], PackPlanEvent> = {
-  planned: { type: "planned", plan },
-  confirm: { type: "confirm" },
-  ran: { type: "ran", result },
-  error: { type: "error", message: "boom" },
-};
+const CASES: MoveCase[] = [
+  {
+    from: "planning",
+    state: { phase: "planning" },
+    legal: { planned: "planned", error: "failed" },
+  },
+  { from: "planned", state: { phase: "planned", plan }, legal: { confirm: "running" } },
+  { from: "planned (nothing to run)", state: { phase: "planned", plan: allSkipped }, legal: {} },
+  { from: "running", state: { phase: "running", plan }, legal: { ran: "done", error: "failed" } },
+  { from: "done", state: { phase: "done", result }, legal: {} },
+  { from: "failed", state: { phase: "failed", message: "boom" }, legal: {} },
+];
 
-/** Every legal move; any `(state, event)` pair not listed must be refused. */
-const LEGAL: Record<string, Partial<Record<PackPlanEvent["type"], PackPlanState["phase"]>>> = {
-  planning: { planned: "planned", error: "failed" },
-  planned: { confirm: "running" },
-  "planned (nothing to run)": {},
-  running: { ran: "done", error: "failed" },
-  done: {},
-  failed: {},
-};
+const EVENTS: PackPlanEvent[] = [
+  { type: "planned", plan },
+  { type: "confirm" },
+  { type: "ran", result },
+  { type: "error", message: "boom" },
+];
 
 describe("advancePackPlan", () => {
-  for (const [from, state] of Object.entries(STATES)) {
-    for (const [type, event] of Object.entries(EVENTS)) {
-      const want = LEGAL[from][type as PackPlanEvent["type"]];
+  for (const { from, state, legal } of CASES) {
+    for (const event of EVENTS) {
+      const type = event.type;
+      const want = legal[type];
       it(`${from} --${type}--> ${want ?? "refused"}`, () => {
         const move = advancePackPlan(state, event);
         if (want === undefined) {
-          expect(move, `illegal move ${from} --${type}--> was allowed`).toMatchObject({ ok: false });
+          expect(move, `illegal move ${from} --${type}--> was allowed`).toMatchObject({
+            ok: false,
+          });
         } else {
           expect(move, `legal move ${from} --${type}--> was refused`).toMatchObject({
             ok: true,

@@ -9,22 +9,22 @@ import type { FormEvent, ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button, Input } from "@skill-studio/ui";
 import type { Pack, PackReport } from "@skill-studio/lib";
-import { invokeErrorMessage, packList } from "../../lib/skill-api";
 import { PageShell } from "../Shell/PageShell";
 import { ROW_CLASS } from "../SkillList/skill-row-format";
 import { TooltipControl } from "../ui/TooltipControl";
+import { useAppStore } from "../../store/appStore";
+import type { PackIntent } from "../../store/appStore";
 import { PackPlanDialog } from "./PackPlanDialog";
-import type { PackIntent } from "./PackPlanDialog";
 
-const KIND_LABEL: Record<Pack["kind"], string> = {
+const KIND_LABEL = {
   skills_sh: "skills.sh",
   npm: "npm",
   dotagents: "dotagents",
   plugin: "Plugin",
-};
+} satisfies Record<Pack["kind"], string>;
 
 const PACK_ROW_GRID =
-  "[grid-template-columns:minmax(0,1fr)_88px_minmax(0,1.4fr)_auto] gap-x-3 px-3";
+  "[grid-template-columns:minmax(0,1fr)_88px_minmax(0,1.4fr)_240px] gap-x-3 px-3";
 
 /** Why the owner tool, not Skill Studio, changes this pack; `null` when Skill Studio can. */
 function ownerReason(pack: Pack, action: "update" | "remove"): string | null {
@@ -102,34 +102,43 @@ function PackRow({ pack, onAct }: { pack: Pack; onAct: (intent: PackIntent) => v
   );
 }
 
-interface PacksViewProps {
-  /** Changes after every snapshot rebuild, so the list reloads after a pack action. */
-  snapshotRevision: number | undefined;
-}
-
 type ListState =
   | { kind: "loading" }
   | { kind: "ready"; report: PackReport }
   | { kind: "error"; message: string };
 
-export function PacksView({ snapshotRevision }: PacksViewProps) {
+export function PacksView() {
+  const listPacks = useAppStore((s) => s.listPacks);
   const [list, setList] = useState<ListState>({ kind: "loading" });
-  const [remote, setRemote] = useState(false);
   const [checking, setChecking] = useState(false);
   const [intent, setIntent] = useState<PackIntent | null>(null);
   const [addSource, setAddSource] = useState("");
+  const [request, setRequest] = useState({ remote: false, serial: 0 });
 
   useEffect(() => {
     let live = true;
-    setChecking(remote);
-    packList(remote)
+    listPacks(request.remote)
       .then((report) => live && setList({ kind: "ready", report }))
-      .catch((err) => live && setList({ kind: "error", message: invokeErrorMessage(err) }))
+      .catch(
+        (err) =>
+          live &&
+          setList({ kind: "error", message: err instanceof Error ? err.message : String(err) }),
+      )
       .finally(() => live && setChecking(false));
     return () => {
       live = false;
     };
-  }, [remote, snapshotRevision]);
+  }, [listPacks, request]);
+
+  const checkUpstream = () => {
+    setChecking(true);
+    setRequest((current) => ({ remote: true, serial: current.serial + 1 }));
+  };
+
+  const closeDialog = () => {
+    setIntent(null);
+    setRequest((current) => ({ ...current, serial: current.serial + 1 }));
+  };
 
   const submitAdd = (event: FormEvent) => {
     event.preventDefault();
@@ -151,7 +160,7 @@ export function PacksView({ snapshotRevision }: PacksViewProps) {
             size="sm"
             className="rounded-sm px-2 text-text-secondary"
             busy={checking}
-            onClick={() => setRemote(true)}
+            onClick={checkUpstream}
           >
             <RefreshCw size={12} />
             Check upstream
@@ -202,7 +211,7 @@ export function PacksView({ snapshotRevision }: PacksViewProps) {
           </ul>
         </section>
       )}
-      {intent && <PackPlanDialog intent={intent} onClose={() => setIntent(null)} />}
+      {intent && <PackPlanDialog intent={intent} onClose={closeDialog} />}
     </PageShell>
   );
 }

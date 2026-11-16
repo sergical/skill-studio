@@ -18,18 +18,22 @@ import type {
 import { deployment, HARNESS_HOME, skill } from "./skill-fixture";
 
 /** Skills each git source ships upstream that the fixture does not install. */
-const UPSTREAM_ONLY: Record<string, string[]> = {
-  "getsentry/skills": ["sentry-setup-logging"],
-};
+const UPSTREAM_ONLY = new Map([["getsentry/skills", ["sentry-setup-logging"]]]);
 
 /** Fixture skills whose folders differ from what their lock recorded. */
 const EDITED_SKILLS = new Set(["api-client-codegen"]);
 
-const KIND_BY_SOURCE: Record<string, Pack["kind"] | undefined> = {
-  dotagents: "dotagents",
-  "skills-sh": "skills_sh",
-  plugin: "plugin",
-};
+const KIND_BY_SOURCE = new Map<string, Pack["kind"]>([
+  ["dotagents", "dotagents"],
+  ["skills-sh", "skills_sh"],
+  ["plugin", "plugin"],
+]);
+
+/** A mocked pack action: the report, and the snapshot after a real run. */
+interface MockPackResult {
+  report: PackActionReport;
+  next: SkillSnapshot;
+}
 
 type StepAction = PackStep["action"];
 
@@ -67,7 +71,7 @@ function packSkills(item: InstalledSkill): PackSkill[] {
 export function mockPackReport(snapshot: SkillSnapshot, remote: boolean): PackReport {
   const packs = new Map<string, Pack>();
   for (const item of snapshot.skills) {
-    const kind = KIND_BY_SOURCE[item.source_kind];
+    const kind = KIND_BY_SOURCE.get(item.source_kind);
     if (!kind || item.parked) continue;
     const source = packSource(item);
     const pack = packs.get(source) ?? {
@@ -87,7 +91,8 @@ export function mockPackReport(snapshot: SkillSnapshot, remote: boolean): PackRe
     for (const row of packSkills(item)) {
       row.behind = remote && kind !== "plugin" ? item.has_update : null;
       pack.skills.push(row);
-      if (!pack.scopes.some((s) => scopeKey(s) === scopeKey(row.scope))) pack.scopes.push(row.scope);
+      if (!pack.scopes.some((s) => scopeKey(s) === scopeKey(row.scope)))
+        pack.scopes.push(row.scope);
     }
     packs.set(source, pack);
   }
@@ -98,8 +103,10 @@ export function mockPackReport(snapshot: SkillSnapshot, remote: boolean): PackRe
     pack.behind_count = pack.skills.filter((s) => s.behind).length;
     if (remote) {
       pack.remote =
-        pack.kind === "plugin" ? { state: "no_git_source" } : { state: "checked", commit: "abc1234" };
-      pack.new_upstream = (UPSTREAM_ONLY[pack.source] ?? []).filter((n) => !installed.has(n));
+        pack.kind === "plugin"
+          ? { state: "no_git_source" }
+          : { state: "checked", commit: "abc1234" };
+      pack.new_upstream = (UPSTREAM_ONLY.get(pack.source) ?? []).filter((n) => !installed.has(n));
     }
     const parts = [plural(new Set(pack.skills.map((s) => s.name)).size, "skill")];
     if (pack.edited_count) parts.push(`${pack.edited_count} edited locally`);
@@ -141,7 +148,13 @@ function report(dryRun: boolean, action: StepAction, steps: PackStep[]): PackAct
   return { dry_run: dryRun, steps, summary };
 }
 
-function packStep(pack: Pack, row: PackSkill, action: StepAction, skip: string | null, dryRun: boolean) {
+function packStep(
+  pack: Pack,
+  row: PackSkill,
+  action: StepAction,
+  skip: string | null,
+  dryRun: boolean,
+) {
   const state: PackStep["state"] = skip
     ? { state: "skipped", reason: skip }
     : dryRun
@@ -156,13 +169,15 @@ export function mockPackChange(
   action: "update" | "remove",
   source: string | null,
   dryRun: boolean,
-): { report: PackActionReport; next: SkillSnapshot } {
+): MockPackResult {
   const packs = mockPackReport(snapshot, false).packs.filter((p) => !source || p.source === source);
   if (source && packs.length === 0) {
     throw new Error(`no installed pack has source ${source}; pack list shows the sources`);
   }
   const steps = packs.flatMap((pack) =>
-    pack.skills.map((row) => packStep(pack, row, action, skipReason(pack, row, action, snapshot), dryRun)),
+    pack.skills.map((row) =>
+      packStep(pack, row, action, skipReason(pack, row, action, snapshot), dryRun),
+    ),
   );
   const done = steps.filter((s) => s.state.state === "done");
   const now = new Date().toISOString();
@@ -183,16 +198,20 @@ export function mockPackAdd(
   source: string,
   names: string[],
   dryRun: boolean,
-): { report: PackActionReport; next: SkillSnapshot } {
+): MockPackResult {
   const installed = new Set(snapshot.skills.map((s) => s.name));
-  const wanted = names.length ? names : (UPSTREAM_ONLY[source] ?? []).filter((n) => !installed.has(n));
+  const wanted = names.length
+    ? names
+    : (UPSTREAM_ONLY.get(source) ?? []).filter((n) => !installed.has(n));
   if (wanted.length === 0) throw new Error(`${source} has no skills that are not installed`);
   const steps: PackStep[] = wanted.map((name) => ({
     source,
     skill: name,
     scope: { scope: "global" },
     action: "install",
-    state: dryRun ? { state: "planned" } : { state: "done", event_id: `evt:v1/mock/install/${name}` },
+    state: dryRun
+      ? { state: "planned" }
+      : { state: "done", event_id: `evt:v1/mock/install/${name}` },
   }));
   const added = dryRun
     ? []

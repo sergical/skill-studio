@@ -58,7 +58,11 @@ async fn pack_action(
     crate::timing_log::time_command_blocking(&app, trace, command, move || {
         let report = run()?;
         if !report.dry_run {
-            super::skill_park::emit_snapshot_for_names(&state_app, command, changed_skills(&report));
+            super::skill_park::emit_snapshot_for_names(
+                &state_app,
+                command,
+                changed_skills(&report),
+            );
         }
         Ok(report)
     })
@@ -89,9 +93,11 @@ pub async fn pack_add(
     app: tauri::AppHandle,
 ) -> Result<PackActionReport, String> {
     pack_action(app, trace, "pack_add", move || {
-        run_pack_op(Operation::PackAdd, request.skills.is_empty(), |rt, ctx, remote| {
-            ops::pack_add(rt, ctx, &request, remote)
-        })
+        run_pack_op(
+            Operation::PackAdd,
+            request.skills.is_empty(),
+            |rt, ctx, remote| ops::pack_add(rt, ctx, &request, remote),
+        )
     })
     .await
 }

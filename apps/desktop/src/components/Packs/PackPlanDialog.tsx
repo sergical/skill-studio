@@ -16,44 +16,24 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@skill-studio/ui";
-import type { PackActionReport, PackStep } from "@skill-studio/lib";
-import { invokeErrorMessage, packAdd, packRemove, packUpdate } from "../../lib/skill-api";
+import type { PackStep } from "@skill-studio/lib";
+import { useAppStore } from "../../store/appStore";
+import type { PackIntent } from "../../store/appStore";
 import { advancePackPlan, plannedCount } from "./pack-plan-phase";
 import type { PackPlanEvent, PackPlanState } from "./pack-plan-phase";
 
-export type PackIntent =
-  | { kind: "update"; source: string | null }
-  | { kind: "remove"; source: string }
-  | { kind: "add"; source: string; skills: string[] };
-
-function runIntent(intent: PackIntent, dryRun: boolean): Promise<PackActionReport> {
-  switch (intent.kind) {
-    case "update":
-      return packUpdate({
-        source: intent.source,
-        all: intent.source === null,
-        project_path: null,
-        dry_run: dryRun,
-      });
-    case "remove":
-      return packRemove({ source: intent.source, project_path: null, dry_run: dryRun });
-    case "add":
-      return packAdd({
-        source: intent.source,
-        skills: intent.skills,
-        ref_pin: null,
-        harnesses: [],
-        project_path: null,
-        dry_run: dryRun,
-      });
-  }
+function after(event: PackPlanEvent) {
+  return (current: PackPlanState): PackPlanState => {
+    const move = advancePackPlan(current, event);
+    return move.ok ? move.state : current;
+  };
 }
 
-const VERB: Record<PackIntent["kind"], string> = {
+const VERB = {
   update: "Update",
   remove: "Remove",
   add: "Add",
-};
+} satisfies Record<PackIntent["kind"], string>;
 
 function title(intent: PackIntent): string {
   if (intent.kind === "update" && intent.source === null) return "Update every pack?";
@@ -61,17 +41,17 @@ function title(intent: PackIntent): string {
   return `${VERB[intent.kind]} ${intent.source}?`;
 }
 
-const PLANNED_LABEL: Record<PackStep["action"], string> = {
+const PLANNED_LABEL = {
   install: "Will install",
   update: "Will update",
   remove: "Will remove",
-};
+} satisfies Record<PackStep["action"], string>;
 
-const DONE_LABEL: Record<PackStep["action"], string> = {
+const DONE_LABEL = {
   install: "Installed",
   update: "Updated",
   remove: "Removed",
-};
+} satisfies Record<PackStep["action"], string>;
 
 function scopeLabel(step: PackStep): string {
   return step.scope.scope === "global"
@@ -89,8 +69,7 @@ function StepRow({ step }: { step: PackStep }) {
         : state.state === "skipped"
           ? "Skipped"
           : "Failed";
-  const reason =
-    state.state === "skipped" || state.state === "failed" ? state.reason : null;
+  const reason = state.state === "skipped" || state.state === "failed" ? state.reason : null;
   return (
     <li className="flex flex-col gap-0.5 border-b border-border-subtle py-1.5 last:border-b-0">
       <div className="flex items-baseline gap-2">
@@ -114,27 +93,33 @@ interface PackPlanDialogProps {
 
 export function PackPlanDialog({ intent, onClose }: PackPlanDialogProps) {
   const [state, setState] = useState<PackPlanState>({ phase: "planning" });
-  const send = (event: PackPlanEvent) =>
-    setState((current) => {
-      const move = advancePackPlan(current, event);
-      return move.ok ? move.state : current;
-    });
+  const runPackAction = useAppStore((s) => s.runPackAction);
 
   useEffect(() => {
     let live = true;
-    runIntent(intent, true)
-      .then((plan) => live && send({ type: "planned", plan }))
-      .catch((err) => live && send({ type: "error", message: invokeErrorMessage(err) }));
+    runPackAction(intent, true)
+      .then((plan) => live && setState(after({ type: "planned", plan })))
+      .catch(
+        (err) =>
+          live &&
+          setState(
+            after({ type: "error", message: err instanceof Error ? err.message : String(err) }),
+          ),
+      );
     return () => {
       live = false;
     };
-  }, [intent]);
+  }, [intent, runPackAction]);
 
   const confirm = () => {
-    send({ type: "confirm" });
-    runIntent(intent, false)
-      .then((result) => send({ type: "ran", result }))
-      .catch((err) => send({ type: "error", message: invokeErrorMessage(err) }));
+    setState(after({ type: "confirm" }));
+    runPackAction(intent, false)
+      .then((result) => setState(after({ type: "ran", result })))
+      .catch((err) =>
+        setState(
+          after({ type: "error", message: err instanceof Error ? err.message : String(err) }),
+        ),
+      );
   };
 
   const running = state.phase === "running";
