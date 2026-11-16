@@ -254,13 +254,12 @@ impl SkillUsage {
                 selection.harness.as_ref().is_none_or(|h| {
                     skill_studio_core::identity::AgentId::parse_harness(h)
                         .is_ok_and(|id| id.as_str() == u.harness)
-                })
-                    && (selection.projects.is_empty()
-                        || selection.projects.iter().any(|p| {
-                            u.project_path
-                                .as_deref()
-                                .is_some_and(|recorded| Path::new(recorded) == p)
-                        }))
+                }) && (selection.projects.is_empty()
+                    || selection.projects.iter().any(|p| {
+                        u.project_path
+                            .as_deref()
+                            .is_some_and(|recorded| Path::new(recorded) == p)
+                    }))
             })
             .collect();
         for use_ in selected.iter().filter(|u| sources.is_enabled(&u.harness)) {
