@@ -1364,8 +1364,9 @@ pub fn update_all(
 }
 
 /// [`update_all`] without the [`crate::ops::MAX_BATCH_ITEMS`] limit, for a
-/// caller that acts for a person who asked for the whole set: the desktop's
-/// "Update all" and `pack update`. Agent surfaces (CLI, MCP) call
+/// caller whose set comes from saved state, not from the request: the
+/// desktop's "Update all" (the outdated list) and `pack update` (the pack
+/// file, on every surface). A request that lists its own skills calls
 /// [`update_all`].
 pub fn update_all_unbounded(
     rt: &Runtime,

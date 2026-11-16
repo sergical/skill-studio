@@ -31,8 +31,9 @@ const EXCLUSIONS: &[Exclusion] = &[
     },
     Exclusion {
         name: "update_all_unbounded",
-        reason: "`update_all` without the batch limit, for the desktop's \"Update all\" and \
-                  `pack update`; agent surfaces must stay bounded, so they call `update_all`",
+        reason: "`update_all` without the batch limit, for a set that comes from saved state \
+                  (the desktop's \"Update all\", `pack update`); a request that lists its own \
+                  skills calls `update_all`",
     },
     Exclusion {
         name: "skill_content_hash",
