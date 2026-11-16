@@ -210,11 +210,11 @@ fn library_keeps_partial_tables_and_the_worst_agent_copy() {
         );
         assert_eq!(cli["data"]["count"], 1, "{cli}");
         assert_eq!(
-            cli["data"]["rows"][0]["copies"]["open-code"], "changed",
+            cli["data"]["rows"][0]["copies"]["opencode"], "changed",
             "{cli}"
         );
         assert_eq!(
-            cli["data"]["rows"][0]["modes"]["open-code"], "manual",
+            cli["data"]["rows"][0]["modes"]["opencode"], "manual",
             "{cli}"
         );
         cli

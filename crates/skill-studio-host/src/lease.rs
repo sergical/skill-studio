@@ -74,6 +74,13 @@ fn try_lock(file: &File, mode: LeaseMode) -> Result<bool, io::Error> {
     }
 }
 
+/// True when no process holds the lock exclusively, so a holder record that
+/// names a dead pid is left over from an earlier writer, not a lock that the OS
+/// has yet to release.
+fn no_exclusive_holder(path: &Path) -> bool {
+    File::open(path).is_ok_and(|probe| probe.try_lock_shared().is_ok())
+}
+
 /// Records this process as the holder: pid and the wall-clock time of
 /// acquisition, so a later `Busy` error can name both. Written only for
 /// `LeaseMode::Exclusive`; a shared lease has no single holder to name.
@@ -170,7 +177,10 @@ impl LeaseProvider for FileLease {
                         let holder = read_holder(&path);
                         let holder_alive =
                             holder.is_none_or(|(pid, _)| pid_alive(pid).unwrap_or(true));
-                        if !holder_alive && Instant::now() < stale_deadline {
+                        if !holder_alive
+                            && Instant::now() < stale_deadline
+                            && !no_exclusive_holder(&path)
+                        {
                             // The recorded holder is dead; the OS releases
                             // its advisory lock as part of exiting, usually
                             // before we even observe `WouldBlock`. Bridge
@@ -365,11 +375,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(read_holder(&path).unwrap().0, u32::MAX);
+        let started = Instant::now();
         let busy = lease
             .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
             .err()
             .expect("the shared reader still holds the root");
         assert_eq!(busy.code, ErrorCode::ScopeBusy);
+        assert!(
+            started.elapsed() < STALE_TAKEOVER_TIMEOUT,
+            "the dead writer's record sent a zero-wait exclusive request into the stale \
+             takeover for {:?}",
+            started.elapsed()
+        );
     }
 
     /// Given another `FileLease` holds an exclusive lease, when this

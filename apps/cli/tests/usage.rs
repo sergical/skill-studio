@@ -360,20 +360,24 @@ fn review_due_selected_home_counts_local_sessions_instead_of_ambient_codex_sessi
         .output()
         .unwrap();
     assert!(set.status.success());
-    let output = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
-        .args(["review", "due", "--json", "--home"])
-        .arg(&home)
-        .env("CODEX_HOME", foreign.path())
-        .output()
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["data"]["rows"].as_array().unwrap().len(), 1, "{json}");
-    assert!(
-        json["data"]["rows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|r| r["sessions"] == u64::from(r["skill"] == "gamma")),
-        "{json}"
+    let due = |codex_home: Option<&Path>| {
+        let mut command = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home);
+        command
+            .args(["review", "due", "--json", "--home"])
+            .arg(&home);
+        if let Some(codex_home) = codex_home {
+            command.env("CODEX_HOME", codex_home);
+        }
+        let output = command.output().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["data"]["rows"].as_array().unwrap().len(), 1, "{json}");
+        json["data"]["rows"][0]["sessions"].as_u64().unwrap()
+    };
+    let local = due(None);
+    assert!(local > 0, "the local Codex session must count");
+    assert_eq!(
+        due(Some(foreign.path())),
+        local,
+        "an ambient CODEX_HOME added foreign sessions to the selected home"
     );
 }
