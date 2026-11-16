@@ -1393,7 +1393,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn update_all_over_the_batch_limit_reports_the_core_refusal() {
+    async fn update_all_over_the_batch_limit_runs_every_skill_in_split_batches() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         let data_root = tmp.path().join("data");
@@ -1407,7 +1407,9 @@ mod tests {
             skill_studio_core::ops::MAX_BATCH_ITEMS + 1
         ];
 
-        let error = update_all_with_runtime(
+        let reported = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = reported.clone();
+        let outcome = update_all_with_runtime(
             requests,
             move || {
                 super::super::core_runtime::build_runtime_write_at_with_search_dirs(
@@ -1416,19 +1418,16 @@ mod tests {
                     super::super::core_runtime::process_path_search_dirs(),
                 )
             },
-            |_, _| {},
+            move |_, _| {
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            },
         )
         .await
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(
-            error,
-            format!(
-                "This batch has {} skills. One call takes at most {}; split the rest into another call.",
-                skill_studio_core::ops::MAX_BATCH_ITEMS + 1,
-                skill_studio_core::ops::MAX_BATCH_ITEMS
-            )
-        );
+        let total = skill_studio_core::ops::MAX_BATCH_ITEMS + 1;
+        assert_eq!(outcome.items.len(), total);
+        assert_eq!(reported.load(std::sync::atomic::Ordering::Relaxed), total);
     }
 
     /// `update_all_on_ten_outdated_fixtures_ends_with_ten_journal_entries_and_zero_main_thread_calls_over_one_frame`:
@@ -2531,7 +2530,8 @@ async fn update_all_with_runtime(
 }
 
 /// The sync body a `spawn_blocking` closure runs for one update-all batch:
-/// build the `Runtime`, then run every request through `ops::update_all`.
+/// build the `Runtime`, then run every request through `ops::update_all`,
+/// at most `MAX_BATCH_ITEMS` per call.
 /// Shared by `update_all_with_runtime` (test-only, wraps this in its own
 /// `spawn_blocking` since a unit test builds a bare `Runtime` fixture
 /// without an `AppHandle`) and production `update_all_skills` (already
@@ -2553,9 +2553,19 @@ fn run_update_all_sync(
         skill_studio_core::identity::CorrelationId(ulid::Ulid::generate().to_string()),
         cancel,
     );
-    let result = skill_studio_core::ops::update_all(&rt, &ctx, requests, &mut on_outcome);
-    let envelope = ResultEnvelope::from_result(Operation::UpdateAll, &rt.scope, &ctx, result);
-    super::core_runtime::to_command_result(envelope)
+    let mut merged = skill_studio_core::dto::UpdateAllOutcome {
+        items: Vec::new(),
+        errors: std::collections::BTreeMap::new(),
+        not_run: Vec::new(),
+    };
+    for batch in requests.chunks(skill_studio_core::ops::MAX_BATCH_ITEMS) {
+        let outcome = skill_studio_core::ops::update_all(&rt, &ctx, batch, &mut on_outcome)
+            .map_err(|err| err.text())?;
+        merged.items.extend(outcome.items);
+        merged.errors.extend(outcome.errors);
+        merged.not_run.extend(outcome.not_run);
+    }
+    Ok(merged)
 }
 
 /// Which owners a batch's succeeded items should clear (N1: the review
