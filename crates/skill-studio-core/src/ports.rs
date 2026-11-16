@@ -472,10 +472,10 @@ pub trait ScopeFs: Send + Sync {
     /// A view whose `fsops_*` writes stay inside `root`, even when a folder
     /// under it becomes a link after [`crate::fsops::Root::confine`] checked
     /// it. A write that would leave `root` fails. [`crate::fsops::Root`]
-    /// sends its writes here. `None` (the default) sends them to `self`.
-    fn fsops_bind_root(&self, _root: &Path) -> std::io::Result<Option<Box<dyn ScopeFs + '_>>> {
-        Ok(None)
-    }
+    /// sends its writes here. `None` sends them to `self`: only for an
+    /// in-memory fake, or a test wrapper that must see each write. A
+    /// wrapper over a real filesystem forwards this to its inner one.
+    fn fsops_bind_root(&self, root: &Path) -> std::io::Result<Option<Box<dyn ScopeFs + '_>>>;
 }
 
 /// Finds the projects a scope covers under [`ProjectSelection::Discover`].

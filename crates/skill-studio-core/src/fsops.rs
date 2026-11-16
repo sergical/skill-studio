@@ -182,8 +182,37 @@ impl<'a> Root<'a> {
         })
     }
 
-    fn writer(&self) -> &dyn ScopeFs {
+    /// The [`ScopeFs`] for every write under the root. A path from
+    /// [`Self::confine`] written through the `fs` given to [`Self::open`]
+    /// can follow a folder that became a link after the check; written
+    /// here, it cannot leave the root.
+    pub fn writer(&self) -> &dyn ScopeFs {
         self.bound.as_deref().unwrap_or(self.fs)
+    }
+
+    /// Creates `name` (relative to the root) and each missing folder above
+    /// it through [`Self::writer`], fsyncing each new folder and its parent.
+    /// Returns the confined path.
+    pub fn create_dirs(&self, name: &Path) -> Result<PathBuf, FsOpsError> {
+        let target = self.confine(name)?;
+        let relative = target.strip_prefix(&self.path).unwrap_or(Path::new(""));
+        let mut dir = self.path.clone();
+        for component in relative.components() {
+            let parent = dir.clone();
+            dir.push(component);
+            if self.fs.symlink_metadata(&dir).is_ok() {
+                continue;
+            }
+            match self.writer().fsops_create_dir(&dir) {
+                Ok(()) => {
+                    self.writer().fsops_fsync_dir(&dir).fs_err(&dir)?;
+                    self.writer().fsops_fsync_dir(&parent).fs_err(&parent)?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(FsOpsError::io(&dir, error)),
+            }
+        }
+        Ok(target)
     }
 
     /// The root's own path.

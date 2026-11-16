@@ -436,6 +436,9 @@ impl ScopeFs for BoundFs {
     fn fsops_exchange(&self, a: &Path, b: &Path) -> io::Result<()> {
         exchange_in(&self.dir, self.relative(a)?, self.relative(b)?)
     }
+    fn fsops_bind_root(&self, root: &Path) -> io::Result<Option<Box<dyn ScopeFs + '_>>> {
+        RealFs.fsops_bind_root(root)
+    }
 }
 
 /// [`atomic_exchange::exchange`] for two entries inside `dir`: each parent

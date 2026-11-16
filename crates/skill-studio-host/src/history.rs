@@ -728,10 +728,15 @@ impl HistoryStore for SqliteHistoryStore {
                 "Backup exceeds the 64 MiB limit; write refused before changing the target.",
             ));
         }
-        let dir = self.backup_dir_for(id);
         self.managed_backup_dir(id, &format!("backups/{}", id.0))?;
-        ensure_backup_directory(self.fs.as_ref(), &dir)
-            .map_err(|error| CoreError::io(&dir, error))?;
+        ensure_backup_directory(self.fs.as_ref(), &self.backups_root)
+            .map_err(|error| CoreError::io(&self.backups_root, error))?;
+        let root = Root::open(self.fs.as_ref(), self.backups_root.clone())
+            .map_err(|error| CoreError::new(ErrorCode::InvalidRequest, error.to_string()))?;
+        let dir = root
+            .create_dirs(Path::new(&id.0))
+            .map_err(|error| CoreError::io(&self.backups_root, std::io::Error::other(error)))?;
+        let writer = root.writer();
 
         // Every path gets a core `BackupEntry`, present or not: `fingerprint`
         // is `None` exactly when the original was absent at backup time,
@@ -767,7 +772,7 @@ impl HistoryStore for SqliteHistoryStore {
                 .file_name()
                 .map_or_else(|| format!("path-{i}"), |n| n.to_string_lossy().into_owned());
             let relative_path = format!("{i}-{basename}");
-            copy_recursive(self.fs.as_ref(), path, &dir.join(&relative_path))
+            copy_recursive(writer, path, &dir.join(&relative_path))
                 .map_err(|e| CoreError::io(path, e))?;
             let hex = hash_entry(path).map_err(|e| CoreError::io(path, e))?;
             on_disk.entries.insert(
@@ -794,16 +799,16 @@ impl HistoryStore for SqliteHistoryStore {
 
         let manifest_path = dir.join("manifest.json");
         let bytes = serde_json::to_vec_pretty(&on_disk).map_err(json_err)?;
-        self.fs
+        writer
             .fsops_write_new_file(&manifest_path, &bytes)
             .map_err(|error| CoreError::io(&manifest_path, error))?;
-        self.fs
+        writer
             .fsops_fsync_file(&manifest_path)
             .map_err(|error| CoreError::io(&manifest_path, error))?;
-        self.fs
+        writer
             .fsops_fsync_dir(&dir)
             .map_err(|error| CoreError::io(&dir, error))?;
-        self.fs
+        writer
             .fsops_fsync_dir(&self.backups_root)
             .map_err(|error| CoreError::io(&self.backups_root, error))?;
         if let Some(target) = paths.first() {
@@ -1347,8 +1352,6 @@ pub fn hash_entry(path: &Path) -> std::io::Result<String> {
         })
 }
 
-/// Copies `src` into `dest`, preserving regular files as bytes, directories
-/// recursively, and symlinks as the literal link (never following it).
 fn ensure_backup_directory(fs: &dyn ScopeFs, path: &Path) -> std::io::Result<()> {
     match fs.symlink_metadata(path) {
         Ok(facts) if facts.kind == FileKind::Dir => return Ok(()),
@@ -1396,6 +1399,9 @@ fn backup_size(fs: &dyn ScopeFs, path: &Path) -> std::io::Result<u64> {
     }
 }
 
+/// Copies `src` into `dest`, preserving regular files as bytes, directories
+/// recursively, and symlinks as the literal link (never following it).
+/// `fs` is the [`Root::writer`] of the root that holds `dest`.
 fn copy_recursive(fs: &dyn ScopeFs, src: &Path, dest: &Path) -> std::io::Result<()> {
     let facts = fs.symlink_metadata(src)?;
     match facts.kind {

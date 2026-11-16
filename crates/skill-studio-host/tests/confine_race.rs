@@ -154,3 +154,40 @@ fn fsops_swap_refuses_a_folder_swapped_for_a_link_after_its_check() {
     let error = result.expect_err("the swap followed the link out of the root");
     assert!(error.to_string().contains("outside"), "{error}");
 }
+
+#[test]
+fn journal_write_refuses_a_folder_swapped_for_a_link_after_its_check() {
+    let layout = layout();
+    std::fs::remove_dir(layout.outside.join("x")).unwrap();
+    let journal_root = layout.home.join(".journal");
+    std::fs::create_dir_all(&journal_root).unwrap();
+    std::os::unix::fs::symlink(&layout.outside, journal_root.join("plans")).unwrap();
+    // Reads confined to another home see nothing under the journal, so the
+    // journal's path check runs as if it came before the link swap.
+    let blind_home = tempfile::tempdir().unwrap();
+    let blind_scope: &'static NormalizedScope = Box::leak(Box::new(scope_for(blind_home.path())));
+    let journal_fs: Arc<dyn ScopeFs> = Arc::new(ScopedReads::new(&RealFs, blind_scope));
+    let journal = FsJournal::new(journal_root, journal_fs);
+    let lease_dir = layout.home.join(".lease");
+    std::fs::create_dir_all(&lease_dir).unwrap();
+    let handle = FileLease::new(lease_dir)
+        .acquire(&[], LeaseMode::Exclusive, Duration::from_secs(5))
+        .unwrap();
+    let guard = ExclusiveGuard::from_handle(handle);
+
+    let result = PlanWriter::begin(
+        &journal,
+        &guard,
+        PlanId("01PLANJOURNALRACE000000001".to_string()),
+        Utc::now(),
+        "journal race test",
+        layout.home.clone(),
+        Vec::new(),
+    );
+
+    assert_eq!(files_under(&layout.outside), Vec::<PathBuf>::new());
+    assert!(
+        result.is_err(),
+        "the journal write followed the link out of its root"
+    );
+}
