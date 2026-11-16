@@ -127,7 +127,6 @@ pub struct CoreError {
     /// Who holds the lease, set only on [`ErrorCode::ScopeBusy`].
     pub busy: Option<LeaseBusy>,
     /// Third-party text behind the error, such as child process stderr.
-    /// It stays out of `message` so that `message` holds only Skill Studio's words.
     pub detail: Option<String>,
 }
 
@@ -207,7 +206,8 @@ fn error_text(message: &str, detail: Option<&str>) -> String {
 pub struct ErrorEntry {
     /// Stable code.
     pub code: ErrorCode,
-    /// Human-readable message.
+    /// Human-readable message. It can quote names and paths from disk.
+    #[schemars(extend("x-untrusted" = true))]
     pub message: String,
     /// Display path relative to the scope home, when there is one.
     #[schemars(extend("x-untrusted" = true))]

@@ -1641,7 +1641,7 @@ export interface ErrorEntry {
     | "incomplete"
     | "cancelled";
   /**
-   * Human-readable message.
+   * Human-readable message. It can quote names and paths from disk.
    */
   message: string;
   /**

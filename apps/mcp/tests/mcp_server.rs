@@ -2039,6 +2039,7 @@ async fn third_party_text_is_labelled_in_tool_results_and_instructions() {
         "data.skills[].description",
         "data.skills[].deployments[].path",
         "data.skills[].deployments[].frontmatter",
+        "errors[].message",
         "errors[].detail",
     ] {
         assert!(
@@ -2063,11 +2064,7 @@ async fn third_party_text_is_labelled_in_tool_results_and_instructions() {
     let diagnose_paths = untrusted(&diagnose);
     assert!(diagnose_paths.iter().any(|p| p == "data.issues[].skill"));
     for own in [&scan_paths, &diagnose_paths] {
-        assert!(
-            !own.iter()
-                .any(|p| p.contains("next_action") || p == "errors[].message"),
-            "{own:?}"
-        );
+        assert!(!own.iter().any(|p| p.contains("next_action")), "{own:?}");
     }
     let error = call_tool(
         &client,

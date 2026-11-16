@@ -10,7 +10,8 @@
           },
           "reason": {
             "description": "One plain line a person can act on.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           }
         },
         "required": [
@@ -35,7 +36,8 @@
         "type": [
           "string",
           "null"
-        ]
+        ],
+        "x-untrusted": true
       },
       "refusal": {
         "anyOf": [
@@ -68,7 +70,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "SplitCopy": {
         "description": "One folder `split` wrote.",
@@ -79,7 +82,8 @@
           },
           "path": {
             "description": "The copy's folder.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           }
         },
         "required": [
@@ -113,7 +117,8 @@
       },
       "parked_path": {
         "description": "Where `agent`'s copy now lives, under the parked root.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "skill": {
         "$ref": "#/$defs/SkillName",
@@ -363,7 +368,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           }
         },
         "required": [
@@ -585,7 +591,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           }
         },
         "required": [
@@ -661,15 +668,18 @@
         "properties": {
           "message": {
             "description": "One-line summary for a person.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "path_a": {
             "description": "First copy's path.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "path_b": {
             "description": "Second copy's path.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "skill": {
             "$ref": "#/$defs/SkillName",
@@ -686,7 +696,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -871,7 +882,8 @@
               "type": "string"
             },
             "description": "Every top-level frontmatter key, stringified.",
-            "type": "object"
+            "type": "object",
+            "x-untrusted": true
           },
           "harness": {
             "anyOf": [
@@ -905,7 +917,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "modified_at": {
             "description": "RFC3339 of the newest file mtime in the skill folder.",
@@ -958,7 +971,8 @@
           },
           "path": {
             "description": "Absolute lexical path of the skill directory.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "plugin": {
             "anyOf": [
@@ -976,7 +990,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "root": {
             "$ref": "#/$defs/RootRef",
@@ -1001,7 +1016,8 @@
             "items": {
               "type": "string"
             },
-            "type": "array"
+            "type": "array",
+            "x-untrusted": true
           },
           "studio_disabled": {
             "description": "True when this deployment was found inside a root's\n`.skill-studio-disabled/` holding directory. Maps to `disabled_by ==\nSome(DisabledBy::StudioMoved)`.",
@@ -1012,7 +1028,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "symlink_is_broken": {
             "description": "True when the deployment is a symlink whose target does not resolve.",
@@ -1119,7 +1136,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "name": {
             "$ref": "#/$defs/SkillName",
@@ -1127,7 +1145,8 @@
           },
           "source": {
             "description": "Upstream owner/repo from the owning ledger, plugin@marketplace for a\nplugin skill, or manual.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           }
         },
         "required": [
@@ -1164,7 +1183,8 @@
             "items": {
               "type": "string"
             },
-            "type": "array"
+            "type": "array",
+            "x-untrusted": true
           },
           "skills": {
             "description": "Skills sorted by name.",
@@ -1186,7 +1206,8 @@
             "items": {
               "type": "string"
             },
-            "type": "array"
+            "type": "array",
+            "x-untrusted": true
           }
         },
         "required": [
@@ -1218,7 +1239,8 @@
           },
           "message": {
             "description": "Message for a person.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "next_action": {
             "$ref": "#/$defs/NextAction",
@@ -1355,7 +1377,8 @@
           },
           "source": {
             "description": "Recorded upstream, or manual for an adopted local folder.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           }
         },
         "required": [
@@ -1455,7 +1478,8 @@
         "properties": {
           "message": {
             "description": "Message for a person.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "root": {
             "anyOf": [
@@ -1508,11 +1532,13 @@
           "marketplace",
           "plugin"
         ],
-        "type": "object"
+        "type": "object",
+        "x-untrusted": true
       },
       "ProjectRef": {
         "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "RootKind": {
         "description": "What kind of root a path is.",
@@ -1745,11 +1771,13 @@
             ]
           }
         },
-        "type": "object"
+        "type": "object",
+        "x-untrusted": true
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "SourceKind": {
         "description": "How a skill made it onto disk.\n\nPorted from the desktop's `provenance::SourceKind`. Serializes to the same\nkebab-case strings the frontend has always used. Declaration order doubles\nas precedence order (dotagents beats plugin beats skills-sh beats in-repo\nbeats manual) via the derived `Ord`, matching the desktop's\n`classify_source_kind`.",
@@ -1875,7 +1903,8 @@
         "properties": {
           "detail": {
             "description": "Message for a person.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "invariant": {
             "$ref": "#/$defs/DoctorInvariant",
@@ -1883,7 +1912,8 @@
           },
           "path": {
             "description": "Path of the offending entry, when the invariant names one.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "severity": {
             "$ref": "#/$defs/Severity",
@@ -1984,7 +2014,8 @@
           },
           "name": {
             "description": "Model-visible name.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           }
         },
         "required": [
@@ -1995,7 +2026,8 @@
       },
       "ProjectRef": {
         "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "RootScope": {
         "description": "Where a root lives.",
@@ -2227,7 +2259,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2238,7 +2271,8 @@
         "type": [
           "string",
           "null"
-        ]
+        ],
+        "x-untrusted": true
       },
       "drift": {
         "$ref": "#/$defs/DriftState",
@@ -2268,7 +2302,8 @@
         "type": [
           "string",
           "null"
-        ]
+        ],
+        "x-untrusted": true
       },
       "restore": {
         "$ref": "#/$defs/RestoreCapability",
@@ -2331,18 +2366,21 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "path": {
             "description": "File that declares this item.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "project": {
             "description": "Project root for a project declaration.",
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "scope": {
             "description": "`global` or `project`.",
@@ -2394,15 +2432,18 @@
         "properties": {
           "message": {
             "description": "One-line summary for a person.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "path_a": {
             "description": "First copy's path.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "path_b": {
             "description": "Second copy's path.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "skill": {
             "$ref": "#/$defs/SkillName",
@@ -2455,7 +2496,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "UnrepairedIssue": {
         "description": "One issue `fix_skill` found but could not repair, named with its path so\nthe caller can show it rather than a generic toast.",
@@ -2466,11 +2508,13 @@
           },
           "message": {
             "description": "Message for a person.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "path": {
             "description": "Path of the offending file or folder, when the issue names one.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           }
         },
         "required": [
@@ -2543,7 +2587,8 @@
     "$defs": {
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2626,7 +2671,8 @@
       },
       "ProjectRef": {
         "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "ProposalId": {
         "description": "Id of a frontmatter repair proposal.\n\nInvariant: sha256 over deployment id, path, owner id, owner kind, the\nexpected fingerprint, and the proposed text. Any change makes a new id.",
@@ -2704,7 +2750,8 @@
       },
       "diff": {
         "description": "Unified diff for a person.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "expected_fingerprint": {
         "$ref": "#/$defs/Fingerprint",
@@ -2715,11 +2762,13 @@
         "type": [
           "string",
           "null"
-        ]
+        ],
+        "x-untrusted": true
       },
       "original_content": {
         "description": "Current `SKILL.md` text, for a side-by-side view.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "owner_id": {
         "anyOf": [
@@ -2738,7 +2787,8 @@
       },
       "path": {
         "description": "Absolute path of `SKILL.md`.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "proposal_id": {
         "$ref": "#/$defs/ProposalId",
@@ -2746,7 +2796,8 @@
       },
       "proposed_content": {
         "description": "Proposed `SKILL.md` text, for a side-by-side view.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "proposed_fingerprint": {
         "$ref": "#/$defs/Fingerprint",
@@ -2754,7 +2805,8 @@
       },
       "reason": {
         "description": "Why the repair is proposed, for a person (the spec rule that fails).",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "scope": {
         "$ref": "#/$defs/RootScope",
@@ -2804,7 +2856,8 @@
               },
               "path": {
                 "description": "The skill folder the harness reads.",
-                "type": "string"
+                "type": "string",
+                "x-untrusted": true
               }
             },
             "required": [
@@ -2827,7 +2880,8 @@
               },
               "path": {
                 "description": "The new link.",
-                "type": "string"
+                "type": "string",
+                "x-untrusted": true
               }
             },
             "required": [
@@ -2854,7 +2908,8 @@
               },
               "path": {
                 "description": "The new folder.",
-                "type": "string"
+                "type": "string",
+                "x-untrusted": true
               }
             },
             "required": [
@@ -2878,7 +2933,8 @@
               },
               "reason": {
                 "description": "Why, in one plain sentence.",
-                "type": "string"
+                "type": "string",
+                "x-untrusted": true
               }
             },
             "required": [
@@ -2892,7 +2948,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2903,7 +2960,8 @@
         "properties": {
           "deployment_path": {
             "description": "Where its canonical folder now lives.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "event_id": {
             "$ref": "#/$defs/EventId",
@@ -2947,7 +3005,8 @@
         "properties": {
           "identity": {
             "description": "The normalized identity that needs confirming.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "kind": {
             "const": "needs_trust",
@@ -3021,7 +3080,8 @@
     "$defs": {
       "ProjectRef": {
         "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "RootScope": {
         "description": "Where a root lives.",
@@ -3150,7 +3210,8 @@
       },
       "ProjectRef": {
         "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "RootScope": {
         "description": "Where a root lives.",
@@ -3204,7 +3265,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3442,7 +3504,8 @@
               "type": "string"
             },
             "description": "Every top-level frontmatter key, stringified.",
-            "type": "object"
+            "type": "object",
+            "x-untrusted": true
           },
           "harness": {
             "anyOf": [
@@ -3476,7 +3539,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "modified_at": {
             "description": "RFC3339 of the newest file mtime in the skill folder.",
@@ -3529,7 +3593,8 @@
           },
           "path": {
             "description": "Absolute lexical path of the skill directory.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "plugin": {
             "anyOf": [
@@ -3547,7 +3612,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "root": {
             "$ref": "#/$defs/RootRef",
@@ -3572,7 +3638,8 @@
             "items": {
               "type": "string"
             },
-            "type": "array"
+            "type": "array",
+            "x-untrusted": true
           },
           "studio_disabled": {
             "description": "True when this deployment was found inside a root's\n`.skill-studio-disabled/` holding directory. Maps to `disabled_by ==\nSome(DisabledBy::StudioMoved)`.",
@@ -3583,7 +3650,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "symlink_is_broken": {
             "description": "True when the deployment is a symlink whose target does not resolve.",
@@ -3690,7 +3758,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "name": {
             "$ref": "#/$defs/SkillName",
@@ -3698,7 +3767,8 @@
           },
           "source": {
             "description": "Upstream owner/repo from the owning ledger, plugin@marketplace for a\nplugin skill, or manual.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           }
         },
         "required": [
@@ -3771,7 +3841,8 @@
           },
           "source": {
             "description": "Recorded upstream, or manual for an adopted local folder.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           }
         },
         "required": [
@@ -3786,7 +3857,8 @@
         "properties": {
           "message": {
             "description": "Message for a person.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "root": {
             "anyOf": [
@@ -3839,11 +3911,13 @@
           "marketplace",
           "plugin"
         ],
-        "type": "object"
+        "type": "object",
+        "x-untrusted": true
       },
       "ProjectRef": {
         "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "RootKind": {
         "description": "What kind of root a path is.",
@@ -4056,11 +4130,13 @@
             ]
           }
         },
-        "type": "object"
+        "type": "object",
+        "x-untrusted": true
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "SourceKind": {
         "description": "How a skill made it onto disk.\n\nPorted from the desktop's `provenance::SourceKind`. Serializes to the same\nkebab-case strings the frontend has always used. Declaration order doubles\nas precedence order (dotagents beats plugin beats skills-sh beats in-repo\nbeats manual) via the derived `Ord`, matching the desktop's\n`classify_source_kind`.",
@@ -4145,7 +4221,8 @@
         "items": {
           "type": "string"
         },
-        "type": "array"
+        "type": "array",
+        "x-untrusted": true
       },
       "skills": {
         "description": "Skills sorted by name.",
@@ -4167,7 +4244,8 @@
         "items": {
           "type": "string"
         },
-        "type": "array"
+        "type": "array",
+        "x-untrusted": true
       }
     },
     "required": [
@@ -4211,7 +4289,8 @@
           },
           "path": {
             "description": "Copy directory.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           }
         },
         "required": [
@@ -4270,7 +4349,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4326,7 +4406,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4377,7 +4458,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4462,28 +4544,32 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "installed_commit": {
             "description": "The installed side: a dotagents pinned commit SHA, or a skills.sh\n`skillFolderHash`. `None` when the currency rule never resolved an\ninstalled side (`NotTracked`, or `Unknown` before the lock/ledger\nentry was found).",
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "latest_commit": {
             "description": "The newest side: a dotagents commit SHA, or a skills.sh tree SHA for\nthat folder. `None` on the same conditions as `installed_commit`, or\nwhen the lookup failed.",
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "latest_commit_at": {
             "description": "The newest commit's date, dotagents only - `None` for skills.sh\n(tree SHAs carry no date) and whenever `latest_commit` is `None`.",
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           }
         },
         "required": [
@@ -4593,11 +4679,13 @@
           },
           "skill": {
             "description": "Skill name.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "source": {
             "description": "Pack source.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "state": {
             "$ref": "#/$defs/PackStepState",
@@ -4693,8 +4781,9 @@
                 "description": "Stable code of the failure."
               },
               "reason": {
-                "description": "The per-skill op's message.",
-                "type": "string"
+                "description": "The per-skill op's message, with any child process output.",
+                "type": "string",
+                "x-untrusted": true
               },
               "state": {
                 "const": "failed",
@@ -4712,7 +4801,8 @@
       },
       "ProjectRef": {
         "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "RootScope": {
         "description": "Where a root lives.",
@@ -4906,7 +4996,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "kind": {
             "$ref": "#/$defs/PackKind",
@@ -4917,14 +5008,16 @@
             "items": {
               "type": "string"
             },
-            "type": "array"
+            "type": "array",
+            "x-untrusted": true
           },
           "ref_pin": {
             "description": "Branch, tag, commit, or plugin version the install is pinned to.",
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "remote": {
             "$ref": "#/$defs/RemoteState",
@@ -4946,11 +5039,13 @@
           },
           "source": {
             "description": "`owner/repo`, git URL, npm package, or `plugin@marketplace`.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "summary": {
             "description": "One line for a person or agent.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "update_commands": {
             "description": "Commands the owning agent runs to update this pack. Skill Studio does not run them.",
@@ -5025,14 +5120,16 @@
           },
           "name": {
             "description": "Skill name.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "path": {
             "description": "Installed folder, when one is on disk.",
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "scope": {
             "$ref": "#/$defs/RootScope",
@@ -5048,7 +5145,8 @@
       },
       "ProjectRef": {
         "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "RemoteState": {
         "description": "What the remote check found for one pack.",
@@ -5115,7 +5213,8 @@
             "properties": {
               "reason": {
                 "description": "Git's own message.",
-                "type": "string"
+                "type": "string",
+                "x-untrusted": true
               },
               "state": {
                 "const": "failed",
@@ -5274,14 +5373,16 @@
       },
       "parked_path": {
         "description": "Where the directory now lives, under the parked root.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "warnings": {
         "description": "Notes for the caller; never a reason the park failed. An adapter that\nran `park_check` first puts its git warning here.",
         "items": {
           "type": "string"
         },
-        "type": "array"
+        "type": "array",
+        "x-untrusted": true
       }
     },
     "required": [
@@ -5325,7 +5426,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -5344,7 +5446,8 @@
         "type": [
           "string",
           "null"
-        ]
+        ],
+        "x-untrusted": true
       },
       "skill": {
         "$ref": "#/$defs/SkillName",
@@ -5411,7 +5514,8 @@
           },
           "diff": {
             "description": "Unified diff for a person.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "expected_fingerprint": {
             "$ref": "#/$defs/Fingerprint",
@@ -5422,11 +5526,13 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "original_content": {
             "description": "Current `SKILL.md` text, for a side-by-side view.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "owner_id": {
             "anyOf": [
@@ -5445,7 +5551,8 @@
           },
           "path": {
             "description": "Absolute path of `SKILL.md`.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "proposal_id": {
             "$ref": "#/$defs/ProposalId",
@@ -5453,7 +5560,8 @@
           },
           "proposed_content": {
             "description": "Proposed `SKILL.md` text, for a side-by-side view.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "proposed_fingerprint": {
             "$ref": "#/$defs/Fingerprint",
@@ -5461,7 +5569,8 @@
           },
           "reason": {
             "description": "Why the repair is proposed, for a person (the spec rule that fails).",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "scope": {
             "$ref": "#/$defs/RootScope",
@@ -5540,7 +5649,8 @@
       },
       "ProjectRef": {
         "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "ProposalId": {
         "description": "Id of a frontmatter repair proposal.\n\nInvariant: sha256 over deployment id, path, owner id, owner kind, the\nexpected fingerprint, and the proposed text. Any change makes a new id.",
@@ -5719,7 +5829,8 @@
         "items": {
           "type": "string"
         },
-        "type": "array"
+        "type": "array",
+        "x-untrusted": true
       },
       "reverted_event_id": {
         "$ref": "#/$defs/EventId",
@@ -5767,11 +5878,13 @@
         "properties": {
           "path": {
             "description": "Skipped file or root.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "reason": {
             "description": "Why this history is unavailable.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           }
         },
         "required": [
@@ -5795,7 +5908,8 @@
           },
           "skill": {
             "description": "Skill name.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           }
         },
         "required": [
@@ -5849,7 +5963,8 @@
       },
       "skill": {
         "description": "Installed skill name.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "required": [
@@ -5919,7 +6034,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -5990,7 +6106,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "SplitCopy": {
         "description": "One folder `split` wrote.",
@@ -6001,7 +6118,8 @@
           },
           "path": {
             "description": "The copy's folder.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           }
         },
         "required": [
@@ -6031,14 +6149,16 @@
       },
       "quarantine_path": {
         "description": "Where the Universal folder was moved (quarantine), kept for undo.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "removed_links": {
         "description": "Links into the Universal folder that were removed.",
         "items": {
           "type": "string"
         },
-        "type": "array"
+        "type": "array",
+        "x-untrusted": true
       },
       "skill": {
         "$ref": "#/$defs/SkillName",
@@ -6124,7 +6244,8 @@
       },
       "restored_path": {
         "description": "Where the directory now lives: the folder it was parked from.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "required": [
@@ -6164,7 +6285,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "UpdateAllItem": {
         "description": "One skill's result inside an `update_all` batch.",
@@ -6195,7 +6317,8 @@
         "properties": {
           "deployment_path": {
             "description": "Where its canonical folder lives.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "event_id": {
             "$ref": "#/$defs/EventId",
@@ -6233,7 +6356,8 @@
         },
         "default": {},
         "description": "`skill.0` -> error message, for every item whose `outcome` is `None`.",
-        "type": "object"
+        "type": "object",
+        "x-untrusted": true
       },
       "items": {
         "description": "One entry per skill `update_all` was asked to refresh.",
@@ -6315,7 +6439,8 @@
       },
       "ProjectRef": {
         "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "RootScope": {
         "description": "Where a root lives.",
@@ -6354,7 +6479,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "UpdateRequest": {
         "description": "Request to refresh one already-installed skill in place, via\n`ops::update`. Reuses [`InstallMethod`]: `Copy` re-stages fresh `files`\nand swaps them in, quarantining the previous tree; `Dotagents`/`SkillsSh`\nre-run the same CLI `install` shelled out to, in place over the existing\ndestination.",
@@ -6429,7 +6555,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -6437,7 +6564,8 @@
     "properties": {
       "deployment_path": {
         "description": "Where its canonical folder lives.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "event_id": {
         "$ref": "#/$defs/EventId",
@@ -6524,7 +6652,8 @@
       },
       "ProjectRef": {
         "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       },
       "RootScope": {
         "description": "Where a root lives.",
@@ -6563,7 +6692,8 @@
       },
       "SkillName": {
         "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-        "type": "string"
+        "type": "string",
+        "x-untrusted": true
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
