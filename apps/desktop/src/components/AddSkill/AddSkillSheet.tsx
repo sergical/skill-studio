@@ -921,7 +921,7 @@ function ManualTabFields({
       />
 
       {submitError && (
-        <p className="m-0 rounded-md bg-error-soft p-2.5 text-small text-error" role="alert">
+        <p className="m-0 rounded-md bg-error-soft p-2.5 text-small text-error-text" role="alert">
           {submitError}
         </p>
       )}

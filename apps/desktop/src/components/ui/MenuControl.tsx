@@ -21,7 +21,7 @@ import {
 } from "@skill-studio/ui";
 
 const DEFAULT_ITEM_CLASS =
-  "flex h-(--control-height) cursor-pointer items-center gap-2 rounded-sm px-2.5 text-body text-text-secondary data-highlighted:bg-bg-hover data-highlighted:text-text-primary data-disabled:cursor-not-allowed data-disabled:text-text-quaternary data-[variant=destructive]:text-error data-[variant=destructive]:data-highlighted:bg-error-soft data-[variant=destructive]:data-highlighted:text-error";
+  "flex h-(--control-height) cursor-pointer items-center gap-2 rounded-sm px-2.5 text-body text-text-secondary data-highlighted:bg-bg-hover data-highlighted:text-text-primary data-disabled:cursor-not-allowed data-disabled:text-text-quaternary data-[variant=destructive]:text-error-text data-[variant=destructive]:data-highlighted:bg-error-soft data-[variant=destructive]:data-highlighted:text-error-text";
 
 /** The popup shell's default look. */
 const DEFAULT_POPUP_CLASS =
