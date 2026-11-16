@@ -29,10 +29,7 @@ CALLS = {
 
 
 def environment(home: Path) -> dict:
-    env = {k: v for k, v in os.environ.items() if k not in {
-        "OPENCODE_DB", "OPENCODE_CONFIG_DIR", "CLAUDE_CONFIG_DIR",
-        "SKILL_STUDIO_MCP_DEV_TOOLS", "SKILL_STUDIO_FIXTURE", "SKILL_STUDIO_PROJECT",
-    }}
+    env = {k: os.environ[k] for k in ("PATH", "TMPDIR") if k in os.environ}
     env.update({
         "HOME": str(home), "SKILL_STUDIO_HOME": str(home),
         "CODEX_HOME": str(home / ".codex"),

@@ -34,10 +34,10 @@ class AnswerContractsTest(unittest.TestCase):
 
     def test_inherited_paths_cannot_override_fixture(self):
         with patch.dict(os.environ, {"SKILL_STUDIO_FIXTURE": "/outside", "SKILL_STUDIO_PROJECT": "/outside",
-                                     "CODEX_HOME": "/outside", "OPENCODE_DB": "/outside"}):
+                                     "CODEX_HOME": "/outside", "OPENCODE_DB": "/outside",
+                                     "GROK_HOME": "/outside", "XDG_STATE_HOME": "/outside"}):
             env = contracts.environment(Path("/fixture/home"))
-        for key in ("SKILL_STUDIO_FIXTURE", "SKILL_STUDIO_PROJECT", "OPENCODE_DB"):
-            self.assertNotIn(key, env)
+        self.assertFalse([k for k, v in env.items() if v == "/outside"])
         self.assertEqual(env["CODEX_HOME"], "/fixture/home/.codex")
 
     def test_baseline_regression_exits_nonzero(self):
