@@ -244,7 +244,7 @@ fn an_unknown_view_field_is_refused_on_the_cli_and_mcp() {
 
 /// Flow: every read call with no view arguments, on the CLI and MCP, over a
 /// home with 500 skills.
-/// Expectation: each answer stays under 80 KB and its `page` says how many
+/// Expectation: each envelope fits the 32 KB answer budget, MCP labels included, and its `page` says how many
 /// rows exist and how many it returned.
 /// Failure means one call can fill an agent's context (2.9 MB before).
 #[test]
@@ -275,7 +275,10 @@ fn default_read_answers_stay_bounded_at_500_skills() {
         let mcp = &mcp["result"]["structuredContent"];
         for (surface, envelope) in [("cli", &cli), ("mcp", mcp)] {
             let bytes = envelope.to_string().len();
-            assert!(bytes <= 33 * 1024, "{surface} {command}: {bytes} bytes");
+            assert!(
+                bytes <= skill_studio_core::view::ANSWER_BYTES,
+                "{surface} {command}: {bytes} bytes"
+            );
             let page = &envelope["page"];
             let cut = std::iter::once(page)
                 .chain(page["also"].as_array().into_iter().flatten())

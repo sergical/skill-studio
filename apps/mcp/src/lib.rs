@@ -489,21 +489,16 @@ async fn run_op_viewed<T: Outcome + serde::Serialize + schemars::JsonSchema + 's
             .await;
     }
 
-    let value = skill_studio_core::view::render(&envelope.envelope, view, false).map_or(
-        serde_json::Value::Null,
-        |rendered| match rendered.json {
-            serde_json::Value::Object(doc) => {
-                let mut labeled = serde_json::Map::new();
-                labeled.insert(
-                    "untrusted_paths".into(),
-                    serde_json::Value::from(envelope.untrusted_paths.to_vec()),
-                );
-                labeled.extend(doc);
-                serde_json::Value::Object(labeled)
-            }
-            other => other,
-        },
-    );
+    let value = serde_json::to_value(&envelope)
+        .and_then(|json| {
+            skill_studio_core::view::render_document::<T>(
+                json,
+                envelope.envelope.exit_status(),
+                view,
+                false,
+            )
+        })
+        .map_or(serde_json::Value::Null, |rendered| rendered.json);
     if value["status"] == "error" {
         CallToolResult::structured_error(value)
     } else {

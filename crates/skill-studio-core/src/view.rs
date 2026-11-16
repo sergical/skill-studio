@@ -77,8 +77,23 @@ pub fn render<T: Outcome + Serialize>(
     view: &ViewRequest,
     timings: bool,
 ) -> Result<Rendered, serde_json::Error> {
-    let mut exit_status = envelope.exit_status();
-    let mut json = serde_json::to_value(envelope)?;
+    render_document::<T>(
+        serde_json::to_value(envelope)?,
+        envelope.exit_status(),
+        view,
+        timings,
+    )
+}
+
+/// [`render`] for an envelope already serialized inside a larger document,
+/// such as the MCP's labeled answer. Every field of `json` counts toward the
+/// answer budget.
+pub fn render_document<T: Outcome>(
+    mut json: Value,
+    mut exit_status: i32,
+    view: &ViewRequest,
+    timings: bool,
+) -> Result<Rendered, serde_json::Error> {
     if !timings {
         if let Value::Object(doc) = &mut json {
             doc.remove("timings");
