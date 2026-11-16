@@ -881,6 +881,7 @@ fn reverse_steps(
 ) -> std::io::Result<()> {
     let root =
         Root::open(fs, plan.root.clone()).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let fs = root.writer();
     for step in plan.steps.iter().rev() {
         for path in step_paths(step) {
             confine_to_root(&root, &plan.root, path)?;

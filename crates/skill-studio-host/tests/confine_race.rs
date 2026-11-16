@@ -9,11 +9,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use skill_studio_core::error::CoreError;
 use skill_studio_core::fsops::{self, Root};
 use skill_studio_core::identity::PlanId;
-use skill_studio_core::journal::{FsJournal, PlanWriter};
+use skill_studio_core::journal::{reconcile, FsJournal, PlanWriter};
 use skill_studio_core::ports::{
-    acquire_exclusive, confine, ExclusiveGuard, LeaseMode, LeaseProvider, ScopeFs, ScopedReads,
+    acquire_exclusive, confine, ExclusiveGuard, Journal, LeaseMode, LeaseProvider, PlanRecord,
+    PlanStatus, PlanStep, ScopeFs, ScopedReads,
 };
 use skill_studio_core::scope::{NormalizedScope, RuntimeScope};
 use skill_studio_host::{FileLease, RealFs};
@@ -190,4 +192,102 @@ fn journal_write_refuses_a_folder_swapped_for_a_link_after_its_check() {
         result.is_err(),
         "the journal write followed the link out of its root"
     );
+}
+
+/// An [`FsJournal`] that runs `swap` once, when recovery reads a backup:
+/// after recovery checked the step's path, before it writes the backup back.
+struct SwapOnBackupRead<F: Fn() + Send> {
+    inner: FsJournal,
+    swap: F,
+}
+
+impl<F: Fn() + Send> Journal for SwapOnBackupRead<F> {
+    fn begin(&self, guard: &ExclusiveGuard, plan: &PlanRecord) -> Result<(), CoreError> {
+        self.inner.begin(guard, plan)
+    }
+    fn record_step(
+        &self,
+        guard: &ExclusiveGuard,
+        id: &PlanId,
+        step: PlanStep,
+    ) -> Result<(), CoreError> {
+        self.inner.record_step(guard, id, step)
+    }
+    fn finish(
+        &self,
+        guard: &ExclusiveGuard,
+        id: &PlanId,
+        status: PlanStatus,
+    ) -> Result<(), CoreError> {
+        self.inner.finish(guard, id, status)
+    }
+    fn all(&self) -> Result<Vec<PlanRecord>, CoreError> {
+        self.inner.all()
+    }
+    fn pending(&self) -> Result<Vec<PlanRecord>, CoreError> {
+        self.inner.pending()
+    }
+    fn remove_backup(
+        &self,
+        guard: &ExclusiveGuard,
+        id: &PlanId,
+        relative: &str,
+    ) -> Result<(), CoreError> {
+        self.inner.remove_backup(guard, id, relative)
+    }
+    fn write_backup(
+        &self,
+        guard: &ExclusiveGuard,
+        id: &PlanId,
+        relative: &str,
+        bytes: &[u8],
+    ) -> Result<(), CoreError> {
+        self.inner.write_backup(guard, id, relative, bytes)
+    }
+    fn read_backup(&self, id: &PlanId, relative: &str) -> Result<Vec<u8>, CoreError> {
+        (self.swap)();
+        self.inner.read_backup(id, relative)
+    }
+}
+
+#[test]
+fn recovery_refuses_a_folder_swapped_for_a_link_after_its_check() {
+    let layout = layout();
+    let skills = layout.home.join(".claude/skills");
+    let skill_file = skills.join("x/SKILL.md");
+    std::fs::write(&skill_file, b"new").unwrap();
+    std::fs::write(layout.outside.join("x/SKILL.md"), b"user").unwrap();
+    let scope = scope_for(&layout.home);
+    let guard = acquire_exclusive(&FileLease::new(layout.home.join(".lease")), &scope).unwrap();
+    let journal = SwapOnBackupRead {
+        inner: FsJournal::new(layout.home.join(".journal"), Arc::new(RealFs::new())),
+        swap: || {
+            let x = layout.home.join(".claude/skills/x");
+            if !x.is_symlink() {
+                std::fs::remove_dir_all(&x).unwrap();
+                std::os::unix::fs::symlink(layout.outside.join("x"), &x).unwrap();
+            }
+        },
+    };
+    let plan = PlanWriter::begin(
+        &journal,
+        &guard,
+        PlanId("01PLANRECOVERYRACE00000001".to_string()),
+        Utc::now(),
+        "recovery race test",
+        skills.clone(),
+        Vec::new(),
+    )
+    .unwrap();
+    plan.record_write_file(&skill_file, Some(b"old")).unwrap();
+    drop(plan);
+
+    let report = reconcile(&journal, &guard, &RealFs::new()).unwrap();
+
+    assert_eq!(
+        std::fs::read(layout.outside.join("x/SKILL.md")).unwrap(),
+        b"user",
+        "recovery wrote the backup through the link out of the plan root"
+    );
+    assert_eq!(report.interrupted.len(), 1, "{report:?}");
 }
