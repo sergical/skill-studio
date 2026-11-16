@@ -24,7 +24,9 @@ pub struct InvocationMismatch {
     pub auto: BTreeSet<AgentId>,
 }
 
-impl Outcome for InvocationMismatches {}
+impl Outcome for InvocationMismatches {
+    const LISTS: &'static [&'static str] = &["/skills"];
+}
 
 /// Keeps only the skills whose agents disagree on invocation.
 pub fn invocation_mismatches(report: &InvocationReport) -> InvocationMismatches {

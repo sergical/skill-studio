@@ -101,7 +101,7 @@ fn library_matches_usage_scan_and_mcp() {
         root,
         &["usage", "--since", "2026-10-01", "--until", "2026-11-01"],
     );
-    let scan = headless::cli(root, &["scan"]);
+    let scan = headless::cli(root, &["scan", "--limit", "1000"]);
     for row in data["rows"].as_array().unwrap() {
         let used = usage["data"]["rows"]
             .as_array()

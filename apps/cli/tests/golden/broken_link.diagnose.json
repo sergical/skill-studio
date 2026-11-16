@@ -86,19 +86,5 @@
   },
   "errors": [],
   "correlation_id": "-",
-  "event_id": null,
-  "timings": {
-    "op": "diagnose",
-    "elapsed_ms": "-",
-    "steps": [
-      {
-        "name": "scan",
-        "elapsed_ms": "-"
-      },
-      {
-        "name": "derive_issues",
-        "elapsed_ms": "-"
-      }
-    ]
-  }
+  "event_id": null
 }

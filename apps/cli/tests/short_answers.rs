@@ -146,3 +146,149 @@ fn an_empty_usage_window_is_refused_on_the_cli_and_mcp() {
         }
     }
 }
+
+/// Flow: `library` with `--limit`, `--cursor`, `--fields`, `--count-by` and
+/// `--mode` on the CLI, and the same arguments to the MCP `library` tool, on
+/// a library of three skills where only `beta` is manual in Claude Code.
+/// Expectation: both surfaces return the same rows and the same `page`.
+/// Failure means an agent must fetch every row to count, page or project.
+#[test]
+fn library_views_page_project_and_count_the_same_on_the_cli_and_mcp() {
+    let home = tempfile::tempdir().unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        write_skill(&home.path().join(".agents/skills"), name, "Body.");
+    }
+    std::fs::create_dir_all(home.path().join(".claude/skills/beta")).unwrap();
+    std::fs::write(
+        home.path().join(".claude/skills/beta/SKILL.md"),
+        "---\nname: beta\ndescription: A pack skill.\ndisable-model-invocation: true\n---\nBody.\n",
+    )
+    .unwrap();
+
+    for (args, params, rows, page) in [
+        (
+            vec!["--limit", "1"],
+            json!({"limit": 1}),
+            json!(["alpha"]),
+            json!({"list": "/rows", "total": 3, "returned": 1, "next_cursor": "1"}),
+        ),
+        (
+            vec!["--limit", "1", "--cursor", "2"],
+            json!({"limit": 1, "cursor": "2"}),
+            json!(["gamma"]),
+            json!({"list": "/rows", "total": 3, "returned": 1}),
+        ),
+        (
+            vec!["--fields", "name", "--count-by", "source"],
+            json!({"fields": ["name"], "count_by": "source"}),
+            json!(["alpha", "beta", "gamma"]),
+            json!({"list": "/rows", "total": 3, "returned": 3, "counts": {"null": 3}}),
+        ),
+        (
+            vec!["--mode", "claude-code=manual", "--mode", "codex=auto"],
+            json!({"modes": {"claude-code": "manual", "codex": "auto"}}),
+            json!(["beta"]),
+            serde_json::Value::Null,
+        ),
+    ] {
+        let cli = headless::cli(home.path(), &[&["library"], &args[..]].concat());
+        let mcp = headless::mcp(home.path(), "library", &params);
+        let mcp = &mcp["result"]["structuredContent"];
+        for (surface, envelope) in [("cli", &cli), ("mcp", mcp)] {
+            let names: Vec<_> = envelope["data"]["rows"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{surface} {args:?}: {envelope}"))
+                .iter()
+                .map(|row| row["name"].clone())
+                .collect();
+            assert_eq!(json!(names), rows, "{surface} {args:?}: {envelope}");
+            assert_eq!(envelope["page"], page, "{surface} {args:?}: {envelope}");
+        }
+        assert_eq!(cli["data"], mcp["data"], "{args:?}");
+        if args[0] == "--fields" {
+            assert_eq!(cli["data"]["rows"][0], json!({"name": "alpha"}));
+        }
+    }
+}
+
+/// Flow: `library --fields nope` on the CLI and the MCP `library` tool.
+/// Expectation: an `invalid_request` error that names the row fields, with
+/// exit status 2 on the CLI and `isError` on MCP.
+/// Failure means a typo returns every field or an empty list as an answer.
+#[test]
+fn an_unknown_view_field_is_refused_on_the_cli_and_mcp() {
+    let home = tempfile::tempdir().unwrap();
+    write_skill(&home.path().join(".agents/skills"), "alpha", "Body.");
+
+    let output = headless::test_home::command(env!("CARGO_BIN_EXE_skill-studio"), home.path())
+        .args(["library", "--fields", "nope", "--json", "--home"])
+        .arg(home.path())
+        .env("SKILL_STUDIO_TELEMETRY", "0")
+        .output()
+        .unwrap();
+    let cli: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let mcp = headless::mcp(home.path(), "library", &json!({"fields": ["nope"]}));
+
+    assert_eq!(output.status.code(), Some(2), "{cli}");
+    assert_eq!(mcp["result"]["isError"], true, "{mcp}");
+    let mcp = &mcp["result"]["structuredContent"];
+    assert_eq!(cli["errors"], mcp["errors"]);
+    assert_eq!(cli["errors"][0]["code"], "invalid_request");
+    let message = cli["errors"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("`nope`") && message.contains("name"),
+        "{message}"
+    );
+    assert!(cli["data"].is_null());
+}
+
+/// Flow: every read call with no view arguments, on the CLI and MCP, over a
+/// home with 500 skills.
+/// Expectation: each answer stays under 80 KB and its `page` says how many
+/// rows exist and how many it returned.
+/// Failure means one call can fill an agent's context (2.9 MB before).
+#[test]
+fn default_read_answers_stay_bounded_at_500_skills() {
+    let home = tempfile::tempdir().unwrap();
+    let description =
+        "Reviews a change for one narrow concern and reports each finding. ".repeat(4);
+    for i in 0..500 {
+        let skill = home.path().join(format!(".agents/skills/skill-{i:03}"));
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            format!("---\nname: skill-{i:03}\ndescription: {description}\n---\nBody.\n"),
+        )
+        .unwrap();
+    }
+
+    for (command, tool, list) in [
+        ("scan", "scan", "/skills"),
+        ("diagnose", "diagnose", "/inventory/skills"),
+        ("library", "library", "/rows"),
+        ("invocation", "invocation", "/skills"),
+    ] {
+        let cli = headless::cli(home.path(), &[command]);
+        let mcp = headless::mcp(home.path(), tool, &json!({}));
+        let bytes = mcp["result"].to_string().len();
+        assert!(bytes < 80 * 1024, "mcp {command}: {bytes} bytes");
+        let mcp = &mcp["result"]["structuredContent"];
+        for (surface, envelope) in [("cli", &cli), ("mcp", mcp)] {
+            let bytes = envelope.to_string().len();
+            assert!(bytes <= 33 * 1024, "{surface} {command}: {bytes} bytes");
+            let page = &envelope["page"];
+            let cut = std::iter::once(page)
+                .chain(page["also"].as_array().into_iter().flatten())
+                .find(|page| page["list"] == list)
+                .unwrap_or_else(|| panic!("{surface} {command}: {page}"));
+            assert!(
+                cut["returned"].as_u64() < cut["total"].as_u64(),
+                "{surface} {command}: {cut}"
+            );
+            assert!(
+                cut["total"].as_u64() >= Some(500),
+                "{surface} {command}: {cut}"
+            );
+        }
+    }
+}

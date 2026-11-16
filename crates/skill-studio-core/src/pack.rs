@@ -140,6 +140,8 @@ pub struct PackReport {
 }
 
 impl Outcome for PackReport {
+    const LISTS: &'static [&'static str] = &["/packs"];
+
     fn status(&self) -> OpStatus {
         if self
             .packs
