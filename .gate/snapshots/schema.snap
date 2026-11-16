@@ -55,7 +55,7 @@
   "crates/skill-studio-core/schema/agent_off_outcome.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
       "DeploymentId": {
@@ -139,7 +139,7 @@
   "crates/skill-studio-core/schema/agent_off_request.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
       "DeploymentId": {
@@ -169,7 +169,7 @@
   "crates/skill-studio-core/schema/capabilities.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
       "CapabilityReport": {
@@ -622,7 +622,7 @@
   "crates/skill-studio-core/schema/capabilities_request.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       }
     },
@@ -715,7 +715,7 @@
   "crates/skill-studio-core/schema/diagnosis.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
       "BackingRelationship": {
@@ -1832,7 +1832,7 @@
   "crates/skill-studio-core/schema/doctor_report.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
       "DoctorInvariant": {
@@ -2094,7 +2094,7 @@
   "crates/skill-studio-core/schema/event_dto.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
       "DriftState": {
@@ -2781,7 +2781,7 @@
   "crates/skill-studio-core/schema/install_outcome.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
       "EventId": {
@@ -2966,7 +2966,7 @@
   "crates/skill-studio-core/schema/install_preferences.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
       "InstallMethod": {
@@ -3076,7 +3076,7 @@
   "crates/skill-studio-core/schema/install_request.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
       "InstallFile": {
@@ -3286,7 +3286,7 @@
   "crates/skill-studio-core/schema/inventory.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
       "BackingRelationship": {
@@ -4183,7 +4183,7 @@
   "crates/skill-studio-core/schema/invocation_report.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
       "DeploymentId": {
@@ -4780,7 +4780,7 @@
   "crates/skill-studio-core/schema/pack_add_request.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       }
     },
@@ -5977,7 +5977,7 @@
   "crates/skill-studio-core/schema/split_outcome.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
       "DeploymentId": {
@@ -6064,7 +6064,7 @@
   "crates/skill-studio-core/schema/split_request.schema.json": {
     "$defs": {
       "AgentIdentity": {
-        "description": "Kebab-case harness identifier, for example `claude-code` or `open-code`.\n\nInvariant: the string is the serde wire name used by the desktop app\ntoday. `open-code` is canonical; `opencode` is only a CLI binary name and\nis never stored in an `AgentId`.",
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
       "DeploymentId": {
