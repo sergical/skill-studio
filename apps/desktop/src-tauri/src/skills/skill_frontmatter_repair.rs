@@ -258,16 +258,17 @@ fn validate_bound_preview(
     Ok(preview)
 }
 
-fn begin_bound_frontmatter_repair_transaction(
+fn begin_bound_frontmatter_repair_transaction<'lease>(
+    lease: &'lease super::write_lease::WriteLeaseGuard,
     deployment: &Deployment,
     peer_paths: &[PathBuf],
     expected_content_fingerprint: &str,
     expected_proposal_id: &str,
     kind: FrontmatterRepairKind,
     choice: Option<InvocationConflictChoice>,
-) -> Result<(SkillMdWriteTransaction, FrontmatterRepairPreview), String> {
+) -> Result<(SkillMdWriteTransaction<'lease>, FrontmatterRepairPreview), String> {
     refuse_name_fix_with_differently_named_peer(peer_paths, deployment, kind)?;
-    let transaction = begin_skill_md_write_transaction()?;
+    let transaction = begin_skill_md_write_transaction(lease);
     let preview = validate_bound_preview(
         deployment,
         expected_content_fingerprint,
@@ -453,7 +454,7 @@ pub fn reconcile_interrupted_frontmatter_repair(
     store: &EventStore,
     home: &Path,
     row: &EventRow,
-    guard: Option<&super::write_lease::WriteLeaseGuard>,
+    guard: &super::write_lease::WriteLeaseGuard,
 ) -> Result<(), String> {
     reconcile_interrupted_frontmatter_repair_with(store, home, row, guard, |_| {})
 }
@@ -462,10 +463,10 @@ fn reconcile_interrupted_frontmatter_repair_with(
     store: &EventStore,
     home: &Path,
     row: &EventRow,
-    guard: Option<&super::write_lease::WriteLeaseGuard>,
-    after_read: impl FnOnce(&SkillMdWriteTransaction),
+    guard: &super::write_lease::WriteLeaseGuard,
+    after_read: impl FnOnce(&SkillMdWriteTransaction<'_>),
 ) -> Result<(), String> {
-    let transaction = begin_skill_md_write_transaction()?;
+    let transaction = begin_skill_md_write_transaction(guard);
     let intent: FrontmatterRepairIntent = serde_json::from_value(row.payload.clone())
         .map_err(|error| format!("Malformed frontmatter repair intent: {error}"))?;
     let skill_md = intent.path.join("SKILL.md");
@@ -485,7 +486,7 @@ fn reconcile_interrupted_frontmatter_repair_with(
         return Ok(());
     }
     if managed_ledger_still_owns(home, &intent.name)? {
-        roll_back_incomplete_fork(store, home, row, &intent, guard)?;
+        roll_back_incomplete_fork(store, home, row, &intent, Some(guard))?;
         return Ok(());
     }
     if !fork_record_matches(home, &intent)? {
@@ -539,6 +540,7 @@ pub async fn apply_skill_frontmatter_repair(
                 .map_err(|error| format!("event store lock poisoned: {error}"))?;
             let store = guard.as_mut().ok_or("Event store is unavailable")?;
             let (transaction, preview) = begin_bound_frontmatter_repair_transaction(
+                &write_guard,
                 &deployment,
                 &name_fix_peer_paths(&snapshot, &deployment),
                 &expected_content_fingerprint,
@@ -644,7 +646,6 @@ pub async fn apply_skill_frontmatter_repair(
             if result.is_ok() {
                 store.retain_backups(write_guard.as_exclusive_guard());
             }
-            drop(transaction);
             drop(guard);
             let affected_projects: Vec<PathBuf> = deployment
                 .project_path
@@ -671,8 +672,13 @@ mod tests {
     use super::super::skill_fork_registry::{
         write_fork_registry, ForkRecord, ForkRegistry, OriginTool,
     };
-    use super::super::skill_md_write::{skill_md_write_transaction_is_held, write_skill_md_bytes};
+    use super::super::skill_md_write::write_skill_md_bytes;
+    use super::super::write_lease::{exclusive_lease_is_held, WriteLease, WriteLeaseGuard};
     use super::*;
+
+    fn home_guard(home: &Path) -> WriteLeaseGuard {
+        WriteLease::default().try_acquire(home).unwrap()
+    }
 
     fn malformed() -> &'static str {
         "---\nname: sample\ndescription: Use when: testing\n---\n# Body\n"
@@ -1051,7 +1057,9 @@ mod tests {
             let deployment = deployment(&skill, LifecycleOwnerKind::Manual);
             let preview = preview_from_deployment(&deployment, kind, choice).unwrap();
 
+            let lease = home_guard(temp.path());
             let (transaction, validated) = begin_bound_frontmatter_repair_transaction(
+                &lease,
                 &deployment,
                 &[],
                 &preview.expected_content_fingerprint,
@@ -1063,7 +1071,6 @@ mod tests {
             transaction
                 .replace_text(&skill.join("SKILL.md"), &validated.proposed_content)
                 .unwrap();
-            drop(transaction);
 
             assert_eq!(
                 fs::read_to_string(skill.join("SKILL.md")).unwrap(),
@@ -1159,7 +1166,9 @@ mod tests {
                 expected
             );
 
-            store.restore("repair", false).unwrap();
+            store
+                .restore_with_lease(&home_guard(&skill), "repair", false)
+                .unwrap();
 
             assert_eq!(
                 fs::read(skill.join("SKILL.md")).unwrap(),
@@ -1309,7 +1318,12 @@ mod tests {
         let preview =
             preview_from_deployment(&deployment, FrontmatterRepairKind::ColonScalar, None).unwrap();
 
+        let lease_root = temp.path().join("leases");
+        let lease = WriteLease::with_lease_root(lease_root.clone())
+            .try_acquire(temp.path())
+            .unwrap();
         let (transaction, validated) = begin_bound_frontmatter_repair_transaction(
+            &lease,
             &deployment,
             &[],
             &preview.expected_content_fingerprint,
@@ -1318,11 +1332,10 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(skill_md_write_transaction_is_held());
+        assert!(exclusive_lease_is_held(&lease_root, temp.path()));
         transaction
             .replace_text(&skill.join("SKILL.md"), &validated.proposed_content)
             .unwrap();
-        drop(transaction);
 
         assert_eq!(
             fs::read_to_string(skill.join("SKILL.md")).unwrap(),
@@ -1399,12 +1412,13 @@ mod tests {
         )
         .unwrap();
         fs::write(skill.join("SKILL.md"), "external drift").unwrap();
+        let lease = home_guard(&skill);
         assert!(store
-            .restore("repair-2", false)
+            .restore_with_lease(&lease, "repair-2", false)
             .unwrap_err()
             .contains("has changed"));
         fs::write(skill.join("SKILL.md"), intent.proposed_content).unwrap();
-        store.restore("repair-2", false).unwrap();
+        store.restore_with_lease(&lease, "repair-2", false).unwrap();
         assert_eq!(
             fs::read_to_string(skill.join("SKILL.md")).unwrap(),
             malformed()
@@ -1443,8 +1457,12 @@ mod tests {
         );
         write_fork_registry(&home, &mut registry).unwrap();
         let rows = store.reconcile_at_startup().unwrap();
-        reconcile_interrupted_frontmatter_repair_with(&store, &home, &rows[0], None, |_| {
-            assert!(skill_md_write_transaction_is_held());
+        let guard = home_guard(&home);
+        reconcile_interrupted_frontmatter_repair_with(&store, &home, &rows[0], &guard, |_| {
+            assert!(exclusive_lease_is_held(
+                &super::super::skill_fork_registry::registry_lease_root(),
+                &home
+            ));
         })
         .unwrap();
         assert_eq!(
@@ -1471,7 +1489,13 @@ mod tests {
         );
         write_fork_registry(&home, &mut ForkRegistry::default()).unwrap();
         let rows = store.reconcile_at_startup().unwrap();
-        assert!(reconcile_interrupted_frontmatter_repair(&store, &home, &rows[0], None).is_err());
+        assert!(reconcile_interrupted_frontmatter_repair(
+            &store,
+            &home,
+            &rows[0],
+            &home_guard(&home)
+        )
+        .is_err());
         assert_eq!(
             fs::read_to_string(skill.join("SKILL.md")).unwrap(),
             malformed()
@@ -1517,7 +1541,8 @@ mod tests {
         );
         write_fork_registry(&home, &mut registry).unwrap();
         let rows = store.reconcile_at_startup().unwrap();
-        reconcile_interrupted_frontmatter_repair(&store, &home, &rows[0], None).unwrap();
+        reconcile_interrupted_frontmatter_repair(&store, &home, &rows[0], &home_guard(&home))
+            .unwrap();
         assert!(super::super::skill_fork_registry::read_fork_registry(&home)
             .unwrap()
             .forks
@@ -1579,7 +1604,7 @@ mod tests {
 
         let write_lease = super::super::write_lease::WriteLease::default();
         let guard = write_lease.try_acquire(&home).unwrap();
-        reconcile_interrupted_frontmatter_repair(&store, &home, &rows[0], Some(&guard)).unwrap();
+        reconcile_interrupted_frontmatter_repair(&store, &home, &rows[0], &guard).unwrap();
 
         assert!(super::super::skill_fork_registry::read_fork_registry(&home)
             .unwrap()
@@ -1613,7 +1638,9 @@ mod tests {
         )
         .unwrap();
         assert!(preview.proposed_content.contains("name: foo"));
+        let lease = home_guard(Path::new(&real.path));
         let (transaction, preview) = begin_bound_frontmatter_repair_transaction(
+            &lease,
             &real,
             &[PathBuf::from(&link.path)],
             &preview.expected_content_fingerprint,
@@ -1628,7 +1655,6 @@ mod tests {
                 &preview.proposed_content,
             )
             .unwrap();
-        drop(transaction);
         assert!(fs::read_to_string(Path::new(&real.path).join("SKILL.md"))
             .unwrap()
             .contains("name: foo"));
@@ -1661,7 +1687,9 @@ mod tests {
         let preview =
             preview_from_deployment(&real, FrontmatterRepairKind::NameMismatch, None).unwrap();
         std::os::unix::fs::symlink(&real.path, &link.path).unwrap();
+        let lease = home_guard(Path::new(&real.path));
         let result = begin_bound_frontmatter_repair_transaction(
+            &lease,
             &real,
             &[PathBuf::from(&link.path)],
             &preview.expected_content_fingerprint,
@@ -1669,12 +1697,8 @@ mod tests {
             FrontmatterRepairKind::NameMismatch,
             None,
         );
-        let error = match result {
-            Err(error) => error,
-            Ok((transaction, _)) => {
-                drop(transaction);
-                panic!("apply did not protect the newly added peer");
-            }
+        let Err(error) = result else {
+            panic!("apply did not protect the newly added peer");
         };
         assert!(error.contains(&link.path), "{error}");
         assert!(fs::read_to_string(Path::new(&real.path).join("SKILL.md"))

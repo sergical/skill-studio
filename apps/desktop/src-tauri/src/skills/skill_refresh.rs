@@ -5751,7 +5751,12 @@ resolved_commit = "old"
                 .unwrap_or_else(|e| panic!("{label}: the link did not resolve to a file: {e}"));
             check_skill_md_write_allowed(Some(&snapshot), &link)
                 .unwrap_or_else(|e| panic!("{label}: the save was refused: {e}"));
+            let lease =
+                super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases"))
+                    .try_acquire(tmp.path())
+                    .unwrap();
             write_skill_md_compare_and_swap(
+                &lease,
                 &canonical,
                 "---\nname: foo\n---\nold body\n",
                 "---\nname: foo\n---\nnew body\n",
