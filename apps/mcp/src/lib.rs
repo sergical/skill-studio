@@ -176,6 +176,10 @@ pub struct Viewed<R> {
     pub view: ViewRequest,
 }
 
+/// Input of a tool that takes nothing but a view.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct NoInput {}
+
 /// Input for `skill_usage`.
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
@@ -344,6 +348,12 @@ async fn run_op_in_project<T: Outcome + serde::Serialize>(
     context: &RequestContext<RoleServer>,
     call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
 ) -> CallToolResult {
+    const {
+        assert!(
+            T::LISTS.is_empty(),
+            "a result with lists to page needs a Viewed input and run_op_viewed, or its cursor cannot be sent back"
+        );
+    }
     run_op_viewed(
         operation,
         with_history,
@@ -495,11 +505,25 @@ impl SkillStudioServer {
         description = "List only the skills with one copy read as manual and another as automatic, and the agents on each side.",
         annotations(read_only_hint = true)
     )]
-    async fn invocation_mismatches(&self, context: RequestContext<RoleServer>) -> CallToolResult {
-        run_op(Operation::Invocation, false, &context, |rt, ctx| {
-            skill_studio_core::ops_invocation::invocation(rt, ctx, &Default::default())
-                .map(|report| answers::invocation_mismatches(&report))
-        })
+    async fn invocation_mismatches(
+        &self,
+        Parameters(Viewed {
+            request: NoInput {},
+            view,
+        }): Parameters<Viewed<NoInput>>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op_viewed(
+            Operation::Invocation,
+            false,
+            None,
+            &view,
+            &context,
+            |rt, ctx| {
+                skill_studio_core::ops_invocation::invocation(rt, ctx, &Default::default())
+                    .map(|report| answers::invocation_mismatches(&report))
+            },
+        )
         .await
     }
 
@@ -898,12 +922,16 @@ impl SkillStudioServer {
     )]
     async fn invocation(
         &self,
-        Parameters(req): Parameters<skill_studio_core::ops_invocation::InvocationRequest>,
+        Parameters(Viewed { request: req, view }): Parameters<
+            Viewed<skill_studio_core::ops_invocation::InvocationRequest>,
+        >,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op(
+        run_op_viewed(
             Operation::Invocation,
             req.policy.is_some(),
+            None,
+            &view,
             &context,
             |rt, ctx| skill_studio_core::ops_invocation::invocation(rt, ctx, &req),
         )

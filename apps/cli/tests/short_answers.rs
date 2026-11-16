@@ -292,3 +292,27 @@ fn default_read_answers_stay_bounded_at_500_skills() {
         }
     }
 }
+
+/// Flow: the MCP `invocation` and `invocation_mismatches` tools with
+/// `limit: 0`, on a home where one skill is manual in Claude Code only.
+/// Expectation: each tool takes the view and answers with a `page`.
+/// Failure means a cut invocation answer hands out a cursor that its tool
+/// cannot take back.
+#[test]
+fn invocation_tools_take_the_view_that_pages_their_answer() {
+    let home = tempfile::tempdir().unwrap();
+    write_skill(&home.path().join(".agents/skills"), "alpha", "Body.");
+    std::fs::create_dir_all(home.path().join(".claude/skills/alpha")).unwrap();
+    std::fs::write(
+        home.path().join(".claude/skills/alpha/SKILL.md"),
+        "---\nname: alpha\ndescription: A skill.\ndisable-model-invocation: true\n---\nBody.\n",
+    )
+    .unwrap();
+
+    for tool in ["invocation", "invocation_mismatches"] {
+        let mcp = headless::mcp(home.path(), tool, &json!({"limit": 0}));
+        let envelope = &mcp["result"]["structuredContent"];
+        assert_eq!(envelope["page"]["list"], "/skills", "{tool}: {envelope}");
+        assert_eq!(envelope["page"]["returned"], 0, "{tool}: {envelope}");
+    }
+}
