@@ -9,8 +9,16 @@ import type { SkillListFilter, HarnessReport, HarnessesChoice } from "@skill-stu
 import { ALL_ACTIVITY, USAGE_WINDOWS } from "@skill-studio/lib";
 import type { ActivityFilter, UsageWindow } from "@skill-studio/lib";
 import type { Toast, TrackedProjects, SkillSnapshot } from "@skill-studio/lib";
+import type { PackActionReport, PackReport } from "@skill-studio/lib";
 import { addToast } from "../lib/toast";
-import { checkSkillUpdatesNow } from "../lib/skill-api";
+import {
+  checkSkillUpdatesNow,
+  invokeErrorMessage,
+  packAdd,
+  packList,
+  packRemove,
+  packUpdate,
+} from "../lib/skill-api";
 import { EMPTY_NAV_HISTORY, recordNavigation, stepBack, stepForward } from "../lib/nav-history";
 import type {
   DefaultDeploymentPaths,
@@ -49,6 +57,7 @@ export type ActiveView =
   | { kind: "home" }
   | { kind: "skills" }
   | { kind: "plugins" }
+  | { kind: "packs" }
   | { kind: "activity" }
   | { kind: "learn"; section?: LearnSection }
   | { kind: "settings" }
@@ -70,6 +79,40 @@ export interface HarnessDetectionState {
   choice: HarnessesChoice | null;
   error: string | null;
   saving: boolean;
+}
+
+export type PackIntent =
+  | { kind: "update"; source: string | null }
+  | { kind: "remove"; source: string }
+  | { kind: "add"; source: string; skills: string[]; refPin: string | null };
+
+function packActionCall(intent: PackIntent, dryRun: boolean): Promise<PackActionReport> {
+  switch (intent.kind) {
+    case "update":
+      return packUpdate({
+        source: intent.source,
+        all: intent.source === null,
+        project_path: null,
+        dry_run: dryRun,
+      });
+    case "remove":
+      return packRemove({ source: intent.source, project_path: null, dry_run: dryRun });
+    case "add":
+      return packAdd({
+        source: intent.source,
+        skills: intent.skills,
+        ref_pin: intent.refPin,
+        harnesses: [],
+        project_path: null,
+        dry_run: dryRun,
+      });
+  }
+}
+
+function withCommandMessage<T>(call: Promise<T>): Promise<T> {
+  return call.catch((err) => {
+    throw new Error(invokeErrorMessage(err));
+  });
 }
 
 interface AppState {
@@ -180,6 +223,12 @@ interface AppState {
   setTheme: (theme: Theme) => void;
 
   checkSkillUpdates: () => Promise<SkillSnapshot["update_check"]>;
+
+  // === Packs ===
+  /** Every installed pack, from the core's `pack_list`. `remote` asks each git source what is new. */
+  listPacks: (remote: boolean) => Promise<PackReport>;
+  /** Plans (`dryRun`) or runs one pack action through the core. Rejects with the command's message. */
+  runPackAction: (intent: PackIntent, dryRun: boolean) => Promise<PackActionReport>;
 
   // === Add-skill Sheet ===
   addSkillSheet: { open: boolean; prefill?: string };
@@ -460,6 +509,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   checkSkillUpdates: checkSkillUpdatesNow,
+
+  listPacks: (remote) => withCommandMessage(packList(remote)),
+  runPackAction: (intent, dryRun) => withCommandMessage(packActionCall(intent, dryRun)),
 
   addSkillSheet: { open: false },
   openAddSkillSheet: (prefill) => set({ addSkillSheet: { open: true, prefill } }),
