@@ -14,7 +14,8 @@
     },
     "restored_path": {
       "description": "Where the directory now lives: the folder it was parked from.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     }
   },
   "required": [

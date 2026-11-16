@@ -73,17 +73,21 @@ pub struct OutdatedRecord {
     /// `skillFolderHash`. `None` when the currency rule never resolved an
     /// installed side (`NotTracked`, or `Unknown` before the lock/ledger
     /// entry was found).
+    #[schemars(extend("x-untrusted" = true))]
     pub installed_commit: Option<String>,
     /// The newest side: a dotagents commit SHA, or a skills.sh tree SHA for
     /// that folder. `None` on the same conditions as `installed_commit`, or
     /// when the lookup failed.
+    #[schemars(extend("x-untrusted" = true))]
     pub latest_commit: Option<String>,
     /// The newest commit's date, dotagents only - `None` for skills.sh
     /// (tree SHAs carry no date) and whenever `latest_commit` is `None`.
+    #[schemars(extend("x-untrusted" = true))]
     pub latest_commit_at: Option<String>,
     /// Why the lookup could not confirm currency, when `currency` is
     /// [`Currency::Unknown`] because of a lookup failure rather than a
     /// missing lock/ledger entry. `None` otherwise.
+    #[schemars(extend("x-untrusted" = true))]
     pub error: Option<String>,
 }
 

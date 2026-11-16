@@ -421,7 +421,8 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         }
       },
       "required": [
@@ -442,7 +443,8 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         }
       },
       "required": [

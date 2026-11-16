@@ -16,6 +16,7 @@ use crate::yaml;
 /// ignored by default serde behavior, so agent-specific extensions in a
 /// skill's frontmatter don't break parsing.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(extend("x-untrusted" = true))]
 pub struct SkillFrontmatter {
     /// Required by spec: 1-64 chars, lowercase a-z0-9 and hyphens, must
     /// match the parent directory name.

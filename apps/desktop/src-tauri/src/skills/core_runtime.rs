@@ -188,7 +188,7 @@ pub fn to_command_result<T: Outcome>(envelope: ResultEnvelope<T>) -> Result<T, S
         _ => Err(envelope
             .errors
             .first()
-            .map_or_else(|| "operation failed".to_string(), |e| e.message.clone())),
+            .map_or_else(|| "operation failed".to_string(), ToString::to_string)),
     }
 }
 

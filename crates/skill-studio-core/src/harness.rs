@@ -294,6 +294,7 @@ pub struct HarnessObserved {
     /// The native config file can be written (parsed and not `.jsonc`).
     pub config_writable: Support,
     /// Resolved runner binary, when found on `PATH`.
+    #[schemars(extend("x-untrusted" = true))]
     pub runner_binary: Option<PathBuf>,
 }
 
@@ -312,6 +313,7 @@ pub struct ToolAvailability {
     /// Name as requested (`npx`, `dotagents`, `gh`).
     pub name: String,
     /// Resolved path, `None` when the tool is absent.
+    #[schemars(extend("x-untrusted" = true))]
     pub path: Option<PathBuf>,
 }
 
@@ -1007,11 +1009,13 @@ pub struct HarnessDetection {
     /// Derived state.
     pub state: HarnessState,
     /// Resolved executable path, when found on `PATH`.
+    #[schemars(extend("x-untrusted" = true))]
     pub executable: Option<PathBuf>,
     /// False for an executable found only in a fallback directory.
     #[serde(default)]
     pub executable_on_path: Option<bool>,
     /// Version, proven by `<bin> --version`.
+    #[schemars(extend("x-untrusted" = true))]
     pub version: DetectedString,
     /// Install method from vendor metadata, or inferred from the executable path.
     pub install_method: DetectedString,

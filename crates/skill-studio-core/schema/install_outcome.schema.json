@@ -21,7 +21,8 @@
         },
         "deployment_path": {
           "description": "Where its canonical folder now lives.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "linked_harnesses": {
           "description": "Harnesses that now see the skill through a per-skill link or a\nwhole-folder link into the shared folder.",
@@ -57,7 +58,8 @@
         },
         "identity": {
           "description": "The normalized identity that needs confirming.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         }
       },
       "required": [
@@ -73,7 +75,8 @@
     },
     "SkillName": {
       "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "AgentIdentity": {
       "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
@@ -96,7 +99,8 @@
             },
             "path": {
               "description": "The skill folder the harness reads.",
-              "type": "string"
+              "type": "string",
+              "x-untrusted": true
             }
           },
           "required": [
@@ -119,7 +123,8 @@
             },
             "path": {
               "description": "The new link.",
-              "type": "string"
+              "type": "string",
+              "x-untrusted": true
             }
           },
           "required": [
@@ -142,7 +147,8 @@
             },
             "path": {
               "description": "The new folder.",
-              "type": "string"
+              "type": "string",
+              "x-untrusted": true
             },
             "link_failed": {
               "description": "`true` when a link was asked for but the symlink failed, so the\nfolder was copied instead.",
@@ -170,7 +176,8 @@
             },
             "reason": {
               "description": "Why, in one plain sentence.",
-              "type": "string"
+              "type": "string",
+              "x-untrusted": true
             }
           },
           "required": [

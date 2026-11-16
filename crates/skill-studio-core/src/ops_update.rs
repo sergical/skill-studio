@@ -306,14 +306,17 @@ pub(crate) fn cli_failure(command: &str, output: &crate::ports::ProcessOutput) -
             !line.is_empty() && !line.starts_with("npm notice") && !line.starts_with("npm warn")
         })
         .collect();
-    let detail = if output.timed_out {
-        "timed out".to_string()
+    if output.timed_out {
+        CoreError::new(ErrorCode::Io, format!("{command} failed: timed out"))
     } else if lines.is_empty() {
-        format!("exit status {:?}", output.status)
+        CoreError::new(
+            ErrorCode::Io,
+            format!("{command} failed: exit status {:?}", output.status),
+        )
     } else {
-        lines[lines.len().saturating_sub(3)..].join(" ")
-    };
-    CoreError::new(ErrorCode::Io, format!("{command} failed: {detail}"))
+        CoreError::new(ErrorCode::Io, format!("{command} failed"))
+            .with_detail(lines[lines.len().saturating_sub(3)..].join(" "))
+    }
 }
 
 /// `Dotagents`/`SkillsSh` preconditions (U5): a missing source or a host
@@ -1563,7 +1566,7 @@ fn update_all_body(
                 outcome: Some(outcome),
             }),
             Err(e) => {
-                errors.insert(req.skill.0.clone(), e.message.clone());
+                errors.insert(req.skill.0.clone(), e.text());
                 items.push(UpdateAllItem {
                     skill: req.skill.clone(),
                     outcome: None,

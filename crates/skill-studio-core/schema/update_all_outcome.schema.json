@@ -17,7 +17,8 @@
       "additionalProperties": {
         "type": "string"
       },
-      "default": {}
+      "default": {},
+      "x-untrusted": true
     },
     "not_run": {
       "description": "Skills never started because the batch's cancel token was set; they\nhave no entry in `items` or `errors`.",
@@ -58,7 +59,8 @@
     },
     "SkillName": {
       "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "UpdateOutcome": {
       "description": "Result of `update`.",
@@ -74,7 +76,8 @@
         },
         "deployment_path": {
           "description": "Where its canonical folder lives.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "tree_hash_before": {
           "description": "The tree's git tree SHA before this update.",

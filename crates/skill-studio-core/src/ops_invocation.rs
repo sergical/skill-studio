@@ -37,6 +37,7 @@ pub struct InvocationDeployment {
     /// Harness that reads this copy.
     pub harness: AgentId,
     /// Copy directory.
+    #[schemars(extend("x-untrusted" = true))]
     pub path: PathBuf,
     /// Mode this harness reads.
     pub mode: InvocationMode,

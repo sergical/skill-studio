@@ -19,6 +19,7 @@ pub struct ReviewRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewOutcome {
     /// Installed skill name.
+    #[schemars(extend("x-untrusted" = true))]
     pub skill: String,
     /// None after clear.
     pub review_date: Option<String>,
@@ -116,6 +117,7 @@ pub fn review_due(rt: &Runtime, ctx: &OpContext) -> Result<BTreeMap<String, Naiv
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewRow {
     /// Skill name.
+    #[schemars(extend("x-untrusted" = true))]
     pub skill: String,
     /// Saved date in YYYY-MM-DD form.
     pub review_date: String,
@@ -126,8 +128,10 @@ pub struct ReviewRow {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewObservation {
     /// Skipped file or root.
+    #[schemars(extend("x-untrusted" = true))]
     pub path: std::path::PathBuf,
     /// Why this history is unavailable.
+    #[schemars(extend("x-untrusted" = true))]
     pub reason: String,
 }
 /// Due skills with usage completeness facts.

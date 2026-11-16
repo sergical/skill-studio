@@ -4561,6 +4561,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "rustix",
+ "schemars 1.2.3",
  "sentry",
  "serde",
  "serde_json",

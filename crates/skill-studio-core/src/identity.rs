@@ -142,6 +142,7 @@ impl From<&'static str> for AgentId {
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
 #[serde(transparent)]
+#[schemars(extend("x-untrusted" = true))]
 pub struct SkillName(pub String);
 
 impl fmt::Display for SkillName {
@@ -158,6 +159,7 @@ impl fmt::Display for SkillName {
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
 #[serde(transparent)]
+#[schemars(extend("x-untrusted" = true))]
 pub struct ProjectRef(pub PathBuf);
 
 /// Where a root lives.

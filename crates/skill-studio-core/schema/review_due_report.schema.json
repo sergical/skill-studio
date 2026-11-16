@@ -35,7 +35,8 @@
       "properties": {
         "skill": {
           "description": "Skill name.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "review_date": {
           "description": "Saved date in YYYY-MM-DD form.",
@@ -60,11 +61,13 @@
       "properties": {
         "path": {
           "description": "Skipped file or root.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "reason": {
           "description": "Why this history is unavailable.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         }
       },
       "required": [
