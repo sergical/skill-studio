@@ -1,3 +1,4 @@
+import "./lib/zod-jitless";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { KitPreview } from "@skill-studio/ui";

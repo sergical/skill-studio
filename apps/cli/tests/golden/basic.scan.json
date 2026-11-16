@@ -318,47 +318,5 @@
   },
   "errors": [],
   "correlation_id": "-",
-  "event_id": null,
-  "timings": {
-    "op": "scan",
-    "elapsed_ms": "-",
-    "steps": [
-      {
-        "name": "ledgers_read",
-        "elapsed_ms": "-"
-      },
-      {
-        "name": "roots_walk",
-        "elapsed_ms": "-"
-      },
-      {
-        "name": "dir_walk",
-        "elapsed_ms": "-",
-        "parent": "roots_walk"
-      },
-      {
-        "name": "skill_md_read",
-        "elapsed_ms": "-",
-        "parent": "roots_walk"
-      },
-      {
-        "name": "frontmatter_parse",
-        "elapsed_ms": "-",
-        "parent": "roots_walk"
-      },
-      {
-        "name": "plugin_cache_walk",
-        "elapsed_ms": "-",
-        "parent": "roots_walk"
-      },
-      {
-        "name": "link_owner_propagation",
-        "elapsed_ms": "-"
-      },
-      {
-        "name": "claude_universal_reader_check",
-        "elapsed_ms": "-"
-      }
-    ]
-  }
+  "event_id": null
 }

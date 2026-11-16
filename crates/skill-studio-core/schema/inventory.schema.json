@@ -24,7 +24,8 @@
       "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "x-untrusted": true
     },
     "completeness": {
       "description": "Whether every root was read.",
@@ -43,7 +44,8 @@
       "items": {
         "type": "string"
       },
-      "default": []
+      "default": [],
+      "x-untrusted": true
     },
     "timings": {
       "description": "Phase timings.",
@@ -71,7 +73,8 @@
         },
         "source": {
           "description": "Recorded upstream, or manual for an adopted local folder.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "scope": {
           "description": "Scope containing the ledger.",
@@ -86,7 +89,8 @@
     },
     "SkillName": {
       "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "RootScope": {
       "description": "Where a root lives.",
@@ -125,7 +129,8 @@
     },
     "ProjectRef": {
       "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "InstalledSkillDto": {
       "description": "One skill with all of its deployments.",
@@ -133,7 +138,8 @@
       "properties": {
         "source": {
           "description": "Upstream owner/repo from the owning ledger, plugin@marketplace for a\nplugin skill, or manual.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "name": {
           "description": "Name.",
@@ -144,7 +150,8 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         },
         "deployments": {
           "description": "Deployments in scan order.",
@@ -185,7 +192,8 @@
         },
         "path": {
           "description": "Absolute lexical path of the skill directory.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "destination": {
           "description": "Universal or per-harness.",
@@ -204,7 +212,8 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         },
         "shared_via_whole_dir_link": {
           "description": "True when the skills root itself is a link into the universal root.",
@@ -219,7 +228,8 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         },
         "symlink_is_broken": {
           "description": "True when the deployment is a symlink whose target does not resolve.",
@@ -230,7 +240,8 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         },
         "owner_kind": {
           "description": "Which ledger owns the lifecycle.",
@@ -281,7 +292,8 @@
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "x-untrusted": true
         },
         "plugin": {
           "description": "Plugin provenance for a plugin-cache deployment.",
@@ -310,7 +322,8 @@
           "type": "object",
           "additionalProperties": {
             "type": "string"
-          }
+          },
+          "x-untrusted": true
         },
         "has_spec": {
           "description": "True when the SKILL.md matches the getsentry/skillet spec pattern.",
@@ -709,7 +722,8 @@
       "required": [
         "marketplace",
         "plugin"
-      ]
+      ],
+      "x-untrusted": true
     },
     "SkillFrontmatter": {
       "description": "`SKILL.md` frontmatter, per the agentskills.io spec. Unknown keys are\nignored by default serde behavior, so agent-specific extensions in a\nskill's frontmatter don't break parsing.",
@@ -772,7 +786,8 @@
             "null"
           ]
         }
-      }
+      },
+      "x-untrusted": true
     },
     "SourceKind": {
       "description": "How a skill made it onto disk.\n\nPorted from the desktop's `provenance::SourceKind`. Serializes to the same\nkebab-case strings the frontend has always used. Declaration order doubles\nas precedence order (dotagents beats plugin beats skills-sh beats in-repo\nbeats manual) via the derived `Ord`, matching the desktop's\n`classify_source_kind`.",
@@ -866,7 +881,8 @@
         },
         "message": {
           "description": "Message for a person.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         }
       },
       "required": [

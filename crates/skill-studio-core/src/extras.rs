@@ -20,12 +20,15 @@ pub struct ExtraEntry {
     /// `global` or `project`.
     pub scope: String,
     /// Project root for a project declaration.
+    #[schemars(extend("x-untrusted" = true))]
     pub project: Option<PathBuf>,
     /// `hook`, `mcp_server`, `instruction`, or `config` for an unreadable file.
     pub kind: String,
     /// Event, server, or instruction filename. Absent on unreadable files.
+    #[schemars(extend("x-untrusted" = true))]
     pub name: Option<String>,
     /// File that declares this item.
+    #[schemars(extend("x-untrusted" = true))]
     pub path: PathBuf,
     /// Handler count for hooks. One for other declarations, zero for unreadable files.
     pub count: usize,

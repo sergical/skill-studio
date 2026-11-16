@@ -49,7 +49,8 @@
   "$defs": {
     "SkillName": {
       "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "InstallMethod": {
       "description": "Which of the three ways `ops::install` can put a skill's bytes on disk.",
@@ -108,7 +109,8 @@
     },
     "ProjectRef": {
       "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "InstallFile": {
       "description": "One file `InstallMethod::Copy` stages into the new skill's folder, path\nrelative to the folder root (for example `SKILL.md` or\n`scripts/run.sh`).",

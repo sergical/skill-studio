@@ -1,32 +1,33 @@
 // ============================================================================
 // Skills Module - coordinated SKILL.md writes
-// Serializes editor-style SKILL.md read-modify-write operations in this
-// process and provides their atomic file-replacement primitive.
+// Every app-managed SKILL.md read-modify-write runs under the shared write
+// lease, the same `FileLease` core writes such as `ops_invocation` take, and
+// uses this module's atomic file-replacement primitive.
 // ============================================================================
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
 use std::time::SystemTime;
+
+use super::write_lease::WriteLeaseGuard;
 
 /// Counter appended to the atomic-write temp filename, on top of the pid and
 /// a timestamp, so two saves in the same nanosecond still get distinct files.
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-static SKILL_MD_WRITE_LOCK: Mutex<()> = Mutex::new(());
-
-/// Capability for reading and replacing SKILL.md while the process-wide
-/// write transaction is held. External editors do not participate in it.
-pub(crate) struct SkillMdWriteTransaction {
-    _guard: MutexGuard<'static, ()>,
+/// Capability for reading and replacing SKILL.md while the caller holds the
+/// write lease. Core writers and other Skill Studio processes take the same
+/// lease; external editors do not.
+pub(crate) struct SkillMdWriteTransaction<'lease> {
+    _lease: &'lease WriteLeaseGuard,
 }
 
 // Every method here takes `&self` as a capability token proving the caller
-// holds the write-transaction guard, not because the body reads it.
+// holds the write lease, not because the body reads it.
 #[allow(clippy::unused_self)]
-impl SkillMdWriteTransaction {
+impl SkillMdWriteTransaction<'_> {
     /// Reads text that will be checked or rewritten before this transaction
     /// replaces the same SKILL.md.
     pub(crate) fn read_to_string(&self, path: &Path) -> Result<String, String> {
@@ -49,51 +50,49 @@ impl SkillMdWriteTransaction {
         })
     }
 
-    /// Atomically replaces SKILL.md bytes without reacquiring the transaction
-    /// lock. Callers can safely use it after a read or drift check on `self`.
+    /// Atomically replaces SKILL.md bytes under the lease `self` borrows.
+    /// Callers can safely use it after a read or drift check on `self`.
     pub(crate) fn replace_bytes(&self, path: &Path, bytes: &[u8]) -> Result<(), String> {
-        atomic_replace_skill_md_unlocked(path, bytes)
+        atomic_replace_skill_md(path, bytes)
     }
 
-    /// Atomically replaces SKILL.md text without reacquiring the transaction
-    /// lock. Callers can safely use it after a read or drift check on `self`.
+    /// Atomically replaces SKILL.md text under the lease `self` borrows.
+    /// Callers can safely use it after a read or drift check on `self`.
     pub(crate) fn replace_text(&self, path: &Path, content: &str) -> Result<(), String> {
         self.replace_bytes(path, content.as_bytes())
     }
 }
 
-/// Starts one app-managed SKILL.md write transaction. Keep the returned
+/// Starts one app-managed SKILL.md write transaction under `lease`. Take the
+/// lease at the outermost point of the command and keep the returned
 /// capability alive across every read or drift check and its replacement.
-pub(crate) fn begin_skill_md_write_transaction() -> Result<SkillMdWriteTransaction, String> {
-    let guard = SKILL_MD_WRITE_LOCK.lock().map_err(|_| {
-        "SKILL.md write transaction lock is poisoned. Restart Skill Studio before editing SKILL.md again."
-            .to_string()
-    })?;
-    Ok(SkillMdWriteTransaction { _guard: guard })
+pub(crate) fn begin_skill_md_write_transaction(
+    lease: &WriteLeaseGuard,
+) -> SkillMdWriteTransaction<'_> {
+    SkillMdWriteTransaction { _lease: lease }
 }
 
-/// Atomically replaces SKILL.md in one app-managed write transaction. Only
-/// `write_skill_md_compare_and_swap` writes SKILL.md in production; this
-/// plain (non-comparing) write survives as a test helper for the atomic
-/// replace primitive itself.
+/// Atomically replaces SKILL.md with no lease, for tests of the replace
+/// primitive itself and for fixtures that stand in for an external editor.
 #[cfg(test)]
 pub(crate) fn write_skill_md(path: &Path, content: &str) -> Result<(), String> {
-    begin_skill_md_write_transaction()?.replace_text(path, content)
+    write_skill_md_bytes(path, content.as_bytes())
 }
 
-/// Atomically replaces SKILL.md bytes in one app-managed write transaction.
+/// Byte form of [`write_skill_md`].
 #[cfg(test)]
 pub(crate) fn write_skill_md_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    begin_skill_md_write_transaction()?.replace_bytes(path, bytes)
+    atomic_replace_skill_md(path, bytes)
 }
 
-/// Compares and atomically replaces SKILL.md in one app-managed transaction.
+/// Compares and atomically replaces SKILL.md under `lease`.
 pub(crate) fn write_skill_md_compare_and_swap(
+    lease: &WriteLeaseGuard,
     path: &Path,
     expected_content: &str,
     content: &str,
 ) -> Result<(), String> {
-    let transaction = begin_skill_md_write_transaction()?;
+    let transaction = begin_skill_md_write_transaction(lease);
     compare_and_replace_skill_md(&transaction, path, expected_content, content, || {})
 }
 
@@ -117,12 +116,13 @@ fn compare_and_replace_skill_md(
 
 #[cfg(test)]
 pub(crate) fn write_skill_md_compare_and_swap_with(
+    lease: &WriteLeaseGuard,
     path: &Path,
     expected_content: &str,
     content: &str,
     before_replace: impl FnOnce(),
 ) -> Result<(), String> {
-    let transaction = begin_skill_md_write_transaction()?;
+    let transaction = begin_skill_md_write_transaction(lease);
     compare_and_replace_skill_md(
         &transaction,
         path,
@@ -132,12 +132,7 @@ pub(crate) fn write_skill_md_compare_and_swap_with(
     )
 }
 
-#[cfg(test)]
-pub(crate) fn skill_md_write_transaction_is_held() -> bool {
-    SKILL_MD_WRITE_LOCK.try_lock().is_err()
-}
-
-fn atomic_replace_skill_md_unlocked(path: &Path, bytes: &[u8]) -> Result<(), String> {
+fn atomic_replace_skill_md(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("Failed to resolve parent directory of {}", path.display()))?;

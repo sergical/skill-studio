@@ -96,6 +96,7 @@ pub struct Issue {
     /// Deployment the issue belongs to, when it is deployment-specific.
     pub deployment_id: Option<DeploymentId>,
     /// Message for a person.
+    #[schemars(extend("x-untrusted" = true))]
     pub message: String,
     /// Suggested action.
     pub next_action: NextAction,
@@ -117,6 +118,7 @@ pub struct Observation {
     /// Root the observation is about, when there is one.
     pub root: Option<RootRef>,
     /// Message for a person.
+    #[schemars(extend("x-untrusted" = true))]
     pub message: String,
 }
 
@@ -132,6 +134,7 @@ pub struct Timing {
 /// Where a plugin-cache deployment came from, per the agent-plugins.org
 /// manifest convention (`<cache>/<marketplace>/<plugin>/<version>/skills/`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(extend("x-untrusted" = true))]
 pub struct PluginSourceDto {
     /// Marketplace directory name.
     pub marketplace: String,
@@ -160,6 +163,7 @@ pub struct DeploymentDto {
     /// Harness that owns the root, when it is a harness root.
     pub harness: Option<AgentId>,
     /// Absolute lexical path of the skill directory.
+    #[schemars(extend("x-untrusted" = true))]
     pub path: PathBuf,
     /// Universal or per-harness.
     pub destination: SkillDestination,
@@ -168,6 +172,7 @@ pub struct DeploymentDto {
     /// Whether writes are allowed.
     pub mutability: DeploymentMutability,
     /// Link target, when the deployment is a symlink.
+    #[schemars(extend("x-untrusted" = true))]
     pub link_target: Option<PathBuf>,
     /// True when the skills root itself is a link into the universal root.
     pub shared_via_whole_dir_link: bool,
@@ -178,10 +183,12 @@ pub struct DeploymentDto {
     /// `link_target` is the symlink's own target, while `resolved_path` is
     /// `None` for an ordinary directory that canonicalizes to itself or for
     /// a symlink whose target does not resolve.
+    #[schemars(extend("x-untrusted" = true))]
     pub resolved_path: Option<PathBuf>,
     /// True when the deployment is a symlink whose target does not resolve.
     pub symlink_is_broken: bool,
     /// Error reading the symlink target, when one occurred.
+    #[schemars(extend("x-untrusted" = true))]
     pub symlink_error: Option<String>,
     /// Which ledger owns the lifecycle.
     pub owner_kind: LifecycleOwnerKind,
@@ -194,12 +201,14 @@ pub struct DeploymentDto {
     /// Readers of a universal deployment that have it disabled.
     pub disabled_readers: Vec<AgentId>,
     /// Spec violations, verbatim messages.
+    #[schemars(extend("x-untrusted" = true))]
     pub spec_violations: Vec<String>,
     /// Plugin provenance for a plugin-cache deployment.
     pub plugin: Option<PluginSourceDto>,
     /// Parsed `SKILL.md` frontmatter, when the file parsed.
     pub frontmatter: Option<SkillFrontmatter>,
     /// Every top-level frontmatter key, stringified.
+    #[schemars(extend("x-untrusted" = true))]
     pub frontmatter_fields: std::collections::BTreeMap<String, String>,
     /// True when the SKILL.md matches the getsentry/skillet spec pattern.
     pub has_spec: bool,
@@ -258,10 +267,12 @@ pub struct DeploymentDto {
 pub struct InstalledSkillDto {
     /// Upstream owner/repo from the owning ledger, plugin@marketplace for a
     /// plugin skill, or manual.
+    #[schemars(extend("x-untrusted" = true))]
     pub source: String,
     /// Name.
     pub name: SkillName,
     /// Description from the first readable deployment.
+    #[schemars(extend("x-untrusted" = true))]
     pub description: Option<String>,
     /// Deployments in scan order.
     pub deployments: Vec<DeploymentDto>,
@@ -276,6 +287,7 @@ pub struct Inventory {
     /// Skills sorted by name.
     pub skills: Vec<InstalledSkillDto>,
     /// Projects that were covered, sorted by canonical path.
+    #[schemars(extend("x-untrusted" = true))]
     pub projects: Vec<PathBuf>,
     /// Whether every root was read.
     pub completeness: Completeness,
@@ -288,6 +300,7 @@ pub struct Inventory {
     /// merging this result into a previous one must scope a carried-over
     /// deployment to.
     #[serde(default)]
+    #[schemars(extend("x-untrusted" = true))]
     pub unread_roots: Vec<PathBuf>,
     /// Phase timings.
     pub timings: Vec<Timing>,
@@ -372,10 +385,12 @@ pub struct FrontmatterRepairPreview {
     /// Target deployment.
     pub deployment_id: DeploymentId,
     /// Absolute path of `SKILL.md`.
+    #[schemars(extend("x-untrusted" = true))]
     pub path: PathBuf,
     /// Scope of the deployment's root.
     pub scope: RootScope,
     /// Why the repair is proposed, for a person (the spec rule that fails).
+    #[schemars(extend("x-untrusted" = true))]
     pub reason: String,
     /// Owner at preview time.
     pub owner_id: Option<OwnerId>,
@@ -386,15 +401,19 @@ pub struct FrontmatterRepairPreview {
     /// Fingerprint of the proposed bytes.
     pub proposed_fingerprint: Fingerprint,
     /// Current `SKILL.md` text, for a side-by-side view.
+    #[schemars(extend("x-untrusted" = true))]
     pub original_content: String,
     /// Proposed `SKILL.md` text, for a side-by-side view.
+    #[schemars(extend("x-untrusted" = true))]
     pub proposed_content: String,
     /// Unified diff for a person.
+    #[schemars(extend("x-untrusted" = true))]
     pub diff: String,
     /// Modes the caller may choose from.
     pub allowed_apply_modes: Vec<RepairApplyMode>,
     /// Warning shown for [`RepairApplyMode::FixInstalledCopy`]: the next
     /// managed update overwrites the fix.
+    #[schemars(extend("x-untrusted" = true))]
     pub managed_update_warning: Option<String>,
 }
 
@@ -472,8 +491,10 @@ pub enum UnrepairedIssueKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UnrepairedIssue {
     /// Path of the offending file or folder, when the issue names one.
+    #[schemars(extend("x-untrusted" = true))]
     pub path: PathBuf,
     /// Message for a person.
+    #[schemars(extend("x-untrusted" = true))]
     pub message: String,
     /// Stable category a caller can branch on instead of `message`.
     pub kind: UnrepairedIssueKind,
@@ -486,10 +507,13 @@ pub struct ConflictSummary {
     /// Skill the conflict belongs to.
     pub skill: SkillName,
     /// One-line summary for a person.
+    #[schemars(extend("x-untrusted" = true))]
     pub message: String,
     /// First copy's path.
+    #[schemars(extend("x-untrusted" = true))]
     pub path_a: PathBuf,
     /// Second copy's path.
+    #[schemars(extend("x-untrusted" = true))]
     pub path_b: PathBuf,
 }
 
@@ -539,8 +563,10 @@ pub struct DoctorViolation {
     /// Which invariant is violated.
     pub invariant: crate::doctor::DoctorInvariant,
     /// Path of the offending entry, when the invariant names one.
+    #[schemars(extend("x-untrusted" = true))]
     pub path: PathBuf,
     /// Message for a person.
+    #[schemars(extend("x-untrusted" = true))]
     pub detail: String,
 }
 
@@ -627,6 +653,7 @@ pub struct EventDto {
     /// `global` or `project`.
     pub scope: Option<String>,
     /// Project path, when project-scoped.
+    #[schemars(extend("x-untrusted" = true))]
     pub project_path: Option<PathBuf>,
     /// `pending`, `done`, `failed`, or `interrupted`.
     pub status: String,
@@ -635,6 +662,7 @@ pub struct EventDto {
     /// Whether the touched files still match the recorded fingerprints.
     pub drift: DriftState,
     /// Relative backup directory, when bytes were preserved.
+    #[schemars(extend("x-untrusted" = true))]
     pub backup_dir: Option<String>,
 }
 
@@ -673,6 +701,7 @@ pub struct RestoreOutcome {
     /// The event that was reverted.
     pub reverted_event_id: EventId,
     /// Paths put back.
+    #[schemars(extend("x-untrusted" = true))]
     pub restored_paths: Vec<PathBuf>,
 }
 
@@ -691,6 +720,7 @@ pub struct CommandHealth {
     /// 95th-percentile elapsed milliseconds, nearest-rank.
     pub p95_ms: u64,
     /// The most recent failing call's error text, if any failed.
+    #[schemars(extend("x-untrusted" = true))]
     pub last_error: Option<String>,
 }
 
@@ -759,6 +789,7 @@ pub struct ParkCheck {
     /// opens an install dialog, so it is not run.
     pub git_tracked: Option<bool>,
     /// The project the copy belongs to, when it is a project copy.
+    #[schemars(extend("x-untrusted" = true))]
     pub project: Option<PathBuf>,
 }
 
@@ -770,10 +801,12 @@ pub struct ParkOutcome {
     /// The deployment that was parked.
     pub deployment_id: DeploymentId,
     /// Where the directory now lives, under the parked root.
+    #[schemars(extend("x-untrusted" = true))]
     pub parked_path: PathBuf,
     /// Notes for the caller; never a reason the park failed. An adapter that
     /// ran `park_check` first puts its git warning here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(extend("x-untrusted" = true))]
     pub warnings: Vec<String>,
 }
 
@@ -813,6 +846,7 @@ pub struct UnparkOutcome {
     /// The deployment that was restored.
     pub deployment_id: DeploymentId,
     /// Where the directory now lives: the folder it was parked from.
+    #[schemars(extend("x-untrusted" = true))]
     pub restored_path: PathBuf,
 }
 
@@ -834,6 +868,7 @@ pub struct SplitCopy {
     /// The harness that reads this copy.
     pub harness: AgentId,
     /// The copy's folder.
+    #[schemars(extend("x-untrusted" = true))]
     pub path: PathBuf,
 }
 
@@ -849,8 +884,10 @@ pub struct SplitOutcome {
     /// One entry per chosen harness.
     pub copies: Vec<SplitCopy>,
     /// Links into the Universal folder that were removed.
+    #[schemars(extend("x-untrusted" = true))]
     pub removed_links: Vec<PathBuf>,
     /// Where the Universal folder was moved (quarantine), kept for undo.
+    #[schemars(extend("x-untrusted" = true))]
     pub quarantine_path: PathBuf,
     /// Plain-language note: `npx skills update` updates only a Universal
     /// copy, so these copies no longer get updates from it.
@@ -882,6 +919,7 @@ pub struct AgentOffOutcome {
     /// One entry per agent that got its own copy, including `agent`.
     pub copies: Vec<SplitCopy>,
     /// Where `agent`'s copy now lives, under the parked root.
+    #[schemars(extend("x-untrusted" = true))]
     pub parked_path: PathBuf,
     /// Plain-language note: `npx skills update` updates only a Universal
     /// copy, so these copies no longer get updates from it.
@@ -892,6 +930,7 @@ pub struct AgentOffOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AgentOffRefusal {
     /// One plain line a person can act on.
+    #[schemars(extend("x-untrusted" = true))]
     pub reason: String,
     /// True when parking the shared copy for every agent is the way out.
     pub off_everywhere: bool,
@@ -906,6 +945,7 @@ pub struct AgentOffCheck {
     /// shows as deleted files. `None` when git could not be asked.
     pub git_tracked: Option<bool>,
     /// The project the copy belongs to, when it is a project copy.
+    #[schemars(extend("x-untrusted" = true))]
     pub project: Option<PathBuf>,
 }
 
@@ -1006,6 +1046,7 @@ pub enum InstallOutcome {
         /// The skill that was installed.
         skill: SkillName,
         /// Where its canonical folder now lives.
+        #[schemars(extend("x-untrusted" = true))]
         deployment_path: PathBuf,
         /// Harnesses that now see the skill through a per-skill link or a
         /// whole-folder link into the shared folder.
@@ -1019,6 +1060,7 @@ pub enum InstallOutcome {
     /// once the user confirms.
     NeedsTrust {
         /// The normalized identity that needs confirming.
+        #[schemars(extend("x-untrusted" = true))]
         identity: String,
     },
 }
@@ -1053,6 +1095,7 @@ pub enum InstallHarnessResult {
         /// The requested harness (or `universal`).
         harness: AgentId,
         /// The skill folder the harness reads.
+        #[schemars(extend("x-untrusted" = true))]
         path: PathBuf,
     },
     /// A relative symlink at `path` points to the shared folder's copy.
@@ -1060,6 +1103,7 @@ pub enum InstallHarnessResult {
         /// The requested harness.
         harness: AgentId,
         /// The new link.
+        #[schemars(extend("x-untrusted" = true))]
         path: PathBuf,
     },
     /// A real folder at `path`.
@@ -1067,6 +1111,7 @@ pub enum InstallHarnessResult {
         /// The requested harness.
         harness: AgentId,
         /// The new folder.
+        #[schemars(extend("x-untrusted" = true))]
         path: PathBuf,
         /// `true` when a link was asked for but the symlink failed, so the
         /// folder was copied instead.
@@ -1077,6 +1122,7 @@ pub enum InstallHarnessResult {
         /// The requested harness.
         harness: AgentId,
         /// Why, in one plain sentence.
+        #[schemars(extend("x-untrusted" = true))]
         reason: String,
     },
 }
@@ -1106,6 +1152,7 @@ pub struct RemoveOutcome {
     /// Remove row). `None` for `Dotagents`/`SkillsSh`, whose own CLI deletes
     /// the bytes directly, the same as it does for every other build's
     /// remove today.
+    #[schemars(extend("x-untrusted" = true))]
     pub quarantine_path: Option<PathBuf>,
 }
 
@@ -1179,6 +1226,7 @@ pub struct UpdateOutcome {
     /// The skill that was updated.
     pub skill: SkillName,
     /// Where its canonical folder lives.
+    #[schemars(extend("x-untrusted" = true))]
     pub deployment_path: PathBuf,
     /// The tree's git tree SHA before this update.
     pub tree_hash_before: String,
@@ -1206,6 +1254,7 @@ pub struct UpdateAllOutcome {
     pub items: Vec<UpdateAllItem>,
     /// `skill.0` -> error message, for every item whose `outcome` is `None`.
     #[serde(default)]
+    #[schemars(extend("x-untrusted" = true))]
     pub errors: std::collections::BTreeMap<String, String>,
     /// Skills never started because the batch's cancel token was set; they
     /// have no entry in `items` or `errors`.
@@ -1267,6 +1316,7 @@ pub struct LockOnlySkill {
     /// Ledger key.
     pub name: SkillName,
     /// Recorded upstream, or manual for an adopted local folder.
+    #[schemars(extend("x-untrusted" = true))]
     pub source: String,
     /// Scope containing the ledger.
     pub scope: RootScope,

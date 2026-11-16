@@ -16,15 +16,20 @@ import fixture
 
 BYTE_BUDGET = 2048
 BASELINE = Path(__file__).parent / "contracts/baseline.json"
+DAYS = {"days": fixture.WINDOW_DAYS}
+# Each question: CLI arguments after `library`, then the MCP `library` arguments.
 CALLS = {
-    "q1": ("scan", "scan"),
-    "q2": ("usage", "skill_usage"),
-    "q3": ("usage", "skill_usage"),
-    "q4": ("invocation", "invocation"),
-    "u1": ("scan", "scan"),
-    "u2": ("scan", "scan"),
-    "s1": ("scan", "scan"),
-    "s2": ("scan", "scan"),
+    "q1": (["--limit", "0"], {"limit": 0}),
+    "q2": (["--days", str(fixture.WINDOW_DAYS), "--limit", "0"], {**DAYS, "limit": 0}),
+    "q3": (["--days", str(fixture.WINDOW_DAYS), "--top", "5", "--fields", "name,uses"],
+           {**DAYS, "top": 5, "fields": ["name", "uses"]}),
+    "q4": (["--mode", "claude-code=manual", "--mode", "codex=auto", "--limit", "0"],
+           {"modes": {"claude-code": "manual", "codex": "auto"}, "limit": 0}),
+    "u1": (["--source", fixture.UPDATED_PACK, "--limit", "0"], {"source": fixture.UPDATED_PACK, "limit": 0}),
+    "u2": (["--source", fixture.UPDATED_PACK, "--fields", "name,copies"],
+           {"source": fixture.UPDATED_PACK, "fields": ["name", "copies"]}),
+    "s1": (["--count-by", "source", "--limit", "0"], {"count_by": "source", "limit": 0}),
+    "s2": (["--source", "manual", "--fields", "name"], {"source": "manual", "fields": ["name"]}),
 }
 
 
@@ -101,48 +106,25 @@ def payload(raw: bytes, transport: str) -> dict:
     # Both transports return the shared operation envelope.
     if data.get("status") == "error":
         raise ValueError("operation error")
-    return data.get("data", data)
+    return data
 
 
-def library_rows(data: dict, home: Path) -> list:
-    root = home / ".agents/skills"
-    return [s for s in data["skills"] if any(Path(d["path"]).parent == root for d in s["deployments"])]
-
-
-def extract(question: str, data: dict, home: Path):
-    if question in {"q2", "q3"}:
-        rows = data["rows"]
-        if question == "q2":
-            return sum(r["recent_uses"] > 0 for r in rows)
-        return [{"skill": r["skill"], "uses": r["recent_uses"]}
-                for r in sorted(rows, key=lambda r: (-r["recent_uses"], r["skill"]))[:5]]
-    if question == "q4":
-        count = 0
-        for row in data["skills"]:
-            if not any(Path(d["path"]).parent == home / ".agents/skills" for d in row["deployments"]):
-                continue
-            modes = {(d["harness"], d["mode"]) for d in row["deployments"]}
-            count += ("claude-code", "manual") in modes and ("codex", "auto") in modes
-        return count
-    rows = library_rows(data, home)
-    if question == "q1":
-        return len(rows)
-    if any("source" not in r for r in rows):
-        return None
-    if question == "u1":
-        return sum(r["source"] == fixture.UPDATED_PACK for r in rows)
+def extract(question: str, envelope: dict):
+    data = envelope["data"]
+    if question in {"q1", "q4", "u1"}:
+        return data["count"]
+    if question == "q2":
+        return data["used"]
     if question == "s1":
-        counts = {}
-        for row in rows:
-            if row["source"] != "manual":
-                counts[row["source"]] = counts.get(row["source"], 0) + 1
-        return [{"repo": repo, "skills": n} for repo, n in sorted(counts.items())]
-    if question == "s2":
-        return sorted(r["name"] for r in rows if r["source"] == "manual")
-    if any("copy_status" not in d for r in rows for d in r["deployments"]):
-        return None
-    return [{"skill": r["name"], "agent": d["harness"]} for r in rows
-            if r["source"] == fixture.UPDATED_PACK for d in r["deployments"] if d["copy_status"] == "stale"]
+        return [{"repo": repo, "skills": n} for repo, n in envelope["page"]["counts"].items() if repo != "null"]
+    if envelope.get("page", {}).get("next_cursor"):
+        raise ValueError("answer spans more than one page")
+    if question == "q3":
+        return [{"skill": r["name"], "uses": r["uses"]} for r in data["rows"]]
+    if question == "u2":
+        return [{"skill": r["name"], "agent": agent} for r in data["rows"]
+                for agent, status in r["copies"].items() if status in {"old", "changed"}]
+    return [r["name"] for r in data["rows"]]
 
 
 def run(args, score, questions, repo: Path) -> int:
@@ -161,11 +143,9 @@ def run(args, score, questions, repo: Path) -> int:
                 home = Path(temp) / "fixture/home"
                 for question in keys:
                     for transport, binary in binaries.items():
-                        command, tool = CALLS[question]
-                        arguments = {"days": fixture.WINDOW_DAYS} if command == "usage" else {}
-                        argv = [str(binary), command, "--home", str(home), "--json"]
-                        if command == "usage":
-                            argv += ["--days", str(fixture.WINDOW_DAYS)]
+                        flags, arguments = CALLS[question]
+                        tool = "library"
+                        argv = [str(binary), "library", "--home", str(home), "--json", *flags]
                         raw, answer, error = b"", None, None
                         try:
                             if transport == "cli":
@@ -175,7 +155,7 @@ def run(args, score, questions, repo: Path) -> int:
                                     raise ValueError(f"CLI exit {proc.returncode}")
                             else:
                                 raw = mcp_call(binary, home, tool, arguments)
-                            answer = extract(question, payload(raw, transport), home)
+                            answer = extract(question, payload(raw, transport))
                         except (ValueError, KeyError, StopIteration, RuntimeError, queue.Empty, subprocess.TimeoutExpired) as exc:
                             error = str(exc) or type(exc).__name__
                         correct = score(task, {question: answer}, truth)[question]

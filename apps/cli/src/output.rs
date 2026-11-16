@@ -14,22 +14,31 @@ use skill_studio_core::dto::{
 };
 use skill_studio_core::harness::{Capabilities, HarnessReport};
 use skill_studio_core::identity::AgentId;
-use skill_studio_core::ops::ResultEnvelope;
+use skill_studio_core::ops::{Outcome, ResultEnvelope};
 use skill_studio_core::skill_update_check::{Currency, OutdatedRecord};
+use skill_studio_core::view::ViewRequest;
 use skill_studio_host::{SkillUsageRow, UsageReport};
 use std::collections::BTreeMap;
 
-/// Prints one envelope as a single JSON document with a trailing newline.
-/// `println!` supplies the newline; the document itself is compact, so a
-/// golden diff or a scripted caller sees exactly one line.
-pub fn print_json<T: Serialize>(envelope: &ResultEnvelope<T>) {
+/// Prints one envelope, with `view` applied, as a single JSON document with
+/// a trailing newline, and returns its exit status. `timings` is kept only
+/// for `--time`. The document is compact, so a golden diff or a scripted
+/// caller sees exactly one line.
+pub fn print_json<T: Serialize + Outcome>(
+    envelope: &ResultEnvelope<T>,
+    view: &ViewRequest,
+    time: bool,
+) -> i32 {
     // Every field on a `ResultEnvelope` is one of our own DTOs; the only way
-    // `to_string` errs is a non-string map key or a NaN/infinite float,
+    // serializing errs is a non-string map key or a NaN/infinite float,
     // neither of which this envelope ever holds. If it ever does, stdout must
     // stay empty rather than carry a document that is not a `ResultEnvelope`,
     // and the process must not exit as if the command succeeded: EX_SOFTWARE.
-    match serde_json::to_string(envelope) {
-        Ok(line) => println!("{line}"),
+    match skill_studio_core::view::render(envelope, view, time) {
+        Ok(rendered) => {
+            println!("{}", rendered.json);
+            rendered.exit_status
+        }
         Err(err) => {
             eprintln!("failed to serialize the result envelope: {err}");
             std::process::exit(70);
@@ -44,7 +53,7 @@ fn print_errors(envelope: &ResultEnvelope<impl Serialize>) {
             .as_ref()
             .map(|p| format!(" ({p})"))
             .unwrap_or_default();
-        eprintln!("{}: {}{path}", error.code.as_str(), error.message);
+        eprintln!("{}: {error}{path}", error.code.as_str());
     }
 }
 

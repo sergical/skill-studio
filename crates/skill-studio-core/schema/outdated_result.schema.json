@@ -19,28 +19,32 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         },
         "latest_commit": {
           "description": "The newest side: a dotagents commit SHA, or a skills.sh tree SHA for\nthat folder. `None` on the same conditions as `installed_commit`, or\nwhen the lookup failed.",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         },
         "latest_commit_at": {
           "description": "The newest commit's date, dotagents only - `None` for skills.sh\n(tree SHAs carry no date) and whenever `latest_commit` is `None`.",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         },
         "error": {
           "description": "Why the lookup could not confirm currency, when `currency` is\n[`Currency::Unknown`] because of a lookup failure rather than a\nmissing lock/ledger entry. `None` otherwise.",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         }
       },
       "required": [

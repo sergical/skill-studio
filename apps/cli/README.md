@@ -93,6 +93,53 @@ trailing newline, and exits with `envelope.exit_status()`. Without
 `--json`, it prints a short human table (skills, deployments, issues) and
 uses the same exit status. `--json` never prompts and never colors.
 
+### Bounded answers
+
+`scan`, `diagnose`, `library`, `usage`, `outdated`, `invocation` and
+`pack list|show` return their main list in pages. Without view flags, the
+lists keep the rows that fit in a 32 KB answer, `page` included, main list
+first. When a list loses rows, the envelope gets a top-level `page`:
+
+```json
+{
+  "page": {
+    "list": "/skills",
+    "total": 4002,
+    "returned": 61,
+    "next_cursor": "61",
+    "also": [
+      {
+        "list": "/inventory/skills",
+        "total": 4002,
+        "returned": 58,
+        "next_cursor": "/inventory/skills@58"
+      }
+    ]
+  }
+}
+```
+
+A cursor continues only its own list: `<offset>` for the main list,
+`<list>@<offset>` for a list in `also`. The other lists then return only
+their totals, so no call repeats a row.
+
+These flags need `--json`. The MCP read tools take the same names
+(`limit`, `cursor`, `fields`, `count_by`) as arguments.
+
+| Flag                 | Effect                                                                |
+| -------------------- | --------------------------------------------------------------------- |
+| `--limit <n>`        | Return at most `n` rows. `--limit 0` returns only the totals.         |
+| `--cursor <c>`       | Continue the list of a `next_cursor` from an earlier call.            |
+| `--fields a,b`       | Keep only these keys in each row.                                     |
+| `--count-by <field>` | Put row counts per value of `field` in `page.counts`, over every row. |
+
+A field that is not a row key, or a cursor that is not a `next_cursor`,
+gives `invalid_request` and exit 2. `timings` is in the envelope only with
+`--time`; MCP answers do not include it.
+
+`library --mode <agent>=<manual|auto>` (repeatable; MCP `modes`) keeps the
+rows that each named agent reads in that mode.
+
 An error — including a scope that fails to normalize, such as
 `--fixture /nonexistent` — still prints a full envelope with
 `status: "error"` and `data: null` in JSON mode; the CLI never panics

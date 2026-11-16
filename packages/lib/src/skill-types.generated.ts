@@ -1542,7 +1542,7 @@ export interface PackStep {
           | "incomplete"
           | "cancelled";
         /**
-         * The per-skill op's message.
+         * The per-skill op's message, with any child process output.
          */
         reason: string;
       };
@@ -1953,13 +1953,17 @@ export interface ErrorEntry {
     | "incomplete"
     | "cancelled";
   /**
-   * Human-readable message.
+   * Human-readable message. It can quote names and paths from disk.
    */
   message: string;
   /**
    * Display path relative to the scope home, when there is one.
    */
   path: string | null;
+  /**
+   * Third-party text behind the error, such as child process stderr.
+   */
+  detail?: string | null;
 }
 /**
  * Results of turning a batch of parked skills on.

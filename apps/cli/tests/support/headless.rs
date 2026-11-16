@@ -134,3 +134,17 @@ pub fn mcp_request(
     child.wait().unwrap();
     result
 }
+
+/// The envelope of an MCP tool response without its leading `untrusted_paths`,
+/// so that it compares equal to the CLI's envelope.
+#[allow(dead_code)]
+pub fn mcp_envelope(response: &Value) -> Value {
+    let mut envelope = response["result"]["structuredContent"].clone();
+    let fields = envelope.as_object_mut().unwrap();
+    assert_eq!(
+        fields.keys().next().map(String::as_str),
+        Some("untrusted_paths")
+    );
+    assert!(fields.remove("untrusted_paths").unwrap().is_array());
+    envelope
+}

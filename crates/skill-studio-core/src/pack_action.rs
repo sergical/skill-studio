@@ -108,7 +108,8 @@ pub enum PackStepState {
     Failed {
         /// Stable code of the failure.
         code: ErrorCode,
-        /// The per-skill op's message.
+        /// The per-skill op's message, with any child process output.
+        #[schemars(extend("x-untrusted" = true))]
         reason: String,
     },
 }
@@ -117,8 +118,10 @@ pub enum PackStepState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PackStep {
     /// Pack source.
+    #[schemars(extend("x-untrusted" = true))]
     pub source: String,
     /// Skill name.
+    #[schemars(extend("x-untrusted" = true))]
     pub skill: String,
     /// Global or one project.
     pub scope: RootScope,
@@ -154,8 +157,9 @@ impl Outcome for PackActionReport {
             .filter_map(|step| match &step.state {
                 PackStepState::Failed { code, reason } => Some(ErrorEntry {
                     code: *code,
-                    message: format!("{}: {reason}", step.skill),
+                    message: "A pack step failed.".into(),
                     path: None,
+                    detail: Some(format!("{}: {reason}", step.skill)),
                 }),
                 _ => None,
             })
@@ -444,7 +448,7 @@ fn run_each(
             },
             Err(err) => PackStepState::Failed {
                 code: err.code,
-                reason: err.message,
+                reason: err.text(),
             },
         };
     }

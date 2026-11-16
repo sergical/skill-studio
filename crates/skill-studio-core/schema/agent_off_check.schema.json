@@ -27,7 +27,8 @@
       "type": [
         "string",
         "null"
-      ]
+      ],
+      "x-untrusted": true
     }
   },
   "$defs": {
@@ -37,7 +38,8 @@
       "properties": {
         "reason": {
           "description": "One plain line a person can act on.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "off_everywhere": {
           "description": "True when parking the shared copy for every agent is the way out.",

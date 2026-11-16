@@ -37,6 +37,7 @@ pub struct InvocationDeployment {
     /// Harness that reads this copy.
     pub harness: AgentId,
     /// Copy directory.
+    #[schemars(extend("x-untrusted" = true))]
     pub path: PathBuf,
     /// Mode this harness reads.
     pub mode: InvocationMode,
@@ -59,7 +60,9 @@ pub struct InvocationReport {
     /// Changes that can be undone through `restore_event`.
     pub event_ids: Vec<EventId>,
 }
-impl Outcome for InvocationReport {}
+impl Outcome for InvocationReport {
+    const LISTS: &'static [&'static str] = &["/skills"];
+}
 
 /// Check invocation, or set both skill-owned controls under the write lease.
 pub fn invocation(

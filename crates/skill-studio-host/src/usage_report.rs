@@ -39,14 +39,16 @@ pub fn cli_usage_cache_path(desktop_cache: &Path) -> PathBuf {
 }
 
 /// One installed skill's uses.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct SkillUsageRow {
     /// Distinct (harness, normalized session identity) pairs for the standalone review-date report.
     #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub sessions: usize,
     /// Uses in the last `days` days, by trigger.
     pub triggers: BTreeMap<String, u32>,
     /// The skill's name.
+    #[schemars(extend("x-untrusted" = true))]
     pub skill: String,
     /// Uses inside the report window: `since`..`until`, or the last `days`.
     pub recent_uses: u32,
@@ -61,7 +63,7 @@ pub struct SkillUsageRow {
 }
 
 /// Uses for every installed, not parked skill over one window.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct UsageReport {
     /// Roots or files whose history was unavailable or skipped.
     pub observations: Vec<crate::skill_uses::UsageObservation>,
@@ -73,6 +75,7 @@ pub struct UsageReport {
     pub rows: Vec<SkillUsageRow>,
     /// Names of the skills with no use in the window, in `rows` order.
     /// Empty when the caller asked for the top rows only.
+    #[schemars(extend("x-untrusted" = true))]
     pub unused: Vec<String>,
     /// Set when some session history could not be read, so a skill in
     /// `unused` may still have uses that were not counted, or when the scan
@@ -81,6 +84,8 @@ pub struct UsageReport {
 }
 
 impl Outcome for UsageReport {
+    const LISTS: &'static [&'static str] = &["/rows", "/unused"];
+
     fn status(&self) -> OpStatus {
         if self.partial {
             OpStatus::Partial

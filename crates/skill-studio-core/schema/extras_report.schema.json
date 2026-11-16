@@ -33,7 +33,8 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         },
         "kind": {
           "description": "`hook`, `mcp_server`, `instruction`, or `config` for an unreadable file.",
@@ -44,11 +45,13 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         },
         "path": {
           "description": "File that declares this item.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "count": {
           "description": "Handler count for hooks. One for other declarations, zero for unreadable files.",

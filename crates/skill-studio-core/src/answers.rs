@@ -17,6 +17,7 @@ pub struct InvocationMismatches {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct InvocationMismatch {
     /// Skill name.
+    #[schemars(extend("x-untrusted" = true))]
     pub skill: String,
     /// Agents that read a copy as manual only.
     pub manual: BTreeSet<AgentId>,
@@ -24,7 +25,9 @@ pub struct InvocationMismatch {
     pub auto: BTreeSet<AgentId>,
 }
 
-impl Outcome for InvocationMismatches {}
+impl Outcome for InvocationMismatches {
+    const LISTS: &'static [&'static str] = &["/skills"];
+}
 
 /// Keeps only the skills whose agents disagree on invocation.
 pub fn invocation_mismatches(report: &InvocationReport) -> InvocationMismatches {

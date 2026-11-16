@@ -154,11 +154,11 @@ fn mcp_park(home: &Path, deployment_id: &DeploymentId) {
     });
     std::env::remove_var("SKILL_STUDIO_HOME");
     assert_eq!(
-        envelope.status,
+        envelope.envelope.status,
         OpStatus::Ok,
         "mcp park at {}: {:?}",
         home.display(),
-        envelope.errors
+        envelope.envelope.errors
     );
 }
 
