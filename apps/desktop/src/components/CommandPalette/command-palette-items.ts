@@ -75,7 +75,7 @@ interface GotoDef {
 }
 
 /** Builds the "Go to" items from the app's places - the caller supplies which ones apply
- * (e.g. Plugins only when there are any, Packs only behind its feature flag). */
+ * (e.g. Plugins only when there are any). */
 export function gotoItems(
   defs: GotoDef[],
   setActiveView: (view: ActiveView) => void,

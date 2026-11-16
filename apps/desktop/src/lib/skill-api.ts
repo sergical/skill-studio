@@ -27,6 +27,11 @@ import type {
   FrontmatterRepairPreview,
   InvocationConflictChoice,
   LocalEditsDto,
+  PackActionReport,
+  PackAddRequest,
+  PackRemoveRequest,
+  PackReport,
+  PackUpdateRequest,
   ParkCheck,
   GithubSkillListing,
   InstalledSkill,
@@ -591,6 +596,39 @@ export async function getAddMethodDefaults(
 // ============================================================================
 // Park / Per-harness disable / Invocation policy API
 // ============================================================================
+
+/**
+ * Every installed pack: one source that ships skills. `remote` asks each git
+ * source for its newest commit, so the report can say which skills are behind
+ * and which upstream skills are not installed.
+ */
+export async function packList(remote: boolean): Promise<PackReport> {
+  return callCommand("pack_list", { request: { project_path: null, remote } });
+}
+
+/**
+ * Plan (`dry_run`) or run `npx skills add` for skills of one git pack, through
+ * the same core operation as `skill-studio pack add`.
+ */
+export async function packAdd(request: PackAddRequest): Promise<PackActionReport> {
+  return callCommand("pack_add", { request });
+}
+
+/**
+ * Plan (`dry_run`) or run the update of one pack or of every pack. Plugin and
+ * npm packs and skills with local edits come back as skipped steps with a reason.
+ */
+export async function packUpdate(request: PackUpdateRequest): Promise<PackActionReport> {
+  return callCommand("pack_update", { request });
+}
+
+/**
+ * Plan (`dry_run`) or run the removal of one pack through its owner tool.
+ * Skills with local edits come back as skipped steps.
+ */
+export async function packRemove(request: PackRemoveRequest): Promise<PackActionReport> {
+  return callCommand("pack_remove", { request });
+}
 
 /**
  * Park one real copy: the Universal folder or an agent's own folder, global

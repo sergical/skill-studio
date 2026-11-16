@@ -2325,9 +2325,8 @@ pub(crate) fn core_scan_installed_skills(
         paths: project_paths.to_vec(),
     };
     scope.opencode_config_root = Some(opencode_config_root_path.clone());
-    // The 2s default guards stateless CLI/MCP calls; the desktop refresh
-    // runs in the background and must reach every root even on a home with
-    // many projects and plugin caches.
+    // A background refresh can wait for a running write to release the lease;
+    // the 2s default keeps stateless CLI/MCP reads from hanging behind one.
     scope.read_timeout_ms = 60_000;
 
     let catalog = std::sync::Arc::new(skill_studio_core::harness::HarnessCatalog::builtin());
@@ -6572,7 +6571,7 @@ resolved_commit = "old"
             skill_studio_core::ops::scan(&runtime, &context, &ScanRequest::default()).unwrap();
         assert_eq!(full.completeness, Completeness::Complete);
         assert_eq!(full.skills.len(), estate.stats.skill_count);
-        scope.read_timeout_ms = 1;
+        scope.scan_budget_ms = Some(1);
         ports.clock = Arc::new(TickingClock::at(0));
         let limited = Runtime::new(&scope, ports).unwrap();
         let partial =

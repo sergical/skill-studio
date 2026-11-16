@@ -179,12 +179,9 @@ impl ScopeFs for CountingFs {
 }
 
 /// A fixture-rooted scope tracking `project_dirs` as explicit projects, the
-/// same shape `benches/scan.rs`'s `scope_for` uses, with the same generous
-/// read budget `tests/scan_timing.rs` and `tests/repair_and_restore.rs` run
-/// under so a real-disk 400-skill scan never trips the budget mid-test.
+/// same shape `benches/scan.rs`'s `scope_for` uses.
 fn scope_for(home: &Path, project_dirs: &[PathBuf]) -> RuntimeScope {
     let mut scope = RuntimeScope::fixture(home);
-    scope.read_timeout_ms = 10_000;
     scope.projects = ProjectSelection::Explicit {
         paths: project_dirs.iter().map(|d| home.join(d)).collect(),
     };

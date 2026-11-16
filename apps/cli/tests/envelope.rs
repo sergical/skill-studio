@@ -269,13 +269,13 @@ fn diagnose_with_warnings_exits_1() {
 }
 
 #[test]
-fn a_zero_read_timeout_forces_a_partial_scan_that_exits_4() {
+fn a_zero_scan_budget_forces_a_partial_scan_that_exits_4() {
     let home = materialized_fixture("basic");
     let run = run(&[
         "scan",
         "--fixture",
         home.to_str().unwrap(),
-        "--read-timeout-ms",
+        "--scan-budget-ms",
         "0",
         "--json",
     ]);

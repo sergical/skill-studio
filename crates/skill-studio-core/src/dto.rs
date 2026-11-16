@@ -78,7 +78,7 @@ pub enum NextAction {
         /// Target.
         deployment_id: DeploymentId,
     },
-    /// Rescan with a longer read budget.
+    /// Scan again when the root is readable, or with no scan budget.
     Rescan,
     /// No automatic action exists.
     None,

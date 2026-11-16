@@ -21,9 +21,13 @@ pub struct ScopeArgs {
     #[arg(long = "project")]
     projects: Vec<PathBuf>,
     /// Shared-lease wait budget for this call, in milliseconds. Hidden: only
-    /// the test suite sets this, to force a `Partial` scan deterministically.
+    /// the test suite sets this, to force a fast `scope_busy` on a read.
     #[arg(long = "read-timeout-ms", hide = true)]
     read_timeout_ms: Option<u64>,
+    /// Scan walk budget for this call, in milliseconds. Hidden: only the
+    /// test suite sets this, to force a `Partial` scan deterministically.
+    #[arg(long = "scan-budget-ms", hide = true)]
+    scan_budget_ms: Option<u64>,
     /// Exclusive-lease wait budget for this call, in milliseconds. Hidden:
     /// only the test suite sets this, to force a fast `scope_busy` on a
     /// write command instead of waiting out the real (10s) default.
@@ -134,6 +138,7 @@ impl ScopeArgs {
         if let Some(ms) = self.write_timeout_ms {
             scope.write_timeout_ms = ms;
         }
+        scope.scan_budget_ms = self.scan_budget_ms;
         (scope, lease_root)
     }
 }

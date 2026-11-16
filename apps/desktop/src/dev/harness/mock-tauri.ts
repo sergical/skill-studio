@@ -31,6 +31,7 @@ import {
   harnessSkillContent,
   skill,
 } from "./skill-fixture";
+import { mockPackAdd, mockPackChange, mockPackReport } from "./mock-packs";
 
 /** Mirrors the core's `split_target_root` with default `CODEX_HOME` and OpenCode config root. */
 function splitCopyPath(harness: string, skillName: string, projectPath: string | null): string {
@@ -523,6 +524,37 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         case "get_install_counts":
           return [];
 
+        case "pack_list": {
+          const { remote } = z.object({ remote: z.boolean() }).parse(payload.request);
+          return mockPackReport(currentSnapshot, remote);
+        }
+        case "pack_add": {
+          const request = z
+            .object({ source: z.string(), skills: z.array(z.string()), dry_run: z.boolean() })
+            .parse(payload.request);
+          const { report, next } = mockPackAdd(
+            currentSnapshot,
+            request.source,
+            request.skills,
+            request.dry_run,
+          );
+          if (!request.dry_run) await publish(next);
+          return report;
+        }
+        case "pack_update":
+        case "pack_remove": {
+          const request = z
+            .object({ source: z.string().nullish(), dry_run: z.boolean() })
+            .parse(payload.request);
+          const { report, next } = mockPackChange(
+            currentSnapshot,
+            command === "pack_update" ? "update" : "remove",
+            request.source ?? null,
+            request.dry_run,
+          );
+          if (!request.dry_run) await publish(next);
+          return report;
+        }
         case "park_skill": {
           const { deployment_id, owner_id } = z
             .object({ deployment_id: z.string().nullish(), owner_id: z.string().nullish() })
