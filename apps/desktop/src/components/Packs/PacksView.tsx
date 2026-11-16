@@ -80,7 +80,14 @@ function PackRow({ pack, onAct }: { pack: Pack; onAct: (intent: PackIntent) => v
         {pack.new_upstream.length > 0 && (
           <RowButton
             disabledReason={null}
-            onClick={() => onAct({ kind: "add", source: pack.source, skills: pack.new_upstream })}
+            onClick={() =>
+              onAct({
+                kind: "add",
+                source: pack.source,
+                skills: pack.new_upstream,
+                refPin: pack.ref_pin,
+              })
+            }
           >
             Add {pack.new_upstream.length} new
           </RowButton>
@@ -143,7 +150,7 @@ export function PacksView() {
   const submitAdd = (event: FormEvent) => {
     event.preventDefault();
     const source = addSource.trim();
-    if (source) setIntent({ kind: "add", source, skills: [] });
+    if (source) setIntent({ kind: "add", source, skills: [], refPin: null });
   };
 
   const packs = list.kind === "ready" ? list.report.packs : [];

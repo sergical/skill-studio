@@ -103,3 +103,16 @@ test("removing a pack asks first, and Confirm removes its skills and drops the r
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(packRow(page, "anthropics/skills")).toHaveCount(0);
 });
+
+test("an app shortcut does not leave Packs while a pack dialog is open", async ({ page }) => {
+  await packRow(page, "anthropics/skills").getByRole("button", { name: "Remove" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog.getByRole("status")).toHaveText("Would remove 1 skill; 0 skipped.");
+
+  await page.keyboard.press("ControlOrMeta+Comma");
+
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("heading", { name: "Packs", level: 1 })).toBeVisible();
+});

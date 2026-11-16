@@ -84,7 +84,7 @@ export interface HarnessDetectionState {
 export type PackIntent =
   | { kind: "update"; source: string | null }
   | { kind: "remove"; source: string }
-  | { kind: "add"; source: string; skills: string[] };
+  | { kind: "add"; source: string; skills: string[]; refPin: string | null };
 
 function packActionCall(intent: PackIntent, dryRun: boolean): Promise<PackActionReport> {
   switch (intent.kind) {
@@ -101,7 +101,7 @@ function packActionCall(intent: PackIntent, dryRun: boolean): Promise<PackAction
       return packAdd({
         source: intent.source,
         skills: intent.skills,
-        ref_pin: null,
+        ref_pin: intent.refPin,
         harnesses: [],
         project_path: null,
         dry_run: dryRun,

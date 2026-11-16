@@ -32,5 +32,9 @@ export function keyShortcutsFor(shortcut: ShortcutDef): string | undefined {
 /** Whether any modal surface (dialog, drawer, popup menu) is currently open - `⌘N`/`⌘,` are
  * blocked while one is, so a shortcut never stacks a second surface on top of it. */
 export function isModalSurfaceOpen(): boolean {
-  return document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]') !== null;
+  return (
+    document.querySelector(
+      '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+    ) !== null
+  );
 }
