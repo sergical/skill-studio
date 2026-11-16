@@ -113,7 +113,7 @@ pub struct LeaseBusy {
 /// `path` holds the absolute path that failed; [`CoreError::sanitized`]
 /// rewrites it relative to the scope before it leaves the core.
 #[derive(Debug, thiserror::Error)]
-#[error("{code:?}: {message}")]
+#[error("{code:?}: {}", self.text())]
 pub struct CoreError {
     /// Stable code.
     pub code: ErrorCode,
@@ -126,6 +126,9 @@ pub struct CoreError {
     pub source: Option<std::io::Error>,
     /// Who holds the lease, set only on [`ErrorCode::ScopeBusy`].
     pub busy: Option<LeaseBusy>,
+    /// Third-party text behind the error, such as child process stderr.
+    /// It stays out of `message` so that `message` holds only Skill Studio's words.
+    pub detail: Option<String>,
 }
 
 impl CoreError {
@@ -137,6 +140,7 @@ impl CoreError {
             path: None,
             source: None,
             busy: None,
+            detail: None,
         }
     }
 
@@ -154,6 +158,18 @@ impl CoreError {
         self
     }
 
+    /// Attaches third-party text, such as the stderr of the child process that failed.
+    #[must_use]
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    /// `message`, then `detail` when there is one: the text a person reads.
+    pub fn text(&self) -> String {
+        error_text(&self.message, self.detail.as_deref())
+    }
+
     /// Wraps an I/O error under [`ErrorCode::Io`].
     pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
         let path = path.into();
@@ -163,6 +179,7 @@ impl CoreError {
             path: Some(path),
             source: Some(source),
             busy: None,
+            detail: None,
         }
     }
 
@@ -173,7 +190,15 @@ impl CoreError {
             code: self.code,
             message: self.message.clone(),
             path: self.path.as_ref().map(|p| scope.display_path(p)),
+            detail: self.detail.clone(),
         }
+    }
+}
+
+fn error_text(message: &str, detail: Option<&str>) -> String {
+    match detail {
+        Some(detail) => format!("{message}: {detail}"),
+        None => message.to_string(),
     }
 }
 
@@ -185,7 +210,18 @@ pub struct ErrorEntry {
     /// Human-readable message.
     pub message: String,
     /// Display path relative to the scope home, when there is one.
+    #[schemars(extend("x-untrusted" = true))]
     pub path: Option<String>,
+    /// Third-party text behind the error, such as child process stderr.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-untrusted" = true))]
+    pub detail: Option<String>,
+}
+
+impl std::fmt::Display for ErrorEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&error_text(&self.message, self.detail.as_deref()))
+    }
 }
 
 #[cfg(test)]

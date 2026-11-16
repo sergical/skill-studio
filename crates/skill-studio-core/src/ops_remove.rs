@@ -338,8 +338,9 @@ fn remove_via_cli(
     if output.status != Some(0) {
         return Err(CoreError::new(
             ErrorCode::Io,
-            format!("npx exited with {:?}: {}", output.status, output.stderr),
-        ));
+            format!("npx exited with {:?}", output.status),
+        )
+        .with_detail(output.stderr));
     }
     if rt.ports.fs.symlink_metadata(path).is_ok() {
         return Err(CoreError::new(

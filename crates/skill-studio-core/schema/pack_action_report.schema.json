@@ -32,11 +32,13 @@
       "properties": {
         "source": {
           "description": "Pack source.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "skill": {
           "description": "Skill name.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "scope": {
           "description": "Global or one project.",
@@ -96,7 +98,8 @@
     },
     "ProjectRef": {
       "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "PackStepAction": {
       "description": "What one step does to one skill.",
@@ -183,8 +186,9 @@
               "$ref": "#/$defs/ErrorCode"
             },
             "reason": {
-              "description": "The per-skill op's message.",
-              "type": "string"
+              "description": "The per-skill op's message, with any child process output.",
+              "type": "string",
+              "x-untrusted": true
             }
           },
           "required": [

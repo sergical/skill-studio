@@ -80,6 +80,7 @@ pub enum RemoteState {
     /// The source did not answer.
     Failed {
         /// Git's own message.
+        #[schemars(extend("x-untrusted" = true))]
         reason: String,
     },
 }
@@ -88,10 +89,12 @@ pub enum RemoteState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PackSkill {
     /// Skill name.
+    #[schemars(extend("x-untrusted" = true))]
     pub name: String,
     /// Global or one project.
     pub scope: RootScope,
     /// Installed folder, when one is on disk.
+    #[schemars(extend("x-untrusted" = true))]
     pub path: Option<PathBuf>,
     /// Agents that load this skill at this scope.
     pub agents: Vec<String>,
@@ -105,12 +108,15 @@ pub struct PackSkill {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Pack {
     /// `owner/repo`, git URL, npm package, or `plugin@marketplace`.
+    #[schemars(extend("x-untrusted" = true))]
     pub source: String,
     /// The tool that installed it.
     pub kind: PackKind,
     /// Git URL the remote check uses.
+    #[schemars(extend("x-untrusted" = true))]
     pub git_url: Option<String>,
     /// Branch, tag, commit, or plugin version the install is pinned to.
+    #[schemars(extend("x-untrusted" = true))]
     pub ref_pin: Option<String>,
     /// Commands the owning agent runs to update this pack. Skill Studio does not run them.
     pub update_commands: Vec<String>,
@@ -119,6 +125,7 @@ pub struct Pack {
     /// Installed skills, by scope and name.
     pub skills: Vec<PackSkill>,
     /// Upstream skills that are not installed. Empty without a remote check.
+    #[schemars(extend("x-untrusted" = true))]
     pub new_upstream: Vec<String>,
     /// Skills with local edits.
     pub edited_count: usize,
@@ -127,6 +134,7 @@ pub struct Pack {
     /// Remote check result.
     pub remote: RemoteState,
     /// One line for a person or agent.
+    #[schemars(extend("x-untrusted" = true))]
     pub summary: String,
 }
 

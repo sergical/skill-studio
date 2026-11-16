@@ -39,7 +39,8 @@
   "$defs": {
     "SkillName": {
       "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "FixApplied": {
       "description": "One repair `fix_skill` applied.",
@@ -83,11 +84,13 @@
       "properties": {
         "path": {
           "description": "Path of the offending file or folder, when the issue names one.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "message": {
           "description": "Message for a person.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "kind": {
           "description": "Stable category a caller can branch on instead of `message`.",
@@ -130,15 +133,18 @@
         },
         "message": {
           "description": "One-line summary for a person.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "path_a": {
           "description": "First copy's path.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "path_b": {
           "description": "Second copy's path.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         }
       },
       "required": [

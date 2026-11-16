@@ -896,7 +896,8 @@ fn a_failed_cli_update_says_which_command_failed_with_the_tool_line_and_no_npm_c
         );
 
         let err = ops::update(&rt, &ctx(), &cli_request("delta", method)).unwrap_err();
-        assert_eq!(err.message, expected);
+        assert_eq!(err.text(), expected);
+        assert!(!err.message.contains("could not fetch"));
 
         std::fs::remove_dir_all(&home).ok();
     }

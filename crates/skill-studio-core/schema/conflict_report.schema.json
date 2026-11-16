@@ -26,15 +26,18 @@
         },
         "message": {
           "description": "One-line summary for a person.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "path_a": {
           "description": "First copy's path.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "path_b": {
           "description": "Second copy's path.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         }
       },
       "required": [
@@ -46,7 +49,8 @@
     },
     "SkillName": {
       "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     }
   }
 }

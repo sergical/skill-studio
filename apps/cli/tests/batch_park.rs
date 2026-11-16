@@ -3,7 +3,7 @@
 use serde_json::{json, Value};
 #[path = "support/headless.rs"]
 mod headless;
-use headless::{cli, mcp};
+use headless::{cli, mcp, mcp_envelope};
 
 fn skill(home: &std::path::Path, name: &str) {
     let path = home.join(".agents/skills").join(name);
@@ -286,20 +286,10 @@ fn one_name_mcp_matches_cli_instead_of_returning_a_batch() {
             "park"
         };
         assert_eq!(cli(home.path(), &[reverse, "alpha"])["status"], "ok");
-        let mut mcp_result = mcp(home.path(), operation, &json!({"skills":["alpha"]}))["result"]
-            ["structuredContent"]
-            .clone();
+        let mut mcp_result =
+            mcp_envelope(&mcp(home.path(), operation, &json!({"skills":["alpha"]})));
         assert_eq!(cli_result["status"], "ok", "{cli_result}");
         assert_eq!(mcp_result["status"], "ok", "{mcp_result}");
-        assert!(cli_result.get("text_trust").is_none());
-        assert!(mcp_result
-            .as_object_mut()
-            .unwrap()
-            .remove("text_trust")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .contains("untrusted data"));
         for result in [&mut cli_result, &mut mcp_result] {
             for key in ["correlation_id", "event_id", "timings"] {
                 result.as_object_mut().unwrap().remove(key);

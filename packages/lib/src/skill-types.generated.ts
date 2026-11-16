@@ -1648,6 +1648,10 @@ export interface ErrorEntry {
    * Display path relative to the scope home, when there is one.
    */
   path: string | null;
+  /**
+   * Third-party text behind the error, such as child process stderr.
+   */
+  detail?: string | null;
 }
 /**
  * Results of turning a batch of parked skills on.

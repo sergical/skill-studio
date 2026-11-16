@@ -32,7 +32,8 @@
         },
         "path": {
           "description": "Absolute path of `SKILL.md`.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "scope": {
           "description": "Scope of the deployment's root.",
@@ -40,7 +41,8 @@
         },
         "reason": {
           "description": "Why the repair is proposed, for a person (the spec rule that fails).",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "owner_id": {
           "description": "Owner at preview time.",
@@ -67,15 +69,18 @@
         },
         "original_content": {
           "description": "Current `SKILL.md` text, for a side-by-side view.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "proposed_content": {
           "description": "Proposed `SKILL.md` text, for a side-by-side view.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "diff": {
           "description": "Unified diff for a person.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "allowed_apply_modes": {
           "description": "Modes the caller may choose from.",
@@ -89,7 +94,8 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         }
       },
       "required": [
@@ -152,7 +158,8 @@
     },
     "ProjectRef": {
       "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "OwnerId": {
       "description": "Opaque lifecycle owner id.\n\nInvariant: the string starts with `owner:v1/`. It names the ledger entry\nthat installed the skill, not a path.",

@@ -412,6 +412,7 @@ impl<T: Outcome> ResultEnvelope<T> {
                         code: ErrorCode::Incomplete,
                         message: "some roots were not read; see observations".into(),
                         path: None,
+                        detail: None,
                     }]
                 } else {
                     Vec::new()

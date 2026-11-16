@@ -44,7 +44,7 @@ fn print_errors(envelope: &ResultEnvelope<impl Serialize>) {
             .as_ref()
             .map(|p| format!(" ({p})"))
             .unwrap_or_default();
-        eprintln!("{}: {}{path}", error.code.as_str(), error.message);
+        eprintln!("{}: {error}{path}", error.code.as_str());
     }
 }
 
