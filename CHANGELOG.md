@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Claude Code plugin updates, fork-ahead notices, skill authors and install counts.
 - Turn a shared skill off for one agent (confirm, split, park). Park works for any copy and is the only off switch.
 - Settings → Connect your agents adds the MCP server to Claude Code, Codex, Cursor, OpenCode, pi and Grok Build, and has a setup prompt to paste into any agent. The homepage and the MCP docs have the same prompt; the docs and `llms.txt` list the setup for VS Code, Gemini CLI and Claude Desktop too.
+- Packs: `skill-studio pack list|show|add|update|remove` on the CLI, and `pack_list`, `pack_show`, `pack_add`, `pack_update` and `pack_remove` on MCP. A pack is one source that ships skills: a git repo, an npm package, a dotagents source or a plugin. Each change plans first, and `--dry-run` returns only the plan. Update and remove skip plugin packs, npm packs and skills with local edits, and say why.
+- `skill-studio library` (MCP `skill_library`) gives each skill's folder, agents, source, invocation mode and use count in one call. Usage, review and library counts now agree: a resumed or forked session counts once, and a sub-agent log is its own session.
 
 ### Changed
 
@@ -28,7 +30,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Scan reuses digests of identical folders, and writes scan only the skills they touch.
 - YAML frontmatter uses `serde-saphyr` instead of the unmaintained `serde_yaml`.
 - The telemetry switch in `~/.agents/skill-studio.json` is now `telemetry_enabled`; a file saved by an rc build under `error_reporting_enabled` is still read.
-- Desktop: Enter submits Add skill, the first frame uses the saved theme, dialogs dim the window correctly, and tags and destructive buttons meet contrast targets.
+- Desktop: Enter submits Add skill, the first frame uses the saved theme, dialogs dim the window correctly, and tags meet contrast targets. Destructive buttons have more contrast, but their dark-mode text is still 3.9:1 (#646).
+- Desktop: Home and Skills share one skill row. A state icon turns into a checkbox on hover or focus, each row has one named fix button (Update, Compare, Fix, Resolve, Convert, Park, Unpark), and both pages share one selection bar. ↑ ↓ move, Enter opens, X or Space selects, Escape clears. "Pull latest" is now "Update", and "Convert links" is now "Convert".
+- Desktop: the Updates tile on Home shows when the last check ran. The separate source update card, which counted copies instead of skills, is gone.
+- The pinned skills CLI is 1.8.1. Adding a skill to Claude Code only now makes a copy, not a link.
 
 ### Fixed
 
@@ -42,6 +47,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Network requests to skills.sh, GitHub and the proxy time out instead of hanging.
 - `usage` counts sessions and triggers only in the `--days` window; all-time uses stay in `total_uses`.
 - `invocation` reports a mismatch only when one harness reads a skill as auto and another as manual; one copy or `unsupported` copies never mismatch.
+- Desktop counts, labels and dead ends: the Skills count leaves out parked skills, a spec violation with no quick fix has an Edit SKILL.md button, Compare says when SKILL.md is the same but another file differs, and error and warning rows show a word, not only a color.
+- Command palette (⌘K): arrow keys and focus work in WebKit, and ⌘K no longer moves the list cursor.
 
 ### Removed
 
