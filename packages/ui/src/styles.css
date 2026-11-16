@@ -88,6 +88,7 @@
   --color-pressed: var(--color-bg-pressed);
   --color-highlight-foreground: var(--color-text-primary);
   --color-destructive: var(--color-error);
+  --color-destructive-text: var(--color-error-text);
   --color-input: var(--color-border);
   --color-ring: var(--color-border-focus);
 
