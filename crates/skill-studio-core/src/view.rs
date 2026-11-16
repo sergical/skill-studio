@@ -22,7 +22,9 @@ pub struct ViewRequest {
     /// Rows to return from the main list. `0` returns only `page` (totals
     /// and `counts`). Without it, rows until the answer is 32 KB.
     pub limit: Option<usize>,
-    /// `page.next_cursor` from an earlier call with the same filters.
+    /// A `next_cursor` from `page` or `page.also` of an earlier call with the
+    /// same filters. It continues that one list; the other lists return only
+    /// totals.
     pub cursor: Option<String>,
     /// Row fields to keep. Empty keeps every field.
     pub fields: Vec<String>,
@@ -82,19 +84,8 @@ pub fn render<T: Outcome + Serialize>(
             doc.remove("timings");
         }
     }
-    let budget = ANSWER_BYTES.saturating_sub(bytes_without_lists(&mut json, T::LISTS));
-    let Value::Object(doc) = &mut json else {
-        return Ok(Rendered { json, exit_status });
-    };
-    let Some(data) = doc.get_mut("data").filter(|data| !data.is_null()) else {
-        return Ok(Rendered { json, exit_status });
-    };
-    match apply(data, T::LISTS, view, budget) {
-        Ok(Some(page)) => {
-            doc.insert("page".into(), serde_json::to_value(page)?);
-        }
-        Ok(None) => {}
-        Err(message) => {
+    if let Err(message) = fit_answer(&mut json, T::LISTS, view)? {
+        if let Value::Object(doc) = &mut json {
             let error = ErrorEntry {
                 code: ErrorCode::InvalidRequest,
                 message,
@@ -103,10 +94,46 @@ pub fn render<T: Outcome + Serialize>(
             doc.insert("status".into(), serde_json::to_value(OpStatus::Error)?);
             doc.insert("data".into(), Value::Null);
             doc.insert("errors".into(), serde_json::to_value([error])?);
-            exit_status = ErrorCode::InvalidRequest.exit_status();
         }
+        exit_status = ErrorCode::InvalidRequest.exit_status();
     }
     Ok(Rendered { json, exit_status })
+}
+
+/// Applies `view` to the lists of the envelope `json` and adds its `page`.
+/// Rows go until the whole document, `page` included, is `ANSWER_BYTES`.
+fn fit_answer(
+    json: &mut Value,
+    lists: &[&str],
+    view: &ViewRequest,
+) -> serde_json::Result<Result<(), String>> {
+    let rest = bytes_without_lists(json, lists);
+    let Value::Object(doc) = json else {
+        return Ok(Ok(()));
+    };
+    let Some(data) = doc.get("data").filter(|data| !data.is_null()).cloned() else {
+        return Ok(Ok(()));
+    };
+    let mut budget = ANSWER_BYTES.saturating_sub(rest);
+    loop {
+        let mut viewed = data.clone();
+        let page = match apply(&mut viewed, lists, view, budget) {
+            Ok(page) => page,
+            Err(message) => return Ok(Err(message)),
+        };
+        doc.insert("data".into(), viewed);
+        match page {
+            Some(page) => doc.insert("page".into(), serde_json::to_value(page)?),
+            None => doc.remove("page"),
+        };
+        let over = serde_json::to_string(&*doc)?
+            .len()
+            .saturating_sub(ANSWER_BYTES);
+        if over == 0 || budget == 0 {
+            return Ok(Ok(()));
+        }
+        budget = budget.saturating_sub(over);
+    }
 }
 
 /// Bytes of the envelope with every list in `lists` left empty.
@@ -134,24 +161,20 @@ fn apply(
     view: &ViewRequest,
     mut budget: usize,
 ) -> Result<Option<Page>, String> {
-    let Some((main, others)) = lists.split_first() else {
+    let Some(main) = lists.first() else {
         return if view.is_set() {
             Err("this result has no list to page, project or count".into())
         } else {
             Ok(None)
         };
     };
-    let offset = match &view.cursor {
-        Some(cursor) => cursor
-            .parse()
-            .map_err(|_| format!("cursor `{cursor}` is not a page.next_cursor"))?,
-        None => 0,
-    };
-    let Some(mut page) = cut(data, main, offset, view.limit, view, &mut budget, 1)? else {
+    let (target, offset) = parse_cursor(view.cursor.as_deref(), main, lists)?;
+    let Some(mut page) = cut(data, target, offset, view.limit, view, &mut budget, 1)? else {
         return Ok(None);
     };
-    let other_limit = (view.limit == Some(0)).then_some(0);
-    for pointer in others {
+    name_cursor(&mut page, main);
+    let other_limit = (view.limit == Some(0) || view.cursor.is_some()).then_some(0);
+    for pointer in lists.iter().filter(|pointer| **pointer != target) {
         let other = cut(
             data,
             pointer,
@@ -161,14 +184,44 @@ fn apply(
             &mut budget,
             0,
         )?;
-        if let Some(other) = other {
+        if let Some(mut other) = other {
             if other.returned < other.total {
+                name_cursor(&mut other, main);
                 page.also.push(other);
             }
         }
     }
     let cut_any = page.returned < page.total || !page.also.is_empty();
     Ok((cut_any || view.is_set()).then_some(page))
+}
+
+fn name_cursor(page: &mut Page, main: &str) {
+    if page.list != main {
+        page.next_cursor = page
+            .next_cursor
+            .take()
+            .map(|offset| format!("{}@{offset}", page.list));
+    }
+}
+
+/// The list a cursor continues and its offset: `<offset>` for the main list,
+/// `<list>@<offset>` for another list.
+fn parse_cursor<'a>(
+    cursor: Option<&str>,
+    main: &'a str,
+    lists: &[&'a str],
+) -> Result<(&'a str, usize), String> {
+    let Some(cursor) = cursor else {
+        return Ok((main, 0));
+    };
+    let invalid = || format!("cursor `{cursor}` is not a page.next_cursor");
+    let (list, offset) = cursor.rsplit_once('@').unwrap_or((main, cursor));
+    let list = lists
+        .iter()
+        .copied()
+        .find(|pointer| *pointer == list)
+        .ok_or_else(invalid)?;
+    Ok((list, offset.parse().map_err(|_| invalid())?))
 }
 
 fn cut(
@@ -345,15 +398,74 @@ mod tests {
 
     #[test]
     fn every_cut_list_shares_one_answer_budget() {
-        let lists = ["/rows", "/unused"];
         let mut doc = json!({"status": "ok", "data": {"rows": rows(2_000)["rows"], "unused": rows(2_000)["rows"]}});
-        let budget = ANSWER_BYTES - bytes_without_lists(&mut doc, &lists);
-        let page = apply(&mut doc["data"], &lists, &ViewRequest::default(), budget)
+        fit_answer(&mut doc, &["/rows", "/unused"], &ViewRequest::default())
             .unwrap()
             .unwrap();
-        assert!(doc.to_string().len() <= ANSWER_BYTES, "{page:?}");
-        assert_eq!(page.also.len(), 1, "{page:?}");
-        assert!(page.returned > page.also[0].returned, "{page:?}");
+        let page = &doc["page"];
+        assert!(doc.to_string().len() <= ANSWER_BYTES, "{page}");
+        assert_eq!(page["also"].as_array().map(Vec::len), Some(1), "{page}");
+        assert!(
+            page["returned"].as_u64() > page["also"][0]["returned"].as_u64(),
+            "{page}"
+        );
+    }
+
+    #[test]
+    fn the_page_object_counts_toward_the_answer_budget() {
+        let mut doc = json!({"status": "ok", "data": rows(1_500)});
+        fit_answer(
+            &mut doc,
+            &["/rows", "/unused"],
+            &view(None, None, &[], Some("name")),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(doc["page"]["counts"].as_object().map(Map::len), Some(1_500));
+        assert!(
+            doc.to_string().len() <= ANSWER_BYTES,
+            "{}",
+            doc.to_string().len()
+        );
+    }
+
+    #[test]
+    fn a_cursor_continues_its_own_list_and_no_list_repeats_rows() {
+        let lists = ["/rows", "/unused"];
+        let mut data = rows(2_000);
+        let first = apply(&mut data, &lists, &ViewRequest::default(), ANSWER_BYTES)
+            .unwrap()
+            .unwrap();
+        let unused = &first.also[0];
+        let cursor = format!("/unused@{}", unused.returned);
+        assert_eq!(unused.next_cursor.as_deref(), Some(cursor.as_str()));
+
+        let mut data = rows(2_000);
+        let next = apply(
+            &mut data,
+            &lists,
+            &view(None, Some(&cursor), &[], None),
+            ANSWER_BYTES,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(next.list, "/unused");
+        assert_eq!(data["unused"][0], format!("s{}", unused.returned));
+        assert_eq!(data["rows"], json!([]));
+        assert_eq!(next.also[0].next_cursor.as_deref(), Some("0"));
+
+        let mut data = rows(2_000);
+        let main = apply(
+            &mut data,
+            &lists,
+            &view(None, first.next_cursor.as_deref(), &[], None),
+            ANSWER_BYTES,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(data["rows"][0]["name"], format!("s{}", first.returned));
+        assert_eq!(data["unused"], json!([]));
+        assert_eq!(main.also[0].next_cursor.as_deref(), Some("/unused@0"));
     }
 
     #[test]
@@ -468,6 +580,13 @@ mod tests {
             &mut rows(2),
             &["/rows"],
             &view(None, Some("x"), &[], None),
+            ANSWER_BYTES
+        )
+        .is_err());
+        assert!(apply(
+            &mut rows(2),
+            &["/rows"],
+            &view(None, Some("/nope@0"), &[], None),
             ANSWER_BYTES
         )
         .is_err());

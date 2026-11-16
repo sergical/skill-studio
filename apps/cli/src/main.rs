@@ -744,7 +744,7 @@ struct ViewArgs {
     /// Print at most N rows of the main list; 0 prints only the totals.
     #[arg(long, value_name = "N", requires = "json")]
     limit: Option<usize>,
-    /// Continue from `page.next_cursor` of the last call.
+    /// Continue the list of a `next_cursor` from the last call.
     #[arg(long, requires = "json")]
     cursor: Option<String>,
     /// Keep only these row fields, comma-separated.

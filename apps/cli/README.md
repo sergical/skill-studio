@@ -97,9 +97,8 @@ uses the same exit status. `--json` never prompts and never colors.
 
 `scan`, `diagnose`, `library`, `usage`, `outdated`, `invocation` and
 `pack list|show` return their main list in pages. Without view flags, the
-lists keep the rows that fit in a 32 KB answer, main list first. When a list
-loses rows, the envelope
-gets a top-level `page`:
+lists keep the rows that fit in a 32 KB answer, `page` included, main list
+first. When a list loses rows, the envelope gets a top-level `page`:
 
 ```json
 {
@@ -108,10 +107,21 @@ gets a top-level `page`:
     "total": 4002,
     "returned": 61,
     "next_cursor": "61",
-    "also": [{ "list": "/inventory/skills", "total": 4002, "returned": 58 }]
+    "also": [
+      {
+        "list": "/inventory/skills",
+        "total": 4002,
+        "returned": 58,
+        "next_cursor": "/inventory/skills@58"
+      }
+    ]
   }
 }
 ```
+
+A cursor continues only its own list: `<offset>` for the main list,
+`<list>@<offset>` for a list in `also`. The other lists then return only
+their totals, so no call repeats a row.
 
 These flags need `--json`. The MCP read tools take the same names
 (`limit`, `cursor`, `fields`, `count_by`) as arguments.
@@ -119,7 +129,7 @@ These flags need `--json`. The MCP read tools take the same names
 | Flag                 | Effect                                                                |
 | -------------------- | --------------------------------------------------------------------- |
 | `--limit <n>`        | Return at most `n` rows. `--limit 0` returns only the totals.         |
-| `--cursor <c>`       | Start at a `page.next_cursor` from an earlier call.                   |
+| `--cursor <c>`       | Continue the list of a `next_cursor` from an earlier call.            |
 | `--fields a,b`       | Keep only these keys in each row.                                     |
 | `--count-by <field>` | Put row counts per value of `field` in `page.counts`, over every row. |
 
