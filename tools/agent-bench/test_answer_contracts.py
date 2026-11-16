@@ -63,22 +63,21 @@ class AnswerContractsTest(unittest.TestCase):
                 self.assertEqual(contracts.run(args, score, {"usage": ("q1",)}, root), 1)
 
     def test_extractors_use_returned_fields(self):
-        home = Path("/fixture/home")
-        data = {"rows": [{"skill": "invented", "recent_uses": 8},
-                         {"skill": "other", "recent_uses": 0}]}
-        self.assertEqual(contracts.extract("q2", data, home), 1)
-        self.assertEqual(contracts.extract("q3", data, home)[0], {"skill": "invented", "uses": 8})
-        scan = {"skills": [{"name": "invented", "deployments": [{"path": str(home / ".agents/skills/invented")}]}]}
-        self.assertEqual(contracts.extract("q1", scan, home), 1)
-        for question in ("u1", "u2", "s1", "s2"):
-            self.assertIsNone(contracts.extract(question, scan, home))
-        stale = {"skills": [{"name": "invented", "source": fixture.UPDATED_PACK, "deployments": [
-            {"path": str(home / ".agents/skills/invented"), "harness": "shared", "copy_status": "same"},
-            {"path": str(home / ".codex/skills/invented"), "harness": "codex", "copy_status": "stale"}]}]}
-        self.assertEqual(contracts.extract("u2", stale, home), [{"skill": "invented", "agent": "codex"}])
+        library = {"data": {"count": 2, "used": 1, "rows": [
+            {"name": "invented", "uses": 8, "copies": {"codex": "changed", "pi": "link"}},
+            {"name": "other", "uses": 0, "copies": {"cursor": "old"}}]}}
+        self.assertEqual(contracts.extract("q1", library), 2)
+        self.assertEqual(contracts.extract("q2", library), 1)
+        self.assertEqual(contracts.extract("q3", library)[0], {"skill": "invented", "uses": 8})
+        self.assertEqual(contracts.extract("u2", library), [{"skill": "invented", "agent": "codex"},
+                                                            {"skill": "other", "agent": "cursor"}])
+        self.assertEqual(contracts.extract("s2", library), ["invented", "other"])
+        counted = {**library, "page": {"counts": {"null": 3, "acme/pack": 2}, "next_cursor": "0"}}
+        self.assertEqual(contracts.extract("s1", counted), [{"repo": "acme/pack", "skills": 2}])
+        with self.assertRaises(ValueError):
+            contracts.extract("s2", counted)
         truth = {"q1": 1, "q2": 1, "q3": [{"skill": "invented", "uses": 8}], "q4": 0}
-        self.assertTrue(score("usage", {"q3": contracts.extract("q3", data, home)[:1]}, truth)["q3"])
-
+        self.assertTrue(score("usage", {"q3": contracts.extract("q3", library)[:1]}, truth)["q3"])
 
 if __name__ == "__main__":
     unittest.main()

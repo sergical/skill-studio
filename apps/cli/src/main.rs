@@ -38,6 +38,7 @@ use skill_studio_core::identity::{
 use skill_studio_core::ops::{self, Operation, ResultEnvelope};
 use skill_studio_core::ports::{OpContext, Runtime};
 use skill_studio_core::snapshot::SnapshotCell;
+use skill_studio_core::view::ViewRequest;
 
 use crate::scope::ScopeArgs;
 
@@ -87,11 +88,15 @@ Common questions:
       skill-studio library --source <owner/repo> --copy-status old --json
   Which skills did I not use in the last 30 days?
       skill-studio usage --json
+  How many library skills come from each source?
+      skill-studio library --count-by source --limit 0 --json
+  Which library skills does Claude Code read as manual and Codex as auto?
+      skill-studio library --mode claude-code=manual --mode codex=auto --fields name --json
   Which skills do agents read in different modes?
       skill-studio invocation --mismatches --json
   What is broken?
       skill-studio diagnose --json
-Add --json for one JSON document.";
+Add --json for one JSON document. A long list returns one page; page.total counts every row and --cursor <page.next_cursor> gets the next one.";
 
 #[derive(Parser)]
 #[command(
@@ -125,6 +130,8 @@ enum Command {
         /// Only list skills that agents read in different modes.
         #[arg(long, conflicts_with_all = ["skill", "manual", "auto"])]
         mismatches: bool,
+        #[command(flatten)]
+        view: ViewArgs,
         #[arg(long)]
         json: bool,
     },
@@ -148,6 +155,8 @@ enum Command {
         /// Include per-phase timings.
         #[arg(long, hide = true)]
         timings: bool,
+        #[command(flatten)]
+        view: ViewArgs,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -162,6 +171,8 @@ enum Command {
         /// Include per-phase timings.
         #[arg(long, hide = true)]
         timings: bool,
+        #[command(flatten)]
+        view: ViewArgs,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -211,6 +222,12 @@ enum Command {
         /// Show only the N most used skills.
         #[arg(long)]
         top: Option<usize>,
+        /// Only show rows that this agent reads in this mode: AGENT=manual
+        /// or AGENT=auto. Repeat for more than one agent.
+        #[arg(long = "mode", value_name = "AGENT=MODE", value_parser = parse_agent_mode)]
+        modes: Vec<(String, skill_studio_core::ops_invocation::InvocationMode)>,
+        #[command(flatten)]
+        view: ViewArgs,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -241,6 +258,8 @@ enum Command {
         /// Show only the N most used skills.
         #[arg(long, value_name = "N")]
         top: Option<usize>,
+        #[command(flatten)]
+        view: ViewArgs,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -415,6 +434,8 @@ enum Command {
         /// Only check this skill. Repeat for more than one.
         #[arg(long = "skill")]
         skills: Vec<String>,
+        #[command(flatten)]
+        view: ViewArgs,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -710,8 +731,39 @@ struct PackArgs {
     /// Ask each git source for its newest commit and skills.
     #[arg(long)]
     remote: bool,
+    #[command(flatten)]
+    view: ViewArgs,
     #[arg(long)]
     json: bool,
+}
+
+/// Which rows of a JSON answer to print. Without these, the lists keep
+/// rows until the answer is 32 KB and `page.next_cursor` gets the rest.
+#[derive(clap::Args)]
+struct ViewArgs {
+    /// Print at most N rows of the main list; 0 prints only the totals.
+    #[arg(long, value_name = "N", requires = "json")]
+    limit: Option<usize>,
+    /// Continue the list of a `next_cursor` from the last call.
+    #[arg(long, requires = "json")]
+    cursor: Option<String>,
+    /// Keep only these row fields, comma-separated.
+    #[arg(long, value_delimiter = ',', requires = "json")]
+    fields: Vec<String>,
+    /// Count all rows by this field, in page.counts.
+    #[arg(long, value_name = "FIELD", requires = "json")]
+    count_by: Option<String>,
+}
+
+impl From<ViewArgs> for ViewRequest {
+    fn from(args: ViewArgs) -> Self {
+        Self {
+            limit: args.limit,
+            cursor: args.cursor,
+            fields: args.fields,
+            count_by: args.count_by,
+        }
+    }
 }
 
 #[derive(clap::Args)]
@@ -769,6 +821,7 @@ fn main() -> ExitCode {
             scope,
             skills,
             timings,
+            view,
             json,
         } => run_scan(
             &scope,
@@ -779,6 +832,7 @@ fn main() -> ExitCode {
                 skills: skills.into_iter().map(SkillName).collect(),
                 timings,
             },
+            &view.into(),
             json,
             time,
         ),
@@ -786,8 +840,9 @@ fn main() -> ExitCode {
             scope,
             skills,
             timings,
+            view,
             json,
-        } => run_diagnose(&scope, skills, timings, json, time),
+        } => run_diagnose(&scope, skills, timings, &view.into(), json, time),
         Command::Capabilities {
             scope,
             harnesses,
@@ -833,6 +888,8 @@ fn main() -> ExitCode {
             until,
             sort,
             top,
+            modes,
+            view,
             json,
         } => {
             let request = skill_studio_core::library::LibraryRequest {
@@ -840,6 +897,7 @@ fn main() -> ExitCode {
                 source,
                 skills,
                 copy_status,
+                modes: modes.into_iter().collect(),
                 days: Some(days),
                 since,
                 until,
@@ -852,7 +910,7 @@ fn main() -> ExitCode {
                     }
                 }),
             };
-            run_library(&scope, &request, json, time)
+            run_library(&scope, &request, &view.into(), json, time)
         }
         Command::Pack { action } => run_pack(action, time),
         Command::Usage {
@@ -861,6 +919,7 @@ fn main() -> ExitCode {
             since,
             until,
             top,
+            view,
             json,
             harness,
         } => {
@@ -871,7 +930,7 @@ fn main() -> ExitCode {
                 until,
                 top,
             };
-            run_usage(&scope, days, json, time, &filter)
+            run_usage(&scope, days, &view.into(), json, time, &filter)
         }
         Command::Mcp => unreachable!("handled before telemetry starts"),
         Command::Add {
@@ -917,15 +976,17 @@ fn main() -> ExitCode {
         Command::Invocation {
             scope,
             mismatches: true,
+            view,
             json,
             ..
-        } => run_invocation_mismatches(&scope, json, time),
+        } => run_invocation_mismatches(&scope, &view.into(), json, time),
         Command::Invocation {
             scope,
             skill,
             manual,
             auto,
             mismatches: false,
+            view,
             json,
         } => run_invocation(
             &scope,
@@ -937,6 +998,7 @@ fn main() -> ExitCode {
             } else {
                 None
             },
+            &view.into(),
             json,
             time,
         ),
@@ -992,8 +1054,9 @@ fn main() -> ExitCode {
         Command::Outdated {
             scope,
             skills,
+            view,
             json,
-        } => run_outdated(&scope, skills, json, time),
+        } => run_outdated(&scope, skills, &view.into(), json, time),
         Command::SweepQuarantine { scope, json } => run_sweep_quarantine(&scope, json, time),
         Command::Update {
             scope,
@@ -1097,7 +1160,7 @@ fn build_runtime_write_with_project<T: ops::Outcome + serde::Serialize>(
         let envelope: ResultEnvelope<T> = error_envelope(operation, err, &runtime_scope);
         let code = exit_code(envelope.exit_status());
         if json {
-            output::print_json(&envelope);
+            output::print_json(&envelope, &ViewRequest::default(), false);
         } else {
             for error in &envelope.errors {
                 eprintln!("{}: {}", error.code.as_str(), error.message);
@@ -1146,7 +1209,7 @@ fn build_runtime_with_project<T: ops::Outcome + serde::Serialize>(
         let envelope: ResultEnvelope<T> = error_envelope(operation, err, &runtime_scope);
         let code = exit_code(envelope.exit_status());
         if json {
-            output::print_json(&envelope);
+            output::print_json(&envelope, &ViewRequest::default(), false);
         } else {
             for error in &envelope.errors {
                 eprintln!("{}: {}", error.code.as_str(), error.message);
@@ -1210,6 +1273,17 @@ fn parse_library_copy_status(
     }
 }
 
+fn parse_agent_mode(
+    value: &str,
+) -> Result<(String, skill_studio_core::ops_invocation::InvocationMode), String> {
+    use skill_studio_core::ops_invocation::InvocationMode;
+    match value.split_once('=') {
+        Some((agent, "manual")) if !agent.is_empty() => Ok((agent.into(), InvocationMode::Manual)),
+        Some((agent, "auto")) if !agent.is_empty() => Ok((agent.into(), InvocationMode::Auto)),
+        _ => Err("expected AGENT=manual or AGENT=auto".into()),
+    }
+}
+
 fn parse_copy_status(value: &str) -> Result<CopyStatus, String> {
     CopyStatus::ALL
         .into_iter()
@@ -1217,7 +1291,13 @@ fn parse_copy_status(value: &str) -> Result<CopyStatus, String> {
         .ok_or_else(|| "expected link, same, differs or stale".into())
 }
 
-fn run_scan(scope: &ScopeArgs, req: &ScanRequest, json: bool, time: bool) -> ExitCode {
+fn run_scan(
+    scope: &ScopeArgs,
+    req: &ScanRequest,
+    view: &ViewRequest,
+    json: bool,
+    time: bool,
+) -> ExitCode {
     let rt = match build_runtime::<skill_studio_core::dto::Inventory>(scope, Operation::Scan, json)
     {
         Ok(rt) => rt,
@@ -1226,19 +1306,14 @@ fn run_scan(scope: &ScopeArgs, req: &ScanRequest, json: bool, time: bool) -> Exi
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::scan(&rt, &ctx, req);
     let envelope = ResultEnvelope::from_result(Operation::Scan, &rt.scope, &ctx, result);
-    if json {
-        output::print_json(&envelope);
-    } else {
-        output::print_scan_table(&envelope);
-    }
-    print_timing(time, envelope.timings.as_ref());
-    exit_code(envelope.exit_status())
+    finish_view(&envelope, view, json, time, output::print_scan_table)
 }
 
 fn run_diagnose(
     scope: &ScopeArgs,
     skills: Vec<String>,
     timings: bool,
+    view: &ViewRequest,
     json: bool,
     time: bool,
 ) -> ExitCode {
@@ -1258,14 +1333,7 @@ fn run_diagnose(
     };
     let result = ops::diagnose(&rt, &ctx, &req);
     let envelope = ResultEnvelope::from_result(Operation::Diagnose, &rt.scope, &ctx, result);
-    let code = exit_code(envelope.exit_status());
-    if json {
-        output::print_json(&envelope);
-    } else {
-        output::print_diagnose_table(&envelope);
-    }
-    print_timing(time, envelope.timings.as_ref());
-    code
+    finish_view(&envelope, view, json, time, output::print_diagnose_table)
 }
 
 fn run_capabilities(
@@ -1300,7 +1368,7 @@ fn run_capabilities(
             );
             let code = exit_code(envelope.exit_status());
             if json {
-                output::print_json(&envelope);
+                output::print_json(&envelope, &ViewRequest::default(), time);
             } else {
                 for error in &envelope.errors {
                     eprintln!("{}: {}", error.code.as_str(), error.message);
@@ -1316,14 +1384,7 @@ fn run_capabilities(
     };
     let result = ops::capabilities(&rt, &ctx, &req);
     let envelope = ResultEnvelope::from_result(Operation::Capabilities, &rt.scope, &ctx, result);
-    let code = exit_code(envelope.exit_status());
-    if json {
-        output::print_json(&envelope);
-    } else {
-        output::print_capabilities_table(&envelope);
-    }
-    print_timing(time, envelope.timings.as_ref());
-    code
+    finish(&envelope, json, time, output::print_capabilities_table)
 }
 
 fn run_harnesses(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
@@ -1338,14 +1399,7 @@ fn run_harnesses(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::harnesses(&rt, &ctx, &HarnessesRequest {});
     let envelope = ResultEnvelope::from_result(Operation::Harnesses, &rt.scope, &ctx, result);
-    let code = exit_code(envelope.exit_status());
-    if json {
-        output::print_json(&envelope);
-    } else {
-        output::print_harnesses_table(&envelope);
-    }
-    print_timing(time, envelope.timings.as_ref());
-    code
+    finish(&envelope, json, time, output::print_harnesses_table)
 }
 
 fn run_preview_repair(scope: &ScopeArgs, deployment_id: &str, json: bool, time: bool) -> ExitCode {
@@ -2265,6 +2319,7 @@ fn run_unpark(scope: &ScopeArgs, target: &TargetArgs, json: bool, time: bool) ->
 fn run_usage(
     scope: &ScopeArgs,
     days: u32,
+    view: &ViewRequest,
     json: bool,
     time: bool,
     filter: &skill_studio_host::UsageFilter,
@@ -2345,7 +2400,7 @@ fn run_usage(
         steps,
     ));
     let envelope = ResultEnvelope::from_result(Operation::SkillUsage, &rt.scope, &ctx, result);
-    finish(&envelope, json, time, output::print_usage_table)
+    finish_view(&envelope, view, json, time, output::print_usage_table)
 }
 
 use skill_studio_host::NoGhLookup;
@@ -2354,7 +2409,13 @@ use skill_studio_host::NoGhLookup;
 /// `rt.ports.tools` the same way other CLI surfaces resolve external
 /// binaries; a machine with no `gh` still returns a result, with every
 /// skills.sh/dotagents skill's currency `Unknown` rather than an error.
-fn run_outdated(scope: &ScopeArgs, skills: Vec<String>, json: bool, time: bool) -> ExitCode {
+fn run_outdated(
+    scope: &ScopeArgs,
+    skills: Vec<String>,
+    view: &ViewRequest,
+    json: bool,
+    time: bool,
+) -> ExitCode {
     let rt = match build_runtime_write::<
         std::collections::BTreeMap<String, skill_studio_core::skill_update_check::OutdatedRecord>,
     >(scope, Operation::Outdated, json)
@@ -2381,7 +2442,7 @@ fn run_outdated(scope: &ScopeArgs, skills: Vec<String>, json: bool, time: bool) 
         None => ops::outdated(&rt, &ctx, &req, &NoGhLookup, &NoGhLookup, &NoGhLookup),
     };
     let envelope = ResultEnvelope::from_result(Operation::Outdated, &rt.scope, &ctx, result);
-    finish(&envelope, json, time, output::print_outdated_table)
+    finish_view(&envelope, view, json, time, output::print_outdated_table)
 }
 
 /// Prunes the global quarantine cap, via `ops::sweep_quarantine`. Global
@@ -2577,14 +2638,24 @@ fn finish<T: serde::Serialize + ops::Outcome>(
     time: bool,
     print_table: impl FnOnce(&ResultEnvelope<T>),
 ) -> ExitCode {
-    let code = exit_code(envelope.exit_status());
-    if json {
-        output::print_json(envelope);
+    finish_view(envelope, &ViewRequest::default(), json, time, print_table)
+}
+
+fn finish_view<T: serde::Serialize + ops::Outcome>(
+    envelope: &ResultEnvelope<T>,
+    view: &ViewRequest,
+    json: bool,
+    time: bool,
+    print_table: impl FnOnce(&ResultEnvelope<T>),
+) -> ExitCode {
+    let status = if json {
+        output::print_json(envelope, view, time)
     } else {
         print_table(envelope);
-    }
+        envelope.exit_status()
+    };
     print_timing(time, envelope.timings.as_ref());
-    code
+    exit_code(status)
 }
 
 /// A `run_*` command's early exit for a client-side validation failure
@@ -2689,10 +2760,19 @@ fn run_invocation(
     scope: &ScopeArgs,
     skill: Option<String>,
     policy: Option<InvocationPolicy>,
+    view: &ViewRequest,
     json: bool,
     time: bool,
 ) -> ExitCode {
     use skill_studio_core::ops_invocation::{invocation, InvocationReport, InvocationRequest};
+    if policy.is_some() && *view != ViewRequest::default() {
+        <Cli as clap::CommandFactory>::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--limit, --cursor, --fields and --count-by do not apply to --manual or --auto",
+            )
+            .exit();
+    }
     let rt = match if policy.is_some() {
         build_runtime_write::<InvocationReport>(scope, Operation::Invocation, json)
     } else {
@@ -2709,10 +2789,15 @@ fn run_invocation(
     };
     let result = invocation(&rt, &ctx, &req);
     let envelope = ResultEnvelope::from_result(Operation::Invocation, &rt.scope, &ctx, result);
-    finish(&envelope, json, time, output::print_invocation_table)
+    finish_view(&envelope, view, json, time, output::print_invocation_table)
 }
 
-fn run_invocation_mismatches(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
+fn run_invocation_mismatches(
+    scope: &ScopeArgs,
+    view: &ViewRequest,
+    json: bool,
+    time: bool,
+) -> ExitCode {
     use skill_studio_core::ops_invocation::{invocation, InvocationRequest};
     let rt =
         match build_runtime::<answers::InvocationMismatches>(scope, Operation::Invocation, json) {
@@ -2723,7 +2808,13 @@ fn run_invocation_mismatches(scope: &ScopeArgs, json: bool, time: bool) -> ExitC
     let result = invocation(&rt, &ctx, &InvocationRequest::default())
         .map(|report| answers::invocation_mismatches(&report));
     let envelope = ResultEnvelope::from_result(Operation::Invocation, &rt.scope, &ctx, result);
-    finish(&envelope, json, time, output::print_invocation_mismatches)
+    finish_view(
+        &envelope,
+        view,
+        json,
+        time,
+        output::print_invocation_mismatches,
+    )
 }
 
 fn run_pack(action: PackCommand, time: bool) -> ExitCode {
@@ -2779,7 +2870,13 @@ fn run_pack(action: PackCommand, time: bool) -> ExitCode {
         ),
     };
     let envelope = ResultEnvelope::from_result(operation, &rt.scope, &ctx, result);
-    finish(&envelope, args.json, time, output::print_packs)
+    finish_view(
+        &envelope,
+        &args.view.into(),
+        args.json,
+        time,
+        output::print_packs,
+    )
 }
 
 fn run_pack_action(action: PackCommand, time: bool) -> ExitCode {
@@ -2900,6 +2997,7 @@ fn run_review(action: ReviewCommand, time: bool) -> ExitCode {
 fn run_library(
     scope: &ScopeArgs,
     request: &skill_studio_core::library::LibraryRequest,
+    view: &ViewRequest,
     json: bool,
     time: bool,
 ) -> ExitCode {
@@ -2919,5 +3017,5 @@ fn run_library(
         scope.desktop_usage_cache().as_deref(),
     );
     let envelope = ResultEnvelope::from_result(Operation::Library, &rt.scope, &ctx, result);
-    finish(&envelope, json, time, output::print_library)
+    finish_view(&envelope, view, json, time, output::print_library)
 }

@@ -81,6 +81,7 @@ pub mod timing;
 pub mod tracked_projects;
 pub mod tree_hash;
 pub mod usage_window;
+pub mod view;
 pub mod yaml;
 
 #[cfg(any(test, feature = "testing"))]

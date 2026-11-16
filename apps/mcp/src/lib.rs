@@ -93,6 +93,7 @@ use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::CorrelationId;
 use skill_studio_core::ops::{self, Operation, Outcome, ResultEnvelope};
 use skill_studio_core::ports::{OpContext, Runtime};
+use skill_studio_core::view::ViewRequest;
 use skill_studio_core::CoreError;
 use skill_studio_host::SkillUsage;
 
@@ -240,6 +241,10 @@ pub struct LibraryRequest {
     pub skills: Vec<String>,
     /// Keep rows with this agent copy status.
     pub copy_status: Option<skill_studio_core::library::LibraryCopyStatus>,
+    /// Keep rows that each named agent (`claude-code`, `codex`, ...) reads
+    /// in the given mode.
+    pub modes:
+        std::collections::BTreeMap<String, skill_studio_core::ops_invocation::InvocationMode>,
 
     /// Rolling window in days; defaults to 30.
     pub days: Option<u32>,
@@ -252,6 +257,21 @@ pub struct LibraryRequest {
     /// Keep the N most used skills.
     pub top: Option<usize>,
 }
+
+/// A read tool's input, with the view that bounds its answer.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct Viewed<R> {
+    /// The tool's own input.
+    #[serde(flatten)]
+    pub request: R,
+    /// Rows, fields and counts to return.
+    #[serde(flatten)]
+    pub view: ViewRequest,
+}
+
+/// Input of a tool that takes nothing but a view.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct NoInput {}
 
 /// Input for `skill_usage`.
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
@@ -427,6 +447,31 @@ async fn run_op_in_project<T: Outcome + serde::Serialize + schemars::JsonSchema 
     context: &RequestContext<RoleServer>,
     call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
 ) -> CallToolResult {
+    const {
+        assert!(
+            T::LISTS.is_empty(),
+            "a result with lists to page needs a Viewed input and run_op_viewed, or its cursor cannot be sent back"
+        );
+    }
+    run_op_viewed(
+        operation,
+        with_history,
+        project,
+        &ViewRequest::default(),
+        context,
+        call,
+    )
+    .await
+}
+
+async fn run_op_viewed<T: Outcome + serde::Serialize + schemars::JsonSchema + 'static>(
+    operation: Operation,
+    with_history: bool,
+    project: Option<&std::path::Path>,
+    view: &ViewRequest,
+    context: &RequestContext<RoleServer>,
+    call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
+) -> CallToolResult {
     let progress_token = context.meta.get_progress_token();
     if let Some(token) = &progress_token {
         let _ = context
@@ -444,8 +489,17 @@ async fn run_op_in_project<T: Outcome + serde::Serialize + schemars::JsonSchema 
             .await;
     }
 
-    let value = serde_json::to_value(&envelope).unwrap_or(serde_json::Value::Null);
-    if envelope.envelope.status == skill_studio_core::OpStatus::Error {
+    let value = serde_json::to_value(&envelope)
+        .and_then(|json| {
+            skill_studio_core::view::render_document::<T>(
+                json,
+                envelope.envelope.exit_status(),
+                view,
+                false,
+            )
+        })
+        .map_or(serde_json::Value::Null, |rendered| rendered.json);
+    if value["status"] == "error" {
         CallToolResult::structured_error(value)
     } else {
         CallToolResult::structured(value)
@@ -499,10 +553,10 @@ impl SkillStudioServer {
     )]
     async fn scan(
         &self,
-        Parameters(req): Parameters<ScanRequest>,
+        Parameters(Viewed { request: req, view }): Parameters<Viewed<ScanRequest>>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op(Operation::Scan, false, &context, |rt, ctx| {
+        run_op_viewed(Operation::Scan, false, None, &view, &context, |rt, ctx| {
             ops::scan(rt, ctx, &req)
         })
         .await
@@ -514,36 +568,44 @@ impl SkillStudioServer {
     )]
     async fn library(
         &self,
-        Parameters(req): Parameters<LibraryRequest>,
+        Parameters(Viewed { request: req, view }): Parameters<Viewed<LibraryRequest>>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op(Operation::Library, false, &context, |rt, ctx| {
-            let bound = |text: &Option<String>| {
-                text.as_deref()
-                    .map(skill_studio_host::parse_usage_time)
-                    .transpose()
-                    .map_err(|message| {
-                        CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
-                    })
-            };
-            let request = skill_studio_core::library::LibraryRequest {
-                all: req.all,
-                source: req.source.clone(),
-                skills: req.skills.clone(),
-                copy_status: req.copy_status,
-                days: req.days,
-                since: bound(&req.since)?,
-                until: bound(&req.until)?,
-                sort: req.sort,
-                top: req.top,
-            };
-            skill_studio_host::library_report(
-                rt,
-                ctx,
-                &request,
-                scope::desktop_usage_cache().as_deref(),
-            )
-        })
+        run_op_viewed(
+            Operation::Library,
+            false,
+            None,
+            &view,
+            &context,
+            |rt, ctx| {
+                let bound = |text: &Option<String>| {
+                    text.as_deref()
+                        .map(skill_studio_host::parse_usage_time)
+                        .transpose()
+                        .map_err(|message| {
+                            CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+                        })
+                };
+                let request = skill_studio_core::library::LibraryRequest {
+                    all: req.all,
+                    source: req.source.clone(),
+                    skills: req.skills.clone(),
+                    copy_status: req.copy_status,
+                    modes: req.modes.clone(),
+                    days: req.days,
+                    since: bound(&req.since)?,
+                    until: bound(&req.until)?,
+                    sort: req.sort,
+                    top: req.top,
+                };
+                skill_studio_host::library_report(
+                    rt,
+                    ctx,
+                    &request,
+                    scope::desktop_usage_cache().as_deref(),
+                )
+            },
+        )
         .await
     }
 
@@ -551,11 +613,25 @@ impl SkillStudioServer {
         description = "List only the skills with one copy read as manual and another as automatic, and the agents on each side.",
         annotations(read_only_hint = true)
     )]
-    async fn invocation_mismatches(&self, context: RequestContext<RoleServer>) -> CallToolResult {
-        run_op(Operation::Invocation, false, &context, |rt, ctx| {
-            skill_studio_core::ops_invocation::invocation(rt, ctx, &Default::default())
-                .map(|report| answers::invocation_mismatches(&report))
-        })
+    async fn invocation_mismatches(
+        &self,
+        Parameters(Viewed {
+            request: NoInput {},
+            view,
+        }): Parameters<Viewed<NoInput>>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op_viewed(
+            Operation::Invocation,
+            false,
+            None,
+            &view,
+            &context,
+            |rt, ctx| {
+                skill_studio_core::ops_invocation::invocation(rt, ctx, &Default::default())
+                    .map(|report| answers::invocation_mismatches(&report))
+            },
+        )
         .await
     }
 
@@ -565,12 +641,17 @@ impl SkillStudioServer {
     )]
     async fn diagnose(
         &self,
-        Parameters(req): Parameters<ScanRequest>,
+        Parameters(Viewed { request: req, view }): Parameters<Viewed<ScanRequest>>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op(Operation::Diagnose, false, &context, |rt, ctx| {
-            ops::diagnose(rt, ctx, &req)
-        })
+        run_op_viewed(
+            Operation::Diagnose,
+            false,
+            None,
+            &view,
+            &context,
+            |rt, ctx| ops::diagnose(rt, ctx, &req),
+        )
         .await
     }
 
@@ -630,13 +711,16 @@ impl SkillStudioServer {
     )]
     async fn pack_list(
         &self,
-        Parameters(req): Parameters<skill_studio_core::pack::PackListRequest>,
+        Parameters(Viewed { request: req, view }): Parameters<
+            Viewed<skill_studio_core::pack::PackListRequest>,
+        >,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op_in_project(
+        run_op_viewed(
             Operation::PackList,
             false,
             req.project_path.as_deref(),
+            &view,
             &context,
             |rt, ctx| {
                 let remote = pack_remote(rt, req.remote);
@@ -652,13 +736,16 @@ impl SkillStudioServer {
     )]
     async fn pack_show(
         &self,
-        Parameters(req): Parameters<skill_studio_core::pack::PackShowRequest>,
+        Parameters(Viewed { request: req, view }): Parameters<
+            Viewed<skill_studio_core::pack::PackShowRequest>,
+        >,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op_in_project(
+        run_op_viewed(
             Operation::PackShow,
             false,
             req.project_path.as_deref(),
+            &view,
             &context,
             |rt, ctx| {
                 let remote = pack_remote(rt, req.remote);
@@ -734,43 +821,50 @@ impl SkillStudioServer {
     )]
     async fn skill_usage(
         &self,
-        Parameters(req): Parameters<SkillUsageRequest>,
+        Parameters(Viewed { request: req, view }): Parameters<Viewed<SkillUsageRequest>>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
         let days = req.days.unwrap_or(skill_studio_host::DEFAULT_USAGE_DAYS);
-        run_op(Operation::SkillUsage, false, &context, |rt, ctx| {
-            let bound = |text: &Option<String>| {
-                text.as_deref()
-                    .map(skill_studio_host::parse_usage_time)
-                    .transpose()
-                    .map_err(|message| {
-                        CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
-                    })
-            };
-            let filter = skill_studio_host::UsageFilter {
-                harness: req.harness.clone(),
-                projects: req.project.clone().into_iter().collect(),
-                since: bound(&req.since)?,
-                until: bound(&req.until)?,
-                top: req.top,
-            };
-            filter.check_window(chrono::Utc::now()).map_err(|message| {
-                CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
-            })?;
-            let inventory = ops::scan_for_usage(rt, ctx)?;
-            let mut usage = self.usage.lock().unwrap_or_else(PoisonError::into_inner);
-            let usage = usage.get_or_insert_with(|| {
-                SkillUsage::load_read_only(scope::desktop_usage_cache().as_deref())
-            });
-            usage.set_codex_home(rt.scope.codex_home.clone());
-            Ok(usage.report_filtered(
-                &rt.scope.home.canonical,
-                &inventory,
-                days,
-                chrono::Utc::now(),
-                &filter,
-            ))
-        })
+        run_op_viewed(
+            Operation::SkillUsage,
+            false,
+            None,
+            &view,
+            &context,
+            |rt, ctx| {
+                let bound = |text: &Option<String>| {
+                    text.as_deref()
+                        .map(skill_studio_host::parse_usage_time)
+                        .transpose()
+                        .map_err(|message| {
+                            CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+                        })
+                };
+                let filter = skill_studio_host::UsageFilter {
+                    harness: req.harness.clone(),
+                    projects: req.project.clone().into_iter().collect(),
+                    since: bound(&req.since)?,
+                    until: bound(&req.until)?,
+                    top: req.top,
+                };
+                filter.check_window(chrono::Utc::now()).map_err(|message| {
+                    CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+                })?;
+                let inventory = ops::scan_for_usage(rt, ctx)?;
+                let mut usage = self.usage.lock().unwrap_or_else(PoisonError::into_inner);
+                let usage = usage.get_or_insert_with(|| {
+                    SkillUsage::load_read_only(scope::desktop_usage_cache().as_deref())
+                });
+                usage.set_codex_home(rt.scope.codex_home.clone());
+                Ok(usage.report_filtered(
+                    &rt.scope.home.canonical,
+                    &inventory,
+                    days,
+                    chrono::Utc::now(),
+                    &filter,
+                ))
+            },
+        )
         .await
     }
 
@@ -936,12 +1030,16 @@ impl SkillStudioServer {
     )]
     async fn invocation(
         &self,
-        Parameters(req): Parameters<skill_studio_core::ops_invocation::InvocationRequest>,
+        Parameters(Viewed { request: req, view }): Parameters<
+            Viewed<skill_studio_core::ops_invocation::InvocationRequest>,
+        >,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op(
+        run_op_viewed(
             Operation::Invocation,
             req.policy.is_some(),
+            None,
+            &view,
             &context,
             |rt, ctx| skill_studio_core::ops_invocation::invocation(rt, ctx, &req),
         )
@@ -1150,11 +1248,16 @@ impl SkillStudioServer {
     )]
     async fn outdated(
         &self,
-        Parameters(req): Parameters<ScanRequest>,
+        Parameters(Viewed { request: req, view }): Parameters<Viewed<ScanRequest>>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op(Operation::Outdated, true, &context, |rt, ctx| {
-            match rt.ports.tools.as_ref().and_then(|t| t.find_binary("gh")) {
+        run_op_viewed(
+            Operation::Outdated,
+            true,
+            None,
+            &view,
+            &context,
+            |rt, ctx| match rt.ports.tools.as_ref().and_then(|t| t.find_binary("gh")) {
                 Some(gh_bin) => ops::outdated(
                     rt,
                     ctx,
@@ -1164,8 +1267,8 @@ impl SkillStudioServer {
                     &skill_studio_host::GhPluginManifestLookup,
                 ),
                 None => ops::outdated(rt, ctx, &req, &NoGhLookup, &NoGhLookup, &NoGhLookup),
-            }
-        })
+            },
+        )
         .await
     }
 

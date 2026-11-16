@@ -444,6 +444,40 @@
           "default": null,
           "description": "Keep only the agent copies with this copy status."
         },
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "root": {
           "anyOf": [
             {
@@ -536,6 +570,22 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "deployment_id": {
           "anyOf": [
             {
@@ -547,6 +597,24 @@
             }
           ],
           "description": "Desktop edits one exact copy."
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "policy": {
           "anyOf": [
@@ -596,7 +664,43 @@
   },
   {
     "inputSchema": {
-      "properties": {},
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "name": "invocation_mismatches"
@@ -644,6 +748,22 @@
           "default": null,
           "description": "Keep rows with this agent copy status."
         },
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "days": {
           "default": null,
           "description": "Rolling window in days; defaults to 30.",
@@ -653,6 +773,49 @@
             "integer",
             "null"
           ]
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "modes": {
+          "additionalProperties": {
+            "description": "Effective model invocation support for one harness.",
+            "oneOf": [
+              {
+                "const": "manual",
+                "description": "Only explicit invocation.",
+                "type": "string"
+              },
+              {
+                "const": "auto",
+                "description": "Model invocation is allowed.",
+                "type": "string"
+              },
+              {
+                "const": "unsupported",
+                "description": "No verified skill-owned control.",
+                "type": "string"
+              }
+            ]
+          },
+          "default": {},
+          "description": "Keep rows that each named agent (`claude-code`, `codex`, ...) reads\nin the given mode.",
+          "type": "object"
         },
         "since": {
           "default": null,
@@ -811,6 +974,40 @@
           "default": null,
           "description": "Keep only the agent copies with this copy status."
         },
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "root": {
           "anyOf": [
             {
@@ -916,6 +1113,40 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "project_path": {
           "default": null,
           "description": "Only this tracked project. Absent: the home and every tracked project.",
@@ -967,6 +1198,40 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "project_path": {
           "default": null,
           "description": "Only this tracked project. Absent: the home and every tracked project.",
@@ -1283,6 +1548,40 @@
           "default": null,
           "description": "Keep only the agent copies with this copy status."
         },
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "root": {
           "anyOf": [
             {
@@ -1334,6 +1633,22 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "days": {
           "default": null,
           "description": "How many days back to count uses. Default 30.",
@@ -1344,11 +1659,29 @@
             "null"
           ]
         },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "harness": {
           "default": null,
           "description": "Keep uses from this harness id only.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
             "null"
           ]
         },

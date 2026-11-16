@@ -84,6 +84,8 @@ pub struct UsageReport {
 }
 
 impl Outcome for UsageReport {
+    const LISTS: &'static [&'static str] = &["/rows", "/unused"];
+
     fn status(&self) -> OpStatus {
         if self.partial {
             OpStatus::Partial

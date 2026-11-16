@@ -82,7 +82,7 @@ def mcp_samples(binary, env, runs):
         statuses = []
         for i in range(runs):
             start = time.perf_counter_ns()
-            request({"jsonrpc": "2.0", "id": i + 2, "method": "tools/call", "params": {"name": "scan", "arguments": {}}})
+            request({"jsonrpc": "2.0", "id": i + 2, "method": "tools/call", "params": {"name": "scan", "arguments": {"limit": 1_000_000}}})
             reply = response()
             samples.append((time.perf_counter_ns() - start) / 1e6)
             assert reply["id"] == i + 2 and "result" in reply, reply

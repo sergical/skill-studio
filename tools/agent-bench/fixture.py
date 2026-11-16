@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import random
+import shutil
 import sqlite3
 import stat
 import uuid
@@ -288,6 +289,13 @@ PACKS = {
     ],
 }
 UPDATED_PACK = "acme-labs/review-skills"
+
+
+def copy_folder(library_folder: Path, copy: Path, current: bool) -> None:
+    """A copy that matches the new version holds the library's reference files too."""
+    copy.mkdir(parents=True, exist_ok=True)
+    if current and (library_folder / "references").is_dir():
+        shutil.copytree(library_folder / "references", copy / "references", dirs_exist_ok=True)
 # Still in the lock file, but its folder is only in .trash.
 REMOVED_FROM_PACK = "old-linter"
 # Real copies the user made for one agent, before the pack update: (agent, folder, skill, matches the new version).
@@ -339,13 +347,13 @@ def write_overlay(home: Path, task: str, now: datetime) -> dict:
         for _agent, folder, skill, current in AGENT_COPIES:
             if skill == name:
                 copy = home / folder / skill
-                copy.mkdir(parents=True, exist_ok=True)
+                copy_folder(lib / name, copy, current)
                 (copy / "SKILL.md").write_text(new_version(old) if current else old)
         (lib / name / "SKILL.md").write_text(new_version(old))
     for _agent, folder, skill, current in AGENT_COPIES:
         if pack_of(skill) != UPDATED_PACK:
             copy = home / folder / skill
-            copy.mkdir(parents=True, exist_ok=True)
+            copy_folder(lib / skill, copy, current)
             text = (lib / skill / "SKILL.md").read_text()
             (copy / "SKILL.md").write_text(text if current else text.replace("1. Read the request.", "1. Read the request and the failing test log."))
     for _agent, folder, skill in AGENT_LINKS:

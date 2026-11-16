@@ -169,6 +169,11 @@ pub enum OpStatus {
 /// Invariant: a `Partial` outcome maps to exit status 4 even though no
 /// error was raised.
 pub trait Outcome {
+    /// JSON pointers into the serialized value of the lists that
+    /// [`crate::view::render`] bounds; the first one is the list a view
+    /// pages, projects and counts. Empty for a result without lists.
+    const LISTS: &'static [&'static str] = &[];
+
     /// Status of this value.
     fn status(&self) -> OpStatus {
         OpStatus::Ok
@@ -197,6 +202,8 @@ pub trait Outcome {
 }
 
 impl Outcome for Inventory {
+    const LISTS: &'static [&'static str] = &["/skills"];
+
     fn status(&self) -> OpStatus {
         match self.completeness {
             Completeness::Complete => OpStatus::Ok,
@@ -206,6 +213,8 @@ impl Outcome for Inventory {
 }
 
 impl Outcome for Diagnosis {
+    const LISTS: &'static [&'static str] = &["/issues", "/inventory/skills"];
+
     fn status(&self) -> OpStatus {
         self.inventory.status()
     }
@@ -359,7 +368,9 @@ impl Outcome for crate::dto::InstallPreferences {}
 /// `outdated`'s per-skill currency map carries no event and is never
 /// partial - a lookup failure resolves the affected skill to `Unknown`
 /// rather than raising.
-impl Outcome for std::collections::BTreeMap<String, crate::skill_update_check::OutdatedRecord> {}
+impl Outcome for std::collections::BTreeMap<String, crate::skill_update_check::OutdatedRecord> {
+    const LISTS: &'static [&'static str] = &[""];
+}
 /// `sweep_quarantine` has no outcome payload of its own - it either prunes
 /// the cap or returns an error - so it wraps in an envelope over `()`,
 /// taking every `Outcome` default (always `Ok`, no event).

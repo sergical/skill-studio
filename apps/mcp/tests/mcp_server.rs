@@ -173,9 +173,9 @@ async fn call_scan(
         .expect("scan's CallToolResult always carries structured_content (the envelope)")
 }
 
-/// Blanks the fields that are fresh per call (`correlation_id`) or per
-/// timing run (`data.timings`, when requested), and removes the MCP-only
-/// leading `untrusted_paths`, so two otherwise-identical envelopes compare equal.
+/// Blanks the field that is fresh per call (`correlation_id`), and removes
+/// the MCP-only leading `untrusted_paths`, so two otherwise-identical
+/// envelopes compare equal.
 fn normalize(mut json: serde_json::Value) -> serde_json::Value {
     if let Some(obj) = json.as_object_mut() {
         if obj.contains_key("untrusted_paths") {
@@ -189,10 +189,6 @@ fn normalize(mut json: serde_json::Value) -> serde_json::Value {
             "correlation_id".into(),
             serde_json::Value::String("-".into()),
         );
-        // `timings` carries wall-clock milliseconds, never reproducible
-        // call to call even within one process, let alone across a
-        // restart.
-        obj.insert("timings".into(), serde_json::Value::Null);
     }
     json
 }
@@ -207,10 +203,11 @@ async fn restart_gives_the_same_envelope_as_the_first_run() {
 
     let (client_a, _) = connect(&env).await;
     let raw_first = call_scan(&client_a, None).await;
-    // A regression that drops `scan`'s timing from the envelope, or hands
-    // back another op's, must fail here rather than only downstream once
-    // `normalize` has already blanked `timings` for the equality check.
-    assert_eq!(raw_first["timings"]["op"], "scan");
+    assert_eq!(raw_first["operation"], "scan");
+    assert!(
+        raw_first.get("timings").is_none(),
+        "MCP answers carry no wall-clock timings"
+    );
     let first = normalize(raw_first);
     client_a.cancel().await.ok();
 

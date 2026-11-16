@@ -24,6 +24,8 @@ pub struct LibraryRequest {
     pub skills: Vec<String>,
     /// Keep rows with an agent copy of this status.
     pub copy_status: Option<LibraryCopyStatus>,
+    /// Keep rows that each named agent reads in the given mode.
+    pub modes: BTreeMap<String, InvocationMode>,
     /// Rolling window in days; defaults to 30.
     pub days: Option<u32>,
     /// Inclusive start, instead of days before the end.
@@ -127,6 +129,8 @@ impl From<CopyStatus> for LibraryCopyStatus {
 }
 
 impl Outcome for LibraryReport {
+    const LISTS: &'static [&'static str] = &["/rows"];
+
     fn status(&self) -> OpStatus {
         if self.partial {
             OpStatus::Partial
@@ -265,6 +269,13 @@ pub fn library(
                 }
             }
             row.modes.extend(modes);
+        }
+        if request
+            .modes
+            .iter()
+            .any(|(agent, mode)| row.modes.get(agent) != Some(mode))
+        {
+            continue;
         }
         for deployment in copies {
             if let (Some(agent), Some(status)) = (&deployment.harness, deployment.copy_status) {
