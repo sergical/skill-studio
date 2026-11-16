@@ -104,6 +104,7 @@ for (const theme of ["dark", "light"] as const) {
     await item.hover();
     await settled(item);
     expect(await textContrast(item)).toBeGreaterThanOrEqual(AA_BODY_TEXT);
+    await page.mouse.move(0, 0);
     await item.focus();
     await settled(item);
     expect(await textContrast(item)).toBeGreaterThanOrEqual(AA_BODY_TEXT);

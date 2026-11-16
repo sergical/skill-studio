@@ -159,7 +159,7 @@ function EventStatusBadge({
   return (
     <span
       className={`shrink-0 text-caption font-semibold ${
-        isFailed ? "text-error" : isInterrupted ? "text-warning" : "text-text-tertiary"
+        isFailed ? "text-error-text" : isInterrupted ? "text-warning" : "text-text-tertiary"
       }`}
     >
       {isInterrupted ? "Interrupted - the app was quit during this operation" : status}
