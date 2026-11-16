@@ -71,6 +71,8 @@
   --color-warning-soft: oklch(0.769 0.165 70.08 / 0.12);
   --color-error-solid: oklch(0.544 0.215 27.325);
   --color-error: oklch(0.645 0.208 25.331);
+  /* Red text on a red tint: lighter than --color-error so it clears 4.5:1 on the hover tint. */
+  --color-error-text: oklch(0.74 0.17 25.331);
   --color-error-soft: oklch(0.645 0.208 25.331 / 0.12);
   --color-info: oklch(0.629 0.188 259.815);
   --color-info-soft: oklch(0.629 0.188 259.815 / 0.12);
@@ -197,6 +199,7 @@
   --color-warning: oklch(0.534 0.113 70.08);
   --color-warning-soft: oklch(0.534 0.113 70.08 / 0.12);
   --color-error: oklch(0.544 0.215 27.325);
+  --color-error-text: oklch(0.44 0.17 27.325);
   --color-error-soft: oklch(0.544 0.215 27.325 / 0.12);
   --color-info: oklch(0.538 0.215 262.881);
   --color-info-soft: oklch(0.538 0.215 262.881 / 0.12);
